@@ -156,6 +156,48 @@ it('refuses a second writer for an owned run and lets a dead owner be reported s
   });
 });
 
+it('rejects legacy schema-versioned owner metadata', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root, { runId: 'run-1' }));
+    try {
+      await writeFile(join(writer.directory, 'owner.json'), '{"createdAt":"2026-08-19T00:00:00.000Z","nonce":"owner-nonce","pid":1,"schemaVersion":1}\n');
+
+      await expect(createEvalRun(runOptions(root, { probeProcess: () => false, runId: 'run-1' })))
+        .rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
+it('rejects owner metadata with an extra key', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root, { runId: 'run-1' }));
+    try {
+      await writeFile(join(writer.directory, 'owner.json'), '{"createdAt":"2026-08-19T00:00:00.000Z","nonce":"owner-nonce","pid":1,"unexpected":true}\n');
+
+      await expect(createEvalRun(runOptions(root, { probeProcess: () => false, runId: 'run-1' })))
+        .rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
+it('rejects duplicate keys in owner metadata', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root, { runId: 'run-1' }));
+    try {
+      await writeFile(join(writer.directory, 'owner.json'), '{"createdAt":"2026-08-19T00:00:00.000Z","nonce":"owner-nonce","pid":1,"pid":2}\n');
+
+      await expect(createEvalRun(runOptions(root, { probeProcess: () => false, runId: 'run-1' })))
+        .rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
 it('mints a distinct run for a second concurrent writer instead of appending', async () => {
   await withProject(async (root) => {
     const first = await createEvalRun(runOptions(root));

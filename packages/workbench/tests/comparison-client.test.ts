@@ -122,41 +122,56 @@ it('strictly decodes nested provenance and usage while preserving unrecorded sem
   expect(Object.isFrozen(result.rows[0]?.baseline?.usage)).toBe(true);
 });
 
-it('decodes automatic Skill invocation provenance without admitting path-shaped identities', async () => {
-  const withInvocation = (invocation: string) => {
-    const result = structuredClone(comparison);
-    const baseline = result.rows[0]?.baseline;
-    if (baseline === undefined) throw new Error('Comparison fixture must include a baseline.');
-    baseline.provenance.invocation = invocation;
-    return result;
+it('accepts the canonical semantic grader identity without a schema-version suffix', async () => {
+  const canonical = structuredClone(comparison) as {
+    rows: Array<{ baseline?: { provenance: { semanticGrader: unknown } } }>;
   };
+  const baseline = canonical.rows[0]?.baseline;
+  if (baseline === undefined) throw new Error('Comparison fixture must include a baseline.');
+  baseline.provenance.semanticGrader = 'claude-semantic@sonnet';
+  const comparisonClient = client(recordingFetch([], () => response({ comparison: canonical })));
 
-  await expect(client(recordingFetch([], () => response({
-    comparison: withInvocation('automatic:release-notes'),
-  }))).compare({ base: 'run-base', candidate: 'run-candidate' })).resolves.toMatchObject({
-    rows: [{ baseline: { provenance: { invocation: 'automatic:release-notes' } } }],
+  const result = await comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' });
+
+  expect(result.rows[0]).toMatchObject({
+    baseline: { provenance: { semanticGrader: 'claude-semantic@sonnet' } },
   });
+});
 
-  for (const invocation of [
-    'automatic:',
-    'automatic:../outside',
-    'automatic:C:private',
-    'automatic:C:\\private',
-    'automatic:C:/private',
-    'automatic:\\\\server\\share',
-    'automatic:file:///private/skill',
-    `automatic:${'a'.repeat(129)}`,
-  ]) {
-    await expect(client(recordingFetch([], () => response({
-      comparison: withInvocation(invocation),
-    }))).compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({ code: 'AB8083' });
-  }
+it('decodes the canonical semantic-grader identity mismatch cause', async () => {
+  const aligned = comparison.rows[0]!;
+  const semanticMismatch = {
+    ...comparison,
+    rows: [{
+      baseline: aligned.baseline,
+      candidate: aligned.candidate,
+      caseId: aligned.caseId,
+      causes: [{
+        baseline: 'claude-semantic@sonnet',
+        candidate: 'claude-semantic@opus',
+        code: 'semantic-grader-identity-mismatch',
+        message: 'The semantic grader identities do not align.',
+      }],
+      comparable: false,
+      host: aligned.host,
+    }],
+    summary: { comparable: 0, nonComparable: 1, reliability: 0, smoke: 0 },
+  };
+  const comparisonClient = client(recordingFetch([], () => response({ comparison: semanticMismatch })));
+
+  const result = await comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' });
+
+  expect(result.rows[0]).toMatchObject({
+    causes: [{ code: 'semantic-grader-identity-mismatch' }],
+    comparable: false,
+  });
 });
 
 it('rejects extra, path-shaped, or negative nested comparison data', async () => {
   const invalid = [
     { provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'none', unexpected: true } },
     { provenance: { hostCliVersion: '/private/bin/claude', invocation: 'automatic', semanticGrader: 'none' } },
+    { provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'claude-semantic@sonnet/v1' } },
     { usage: { inputTokens: 300, outputTokens: -1, recordedTrials: 3, totalTokens: 299 } },
     { usage: { inputTokens: 0, outputTokens: 0, recordedTrials: 0, totalTokens: 0 } },
     { usage: { inputTokens: 300, outputTokens: 25, recordedTrials: 4, totalTokens: 325 } },

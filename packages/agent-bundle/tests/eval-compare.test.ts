@@ -150,7 +150,7 @@ it.each([
   expect(comparison.summary).toEqual({ comparable: 0, nonComparable: 1, reliability: 0, smoke: 0 });
 });
 
-it('labels a host CLI version, invocation, semantic grader version, or harness mismatch non-comparable', () => {
+it('labels a host CLI version, invocation, semantic grader identity, or harness mismatch non-comparable', () => {
   const baselineTrials = trials(['pass', 'pass', 'pass']);
   const candidateTrials = trials(['pass', 'pass', 'pass']);
   const causeCodes = (candidate: readonly EvalTrialRecord[]): readonly string[] =>
@@ -180,7 +180,7 @@ it('labels a host CLI version, invocation, semantic grader version, or harness m
       invocation: { mode: 'automatic' },
       semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-6' },
     },
-  }))).toEqual(['grader-versions-mismatch']);
+  }))).toEqual(['semantic-grader-identity-mismatch']);
   expect(nonComparable(compareEvalRuns({
     baseline: side('run-base', trials(['pass', 'pass', 'pass'], {
       provenance: {
@@ -217,7 +217,7 @@ it('does not compare a manually graded trial whose semantic grader identity was 
 
   const row = nonComparable(comparison.rows[0]);
   expect(row.causes.map((cause) => cause.code)).toEqual([
-    'grader-versions-mismatch',
+    'semantic-grader-identity-mismatch',
   ]);
   expect(row.candidate?.provenance.semanticGrader).toEqual({ state: 'unrecorded' });
 });

@@ -11,6 +11,7 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 
 interface UpstreamManifest {
+  readonly aliases: readonly (readonly [string, string])[];
   readonly commit: string;
   readonly dependencies: readonly string[];
   readonly files: readonly {
@@ -18,8 +19,20 @@ interface UpstreamManifest {
     readonly sha256: string;
     readonly upstreamSha256: string;
   }[];
+  readonly license: {
+    readonly path: string;
+    readonly sha256: string;
+  };
+  readonly mcpSdkVersion: string;
+  readonly patches: readonly {
+    readonly path: string;
+    readonly sha256: string;
+  }[];
+  readonly publicImports: readonly string[];
   readonly repository: string;
-  readonly schemaVersion: number;
+  readonly retainedTests: readonly string[];
+  readonly testDependencies: readonly string[];
+  readonly version: string;
 }
 
 const sync = async (args: readonly string[]): Promise<{ readonly stderr: string; readonly stdout: string }> =>
@@ -84,11 +97,26 @@ it('copies an explicit recursive Inspector closure with byte-identical digests',
   expect(copiedEntry).toEqual(sourceEntry);
 
   const manifest = JSON.parse(manifestText) as UpstreamManifest;
+  expect(Object.keys(manifest).sort()).toEqual([
+    'aliases',
+    'commit',
+    'dependencies',
+    'files',
+    'license',
+    'mcpSdkVersion',
+    'patches',
+    'publicImports',
+    'repository',
+    'retainedTests',
+    'testDependencies',
+    'version',
+  ]);
   expect(manifest).toMatchObject({
     commit,
     dependencies: ['react'],
+    mcpSdkVersion: '2.0.0',
     repository: 'https://github.com/modelcontextprotocol/inspector.git',
-    schemaVersion: 1,
+    version: '2.2.0',
   });
   expect(manifest.files).toEqual([
     {
@@ -102,6 +130,11 @@ it('copies an explicit recursive Inspector closure with byte-identical digests',
       upstreamSha256: sha256(await readFile(join(source, 'src', 'label.ts'))),
     },
   ]);
+
+  await writeFile(join(output, 'UPSTREAM.json'), `${JSON.stringify({ ...manifest, schemaVersion: 1 }, null, 2)}\n`);
+  await expect(sync(['--verify', '--out', output])).rejects.toMatchObject({
+    stderr: expect.stringContaining('UPSTREAM.json is not an Inspector sync manifest'),
+  });
 });
 
 it('rejects a vendored import outside the declared dependency closure', async () => {

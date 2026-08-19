@@ -13,23 +13,23 @@ export type EvalComparisonEvidence = 'reliability' | 'smoke';
 export type EvalAlignmentFacet =
   | 'case'
   | 'fixture'
-  | 'grader-versions'
   | 'harness'
   | 'host-cli-version'
   | 'invocation'
-  | 'model';
+  | 'model'
+  | 'semantic-grader-identity';
 
 export type EvalNonComparableReason =
   | 'case-mismatch'
   | 'fixture-mismatch'
-  | 'grader-versions-mismatch'
   | 'harness-mismatch'
   | 'host-cli-version-mismatch'
   | 'invocation-mismatch'
   | 'missing-baseline'
   | 'missing-candidate'
   | 'model-mismatch'
-  | 'no-gradable-trials';
+  | 'no-gradable-trials'
+  | 'semantic-grader-identity-mismatch';
 
 export type EvalComparisonErrorCode =
   | 'EVAL_COMPARISON_SAMPLE_INVALID'
@@ -171,31 +171,31 @@ interface Condition {
 const alignmentFacets: readonly EvalAlignmentFacet[] = Object.freeze([
   'case',
   'fixture',
-  'grader-versions',
   'harness',
   'host-cli-version',
   'invocation',
   'model',
+  'semantic-grader-identity',
 ]);
 
 const facetLabels: Readonly<Record<EvalAlignmentFacet, string>> = Object.freeze({
   'case': 'case definition',
   'fixture': 'fixture digest',
-  'grader-versions': 'grader versions',
   'harness': 'harness',
   'host-cli-version': 'host CLI version',
   'invocation': 'invocation',
   'model': 'pinned model',
+  'semantic-grader-identity': 'semantic grader identity',
 });
 
 const facetReasons: Readonly<Record<EvalAlignmentFacet, EvalNonComparableReason>> = Object.freeze({
   'case': 'case-mismatch',
   'fixture': 'fixture-mismatch',
-  'grader-versions': 'grader-versions-mismatch',
   'harness': 'harness-mismatch',
   'host-cli-version': 'host-cli-version-mismatch',
   'invocation': 'invocation-mismatch',
   'model': 'model-mismatch',
+  'semantic-grader-identity': 'semantic-grader-identity-mismatch',
 });
 
 const unrecorded = 'unrecorded';
@@ -271,7 +271,7 @@ const invocationIdentity = (provenance: EvalTrialProvenance): string => {
   return invocation.skill === undefined ? invocation.mode : `${invocation.mode}:${invocation.skill}`;
 };
 
-const semanticGraderVersion = (provenance: EvalTrialProvenance): string | undefined => {
+const semanticGraderIdentity = (provenance: EvalTrialProvenance): string | undefined => {
   const semanticGrader = provenance.semanticGrader;
   return semanticGrader === null
     ? 'none'
@@ -291,7 +291,7 @@ const conditionProvenanceFor = (condition: Condition): EvalConditionProvenance =
   const graders = condition.trials.map((trial) => trial.provenance.semanticGrader);
   const semanticGrader = graders.every((grader) => grader !== undefined && grader !== null && 'state' in grader)
     ? unrecordedSemanticGrader
-    : recordedConditionValue(condition.trials.map((trial) => semanticGraderVersion(trial.provenance)));
+    : recordedConditionValue(condition.trials.map((trial) => semanticGraderIdentity(trial.provenance)));
   return Object.freeze({
     ...(hostCliVersion === undefined ? {} : { hostCliVersion }),
     ...(invocation === undefined ? {} : { invocation }),
@@ -349,11 +349,11 @@ const facetValue = (values: readonly (string | undefined)[]): FacetValue => {
 const facetsOf = (condition: Condition): Readonly<Record<EvalAlignmentFacet, FacetValue>> => Object.freeze({
   'case': facetValue(condition.trials.map((trial) => trial.caseDigest)),
   'fixture': facetValue(condition.trials.map((trial) => trial.fixtureDigest)),
-  'grader-versions': facetValue(condition.trials.map((trial) => semanticGraderVersion(trial.provenance))),
   'harness': facetValue([condition.side.run.harness]),
   'host-cli-version': facetValue(condition.trials.map((trial) => trial.provenance.hostCliVersion)),
   'invocation': facetValue(condition.trials.map((trial) => invocationIdentity(trial.provenance))),
   'model': facetValue(condition.trials.map((trial) => trial.model)),
+  'semantic-grader-identity': facetValue(condition.trials.map((trial) => semanticGraderIdentity(trial.provenance))),
 });
 
 const causeFor = (

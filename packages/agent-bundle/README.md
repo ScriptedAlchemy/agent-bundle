@@ -112,9 +112,11 @@ Eval suites are typed modules discovered by convention:
 import { defineEvalSuite, expectExitCode } from 'agent-bundle/eval';
 ```
 
-Assertions resolve to `pass`, `fail`, or `inconclusive`; insufficient evidence is never silently
-passed. Fewer than three trials is smoke evidence, and comparisons label unrecorded alignment facets
-as unverified.
+Every assertion resolves to `pass`, `fail`, or `inconclusive`, and declares the minimum evidence it
+accepts. An assertion that needs stronger evidence than the harness produced is inconclusive, never
+silently passed. Fewer than three trials is reported as smoke evidence rather than a reliability
+number, and comparison rows are only aligned when case, fixture, semantic grader identity, harness,
+host CLI version, invocation, and model all match.
 
 An optional semantic grader is configured with one pinned Claude model:
 
@@ -185,7 +187,7 @@ project configuration or use them as a fallback for either harness.
   failure. Their live smoke tests are opt-in and are not part of an ordinary test run.
 - Codex exposes no authoritative Skill-activation event, so Codex activation evidence is `inferred`
   and is never reported as `observed`.
-- Comparison facets that a run did not record — grader versions, host CLI version, invocation — are
+- Comparison facets that a run did not record — semantic grader identity, host CLI version, invocation — are
   labeled unverified rather than assumed aligned.
 - Semantic grading requires a native Claude harness and a signed-in Claude Code session; deterministic
   and Codex selections are refused when it is configured.

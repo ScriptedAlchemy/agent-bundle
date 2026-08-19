@@ -297,21 +297,26 @@ type DirectorySyncReason =
   | 'pending-index-publication'
   | 'session-metadata-rename';
 type DurableFilePhase = 'event' | 'owner' | 'pending-index' | 'session-metadata';
+type OwnerMutationReason = 'create-recovery' | 'recovery' | 'release';
 type DurabilityTestPhase =
   | 'after-final-index-link'
   | 'after-object-admission-ownership-check'
   | 'before-object-admission-cleanup'
+  | 'before-owner-lock-recovery'
   | 'before-final-index-link'
   | `before-directory-fsync:${DirectorySyncReason}`
   | `before-directory-open:${DirectorySyncReason}`
   | `before-directory-sync:${DirectorySyncReason}`
   | `before-file-fsync:${DurableFilePhase}`
-  | `before-file-write:${DurableFilePhase}`;
-type DurabilityTestHook = (phase: DurabilityTestPhase, path: string) => void;
+  | `before-file-write:${DurableFilePhase}`
+  | `before-owner-lock-unlink:${OwnerMutationReason}`;
+type DurabilityTestHook = (phase: DurabilityTestPhase, path: string) => Promise<void> | void;
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
 const durabilityTestHookKey = Symbol.for('agent-bundle.playground-service.durability-test-hook');
 const durabilityTestPlatformKey = Symbol.for('agent-bundle.playground-service.durability-test-platform');
 const pathSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
+const canonicalOwnerToken = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const ownerMutationTails = new Map<string, Promise<void>>();
 const traceSources: ReadonlySet<string> = new Set<PlaygroundTraceSource>([
   'build',
   'diagnostics',
@@ -386,10 +391,52 @@ const hasPersistedOutcomeSchema = (value: unknown): boolean => {
 const serviceError = (code: PlaygroundServiceErrorCode, message: string): PlaygroundServiceError =>
   new PlaygroundServiceError(code, message);
 
+const parseOwnerLockDocument = (document: string): OwnerLock => {
+  let parsed: unknown;
+  try {
+    parsed = parseJsonWithoutDuplicateKeys(document);
+  } catch {
+    throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is malformed.');
+  }
+  if (!isRecord(parsed)
+    || !hasExactOwnKeys(parsed, ['pid', 'token'])
+    || typeof parsed.pid !== 'number'
+    || !Number.isSafeInteger(parsed.pid)
+    || parsed.pid < 1
+    || typeof parsed.token !== 'string'
+    || !canonicalOwnerToken.test(parsed.token)) {
+    throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is invalid.');
+  }
+  return Object.freeze({ pid: parsed.pid, token: parsed.token });
+};
+
+const sameOwner = (left: OwnerLock, right: OwnerLock): boolean =>
+  left.pid === right.pid && left.token === right.token;
+
+const serializeOwnerMutation = async <T>(path: string, operation: () => Promise<T>): Promise<T> => {
+  const previous = ownerMutationTails.get(path) ?? Promise.resolve();
+  let release!: () => void;
+  const boundary = new Promise<void>((resolveBoundary) => { release = resolveBoundary; });
+  ownerMutationTails.set(path, boundary);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (ownerMutationTails.get(path) === boundary) ownerMutationTails.delete(path);
+  }
+};
+
 const runDurabilityTestHook = (phase: DurabilityTestPhase, path: string): void => {
   if (process.env.NODE_ENV !== 'test') return;
   const hooks = globalThis as typeof globalThis & Record<symbol, DurabilityTestHook | undefined>;
-  hooks[durabilityTestHookKey]?.(phase, path);
+  void hooks[durabilityTestHookKey]?.(phase, path);
+};
+
+const runAsyncDurabilityTestHook = async (phase: DurabilityTestPhase, path: string): Promise<void> => {
+  if (process.env.NODE_ENV !== 'test') return;
+  const hooks = globalThis as typeof globalThis & Record<symbol, DurabilityTestHook | undefined>;
+  await hooks[durabilityTestHookKey]?.(phase, path);
 };
 
 const durabilityPlatform = (): NodeJS.Platform => {
@@ -666,7 +713,9 @@ export class PlaygroundService {
         this.#syncDirectory(this.#requireObjectRoot(), 'object-created');
         await this.#assertObjectDirectory(root, storageObjectId);
         this.#assertAvailable();
-        const ownerToken = await this.#acquireOwner(root, id);
+        const ownerToken = await this.#acquireOwner(root, id, (token) => {
+          admission.ownerToken = token;
+        });
         admission.ownerToken = ownerToken;
         record = {
           admissionFailed: false,
@@ -1412,7 +1461,7 @@ export class PlaygroundService {
     try {
       await this.#assertObjectDirectory(root, objectId);
       const owner = await this.#readOwnerLock(root);
-      if (owner.token !== token) {
+      if (!sameOwner(owner, { pid: process.pid, token })) {
         throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} object ownership changed during admission.`);
       }
     } catch (error) {
@@ -1547,7 +1596,11 @@ export class PlaygroundService {
     }
   }
 
-  async #acquireOwner(root: string, sessionId: string): Promise<string> {
+  async #acquireOwner(
+    root: string,
+    sessionId: string,
+    retainUnsettledOwner?: (token: string) => void,
+  ): Promise<string> {
     const token = randomUUID();
     const path = join(root, ownerLockName);
     const document = Object.freeze({ pid: process.pid, token });
@@ -1579,6 +1632,7 @@ export class PlaygroundService {
           try {
             await this.#removeJustCreatedOwnerLock(root, token);
           } catch (cleanupError) {
+            retainUnsettledOwner?.(token);
             throw new AggregateError(
               [error, cleanupError],
               'Playground owner-lock durability failure could not be cleaned up.',
@@ -1589,17 +1643,18 @@ export class PlaygroundService {
         }
         if (!isErrno(error, 'EEXIST')) throw error;
       }
-      const owner = await this.#readOwnerLock(root);
-      if (!this.#ownerIsStale(owner)) {
-        throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} is owned by another foreground service.`);
-      }
-      try {
-        await this.#assertMutableFile(root, ownerLockName);
-        await unlink(path);
-        this.#syncDirectory(root, 'owner-lock-recovery');
-      } catch (error) {
-        if (!isErrno(error, 'ENOENT')) throw error;
-      }
+      await serializeOwnerMutation(path, async () => {
+        try {
+          await runAsyncDurabilityTestHook('before-owner-lock-recovery', path);
+          const owner = await this.#readOwnerLock(root);
+          if (!this.#ownerIsStale(owner)) {
+            throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} is owned by another foreground service.`);
+          }
+          await this.#unlinkExpectedOwner(root, owner, 'recovery');
+        } catch (error) {
+          if (!isErrno(error, 'ENOENT')) throw error;
+        }
+      });
     }
     throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} ownership could not be acquired.`);
   }
@@ -1607,44 +1662,56 @@ export class PlaygroundService {
   async #releaseOwner(root: string, token: string): Promise<void> {
     const path = join(root, ownerLockName);
     try {
-      const owner = await this.#readOwnerLock(root);
-      if (owner.token === token) {
-        await this.#assertMutableFile(root, ownerLockName);
-        await unlink(path);
-        this.#syncDirectory(root, 'owner-lock-release');
-      }
+      await serializeOwnerMutation(path, async () => {
+        await this.#unlinkExpectedOwner(root, Object.freeze({ pid: process.pid, token }), 'release');
+      });
     } catch (error) {
       if (!isErrno(error, 'ENOENT')) throw error;
     }
   }
 
   async #readOwnerLock(root: string): Promise<OwnerLock> {
-    let parsed: unknown;
+    let document: string;
     try {
-      parsed = parseJsonWithoutDuplicateKeys(await this.#readMutableFile(root, ownerLockName));
-    } catch {
+      document = await this.#readMutableFile(root, ownerLockName);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) throw error;
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is malformed.');
     }
-    if (!isRecord(parsed) || !hasExactOwnKeys(parsed, ['pid', 'token']) || typeof parsed.pid !== 'number'
-      || !Number.isSafeInteger(parsed.pid) || parsed.pid < 1 || typeof parsed.token !== 'string') {
-      throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is invalid.');
-    }
-    return Object.freeze({ pid: parsed.pid, token: parsed.token });
+    return parseOwnerLockDocument(document);
   }
 
   async #removeJustCreatedOwnerLock(root: string, token: string): Promise<void> {
     const path = join(root, ownerLockName);
-    const owner = await this.#readOwnerLock(root);
-    if (owner.token !== token) {
-      throw serviceError('PLAYGROUND_SESSION_OWNED', 'Playground owner lock changed before durability cleanup.');
+    await serializeOwnerMutation(path, async () => {
+      await this.#unlinkExpectedOwner(root, Object.freeze({ pid: process.pid, token }), 'create-recovery');
+    });
+  }
+
+  async #unlinkExpectedOwner(root: string, expected: OwnerLock, reason: OwnerMutationReason): Promise<void> {
+    const path = join(root, ownerLockName);
+    const handle = await this.#openPinnedMutableFile(root, ownerLockName, constants.O_RDONLY);
+    try {
+      const pinnedBefore = await handle.stat();
+      await runAsyncDurabilityTestHook(`before-owner-lock-unlink:${reason}`, path);
+      const [contents, pathStat, pinnedAfter] = await Promise.all([handle.readFile(), lstat(path), handle.stat()]);
+      const actual = parseOwnerLockDocument(contents.toString('utf8'));
+      if (!pathStat.isFile()
+        || pathStat.isSymbolicLink()
+        || pathStat.nlink !== 1
+        || pinnedBefore.dev !== pathStat.dev
+        || pinnedBefore.ino !== pathStat.ino
+        || pinnedAfter.dev !== pathStat.dev
+        || pinnedAfter.ino !== pathStat.ino
+        || pinnedAfter.nlink !== 1
+        || !sameOwner(actual, expected)) {
+        throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground owner lock changed before ${reason} removal.`);
+      }
+      await unlink(path);
+    } finally {
+      await handle.close();
     }
-    await this.#assertMutableFile(root, ownerLockName);
-    const currentOwner = await this.#readOwnerLock(root);
-    if (currentOwner.token !== token) {
-      throw serviceError('PLAYGROUND_SESSION_OWNED', 'Playground owner lock changed during durability cleanup.');
-    }
-    await unlink(path);
-    this.#syncDirectory(root, 'owner-lock-create-recovery');
+    this.#syncDirectory(root, reason === 'create-recovery' ? 'owner-lock-create-recovery' : `owner-lock-${reason}`);
   }
 
   #ownerIsStale(owner: OwnerLock): boolean {

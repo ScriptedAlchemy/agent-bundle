@@ -8,7 +8,7 @@ export default {
         apps: {
           dashboard: {
             entry: './views/dashboard.ts',
-            resourceUri: 'ui://packed-release/dashboard-v1.html',
+            resourceUri: 'ui://packed-release/dashboard.html',
             targets: ['portable'],
             template: './views/shell.html',
           },

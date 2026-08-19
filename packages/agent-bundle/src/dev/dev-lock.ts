@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, open, readFile, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
@@ -16,6 +16,16 @@ export interface DevLockOptions {
   readonly now?: () => Date;
   readonly probeProcess?: (pid: number) => boolean;
   readonly projectRoot: string;
+  readonly storage?: DevLockStorage;
+}
+
+export interface DevLockStorage {
+  readonly link: typeof link;
+  readonly lstat: typeof lstat;
+  readonly mkdir: typeof mkdir;
+  readonly open: typeof open;
+  readonly readFile: typeof readFile;
+  readonly remove: typeof rm;
 }
 
 export type DevLockErrorCode = 'DEV_LOCK_HELD' | 'DEV_LOCK_INVALID';
@@ -34,6 +44,7 @@ export class DevLockError extends Error {
 
 const devLockName = 'dev.lock';
 const recoverySuffix = '.recovery';
+const defaultStorage: DevLockStorage = Object.freeze({ link, lstat, mkdir, open, readFile, remove: rm });
 
 interface RecoveryRecord {
   readonly owner: DevLockOwner;
@@ -105,26 +116,95 @@ const parseRecoveryRecord = (value: string, projectRoot: string): RecoveryRecord
   }
 };
 
-const writeCompleteExclusive = async (path: string, contents: string, nonce: string): Promise<boolean> => {
-  const candidate = join(dirname(path), `.${basename(path)}.candidate-${nonce}`);
+const candidatePathFor = (path: string, nonce: string): string =>
+  join(dirname(path), `.${basename(path)}.candidate-${nonce}`);
+
+const syncDirectory = async (storage: DevLockStorage, path: string): Promise<void> => {
+  const handle = await storage.open(path, 'r');
   try {
-    await writeFile(candidate, contents, { encoding: 'utf8', flag: 'wx' });
-    try {
-      await link(candidate, path);
-      return true;
-    } catch (error) {
-      if (isErrno(error, 'EEXIST')) return false;
-      throw error;
-    }
+    await handle.sync();
+  } catch (error) {
+    if (process.platform === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+    throw error;
   } finally {
-    await rm(candidate, { force: true });
+    await handle.close();
   }
 };
 
-const removeIfOwned = async (path: string, contents: string): Promise<void> => {
+const writeCompleteExclusive = async (
+  storage: DevLockStorage,
+  path: string,
+  contents: string,
+  nonce: string,
+): Promise<boolean> => {
+  const candidate = candidatePathFor(path, nonce);
+  const handle = await storage.open(candidate, 'wx', 0o600);
   try {
-    if (await readFile(path, 'utf8') === contents) {
-      await rm(path, { force: true });
+    await handle.writeFile(contents, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+
+  let published = false;
+  let publicationFailure: unknown;
+  try {
+    await storage.link(candidate, path);
+    published = true;
+  } catch (error) {
+    if (!isErrno(error, 'EEXIST')) publicationFailure = error;
+  }
+  let candidateCleanupFailure: unknown;
+  try {
+    await storage.remove(candidate, { force: true });
+  } catch (error) {
+    candidateCleanupFailure = error;
+  }
+  if (publicationFailure !== undefined) {
+    if (candidateCleanupFailure !== undefined) {
+      throw new AggregateError(
+        [publicationFailure, candidateCleanupFailure],
+        'Development lock publication and candidate cleanup both failed.',
+        { cause: publicationFailure },
+      );
+    }
+    throw publicationFailure;
+  }
+  if (!published) {
+    if (candidateCleanupFailure !== undefined) throw candidateCleanupFailure;
+    return false;
+  }
+
+  try {
+    await syncDirectory(storage, dirname(path));
+  } catch (error) {
+    const cleanupFailures: unknown[] = [];
+    try {
+      await removeIfOwned(storage, path, contents);
+    } catch (cleanupFailure) {
+      cleanupFailures.push(cleanupFailure);
+    }
+    try {
+      await removeIfOwned(storage, candidate, contents);
+    } catch (cleanupFailure) {
+      cleanupFailures.push(cleanupFailure);
+    }
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupFailures],
+        'Development lock publication and rollback both failed.',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  return true;
+};
+
+const removeIfOwned = async (storage: DevLockStorage, path: string, contents: string): Promise<void> => {
+  try {
+    if (await storage.readFile(path, 'utf8') === contents) {
+      await storage.remove(path, { force: true });
     }
   } catch (error) {
     if (!isErrno(error, 'ENOENT')) throw error;
@@ -138,17 +218,18 @@ const yieldToFilesystem = async (): Promise<void> => {
 const recoveryContentsFor = (owner: DevLockOwner): string => `${stableJson({ owner })}\n`;
 
 const acquireRecoveryGate = async (
+  storage: DevLockStorage,
   recoveryPath: string,
   owner: DevLockOwner,
   probeProcess: (pid: number) => boolean,
 ): Promise<string> => {
   const contents = recoveryContentsFor(owner);
   for (;;) {
-    if (await writeCompleteExclusive(recoveryPath, contents, owner.nonce)) return contents;
+    if (await writeCompleteExclusive(storage, recoveryPath, contents, owner.nonce)) return contents;
 
     let currentContents: string;
     try {
-      currentContents = await readFile(recoveryPath, 'utf8');
+      currentContents = await storage.readFile(recoveryPath, 'utf8');
     } catch (error) {
       if (isErrno(error, 'ENOENT')) continue;
       throw error;
@@ -164,7 +245,7 @@ const acquireRecoveryGate = async (
       await yieldToFilesystem();
       continue;
     }
-    await removeIfOwned(recoveryPath, currentContents);
+    await removeIfOwned(storage, recoveryPath, currentContents);
   }
 };
 
@@ -173,6 +254,7 @@ export class DevLock {
   readonly #path: string;
   readonly #probeProcess: (pid: number) => boolean;
   readonly #recoveryPath: string;
+  readonly #storage: DevLockStorage;
   #closed = false;
   #closePromise: Promise<void> | undefined;
 
@@ -182,10 +264,12 @@ export class DevLock {
     contents: string,
     owner: DevLockOwner,
     probeProcess: (pid: number) => boolean,
+    storage: DevLockStorage,
   ) {
     this.#path = path;
     this.#probeProcess = probeProcess;
     this.#recoveryPath = recoveryPath;
+    this.#storage = storage;
     this.#contents = contents;
     this.owner = owner;
   }
@@ -197,11 +281,17 @@ export class DevLock {
     if (this.#closePromise !== undefined) return this.#closePromise;
 
     const closePromise = (async () => {
-      const recoveryContents = await acquireRecoveryGate(this.#recoveryPath, this.owner, this.#probeProcess);
+      const recoveryContents = await acquireRecoveryGate(
+        this.#storage,
+        this.#recoveryPath,
+        this.owner,
+        this.#probeProcess,
+      );
       try {
-        await removeIfOwned(this.#path, this.#contents);
+        await removeIfOwned(this.#storage, this.#path, this.#contents);
+        await removeIfOwned(this.#storage, candidatePathFor(this.#path, this.owner.nonce), this.#contents);
       } finally {
-        await removeIfOwned(this.#recoveryPath, recoveryContents);
+        await removeIfOwned(this.#storage, this.#recoveryPath, recoveryContents);
       }
     })();
     this.#closePromise = closePromise;
@@ -220,6 +310,7 @@ export class DevLock {
 
 /** Acquires the single writer lock for one project's development epoch store. */
 export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> => {
+  const storage = options.storage ?? defaultStorage;
   const projectRoot = resolve(options.projectRoot);
   const path = join(projectRoot, '.agent-bundle', devLockName);
   const owner: DevLockOwner = Object.freeze({
@@ -232,8 +323,8 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
   const probeProcess = options.probeProcess ?? isProcessRunning;
   const recoveryPath = `${path}${recoverySuffix}`;
   const directoryPath = dirname(path);
-  await mkdir(directoryPath, { recursive: true });
-  if (!(await lstat(directoryPath)).isDirectory()) {
+  await storage.mkdir(directoryPath, { recursive: true });
+  if (!(await storage.lstat(directoryPath)).isDirectory()) {
     throw new DevLockError(
       'DEV_LOCK_INVALID',
       'The .agent-bundle path must be a directory contained by the project.',
@@ -241,13 +332,13 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
   }
 
   for (;;) {
-    if (await writeCompleteExclusive(path, contents, owner.nonce)) {
-      return new DevLock(path, recoveryPath, contents, owner, probeProcess);
+    if (await writeCompleteExclusive(storage, path, contents, owner.nonce)) {
+      return new DevLock(path, recoveryPath, contents, owner, probeProcess, storage);
     }
 
     let currentContents: string;
     try {
-      currentContents = await readFile(path, 'utf8');
+      currentContents = await storage.readFile(path, 'utf8');
     } catch (error) {
       if (isErrno(error, 'ENOENT')) continue;
       throw error;
@@ -267,11 +358,11 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
       );
     }
 
-    const recoveryContents = await acquireRecoveryGate(recoveryPath, owner, probeProcess);
+    const recoveryContents = await acquireRecoveryGate(storage, recoveryPath, owner, probeProcess);
     try {
       let currentDuringRecovery: string;
       try {
-        currentDuringRecovery = await readFile(path, 'utf8');
+        currentDuringRecovery = await storage.readFile(path, 'utf8');
       } catch (error) {
         if (isErrno(error, 'ENOENT')) continue;
         throw error;
@@ -285,11 +376,16 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
         );
       }
       if (probeProcess(ownerDuringRecovery.pid)) continue;
-      await removeIfOwned(path, currentContents);
+      await removeIfOwned(storage, path, currentContents);
+      await removeIfOwned(
+        storage,
+        candidatePathFor(path, ownerDuringRecovery.nonce),
+        currentContents,
+      );
     } catch (error) {
       if (!isErrno(error, 'ENOENT')) throw error;
     } finally {
-      await removeIfOwned(recoveryPath, recoveryContents);
+      await removeIfOwned(storage, recoveryPath, recoveryContents);
     }
   }
 };

@@ -75,6 +75,8 @@ afterEach(async () => {
   await Promise.all(directories.map((directory) => rm(directory, { force: true, recursive: true })));
 });
 
+const nativeCatalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
+
 const claudeStream = [
   '{"type":"system","subtype":"init","plugins":[{"name":"review"}],"mcp_servers":[{"name":"project"}]}',
   '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"sk-proj-1234567890abcdef /private/native/activation"}}]}}',
@@ -425,6 +427,254 @@ it('rejects semantically hostile persisted catalog selections without rediscover
     });
     await expect(reader.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
     await reader.close();
+  }
+});
+
+it('rejects catalog directories that escape epoch metadata through a symlinked directory or ancestor', async () => {
+  for (const symlinkLocation of ['catalog', 'metadata'] as const) {
+    const root = await mkdtemp(join(tmpdir(), `agent-bundle-native-playground-${symlinkLocation}-escape-`));
+    try {
+      const epochsRoot = join(root, '.agent-bundle', 'epochs');
+      const reference = epoch(`epoch-${symlinkLocation}-escape`, join(epochsRoot, `epoch-${symlinkLocation}-escape`));
+      const outside = join(root, 'outside');
+      await Promise.all([mkdir(reference.root, { recursive: true }), mkdir(outside)]);
+      if (symlinkLocation === 'metadata') {
+        await symlink(outside, join(epochsRoot, '.metadata'), 'dir');
+      } else {
+        const metadata = join(epochsRoot, '.metadata');
+        await mkdir(metadata);
+        await symlink(outside, join(metadata, 'native-playground'), 'dir');
+      }
+      const service = new NativePlaygroundService({
+        discover: async () => Object.freeze([]),
+        inspectArtifact: async (candidate) => Object.freeze({
+          binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+          root: candidate.root,
+        }),
+        projectRoot: root,
+      });
+      await expect(service.catalog(reference)).rejects.toThrow('catalog directory is invalid');
+      await service.close();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }
+});
+
+it('requires every persisted fixture sha256 to be exactly 64 lowercase hexadecimal characters', async () => {
+  for (const [label, sha256] of [
+    ['uppercase', 'A'.repeat(64)],
+    ['short', 'a'.repeat(63)],
+    ['non-hex', 'g'.repeat(64)],
+  ] as const) {
+    const root = await mkdtemp(join(tmpdir(), `agent-bundle-native-playground-${label}-sha-`));
+    try {
+      const suiteDir = join(root, 'evals');
+      const fixtureDir = join(suiteDir, 'fixture');
+      await mkdir(fixtureDir, { recursive: true });
+      await writeFile(join(fixtureDir, 'input.txt'), 'fixture bytes\n');
+      const entries = Object.freeze([Object.freeze({ executable: false, path: 'input.txt', sha256 })]);
+      const service = new NativePlaygroundService({
+        catalogDirectory: join(root, 'catalog'),
+        discover: async () => nativeSuite('claude', join(suiteDir, 'review.eval.ts')),
+        inspectArtifact: async (candidate) => Object.freeze({
+          binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+          root: candidate.root,
+        }),
+        planFixture: async () => Object.freeze({
+          digest: digest({ entries, git: false }),
+          entries,
+          git: false,
+          sourcePath: fixtureDir,
+        }),
+        projectRoot: root,
+      });
+      await expect(service.catalog(epoch(`epoch-${label}-sha`, join(root, 'artifact'))))
+        .rejects.toThrow('Native Playground discovered an invalid fixture plan.');
+      await service.close();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }
+});
+
+it('rejects a catalog whose cumulative nested values exceed the whole-sidecar budget', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-cumulative-budget-'));
+  try {
+    const suiteDir = join(root, 'evals');
+    const fixtureDir = join(suiteDir, 'fixture');
+    await mkdir(fixtureDir, { recursive: true });
+    const entries = Object.freeze(Array.from({ length: 4_096 }, (_, index) => Object.freeze({
+      executable: false,
+      path: `file-${index}.txt`,
+      sha256: 'a'.repeat(64),
+    })).sort((left, right) => left.path.localeCompare(right.path)));
+    const discovered = Object.freeze([Object.freeze({
+      sourcePath: join(suiteDir, 'review.eval.ts'),
+      suite: defineEvalSuite({
+        cases: [0, 1].map((index) => ({
+          assertions: [expectExitCode(0)],
+          fixture: { git: false, include: ['**/*'], path: './fixture' },
+          hosts: {
+            claude: { model: 'pinned-claude-model' },
+            codex: { model: 'pinned-codex-model' },
+          },
+          id: `budget-case-${index}`,
+          invocation: { mode: 'automatic' as const },
+          prompt: 'Review the fixture.',
+          trials: 1,
+        })),
+        name: 'cumulative-budget',
+      }),
+    })]);
+    const service = new NativePlaygroundService({
+      catalogDirectory: join(root, 'catalog'),
+      discover: async () => discovered,
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      planFixture: async () => Object.freeze({
+        digest: digest({ entries, git: false }),
+        entries,
+        git: false,
+        sourcePath: fixtureDir,
+      }),
+      projectRoot: root,
+    });
+    const reference = Object.freeze({
+      ...epoch('epoch-cumulative-budget', join(root, 'artifact')),
+      epoch: Object.freeze({
+        ...epoch('epoch-cumulative-budget', join(root, 'artifact')).epoch,
+        targetDigests: Object.freeze({ claude: 'target-claude', codex: 'target-codex' }),
+      }),
+    });
+    await expect(service.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('tolerates only Windows directory fsync capability failures during catalog publication', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-windows-directory-sync-'));
+  const catalogDirectory = join(root, 'catalog');
+  const runtime = globalThis as typeof globalThis & Record<symbol, NodeJS.Platform | undefined>;
+  const previousPlatform = runtime[nativeCatalogDurabilityPlatformKey];
+  runtime[nativeCatalogDurabilityPlatformKey] = 'win32';
+  const serviceFor = (code: 'EACCES' | 'EINVAL' | 'EPERM'): NativePlaygroundService => {
+    const storage: NativePlaygroundCatalogStorage = {
+      link,
+      mkdir,
+      open: async (path, flags, mode) => {
+        const handle = await open(path, flags, mode);
+        if (String(path) !== catalogDirectory) return handle;
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === 'sync') {
+              return async () => {
+                throw Object.assign(new Error(`${code} directory sync`), { code });
+              };
+            }
+            const value = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      },
+      move: rename,
+      remove: rm,
+    };
+    return new NativePlaygroundService({
+      catalogDirectory,
+      catalogStorage: storage,
+      discover: async () => suite(),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      planFixture: async () => fixturePlan,
+      projectRoot: '/project',
+    });
+  };
+  try {
+    for (const code of ['EACCES', 'EINVAL'] as const) {
+      await rm(catalogDirectory, { force: true, recursive: true });
+      const service = serviceFor(code);
+      await expect(service.catalog(epoch(`epoch-${code.toLowerCase()}`, join(root, code)))).resolves.toMatchObject({ epochId: `epoch-${code.toLowerCase()}` });
+      await service.close();
+    }
+    await rm(catalogDirectory, { force: true, recursive: true });
+    const service = serviceFor('EPERM');
+    await expect(service.catalog(epoch('epoch-eperm', join(root, 'EPERM')))).rejects.toMatchObject({
+      errors: [expect.objectContaining({ code: 'EPERM' }), expect.objectContaining({ code: 'EPERM' })],
+    });
+    await service.close();
+  } finally {
+    if (previousPlatform === undefined) delete runtime[nativeCatalogDurabilityPlatformKey];
+    else runtime[nativeCatalogDurabilityPlatformKey] = previousPlatform;
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('preserves a catalog replacement raced into rollback and fsyncs the parent after cleanup', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-rollback-race-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-rollback-race', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, 'epoch-rollback-race.json');
+  const replacement = '{"replacement":true}\n';
+  let directorySyncs = 0;
+  let injectReplacement = false;
+  let replacementInjected = false;
+  const replaceSidecar = async (): Promise<void> => {
+    if (!injectReplacement || replacementInjected) return;
+    replacementInjected = true;
+    const replacementPath = join(catalogDirectory, '.replacement');
+    await writeFile(replacementPath, replacement);
+    await rename(replacementPath, sidecar);
+  };
+  const storage = {
+    link,
+    mkdir,
+    open: async (path: Parameters<typeof open>[0], flags: Parameters<typeof open>[1], mode?: Parameters<typeof open>[2]) => {
+      const handle = await open(path, flags, mode);
+      if (String(path) !== catalogDirectory) return handle;
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync') return async () => { directorySyncs += 1; await target.sync(); };
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+    remove: async (path: Parameters<typeof rm>[0], options: Parameters<typeof rm>[1]) => {
+      if (String(path) === sidecar) await replaceSidecar();
+      await rm(path, options);
+    },
+    move: async (oldPath: Parameters<typeof rename>[0], newPath: Parameters<typeof rename>[1]) => {
+      if (String(oldPath) === sidecar) await replaceSidecar();
+      await rename(oldPath, newPath);
+    },
+  } as NativePlaygroundCatalogStorage & { readonly move: typeof rename };
+  try {
+    const service = new NativePlaygroundService({
+      catalogDirectory,
+      catalogStorage: storage,
+      discover: async () => Object.freeze([]),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      projectRoot: root,
+    });
+    const receipt = await service.publishCatalogSnapshot(reference);
+    const publicationSyncs = directorySyncs;
+    injectReplacement = true;
+    await receipt.rollback();
+    expect(await readFile(sidecar, 'utf8')).toBe(replacement);
+    expect(directorySyncs).toBe(publicationSyncs + 1);
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 
@@ -1190,7 +1440,13 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
     for (const failure of ['write', 'file', 'link', 'directory'] as const) {
       await rm(catalogDirectory, { force: true, recursive: true });
       const service = serviceFor(failure);
-      await expect(service.catalog(reference)).rejects.toThrow(failures.get(failure)!.message);
+      if (failure === 'directory') {
+        await expect(service.catalog(reference)).rejects.toMatchObject({
+          errors: [failures.get(failure), failures.get(failure)],
+        });
+      } else {
+        await expect(service.catalog(reference)).rejects.toThrow(failures.get(failure)!.message);
+      }
       expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
       await expect(readFile(join(catalogDirectory, `${reference.epoch.id}.json`), 'utf8'))
         .rejects.toMatchObject({ code: 'ENOENT' });

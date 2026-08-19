@@ -146,6 +146,57 @@ it('returns route diagnostics instead of a simulation', async () => {
   })).resolves.toMatchObject({ diagnostics: [{ code: 'hook.playground.target.unsupported' }] });
 });
 
+it('rejects surplus fields throughout the hook list wire DTO', async () => {
+  const listedHook = {
+    binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
+    hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'claude/hooks/session-start.mjs', target: 'claude' },
+  };
+  const malformed = [
+    { hooks: [], schemaVersion: 1 },
+    { hooks: [{ ...listedHook, version: 1 }] },
+    { hooks: [{ ...listedHook, binding: { ...listedHook.binding, schemaVersion: 1 } }] },
+    { hooks: [{ ...listedHook, hook: { ...listedHook.hook, version: 1 } }] },
+  ];
+
+  for (const body of malformed) {
+    const client = new HookClient({ foreground: foreground(recordingFetch([], () => response(body))) });
+
+    await expect(client.list({ epochId: 'epoch-1' })).rejects.toMatchObject({ code: 'AB8033' });
+  }
+});
+
+it('rejects surplus fields throughout the hook simulation wire DTO', async () => {
+  const diagnostic = {
+    code: 'hook.playground.target.unsupported',
+    event: 'sessionStart',
+    message: 'Hook playground cannot map target "codex".',
+    severity: 'error',
+    target: 'codex',
+  };
+  const malformed = [
+    { simulation, schemaVersion: 1 },
+    { diagnostics: [diagnostic], version: 1 },
+    { diagnostics: [{ ...diagnostic, schemaVersion: 1 }] },
+    { simulation: { ...simulation, version: 1 } },
+    { simulation: { ...simulation, binding: { ...simulation.binding, schemaVersion: 1 } } },
+    { simulation: { ...simulation, canonicalIntent: { ...simulation.canonicalIntent, version: 1 } } },
+    { simulation: { ...simulation, hostMapping: { ...simulation.hostMapping, schemaVersion: 1 } } },
+    { simulation: { ...simulation, replay: { ...simulation.replay, version: 1 } } },
+    { simulation: { ...simulation, replay: { ...simulation.replay, binding: { ...simulation.replay.binding, schemaVersion: 1 } } } },
+  ];
+
+  for (const body of malformed) {
+    const client = new HookClient({ foreground: foreground(recordingFetch([], () => response(body))) });
+
+    await expect(client.simulate({
+      epochId: 'epoch-1',
+      hook: 'hook:session-start',
+      input: { inline: {} },
+      target: 'claude',
+    })).rejects.toMatchObject({ code: 'AB8033' });
+  }
+});
+
 it('decodes a route diagnostic body into a coded client error', async () => {
   const client = new HookClient({
     foreground: foreground(recordingFetch([], () => response({

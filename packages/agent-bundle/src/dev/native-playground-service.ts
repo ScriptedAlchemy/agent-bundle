@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { link, mkdir, mkdtemp, open, rename, rm } from 'node:fs/promises';
+import { link, lstat, mkdir, mkdtemp, open, realpath, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { digest, stableJson } from '../core/digest.ts';
@@ -22,6 +22,7 @@ import { safeDevWireText } from './dev-log-service.ts';
 import type { ArtifactEpoch } from './types.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../eval/workspace-diff.ts';
 import { isErrno } from '../core/errors.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
 
 export type NativePlaygroundHost = 'claude' | 'codex';
 
@@ -198,11 +199,13 @@ class DiscardingTrialWriter implements EvalTrialWriter {
 }
 
 const nativeHosts = new Set<NativePlaygroundHost>(['claude', 'codex']);
+const catalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
 const maximumCatalogSelections = 256;
+const maximumCatalogSnapshotBytes = 8 * 1_024 * 1_024;
+const maximumCatalogSnapshotNodes = 65_536;
 const maximumFixtureEntries = 4_096;
 const maximumSnapshotDepth = 16;
 const maximumSnapshotStringLength = 16_384;
-const maximumCatalogSnapshotBytes = 8 * 1024 * 1024;
 const maximumNativeEvidenceEntries = 64;
 const maximumNativeEvidenceTextBytes = 4 * 1024;
 const maximumNativeResponseBytes = 256 * 1024;
@@ -210,6 +213,12 @@ const sha256 = /^[a-f0-9]{64}$/u;
 const safeEpochSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const safeIdentifier = /^[a-z0-9][a-z0-9._-]*$/iu;
 const catalogOpenFlags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK);
+
+const catalogDurabilityPlatform = (): NodeJS.Platform => {
+  if (process.env.NODE_ENV !== 'test') return process.platform;
+  const platforms = globalThis as typeof globalThis & Record<symbol, NodeJS.Platform | undefined>;
+  return platforms[catalogDurabilityPlatformKey] ?? process.platform;
+};
 
 const containedPath = (root: string, candidate: string, allowRoot = false): boolean => {
   const path = relative(resolve(root), resolve(candidate));
@@ -463,6 +472,22 @@ const exactKeys = (value: Readonly<Record<string, JsonValue>>, keys: readonly st
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+};
+
+const withinCatalogSnapshotNodeBudget = (root: unknown): boolean => {
+  let remaining = maximumCatalogSnapshotNodes;
+  const pending: unknown[] = [root];
+  while (pending.length > 0) {
+    remaining -= 1;
+    if (remaining < 0) return false;
+    const value = pending.pop();
+    if (Array.isArray(value)) {
+      for (const entry of value) pending.push(entry);
+    } else if (typeof value === 'object' && value !== null) {
+      for (const entry of Object.values(value)) pending.push(entry);
+    }
+  }
+  return true;
 };
 
 const persistedFixturePlan = (
@@ -924,10 +949,16 @@ export class NativePlaygroundService {
   }
 
   async #readSnapshot(reference: NativePlaygroundEpochReference): Promise<PersistedCatalogSnapshot | undefined> {
-    const sidecar = await this.#readSidecar(this.#snapshotPath(reference));
+    const path = this.#snapshotPath(reference);
+    await this.#assertCatalogDirectory(reference, dirname(path), true);
+    const sidecar = await this.#readSidecar(path);
     if (sidecar === undefined) return undefined;
     let value: JsonValue;
-    try { value = snapshotStrictJsonValue(parseJsonWithoutDuplicateKeys(sidecar.raw)); }
+    try {
+      const parsed = parseJsonWithoutDuplicateKeys(sidecar.raw);
+      if (!withinCatalogSnapshotNodeBudget(parsed)) throw new Error('Native Playground catalog snapshot exceeds its cumulative value budget.');
+      value = snapshotStrictJsonValue(parsed);
+    }
     catch { throw new Error('Native Playground catalog snapshot is invalid.'); }
     if (!isRecord(value) || !exactKeys(value, ['epochId', 'selections']) ||
       value.epochId !== reference.epoch.id || !Array.isArray(value.selections) || value.selections.length > maximumCatalogSelections) {
@@ -1030,6 +1061,7 @@ export class NativePlaygroundService {
       throw new Error('Native Playground catalog snapshot is too large.');
     }
     await this.#catalogStorage.mkdir(directory, { recursive: true });
+    await this.#assertCatalogDirectory(reference, directory, false);
     const temporary = join(directory, `.${reference.epoch.id}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`);
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     let created = false;
@@ -1054,9 +1086,7 @@ export class NativePlaygroundService {
       catch (error) {
         if (!isErrno(error, 'EEXIST')) throw error;
       }
-      const directoryHandle = await this.#catalogStorage.open(directory, 'r');
-      try { await directoryHandle.sync(); }
-      finally { await directoryHandle.close(); }
+      await this.#syncCatalogDirectory(directory);
     } catch (error) {
       primary = error;
     } finally {
@@ -1113,6 +1143,7 @@ export class NativePlaygroundService {
     created: boolean,
   ): Promise<NativePlaygroundCatalogPublicationReceipt> {
     const path = this.#snapshotPath(reference);
+    await this.#assertCatalogDirectory(reference, dirname(path), false);
     const sidecar = await this.#readSidecar(path);
     if (sidecar === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
     return this.#publicationReceipt(path, sidecar.identity, created);
@@ -1185,6 +1216,19 @@ export class NativePlaygroundService {
     }
     if (primary !== undefined) throw primary;
     if (cleanupFailure !== undefined) throw cleanupFailure;
+    await this.#syncCatalogDirectory(dirname(path));
+  }
+
+  async #syncCatalogDirectory(directory: string): Promise<void> {
+    const handle = await this.#catalogStorage.open(directory, 'r');
+    try {
+      await handle.sync();
+    } catch (error) {
+      if (catalogDurabilityPlatform() === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      throw error;
+    } finally {
+      await handle.close();
+    }
   }
 
   async #rollbackPublicationAndThrow(
@@ -1204,6 +1248,33 @@ export class NativePlaygroundService {
     if (!safeEpochSegment.test(reference.epoch.id)) throw new Error('Native Playground epoch id is not safe for catalog storage.');
     const directory = this.#catalogDirectory ?? join(dirname(reference.root), '.metadata', 'native-playground');
     return join(directory, `${reference.epoch.id}.json`);
+  }
+
+  async #assertCatalogDirectory(
+    reference: NativePlaygroundEpochReference,
+    directory: string,
+    allowMissing: boolean,
+  ): Promise<void> {
+    let metadata;
+    try { metadata = await lstat(directory); }
+    catch (error) {
+      if (allowMissing && isErrno(error, 'ENOENT')) return;
+      throw new Error('Native Playground catalog directory is invalid.', { cause: error });
+    }
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new Error('Native Playground catalog directory is invalid.');
+    }
+    if (this.#catalogDirectory !== undefined) return;
+    try {
+      const resolvedEpochRoot = await realpath(dirname(reference.root));
+      const resolvedDirectory = await realpath(directory);
+      if (!isInsideOrEqual(resolvedEpochRoot, resolvedDirectory)) {
+        throw new Error('Native Playground catalog directory is invalid.');
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Native Playground catalog directory is invalid.') throw error;
+      throw new Error('Native Playground catalog directory is invalid.', { cause: error });
+    }
   }
 
   async #createWorkspaceRoot(): Promise<string> {

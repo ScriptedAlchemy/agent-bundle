@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -113,6 +113,60 @@ it('publishes one validated prepared project as an immutable epoch and removes i
       .resolves.toBe('{"epochId":"epoch-one","selections":[]}\n');
     expect(removedAttempts).toEqual([attemptRoot]);
     await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports active-metadata durability uncertainty as a committed build warning', async () => {
+  const root = await createProject();
+  const durabilityFailure = new Error('active metadata directory sync failed');
+  let failed = false;
+  try {
+    const controlledOpen: typeof open = async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      if (String(path) !== join(root, '.agent-bundle')) return handle;
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync') {
+            return async () => {
+              if (!failed) {
+                failed = true;
+                throw durabilityFailure;
+              }
+              await target.sync();
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+    const store = new EpochStore({
+      durabilityStorage: Object.freeze({ open: controlledOpen, remove: rm }),
+      projectRoot: root,
+    });
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const result = await new ArtifactService({
+      createEpochId: () => 'epoch-post-commit-durability',
+      epochStore: store,
+    }).build(prepared);
+
+    if (result.outcome === 'failed') {
+      throw new Error(result.diagnostics.map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`).join('\n'));
+    }
+    expect(failed).toBe(true);
+    expect(result.outcome).toBe('succeeded');
+    if (result.outcome !== 'succeeded') throw new Error('Committed epoch was reported as failed.');
+    expect(result.epoch.id).toBe('epoch-post-commit-durability');
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7102',
+        message: expect.stringContaining('active metadata durability could not be confirmed'),
+        severity: 'warning',
+      }),
+    ]));
+    await expect(store.readActiveEpoch()).resolves.toEqual(result.epoch);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

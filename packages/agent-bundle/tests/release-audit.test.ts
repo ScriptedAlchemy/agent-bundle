@@ -105,6 +105,50 @@ it('installs public entrypoints and an externally resolved CLI for production co
       readonly dependencies?: Readonly<Record<string, string>>;
     };
     expect(manifest.dependencies?.commander).toBe('15.0.0');
+    await Promise.all([
+      writeFile(join(consumerRoot, 'canonical-contract.mts'), [
+        "import { type CompareEvalsOptions, type RunEvalsOptions } from 'agent-bundle/api';",
+        "import { defineConfig, type AgentBundleConfig } from 'agent-bundle/config';",
+        "import { defineEvalSuite, expectExitCode, normalizeEvalConfig, type EvalConfigInput, type EvalSuiteInput } from 'agent-bundle/eval';",
+        '',
+        "const config = defineConfig({ plugin: { name: 'canonical-consumer', version: '1.0.0' }, targets: ['portable'] } satisfies AgentBundleConfig);",
+        "const evalConfig = { include: ['evals/**/*.eval.ts'], runsDir: '.agent-bundle/runs' } satisfies EvalConfigInput;",
+        "const evalSuite = { cases: [{ assertions: [expectExitCode(0)], fixture: '.', hosts: { claude: { model: 'claude-sonnet-4-5' } }, id: 'canonical-case', invocation: { mode: 'none' }, prompt: 'Verify the canonical contract.' }], name: 'canonical-consumer' } satisfies EvalSuiteInput;",
+        "const runOptions = { harness: 'claude', root: '.', trials: 1 } satisfies RunEvalsOptions;",
+        "const comparisonOptions = { baseRunId: 'baseline', candidateRunId: 'candidate', root: '.' } satisfies CompareEvalsOptions;",
+        '',
+        'void [config, normalizeEvalConfig(evalConfig), defineEvalSuite(evalSuite), runOptions, comparisonOptions];',
+        '',
+      ].join('\n')),
+      writeFile(join(consumerRoot, 'canonical-contract.mjs'), [
+        "import { compareEvals, runEvals } from 'agent-bundle/api';",
+        "import { defineConfig } from 'agent-bundle/config';",
+        "import { defineEvalSuite, expectExitCode, normalizeEvalConfig } from 'agent-bundle/eval';",
+        '',
+        "const config = defineConfig({ plugin: { name: 'canonical-consumer', version: '1.0.0' }, targets: ['portable'] });",
+        "const evalConfig = normalizeEvalConfig({ include: ['evals/**/*.eval.ts'], runsDir: '.agent-bundle/runs' });",
+        "const evalSuite = defineEvalSuite({ cases: [{ assertions: [expectExitCode(0)], fixture: '.', hosts: { claude: { model: 'claude-sonnet-4-5' } }, id: 'canonical-case', invocation: { mode: 'none' }, prompt: 'Verify the canonical contract.' }], name: 'canonical-consumer' });",
+        'const canonicalValues = { config, evalConfig, evalSuite };',
+        'const serialized = JSON.stringify(canonicalValues);',
+        "if (serialized.includes('\"schemaVersion\"') || serialized.includes('\"version\":1')) throw new Error('Canonical public values must not emit schemaVersion or version:1.');",
+        "if (typeof compareEvals !== 'function' || typeof runEvals !== 'function') throw new Error('Expected public Eval API entrypoints.');",
+        "process.stdout.write('canonical public contract\\n');",
+        '',
+      ].join('\n')),
+    ]);
+    await expect(execFile(join(workspaceRoot, 'node_modules', '.bin', 'tsc'), [
+      '--module', 'NodeNext',
+      '--moduleResolution', 'NodeNext',
+      '--noEmit',
+      '--skipLibCheck',
+      '--strict',
+      '--target', 'ES2024',
+      'canonical-contract.mts',
+    ], { cwd: consumerRoot, env: releaseEnvironment() })).resolves.toMatchObject({ stderr: '', stdout: '' });
+    await expect(execFile(process.execPath, ['canonical-contract.mjs'], {
+      cwd: consumerRoot,
+      env: releaseEnvironment(),
+    })).resolves.toMatchObject({ stderr: '', stdout: 'canonical public contract\n' });
     await expect(execFile(process.execPath, [
       '--input-type=module',
       '--eval',

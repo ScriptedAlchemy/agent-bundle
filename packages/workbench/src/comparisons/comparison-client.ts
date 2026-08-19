@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
 import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
+import {
+  explicitInvocationProvenancePattern,
+  semanticGraderIdentityPattern,
+} from '../../../agent-bundle/src/eval/provenance.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import {
   nonnegativeIntegerSchema,
@@ -43,20 +47,20 @@ const provenanceIdentifierSchema = z.string()
 const invocationProvenanceSchema = z.union([
   z.enum(['automatic', 'none']),
   z.string()
-    .regex(/^(?:automatic|explicit):[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u)
+    .regex(explicitInvocationProvenancePattern)
     .refine((value) => !provenancePathMarker.test(value)),
 ]);
-const semanticGraderVersionSchema = z.union([
+const semanticGraderIdentitySchema = z.union([
   z.literal('none'),
   z.string()
-    .regex(/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}@[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}\/v[1-9][0-9]*$/u)
+    .regex(semanticGraderIdentityPattern)
     .refine((value) => !provenancePathMarker.test(value)),
 ]);
 const conditionProvenanceSchema = z.strictObject({
   hostCliVersion: provenanceIdentifierSchema.optional(),
   invocation: invocationProvenanceSchema.optional(),
   semanticGrader: z.union([
-    semanticGraderVersionSchema,
+    semanticGraderIdentitySchema,
     z.strictObject({ state: z.literal('unrecorded') }),
   ]).optional(),
 });
@@ -103,7 +107,6 @@ const nonComparableCauseSchema = z.strictObject({
   code: z.enum([
     'case-mismatch',
     'fixture-mismatch',
-    'grader-versions-mismatch',
     'harness-mismatch',
     'host-cli-version-mismatch',
     'invocation-mismatch',
@@ -111,6 +114,7 @@ const nonComparableCauseSchema = z.strictObject({
     'missing-candidate',
     'model-mismatch',
     'no-gradable-trials',
+    'semantic-grader-identity-mismatch',
   ]),
   message: z.string(),
 });

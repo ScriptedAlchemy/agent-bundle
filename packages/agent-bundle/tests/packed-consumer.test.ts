@@ -268,7 +268,7 @@ it('uses only an installed tarball after source deletion', async () => {
     ]);
     expect(JSON.parse(listedTools)).toMatchObject({
       tools: [{
-        _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+        _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard.html' } },
         name: 'show-dashboard',
       }],
     });
@@ -278,9 +278,9 @@ it('uses only an installed tarball after source deletion', async () => {
     ]);
     expect(JSON.parse(invokedTool)).toMatchObject({
       result: {
-        _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+        _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard.html' } },
         content: [{ text: 'dashboard ready: ordinary local import', type: 'text' }],
-        structuredContent: { resourceUri: 'ui://integration-fixture/dashboard-v1.html', view: 'dashboard' },
+        structuredContent: { resourceUri: 'ui://integration-fixture/dashboard.html', view: 'dashboard' },
       },
     });
 
@@ -296,13 +296,13 @@ it('uses only an installed tarball after source deletion', async () => {
     const { stdout: resource } = await execFile(process.execPath, [
       reader,
       localServerBundle,
-      'ui://integration-fixture/dashboard-v1.html',
+      'ui://integration-fixture/dashboard.html',
     ], { cwd: projectRoot, env: installedEnvironment() });
     expect(JSON.parse(resource)).toMatchObject({
       contents: [{
         mimeType: 'text/html;profile=mcp-app',
         text: expect.stringContaining('integration dashboard'),
-        uri: 'ui://integration-fixture/dashboard-v1.html',
+        uri: 'ui://integration-fixture/dashboard.html',
       }],
     });
   } finally {

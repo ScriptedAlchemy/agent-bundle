@@ -568,7 +568,6 @@
   "retainedTests": [
     "clients/web/src/utils/inspectorTabs.test.ts"
   ],
-  "schemaVersion": 1,
   "testDependencies": [
     "@rstest/core"
   ],

@@ -490,19 +490,22 @@ const requireEvidenceLevel = (value: JsonValue, code: RunStoreValidationCode, la
 export const mintRunId = (createdAt: Date): string =>
   `${createdAt.toISOString().replace(/[-:.]/gu, '').replace('T', 't').toLowerCase()}-${randomUUID().slice(0, 8)}`;
 
-const parseOwner = (value: unknown): EvalRunOwner | undefined => {
-  if (!isRecord(value)) return undefined;
-  const pid = value.pid;
+const ownerDocumentKeys = ['createdAt', 'nonce', 'pid'];
+
+const parseOwner = (value: unknown): EvalRunOwner => {
+  const owner = strictRecord(value, 'EVAL_RUN_CORRUPT', 'Eval run owner metadata');
+  requireKeys(owner, ownerDocumentKeys, 'EVAL_RUN_CORRUPT', 'Eval run owner metadata');
+  const pid = owner.pid;
   if (
-    typeof value.createdAt !== 'string' ||
-    typeof value.nonce !== 'string' ||
+    typeof owner.createdAt !== 'string' ||
+    typeof owner.nonce !== 'string' ||
     typeof pid !== 'number' ||
     !Number.isSafeInteger(pid) ||
     pid <= 0
   ) {
-    return undefined;
+    return validationError('EVAL_RUN_CORRUPT', 'Eval run owner metadata has an invalid schema.');
   }
-  return Object.freeze({ createdAt: value.createdAt, nonce: value.nonce, pid });
+  return Object.freeze({ createdAt: owner.createdAt, nonce: owner.nonce, pid });
 };
 
 const readOwner = async (directory: string): Promise<EvalRunOwner | undefined> => {
@@ -513,11 +516,11 @@ const readOwner = async (directory: string): Promise<EvalRunOwner | undefined> =
     if (isErrno(error, 'ENOENT')) return undefined;
     throw error;
   }
-  const owner = parseOwner(parseJsonWithoutDuplicateKeys(contents));
-  if (owner === undefined) {
+  try {
+    return parseOwner(parseJsonWithoutDuplicateKeys(contents));
+  } catch {
     throw storeError('EVAL_RUN_CORRUPT', 'Eval run owner metadata is not a valid ownership record.');
   }
-  return owner;
 };
 
 const parseArtifact = (value: unknown, code: RunStoreValidationCode): EvalArtifactBinding => {

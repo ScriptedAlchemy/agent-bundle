@@ -373,10 +373,10 @@ const validateScripts = (
   return diagnostics;
 };
 
-const validVersionedUiUri = (value: string): boolean => {
+const validUiUri = (value: string): boolean => {
   try {
     const uri = new URL(value);
-    return uri.protocol === 'ui:' && /(?:^|[/-])v\d+(?:[./-]|$)/u.test(`${uri.hostname}${uri.pathname}`);
+    return uri.protocol === 'ui:' && uri.hostname.length > 0;
   } catch {
     return false;
   }
@@ -444,10 +444,10 @@ const validateMcpApps = (
         loaded.configPath,
       ));
     }
-    if (!nonemptyString(app.resourceUri) || !validVersionedUiUri(app.resourceUri)) {
+    if (!nonemptyString(app.resourceUri) || !validUiUri(app.resourceUri)) {
       diagnostics.push(sourceDiagnostic(
         'AB4329',
-        `MCP App ${JSON.stringify(appName)} resourceUri must be a versioned ui:// URI.`,
+        `MCP App ${JSON.stringify(appName)} resourceUri must use ui:// with a nonempty host.`,
         loaded.configPath,
       ));
     } else if (seenUris.has(app.resourceUri)) {

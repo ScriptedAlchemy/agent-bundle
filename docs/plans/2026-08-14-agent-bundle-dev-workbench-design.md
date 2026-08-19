@@ -633,8 +633,8 @@ assertions declare their minimum accepted level.
 One or two trials are smoke checks. Reliability comparisons require at least three trials per
 aligned condition. The UI displays the actual `k/n` beside pass@k and pass^k. Baseline and
 candidate trials are comparable only when case, host, pinned model, host CLI version, fixture
-digest, invocation, and grader versions align; mismatches are labeled non-comparable instead of
-being folded into a delta.
+digest, invocation, and semantic grader identities align; mismatches are labeled non-comparable
+instead of being folded into a delta.
 
 ## Skill activation evidence
 
@@ -746,7 +746,7 @@ Run provenance includes:
 - host CLI and plugin versions;
 - selected harness and pinned model;
 - timing, exit state, usage when reported, and raw log references;
-- grader versions and assertion evidence.
+- semantic grader identity and assertion evidence.
 
 One process owns a run directory through an explicit lock and is its only writer. A second
 process creates a new run rather than appending to an active run. Readers may tail completed JSONL

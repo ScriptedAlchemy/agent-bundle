@@ -392,6 +392,56 @@ it('clears queued runtime delivery and ignores late callbacks after close', asyn
   expect(stream.closed).toBe(true);
 });
 
+it('rejects project SSE records whose payload and EventSource sequence identities do not match', async () => {
+  const stream = new RecordingEventSource();
+  const errors: unknown[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
+  });
+  await client.connect(() => undefined, (reason) => errors.push(reason));
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:00:00.000Z', paths: ['src/kept.ts'], reason: 'source-change' },
+      sequence: 7,
+      type: 'source.changed',
+    }),
+    lastEventId: '7',
+  });
+  stream.emit('artifact.status', {
+    data: JSON.stringify({ payload: status().artifact, type: 'artifact.status' }),
+    lastEventId: '8',
+  });
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:01:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:01:00.000Z', paths: ['src/missing-id.ts'], reason: 'source-change' },
+      sequence: 9,
+      type: 'source.changed',
+    }),
+    lastEventId: '',
+  });
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:02:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:02:00.000Z', paths: ['src/mismatch.ts'], reason: 'source-change' },
+      sequence: 12,
+      type: 'source.changed',
+    }),
+    lastEventId: '11',
+  });
+  stream.emit('artifact.status', {
+    data: JSON.stringify({ payload: status().artifact, sequence: 13.5, type: 'artifact.status' }),
+    lastEventId: '13',
+  });
+  await flushEvents();
+
+  expect(client.activity.changedFiles).toEqual(['src/kept.ts']);
+  expect(client.lastEventId).toBe(13);
+  expect(errors).toHaveLength(4);
+});
+
 it('captures the latest valid source-change paths in an immutable browser activity snapshot', async () => {
   const stream = new RecordingEventSource();
   const client = new ProjectClient({

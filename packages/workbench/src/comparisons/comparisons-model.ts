@@ -94,7 +94,6 @@ const outcomeLabels: Readonly<Record<EvalAssertionOutcome, string>> = Object.fre
 const reasonLabels: Readonly<Record<EvalNonComparableReason, string>> = Object.freeze({
   'case-mismatch': 'Case definition',
   'fixture-mismatch': 'Fixture digest',
-  'grader-versions-mismatch': 'Grader versions',
   'harness-mismatch': 'Harness',
   'host-cli-version-mismatch': 'Host CLI version',
   'invocation-mismatch': 'Invocation',
@@ -102,6 +101,7 @@ const reasonLabels: Readonly<Record<EvalNonComparableReason, string>> = Object.f
   'missing-candidate': 'Missing in candidate',
   'model-mismatch': 'Pinned model',
   'no-gradable-trials': 'No gradable trial',
+  'semantic-grader-identity-mismatch': 'Semantic grader identity',
 });
 
 const sign = (value: number): string => (value > 0 ? '+' : '');
