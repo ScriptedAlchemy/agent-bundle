@@ -72,6 +72,8 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
 .next-action button:disabled { cursor: wait; opacity: .7; }
 .request-error { color: #b31b23; margin: 20px 10px 0; }
 .loading-state { align-items: center; display: flex; flex-direction: column; gap: 10px; justify-content: center; min-height: 100vh; }
+.connection-content { display: contents; }
+.connection-recovery { background: #fff; inset: 0; min-height: 100vh; position: fixed; z-index: 1000; }
 .runtime-stage,
 .runtime-inspector { border: 1px solid #d9dee7; display: grid; gap: 14px; min-width: 0; padding: 14px; }
 .runtime-content { margin: 0 auto; max-width: 1460px; min-width: 0; padding: 30px 34px 64px; width: 100%; }

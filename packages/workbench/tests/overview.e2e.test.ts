@@ -1008,6 +1008,9 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     const transportEventStart = runtimeEvents.length;
     await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 })
       .toBe(serverOwnedProjectSubscriptions + 1);
+    await page.locator('.connection-content').evaluate((element) => {
+      element.setAttribute('data-recovery-probe', 'same-instance');
+    });
     await page.context().setOffline(true);
     fixture.disconnectProjectEventStream();
     await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 })
@@ -1056,8 +1059,9 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     await expect.poll(() => replayGaps.length, { timeout: 15_000 }).toBe(1);
     const replayGap = replayGaps[0];
     if (replayGap === undefined) throw new Error('Project EventSource did not deliver a replay gap.');
-    // An id-less SSE frame preserves the prior EventSource cursor rather than advancing it.
-    expect(replayGap.lastEventId).toBe(reconnectCursor);
+    // The replacement source is seeded by its query, while an id-less gap leaves the
+    // browser-owned Last-Event-ID empty until the first sequenced frame arrives.
+    expect(replayGap.lastEventId).toBe('');
     expect(JSON.parse(replayGap.data)).toMatchObject({
       latestDroppedSequence: expect.any(Number),
       requestedAfterSequence: Number(reconnectCursor),
@@ -1065,6 +1069,7 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     });
     await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'detached', timeout: 15_000 });
     expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(0);
+    await expect(page.locator('.connection-content')).toHaveAttribute('data-recovery-probe', 'same-instance');
     await expect(page.getByText('Interactive App rendering is unavailable (registry-replay-gap). Showing the ordinary tool result instead.')).toBeVisible();
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toEqual([]);
     await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe(2);
@@ -1690,6 +1695,9 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+    await page.locator('.connection-content').evaluate((element) => {
+      element.setAttribute('data-recovery-probe', 'foreground-a');
+    });
 
     const port = Number(new URL(server.url).port);
     await server.close();
@@ -1699,6 +1707,7 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
 
     server = await startRestartableServer(port);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.connection-content')).not.toHaveAttribute('data-recovery-probe', 'foreground-a');
     await expect(page.locator('#mcp-target')).toHaveValue('');
     await expect(page.locator('#mcp-server-name')).toHaveValue('');
     await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });

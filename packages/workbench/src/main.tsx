@@ -1281,17 +1281,19 @@ const Workbench = () => {
   }, [mcpController]);
   useEffect(() => mcpController.subscribe(setMcpModel), [mcpController]);
 
-  if (connection.state !== 'connected') {
-    const unavailable = connection.state === 'unavailable';
-    return <main aria-live="polite" className="loading-state">
-      <h1>{unavailable ? 'Foreground connection unavailable' : 'Foreground connection reconnecting'}</h1>
-      <p>{unavailable ? 'Waiting for the foreground server to recover.' : 'Connecting to the foreground server.'}</p>
-      {connectionError === undefined ? undefined : <p role="alert">{connectionError}</p>}
-    </main>;
-  }
+  const connectionGate = connection.state === 'connected' ? undefined : <main aria-live="polite" className="connection-recovery loading-state">
+    <h1>{connection.state === 'unavailable' ? 'Foreground connection unavailable' : 'Foreground connection reconnecting'}</h1>
+    <p>{connection.state === 'unavailable' ? 'Waiting for the foreground server to recover.' : 'Connecting to the foreground server.'}</p>
+    {connectionError === undefined ? undefined : <p role="alert">{connectionError}</p>}
+  </main>;
+  const withConnectionGate = (content: ReactNode): ReactNode => <>
+    <div className="connection-content" inert={connectionGate === undefined ? undefined : true} key={connection.generation}>{content}</div>
+    {connectionGate}
+  </>;
+  if (connection.generation === undefined && connectionGate !== undefined) return connectionGate;
   if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
     if (page === 'mcp') {
-      return <McpScreen
+      return withConnectionGate(<McpScreen
         appPreviewClient={mcpAppClient.current}
         connectionError={connectionError}
         controller={mcpController}
@@ -1308,10 +1310,10 @@ const Workbench = () => {
         presentation={mcpPresentation}
         setPresentation={setMcpPresentation}
         status={status}
-      />;
+      />);
     }
     if (page === 'runtime' && runtimeControllerState !== undefined) {
-      return <RuntimeScreen
+      return withConnectionGate(<RuntimeScreen
         connectionError={connectionError}
         controller={runtimeControllerState}
         handoffDiagnostic={runtimeHandoffError}
@@ -1322,10 +1324,10 @@ const Workbench = () => {
         resolveRuntimeConsent={resolveRuntimeConsent}
         runtimeConsent={runtimeConsent}
         runtimeDiagnostic={runtimeError}
-      />;
+      />);
     }
     if (page === 'playground') {
-      return <PlaygroundScreen
+      return withConnectionGate(<PlaygroundScreen
         artifactClient={artifactClient.current}
         connectionError={connectionError}
         onNavigate={navigate}
@@ -1335,47 +1337,48 @@ const Workbench = () => {
         runtimeAvailable={runtimeAvailable}
         runtimeDiagnostic={runtimeError}
         status={status}
-      />;
+      />);
     }
     if (page === 'logs') {
-      return <LogsScreen
+      return withConnectionGate(<LogsScreen
         connectionError={connectionError}
         logClient={logClient.current}
         onNavigate={navigate}
         runtimeAvailable={runtimeAvailable}
         runtimeDiagnostic={runtimeError}
-      />;
+      />);
     }
     if (page === 'evals') {
-      return <EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} />;
+      return withConnectionGate(<EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} />);
     }
     if (page === 'comparisons') {
-      return <ComparisonsScreen
+      return withConnectionGate(<ComparisonsScreen
         comparisonClient={comparisonClient.current}
         connectionError={connectionError}
         evalClient={evalClient.current}
         onNavigate={navigate}
         runtimeAvailable={runtimeAvailable}
         runtimeDiagnostic={runtimeError}
-      />;
+      />);
     }
     if (page === 'artifacts') {
-      return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />;
+      return withConnectionGate(<ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />);
     }
     if (page === 'hooks') {
-      return <HooksScreen
+      return withConnectionGate(<HooksScreen
         connectionError={connectionError}
         hookClient={hookClient.current}
         onNavigate={navigate}
         runtimeAvailable={runtimeAvailable}
         runtimeDiagnostic={runtimeError}
         status={status}
-      />;
+      />);
     }
-    return page === 'skills'
+    return withConnectionGate(page === 'skills'
       ? <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} skillClient={skillClient.current} status={status} />
-      : <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />;
+      : <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />);
   }
+  if (connectionGate !== undefined) return connectionGate;
   return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}{runtimeError === undefined ? undefined : <p className="runtime-capability-error">Runtime capability issue: {runtimeError}</p>}</main>;
 };
 
