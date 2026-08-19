@@ -6,7 +6,7 @@ import { logsViewFor, mergeDevLogRecords, type LogsView as LogsViewModel } from 
 import './logs-page.css';
 
 export interface LogsPageProps {
-  readonly client: Pick<LogClient, 'replay' | 'stream'> & Partial<Pick<LogClient, 'forget'>>;
+  readonly client: Pick<LogClient, 'replay' | 'stream'>;
   /** A supplied snapshot keeps server/static rendering deterministic. */
   readonly records?: readonly DevLogRecord[];
 }
@@ -129,10 +129,9 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
           () => { if (attempt === generation) reconnectLater(); },
           (reason: unknown) => {
             if (!current || attempt !== generation) return;
-            if (isCursorAhead(reason)) {
-              resetCursor();
-              client.forget?.();
-              void connect();
+          if (isCursorAhead(reason)) {
+            resetCursor();
+            void connect();
               return;
             }
             setError(errorMessage(reason));
@@ -143,7 +142,6 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
         if (!current || attempt !== generation) return;
         if (isCursorAhead(reason)) {
           resetCursor();
-          client.forget?.();
           void connect();
           return;
         }
@@ -158,7 +156,6 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
       if (reconnect !== undefined) clearTimeout(reconnect);
       generationController?.abort();
       stream?.close();
-      client.forget?.();
     };
   }, [client, suppliedRecords]);
 

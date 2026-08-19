@@ -63,7 +63,7 @@ const comparison = {
 const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
   async (input, init) => {
     const url = String(input);
-    if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
     calls.push({
       method: init?.method ?? 'GET',
       token: new Headers(init?.headers).get('x-agent-bundle-session'),
@@ -210,28 +210,8 @@ it('rejects a response that is not a comparison', async () => {
 
 it('refuses a foreground session bootstrap that does not match this browser origin', async () => {
   const client = new ComparisonClient({
-    fetch: async () => response({ origin: 'http://127.0.0.1:5173/', token: 'foreground-token' }),
+    fetch: async () => response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173/', token: 'foreground-token' }),
   });
 
   await expect(client.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({ code: 'AB8083' });
-});
-
-it('forgets the foreground token when the owning page stops using it', async () => {
-  let bootstraps = 0;
-  const client = new ComparisonClient({
-    fetch: async (input) => {
-      if (String(input) === '/api/project/session') {
-        bootstraps += 1;
-        return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
-      }
-      return response({ comparison });
-    },
-  });
-
-  await client.compare({ base: 'run-base', candidate: 'run-candidate' });
-  await client.compare({ base: 'run-base', candidate: 'run-candidate' });
-  client.forgetAuthentication();
-  await client.compare({ base: 'run-base', candidate: 'run-candidate' });
-
-  expect(bootstraps).toBe(2);
 });

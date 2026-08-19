@@ -1,6 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import { ArtifactClient } from '../src/artifacts/artifact-client.ts';
+import { ForegroundSessionAuthority } from '../src/foreground-session.ts';
 
 interface RecordedRequest {
   readonly method: string;
@@ -56,7 +57,7 @@ const diff = {
 const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
   async (input, init) => {
     const url = String(input);
-    if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
     calls.push({
       method: init?.method ?? 'GET',
       token: new Headers(init?.headers).get('x-agent-bundle-session'),
@@ -64,6 +65,31 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
     });
     return reply();
   };
+
+it('uses refreshed authority credentials for later artifact requests without reconstruction', async () => {
+  const tokens = ['token-a', 'token-b'];
+  const authority = new ForegroundSessionAuthority({
+    fetch: async () => response({
+      instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: tokens.shift(),
+    }),
+  });
+  const requestTokens: Array<string | null> = [];
+  const client = new ArtifactClient({
+    authority,
+    fetch: async (_input, init) => {
+      requestTokens.push(new Headers(init?.headers).get('x-agent-bundle-session'));
+      return response({ inspection });
+    },
+  });
+
+  await client.inspect('epoch-1');
+  await authority.refresh();
+  await client.inspect('epoch-1');
+
+  expect(requestTokens).toEqual(['token-a', 'token-b']);
+});
 
 it('reads one epoch inspection over the same foreground session', async () => {
   const calls: RecordedRequest[] = [];

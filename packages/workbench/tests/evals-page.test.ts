@@ -510,7 +510,7 @@ it('starts a durable run from the selected suite, trial count, and closed harnes
   const client = new EvalClient({
     fetch: async (input, init) => {
       const url = String(input);
-      if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
       return new Response(JSON.stringify({ run: { ...runRecord, completedAt: undefined, summary: undefined } }), {
         headers: { 'content-type': 'application/json' },
@@ -533,7 +533,7 @@ it('reopens a recorded run by identifier without restarting it', async () => {
   const client = new EvalClient({
     fetch: async (input, init) => {
       const url = String(input);
-      if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       requests.push(`${init?.method ?? 'GET'} ${url}`);
       return response({ run: result });
     },

@@ -61,7 +61,7 @@ const event = (sequence: number, summary: string): PlaygroundTraceEvent => ({
 const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
   async (input, init) => {
     const url = String(input);
-    if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
     calls.push({
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
       method: init?.method ?? 'GET',
@@ -73,7 +73,7 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
 
 const hostileFetch = (body: unknown): typeof fetch => async (input) =>
   String(input) === '/api/project/session'
-    ? response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+    ? response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
     : decodedResponse(body);
 
 it('starts one server-owned skill inspection without browser-authored identity or evidence', async () => {
@@ -126,7 +126,7 @@ it('forwards catalog cancellation through the authenticated foreground transport
   let catalogSignal: AbortSignal | null | undefined;
   const client = new PlaygroundClient({
     fetch: async (input, init) => {
-      if (String(input) === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (String(input) === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       expect(String(input)).toBe('/api/playground/catalog?epochId=epoch%2Fnative');
       catalogSignal = init?.signal;
       return response({ catalog: nativeCatalog });
@@ -239,7 +239,7 @@ it('decodes NDJSON trace frames split across transport chunks', async () => {
   const client = new PlaygroundClient({
     fetch: async (input) => {
       const url = String(input);
-      if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       expect(url).toBe('/api/playground/sessions/session-1/stream?after=1');
       return ndjson([`${first}\n${second.slice(0, half)}`, `${second.slice(half)}\n`]);
     },

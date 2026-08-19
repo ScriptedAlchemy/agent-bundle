@@ -95,7 +95,7 @@ const response = (body: unknown): Response => new Response(JSON.stringify(body),
 
 const stubFetch = (calls: string[], body: unknown): typeof fetch => async (input) => {
   const url = String(input);
-  if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+  if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
   calls.push(url);
   return response(body);
 };

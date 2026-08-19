@@ -132,7 +132,7 @@ it('posts fixture input with the strict simulation request body', async () => {
   const bodies: unknown[] = [];
   const client = new HookClient({
     fetch: async (request, init) => {
-      if (String(request) === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (String(request) === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
       return response({ simulation });
     },
@@ -169,7 +169,7 @@ it('replays a saved simulation against its original epoch, not the selected one'
   const client = new HookClient({
     fetch: async (input, init) => {
       const url = String(input);
-      if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
       return response({ simulation });
     },

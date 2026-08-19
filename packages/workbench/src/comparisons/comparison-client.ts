@@ -5,7 +5,7 @@ import {
   explicitInvocationProvenancePattern,
   semanticGraderIdentityPattern,
 } from '../../../agent-bundle/src/eval/provenance.ts';
-import { ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import {
   nonnegativeIntegerSchema,
   nonnegativeNumberSchema,
@@ -16,6 +16,7 @@ import {
 } from '../schema-atoms.ts';
 
 export interface ComparisonClientOptions {
+  readonly authority?: ForegroundSessionAuthority;
   readonly fetch?: typeof fetch;
 }
 
@@ -165,6 +166,7 @@ export class ComparisonClient {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new ComparisonClientError(code, message),
       fallbackCode: 'AB8083',
+      ...(options.authority === undefined ? {} : { authority: options.authority }),
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       label: 'Eval comparison',
     });
@@ -177,11 +179,6 @@ export class ComparisonClient {
       `/api/evals/comparisons?${query.toString()}`,
       signal === undefined ? {} : { signal },
     ));
-  }
-
-  /** Erases the short-lived foreground token once the owning page stops using it. */
-  forgetAuthentication(): void {
-    this.#transport.forget();
   }
 
 }

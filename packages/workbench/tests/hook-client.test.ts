@@ -38,7 +38,7 @@ const simulation = {
 const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
   async (input, init) => {
     const url = String(input);
-    if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
     const signal = init?.signal;
     calls.push({
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,

@@ -91,7 +91,7 @@ const listing = {
 const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
   async (input, init) => {
     const url = String(input);
-    if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
     calls.push({
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
       method: init?.method ?? 'GET',
@@ -240,14 +240,14 @@ it('replays only a detached, contiguous persisted event timeline from its cursor
 it('rejects a duplicate-key or reordered event replay instead of retaining a hostile response object', async () => {
   const duplicate = new EvalClient({
     fetch: async (input) => String(input) === '/api/project/session'
-      ? response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+      ? response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
       : new Response('{"replay":{"cursor":{"afterSequence":1},"events":[{"kind":"run.started","payload":{},"sequence":1,"sequence":2,"timestamp":"2026-08-17T00:00:00.000Z"}]}}', {
         headers: { 'content-type': 'application/json' },
       }),
   });
   const reordered = new EvalClient({
     fetch: async (input) => String(input) === '/api/project/session'
-      ? response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+      ? response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
       : response({ replay: {
         cursor: { afterSequence: 2 },
         events: [
@@ -274,7 +274,7 @@ it('decodes fragmented NDJSON in sequence and aborts a replacement stream withou
   const client = new EvalClient({
     fetch: async (input) => {
       const url = String(input);
-      if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       streamCalls += 1;
       if (streamCalls === 1) {
         return new Response(new ReadableStream<Uint8Array>({
@@ -311,7 +311,7 @@ it('fetches an opaque persisted artifact through the foreground session without 
   const client = new EvalClient({
     fetch: async (input) => {
       const url = String(input);
-      if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       calls.push(url);
       return new Response('{"evidence":true}\n', {
         headers: {

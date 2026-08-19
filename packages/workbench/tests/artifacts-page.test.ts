@@ -113,7 +113,7 @@ const response = (body: unknown, status = 200): Response => new Response(JSON.st
 
 const sessionFetch = (reply: (url: string) => Response): typeof fetch => async (input) => {
   const url = String(input);
-  if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+  if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
   return reply(url);
 };
 

@@ -8,11 +8,12 @@ import type {
 } from '../../../agent-bundle/src/dev/hook-playground-service.ts';
 import { z } from 'zod';
 
-import { ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 
 export type HookSimulationResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation;
 
 export interface HookClientOptions {
+  readonly authority?: ForegroundSessionAuthority;
   readonly fetch?: typeof fetch;
 }
 
@@ -21,11 +22,6 @@ export interface HookSimulationOptions {
   readonly hook: string;
   readonly input: HookPlaygroundInput;
   readonly target: string;
-}
-
-interface ForegroundSession {
-  readonly origin: string;
-  readonly token: string;
 }
 
 export class HookClientError extends Error {
@@ -191,6 +187,7 @@ export class HookClient {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new HookClientError(code, message),
       fallbackCode: 'AB8033',
+      ...(options.authority === undefined ? {} : { authority: options.authority }),
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       label: 'Hook playground',
     });
@@ -221,11 +218,6 @@ export class HookClient {
       method: 'POST',
       signal,
     }));
-  }
-
-  /** Erases the short-lived foreground token once the owning page stops using it. */
-  forgetAuthentication(): void {
-    this.#transport.forget();
   }
 
 }

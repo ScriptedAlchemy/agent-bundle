@@ -6,9 +6,10 @@ import type {
 } from '../../../agent-bundle/src/dev/dev-log-service.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
-import { awaitWithAbort, ForegroundTransport } from '../foreground-session.ts';
+import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 
 export interface LogClientOptions {
+  readonly authority?: ForegroundSessionAuthority;
   readonly fetch?: typeof fetch;
 }
 
@@ -168,6 +169,7 @@ export class LogClient {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new LogClientError(code, message),
       fallbackCode: 'AB8093',
+      ...(options.authority === undefined ? {} : { authority: options.authority }),
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       label: 'Dev Log',
     });
@@ -178,9 +180,6 @@ export class LogClient {
     const body = await this.#json(`/api/logs/replay?after=${String(afterSequence)}`, { signal });
     return replayFor(body, afterSequence);
   }
-
-  /** The Logs page owns this client and erases its short-lived session on unmount. */
-  forget(): void { this.#transport.forget(); }
 
   stream(options: LogStreamOptions): LogStream {
     const controller = new AbortController();

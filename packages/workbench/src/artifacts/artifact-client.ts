@@ -1,15 +1,11 @@
 import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
 import { snapshotStrictJsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
-import { ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/dev/types.ts';
 
 export interface ArtifactClientOptions {
+  readonly authority?: ForegroundSessionAuthority;
   readonly fetch?: typeof fetch;
-}
-
-interface ForegroundSession {
-  readonly origin: string;
-  readonly token: string;
 }
 
 const noDiagnostics: readonly Diagnostic[] = Object.freeze([]);
@@ -158,6 +154,7 @@ export class ArtifactClient {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message, body) => new ArtifactClientError(code, message, failureDiagnostics(body)),
       fallbackCode: 'AB8063',
+      ...(options.authority === undefined ? {} : { authority: options.authority }),
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       label: 'Artifact inspection',
     });
@@ -170,11 +167,6 @@ export class ArtifactClient {
   async diff(baseEpochId: string, candidateEpochId: string, signal?: AbortSignal): Promise<ArtifactEpochDiff> {
     const query = new URLSearchParams({ base: baseEpochId, candidate: candidateEpochId });
     return diffBody(await this.#transport.json(`/api/artifacts/diff?${query.toString()}`, { signal }));
-  }
-
-  /** Erases the short-lived foreground token once the owning page stops using it. */
-  forgetAuthentication(): void {
-    this.#transport.forget();
   }
 
 }

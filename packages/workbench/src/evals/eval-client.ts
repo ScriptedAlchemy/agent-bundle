@@ -8,7 +8,7 @@ import type {
 } from '../../../agent-bundle/src/dev/eval-service.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
-import { awaitWithAbort, ForegroundTransport } from '../foreground-session.ts';
+import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import {
   nonnegativeIntegerSchema,
   positiveIntegerSchema,
@@ -17,6 +17,7 @@ import {
 } from '../schema-atoms.ts';
 
 export interface EvalClientOptions {
+  readonly authority?: ForegroundSessionAuthority;
   readonly fetch?: typeof fetch;
 }
 
@@ -343,6 +344,7 @@ export class EvalClient {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new EvalClientError(code, message),
       fallbackCode: 'AB8073',
+      ...(options.authority === undefined ? {} : { authority: options.authority }),
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       label: 'Eval',
     });
@@ -421,9 +423,6 @@ export class EvalClient {
       throw invalidResponse();
     }
   }
-
-  /** Erases the short-lived foreground token once the owning page stops using it. */
-  forgetAuthentication(): void { this.#transport.forget(); }
 
   async #json(path: string, init: RequestInit = {}, expectedStatus?: number): Promise<JsonValue> {
     try {

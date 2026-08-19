@@ -18,7 +18,7 @@ const json = (body: unknown, status = 200): Response => new Response(JSON.string
   status,
 });
 
-const session = (): Response => json({ origin: 'http://foreground.test', token: 'test-session-token' });
+const session = (): Response => json({ instanceId: 'foreground-instance-a', origin: 'http://foreground.test', token: 'test-session-token' });
 
 const ndjson = (chunks: readonly Uint8Array[]): Response => new Response(new ReadableStream<Uint8Array>({
   start: (controller) => {

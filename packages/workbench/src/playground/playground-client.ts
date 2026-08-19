@@ -9,9 +9,10 @@ import type {
 } from '../../../agent-bundle/src/services/playground-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
 import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/dev/native-playground-service.ts';
-import { ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 
 export interface PlaygroundClientOptions {
+  readonly authority?: ForegroundSessionAuthority;
   readonly fetch?: typeof fetch;
 }
 
@@ -316,6 +317,7 @@ export class PlaygroundClient {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new PlaygroundClientError(code, message),
       fallbackCode: 'AB8043',
+      ...(options.authority === undefined ? {} : { authority: options.authority }),
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       label: 'Playground',
     });
@@ -382,11 +384,6 @@ export class PlaygroundClient {
     const controller = new AbortController();
     const done = this.#stream(sessionId, options, controller.signal);
     return Object.freeze({ close: () => controller.abort(), done });
-  }
-
-  /** Erases the short-lived foreground token once the owning page stops using it. */
-  forgetAuthentication(): void {
-    this.#transport.forget();
   }
 
   #path(sessionId: string): string {
