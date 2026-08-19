@@ -112,6 +112,7 @@ const artifactEpochKeys = [
   'targetDigests',
 ] as const;
 const epochDiagnosticsKeys = ['errors', 'infos', 'warnings'] as const;
+const epochReferenceCounts = new Map<string, number>();
 
 const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
   const actual = Object.keys(value);
@@ -292,7 +293,6 @@ export class EpochStore {
   readonly #cleanupRemove: typeof rm;
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
-  readonly #references = new Map<string, number>();
   readonly #staging = new Map<symbol, StagingRecord>();
   readonly #stagingMarkerStorage: EpochStagingMarkerStorage;
   readonly #transitions = serialQueue();
@@ -362,13 +362,14 @@ export class EpochStore {
 
   async releaseEpochReference(epochId: string): Promise<void> {
     await this.#transitions.run(async () => {
-      const count = this.#references.get(epochId) ?? 0;
+      const referenceKey = join(this.#epochsPath, epochId);
+      const count = epochReferenceCounts.get(referenceKey) ?? 0;
       if (count === 1) {
-        this.#references.delete(epochId);
+        epochReferenceCounts.delete(referenceKey);
         await this.#cleanup();
         return;
       }
-      if (count > 1) this.#references.set(epochId, count - 1);
+      if (count > 1) epochReferenceCounts.set(referenceKey, count - 1);
     });
   }
 
@@ -421,7 +422,7 @@ export class EpochStore {
 
   async #acquireEpochReference(epoch: ArtifactEpoch): Promise<EpochReference> {
     const epochPath = await this.#assertEpochDirectory(epoch.id);
-    this.#references.set(epoch.id, (this.#references.get(epoch.id) ?? 0) + 1);
+    epochReferenceCounts.set(epochPath, (epochReferenceCounts.get(epochPath) ?? 0) + 1);
     return new EpochReference(this, freezeArtifactEpoch(epoch), epochPath);
   }
 
@@ -445,7 +446,11 @@ export class EpochStore {
     const active = await this.#readActiveEpoch();
     const metadata = await this.#readAllEpochMetadata();
     const protectedIds = new Set<string>(active === undefined ? [] : [active.id]);
-    for (const epochId of this.#references.keys()) protectedIds.add(epochId);
+    for (const entry of metadata) {
+      if ((epochReferenceCounts.get(join(this.#epochsPath, entry.epoch.id)) ?? 0) > 0) {
+        protectedIds.add(entry.epoch.id);
+      }
+    }
 
     const retainedUnreferenced = metadata
       .filter((entry) => !protectedIds.has(entry.epoch.id))

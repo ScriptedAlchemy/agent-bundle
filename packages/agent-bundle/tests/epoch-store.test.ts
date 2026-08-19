@@ -360,6 +360,34 @@ it('retains active, referenced, and five newest unreferenced epochs until the fi
   }
 });
 
+it('retains an epoch leased through another store for the same project', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle shared epoch lease '));
+
+  try {
+    const leaseStore = new EpochStore({ projectRoot: root });
+    const publishingStore = new EpochStore({ projectRoot: root });
+    await publishEpoch(leaseStore, epochFor(root, 'epoch-1', '2026-08-14T12:00:01.000Z'));
+    const reference = await leaseStore.acquireEpochReference('epoch-1');
+
+    for (let sequence = 2; sequence <= 8; sequence += 1) {
+      await publishEpoch(
+        publishingStore,
+        epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`),
+      );
+    }
+
+    await expect(
+      readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).resolves.toBe('epoch-1\n');
+    await reference.close();
+    await expect(
+      readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('keeps a retired epoch until the final of multiple references closes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch final reference '));
 
