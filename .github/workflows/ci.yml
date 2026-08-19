@@ -45,6 +45,8 @@ jobs:
       # Build first: checked-in suites and API tests import the package's built type
       # declarations, so typecheck requires dist (same order as `npm run check`).
       - run: npm run build
+      - name: Package lint (publint)
+        run: npm run lint:package
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
