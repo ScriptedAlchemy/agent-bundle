@@ -55,7 +55,6 @@ const comparison = {
     evidence: 'reliability',
     host: 'claude',
     model: 'sonnet',
-    unverifiedFacets: [],
   }],
   sampleSize: 3,
   summary: { comparable: 1, nonComparable: 0, reliability: 1, smoke: 0 },

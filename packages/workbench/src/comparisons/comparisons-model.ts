@@ -1,5 +1,4 @@
 import type {
-  EvalAlignmentFacet,
   EvalComparison,
   EvalComparisonDelta,
   EvalComparisonEvidence,
@@ -59,8 +58,6 @@ export interface ComparisonMatrixRow {
   readonly key: string;
   readonly model: string;
   readonly reasons: readonly ComparisonReason[];
-  /** Facets neither run recorded, so their alignment is unverified rather than established. */
-  readonly unverifiedFacets: readonly EvalAlignmentFacet[];
 }
 
 export interface ComparisonsViewOptions {
@@ -78,8 +75,6 @@ export interface ComparisonsView {
   readonly state: ComparisonsState;
   readonly summary: string;
 }
-
-const noFacets: readonly EvalAlignmentFacet[] = Object.freeze([]);
 
 const noReasons: readonly ComparisonReason[] = Object.freeze([]);
 
@@ -190,7 +185,6 @@ export const comparisonMatrixRowFor = (row: EvalComparisonRow): ComparisonMatrix
       detail: `${cause.baseline} → ${cause.candidate}`,
       label: reasonLabels[cause.code],
     }))),
-    unverifiedFacets: row.comparable ? row.unverifiedFacets : noFacets,
   });
 };
 

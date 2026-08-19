@@ -58,7 +58,6 @@ const comparison: EvalComparison = {
       evidence: 'reliability',
       host: 'claude',
       model: 'sonnet',
-      unverifiedFacets: ['grader-versions'],
     },
     {
       baseline: metrics({ evidence: 'smoke', passRate: 0.5, passes: 1, reliability: undefined, trials: 2 }),
@@ -69,7 +68,6 @@ const comparison: EvalComparison = {
       evidence: 'smoke',
       host: 'claude',
       model: 'sonnet',
-      unverifiedFacets: [],
     },
     {
       baseline: metrics(),
@@ -143,12 +141,6 @@ it('renders a non-comparable row as non-comparable with its reason and no delta'
   expect(markup).toContain('Host CLI version');
   expect(markup).toContain('2.4.0 → 2.5.0');
   expect(markup).toContain('Not aligned');
-});
-
-it('names the facets no run recorded so an alignment is never overstated', () => {
-  const markup = renderToStaticMarkup(createElement(ComparisonMatrix, { view }));
-
-  expect(markup).toContain('grader-versions');
 });
 
 it('states that a matrix without rows has nothing to align', () => {

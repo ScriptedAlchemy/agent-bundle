@@ -169,9 +169,6 @@ export const ComparisonMatrix = ({ view }: ComparisonMatrixProps) => <div classN
           <span className="comparison-case">{row.caseId}</span>
           <span className="comparison-condition">{row.host} · {row.model}</span>
           {row.evidenceNote === undefined ? undefined : <span className="comparison-note">{row.evidenceNote}</span>}
-          {row.unverifiedFacets.length === 0
-            ? undefined
-            : <span className="comparison-note">Unverified alignment: {row.unverifiedFacets.join(', ')}.</span>}
         </th>
         <MetricCell cell={row.baseline} />
         <MetricCell cell={row.candidate} />

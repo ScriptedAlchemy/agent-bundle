@@ -126,7 +126,6 @@ export interface EvalComparableRow {
   readonly evidence: EvalComparisonEvidence;
   readonly host: string;
   readonly model: string;
-  readonly unverifiedFacets: readonly EvalAlignmentFacet[];
 }
 
 export interface EvalNonComparableRow {
@@ -199,7 +198,6 @@ const facetReasons: Readonly<Record<EvalAlignmentFacet, EvalNonComparableReason>
   'model': 'model-mismatch',
 });
 
-const noFacets: readonly EvalAlignmentFacet[] = Object.freeze([]);
 const unrecorded = 'unrecorded';
 const unrecordedSemanticGrader = Object.freeze({ state: 'unrecorded' as const });
 
@@ -494,7 +492,6 @@ const rowFor = (
       : 'smoke',
     host: identity.host,
     model: baselineFacets.model.value,
-    unverifiedFacets: noFacets,
   });
 };
 
