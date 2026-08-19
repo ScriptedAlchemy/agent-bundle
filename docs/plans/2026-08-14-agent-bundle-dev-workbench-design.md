@@ -1,6 +1,6 @@
 # Agent Bundle developer workbench design
 
-**Status:** Proposed extension to the approved Agent Bundle architecture
+**Status:** Implemented extension to the approved Agent Bundle architecture; delivery verification is in progress
 
 **Date:** 2026-08-14
 
@@ -729,7 +729,6 @@ No database is required. State has one canonical, strictly decoded, inspectable 
     └── <run-id>/
         ├── run.json
         ├── events.jsonl
-        ├── comparison.json
         ├── cases/
         │   └── <case-id>/
         │       └── <trial-id>.json
@@ -737,13 +736,16 @@ No database is required. State has one canonical, strictly decoded, inspectable 
             └── ...
 ```
 
+Comparisons are derived, frozen views over selected persisted runs; they are not a canonical file in
+either run tree. Their conclusions retain the selected run identities and each run's recorded
+provenance and usage without introducing mutable comparison state.
+
 Run provenance includes:
 
-- Agent Bundle version;
-- project revision and dirty-state digest;
+- project content revision;
+- Agent Bundle version, host CLI version, and target identity;
 - artifact epoch and target digests;
 - fixture digest;
-- host CLI and plugin versions;
 - selected harness and pinned model;
 - timing, exit state, usage when reported, and raw log references;
 - semantic grader identity and assertion evidence.

@@ -1,6 +1,6 @@
 # Agent Bundle design
 
-**Status:** Approved foundation; developer workbench extension under review
+**Status:** Approved and implemented foundation; developer-workbench delivery verification is in progress
 
 **Date:** 2026-08-13
 

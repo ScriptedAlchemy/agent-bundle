@@ -1,5 +1,7 @@
 # Agent Bundle Workbench and Evals Implementation Plan
 
+**Status:** Implemented through Task 11; Task 12 delivery verification, authenticated native smokes, and packed-consumer verification remain in progress.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the foreground development coordinator, React workbench, generated-artifact MCP/hook playgrounds, deterministic and semantic eval system, and native Claude Code/Codex harnesses described by the approved workbench design.
@@ -80,7 +82,7 @@ scripts/sync-inspector.mjs             # maintainer-only pinned snapshot refresh
 THIRD_PARTY_NOTICES
 ```
 
-### Task 1: Atomic artifact epochs, project lock, watcher, and coordinator
+### Task 1: Atomic artifact epochs, project lock, watcher, and coordinator — implemented
 
 **Files:**
 - Create: `packages/agent-bundle/src/dev/epochs.ts`
@@ -97,23 +99,23 @@ THIRD_PARTY_NOTICES
 - Produces: `DevCoordinator.start()`, `rebuild(reason)`, `status()`, `close()`
 - Produces: `EpochStore.publish()`, `retain()`, `release()`, `cleanup()`
 
-- [ ] **Step 1: Write failing real-filesystem tests**
+- [x] **Step 1: Write failing real-filesystem tests**
 
   Assert invalidations coalesce, a second change during a build creates exactly one follow-up, successful staging rename publishes the complete epoch, failed validation retains the last good epoch, references prevent cleanup, the five newest unreferenced epochs remain, affected files reach one resident Rslint engine, and a live second writer is rejected.
 
-- [ ] **Step 2: Run the focused test and confirm the coordinator is absent**
+- [x] **Step 2: Run the focused test and confirm the coordinator is absent**
 
-- [ ] **Step 3: Implement the process lock with PID liveness and stale-lock recovery**
+- [x] **Step 3: Implement the process lock with PID liveness and stale-lock recovery**
 
-- [ ] **Step 4: Implement focused project/artifact/diagnostic services, serialized rebuilds, atomic epoch publication, retention, structured status, and complete shutdown**
+- [x] **Step 4: Implement focused project/artifact/diagnostic services, serialized rebuilds, atomic epoch publication, retention, structured status, and complete shutdown**
 
-- [ ] **Step 5: Run tests with open-handle detection and repeat the race cases**
+- [x] **Step 5: Run tests with open-handle detection and repeat the race cases**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/agent-bundle/src/dev packages/agent-bundle/tests/dev-coordinator.test.ts && git commit -m "feat: coordinate atomic development epochs"`
 
-### Task 2: Eval DSL, fixture materialization, deterministic graders, and RunStore
+### Task 2: Eval DSL, fixture materialization, deterministic graders, and RunStore — implemented
 
 **Files:**
 - Create: `packages/agent-bundle/src/eval/index.ts`
@@ -128,25 +130,25 @@ THIRD_PARTY_NOTICES
 **Interfaces:**
 - Produces: `defineEvalSuite`, assertion builders, `materializeFixture`, `aggregateTrials`, `compareRuns`, `RunStore`
 
-- [ ] **Step 1: Write failing tests for typed suites and independent fixture copies**
+- [x] **Step 1: Write failing tests for typed suites and independent fixture copies**
 
   Assert the same source digest, distinct writable directories, optional Git baseline commit, allowlisted files only, and no mutation sharing.
 
-- [ ] **Step 2: Write failing literal-outcome tests for pass/fail/inconclusive assertions and aggregation**
+- [x] **Step 2: Write failing literal-outcome tests for pass/fail/inconclusive assertions and aggregation**
 
   Cover exit code, script outcome, required/forbidden MCP calls, activation evidence, pass rate, pass@k, pass^k, and alignment mismatch classification.
 
-- [ ] **Step 3: Write a failing concurrency test proving one writer per run directory and complete JSONL records**
+- [x] **Step 3: Write a failing concurrency test proving one writer per run directory and complete JSONL records**
 
-- [ ] **Step 4: Implement the DSL, fixture copier, graders, aggregation, and strict canonical store**
+- [x] **Step 4: Implement the DSL, fixture copier, graders, aggregation, and strict canonical store**
 
-- [ ] **Step 5: Run focused tests and inspect the persisted run tree**
+- [x] **Step 5: Run focused tests and inspect the persisted run tree**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/agent-bundle/src/eval packages/agent-bundle/tests/eval-core.test.ts && git commit -m "feat: add deterministic eval core"`
 
-### Task 3: Harness contract and deterministic runner
+### Task 3: Harness contract and deterministic runner — implemented
 
 **Files:**
 - Create: `packages/agent-bundle/src/eval/harnesses/types.ts`
@@ -157,23 +159,23 @@ THIRD_PARTY_NOTICES
 **Interfaces:**
 - Produces: `Harness.preflight()`, `Harness.runTrial()`, normalized `TrialTrace`, and `EvalService.run()`
 
-- [ ] **Step 1: Write a failing end-to-end deterministic trial test against a built epoch**
+- [x] **Step 1: Write a failing end-to-end deterministic trial test against a built epoch**
 
   Assert preflight, fresh fixture, ordered trace, durable outcome, grading, raw references, and RunStore persistence.
 
-- [ ] **Step 2: Run and observe missing orchestration**
+- [x] **Step 2: Run and observe missing orchestration**
 
-- [ ] **Step 3: Implement the harness interface, failure taxonomy, deterministic runner, and EvalService lifecycle**
+- [x] **Step 3: Implement the harness interface, failure taxonomy, deterministic runner, and EvalService lifecycle**
 
-- [ ] **Step 4: Ensure startup/auth/plugin/timeout failures remain harness failures and preserve available evidence**
+- [x] **Step 4: Ensure startup/auth/plugin/timeout failures remain harness failures and preserve available evidence**
 
-- [ ] **Step 5: Run the focused and full suites**
+- [x] **Step 5: Run the focused and full suites**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/agent-bundle/src/eval packages/agent-bundle/tests/eval-service.test.ts && git commit -m "feat: orchestrate deterministic eval trials"`
 
-### Task 4: Claude Code native CLI harness and semantic grader
+### Task 4: Claude Code native CLI harness and semantic grader — implemented; authenticated smoke remains open
 
 **Files:**
 - Create: `packages/agent-bundle/src/eval/harnesses/claude.ts`
@@ -184,27 +186,27 @@ THIRD_PARTY_NOTICES
 **Interfaces:**
 - Produces: `ClaudeHarness` and `ClaudeSemanticGrader`
 
-- [ ] **Step 1: Capture `claude --version`, `claude --help`, and `claude auth status --json` into redacted capability fixtures**
+- [x] **Step 1: Capture `claude --version`, `claude --help`, and `claude auth status --json` into redacted capability fixtures**
 
   Retain only boolean auth state, auth method category, CLI version, and supported flags; never persist account identifiers or credential values.
 
-- [ ] **Step 2: Write failing trace-normalization tests from a complete stream fixture**
+- [x] **Step 2: Write failing trace-normalization tests from a complete stream fixture**
 
   Cover initialization, plugin errors, MCP state, Skill calls, hook events, tools, result, usage, stderr, malformed lines, and `observed` activation.
 
-- [ ] **Step 3: Implement preflight and argument construction**
+- [x] **Step 3: Implement preflight and argument construction**
 
   Exact invariant: spawn `claude -p --plugin-dir <artifact> --output-format stream-json --include-hook-events --no-session-persistence --model <model>` using inherited environment and existing signed-in session. Reject any Agent Bundle API/config field that attempts to supply an API key. Never add `--bare`.
 
-- [ ] **Step 4: Implement streaming execution, timeout/cancellation, normalization, and semantic grading through a second native CLI invocation**
+- [x] **Step 4: Implement streaming execution, timeout/cancellation, normalization, and semantic grading through a second native CLI invocation**
 
 - [ ] **Step 5: Run fixture tests, then the opt-in authenticated smoke against a handwritten plugin and fresh fixture**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/agent-bundle/src/eval packages/agent-bundle/fixtures/contracts/claude packages/agent-bundle/tests/*claude* && git commit -m "feat: run evals through Claude Code CLI"`
 
-### Task 5: Codex native CLI harness
+### Task 5: Codex native CLI harness — implemented; authenticated smoke remains open
 
 **Files:**
 - Create: `packages/agent-bundle/src/eval/harnesses/codex.ts`
@@ -215,25 +217,25 @@ THIRD_PARTY_NOTICES
 **Interfaces:**
 - Produces: `CodexHarness`
 
-- [ ] **Step 1: Capture installed Codex version and plugin/exec help into capability fixtures**
+- [x] **Step 1: Capture installed Codex version and plugin/exec help into capability fixtures**
 
-- [ ] **Step 2: Write failing unit tests for temporary-home setup and complete JSONL trace normalization**
+- [x] **Step 2: Write failing unit tests for temporary-home setup and complete JSONL trace normalization**
 
   The home test must prove only opaque `auth.json` is copied with its mode, marketplace/plugin state is new, the source home digest is unchanged, and cleanup removes the temporary home.
 
-- [ ] **Step 3: Implement preflight and temporary lifecycle**
+- [x] **Step 3: Implement preflight and temporary lifecycle**
 
   Invoke `codex plugin marketplace add`, `codex plugin add`, `codex plugin list --json`, and `codex exec --ephemeral --json -m <model>` with the temporary `CODEX_HOME`. Do not accept or construct API-key environment variables.
 
-- [ ] **Step 4: Implement JSONL normalization, inferred activation, cancellation, cleanup, and failure classification**
+- [x] **Step 4: Implement JSONL normalization, inferred activation, cancellation, cleanup, and failure classification**
 
 - [ ] **Step 5: Run fixture tests, then the opt-in authenticated smoke and prove the normal Codex home is byte-identical**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/agent-bundle/src/eval packages/agent-bundle/fixtures/contracts/codex packages/agent-bundle/tests/*codex* && git commit -m "feat: run evals through Codex CLI"`
 
-### Task 6: Foreground HTTP server, typed routes, and live events
+### Task 6: Foreground HTTP server, typed routes, and live events — implemented
 
 **Files:**
 - Create: `packages/agent-bundle/src/dev/server.ts`
@@ -246,23 +248,23 @@ THIRD_PARTY_NOTICES
 - Produces: `startDevServer({ root, port, open, agentApi }): Promise<DevSession>`
 - Produces routes for project, skills, artifacts, MCP, hooks, evals, logs, and event stream.
 
-- [ ] **Step 1: Write failing real-server tests on an ephemeral loopback port**
+- [x] **Step 1: Write failing real-server tests on an ephemeral loopback port**
 
   Assert static index serving, typed project snapshot, ordered live event delivery, route validation, process-start route session token, origin rejection, and close cascading to watchers/children.
 
-- [ ] **Step 2: Run and confirm the server entry is absent**
+- [x] **Step 2: Run and confirm the server entry is absent**
 
-- [ ] **Step 3: Implement the loopback server and route codecs with handlers delegating to application services**
+- [x] **Step 3: Implement the loopback server and route codecs with handlers delegating to application services**
 
-- [ ] **Step 4: Serve contributor proxy contracts and published prebuilt assets through the same API paths**
+- [x] **Step 4: Serve contributor proxy contracts and published prebuilt assets through the same API paths**
 
-- [ ] **Step 5: Run focused tests with open-handle detection**
+- [x] **Step 5: Run focused tests with open-handle detection**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/agent-bundle/src/dev packages/agent-bundle/src/api.ts packages/agent-bundle/tests/dev-server.test.ts && git commit -m "feat: serve the development workbench"`
 
-### Task 7: Rsbuild React shell, project store, and overview
+### Task 7: Rsbuild React shell, project store, and overview — implemented
 
 **Files:**
 - Create: `packages/workbench/package.json`
@@ -279,23 +281,23 @@ THIRD_PARTY_NOTICES
 **Interfaces:**
 - Produces: browser API client, event-driven project store, page router, overview target/status matrix.
 
-- [ ] **Step 1: Write a failing browser test for the five overview questions**
+- [x] **Step 1: Write a failing browser test for the five overview questions**
 
   Use a real in-memory API transport and assert normalization state, active/stale epoch, target matrix, diagnostics, changed files, and next action.
 
-- [ ] **Step 2: Run Rstest Browser Mode and observe the missing app**
+- [x] **Step 2: Run Rstest Browser Mode and observe the missing app**
 
-- [ ] **Step 3: Configure Rsbuild React/HMR and implement the typed client/store/app shell**
+- [x] **Step 3: Configure Rsbuild React/HMR and implement the typed client/store/app shell**
 
-- [ ] **Step 4: Implement responsive navigation and overview without duplicating server logic**
+- [x] **Step 4: Implement responsive navigation and overview without duplicating server logic**
 
-- [ ] **Step 5: Run browser test and production Rsbuild build**
+- [x] **Step 5: Run browser test and production Rsbuild build**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/workbench package.json package-lock.json && git commit -m "feat: add Rsbuild workbench shell"`
 
-### Task 8: Skill browser and inert Markdown renderer
+### Task 8: Skill browser and inert Markdown renderer — implemented
 
 **Files:**
 - Create: `packages/workbench/src/pages/skills.tsx`
@@ -307,23 +309,23 @@ THIRD_PARTY_NOTICES
 **Interfaces:**
 - Consumes server-parsed `SkillDocument`; never parses frontmatter in the browser.
 
-- [ ] **Step 1: Write failing browser tests for frontmatter, GFM, resources, source/generated bases, and inert content**
+- [x] **Step 1: Write failing browser tests for frontmatter, GFM, resources, source/generated bases, and inert content**
 
   Assert tables/task lists/links/code render, Shiki loads only when a fence exists, relative images use the correct API base, raw HTML is not mounted, JSX is visible text, and Mermaid remains code.
 
-- [ ] **Step 2: Run and confirm the renderer is absent**
+- [x] **Step 2: Run and confirm the renderer is absent**
 
-- [ ] **Step 3: Implement React Markdown/remark-gfm components and lazy fine-grained Shiki loading**
+- [x] **Step 3: Implement React Markdown/remark-gfm components and lazy fine-grained Shiki loading**
 
-- [ ] **Step 4: Implement the tree and synchronized Rendered/Source/Generated tabs**
+- [x] **Step 4: Implement the tree and synchronized Rendered/Source/Generated tabs**
 
-- [ ] **Step 5: Run Browser Mode and production asset build**
+- [x] **Step 5: Run Browser Mode and production asset build**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/workbench/src packages/workbench/tests/skills.test.tsx && git commit -m "feat: render and inspect Skills"`
 
-### Task 9: Inspector snapshot, MCP remote transport, and MCP page
+### Task 9: Inspector snapshot, MCP remote transport, and MCP page — implemented
 
 **Files:**
 - Create: `scripts/sync-inspector.mjs`
@@ -339,25 +341,25 @@ THIRD_PARTY_NOTICES
 **Interfaces:**
 - Produces: `AgentBundleRemoteTransport` bound to `{ epochId, target, serverName }`.
 
-- [ ] **Step 1: Pin one Inspector commit and create an allowlist from public source paths used by client state, hooks, protocol views, forms, progress, and logs**
+- [x] **Step 1: Pin one Inspector commit and create an allowlist from public source paths used by client state, hooks, protocol views, forms, progress, and logs**
 
-- [ ] **Step 2: Write failing sync verification for upstream/post-patch digests, dependency allowlist, moved paths, license, and adapter preservation**
+- [x] **Step 2: Write failing sync verification for upstream/post-patch digests, dependency allowlist, moved paths, license, and adapter preservation**
 
-- [ ] **Step 3: Write a failing browser-to-stdio bridge test**
+- [x] **Step 3: Write a failing browser-to-stdio bridge test**
 
   Initialize, list, call, observe stderr/progress, cancel, restart on the same epoch, and reject arbitrary executable input.
 
-- [ ] **Step 4: Vendor byte-identical sources where possible, record mechanical patches, and implement the adapter/transport**
+- [x] **Step 4: Vendor byte-identical sources where possible, record mechanical patches, and implement the adapter/transport**
 
-- [ ] **Step 5: Build the MCP page with catalog/forms/raw JSON/history/replay/export bound to the selected epoch**
+- [x] **Step 5: Build the MCP page with catalog/forms/raw JSON/history/replay/export bound to the selected epoch**
 
-- [ ] **Step 6: Run retained upstream fixtures, server transport tests, Browser Mode, and Rsbuild production build**
+- [x] **Step 6: Run retained upstream fixtures, server transport tests, Browser Mode, and Rsbuild production build**
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
   Run: `git add scripts packages/workbench/src/inspector packages/workbench/src/pages/mcp.tsx packages/workbench/tests packages/agent-bundle/tests THIRD_PARTY_NOTICES && git commit -m "feat: integrate the MCP protocol workbench"`
 
-### Task 10: Hooks, artifacts, logs, and whole-plugin playground
+### Task 10: Hooks, artifacts, logs, and whole-plugin playground — implemented
 
 **Files:**
 - Create: `packages/agent-bundle/src/services/playground-service.ts`
@@ -371,21 +373,21 @@ THIRD_PARTY_NOTICES
 **Interfaces:**
 - Produces ordered trace, replay export, and `promoteToDraftEval(sessionId)`.
 
-- [ ] **Step 1: Write failing service tests combining build, host preflight, Skill evidence, hook/MCP/script events, response, workspace changes, diagnostics, and raw links in order**
+- [x] **Step 1: Write failing service tests combining build, host preflight, Skill evidence, hook/MCP/script events, response, workspace changes, diagnostics, and raw links in order**
 
-- [ ] **Step 2: Write failing browser tests for canonical/native hook forms, artifact provenance/diff, producer-grouped logs, replay, and draft eval promotion**
+- [x] **Step 2: Write failing browser tests for canonical/native hook forms, artifact provenance/diff, producer-grouped logs, replay, and draft eval promotion**
 
-- [ ] **Step 3: Implement the shared timeline and promotion service over existing product services**
+- [x] **Step 3: Implement the shared timeline and promotion service over existing product services**
 
-- [ ] **Step 4: Implement the four pages with immutable epoch selection and no source shortcuts**
+- [x] **Step 4: Implement the four pages with immutable epoch selection and no source shortcuts**
 
-- [ ] **Step 5: Run service/browser tests and a real generated hook/MCP fixture**
+- [x] **Step 5: Run service/browser tests and a real generated hook/MCP fixture**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/agent-bundle/src/services packages/agent-bundle/tests packages/workbench/src/pages packages/workbench/tests && git commit -m "feat: add the whole-plugin playground"`
 
-### Task 11: Eval matrix, comparisons, and raw evidence UI
+### Task 11: Eval matrix, comparisons, and raw evidence UI — implemented
 
 **Files:**
 - Create: `packages/workbench/src/pages/evals.tsx`
@@ -397,17 +399,17 @@ THIRD_PARTY_NOTICES
 **Interfaces:**
 - Produces CLI `eval` and `eval compare`; UI case/host/model matrix and aligned comparison.
 
-- [ ] **Step 1: Write failing CLI tests for suite/case selection, host/trial overrides, persisted run IDs, and comparison output**
+- [x] **Step 1: Write failing CLI tests for suite/case selection, host/trial overrides, persisted run IDs, and comparison output**
 
-- [ ] **Step 2: Write failing browser tests for live trial state, evidence labels, k/n metrics, non-comparable mismatches, duration/usage, and raw links**
+- [x] **Step 2: Write failing browser tests for live trial state, evidence labels, k/n metrics, non-comparable mismatches, duration/usage, and raw links**
 
-- [ ] **Step 3: Implement CLI/API wiring over EvalService**
+- [x] **Step 3: Implement CLI/API wiring over EvalService**
 
-- [ ] **Step 4: Implement the eval page and comparison matrix without recomputing server conclusions**
+- [x] **Step 4: Implement the eval page and comparison matrix without recomputing server conclusions**
 
-- [ ] **Step 5: Run process/browser tests and compare two deterministic multi-trial runs**
+- [x] **Step 5: Run process/browser tests and compare two deterministic multi-trial runs**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Run: `git add packages/agent-bundle/src packages/agent-bundle/tests packages/workbench/src/pages/evals.tsx packages/workbench/tests/evals.test.tsx && git commit -m "feat: report and compare eval runs"`
 
@@ -420,7 +422,7 @@ release gate remain the tracked delivery checks in Steps 4 and 6 below.
 **Files:**
 - Create: `packages/agent-bundle/src/dev/agent-api.ts`
 - Test: `packages/agent-bundle/tests/agent-api.test.ts`
-- Test: `packages/agent-bundle/tests/workbench-packed.test.ts`
+- Test: `packages/workbench/tests/packed-release.e2e.test.ts`
 - Modify: `README.md`
 
 **Interfaces:**
