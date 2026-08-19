@@ -166,6 +166,18 @@ it('keeps recorded token coverage visible when an incomplete side makes the usag
   expect(row.delta?.usage).toBe('Unavailable: incomplete usage coverage');
 });
 
+it('keeps complete usage visible when unequal trial counts make its delta unavailable', () => {
+  const row = comparisonMatrixRowFor(comparableRow({
+    baseline: metrics({ trials: 2, usage: { inputTokens: 200, outputTokens: 0, recordedTrials: 2, totalTokens: 200 } }),
+    candidate: metrics({ runId: 'run-candidate', trials: 3, usage: { inputTokens: 600, outputTokens: 0, recordedTrials: 3, totalTokens: 600 } }),
+    delta: { meanDurationMs: 0, passRate: 0, passes: 0, trials: 0 },
+  }));
+
+  expect(row.baseline?.usage).toBe('200 tokens · 2 of 2 trials');
+  expect(row.candidate?.usage).toBe('600 tokens · 3 of 3 trials');
+  expect(row.delta?.usage).toBe('Unavailable: unequal trial counts');
+});
+
 it('marks a smoke row as evidence rather than a reliability claim', () => {
   const row = comparisonMatrixRowFor(comparableRow({
     baseline: metrics({ evidence: 'smoke', reliability: undefined, trials: 2 }),
