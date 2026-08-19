@@ -78,51 +78,6 @@ const errorCode = (error: unknown): string =>
       ? error.name
       : typeof error;
 
-interface SourceHashIdentity {
-  readonly ino: number;
-  readonly mtimeMs: number;
-  readonly sha256: string;
-  readonly size: number;
-}
-
-/** Per-service SHA-256 cache keyed by resolved path and git-index-style identity. */
-class ProjectSourceHashCache {
-  readonly #entries = new Map<string, SourceHashIdentity>();
-
-  async digest(resolvedPath: string): Promise<string> {
-    const metadata = await lstat(resolvedPath);
-    const cached = this.#entries.get(resolvedPath);
-    if (
-      cached !== undefined &&
-      cached.ino === metadata.ino &&
-      cached.mtimeMs === metadata.mtimeMs &&
-      cached.size === metadata.size
-    ) {
-      return cached.sha256;
-    }
-    const sha256 = await sha256File(resolvedPath);
-    let identity: SourceHashIdentity;
-    try {
-      const after = await lstat(resolvedPath);
-      identity = {
-        ino: after.ino,
-        mtimeMs: after.mtimeMs,
-        sha256,
-        size: after.size,
-      };
-    } catch {
-      identity = {
-        ino: metadata.ino,
-        mtimeMs: metadata.mtimeMs,
-        sha256,
-        size: metadata.size,
-      };
-    }
-    this.#entries.set(resolvedPath, identity);
-    return sha256;
-  }
-}
-
 const directoryWalkLimit = 32;
 
 const mapLimited = async <Value>(
@@ -176,13 +131,12 @@ const relativeSourcePath = (root: string, source: string): string => {
 const sourceInput = async (
   root: string,
   source: string,
-  cache?: ProjectSourceHashCache,
 ): Promise<ProjectSourceSnapshotInput> => {
   try {
     const resolvedSource = await realpath(source);
     const path = relativeSourcePath(root, resolvedSource);
     return Object.freeze({
-      sha256: cache === undefined ? await sha256File(resolvedSource) : await cache.digest(resolvedSource),
+      sha256: await sha256File(resolvedSource),
       path,
     });
   } catch (error) {
@@ -285,7 +239,6 @@ export const snapshotProjectSource = async (
   root: string,
   configPath: string,
   outputRoots: readonly string[] = [],
-  cache?: ProjectSourceHashCache,
 ): Promise<ProjectSourceSnapshot> => {
   const requestedRoot = resolve(root);
   const resolvedRoot = await realpath(requestedRoot);
@@ -296,7 +249,7 @@ export const snapshotProjectSource = async (
   relativeSourcePath(resolvedRoot, resolvedConfigPath);
   const sources = new Set<string>([resolvedConfigPath, ...(await sourcePaths(resolvedRoot, resolvedOutputRoots))]);
   const inputs = Object.freeze((await Promise.all(
-    [...sources].map((source) => sourceInput(resolvedRoot, source, cache)),
+    [...sources].map((source) => sourceInput(resolvedRoot, source)),
   )).sort((left, right) => left.path.localeCompare(right.path)));
   return Object.freeze({
     inputs,
@@ -313,10 +266,9 @@ const snapshotForLoadFailure = async (
   root: string,
   configPath: string,
   outputRoots: readonly string[],
-  cache?: ProjectSourceHashCache,
 ): Promise<ProjectSourceSnapshot> => {
   try {
-    return await snapshotProjectSource(root, configPath, outputRoots, cache);
+    return await snapshotProjectSource(root, configPath, outputRoots);
   } catch {
     return emptySnapshot();
   }
@@ -405,7 +357,6 @@ const invalidPreparedProject = (options: {
 export class ProjectService {
   readonly #options: ProjectServiceOptions;
   readonly #registry: TargetRegistry;
-  readonly #sourceHashCache = new ProjectSourceHashCache();
 
   constructor(options: ProjectServiceOptions) {
     this.#options = Object.freeze({ ...options });
@@ -419,7 +370,7 @@ export class ProjectService {
     let root = requestedRoot;
     let outputRoots: readonly string[] = Object.freeze([]);
     const snapshotSourceFor = (configPath: string): (() => Promise<ProjectSourceSnapshot>) =>
-      () => snapshotProjectSource(root, configPath, outputRoots, this.#sourceHashCache);
+      () => snapshotProjectSource(root, configPath, outputRoots);
     const failedPreparation = (
       code: ProjectDiagnosticCode,
       message: string,
@@ -464,13 +415,13 @@ export class ProjectService {
       });
       discovered = await discoverProject(root, loaded.config);
     } catch {
-      const snapshot = await snapshotForLoadFailure(root, configPath, outputRoots, this.#sourceHashCache);
+      const snapshot = await snapshotForLoadFailure(root, configPath, outputRoots);
       return failedPreparation('AB7000', 'Unable to load project source.', configPath, 'project.invalid-source', snapshot);
     }
 
     let snapshot: ProjectSourceSnapshot;
     try {
-      snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots, this.#sourceHashCache);
+      snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots);
     } catch {
       return failedPreparation('AB7003', 'Unable to snapshot project source.', loaded.configPath, 'project.invalid-source');
     }
