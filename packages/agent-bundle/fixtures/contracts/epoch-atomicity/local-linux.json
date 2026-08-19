@@ -125,7 +125,6 @@
       ]
     }
   ],
-  "schemaVersion": 1,
   "spike": {
     "name": "atomic-epoch-publication-and-lock-ownership",
     "scope": "disposable local filesystem probe; evidence only"

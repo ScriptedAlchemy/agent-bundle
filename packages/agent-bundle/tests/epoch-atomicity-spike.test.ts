@@ -8,7 +8,6 @@ import { expect, it } from '@rstest/core';
 interface EpochEvidence {
   readonly environment: Readonly<Record<string, string>>;
   readonly operations: readonly Readonly<Record<string, unknown>>[];
-  readonly schemaVersion: number;
   readonly spike: Readonly<Record<string, string>>;
 }
 
@@ -148,7 +147,6 @@ const runDisposableEpochSpike = async (root: string): Promise<EpochEvidence> => 
         ],
       },
       ],
-      schemaVersion: 1,
       spike: {
         name: 'atomic-epoch-publication-and-lock-ownership',
         scope: 'disposable local filesystem probe; evidence only',

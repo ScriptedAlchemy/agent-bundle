@@ -434,7 +434,6 @@ nativeIt('runs the signed-in Codex candidate only when explicitly opted in', asy
     eventEnvelopes: result.eventEnvelopes,
     host: 'codex',
     normalHome: result.normalHome,
-    schemaVersion: 1,
     status: result.status,
   }, null, 2)}\n`);
 

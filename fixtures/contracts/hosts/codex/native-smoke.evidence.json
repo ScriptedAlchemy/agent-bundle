@@ -1,5 +1,4 @@
 {
-  "schemaVersion": 1,
   "host": "codex",
   "eventEnvelopes": [
     { "type": "thread.started", "fields": ["thread_id", "type"] },
