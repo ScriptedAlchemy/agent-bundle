@@ -125,10 +125,7 @@ const inspectionError = (
   diagnostic: Diagnostic,
 ): ArtifactInspectionServiceError => new ArtifactInspectionServiceError(code, message, [diagnostic]);
 
-const inspectionMemoLimit = 8;
-
 export class ArtifactInspectionService {
-  readonly #inspections = new Map<string, Promise<ArtifactInspection>>();
   readonly #registry: TargetRegistry;
   readonly #store: EpochStore;
 
@@ -141,7 +138,7 @@ export class ArtifactInspectionService {
     let reference: EpochReference | undefined;
     try {
       reference = await this.#store.acquireEpochReference(epochId);
-      return await this.#memoizedInspection(epochId, reference);
+      return await this.#inspectReference(epochId, reference);
     } finally {
       await this.#releaseReferences(reference === undefined ? [] : [reference]);
     }
@@ -154,8 +151,8 @@ export class ArtifactInspectionService {
       baseReference = await this.#store.acquireEpochReference(baseEpochId);
       candidateReference = await this.#store.acquireEpochReference(candidateEpochId);
       const [base, candidate] = await Promise.all([
-        this.#memoizedInspection(baseEpochId, baseReference),
-        this.#memoizedInspection(candidateEpochId, candidateReference),
+        this.#inspectReference(baseEpochId, baseReference),
+        this.#inspectReference(candidateEpochId, candidateReference),
       ]);
       return this.#diff(base, candidate);
     } finally {
@@ -163,28 +160,6 @@ export class ArtifactInspectionService {
         (reference): reference is EpochReference => reference !== undefined,
       ));
     }
-  }
-
-  #memoizedInspection(epochId: string, reference: EpochReference): Promise<ArtifactInspection> {
-    const cached = this.#inspections.get(epochId);
-    if (cached !== undefined) {
-      this.#inspections.delete(epochId);
-      this.#inspections.set(epochId, cached);
-      return cached;
-    }
-    const pending = this.#inspectReference(epochId, reference).then(
-      (inspection) => inspection,
-      (error: unknown) => {
-        if (this.#inspections.get(epochId) === pending) this.#inspections.delete(epochId);
-        throw error;
-      },
-    );
-    this.#inspections.set(epochId, pending);
-    if (this.#inspections.size > inspectionMemoLimit) {
-      const oldest = this.#inspections.keys().next().value;
-      if (oldest !== undefined && oldest !== epochId) this.#inspections.delete(oldest);
-    }
-    return pending;
   }
 
   async #inspectReference(epochId: string, reference: EpochReference): Promise<ArtifactInspection> {

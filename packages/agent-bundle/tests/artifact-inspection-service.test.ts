@@ -386,6 +386,31 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
   }
 });
 
+it('revalidates an epoch on each inspection so post-publication corruption is visible', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-revalidation-'));
+  const registry = runtimeRegistry();
+  const store = new EpochStore({ projectRoot: root });
+
+  try {
+    await publish({ files: runtimeFiles(), id: 'epoch-revalidation', registry, root, store });
+    const service = new ArtifactInspectionService(store, registry);
+
+    await expect(service.inspect('epoch-revalidation')).resolves.toMatchObject({
+      epochId: 'epoch-revalidation',
+    });
+    await writeFile(
+      join(root, '.agent-bundle', 'epochs', 'epoch-revalidation', 'synthetic', 'scripts', 'alpha.mjs'),
+      'export const alpha = false;\n',
+    );
+
+    await expect(service.inspect('epoch-revalidation')).rejects.toMatchObject({
+      code: 'ARTIFACT_INSPECTION_INVALID',
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('returns deeply frozen detached inspection records', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-immutable-'));
   const registry = runtimeRegistry();
