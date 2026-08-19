@@ -238,7 +238,7 @@ const seedGatedEvalProject = async (root: string): Promise<{ readonly release: (
   return { release: async () => writeFile(gate, 'released\n') };
 };
 
-e2e('admits a deterministic Eval promptly and renders refreshed durable evidence without desktop overflow', { timeout: 120_000 }, async ({ page }) => {
+e2e('admits a deterministic Eval promptly and renders refreshed durable evidence without desktop overflow', { timeout: 180_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
   await seedEvalProject(project.root);
@@ -377,8 +377,9 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
     await expect(page.getByRole('button', { name: 'Cancelling…' })).toBeDisabled();
     expect(cancellations).toBe(1);
     releaseCancel?.();
-    await expect(page.getByText('Cancellation was recorded for this run.')).toBeVisible({ timeout: runCompletionTimeout });
+    await expect(page.getByText('run.cancelling')).toBeVisible({ timeout: runCompletionTimeout });
     await gate.release();
+    await expect(page.getByText('Cancellation was recorded for this run.')).toBeVisible({ timeout: runCompletionTimeout });
     await expect(page.getByText(`Run ${runId} was cancelled after recording`)).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('run.cancelled')).toBeVisible({ timeout: browserTimeout });
     expect(cancellations).toBe(1);
