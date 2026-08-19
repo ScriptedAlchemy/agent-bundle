@@ -410,10 +410,11 @@ it('rejects malformed rebuild input as a stable diagnostic without exposing an e
   }
 });
 
-it('allows a same-origin browser to bootstrap its token but never sends it to a foreign origin', async () => {
+it('allows a same-origin browser to bootstrap its instance identity and token but never sends them to a foreign origin', async () => {
   const server = await startForegroundServer({
     coordinator: new RecordingCoordinator(),
     eventHub: new ProjectEventHub(),
+    instanceId: 'test-instance-id',
     port: 0,
     sessionToken: 'test-session-token',
   });
@@ -431,13 +432,21 @@ it('allows a same-origin browser to bootstrap its token but never sends it to a 
       headers: { origin: server.url },
     });
     expect(browser.status).toBe(200);
-    await expect(browser.json()).resolves.toEqual({ origin: server.url, token: 'test-session-token' });
+    await expect(browser.json()).resolves.toEqual({
+      instanceId: 'test-instance-id',
+      origin: server.url,
+      token: 'test-session-token',
+    });
 
     const browserWithoutOrigin = await fetch(`${server.url}/api/project/session`, {
       headers: { 'sec-fetch-site': 'same-origin' },
     });
     expect(browserWithoutOrigin.status).toBe(200);
-    await expect(browserWithoutOrigin.json()).resolves.toEqual({ origin: server.url, token: 'test-session-token' });
+    await expect(browserWithoutOrigin.json()).resolves.toEqual({
+      instanceId: 'test-instance-id',
+      origin: server.url,
+      token: 'test-session-token',
+    });
 
     const noBrowserProof = await fetch(`${server.url}/api/project/session`);
     expect(noBrowserProof.status).toBe(403);
@@ -446,6 +455,44 @@ it('allows a same-origin browser to bootstrap its token but never sends it to a 
     });
   } finally {
     await server.close();
+  }
+});
+
+it('assigns independent identities to distinct foreground servers with a shared session token', async () => {
+  const first = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'shared-session-token',
+  });
+  const second = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'shared-session-token',
+  });
+
+  try {
+    const [firstResponse, secondResponse] = await Promise.all([
+      fetch(`${first.url}/api/project/session`, { headers: { origin: first.url } }),
+      fetch(`${second.url}/api/project/session`, { headers: { origin: second.url } }),
+    ]);
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    await expect(firstResponse.json()).resolves.toEqual({
+      instanceId: first.instanceId,
+      origin: first.url,
+      token: 'shared-session-token',
+    });
+    await expect(secondResponse.json()).resolves.toEqual({
+      instanceId: second.instanceId,
+      origin: second.url,
+      token: 'shared-session-token',
+    });
+    expect(first.instanceId).not.toBe(second.instanceId);
+  } finally {
+    await Promise.all([first.close(), second.close()]);
   }
 });
 
@@ -848,7 +895,11 @@ it('never discloses a session token when Host does not identify this bound serve
       'sec-fetch-site': 'same-origin',
     });
     expect(sameServer.status).toBe(200);
-    expect(JSON.parse(sameServer.body)).toEqual({ origin: server.url, token: 'test-session-token' });
+    expect(JSON.parse(sameServer.body)).toEqual({
+      instanceId: server.instanceId,
+      origin: server.url,
+      token: 'test-session-token',
+    });
   } finally {
     await server.close();
   }

@@ -106,6 +106,8 @@ export interface ForegroundServerOptions {
   readonly evalLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
+  /** Injectable only to make restart-recovery contracts deterministic. */
+  readonly instanceId?: string;
   /** Already-bound MCP App previews, never executable data supplied by a browser request. */
   readonly mcpAppPreviews?: McpAppRoutePreviewService;
   /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
@@ -420,6 +422,7 @@ export class ForegroundServer {
     this.#evalLifecycle = options.evalLifecycle;
     this.#eventHub = options.eventHub;
     this.#host = host;
+    this.instanceId = options.instanceId ?? randomUUID();
     this.#now = options.now ?? (() => new Date());
     this.#playgroundLifecycle = options.playgroundLifecycle;
     this.#port = port;
@@ -468,6 +471,9 @@ export class ForegroundServer {
       socket.once('close', () => this.#sockets.delete(socket));
     });
   }
+
+  /** Identity for this foreground server process, disclosed solely through same-origin bootstrap. */
+  readonly instanceId: string;
 
   /** Browser-only capability, disclosed solely through same-origin bootstrap. */
   readonly sessionToken: string;
@@ -645,7 +651,7 @@ export class ForegroundServer {
     if (pathname === '/api/project/session') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       this.#assertSessionBootstrapOrigin(request);
-      return responseJson(response, { origin: this.url, token: this.sessionToken });
+      return responseJson(response, { instanceId: this.instanceId, origin: this.url, token: this.sessionToken });
     }
     if (pathname === '/api/project/rebuild') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
