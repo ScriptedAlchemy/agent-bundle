@@ -1264,32 +1264,19 @@ export class McpAppClient implements McpAppRuntimeClient {
   }
 
   async close(bindingId: string, options: Readonly<{ readonly id: McpAppRequestId; readonly reason?: string }>): Promise<McpAppRouteClose> {
-    try {
-      return close(await this.#json(`${this.#bindingPath(bindingId)}/close`, {
-        body: JSON.stringify(detachedJson(closeOptions(options))),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-      }));
-    } finally {
-      this.forgetAuthentication();
-    }
+    return close(await this.#json(`${this.#bindingPath(bindingId)}/close`, {
+      body: JSON.stringify(detachedJson(closeOptions(options))),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }));
   }
 
   async forceClose(bindingId: string): Promise<boolean> {
-    try {
-      const response = asRecord(await this.#json(this.#bindingPath(bindingId), { method: 'DELETE' }));
-      if (response.closed !== true || response.lifecycle !== 'closed') {
-        throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid close response.');
-      }
-      return true;
-    } finally {
-      this.forgetAuthentication();
+    const response = asRecord(await this.#json(this.#bindingPath(bindingId), { method: 'DELETE' }));
+    if (response.closed !== true || response.lifecycle !== 'closed') {
+      throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid close response.');
     }
-  }
-
-  /** Erases the memory-only foreground credential once this relay closes. */
-  forgetAuthentication(): void {
-    this.#foreground.forgetAuthentication();
+    return true;
   }
 
   #admitRuntime(bindingId?: string): RuntimeAdmission {

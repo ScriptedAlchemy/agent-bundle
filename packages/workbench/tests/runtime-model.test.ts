@@ -114,7 +114,7 @@ const reduce = (state: RuntimeModel, ...actions: Parameters<typeof reduceRuntime
 
 /** Mirrors the server-issued per-listener foreground session bootstrap. */
 const foregroundSession = Object.freeze({
-  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
   origin: 'http://localhost',
   token: 'token',
 });

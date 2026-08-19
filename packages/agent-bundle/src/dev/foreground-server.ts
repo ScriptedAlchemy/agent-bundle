@@ -23,6 +23,7 @@ import { SkillDocumentError, type SkillDocumentService } from './skill-document-
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
 const bodyLimit = 64 * 1024;
+const instanceIdLengthLimit = 128;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
 const sseQueueByteLimit = 256 * 1024;
 
@@ -119,6 +120,8 @@ export interface ForegroundServerOptions {
   readonly evalLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
+  /** Injectable only to make restart-recovery contracts deterministic. */
+  readonly instanceId?: string;
   /** Already-bound MCP App previews, never executable data supplied by a browser request. */
   readonly mcpAppPreviews?: McpAppRoutePreviewService;
   /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
@@ -444,6 +447,10 @@ export class ForegroundServer {
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
       throw new ForegroundServerError('AB8000', 'Foreground server port must be a safe TCP port number.');
     }
+    const instanceId = options.instanceId ?? randomUUID();
+    if (instanceId.length === 0 || instanceId.length > instanceIdLengthLimit || instanceId.trim() !== instanceId) {
+      throw new ForegroundServerError('AB8000', 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.');
+    }
 
     this.#agentApi = options.agentApi;
     this.#assets = options.assets;
@@ -451,6 +458,7 @@ export class ForegroundServer {
     this.#evalLifecycle = options.evalLifecycle;
     this.#eventHub = options.eventHub;
     this.#host = host;
+    this.instanceId = instanceId;
     this.#mcpAppPreviews = options.mcpAppPreviews;
     this.#now = options.now ?? (() => new Date());
     this.#port = port;
@@ -517,6 +525,9 @@ export class ForegroundServer {
       socket.once('close', () => this.#sockets.delete(socket));
     });
   }
+
+  /** Identity for this foreground server process, disclosed solely through same-origin bootstrap. */
+  readonly instanceId: string;
 
   /** Browser-only capability, disclosed solely through same-origin bootstrap. */
   readonly sessionToken: string;
@@ -734,7 +745,7 @@ export class ForegroundServer {
         'set-cookie': `${this.#sessionCookieName}=${this.sessionToken}; HttpOnly; SameSite=Strict; Path=/api`,
         'x-content-type-options': 'nosniff',
       });
-      response.end(JSON.stringify({ cookieName: this.#sessionCookieName, origin: this.url, token: this.sessionToken }));
+      response.end(JSON.stringify({ cookieName: this.#sessionCookieName, instanceId: this.instanceId, origin: this.url, token: this.sessionToken }));
       return;
     }
     if (pathname === '/api/project/rebuild') {

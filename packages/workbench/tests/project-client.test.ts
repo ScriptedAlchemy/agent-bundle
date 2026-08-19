@@ -63,6 +63,7 @@ const status = (state: 'active' | 'missing' | 'stale' = 'active') => ({
 
 const foregroundSession = Object.freeze({
   cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+  instanceId: 'foreground-instance-a',
   origin: 'http://127.0.0.1:3100',
   token: 'foreground-token',
 });
@@ -197,7 +198,7 @@ it('completes the shared foreground session bootstrap before constructing its so
     await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
     expect(requests).toEqual(['/api/project/session']);
     expect(stream.listeners).toEqual([]);
-    session.resolve(Response.json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:3100', token: 'token-1' }));
+    session.resolve(Response.json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:3100', token: 'token-1' }));
 
     await expect(connecting).resolves.toMatchObject({ artifact: { state: 'active' } });
     expect(requests).toEqual(['/api/project/session', '/api/project/status']);
@@ -281,61 +282,61 @@ it('refreshes Overview state after live named events and keeps the browser Event
   expect(stream.closed).toBe(true);
 });
 
-it('reports an EventSource outage and clears it after reconnection refreshes project status', async () => {
+it('drains the old instance before adopting a recovered foreground and opening a fresh event stream', async () => {
   const firstStream = new RecordingEventSource();
   const secondStream = new RecordingEventSource();
   const streams = [firstStream, secondStream];
   const errors: unknown[] = [];
-  let connection: 'connected' | 'unavailable' = 'connected';
-  let requests = 0;
-  const client = new ProjectClient({
-    events: () => streams.shift()!,
-    fetch: withForegroundSession(async () => {
-      requests += 1;
+  const connections: string[] = [];
+  const releaseBarrier = deferred<void>();
+  let sessionRequests = 0;
+  let statusRequests = 0;
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      if (String(input) === '/api/project/session') {
+        sessionRequests += 1;
+        return Response.json({
+          cookieName: `agent-bundle-foreground-session-${sessionRequests === 1 ? 'a'.repeat(32) : 'b'.repeat(32)}`,
+          instanceId: `foreground-instance-${sessionRequests === 1 ? 'a' : 'b'}`,
+          origin: 'http://127.0.0.1:3100',
+          token: `token-${sessionRequests === 1 ? 'a' : 'b'}`,
+        });
+      }
+      statusRequests += 1;
       return Response.json({ status: status() });
-    }),
+    },
   });
+  const client = new ProjectClient({
+    beforeInstanceChange: async () => releaseBarrier.promise,
+    events: () => streams.shift()!,
+    foreground,
+    retryDelay: async () => undefined,
+  });
+  client.onConnection((connection) => connections.push(`${connection.state}:${connection.instanceId ?? 'none'}`));
 
   await client.connect(
-    () => { connection = 'connected'; },
-    (reason) => {
-      errors.push(reason);
-      connection = 'unavailable';
-    },
+    () => undefined,
+    (reason) => errors.push(reason),
   );
-  firstStream.emit('open', { data: '', lastEventId: '' });
-  await flushEvents();
-  expect(requests).toBe(1);
-
   firstStream.emit('error', { data: '', lastEventId: '' });
-  firstStream.emit('error', { data: '', lastEventId: '' });
-
-  expect(connection).toBe('unavailable');
-  expect(errors).toHaveLength(1);
-  expect(errors[0]).toMatchObject({ message: 'Foreground project event stream disconnected.' });
-
-  firstStream.emit('open', { data: '', lastEventId: '' });
-  firstStream.emit('open', { data: '', lastEventId: '' });
   await flushEvents();
-
-  expect(connection).toBe('connected');
-  expect(requests).toBe(2);
-
-  await client.connect(() => { connection = 'connected'; }, (reason) => errors.push(reason));
-  expect(requests).toBe(3);
   expect(firstStream.closed).toBe(true);
-  firstStream.emit('error', { data: '', lastEventId: '' });
-  firstStream.emit('open', { data: '', lastEventId: '' });
-  await flushEvents();
-  expect(errors).toHaveLength(1);
-  expect(requests).toBe(3);
+  expect(sessionRequests).toBe(2);
+  expect(statusRequests).toBe(1);
+  expect(connections.at(-1)).toBe('unavailable:foreground-instance-a');
 
-  client.close();
-  secondStream.emit('error', { data: '', lastEventId: '' });
+  releaseBarrier.resolve();
+  await flushEvents();
+  await flushEvents();
   secondStream.emit('open', { data: '', lastEventId: '' });
   await flushEvents();
+
   expect(errors).toHaveLength(1);
-  expect(requests).toBe(3);
+  expect(statusRequests).toBe(3);
+  expect(connections.at(-1)).toBe('connected:foreground-instance-b');
+
+  client.close();
+  expect(secondStream.closed).toBe(true);
 });
 
 it('delivers synchronous runtime events once in FIFO order and refreshes after an unexplained sequence gap', async () => {
@@ -854,7 +855,7 @@ it('bootstraps a same-session token before posting an explicit rebuild through t
   const client = new ProjectClient({
     fetch: async (input, init) => {
       requests.push({ body: init?.body?.toString(), headers: init?.headers, input: String(input) });
-      if (String(input) === '/api/project/session') return Response.json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:3100', token: 'token-1' });
+      if (String(input) === '/api/project/session') return Response.json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:3100', token: 'token-1' });
       return Response.json({ status: status('stale') });
     },
   });
@@ -1048,6 +1049,7 @@ it('invalidates every shared foreground admission when ProjectClient closes duri
   ];
   await new Promise<void>((resolve) => setImmediate(resolve));
   project.close();
+  foreground.forgetAuthentication();
   session.resolve(Response.json(foregroundSession));
 
   const settled = await Promise.allSettled(operations);

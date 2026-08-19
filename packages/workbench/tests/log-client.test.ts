@@ -20,7 +20,7 @@ const json = (body: unknown, status = 200): Response => new Response(JSON.string
 });
 
 const session = (): Response => json({
-  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
   origin: 'http://foreground.test',
   token: 'test-session-token',
 });

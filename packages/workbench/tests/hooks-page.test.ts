@@ -120,7 +120,7 @@ it('renders the hook controls and no request state when no epoch is active', () 
 it('renders the simulation and replay controls for an active epoch', () => {
   const client = new HookClient({ foreground: foreground(async (input) => String(input) === '/api/project/session'
     ? response({
-      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
       origin: 'http://127.0.0.1:5173',
       token: 'foreground-token',
     })
@@ -142,7 +142,7 @@ it('posts fixture input with the strict simulation request body', async () => {
   const client = new HookClient({
     foreground: foreground(async (request, init) => {
       if (String(request) === '/api/project/session') return response({
-        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
         origin: 'http://127.0.0.1:5173',
         token: 'foreground-token',
       });
@@ -183,7 +183,7 @@ it('replays a saved simulation against its original epoch, not the selected one'
     foreground: foreground(async (input, init) => {
       const url = String(input);
       if (url === '/api/project/session') return response({
-        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
         origin: 'http://127.0.0.1:5173',
         token: 'foreground-token',
       });

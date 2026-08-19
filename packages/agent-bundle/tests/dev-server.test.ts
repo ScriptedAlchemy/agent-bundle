@@ -524,10 +524,11 @@ it('rejects malformed rebuild input as a stable diagnostic without exposing an e
   }
 });
 
-it('allows a same-origin browser to bootstrap its token but never sends it to a foreign origin', async () => {
+it('allows a same-origin browser to bootstrap its instance identity and token but never sends them to a foreign origin', async () => {
   const server = await startForegroundServer({
     coordinator: new RecordingCoordinator(),
     eventHub: new ProjectEventHub(),
+    instanceId: 'test-instance-id',
     port: 0,
     sessionToken: 'test-session-token',
   });
@@ -546,7 +547,7 @@ it('allows a same-origin browser to bootstrap its token but never sends it to a 
     });
     expect(browser.status).toBe(200);
     await expect(browser.json()).resolves.toMatchObject({
-      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), origin: server.url, token: 'test-session-token',
+      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), instanceId: 'test-instance-id', origin: server.url, token: 'test-session-token',
     });
 
     const browserWithoutOrigin = await fetch(`${server.url}/api/project/session`, {
@@ -554,7 +555,7 @@ it('allows a same-origin browser to bootstrap its token but never sends it to a 
     });
     expect(browserWithoutOrigin.status).toBe(200);
     await expect(browserWithoutOrigin.json()).resolves.toMatchObject({
-      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), origin: server.url, token: 'test-session-token',
+      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), instanceId: 'test-instance-id', origin: server.url, token: 'test-session-token',
     });
 
     const noBrowserProof = await fetch(`${server.url}/api/project/session`);
@@ -566,6 +567,21 @@ it('allows a same-origin browser to bootstrap its token but never sends it to a 
     await server.close();
   }
 });
+
+for (const [description, instanceId] of [
+  ['empty', ''], ['blank', '   '], ['leading-whitespace', ' instance-id'],
+  ['trailing-whitespace', 'instance-id '], ['overlong', 'x'.repeat(129)],
+] as const) {
+  it(`refuses a ${description} injected foreground instance ID before starting a coordinator`, async () => {
+    const coordinator = new RecordingCoordinator();
+    await expect(startForegroundServer({ coordinator, eventHub: new ProjectEventHub(), instanceId }))
+      .rejects.toMatchObject({
+        code: 'AB8000',
+        message: 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.',
+      });
+    expect(coordinator.startCalls).toBe(0);
+  });
+}
 
 it('requires the same origin and session token before a browser can request a rebuild', async () => {
   const coordinator = new RecordingCoordinator();

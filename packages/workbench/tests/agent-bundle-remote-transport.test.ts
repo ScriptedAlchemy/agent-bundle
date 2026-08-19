@@ -80,7 +80,7 @@ const connection = Object.freeze({
   server: { name: 'weather-fixture', version: '1.0.0' },
 });
 const foregroundBootstrap = Object.freeze({
-  cookieName: 'agent-bundle-foreground-session-00000000000000000000000000000000',
+  cookieName: 'agent-bundle-foreground-session-00000000000000000000000000000000', instanceId: 'foreground-instance-a',
   origin: 'http://127.0.0.1:4100',
   token: 'token-a',
 });

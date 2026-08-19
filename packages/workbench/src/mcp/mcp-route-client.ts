@@ -75,15 +75,27 @@ export interface McpRouteClientOptions extends ForegroundRouteClientOptions {
   readonly foreground?: ForegroundRouteClient;
 }
 
-interface ForegroundSession {
+export interface ForegroundSessionSnapshot {
   readonly cookieName: string;
+  readonly generation: number;
+  readonly instanceId: string;
   readonly origin: string;
   readonly token: string;
 }
 
+export interface ForegroundSessionChange {
+  readonly next: ForegroundSessionSnapshot;
+  readonly previous: ForegroundSessionSnapshot;
+}
+
+export interface ForegroundSessionRefreshOptions {
+  readonly beforeAdopt?: (change: ForegroundSessionChange) => Promise<void>;
+}
+
 interface ForegroundAuthentication {
   readonly generation: number;
-  readonly promise: Promise<ForegroundSession>;
+  readonly promise: Promise<ForegroundSessionSnapshot>;
+  readonly request: number;
 }
 
 interface Diagnostic {
@@ -390,6 +402,8 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
   readonly #fetch: typeof fetch;
   #authentication: ForegroundAuthentication | undefined;
   #authenticationGeneration = 0;
+  #latestStartedBootstrapRequest = 0;
+  #snapshot: ForegroundSessionSnapshot | undefined;
 
   constructor(options: ForegroundRouteClientOptions = {}) {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -410,6 +424,22 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
     if (!this.#isAuthenticationCurrent(authentication)) {
       throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
     }
+  }
+
+  /** Returns the current immutable foreground identity and credential snapshot. */
+  async sessionSnapshot(): Promise<ForegroundSessionSnapshot> {
+    const authentication = this.#authenticate();
+    const session = await authentication.promise;
+    if (!this.#isAuthenticationCurrent(authentication)) {
+      throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
+    }
+    return session;
+  }
+
+  /** Revalidates foreground identity, superseding every older in-flight bootstrap. */
+  async refreshSession(options: ForegroundSessionRefreshOptions = {}): Promise<ForegroundSessionSnapshot> {
+    const request = ++this.#latestStartedBootstrapRequest;
+    return this.#bootstrap(request, this.#authenticationGeneration, options, true);
   }
 
   /** Returns the authenticated foreground origin without exposing the session token. */
@@ -449,9 +479,10 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
 
   /** Erases the short-lived foreground token once its owning transport closes. */
   forgetAuthentication(): void {
-    if (this.#authentication === undefined) return;
     this.#authentication = undefined;
+    this.#snapshot = undefined;
     this.#authenticationGeneration += 1;
+    this.#latestStartedBootstrapRequest += 1;
   }
 
   async #json(response: Response): Promise<unknown> {
@@ -467,13 +498,26 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
 
   #authenticate(): ForegroundAuthentication {
     if (this.#authentication !== undefined) return this.#authentication;
+    return this.#startAuthentication();
+  }
+
+  #startAuthentication(): ForegroundAuthentication {
+    const request = ++this.#latestStartedBootstrapRequest;
     const authentication = Object.freeze({
       generation: this.#authenticationGeneration,
-      promise: this.#bootstrap(),
+      promise: this.#bootstrap(request, this.#authenticationGeneration, {}, false),
+      request,
     });
     this.#authentication = authentication;
     void authentication.promise.catch(() => {
-      if (this.#isAuthenticationCurrent(authentication)) this.#authentication = undefined;
+      if (!this.#isAuthenticationCurrent(authentication)) return;
+      this.#authentication = this.#snapshot === undefined
+        ? undefined
+        : Object.freeze({
+            generation: this.#authenticationGeneration,
+            promise: Promise.resolve(this.#snapshot),
+            request: this.#latestStartedBootstrapRequest,
+          });
     });
     return authentication;
   }
@@ -482,29 +526,77 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
     return this.#authentication === authentication && this.#authenticationGeneration === authentication.generation;
   }
 
-  async #bootstrap(): Promise<ForegroundSession> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw ForegroundRouteClientError.fromResponse(body, response.status);
-    if (
-      !isRecord(body) || !hasExactKeys(body, ['cookieName', 'origin', 'token']) || typeof body.cookieName !== 'string' ||
-      !/^agent-bundle-foreground-session-[a-f0-9]{32}$/u.test(body.cookieName) ||
-      typeof body.origin !== 'string' || typeof body.token !== 'string' || body.token.length === 0
-    ) {
-      throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.', response.status);
-    }
-    let origin: URL;
+  async #bootstrap(
+    request: number,
+    authenticationGeneration: number,
+    options: ForegroundSessionRefreshOptions,
+    replaceAuthentication: boolean,
+  ): Promise<ForegroundSessionSnapshot> {
     try {
-      origin = new URL(body.origin);
-    } catch {
-      throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.', response.status);
+      const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
+      if (this.#bootstrapSuperseded(request, authenticationGeneration)) return this.#supersededSnapshot();
+      const body: unknown = await response.json().catch(() => undefined);
+      if (this.#bootstrapSuperseded(request, authenticationGeneration)) return this.#supersededSnapshot();
+      if (!response.ok) throw ForegroundRouteClientError.fromResponse(body, response.status);
+      if (
+        !isRecord(body) || !hasExactKeys(body, ['cookieName', 'instanceId', 'origin', 'token']) ||
+        typeof body.cookieName !== 'string' || !/^agent-bundle-foreground-session-[a-f0-9]{32}$/u.test(body.cookieName) ||
+        typeof body.instanceId !== 'string' || body.instanceId.length === 0 || body.instanceId.length > 128 ||
+        body.instanceId.trim() !== body.instanceId || typeof body.origin !== 'string' ||
+        typeof body.token !== 'string' || body.token.length === 0
+      ) {
+        throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.', response.status);
+      }
+      let origin: URL;
+      try {
+        origin = new URL(body.origin);
+      } catch {
+        throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.', response.status);
+      }
+      if (origin.origin !== body.origin) throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.', response.status);
+      const browserOrigin = globalThis.location?.origin;
+      if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin) {
+        throw new ForegroundRouteClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.', response.status);
+      }
+      const previous = this.#snapshot;
+      const generation = previous === undefined
+        ? 0
+        : previous.instanceId === body.instanceId
+          ? previous.generation
+          : previous.generation + 1;
+      const snapshot = Object.freeze({
+        cookieName: body.cookieName,
+        generation,
+        instanceId: body.instanceId,
+        origin: body.origin,
+        token: body.token,
+      });
+      if (previous !== undefined && previous.instanceId !== snapshot.instanceId && options.beforeAdopt !== undefined) {
+        await options.beforeAdopt(Object.freeze({ next: snapshot, previous }));
+        if (this.#bootstrapSuperseded(request, authenticationGeneration)) return this.#supersededSnapshot();
+      }
+      this.#snapshot = snapshot;
+      if (replaceAuthentication) {
+        this.#authentication = Object.freeze({
+          generation: authenticationGeneration,
+          promise: Promise.resolve(snapshot),
+          request,
+        });
+      }
+      return snapshot;
+    } catch (error) {
+      if (this.#bootstrapSuperseded(request, authenticationGeneration) && this.#snapshot !== undefined) return this.#snapshot;
+      throw error;
     }
-    if (origin.origin !== body.origin) throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.', response.status);
-    const browserOrigin = globalThis.location?.origin;
-    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin) {
-      throw new ForegroundRouteClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.', response.status);
-    }
-    return Object.freeze({ cookieName: body.cookieName, origin: body.origin, token: body.token });
+  }
+
+  #bootstrapSuperseded(request: number, authenticationGeneration: number): boolean {
+    return request !== this.#latestStartedBootstrapRequest || authenticationGeneration !== this.#authenticationGeneration;
+  }
+
+  #supersededSnapshot(): ForegroundSessionSnapshot {
+    if (this.#snapshot !== undefined) return this.#snapshot;
+    throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap was superseded.', 401);
   }
 }
 

@@ -51,7 +51,7 @@ import {
   type PlaygroundScriptCatalog,
 } from './playground/playground-page.tsx';
 import { overviewFor } from './overview-model.ts';
-import { ProjectClient } from './project-client.ts';
+import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
 import { RuntimeClient, type RuntimeBootstrap } from './runtime-client.ts';
@@ -812,6 +812,7 @@ const Workbench = () => {
   const handoffCoordinator = useRef<RuntimeMcpHandoffCoordinator | undefined>(undefined);
   const mcpPreviewDeparture = useRef<McpPreviewDepartureCoordinator | undefined>(undefined);
   const runtimeOperationTraceAuthorities = useRef(new Map<string, RuntimeOperationTraceAuthority>());
+  const resetRuntimeInstance = useRef<() => void>(() => undefined);
   const artifactClient = useRef<ArtifactClient | undefined>(undefined);
   const comparisonClient = useRef<ComparisonClient | undefined>(undefined);
   const evalClient = useRef<EvalClient | undefined>(undefined);
@@ -819,6 +820,7 @@ const Workbench = () => {
   const logClient = useRef<LogClient | undefined>(undefined);
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const [connectionError, setConnectionError] = useState<string>();
+  const [connection, setConnection] = useState<ProjectConnectionState>({ state: 'connecting' });
   const [error, setError] = useState<string>();
   if (foreground.current === undefined) foreground.current = new ForegroundRouteClient();
   if (mcpRoutes.current === undefined) mcpRoutes.current = new WorkbenchMcpRouteClient({ foreground: foreground.current });
@@ -846,7 +848,39 @@ const Workbench = () => {
 
   pageRef.current = page;
 
-  if (client.current === undefined) client.current = new ProjectClient({ foreground: foreground.current! });
+  if (client.current === undefined) {
+    client.current = new ProjectClient({
+      beforeInstanceChange: async () => {
+        handoffCoordinator.current?.cancel();
+        mcpPreviewDeparture.current?.cancel();
+        runtimeConsentQueue.current?.resolveAll('deny');
+        const results = await Promise.allSettled([
+          handoffCoordinator.current?.close() ?? Promise.resolve(),
+          mcpPreviewDeparture.current?.close() ?? Promise.resolve(),
+          mcpControllerRef.current?.close() ?? Promise.resolve(),
+        ]);
+        const failure = results.find((result) => result.status === 'rejected');
+        if (failure?.status === 'rejected') setConnectionError(errorMessage(failure.reason));
+        handoffCoordinator.current = undefined;
+        mcpPreviewDeparture.current = undefined;
+        resetRuntimeInstance.current();
+        runtimeOperationTraceAuthorities.current.clear();
+        setRuntimeOperationTraces(emptyRuntimeOperationTraces);
+        runtimeController.current?.close();
+        runtimeController.current = undefined;
+        setRuntimeControllerState(undefined);
+        setRuntimeCapability('unknown');
+        setRuntimeHandoff(undefined);
+        setPlaygroundRun(undefined);
+        setChangedFiles([]);
+        const replacement = createMcpController(mcpRoutes.current!);
+        mcpControllerRef.current = replacement;
+        setMcpController(replacement);
+        setMcpModel(replacement.model);
+      },
+      foreground: foreground.current!,
+    });
+  }
   if (mcpAppClient.current === undefined) {
     mcpAppClient.current = new McpAppClient({ foreground: foreground.current!, projectClient: client.current });
   }
@@ -1073,16 +1107,33 @@ const Workbench = () => {
     const next = client.current!;
     const nextSkillClient = new SkillClient();
     const nextRuntimeClient = runtimeClient.current!;
-    const runtimeEvents = createRuntimeEventBuffer();
+    let runtimeEvents = createRuntimeEventBuffer();
     let mounted = true;
+    let runtimeInstanceVersion = 0;
     let runtimeTopologyPresent = false;
     let runtimeBootstrapStarted = false;
     let runtimeRetry: ReturnType<typeof setTimeout> | undefined;
     let runtimeRetryCount = 0;
+    const resetRuntimeBootstrap = (): void => {
+      runtimeInstanceVersion += 1;
+      runtimeTopologyPresent = false;
+      runtimeBootstrapStarted = false;
+      runtimeRetryCount = 0;
+      if (runtimeRetry !== undefined) clearTimeout(runtimeRetry);
+      runtimeRetry = undefined;
+      runtimeEvents.close();
+      runtimeEvents = createRuntimeEventBuffer();
+    };
+    resetRuntimeInstance.current = resetRuntimeBootstrap;
     client.current = next;
     skillClient.current = nextSkillClient;
     const unsubscribeActivity = next.onActivity((activity) => {
       if (mounted) setChangedFiles(activity.changedFiles);
+    });
+    const unsubscribeConnection = next.onConnection((nextConnection) => {
+      if (!mounted) return;
+      setConnection(nextConnection);
+      if (nextConnection.state === 'connected') setConnectionError(undefined);
     });
     const resolveRuntimeCapability = (bootstrap: RuntimeBootstrap): void => {
       if (!mounted) return;
@@ -1134,9 +1185,12 @@ const Workbench = () => {
     };
     const bootstrapRuntime = (): void => {
       if (!mounted || !runtimeTopologyPresent) return;
+      const instanceVersion = runtimeInstanceVersion;
       runtimeBootstrapStarted = true;
-      void nextRuntimeClient.bootstrap().then(resolveRuntimeCapability).catch((reason: unknown) => {
-        if (!mounted) return;
+      void nextRuntimeClient.bootstrap().then((bootstrap) => {
+        if (instanceVersion === runtimeInstanceVersion) resolveRuntimeCapability(bootstrap);
+      }).catch((reason: unknown) => {
+        if (!mounted || instanceVersion !== runtimeInstanceVersion) return;
         setRuntimeError(errorMessage(reason));
         scheduleRuntimeBootstrap();
       });
@@ -1170,10 +1224,12 @@ const Workbench = () => {
     });
     return () => {
       mounted = false;
+      if (resetRuntimeInstance.current === resetRuntimeBootstrap) resetRuntimeInstance.current = () => undefined;
       clearRuntimeOperationTraces();
       if (runtimeRetry !== undefined) clearTimeout(runtimeRetry);
       runtimeEvents.close();
       unsubscribeActivity();
+      unsubscribeConnection();
       const pagePreviewClose = mcpPreviewDeparture.current?.close();
       runtimeConsentQueue.current?.resolveAll('deny');
       void (async () => {
@@ -1225,6 +1281,14 @@ const Workbench = () => {
   }, [mcpController]);
   useEffect(() => mcpController.subscribe(setMcpModel), [mcpController]);
 
+  if (connection.state !== 'connected') {
+    const unavailable = connection.state === 'unavailable';
+    return <main aria-live="polite" className="loading-state">
+      <h1>{unavailable ? 'Foreground connection unavailable' : 'Foreground connection reconnecting'}</h1>
+      <p>{unavailable ? 'Waiting for the foreground server to recover.' : 'Connecting to the foreground server.'}</p>
+      {connectionError === undefined ? undefined : <p role="alert">{connectionError}</p>}
+    </main>;
+  }
   if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
     if (page === 'mcp') {
       return <McpScreen

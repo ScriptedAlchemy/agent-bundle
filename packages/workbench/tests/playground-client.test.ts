@@ -63,7 +63,7 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
   async (input, init) => {
     const url = String(input);
     if (url === '/api/project/session') return response({
-      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
       origin: 'http://127.0.0.1:5173',
       token: 'foreground-token',
     });
@@ -80,7 +80,7 @@ const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => ne
 
 const hostileFetch = (body: unknown): typeof fetch => async (input) =>
   String(input) === '/api/project/session'
-    ? response({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+    ? response({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
     : decodedResponse(body);
 
 it('starts one server-owned skill inspection without browser-authored identity or evidence over the shared foreground session', async () => {
@@ -141,7 +141,7 @@ it('shares one foreground bootstrap across catalog admission and run admission',
       if (url === '/api/project/session') {
         bootstraps += 1;
         return response({
-          cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+          cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
           origin: 'http://127.0.0.1:5173',
           token: 'foreground-token',
         });
@@ -167,7 +167,7 @@ it('forwards catalog cancellation through the authenticated foreground transport
   const client = new PlaygroundClient({
     foreground: foreground(async (input, init) => {
       if (String(input) === '/api/project/session') return response({
-        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
         origin: 'http://127.0.0.1:5173',
         token: 'foreground-token',
       });
@@ -301,7 +301,7 @@ it('decodes NDJSON trace frames split across transport chunks', async () => {
     foreground: foreground(async (input) => {
       const url = String(input);
       if (url === '/api/project/session') return response({
-        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
         origin: 'http://127.0.0.1:5173',
         token: 'foreground-token',
       });
@@ -335,7 +335,7 @@ it('ends a stream without delivering more events once it is closed', async () =>
     foreground: foreground(async (input, init) => {
       const url = String(input);
       if (url === '/api/project/session') return response({
-        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
         origin: 'http://127.0.0.1:5173',
         token: 'foreground-token',
       });

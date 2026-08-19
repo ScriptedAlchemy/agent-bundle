@@ -37,11 +37,21 @@ export interface ProjectActivitySnapshot {
 
 export type ProjectActivityListener = (activity: ProjectActivitySnapshot) => void;
 
+export type ProjectConnectionPhase = 'connected' | 'connecting' | 'unavailable';
+export interface ProjectConnectionState {
+  readonly generation?: number;
+  readonly instanceId?: string;
+  readonly state: ProjectConnectionPhase;
+}
+export type ProjectConnectionListener = (connection: ProjectConnectionState) => void;
+
 export interface ProjectClientOptions {
+  readonly beforeInstanceChange?: () => Promise<void>;
   readonly events?: EventSourceFactory;
   readonly fetch?: typeof fetch;
   /** Reuses Workbench's memory-only foreground authentication authority. */
   readonly foreground?: ForegroundRouteClient;
+  readonly retryDelay?: (milliseconds: number) => Promise<void>;
 }
 
 interface ProjectStatusResponse {
@@ -76,6 +86,8 @@ const projectEventTypes = [
 ] as const;
 
 const browserEvents: EventSourceFactory = (url) => new EventSource(url);
+const retryDelay = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const retryDelayMilliseconds = 250;
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -291,8 +303,11 @@ const activityFor = (paths: readonly string[]): ProjectActivitySnapshot => Objec
  * only turns those events into fresh typed status snapshots.
  */
 export class ProjectClient {
+  readonly #beforeInstanceChange: () => Promise<void>;
   readonly #events: EventSourceFactory;
   readonly #foreground: ForegroundRouteClient;
+  #connection: ProjectConnectionState = Object.freeze({ state: 'connecting' });
+  readonly #connectionListeners = new Set<ProjectConnectionListener>();
   #closed = false;
   #activity = activityFor([]);
   readonly #activityListeners = new Set<ProjectActivityListener>();
@@ -301,6 +316,7 @@ export class ProjectClient {
   readonly #eventSubscribers = new Set<ProjectEventListener>();
   #eventQueue: QueuedProjectEvent[] = [];
   #eventSource: EventSourceLike | undefined;
+  #eventSourceVersion = 0;
   #eventRefreshPromise: Promise<void> | undefined;
   #eventRefreshQueued = false;
   #highestQueuedEventId = -1;
@@ -309,10 +325,15 @@ export class ProjectClient {
   #errorListener: ProjectClientErrorListener | undefined;
   #listener: ((status: ProjectStatus) => void) | undefined;
   #refreshPromise: Promise<ProjectStatus> | undefined;
+  #recoveryVersion = 0;
+  readonly #retryDelay: (milliseconds: number) => Promise<void>;
+  #statusGeneration = 0;
 
   constructor(options: ProjectClientOptions = {}) {
+    this.#beforeInstanceChange = options.beforeInstanceChange ?? (async () => undefined);
     this.#events = options.events ?? browserEvents;
     this.#foreground = options.foreground ?? new ForegroundRouteClient({ fetch: options.fetch });
+    this.#retryDelay = options.retryDelay ?? retryDelay;
   }
 
   get lastEventId(): number {
@@ -321,6 +342,13 @@ export class ProjectClient {
 
   get activity(): ProjectActivitySnapshot {
     return this.#activity;
+  }
+
+  get connection(): ProjectConnectionState { return this.#connection; }
+
+  onConnection(listener: ProjectConnectionListener): () => void {
+    this.#connectionListeners.add(listener);
+    return () => this.#connectionListeners.delete(listener);
   }
 
   onActivity(listener: ProjectActivityListener): () => void {
@@ -344,8 +372,10 @@ export class ProjectClient {
     this.#listener = listener;
     this.#errorListener = onError;
     this.#eventListener = onEvent;
+    let snapshot;
     try {
-      await this.#foreground.ensureSession();
+      snapshot = await this.#foreground.sessionSnapshot();
+      this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connecting' });
     } catch (error) {
       throw projectError(error);
     }
@@ -359,29 +389,37 @@ export class ProjectClient {
     }
     this.#eventSource?.close();
     this.#eventSource = eventSource;
-    let disconnected = false;
+    const version = ++this.#eventSourceVersion;
     for (const type of projectEventTypes) {
-      eventSource.addEventListener(type, (event) => this.#onEvent(eventSource, type, event));
+      eventSource.addEventListener(type, (event) => {
+        if (version === this.#eventSourceVersion) this.#onEvent(eventSource, type, event);
+      });
     }
     eventSource.addEventListener('error', () => {
-      if (!this.#closed && eventSource === this.#eventSource && !disconnected) {
-        disconnected = true;
+      if (!this.#closed && eventSource === this.#eventSource && version === this.#eventSourceVersion) {
+        this.#statusGeneration += 1;
+        this.#eventRefreshQueued = false;
+        eventSource.close();
+        this.#eventSource = undefined;
+        this.#setConnection({ ...this.#connection, state: 'unavailable' });
         this.#reportError(new ProjectClientError('Foreground project event stream disconnected.'));
+        this.#startRecovery(version);
       }
     });
     eventSource.addEventListener('open', () => {
-      if (!this.#closed && eventSource === this.#eventSource && disconnected) {
-        disconnected = false;
-        this.#queueEventRefresh();
+      if (!this.#closed && eventSource === this.#eventSource && version === this.#eventSourceVersion && this.#connection.state !== 'connected') {
+        void this.#refreshRecoveredSource(version);
       }
     });
+    this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connected' });
     return status;
   }
 
   async refresh(): Promise<ProjectStatus> {
     if (this.#refreshPromise !== undefined) return this.#refreshPromise;
+    const statusGeneration = this.#statusGeneration;
     const operation = this.#readStatus().then((status) => {
-      if (!this.#closed) this.#listener?.(status);
+      if (!this.#closed && statusGeneration === this.#statusGeneration) this.#listener?.(status);
       return status;
     }).finally(() => {
       this.#refreshPromise = undefined;
@@ -413,11 +451,83 @@ export class ProjectClient {
     this.#eventSource?.close();
     this.#eventSource = undefined;
     this.#activityListeners.clear();
+    this.#connectionListeners.clear();
+    this.#recoveryVersion += 1;
+    this.#statusGeneration += 1;
     this.#errorListener = undefined;
     this.#eventListener = undefined;
     this.#eventSubscribers.clear();
     this.#listener = undefined;
-    this.#foreground.forgetAuthentication();
+  }
+
+  #startRecovery(disconnectedVersion: number): void {
+    const recoveryVersion = ++this.#recoveryVersion;
+    void this.#recover(disconnectedVersion, recoveryVersion);
+  }
+
+  async #recover(disconnectedVersion: number, recoveryVersion: number): Promise<void> {
+    while (!this.#closed && recoveryVersion === this.#recoveryVersion) {
+      try {
+        const previousGeneration = this.#connection.generation;
+        const snapshot = await this.#foreground.refreshSession({ beforeAdopt: async () => this.#beforeInstanceChange() });
+        if (this.#closed || recoveryVersion !== this.#recoveryVersion) return;
+        if (previousGeneration !== undefined && previousGeneration !== snapshot.generation) this.#resetInstanceState();
+        const status = await this.#readStatus();
+        if (this.#closed || recoveryVersion !== this.#recoveryVersion) return;
+        this.#listener?.(status);
+        const source = this.#events('/api/project/events');
+        if (this.#closed || recoveryVersion !== this.#recoveryVersion) { source.close(); return; }
+        this.#eventSource = source;
+        const version = Math.max(this.#eventSourceVersion + 1, disconnectedVersion + 1);
+        this.#eventSourceVersion = version;
+        for (const type of projectEventTypes) source.addEventListener(type, (event) => this.#onEvent(source, type, event));
+        source.addEventListener('error', () => {
+          if (source !== this.#eventSource || version !== this.#eventSourceVersion) return;
+          this.#statusGeneration += 1;
+          source.close();
+          this.#eventSource = undefined;
+          this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'unavailable' });
+          this.#reportError(new ProjectClientError('Foreground project event stream disconnected.'));
+          this.#startRecovery(version);
+        });
+        source.addEventListener('open', () => { void this.#refreshRecoveredSource(version); });
+        this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connecting' });
+        return;
+      } catch {
+        if (this.#closed || recoveryVersion !== this.#recoveryVersion) return;
+        await this.#retryDelay(retryDelayMilliseconds);
+      }
+    }
+  }
+
+  async #refreshRecoveredSource(version: number): Promise<void> {
+    if (this.#closed || version !== this.#eventSourceVersion || this.#eventSource === undefined) return;
+    try {
+      const status = await this.#readStatus();
+      if (this.#closed || version !== this.#eventSourceVersion || this.#eventSource === undefined) return;
+      this.#listener?.(status);
+      const snapshot = await this.#foreground.sessionSnapshot();
+      if (version === this.#eventSourceVersion) this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connected' });
+    } catch (error) {
+      if (version === this.#eventSourceVersion) this.#reportError(error);
+    }
+  }
+
+  #resetInstanceState(): void {
+    this.#eventQueue.length = 0;
+    this.#highestQueuedEventId = -1;
+    this.#lastEventId = 0;
+    this.#lastSourceChangeSequence = -1;
+    this.#activity = activityFor([]);
+    for (const listener of this.#activityListeners) listener(this.#activity);
+  }
+
+  #setConnection(connection: ProjectConnectionState): void {
+    if (this.#connection.state === connection.state && this.#connection.generation === connection.generation && this.#connection.instanceId === connection.instanceId) return;
+    this.#connection = Object.freeze(connection);
+    for (const listener of this.#connectionListeners) {
+      try { listener(this.#connection); } catch { /* observers cannot interrupt recovery */ }
+    }
   }
 
   async #readStatus(): Promise<ProjectStatus> {

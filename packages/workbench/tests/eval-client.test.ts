@@ -102,7 +102,7 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
   async (input, init) => {
     const url = String(input);
     if (url === '/api/project/session') return response({
-      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
       origin: 'http://127.0.0.1:5173',
       token: 'foreground-token',
     });
@@ -336,7 +336,7 @@ it('decodes fragmented NDJSON in sequence and aborts a replacement stream withou
   const evalClient = client(async (input) => {
     const url = String(input);
     if (url === '/api/project/session') return response({
-      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
       origin: 'http://127.0.0.1:5173',
       token: 'foreground-token',
     });
@@ -375,7 +375,7 @@ it('fetches an opaque persisted artifact through the foreground session without 
   const evalClient = client(async (input) => {
     const url = String(input);
     if (url === '/api/project/session') return response({
-      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
       origin: 'http://127.0.0.1:5173',
       token: 'foreground-token',
     });
@@ -443,7 +443,7 @@ it('shares one foreground bootstrap across eval and comparison routes and fences
     if (path === '/api/project/session') {
       bootstraps += 1;
       return response({
-        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
         origin: 'http://127.0.0.1:5173',
         token: 'foreground-token',
       });

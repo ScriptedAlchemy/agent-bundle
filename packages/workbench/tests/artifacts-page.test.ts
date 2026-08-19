@@ -115,7 +115,7 @@ const response = (body: unknown, status = 200): Response => new Response(JSON.st
 const sessionFetch = (reply: (url: string) => Response): typeof fetch => async (input) => {
   const url = String(input);
   if (url === '/api/project/session') return response({
-    cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+    cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
     origin: 'http://127.0.0.1:5173',
     token: 'foreground-token',
   });

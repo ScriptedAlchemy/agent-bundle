@@ -98,7 +98,7 @@ const response = (body: unknown): Response => new Response(JSON.stringify(body),
 const stubFetch = (calls: string[], body: unknown): typeof fetch => async (input) => {
   const url = String(input);
   if (url === '/api/project/session') return response({
-    cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+    cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
     origin: 'http://127.0.0.1:5173',
     token: 'foreground-token',
   });
@@ -202,7 +202,7 @@ it('delegates run loading to EvalClient and the server comparison to ComparisonC
       if (path === '/api/project/session') {
         bootstraps += 1;
         return response({
-          cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+          cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
           origin: 'http://127.0.0.1:5173',
           token: 'foreground-token',
         });

@@ -70,9 +70,14 @@ const json = (body: unknown, statusCode = 200): Response => Response.json(body, 
 
 /** Mirrors the server-issued per-listener foreground session bootstrap. */
 const foregroundSession = Object.freeze({
-  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
   origin: 'http://localhost',
   token: 'foreground-token',
+});
+const projectStatus = Object.freeze({
+  artifact: Object.freeze({ state: 'missing' as const }),
+  build: Object.freeze({ state: 'idle' as const }),
+  source: Object.freeze({ diagnostics: Object.freeze([]), state: 'unknown' as const }),
 });
 
 const deferred = <Value>(): Deferred<Value> => {
@@ -234,7 +239,7 @@ it('shares one injected foreground bootstrap across MCP, Runtime, and Project cl
       if (url === '/api/runtime/status') return json({ status });
       if (url === '/api/runtime/surfaces') return json({ surfaces: [surface] });
       if (url === '/api/runtime/runs?limit=50') return json({ providerSessionId: 'provider-a', runs: [run()] });
-      if (url === '/api/project/rebuild') return json({ status });
+      if (url === '/api/project/rebuild') return json({ status: projectStatus });
       throw new Error(`Unexpected route request ${url}.`);
     },
   });
@@ -253,13 +258,13 @@ it('shares one injected foreground bootstrap across MCP, Runtime, and Project cl
   project.close();
   project.close();
   await new ProjectClient({ foreground }).rebuild(['skills/review/SKILL.md']);
-  expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(3);
+  expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(2);
 });
 
-it('fences an in-flight Project rebuild when shutdown invalidates foreground authentication', async () => {
+it('fences an in-flight Project rebuild when root shutdown invalidates foreground authentication', async () => {
   const session = deferred<Response>();
   const requests: RecordedRequest[] = [];
-  const client = new ProjectClient({
+  const foreground = new ForegroundRouteClient({
     fetch: async (input, init) => {
       const url = String(input);
       requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
@@ -268,9 +273,11 @@ it('fences an in-flight Project rebuild when shutdown invalidates foreground aut
       throw new Error(`Unexpected route request ${url}.`);
     },
   });
+  const client = new ProjectClient({ foreground });
 
   const rebuilding = client.rebuild(['skills/review/SKILL.md']);
   client.close();
+  foreground.forgetAuthentication();
   session.resolve(json(foregroundSession));
 
   await expect(rebuilding).rejects.toBeInstanceOf(Error);

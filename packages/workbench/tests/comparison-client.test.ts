@@ -65,7 +65,7 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
   async (input, init) => {
     const url = String(input);
     if (url === '/api/project/session') return response({
-      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
       origin: 'http://127.0.0.1:5173',
       token: 'foreground-token',
     });
@@ -247,7 +247,7 @@ it('uses the shared foreground authority error when its authentication is invali
   const foreground = new ForegroundRouteClient({
     fetch: async (input) => String(input) === '/api/project/session'
       ? response({
-        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
         origin: 'http://127.0.0.1:5173',
         token: 'foreground-token',
       })
