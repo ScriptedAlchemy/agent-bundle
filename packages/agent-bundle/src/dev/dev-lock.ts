@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
@@ -227,7 +227,14 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
   const contents = `${stableJson(owner)}\n`;
   const probeProcess = options.probeProcess ?? isProcessRunning;
   const recoveryPath = `${path}${recoverySuffix}`;
-  await mkdir(dirname(path), { recursive: true });
+  const directoryPath = dirname(path);
+  await mkdir(directoryPath, { recursive: true });
+  if (!(await lstat(directoryPath)).isDirectory()) {
+    throw new DevLockError(
+      'DEV_LOCK_INVALID',
+      'The .agent-bundle path must be a directory contained by the project.',
+    );
+  }
 
   for (;;) {
     if (await writeCompleteExclusive(path, contents, owner.nonce)) {

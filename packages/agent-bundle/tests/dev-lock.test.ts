@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -244,5 +244,22 @@ it('allows close to retry after cleanup fails', async () => {
     await expect(readFile(lockPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a symlinked agent-bundle directory without writing outside the project', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle symlinked lock root '));
+  const outside = await mkdtemp(join(tmpdir(), 'agent bundle symlinked lock outside '));
+
+  try {
+    await symlink(outside, join(root, '.agent-bundle'), 'dir');
+
+    await expect(acquireDevLock({ projectRoot: root })).rejects.toMatchObject({
+      code: 'DEV_LOCK_INVALID',
+    });
+    await expect(readFile(join(outside, 'dev.lock'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+    await rm(outside, { force: true, recursive: true });
   }
 });
