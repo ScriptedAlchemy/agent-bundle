@@ -20,7 +20,6 @@ export interface McpProtocolTraceSource {
 export interface McpProtocolTraceExport {
   readonly history: readonly McpBrowserSessionInvocation[];
   readonly kind: 'agent-bundle.mcp-protocol-trace';
-  readonly schemaVersion: 1;
   readonly session: Readonly<{
     readonly binding: McpBrowserSessionBinding | null;
     readonly connection: McpBrowserSessionConnection | null;
@@ -36,7 +35,6 @@ const sessionId = (model: Pick<McpBrowserSessionModel, 'binding' | 'sessionId'>)
 export const mcpProtocolTraceExport = ({ history, model }: McpProtocolTraceSource): McpProtocolTraceExport => ({
   history,
   kind: 'agent-bundle.mcp-protocol-trace',
-  schemaVersion: 1,
   session: {
     binding: model.binding ?? null,
     connection: model.connection ?? null,

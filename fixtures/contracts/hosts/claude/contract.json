@@ -1,5 +1,4 @@
 {
-  "schemaVersion": 1,
   "host": "claude",
   "executable": "claude",
   "minimumVersion": "2.1.232",

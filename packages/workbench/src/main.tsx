@@ -321,13 +321,10 @@ const navigationItems: readonly Readonly<{ glyph: string; label: string; page: W
 const workbenchPages: ReadonlySet<string> = new Set(navigationItems.map((item) => item.page));
 
 const pageForHash = (runtimeAvailable = false): WorkbenchPage => {
-  if (window.location.hash === '#inspector') return 'mcp';
   const page = window.location.hash.slice(1);
   if (page === 'runtime' && !runtimeAvailable) return 'overview';
   return workbenchPages.has(page) ? page as WorkbenchPage : 'overview';
 };
-
-const mcpPresentationForHash = (): McpPresentation => window.location.hash === '#inspector' ? 'inspector' : 'playground';
 
 const Navigation = ({ onNavigate, page, runtimeAvailable = false, runtimeDiagnostic }: {
   readonly onNavigate: (page: WorkbenchPage) => void;
@@ -829,7 +826,7 @@ const Workbench = () => {
   if (runtimeConsentQueue.current === undefined) {
     runtimeConsentQueue.current = createRuntimeConsentQueue(setRuntimeConsent);
   }
-  const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
+  const [mcpPresentation, setMcpPresentation] = useState<McpPresentation>('playground');
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
   const [runtimeOperationTraces, setRuntimeOperationTraces] = useState<readonly RuntimeAppBridgeOperationTrace[]>(emptyRuntimeOperationTraces);
@@ -880,7 +877,6 @@ const Workbench = () => {
     if (next === current) {
       if (current === 'mcp') {
         mcpPreviewDeparture.current!.cancelDeparture();
-        if (window.location.hash === '#inspector') window.history.replaceState(undefined, '', '#mcp');
       } else if (current === 'runtime') {
         handoffCoordinator.current!.cancelDeparture();
       }
@@ -1192,10 +1188,6 @@ const Workbench = () => {
 
   useEffect(() => {
     const updatePage = (fromHashChange: boolean) => {
-      if (window.location.hash === '#inspector') {
-        navigate('mcp', () => { setMcpPresentation('inspector'); });
-        return;
-      }
       if (window.location.hash === '#runtime' && !runtimeAvailable) {
         if (runtimeCapability === 'unavailable') window.history.replaceState(undefined, '', '#overview');
         navigate('overview');

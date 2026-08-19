@@ -41,7 +41,7 @@ interface ArtifactFixtureFile {
 const withHookIndex = (files: readonly ArtifactFixtureFile[]): readonly ArtifactFixtureFile[] =>
   files.some((file) => file.path === 'agent-bundle.hooks.json')
     ? files
-    : [{ contents: '{"hooks":[],"version":1}\n', kind: 'generated', path: 'agent-bundle.hooks.json' }, ...files];
+    : [{ contents: '{"hooks":[]}\n', kind: 'generated', path: 'agent-bundle.hooks.json' }, ...files];
 
 const manifestFor = (
   files: readonly ArtifactFixtureFile[],
@@ -982,7 +982,7 @@ it('requires the canonical hook index when native hook metadata is present', asy
 
 it('reports a compiler-pattern native hook command that is not indexed', async () => {
   const files = [
-    { contents: '{"hooks":[],"version":1}\n', kind: 'generated' as const, path: 'agent-bundle.hooks.json' },
+    { contents: '{"hooks":[]}\n', kind: 'generated' as const, path: 'agent-bundle.hooks.json' },
     {
       contents: `${JSON.stringify({
         hooks: { Start: [{ hooks: [{ command: 'node "${HOOK_ROOT}/hooks/start.mjs"', type: 'command' }] }] },

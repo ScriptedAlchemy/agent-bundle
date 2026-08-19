@@ -57,7 +57,6 @@ export interface ArtifactHook {
 
 export interface ArtifactHookIndex {
   readonly hooks: readonly ArtifactHook[];
-  readonly version: number;
 }
 
 export const artifactHookIndexName = 'agent-bundle.hooks.json';
@@ -272,7 +271,6 @@ export const writeHookIndex = async (options: {
     .map((hook) => Object.freeze({ ...hook }));
   const index: ArtifactHookIndex = {
     hooks: Object.freeze(hooks),
-    version: 1,
   };
   await writeFile(
     join(options.artifactRoot, artifactHookIndexName),

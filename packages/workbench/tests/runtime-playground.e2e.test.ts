@@ -36,14 +36,13 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await page.goto(`${fixture.url}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
-    await page.goto(`${fixture.url}#inspector`);
-    await expect(page).toHaveURL(/#mcp$/u, { timeout: browserTimeout });
+    await page.getByRole('tab', { name: 'Inspector' }).click();
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
     await page.goto(`${fixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
-    await page.goto(`${fixture.url}#inspector`);
-    await expect(page).toHaveURL(/#mcp$/u, { timeout: browserTimeout });
+    await page.goto(`${fixture.url}#mcp`);
+    await page.getByRole('tab', { name: 'Inspector' }).click();
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('tab', { name: 'Playground' }).click();
@@ -93,8 +92,8 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(input).toHaveValue(/"limit": 2/);
     await input.fill('{"broken":');
     await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
-    await page.goto(`${fixture.url}#inspector`);
-    await expect(page).toHaveURL(/#mcp$/u, { timeout: browserTimeout });
+    await page.goto(`${fixture.url}#mcp`);
+    await page.getByRole('tab', { name: 'Inspector' }).click();
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
     await page.goto(`${fixture.url}#runtime`);

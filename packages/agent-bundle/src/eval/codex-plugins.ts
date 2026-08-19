@@ -17,8 +17,7 @@ export interface CodexInstallStep {
   readonly id: CodexInstallStepId;
 }
 
-/** Both generated and hand-written Codex candidates are accepted at their two verified paths. */
-const marketplacePaths = Object.freeze(['.agents/plugins/marketplace.json', 'marketplace.json']);
+const marketplacePath = '.agents/plugins/marketplace.json';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -39,24 +38,21 @@ const readCandidateSkills = async (candidateDirectory: string): Promise<readonly
 };
 
 const readMarketplaceDocument = async (candidateDirectory: string): Promise<unknown> => {
-  for (const relativePath of marketplacePaths) {
-    let raw: string;
-    try {
-      raw = await readFile(join(candidateDirectory, ...relativePath.split('/')), 'utf8');
-    } catch {
-      continue;
-    }
-    try {
-      return parseJsonWithoutDuplicateKeys(raw);
-    } catch (error) {
-      throw artifactError(
-        `Codex candidate marketplace ${JSON.stringify(relativePath)} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+  let raw: string;
+  try {
+    raw = await readFile(join(candidateDirectory, ...marketplacePath.split('/')), 'utf8');
+  } catch {
+    throw artifactError(
+      `Codex candidate ${JSON.stringify(candidateDirectory)} contains no marketplace manifest at ${marketplacePath}.`,
+    );
   }
-  throw artifactError(
-    `Codex candidate ${JSON.stringify(candidateDirectory)} contains no marketplace manifest at ${marketplacePaths.join(' or ')}.`,
-  );
+  try {
+    return parseJsonWithoutDuplicateKeys(raw);
+  } catch (error) {
+    throw artifactError(
+      `Codex candidate marketplace ${JSON.stringify(marketplacePath)} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 };
 
 /** The install identity comes from the candidate's own marketplace, never from a caller-supplied name. */

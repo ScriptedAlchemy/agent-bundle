@@ -306,13 +306,14 @@ it('rejects corrupt, oversized, and duplicate persisted catalog snapshots withou
     const valid = JSON.parse(await readFile(snapshotPath, 'utf8')) as {
       epochId: string;
       selections: unknown[];
-      version: number;
     };
+    expect(valid).not.toHaveProperty('version');
     const invalidSnapshots = [
       '{not json}\n',
       `${' '.repeat(8 * 1024 * 1024)}${JSON.stringify(valid)}\n`,
       `${JSON.stringify({ ...valid, selections: [valid.selections[0], valid.selections[0]] })}\n`,
       `${JSON.stringify({ ...valid, selections: Array.from({ length: 257 }, () => valid.selections[0]) })}\n`,
+      `${JSON.stringify({ ...valid, version: 1 })}\n`,
     ];
 
     for (const invalid of invalidSnapshots) {
@@ -378,7 +379,6 @@ it('rejects semantically hostile persisted catalog selections without rediscover
   const valid = JSON.parse(await readFile(snapshotPath, 'utf8')) as {
     readonly epochId: string;
     readonly selections: readonly Record<string, unknown>[];
-    readonly version: number;
   };
   const snapshots = [
     (snapshot: { selections: Record<string, unknown>[] }) => {

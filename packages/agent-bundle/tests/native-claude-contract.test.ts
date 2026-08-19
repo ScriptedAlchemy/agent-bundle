@@ -520,7 +520,7 @@ nativeIt('runs the checked-in candidate with the existing signed-in Claude subsc
       prompt: 'Use the agent-bundle-native-smoke Skill now. Reply exactly: CLAUDE_NATIVE_SMOKE_OK. Do not access tools or files.',
     });
     await mkdir(evidenceDirectory, { recursive: true });
-    await writeFile(join(evidenceDirectory, 'w2-claude-native-smoke.json'), `${JSON.stringify({ schemaVersion: 1, report }, null, 2)}\n`);
+    await writeFile(join(evidenceDirectory, 'w2-claude-native-smoke.json'), `${JSON.stringify({ report }, null, 2)}\n`);
 
     expect(report.status).toBe('passed');
   } finally {

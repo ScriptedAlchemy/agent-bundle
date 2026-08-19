@@ -202,7 +202,7 @@ it('delegates every fixed tool through the official MCP transport with stable st
           close: () => undefined,
           replay: {
             cursor: { afterSequence: 1 },
-            events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-18T00:00:00.000Z' }],
+            events: [{ kind: 'run.completed', payload: {}, sequence: 1, timestamp: '2026-08-18T00:00:00.000Z' }],
           },
         };
       },

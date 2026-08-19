@@ -300,16 +300,16 @@ Acceptance:
 Create the shared ordered trace/event store and direct whole-plugin operations for scripts, MCP,
 and hooks, plus Skill inspect/render/validate/select operations. Skills are documents and do not
 gain a fake deterministic executor. Add replay/export, Artifacts, and Logs pages. Define and freeze
-a small versioned `DraftEvalCase` contract; promotion writes that shape with durable outcome and
-assertion choices rather than incidental tool order, and W18 consumes it unchanged.
+one small canonical `DraftEvalCase` contract; promotion writes that strict shape with durable
+outcome and assertion choices rather than incidental tool order, and W18 consumes it unchanged.
 
 Acceptance:
 
 - all operations cite the exact epoch and raw event references;
 - replay preserves ordering and epoch binding;
 - artifact tree, provenance, executable metadata, and epoch diff are inspectable;
-- the draft case schema contains the task, fixture, target, invocation intent, durable outcome,
-  selected assertions, and an explicit schema version;
+- the canonical draft case schema contains exactly the task, fixture, target, invocation intent,
+  durable outcome, and selected assertions required by the single contract;
 - no natural-language host action is presented before a native harness exists.
 
 ### W18: Eval DSL, discovery, and fixtures
@@ -328,7 +328,7 @@ Acceptance:
 
 ### W19: Run store and deterministic harness
 
-Implement the schema-versioned JSON/JSONL run store, single-writer ownership, deterministic
+Implement the strict canonical JSON/JSONL run store, single-writer ownership, deterministic
 harness, deterministic graders, pass/fail/inconclusive evidence, and reproducible multi-trial
 aggregation.
 

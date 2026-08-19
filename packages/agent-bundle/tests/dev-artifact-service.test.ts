@@ -110,7 +110,7 @@ it('publishes one validated prepared project as an immutable epoch and removes i
     await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-one', 'portable', 'plugin.json'), 'utf8'))
       .resolves.toContain('artifact-service-fixture');
     await expect(readFile(join(root, '.agent-bundle', 'epochs', '.metadata', 'native-playground', 'epoch-one.json'), 'utf8'))
-      .resolves.toBe('{"epochId":"epoch-one","selections":[],"version":1}\n');
+      .resolves.toBe('{"epochId":"epoch-one","selections":[]}\n');
     expect(removedAttempts).toEqual([attemptRoot]);
     await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
@@ -163,7 +163,7 @@ it('allows only an exact epoch store marker as an extra staged artifact file', a
       '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid staged plugin.","name":"valid","version":"1.0.0"}\n',
     );
     await writeFixtureManifest({ artifactRoot: root, targets: ['portable'] });
-    await writeFile(join(root, marker), '{"token":"8f2aa8b7-bdd2-4065-8cd3-5184c6bd9f74","version":1}\n');
+    await writeFile(join(root, marker), '{"token":"8f2aa8b7-bdd2-4065-8cd3-5184c6bd9f74"}\n');
 
     const allowedContext: Readonly<{ readonly allowEpochStagingMarker: true; readonly artifactRoot: string }> = {
       allowEpochStagingMarker: true,

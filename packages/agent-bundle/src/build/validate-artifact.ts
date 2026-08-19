@@ -351,10 +351,9 @@ const isEpochStagingMarker = (value: string): boolean => {
   try {
     const marker: unknown = JSON.parse(value);
     if (typeof marker !== 'object' || marker === null || Array.isArray(marker)) return false;
-    if (!('token' in marker) || !('version' in marker)) return false;
+    if (!('token' in marker)) return false;
     const entries = Object.entries(marker);
-    return entries.length === 2 &&
-      marker.version === 1 &&
+    return entries.length === 1 &&
       typeof marker.token === 'string' &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(marker.token);
   } catch {

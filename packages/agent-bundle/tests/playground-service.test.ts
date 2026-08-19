@@ -1590,7 +1590,8 @@ it('rejects a replaced session object before it can write or publish an unrelate
     ]);
     await expect(readFile(join(objectsRoot, readdirSync(objectsRoot)[0]!, 'unrelated'), 'utf8')).resolves.toBe('unchanged\n');
     await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toBeDefined();
-    await expect(readFile(join(displacedRoot, '.owner.lock'), 'utf8')).resolves.toContain('token');
+    const displacedOwner = JSON.parse(await readFile(join(displacedRoot, '.owner.lock'), 'utf8')) as unknown;
+    expect(displacedOwner).toEqual({ pid: expect.any(Number), token: expect.any(String) });
   } finally {
     await contender?.close().catch(() => undefined);
     await fixture.close();
@@ -1870,7 +1871,8 @@ it('rejects duplicate and extra persisted envelope keys before reopening', async
     await writeFile(eventPath, eventDocument, 'utf8');
     for (const [session, corrupt] of [
       ['strict-owner-extra', (document: string) => `${JSON.stringify({ ...JSON.parse(document), extra: true })}\n`],
-      ['strict-owner-duplicate', (document: string) => document.replace('"version":1', '"version":1,"version":1')],
+      ['strict-owner-version', (document: string) => `${JSON.stringify({ ...JSON.parse(document), version: 1 })}\n`],
+      ['strict-owner-duplicate', (document: string) => document.replace(/"pid":(\d+)/u, '"pid":$1,"pid":$1')],
     ] as const) {
       const owner = new PlaygroundService({
         projectId: 'project-1',

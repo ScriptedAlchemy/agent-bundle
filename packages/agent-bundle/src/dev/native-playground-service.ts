@@ -174,7 +174,6 @@ interface NativePlaygroundOperation {
 interface PersistedCatalogSnapshot {
   readonly epochId: string;
   readonly selections: readonly PersistedCatalogSelection[];
-  readonly version: 1;
 }
 
 interface SidecarFile {
@@ -199,7 +198,6 @@ class DiscardingTrialWriter implements EvalTrialWriter {
 }
 
 const nativeHosts = new Set<NativePlaygroundHost>(['claude', 'codex']);
-const catalogSnapshotVersion = 1 as const;
 const maximumCatalogSelections = 256;
 const maximumFixtureEntries = 4_096;
 const maximumSnapshotDepth = 16;
@@ -881,7 +879,6 @@ export class NativePlaygroundService {
     return Object.freeze({
       epochId: reference.epoch.id,
       selections: Object.freeze([...selections].sort((left, right) => selectionKey(left).localeCompare(selectionKey(right)))),
-      version: catalogSnapshotVersion,
     });
   }
 
@@ -932,7 +929,7 @@ export class NativePlaygroundService {
     let value: JsonValue;
     try { value = snapshotStrictJsonValue(parseJsonWithoutDuplicateKeys(sidecar.raw)); }
     catch { throw new Error('Native Playground catalog snapshot is invalid.'); }
-    if (!isRecord(value) || !exactKeys(value, ['epochId', 'selections', 'version']) || value.version !== catalogSnapshotVersion ||
+    if (!isRecord(value) || !exactKeys(value, ['epochId', 'selections']) ||
       value.epochId !== reference.epoch.id || !Array.isArray(value.selections) || value.selections.length > maximumCatalogSelections) {
       throw new Error('Native Playground catalog snapshot is invalid.');
     }
@@ -983,7 +980,7 @@ export class NativePlaygroundService {
       const actualHosts = [...(hosts.get(selection.caseId) ?? [])].sort();
       if (stableJson(actualHosts) !== stableJson(expectedHosts)) throw new Error('Native Playground catalog snapshot is invalid.');
     }
-    return Object.freeze({ epochId: value.epochId, selections: Object.freeze(resolved), version: catalogSnapshotVersion });
+    return Object.freeze({ epochId: value.epochId, selections: Object.freeze(resolved) });
   }
 
   async #readSidecar(path: string, allowMultipleLinks = false): Promise<SidecarFile | undefined> {

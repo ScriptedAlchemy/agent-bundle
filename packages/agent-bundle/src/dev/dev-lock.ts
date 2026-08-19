@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
@@ -10,7 +10,6 @@ export interface DevLockOwner {
   readonly nonce: string;
   readonly pid: number;
   readonly projectRoot: string;
-  readonly version: 1;
 }
 
 export interface DevLockOptions {
@@ -38,7 +37,6 @@ const recoverySuffix = '.recovery';
 
 interface RecoveryRecord {
   readonly owner: DevLockOwner;
-  readonly version: 1;
 }
 
 const isProcessRunning = (pid: number): boolean => {
@@ -50,47 +48,58 @@ const isProcessRunning = (pid: number): boolean => {
   }
 };
 
-const parseOwnerValue = (value: unknown): DevLockOwner | undefined => {
+const parseOwnerValue = (value: unknown, projectRoot: string): DevLockOwner | undefined => {
   try {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
     const parsed = value as Partial<DevLockOwner>;
     const pid = parsed.pid;
     if (
-      parsed.version !== 1 ||
+      Object.keys(parsed).length !== 4 ||
+      !Object.hasOwn(parsed, 'createdAt') ||
+      !Object.hasOwn(parsed, 'nonce') ||
+      !Object.hasOwn(parsed, 'pid') ||
+      !Object.hasOwn(parsed, 'projectRoot') ||
       typeof parsed.createdAt !== 'string' ||
       typeof parsed.nonce !== 'string' ||
       parsed.nonce.length === 0 ||
       typeof pid !== 'number' ||
       !Number.isSafeInteger(pid) ||
       pid <= 0 ||
-      typeof parsed.projectRoot !== 'string'
+      parsed.projectRoot !== projectRoot
     ) {
       return undefined;
     }
+    if (new Date(parsed.createdAt).toISOString() !== parsed.createdAt) return undefined;
     return Object.freeze({
       createdAt: parsed.createdAt,
       nonce: parsed.nonce,
       pid,
       projectRoot: parsed.projectRoot,
-      version: 1,
     });
   } catch {
     return undefined;
   }
 };
 
-const parseOwner = (value: string): DevLockOwner | undefined => {
+const parseOwner = (value: string, projectRoot: string): DevLockOwner | undefined => {
   try {
-    return parseOwnerValue(JSON.parse(value));
+    const owner = parseOwnerValue(JSON.parse(value), projectRoot);
+    return owner !== undefined && value === `${stableJson(owner)}\n` ? owner : undefined;
   } catch {
     return undefined;
   }
 };
 
-const parseRecoveryRecord = (value: string): RecoveryRecord | undefined => {
+const parseRecoveryRecord = (value: string, projectRoot: string): RecoveryRecord | undefined => {
   try {
-    const parsed = JSON.parse(value) as Partial<RecoveryRecord>;
-    const owner = parseOwnerValue(parsed.owner);
-    return parsed.version === 1 && owner !== undefined ? Object.freeze({ owner, version: 1 }) : undefined;
+    const parsedValue: unknown = JSON.parse(value);
+    if (typeof parsedValue !== 'object' || parsedValue === null || Array.isArray(parsedValue)) return undefined;
+    const parsed = parsedValue as Partial<RecoveryRecord>;
+    if (Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'owner')) return undefined;
+    const owner = parseOwnerValue(parsed.owner, projectRoot);
+    if (owner === undefined) return undefined;
+    const recovery = Object.freeze({ owner });
+    return value === `${stableJson(recovery)}\n` ? recovery : undefined;
   } catch {
     return undefined;
   }
@@ -126,7 +135,7 @@ const yieldToFilesystem = async (): Promise<void> => {
   await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
 };
 
-const recoveryContentsFor = (owner: DevLockOwner): string => `${stableJson({ owner, version: 1 })}\n`;
+const recoveryContentsFor = (owner: DevLockOwner): string => `${stableJson({ owner })}\n`;
 
 const acquireRecoveryGate = async (
   recoveryPath: string,
@@ -144,7 +153,7 @@ const acquireRecoveryGate = async (
       if (isErrno(error, 'ENOENT')) continue;
       throw error;
     }
-    const recovery = parseRecoveryRecord(currentContents);
+    const recovery = parseRecoveryRecord(currentContents, owner.projectRoot);
     if (recovery === undefined) {
       throw new DevLockError(
         'DEV_LOCK_INVALID',
@@ -165,6 +174,7 @@ export class DevLock {
   readonly #probeProcess: (pid: number) => boolean;
   readonly #recoveryPath: string;
   #closed = false;
+  #closePromise: Promise<void> | undefined;
 
   constructor(
     path: string,
@@ -182,15 +192,29 @@ export class DevLock {
 
   readonly owner: DevLockOwner;
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    const recoveryContents = await acquireRecoveryGate(this.#recoveryPath, this.owner, this.#probeProcess);
-    try {
-      await removeIfOwned(this.#path, this.#contents);
-    } finally {
-      await removeIfOwned(this.#recoveryPath, recoveryContents);
-    }
+  close(): Promise<void> {
+    if (this.#closed) return Promise.resolve();
+    if (this.#closePromise !== undefined) return this.#closePromise;
+
+    const closePromise = (async () => {
+      const recoveryContents = await acquireRecoveryGate(this.#recoveryPath, this.owner, this.#probeProcess);
+      try {
+        await removeIfOwned(this.#path, this.#contents);
+      } finally {
+        await removeIfOwned(this.#recoveryPath, recoveryContents);
+      }
+    })();
+    this.#closePromise = closePromise;
+    void closePromise.then(
+      () => {
+        this.#closed = true;
+        if (this.#closePromise === closePromise) this.#closePromise = undefined;
+      },
+      () => {
+        if (this.#closePromise === closePromise) this.#closePromise = undefined;
+      },
+    );
+    return closePromise;
   }
 }
 
@@ -203,12 +227,18 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
     nonce: randomUUID(),
     pid: process.pid,
     projectRoot,
-    version: 1,
   });
   const contents = `${stableJson(owner)}\n`;
   const probeProcess = options.probeProcess ?? isProcessRunning;
   const recoveryPath = `${path}${recoverySuffix}`;
-  await mkdir(dirname(path), { recursive: true });
+  const directoryPath = dirname(path);
+  await mkdir(directoryPath, { recursive: true });
+  if (!(await lstat(directoryPath)).isDirectory()) {
+    throw new DevLockError(
+      'DEV_LOCK_INVALID',
+      'The .agent-bundle path must be a directory contained by the project.',
+    );
+  }
 
   for (;;) {
     if (await writeCompleteExclusive(path, contents, owner.nonce)) {
@@ -222,7 +252,7 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
       if (isErrno(error, 'ENOENT')) continue;
       throw error;
     }
-    const currentOwner = parseOwner(currentContents);
+    const currentOwner = parseOwner(currentContents, projectRoot);
     if (currentOwner === undefined) {
       throw new DevLockError(
         'DEV_LOCK_INVALID',
@@ -247,7 +277,7 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
         throw error;
       }
       if (currentDuringRecovery !== currentContents) continue;
-      const ownerDuringRecovery = parseOwner(currentDuringRecovery);
+      const ownerDuringRecovery = parseOwner(currentDuringRecovery, projectRoot);
       if (ownerDuringRecovery === undefined) {
         throw new DevLockError(
           'DEV_LOCK_INVALID',

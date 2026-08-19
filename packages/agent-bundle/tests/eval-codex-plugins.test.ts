@@ -72,6 +72,20 @@ it('rejects a candidate that carries no installable Codex marketplace', async ()
   );
 });
 
+it('rejects a root marketplace manifest outside the canonical Codex path', async () => {
+  await withCandidate(
+    async (candidate) => {
+      await writeFile(join(candidate, 'marketplace.json'), `${JSON.stringify(marketplace)}\n`);
+    },
+    async (candidate) => {
+      await expect(readCodexCandidatePlugin(candidate)).rejects.toMatchObject({
+        code: 'CODEX_ARTIFACT_INVALID',
+        name: 'CodexEvalHarnessError',
+      });
+    },
+  );
+});
+
 it('observes plugin availability only when the temporary home reports it installed and enabled', async () => {
   const installed = await readFile(new URL('plugin-list.json', fixtureRoot), 'utf8');
   const disabled = await readFile(new URL('plugin-list-disabled.json', fixtureRoot), 'utf8');

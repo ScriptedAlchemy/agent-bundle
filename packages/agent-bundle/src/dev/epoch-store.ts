@@ -6,6 +6,7 @@ import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInside } from '../core/paths.ts';
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 
 export interface EpochStoreOptions {
@@ -86,7 +87,6 @@ export class EpochStoreError extends Error {
 
 interface EpochMetadata {
   readonly epoch: ArtifactEpoch;
-  readonly version: 1;
 }
 
 interface StagingRecord {
@@ -103,6 +103,22 @@ const metadataDirectoryName = '.metadata';
 const nativePlaygroundCatalogDirectoryName = 'native-playground';
 const stagingMarkerFileName = '.agent-bundle-epoch-stage.json';
 const stagingPrefix = '.stage-';
+const artifactEpochKeys = [
+  'configDigest',
+  'createdAt',
+  'diagnostics',
+  'id',
+  'manifestPath',
+  'modelDigest',
+  'projectRevision',
+  'targetDigests',
+] as const;
+const epochDiagnosticsKeys = ['errors', 'infos', 'warnings'] as const;
+
+const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+};
 
 const pathExists = async (path: string): Promise<boolean> => {
   try {
@@ -136,7 +152,12 @@ const assertSafeTarget = (value: string): void => {
 };
 
 const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    !hasExactOwnKeys(value, artifactEpochKeys)
+  ) return undefined;
   const epoch = value as Partial<ArtifactEpoch>;
   const diagnostics = epoch.diagnostics;
   const targetDigests = epoch.targetDigests;
@@ -149,6 +170,7 @@ const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
     typeof epoch.projectRevision !== 'string' ||
     typeof diagnostics !== 'object' ||
     diagnostics === null ||
+    !hasExactOwnKeys(diagnostics, epochDiagnosticsKeys) ||
     typeof diagnostics.errors !== 'number' ||
     typeof diagnostics.infos !== 'number' ||
     typeof diagnostics.warnings !== 'number' ||
@@ -297,7 +319,7 @@ export class EpochStore {
       await mkdir(this.#epochsPath, { recursive: true });
       const root = await mkdtemp(join(this.#epochsPath, stagingPrefix));
       const metadata = await lstat(root);
-      const markerContents = `${stableJson({ token: randomUUID(), version: 1 })}\n`;
+      const markerContents = `${stableJson({ token: randomUUID() })}\n`;
       await writeFile(join(root, stagingMarkerFileName), markerContents, 'utf8');
       const token = Symbol('epoch-staging');
       this.#staging.set(token, {
@@ -382,7 +404,7 @@ export class EpochStore {
   async #readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
     let value: unknown;
     try {
-      value = JSON.parse(await readFile(this.#activeEpochPath, 'utf8'));
+      value = parseJsonWithoutDuplicateKeys(await readFile(this.#activeEpochPath, 'utf8'));
     } catch (error) {
       if (isErrno(error, 'ENOENT')) return undefined;
       throw new EpochStoreError(
@@ -748,11 +770,11 @@ export class EpochStore {
   }
 
   async #writeEpochMetadata(epoch: ArtifactEpoch): Promise<void> {
-    await this.#writeJsonAtomically(this.#metadataPathFor(epoch.id), { epoch, version: 1 });
+    await this.#writeJsonAtomically(this.#metadataPathFor(epoch.id), { epoch });
   }
 
   async #writeActiveMetadata(epoch: ArtifactEpoch): Promise<void> {
-    await this.#writeJsonAtomically(this.#activeEpochPath, { epoch, version: 1 });
+    await this.#writeJsonAtomically(this.#activeEpochPath, { epoch });
   }
 
   async #writeJsonAtomically(path: string, value: EpochMetadata): Promise<void> {
@@ -771,15 +793,18 @@ export class EpochStore {
 
   #parseMetadata(value: unknown): EpochMetadata | undefined {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    if (!hasExactOwnKeys(value, ['epoch'])) return undefined;
     const metadata = value as Partial<EpochMetadata>;
     const epoch = normalizeEpoch(metadata.epoch);
-    return metadata.version === 1 && epoch !== undefined ? Object.freeze({ epoch, version: 1 }) : undefined;
+    return epoch === undefined ? undefined : Object.freeze({ epoch });
   }
 
   async #readEpochMetadata(epochId: string): Promise<EpochMetadata> {
     let metadata: EpochMetadata | undefined;
     try {
-      metadata = this.#parseMetadata(JSON.parse(await readFile(this.#metadataPathFor(epochId), 'utf8')));
+      metadata = this.#parseMetadata(
+        parseJsonWithoutDuplicateKeys(await readFile(this.#metadataPathFor(epochId), 'utf8')),
+      );
     } catch {
       throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Epoch metadata cannot be parsed as JSON.');
     }

@@ -33,25 +33,23 @@ it('keeps the hook simulation cancellation constructor private to the executor',
 });
 
 it('accepts only canonical frozen hook index metadata', () => {
-  const bytes = '{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"codex/hooks/start.mjs","target":"codex"}],"version":1}\n';
+  const bytes = '{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"codex/hooks/start.mjs","target":"codex"}]}\n';
   const index = parseArtifactHookIndex(bytes);
 
   expect(index).toEqual({
     hooks: [{ event: 'sessionStart', id: 'hook:start', name: 'start', path: 'codex/hooks/start.mjs', target: 'codex' }],
-    version: 1,
   });
   expect(index === undefined ? false : Object.isFrozen(index)).toBe(true);
   expect(index === undefined ? false : Object.isFrozen(index.hooks)).toBe(true);
   expect(parseArtifactHookIndex('{"version":1,"hooks":[]}\n')).toBeUndefined();
-  expect(parseArtifactHookIndex('{"hooks":[],"version":1,"version":1}\n')).toBeUndefined();
-  expect(parseArtifactHookIndex('{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"../start.mjs","target":"codex"}],"version":1}\n')).toBeUndefined();
-  const crossTargetOrder = '{"hooks":[{"event":"sessionStart","id":"z","name":"first","path":"a/hooks/first.mjs","target":"a"},{"event":"sessionStart","id":"a","name":"second","path":"aa/hooks/second.mjs","target":"aa"}],"version":1}\n';
+  expect(parseArtifactHookIndex('{"hooks":[],"hooks":[]}\n')).toBeUndefined();
+  expect(parseArtifactHookIndex('{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"../start.mjs","target":"codex"}]}\n')).toBeUndefined();
+  const crossTargetOrder = '{"hooks":[{"event":"sessionStart","id":"z","name":"first","path":"a/hooks/first.mjs","target":"a"},{"event":"sessionStart","id":"a","name":"second","path":"aa/hooks/second.mjs","target":"aa"}]}\n';
   expect(parseArtifactHookIndex(crossTargetOrder)).toEqual({
     hooks: [
       { event: 'sessionStart', id: 'z', name: 'first', path: 'a/hooks/first.mjs', target: 'a' },
       { event: 'sessionStart', id: 'a', name: 'second', path: 'aa/hooks/second.mjs', target: 'aa' },
     ],
-    version: 1,
   });
 });
 
@@ -65,7 +63,7 @@ it('serializes hook index targets by tuple order without sentinel concatenation'
   try {
     await writeHookIndex({ artifactRoot: root, hooks });
     expect(await readFile(join(root, 'agent-bundle.hooks.json'), 'utf8')).toBe(
-      '{"hooks":[{"event":"sessionStart","id":"z","name":"first","path":"a/hooks/first.mjs","target":"a"},{"event":"sessionStart","id":"a","name":"second","path":"aa/hooks/second.mjs","target":"aa"}],"version":1}\n',
+      '{"hooks":[{"event":"sessionStart","id":"z","name":"first","path":"a/hooks/first.mjs","target":"a"},{"event":"sessionStart","id":"a","name":"second","path":"aa/hooks/second.mjs","target":"aa"}]}\n',
     );
   } finally {
     await rm(root, { force: true, recursive: true });

@@ -1,5 +1,4 @@
 {
-  "schemaVersion": 1,
   "host": "claude",
   "fixtureProvenance": "synthetic-redacted-contract",
   "minimumVersion": "2.1.232",

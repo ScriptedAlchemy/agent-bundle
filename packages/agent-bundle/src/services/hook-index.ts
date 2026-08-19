@@ -70,7 +70,7 @@ export const parseArtifactHookIndex = (bytes: string): ArtifactHookIndex | undef
   } catch {
     return undefined;
   }
-  if (!isPlainRecord(value) || !hasExactKeys(value, ['hooks', 'version']) || value.version !== 1 || !Array.isArray(value.hooks)) {
+  if (!isPlainRecord(value) || !hasExactKeys(value, ['hooks']) || !Array.isArray(value.hooks)) {
     return undefined;
   }
 
@@ -83,6 +83,6 @@ export const parseArtifactHookIndex = (bytes: string): ArtifactHookIndex | undef
     previous = hook;
     hooks.push(hook);
   }
-  const index: ArtifactHookIndex = Object.freeze({ hooks: Object.freeze(hooks), version: 1 });
+  const index: ArtifactHookIndex = Object.freeze({ hooks: Object.freeze(hooks) });
   return bytes === `${stableJson(index)}\n` ? index : undefined;
 };

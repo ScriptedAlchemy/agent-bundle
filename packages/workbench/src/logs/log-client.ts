@@ -94,8 +94,8 @@ const isLevel = (value: unknown): boolean => typeof value === 'string' && (devLo
 const isContext = (value: unknown): value is Readonly<Record<string, string>> => isRecord(value) && Object.entries(value).every(([key, entry]) =>
   safeContextKeys.has(key) && typeof entry === 'string' && safeIdentifier.test(entry) && isSafeWireText(entry, 256));
 const isDevRecord = (value: unknown): value is DevLogRecord => {
-  if (!hasExactKeys(value, ['context', 'details', 'kind', 'level', 'occurredAt', 'producer', 'schemaVersion', 'sequence', 'summary']) || !isProducer(value.producer)) return false;
-  return value.schemaVersion === 1 && safeInteger(value.sequence, 1) && isDate(value.occurredAt) && isLevel(value.level) &&
+  if (!hasExactKeys(value, ['context', 'details', 'kind', 'level', 'occurredAt', 'producer', 'sequence', 'summary']) || !isProducer(value.producer)) return false;
+  return safeInteger(value.sequence, 1) && isDate(value.occurredAt) && isLevel(value.level) &&
     typeof value.kind === 'string' && (devLogKinds[value.producer] as readonly string[]).includes(value.kind) &&
     isSafeWireText(value.summary, maximumSummaryLength) && isContext(value.context) && isSafeDetail(value.details as JsonValue);
 };

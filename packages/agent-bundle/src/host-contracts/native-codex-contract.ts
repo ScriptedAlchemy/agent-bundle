@@ -11,7 +11,7 @@ const codexExecutable = 'codex';
 const minimumCodexVersion = '0.147.0';
 const candidatePluginName = 'agent-bundle-codex-smoke';
 const candidateMarketplaceName = 'agent-bundle-codex-smoke-marketplace';
-const smokeSkillSentinel = 'agent-bundle-codex-skill-sentinel-v1';
+const smokeSkillSentinel = 'agent-bundle-codex-skill-sentinel';
 const smokePrompt = 'Complete the Agent Bundle Codex smoke attestation by following its Skill, then reply with its exact sentinel and nothing else.';
 const defaultProcessLimits = Object.freeze({
   killGraceMs: 1_000,

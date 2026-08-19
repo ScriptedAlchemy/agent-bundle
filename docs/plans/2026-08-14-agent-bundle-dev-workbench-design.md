@@ -147,7 +147,7 @@ Internally it delegates to focused services:
 - `McpService`: starts generated MCP commands and exposes protocol operations;
 - `HookService`: resolves native mappings and runs generated handlers with fixture events;
 - `EvalService`: creates trials, launches harnesses, grades results, and compares runs;
-- `RunStore`: persists schema-versioned JSON and JSONL artifacts.
+- `RunStore`: persists canonical JSON and JSONL artifacts and rejects non-contract shapes.
 
 Services are usable from the UI, CLI, and programmatic API. HTTP handlers contain no product
 logic beyond input decoding and result encoding.
@@ -721,7 +721,7 @@ failures are harness failures rather than plugin failures.
 
 ## Run storage
 
-No database is required. State is schema-versioned and inspectable:
+No database is required. State has one canonical, strictly decoded, inspectable shape:
 
 ```text
 .agent-bundle/
@@ -739,7 +739,7 @@ No database is required. State is schema-versioned and inspectable:
 
 Run provenance includes:
 
-- Agent Bundle version and schema version;
+- Agent Bundle version;
 - project revision and dirty-state digest;
 - artifact epoch and target digests;
 - fixture digest;

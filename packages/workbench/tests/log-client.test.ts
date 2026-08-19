@@ -10,7 +10,6 @@ const record = Object.freeze({
   level: 'info',
   occurredAt: '2026-08-18T12:00:00.000Z',
   producer: 'build',
-  schemaVersion: 1,
   sequence: 1,
   summary: 'Project build started.',
 });
@@ -66,6 +65,11 @@ it('rejects duplicate replay keys, extra record fields, and unsafe wire text bef
   }));
   await expect(extraField.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
+  const versioned = clientFor(json({
+    replay: { cursor: { afterSequence: 1 }, records: [{ ...record, schemaVersion: 1 }] },
+  }));
+  await expect(versioned.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
+
   const unsafeText = clientFor(json({
     replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary: '/private/fixture-secret' }] },
   }));
@@ -85,7 +89,7 @@ it('rejects duplicate replay keys, extra record fields, and unsafe wire text bef
 
 it('rejects malformed UTF-8 and a frame larger than 64 KiB before decoding NDJSON records', async () => {
   const encoder = new TextEncoder();
-  const malformedPrefix = encoder.encode('{"context":{},"details":{},"kind":"project.load","level":"info","occurredAt":"2026-08-18T12:00:00.000Z","producer":"project","schemaVersion":1,"sequence":1,"summary":"');
+  const malformedPrefix = encoder.encode('{"context":{},"details":{},"kind":"project.load","level":"info","occurredAt":"2026-08-18T12:00:00.000Z","producer":"project","sequence":1,"summary":"');
   const malformedSuffix = encoder.encode('"}\n');
   const malformed = new Uint8Array(malformedPrefix.length + 1 + malformedSuffix.length);
   malformed.set(malformedPrefix);

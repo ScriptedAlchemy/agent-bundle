@@ -348,7 +348,7 @@ describe('MCP page', () => {
     expect(markup).toContain('Trace delivery is delayed.');
   });
 
-  it('builds a detached, versioned export of the complete current protocol trace without launch credentials', async () => {
+  it('builds a detached export of the complete current protocol trace without launch credentials', async () => {
     const mutableHistory = [{
       binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
       id: 'tool-1',
@@ -398,7 +398,6 @@ describe('MCP page', () => {
         timing: { completedAt: 1_700_000_000_020, durationMs: 10, startedAt: 1_700_000_000_010 },
       }],
       kind: 'agent-bundle.mcp-protocol-trace',
-      schemaVersion: 1,
       session: {
         binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
         connection: { protocolVersion: '2025-06-18', serverCapabilities: { tools: {} }, serverInfo: { name: 'Weather Server' } },

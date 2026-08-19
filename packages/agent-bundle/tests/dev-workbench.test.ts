@@ -1580,6 +1580,7 @@ it('records a durable playground trace and promotes it through the packaged fore
       epoch: { id: epoch.id },
       outcome: { status: 'passed' },
     });
+    expect(draftEvalCase).not.toHaveProperty('schemaVersion');
 
     await expect(server.close()).resolves.toBeUndefined();
     await expect(fetch(`${server.url}/api/playground/sessions/${run.session.id}`, { headers })).rejects.toThrow();

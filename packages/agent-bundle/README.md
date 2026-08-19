@@ -127,7 +127,7 @@ evals: {
 It runs only with `agent-bundle eval --harness claude` for Claude-pinned cases. After the primary
 trace is usable and deterministic graders finish, Agent Bundle makes one server-owned, plugin-free
 Claude grading call. Its fixed result id is `claude-semantic`; its request, raw stream, stderr, and
-versioned provenance are retained with the trial artifacts. A malformed or failed semantic grader
+canonical provenance are retained with the trial artifacts. A malformed or failed semantic grader
 leaves the trial inconclusive rather than becoming plugin evidence.
 
 The Eval page admits a selected run, reports live progress, and can cancel it through the run

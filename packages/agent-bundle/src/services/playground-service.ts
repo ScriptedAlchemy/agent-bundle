@@ -256,7 +256,6 @@ interface PersistedSessionIndex {
 interface OwnerLock {
   readonly pid: number;
   readonly token: string;
-  readonly version: 1;
 }
 
 interface SessionPersistenceProgress {
@@ -1551,7 +1550,7 @@ export class PlaygroundService {
   async #acquireOwner(root: string, sessionId: string): Promise<string> {
     const token = randomUUID();
     const path = join(root, ownerLockName);
-    const document = Object.freeze({ pid: process.pid, token, version: 1 as const });
+    const document = Object.freeze({ pid: process.pid, token });
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let createdAndSynced = false;
       try {
@@ -1626,11 +1625,11 @@ export class PlaygroundService {
     } catch {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is malformed.');
     }
-    if (!isRecord(parsed) || !hasExactOwnKeys(parsed, ['pid', 'token', 'version']) || parsed.version !== 1 || typeof parsed.pid !== 'number'
+    if (!isRecord(parsed) || !hasExactOwnKeys(parsed, ['pid', 'token']) || typeof parsed.pid !== 'number'
       || !Number.isSafeInteger(parsed.pid) || parsed.pid < 1 || typeof parsed.token !== 'string') {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is invalid.');
     }
-    return Object.freeze({ pid: parsed.pid, token: parsed.token, version: 1 });
+    return Object.freeze({ pid: parsed.pid, token: parsed.token });
   }
 
   async #removeJustCreatedOwnerLock(root: string, token: string): Promise<void> {
