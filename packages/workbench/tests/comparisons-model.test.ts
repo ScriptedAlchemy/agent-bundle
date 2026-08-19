@@ -190,6 +190,24 @@ it('renders a non-comparable row with its reason instead of a delta', () => {
   }]);
 });
 
+it('labels a semantic grader identity mismatch precisely', () => {
+  const row = comparisonMatrixRowFor({
+    ...nonComparableRow,
+    causes: [{
+      baseline: 'claude-semantic@sonnet',
+      candidate: 'claude-semantic@opus',
+      code: 'semantic-grader-identity-mismatch',
+      message: 'The semantic grader identities do not align.',
+    }],
+  });
+
+  expect(row.reasons).toEqual([{
+    code: 'semantic-grader-identity-mismatch',
+    detail: 'claude-semantic@sonnet → claude-semantic@opus',
+    label: 'Semantic grader identity',
+  }]);
+});
+
 it('names a condition only one run recorded', () => {
   const row = comparisonMatrixRowFor({
     candidate: metrics({ runId: 'run-candidate' }),

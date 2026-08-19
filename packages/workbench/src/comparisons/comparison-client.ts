@@ -99,7 +99,6 @@ const nonComparableCauseSchema = z.strictObject({
   code: z.enum([
     'case-mismatch',
     'fixture-mismatch',
-    'grader-versions-mismatch',
     'harness-mismatch',
     'host-cli-version-mismatch',
     'invocation-mismatch',
@@ -107,6 +106,7 @@ const nonComparableCauseSchema = z.strictObject({
     'missing-candidate',
     'model-mismatch',
     'no-gradable-trials',
+    'semantic-grader-identity-mismatch',
   ]),
   message: z.string(),
 });

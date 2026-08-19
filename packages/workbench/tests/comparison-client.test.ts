@@ -129,6 +129,35 @@ it('accepts the canonical semantic grader identity without a schema-version suff
   });
 });
 
+it('decodes the canonical semantic-grader identity mismatch cause', async () => {
+  const aligned = comparison.rows[0]!;
+  const semanticMismatch = {
+    ...comparison,
+    rows: [{
+      baseline: aligned.baseline,
+      candidate: aligned.candidate,
+      caseId: aligned.caseId,
+      causes: [{
+        baseline: 'claude-semantic@sonnet',
+        candidate: 'claude-semantic@opus',
+        code: 'semantic-grader-identity-mismatch',
+        message: 'The semantic grader identities do not align.',
+      }],
+      comparable: false,
+      host: aligned.host,
+    }],
+    summary: { comparable: 0, nonComparable: 1, reliability: 0, smoke: 0 },
+  };
+  const client = new ComparisonClient({ fetch: recordingFetch([], () => response({ comparison: semanticMismatch })) });
+
+  const result = await client.compare({ base: 'run-base', candidate: 'run-candidate' });
+
+  expect(result.rows[0]).toMatchObject({
+    causes: [{ code: 'semantic-grader-identity-mismatch' }],
+    comparable: false,
+  });
+});
+
 it('rejects extra, path-shaped, or negative nested comparison data', async () => {
   const invalid = [
     { provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'none', unexpected: true } },
