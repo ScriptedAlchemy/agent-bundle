@@ -268,38 +268,46 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
 
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
-    child = spawn(installedCli, [
-      'dev', '--agent-api', '--no-open', '--port', String(port), '--root', project,
-    ], {
-      cwd: consumer,
-      env: {
-        ...installedEnvironment(),
-        AGENT_BUNDLE_AGENT_API_TOKEN: agentApiToken,
-        PATH: childPathEntries.join(delimiter),
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
     let commandOutput = '';
     let commandStderr = '';
-    child.stdout?.on('data', (chunk: Buffer) => { commandOutput += chunk.toString(); });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      commandOutput += text;
-      commandStderr += text;
-    });
+    const startInstalledServer = (serverPort: number): ChildProcess => {
+      const nextChild = spawn(installedCli, [
+        'dev', '--agent-api', '--no-open', '--port', String(serverPort), '--root', project,
+      ], {
+        cwd: consumer,
+        env: {
+          ...installedEnvironment(),
+          AGENT_BUNDLE_AGENT_API_TOKEN: agentApiToken,
+          PATH: childPathEntries.join(delimiter),
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      nextChild.stdout?.on('data', (chunk: Buffer) => { commandOutput += chunk.toString(); });
+      nextChild.stderr?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        commandOutput += text;
+        commandStderr += text;
+      });
+      return nextChild;
+    };
+    child = startInstalledServer(port);
     await awaitReady(origin, child, () => commandOutput);
     for (const root of await readdir(tmpdir())) {
       if (productTemporaryRootPrefixes.some((prefix) => root.startsWith(prefix))) productTemporaryRootsBefore.add(root);
     }
     phase = 'browser startup status';
-    const consoleErrors: string[] = [];
+    const consoleErrorRecords: Array<Readonly<{ at: number; text: string }>> = [];
     const pageErrors: Error[] = [];
     const appRouteRequests: Array<Record<string, unknown>> = [];
     const failedAppRouteRequests: Array<Record<string, unknown>> = [];
+    const foregroundRequestFailures: Array<Readonly<{ at: number; error: string | undefined; method: string; path: string }>> = [];
     const nativeRequests: Array<Record<string, unknown>> = [];
     let logsReplayResponses = 0;
     page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(`${message.text()} (${message.location().url})`);
+      if (message.type() === 'error') {
+        const text = `${message.text()} (${message.location().url})`;
+        consoleErrorRecords.push(Object.freeze({ at: Date.now(), text }));
+      }
     });
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('response', (response) => {
@@ -320,6 +328,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
     });
     page.on('requestfailed', (request) => {
       const url = new URL(request.url());
+      if (url.origin === origin) foregroundRequestFailures.push(Object.freeze({
+        at: Date.now(), error: request.failure()?.errorText, method: request.method(), path: url.pathname,
+      }));
       if (!isAppRoute(url)) return;
       failedAppRouteRequests.push(Object.freeze({
         error: request.failure()?.errorText,
@@ -901,6 +912,83 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.getByRole('button', { name: 'Compare runs' }).click();
       await expect(page.locator('.comparison-matrix table')).toBeVisible({ timeout: browserTimeout });
 
+      phase = 'foreground restart/reconnect';
+      if (child === undefined) throw new Error('The packed dev server child was not created.');
+      const stoppedChild = child;
+      if (stoppedChild.pid !== undefined) {
+        trackedProcessIds.add(stoppedChild.pid);
+        for (const processId of await descendantProcessIds(stoppedChild.pid)) trackedProcessIds.add(processId);
+      }
+      const outageStartedAt = Date.now();
+      const recoveredBrowserSession = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/project/session` && response.request().method() === 'GET' && response.ok(),
+      );
+      await closeChild(stoppedChild);
+      phase = 'foreground restart/reconnect disconnected state';
+      await expect(page.getByRole('heading', { name: 'Foreground connection unavailable' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByText('Waiting for the foreground server to recover.')).toBeVisible({ timeout: browserTimeout });
+      phase = 'foreground restart/reconnect browser recovery';
+      child = startInstalledServer(port);
+      await awaitReady(origin, child, () => commandOutput);
+      await expect(page.locator('.connection')).toContainText('Foreground server connected', { timeout: browserTimeout });
+      await recoveredBrowserSession;
+      const rebuiltWithRecoveredSession = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
+      );
+      await page.getByRole('link', { name: 'Overview', exact: true }).click();
+      await page.getByRole('button', { name: 'Rebuild' }).click();
+      await rebuiltWithRecoveredSession;
+      const recoveredAt = Date.now();
+      phase = 'foreground restart/reconnect Agent API recovery';
+      const recoveredStatus = await client.callTool({ name: 'project_status' });
+      expect(record(record(recoveredStatus.structuredContent, 'recovered project status').status, 'recovered project status DTO').artifact)
+        .toEqual(expect.objectContaining({ state: 'active' }));
+      await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 1_000); });
+      const outageFailures = foregroundRequestFailures.filter((failure) => failure.at >= outageStartedAt && failure.at < recoveredAt);
+      const postRecoveryFailures = foregroundRequestFailures.filter((failure) => failure.at >= recoveredAt);
+      expect(postRecoveryFailures).toEqual([]);
+      const expectedProjectStreamFailure = outageFailures.filter((failure) =>
+        failure.method === 'GET' && failure.path === '/api/project/events' && failure.error === 'net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+      );
+      expect(expectedProjectStreamFailure).toHaveLength(1);
+      const expectedMcpStreamFailures = outageFailures.filter((failure) =>
+        failure.method === 'GET' && /^\/api\/mcp\/sessions\/[^/]+\/stream$/u.test(failure.path) && failure.error === 'net::ERR_CONNECTION_REFUSED',
+      );
+      expect(expectedMcpStreamFailures.length).toBeLessThanOrEqual(1);
+      const abortedMcpStreamFailures = outageFailures.filter((failure) =>
+        failure.method === 'GET' && /^\/api\/mcp\/sessions\/[^/]+\/stream$/u.test(failure.path) && failure.error === 'net::ERR_ABORTED',
+      );
+      expect(abortedMcpStreamFailures.length).toBeLessThanOrEqual(2);
+      const expectedSessionFailures = outageFailures.filter((failure) =>
+        failure.method === 'GET' && failure.path === '/api/project/session' && failure.error === 'net::ERR_CONNECTION_REFUSED',
+      );
+      expect(expectedSessionFailures.length).toBeGreaterThanOrEqual(1);
+      for (const [index, failure] of expectedSessionFailures.entries()) {
+        if (index > 0) expect(failure.at - expectedSessionFailures[index - 1]!.at).toBeGreaterThanOrEqual(200);
+      }
+      const oldSessionDeleteFailures = outageFailures.filter((failure) => failure.method === 'DELETE' && /^\/api\/mcp\/sessions\/[^/]+$/u.test(failure.path));
+      expect(oldSessionDeleteFailures.length).toBeLessThanOrEqual(1);
+      const recognizedFailures = expectedProjectStreamFailure.length + expectedMcpStreamFailures.length + abortedMcpStreamFailures.length + expectedSessionFailures.length + oldSessionDeleteFailures.length;
+      expect(outageFailures).toHaveLength(recognizedFailures);
+      const matchedOutageConsoleErrors = consoleErrorRecords.filter((record) => record.at >= outageStartedAt && record.at < recoveredAt &&
+        outageFailures.some((failure) => failure.error !== 'net::ERR_ABORTED' && record.text.includes(failure.error ?? '') && new URL(record.text.slice(record.text.lastIndexOf('(') + 1, -1)).pathname === failure.path),
+      );
+      const consoleBackedFailures = outageFailures.filter((failure) => failure.error !== 'net::ERR_ABORTED');
+      if (matchedOutageConsoleErrors.length !== consoleBackedFailures.length) {
+        const normalizeConsole = (record: Readonly<{ at: number; text: string }>) => Object.freeze({
+          code: /net::[A-Z_]+/u.exec(record.text)?.[0],
+          path: new URL(record.text.slice(record.text.lastIndexOf('(') + 1, -1)).pathname,
+          relativeMs: record.at - outageStartedAt,
+        });
+        const normalizeFailure = (failure: Readonly<{ at: number; error: string | undefined; method: string; path: string }>) => Object.freeze({
+          code: failure.error, method: failure.method, path: failure.path, relativeMs: failure.at - outageStartedAt,
+        });
+        throw new Error(`Foreground outage console/requestfailed mismatch: ${JSON.stringify({
+          console: matchedOutageConsoleErrors.map(normalizeConsole), requestfailed: outageFailures.map(normalizeFailure),
+        })}`);
+      }
+      const unexpectedConsoleErrors = consoleErrorRecords.filter((record) => !matchedOutageConsoleErrors.includes(record));
+
       phase = 'mobile overflow floor';
       await page.setViewportSize({ height: 844, width: 390 });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -909,14 +997,14 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const diagnostics = await call('diagnostics_list');
       expect(record(diagnostics.structuredContent, 'diagnostic list').diagnostics).toEqual(expect.any(Array));
       expect([...called]).toEqual(expectedAgentApiToolNames);
-      if (consoleErrors.length > 0 || pageErrors.length > 0) {
+      if (unexpectedConsoleErrors.length > 0 || pageErrors.length > 0) {
         const iframeSources = await page.locator('iframe').evaluateAll((frames) => frames.map((frame) => Object.freeze({
           src: frame.getAttribute('src'),
           title: frame.getAttribute('title'),
         })));
         throw new Error(`Chrome reported errors: ${JSON.stringify({
           appRouteRequests,
-          consoleErrors,
+          consoleErrors: unexpectedConsoleErrors.map((record) => record.text),
           failedAppRouteRequests,
           frames: page.frames().map((frame) => Object.freeze({
             parentUrl: frame.parentFrame()?.url(),
