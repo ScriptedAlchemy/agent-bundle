@@ -13,6 +13,7 @@ import { EvalClient } from './evals/eval-client.ts';
 import { EvalsPage } from './evals/evals-page.tsx';
 import { ArtifactsPage } from './artifacts/artifacts-page.tsx';
 import { HookClient } from './hooks/hook-client.ts';
+import { ForegroundSessionAuthority } from './foreground-session.ts';
 import { HooksPage } from './hooks/hooks-page.tsx';
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
 import { McpAppClient } from './mcp/mcp-app-client.ts';
@@ -70,7 +71,9 @@ const playgroundTargetsFor = (status: ProjectStatus) => {
 
 const mcpTargets = ['portable', 'claude', 'codex'] as const;
 
-const createMcpController = () => createMcpSessionController({ routes: new McpRouteClient() });
+const createMcpController = (authority: ForegroundSessionAuthority) => createMcpSessionController({
+  routes: new McpRouteClient({ authority }),
+});
 
 const downloadMcpFile = ({ blob, filename }: McpDownload): void => {
   const url = URL.createObjectURL(blob);
@@ -496,6 +499,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
 };
 
 const Workbench = () => {
+  const sessionAuthority = useRef<ForegroundSessionAuthority | undefined>(undefined);
   const client = useRef<ProjectClient | undefined>(undefined);
   const artifactClient = useRef<ArtifactClient | undefined>(undefined);
   const comparisonClient = useRef<ComparisonClient | undefined>(undefined);
@@ -505,9 +509,10 @@ const Workbench = () => {
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const mcpAppClient = useRef<McpAppClient | undefined>(undefined);
   const skillClient = useRef<SkillClient | undefined>(undefined);
+  const authority = sessionAuthority.current ?? (sessionAuthority.current = new ForegroundSessionAuthority());
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
-  const [mcpController, setMcpController] = useState(createMcpController);
+  const [mcpController, setMcpController] = useState(() => createMcpController(authority));
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
   const [mcpPresentation, setMcpPresentation] = useState<McpPresentation>('playground');
   const [page, setPage] = useState<WorkbenchPage>(pageForHash);
@@ -515,13 +520,13 @@ const Workbench = () => {
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
   const [playgroundRun, setPlaygroundRun] = useState<PlaygroundRun>();
 
-  if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient();
-  if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient();
-  if (evalClient.current === undefined) evalClient.current = new EvalClient();
-  if (hookClient.current === undefined) hookClient.current = new HookClient();
-  if (logClient.current === undefined) logClient.current = new LogClient();
-  if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient();
-  if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
+  if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient({ authority });
+  if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient({ authority });
+  if (evalClient.current === undefined) evalClient.current = new EvalClient({ authority });
+  if (hookClient.current === undefined) hookClient.current = new HookClient({ authority });
+  if (logClient.current === undefined) logClient.current = new LogClient({ authority });
+  if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ authority });
+  if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient({ authority });
 
   const navigate = (next: WorkbenchPage): void => {
     const hash = `#${next}`;
@@ -531,7 +536,7 @@ const Workbench = () => {
   };
 
   const resetMcpSession = (): void => {
-    const replacement = createMcpController();
+    const replacement = createMcpController(authority);
     setMcpController(replacement);
     setMcpModel(replacement.model);
   };

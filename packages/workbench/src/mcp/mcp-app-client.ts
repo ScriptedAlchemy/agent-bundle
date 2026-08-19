@@ -1,4 +1,4 @@
-import { decodeForegroundSession } from '../foreground-session.ts';
+import { ForegroundSessionAuthority, type ForegroundSessionSnapshot } from '../foreground-session.ts';
 
 export type McpAppJsonPrimitive = null | boolean | number | string;
 
@@ -70,12 +70,8 @@ export interface McpAppRouteClose {
 }
 
 export interface McpAppClientOptions {
+  readonly authority?: ForegroundSessionAuthority;
   readonly fetch?: typeof fetch;
-}
-
-interface ForegroundSession {
-  readonly origin: string;
-  readonly token: string;
 }
 
 interface Diagnostic {
@@ -241,15 +237,16 @@ const validRequestId = (value: unknown): value is McpAppRequestId =>
 
 /** Credential-memory-only browser client for binding-scoped MCP App routes. */
 export class McpAppClient {
+  readonly #authority: ForegroundSessionAuthority;
   readonly #fetch: typeof fetch;
-  #authentication: Promise<ForegroundSession> | undefined;
 
   constructor(options: McpAppClientOptions = {}) {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#authority = options.authority ?? new ForegroundSessionAuthority({ fetch: this.#fetch });
   }
 
   async create(sessionId: string, request: McpAppPreviewCreateRequest): Promise<McpAppPreview> {
-    const foreground = await this.#authenticate();
+    const foreground = await this.#snapshot();
     return preview(asRecord(await this.#json(`/api/mcp/sessions/${opaqueSegment(sessionId, 'MCP session')}/apps`, {
       body: JSON.stringify(detachedJson(request)),
       headers: { 'content-type': 'application/json' },
@@ -267,32 +264,19 @@ export class McpAppClient {
   }
 
   async close(bindingId: string, options: Readonly<{ readonly id: McpAppRequestId; readonly reason?: string }>): Promise<McpAppRouteClose> {
-    try {
-      return close(await this.#json(`${this.#bindingPath(bindingId)}/close`, {
-        body: JSON.stringify(detachedJson(closeOptions(options))),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-      }));
-    } finally {
-      this.forgetAuthentication();
-    }
+    return close(await this.#json(`${this.#bindingPath(bindingId)}/close`, {
+      body: JSON.stringify(detachedJson(closeOptions(options))),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }));
   }
 
   async forceClose(bindingId: string): Promise<boolean> {
-    try {
-      const response = asRecord(await this.#json(this.#bindingPath(bindingId), { method: 'DELETE' }));
-      if (response.closed !== true || response.lifecycle !== 'closed') {
-        throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid close response.');
-      }
-      return true;
-    } finally {
-      this.forgetAuthentication();
+    const response = asRecord(await this.#json(this.#bindingPath(bindingId), { method: 'DELETE' }));
+    if (response.closed !== true || response.lifecycle !== 'closed') {
+      throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid close response.');
     }
-  }
-
-  /** Erases the memory-only foreground credential once this relay closes. */
-  forgetAuthentication(): void {
-    this.#authentication = undefined;
+    return true;
   }
 
   async #json(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -312,7 +296,7 @@ export class McpAppClient {
   }
 
   async #request(path: string, init: RequestInit = {}): Promise<Response> {
-    const authentication = await this.#authenticate();
+    const authentication = await this.#snapshot();
     const headers = new Headers(init.headers);
     headers.set('x-agent-bundle-session', authentication.token);
     const response = await this.#fetch(path, { ...init, headers });
@@ -324,33 +308,16 @@ export class McpAppClient {
     return response;
   }
 
-  async #authenticate(): Promise<ForegroundSession> {
-    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
+  async #snapshot(): Promise<ForegroundSessionSnapshot> {
     try {
-      return await this.#authentication;
+      return await this.#authority.snapshot();
     } catch (error) {
-      this.#authentication = undefined;
-      throw error;
+      const message = error instanceof Error ? error.message : 'Foreground session bootstrap returned an invalid response.';
+      throw new McpAppClientError(
+        message === 'Foreground session bootstrap origin does not match this browser.' ? 'AB8003' : 'AB8019',
+        message,
+      );
     }
-  }
-
-  async #bootstrap(): Promise<ForegroundSession> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) {
-      const detail = diagnostic(body, response.status);
-      throw new McpAppClientError(detail.code, detail.message);
-    }
-    const session = decodeForegroundSession(body);
-    if (session === undefined || session.token.length === 0) {
-      throw new McpAppClientError('AB8019', 'Foreground session bootstrap returned an invalid response.');
-    }
-    const sessionOrigin = origin(session.origin);
-    const browserOrigin = globalThis.location?.origin;
-    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== sessionOrigin) {
-      throw new McpAppClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.');
-    }
-    return Object.freeze({ origin: sessionOrigin, token: session.token });
   }
 
   #bindingPath(bindingId: string): string {

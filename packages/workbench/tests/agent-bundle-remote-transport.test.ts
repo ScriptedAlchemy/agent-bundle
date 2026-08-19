@@ -92,7 +92,7 @@ const routeFetch = (options: {
       const url = String(input);
       const body = init?.body?.toString();
       requests.push({ body, headers: new Headers(init?.headers), url });
-      if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+      if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
       if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: options.timeoutMs ?? 5_000 } });
       if (url.startsWith('/api/mcp/sessions/session-a/stream?after=')) {
         const response = options.streams[streamIndex];
@@ -247,7 +247,7 @@ it('uses one foreground bootstrap for the model-facing session, catalog, config,
     fetch: async (input, init) => {
       const url = String(input);
       requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-      if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+      if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
       if (url === '/api/mcp/sessions/session-a') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
       if (url === '/api/mcp/sessions/session-a/connection') return json({ connection });
       if (url === '/api/mcp/sessions/session-a/catalog') return json({
@@ -333,7 +333,7 @@ it('sends MCP cancellation to its typed route while a serialized tool call remai
       fetch: async (input, init) => {
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
         if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/operations')) {
@@ -370,7 +370,7 @@ it('closes a session created concurrently without re-bootstrap and notifies only
         const url = String(input);
         if (url === '/api/project/session') {
           bootstraps += 1;
-          return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+          return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
         }
         if (url === '/api/mcp/sessions') return created.promise;
         if (url === '/api/mcp/sessions/session-a' && init?.method === 'DELETE') {
@@ -406,7 +406,7 @@ it('linearizes close by aborting active work, cancelling the reader, waiting cle
       fetch: async (input, init) => {
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
         if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/operations')) {
@@ -450,7 +450,7 @@ it('deletes a mismatched created session using its held foreground token before 
       fetch: async (input, init) => {
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
         if (url === '/api/mcp/sessions') return json({
           session: { binding: { ...binding, epochId: 'wrong-epoch' }, connection, id: 'session-wrong', timeoutMs: 5_000 },
         });
@@ -509,7 +509,7 @@ it('aborts and waits for a bypassed cancellation before releasing its session', 
     routes: new McpRouteClient({
       fetch: async (input, init) => {
         const url = String(input);
-        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
         if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/cancel')) {

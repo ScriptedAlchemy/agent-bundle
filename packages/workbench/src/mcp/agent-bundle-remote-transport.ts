@@ -192,7 +192,6 @@ export class AgentBundleRemoteTransport implements Transport {
       } catch (error) {
         this.#report(error);
       } finally {
-        this.#routes.forgetAuthentication();
         this.#emitClose();
       }
     })();
