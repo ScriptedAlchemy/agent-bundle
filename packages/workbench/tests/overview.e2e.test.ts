@@ -1702,8 +1702,11 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
     const port = Number(new URL(server.url).port);
     await server.close();
     await expect(page.getByRole('heading', { name: 'Foreground connection unavailable' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'Overview' })).toBeHidden();
-    await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeHidden();
+    const retainedNavigation = page.getByRole('link', { name: 'Overview' });
+    await expect(page.locator('.connection-content')).toHaveAttribute('inert', '');
+    await expect(retainedNavigation).toBeVisible();
+    await retainedNavigation.focus();
+    expect(await retainedNavigation.evaluate((element) => element === document.activeElement)).toBe(false);
 
     server = await startRestartableServer(port);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
