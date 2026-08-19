@@ -141,7 +141,9 @@ your machine and rely on its existing signed-in subscription/session; provider A
 variables are removed from the child environment before that CLI is launched.
 
 For a manual authenticated local smoke, complete each CLI's normal interactive sign-in first, then
-run the native harness you intend to exercise from an Agent Bundle project with eval suites:
+verify a supported non-prerelease CLI and run the native harness you intend to exercise from an
+Agent Bundle project with eval suites. Claude Code must be at least `2.1.232`; Codex must be at
+least `0.147.0`:
 
 ```sh
 claude --version
@@ -150,6 +152,10 @@ agent-bundle eval --root . --harness claude --trials 1
 codex --version
 agent-bundle eval --root . --harness codex --trials 1
 ```
+
+Each Codex trial sets a temporary `CODEX_HOME` and copies only the installed CLI's opaque
+`auth.json` into it. Your normal Codex home, configuration, and installed-plugin state are not used
+as trial state and are left unchanged.
 
 These are local authenticated checks, not ordinary CI work. Do not add provider API keys to the
 project configuration or use them as a fallback for either harness.
@@ -171,9 +177,11 @@ project configuration or use them as a fallback for either harness.
 Third-party notices, including the vendored MCP Inspector snapshot's license and provenance, ship in
 the published package.
 
-## Contributor release gate
+## Contributor delivery and release gates
 
-Run the repository's complete release gate with `npm run check:release`. Its exact package-script
-components are `npm run pack:dry-run`, `npm run audit:release`, and `npm run test:packed`.
+Run the complete local delivery gate with `npm run check && npm run check:release`.
+`npm run check:release` is release-only: its exact package-script components are
+`npm run pack:dry-run`, `npm run audit:release`, and `npm run test:packed`, and it does not replace
+`npm run check`.
 Publication is deliberately not scripted here: the release owner must decide the npm package
 name/scope, license, and `publishConfig` before publishing.
