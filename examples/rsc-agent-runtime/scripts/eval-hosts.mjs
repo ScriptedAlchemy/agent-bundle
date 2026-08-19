@@ -5,13 +5,13 @@ import { randomBytes } from 'node:crypto';
 import { copyFile, chmod, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { once } from 'node:events';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import { classifyNativeEvidence, evidenceFromTranscript, hookEvidenceFromProbe, summarizeHookProbe } from './eval-evidence.mjs';
 import { sanitizedHostEnvironment } from './eval-host-environment.mjs';
+import { exampleRootFromModule } from './eval-host-paths.mjs';
 
-const exampleRoot = resolve(new URL('..', import.meta.url).pathname);
+const exampleRoot = exampleRootFromModule(import.meta.url);
 const expectedVersions = { claude: '2.1.232', codex: '0.147.0' };
 
 const parseHost = (argv) => {

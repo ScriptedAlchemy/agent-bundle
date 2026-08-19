@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "NODE_ENV=production rsbuild build && npm run package:hosts",
+    "build": "rsbuild build --mode production && npm run package:hosts",
     "package:hosts": "node scripts/package-hosts.mjs",
     "test": "rstest --config rstest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",

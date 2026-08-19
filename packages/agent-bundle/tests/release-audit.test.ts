@@ -2,6 +2,7 @@ import { execFile as executeFile } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
@@ -11,6 +12,22 @@ const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 
 const releaseEnvironment = (): NodeJS.ProcessEnv => ({ ...process.env, NODE_ENV: 'production' });
+
+it('launches npm through its JavaScript entrypoint on every platform', async () => {
+  const helperUrl = pathToFileURL(join(workspaceRoot, 'scripts', 'npm-cli.mjs')).href;
+  const source = [
+    `import { npmCliInvocation } from ${JSON.stringify(helperUrl)};`,
+    `process.stdout.write(JSON.stringify(npmCliInvocation({ npm_execpath: 'C:\\\\Program Files\\\\nodejs\\\\node_modules\\\\npm\\\\bin\\\\npm-cli.js', npm_node_execpath: 'C:\\\\Program Files\\\\nodejs\\\\node.exe' })));`,
+  ].join('\n');
+  const { stdout } = await execFile(process.execPath, ['--input-type=module', '--eval', source], {
+    cwd: workspaceRoot,
+  });
+
+  expect(JSON.parse(stdout)).toEqual({
+    args: ['C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js'],
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+  });
+});
 
 it('generates a CycloneDX SBOM from an externally installed production tarball', async () => {
   const { stdout } = await execFile(process.execPath, ['scripts/audit-packed-sbom.mjs'], {

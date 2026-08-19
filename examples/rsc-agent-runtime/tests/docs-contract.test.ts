@@ -1,9 +1,14 @@
+import { execFile as executeFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 
 import { expect, test } from '@rstest/core';
 
 const readme = async (): Promise<string> => readFile(join(process.cwd(), 'README.md'), 'utf8');
+const execFile = promisify(executeFile);
 
 test('keeps the Hook JSX author example executable', async () => {
   const source = await readme();
@@ -30,4 +35,24 @@ test('requires attached native evidence before documenting Claude or Codex obser
   expect(source).toContain('MCP App iframe evidence is unavailable from either terminal CLI');
   expect(source).not.toContain('Claude fully proves hook→MCP/RSC shared behavior');
   expect(source).not.toContain('A non-authenticated session is reported as an environment limitation');
+});
+
+test('declares a shell-independent production build', async () => {
+  const manifest = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as {
+    readonly scripts?: Readonly<Record<string, string>>;
+  };
+
+  expect(manifest.scripts?.build).toBe('rsbuild build --mode production && npm run package:hosts');
+});
+
+test('derives the native evaluator root from decoded module URLs', async () => {
+  const helperUrl = pathToFileURL(join(process.cwd(), 'scripts/eval-host-paths.mjs')).href;
+  const moduleUrl = pathToFileURL(join(tmpdir(), 'rsc runtime encoded path', 'scripts', 'eval-hosts.mjs')).href;
+  const source = [
+    `import { exampleRootFromModule } from ${JSON.stringify(helperUrl)};`,
+    `process.stdout.write(exampleRootFromModule(${JSON.stringify(moduleUrl)}));`,
+  ].join('\n');
+  const { stdout } = await execFile(process.execPath, ['--input-type=module', '--eval', source]);
+
+  expect(stdout).toBe(join(tmpdir(), 'rsc runtime encoded path'));
 });
