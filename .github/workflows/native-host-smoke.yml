@@ -21,6 +21,22 @@ jobs:
   native-host-smoke:
     # This runs only on a trusted runner with existing CLI login state; no workflow secrets are passed.
     runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: claude
+            suite: native-claude-contract
+            test: packages/agent-bundle/tests/native-claude-contract.test.ts
+          - host: claude
+            suite: eval-claude-harness
+            test: packages/agent-bundle/tests/eval-claude-harness.test.ts
+          - host: codex
+            suite: native-codex-contract
+            test: packages/agent-bundle/tests/native-codex-contract.test.ts
+          - host: codex
+            suite: eval-codex-home
+            test: packages/agent-bundle/tests/eval-codex-home.test.ts
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -28,13 +44,9 @@ jobs:
           node-version: '22.19.0'
           cache: npm
       - run: npm ci
-      - name: Claude signed-in smoke
-        if: inputs.host == 'both' || inputs.host == 'claude'
+      - name: ${{ matrix.host }} signed-in smoke (${{ matrix.suite }})
+        if: inputs.host == 'both' || inputs.host == matrix.host
         env:
-          AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: '1'
-        run: npm run test -- packages/agent-bundle/tests/native-claude-contract.test.ts
-      - name: Codex signed-in smoke
-        if: inputs.host == 'both' || inputs.host == 'codex'
-        env:
-          AGENT_BUNDLE_NATIVE_CODEX_SMOKE: '1'
-        run: npm run test -- packages/agent-bundle/tests/eval-codex-home.test.ts
+          AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: ${{ matrix.host == 'claude' && '1' || '' }}
+          AGENT_BUNDLE_NATIVE_CODEX_SMOKE: ${{ matrix.host == 'codex' && '1' || '' }}
+        run: npm run test -- ${{ matrix.test }}
