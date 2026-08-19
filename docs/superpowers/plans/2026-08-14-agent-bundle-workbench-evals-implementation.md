@@ -457,7 +457,7 @@ release gate remain the tracked delivery checks in Steps 4 and 6 below.
 
 ---
 
-## Workbench and Evals Completion Evidence
+## Workbench and Evals Implementation Evidence
 
 - Contributor HMR and published prebuilt serving use identical service contracts.
 - A single configured Codex MCP client observes rebuilt artifacts through the stable agent API without restarting Codex; active operations remain pinned to their admitted epoch.
@@ -465,7 +465,9 @@ release gate remain the tracked delivery checks in Steps 4 and 6 below.
 - Epoch and run concurrency tests cover second writers and stale recovery.
 - MCP/hook/playground operations execute emitted artifacts bound to explicit epochs.
 - Skill rendering tests prove inert HTML/JSX and correct source/generated resource bases.
-- Claude and Codex smokes use existing signed-in CLI sessions and persist no API keys.
-- Codex smoke proves the normal home digest is unchanged.
+- Claude and Codex harnesses use existing signed-in CLI sessions and persist no API keys. Their
+  opt-in authenticated smoke evidence remains a delivery check.
+- Codex trials use a temporary `CODEX_HOME` with opaque copied authentication; the authenticated
+  smoke that proves normal-home preservation remains open.
 - Multi-trial metrics and comparisons are backed by raw JSON/JSONL evidence.
-- Packed-consumer dogfood starts the foreground workbench and exercises all documented commands.
+- W26 packed-consumer dogfood and the complete local delivery gate remain open.
