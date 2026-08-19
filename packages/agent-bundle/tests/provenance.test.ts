@@ -5,9 +5,17 @@ import {
   createOutputProvenance,
   type ArtifactOutputCandidate,
 } from '../src/build/provenance.ts';
+import { semanticGraderIdentityPattern } from '../src/eval/provenance.ts';
 
 const projectRoot = '/work/project';
 const artifactRoot = '/tmp/agent-bundle.stage';
+
+it('accepts only the canonical semantic grader id@model identity', () => {
+  expect(semanticGraderIdentityPattern.test('claude-semantic@sonnet')).toBe(true);
+  expect(semanticGraderIdentityPattern.test('claude-semantic@sonnet/v1')).toBe(false);
+  expect(semanticGraderIdentityPattern.test('claude@semantic@sonnet')).toBe(false);
+  expect(semanticGraderIdentityPattern.test('/private/claude@sonnet')).toBe(false);
+});
 
 it('canonicalizes artifact outputs and project inputs into deeply frozen stable records', () => {
   const records = createOutputProvenance({

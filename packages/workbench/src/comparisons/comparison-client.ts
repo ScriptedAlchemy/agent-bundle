@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
 import {
   explicitInvocationProvenancePattern,
-  semanticGraderVersionPattern,
+  semanticGraderIdentityPattern,
 } from '../../../agent-bundle/src/eval/provenance.ts';
 import { ForegroundTransport } from '../foreground-session.ts';
 import {
@@ -44,15 +44,15 @@ const invocationProvenanceSchema = z.union([
   z.enum(['automatic', 'none']),
   z.string().regex(explicitInvocationProvenancePattern),
 ]);
-const semanticGraderVersionSchema = z.union([
+const semanticGraderIdentitySchema = z.union([
   z.literal('none'),
-  z.string().regex(semanticGraderVersionPattern),
+  z.string().regex(semanticGraderIdentityPattern),
 ]);
 const conditionProvenanceSchema = z.strictObject({
   hostCliVersion: provenanceIdentifierSchema.optional(),
   invocation: invocationProvenanceSchema.optional(),
   semanticGrader: z.union([
-    semanticGraderVersionSchema,
+    semanticGraderIdentitySchema,
     z.strictObject({ state: z.literal('unrecorded') }),
   ]).optional(),
 });

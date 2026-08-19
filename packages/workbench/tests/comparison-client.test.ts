@@ -113,10 +113,27 @@ it('strictly decodes nested provenance and usage while preserving unrecorded sem
   expect(Object.isFrozen(result.rows[0]?.baseline?.usage)).toBe(true);
 });
 
+it('accepts the canonical semantic grader identity without a schema-version suffix', async () => {
+  const canonical = structuredClone(comparison) as {
+    rows: Array<{ baseline?: { provenance: { semanticGrader: unknown } } }>;
+  };
+  const baseline = canonical.rows[0]?.baseline;
+  if (baseline === undefined) throw new Error('Comparison fixture must include a baseline.');
+  baseline.provenance.semanticGrader = 'claude-semantic@sonnet';
+  const client = new ComparisonClient({ fetch: recordingFetch([], () => response({ comparison: canonical })) });
+
+  const result = await client.compare({ base: 'run-base', candidate: 'run-candidate' });
+
+  expect(result.rows[0]).toMatchObject({
+    baseline: { provenance: { semanticGrader: 'claude-semantic@sonnet' } },
+  });
+});
+
 it('rejects extra, path-shaped, or negative nested comparison data', async () => {
   const invalid = [
     { provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'none', unexpected: true } },
     { provenance: { hostCliVersion: '/private/bin/claude', invocation: 'automatic', semanticGrader: 'none' } },
+    { provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'claude-semantic@sonnet/v1' } },
     { usage: { inputTokens: 300, outputTokens: -1, recordedTrials: 3, totalTokens: 299 } },
     { usage: { inputTokens: 0, outputTokens: 0, recordedTrials: 0, totalTokens: 0 } },
     { usage: { inputTokens: 300, outputTokens: 25, recordedTrials: 4, totalTokens: 325 } },
