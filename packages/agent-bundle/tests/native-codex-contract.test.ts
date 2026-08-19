@@ -125,7 +125,7 @@ it('infers automatic activation only from the candidate Skill sentinel', async (
           return {
             exitCode: 0,
             stderr: '',
-            stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"agent-bundle-codex-skill-sentinel-v1"}}\n',
+            stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"agent-bundle-codex-skill-sentinel"}}\n',
           };
         }
         return { exitCode: 0, stderr: '', stdout: '' };
@@ -137,7 +137,7 @@ it('infers automatic activation only from the candidate Skill sentinel', async (
       activation: { automatic: 'inferred', pluginAvailability: 'observed' },
       status: 'passed',
     });
-    expect(JSON.stringify(result)).not.toContain('agent-bundle-codex-skill-sentinel-v1');
+    expect(JSON.stringify(result)).not.toContain('agent-bundle-codex-skill-sentinel');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

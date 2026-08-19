@@ -101,7 +101,7 @@ export interface ArtifactInspectionRuntime {
   readonly scripts: readonly ArtifactInspectionScript[];
 }
 
-/** Detached facts from one strictly validated, published Artifact Manifest v2 epoch. */
+/** Detached facts from one strictly validated, published Artifact Manifest epoch. */
 export interface ArtifactInspection {
   readonly epochId: string;
   readonly files: readonly ArtifactInspectionFile[];
