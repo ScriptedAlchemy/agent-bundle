@@ -25,7 +25,6 @@ import { serialQueue } from '../core/async.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue } from '../core/strict-json.ts';
-import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import {
   readTargetMcpServer,
   type ModernMcpServer,
@@ -57,6 +56,12 @@ import type {
   McpSessionTraceSubscription,
   McpSessionTraceSubscriptionOptions,
 } from './mcp-session-protocol.ts';
+import {
+  mcpSessionInspectorConfig,
+  resolveMcpSessionLaunch,
+  type ResolvedMcpSessionLaunch,
+  type ResolvedMcpSessionServer,
+} from './mcp-session-launch.ts';
 import { McpSessionTraceLog, type McpSessionTraceSink } from './mcp-session-trace.ts';
 
 export type {
@@ -87,7 +92,6 @@ const defaultTimeoutMs = 5_000;
 const maxStderrBytes = 1_000_000;
 const maxRetainedEvents = 512;
 const maxRetainedFrames = 512;
-const inspectorEnvironmentAllowlist = new Set(['FORCE_COLOR', 'LANG', 'LC_ALL', 'NO_COLOR', 'TZ']);
 
 type RawMcpFrame = Parameters<Transport['send']>[0];
 
@@ -219,30 +223,6 @@ export class McpSessionServiceCloseError extends Error {
   }
 }
 
-interface ResolvedSessionServer {
-  readonly runtime: TargetMcpRuntimeContract;
-  readonly server: ModernMcpServer;
-  readonly target: string;
-  readonly targetRoot: string;
-}
-
-interface ResolvedStdioLaunch {
-  readonly args: readonly string[];
-  readonly command: string;
-  readonly cwd?: string;
-  readonly env: Readonly<Record<string, string>>;
-  readonly inspectorEnv: Readonly<Record<string, string>>;
-  readonly kind: 'stdio';
-}
-
-interface ResolvedRemoteLaunch {
-  readonly headers?: Readonly<Record<string, string>>;
-  readonly kind: 'streamable-http';
-  readonly url: URL;
-}
-
-type ResolvedLaunch = ResolvedStdioLaunch | ResolvedRemoteLaunch;
-
 interface StderrCapture {
   readonly exceeded: () => boolean;
   readonly output: () => string;
@@ -269,62 +249,6 @@ type McpAppLeaseIdentity = McpAppBridgeSession['identity'] & Readonly<{
   readonly sessionId: McpSessionId;
 }>;
 
-const inspectorCommandAllowlist = new Set(['bun', 'bun.exe', 'deno', 'deno.exe', 'node', 'node.exe']);
-const inspectorRuntimeArgumentAllowlist = new Set(['--enable-source-maps']);
-const safeLocaleValue = /^[A-Za-z0-9_.@-]{1,128}$/u;
-const safeTimeZoneValue = /^[A-Za-z0-9_+./-]{1,128}$/u;
-const credentialShaped = /(?:api[-_]?key|authorization|bearer|credential|cookie|password|secret|token)/iu;
-
-const hasCredentialShapedPathSegment = (path: string): boolean =>
-  path.split(/[\\/]/u).some((segment) => credentialShaped.test(segment));
-
-const inspectorCommand = (command: string): string =>
-  inspectorCommandAllowlist.has(command) ? command : '[REDACTED]';
-
-const inspectorArtifactArgument = (argument: string, targetRoot: string): string => {
-  if (inspectorRuntimeArgumentAllowlist.has(argument)) return argument;
-  if (!isAbsolute(argument) && !argument.startsWith('./') && !argument.startsWith('../')) return '[REDACTED]';
-  if (hasCredentialShapedPathSegment(argument)) return '[REDACTED]';
-  const resolved = resolve(targetRoot, argument);
-  return resolved === targetRoot || resolved.startsWith(`${targetRoot}/`) ? argument : '[REDACTED]';
-};
-
-const inspectorArguments = (args: readonly string[], targetRoot: string): readonly string[] =>
-  Object.freeze(args.map((argument) => inspectorArtifactArgument(argument, targetRoot)));
-
-const safeInspectorEnvironmentValue = (key: string, value: string): boolean => {
-  if (key === 'FORCE_COLOR') return /^(0|1|2|3)$/u.test(value);
-  if (key === 'NO_COLOR') return value === '0' || value === '1';
-  if (key === 'LANG' || key === 'LC_ALL') return safeLocaleValue.test(value) && !credentialShaped.test(value);
-  if (key === 'TZ') return safeTimeZoneValue.test(value) && !credentialShaped.test(value);
-  return false;
-};
-
-const inspectorEnvironment = (env: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> => {
-  const projected: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env ?? {})) {
-    if (inspectorEnvironmentAllowlist.has(key) && safeInspectorEnvironmentValue(key, value)) projected[key] = value;
-  }
-  return Object.freeze(projected);
-};
-
-const inspectorUrl = (url: URL): string => {
-  const sanitized = new URL(url);
-  sanitized.hash = '';
-  sanitized.password = '';
-  sanitized.search = '';
-  sanitized.username = '';
-  const segments = sanitized.pathname.split('/').filter((segment) => segment.length > 0);
-  if (segments.some((segment) => {
-    try {
-      return credentialShaped.test(decodeURIComponent(segment));
-    } catch {
-      // Malformed percent-encoding is treated as credential-shaped and stripped.
-      return true;
-    }
-  })) sanitized.pathname = '/';
-  return sanitized.href;
-};
 
 const detachedJsonSnapshot = snapshotStrictJsonValue;
 
@@ -382,9 +306,6 @@ const safeArtifactPath = (path: string): boolean =>
   path === posix.normalize(path) &&
   path !== '..' &&
   !path.startsWith('../');
-
-const resolveContained = (root: string, path: string): string =>
-  isAbsolute(path) ? path : assertInside(root, resolve(root, path));
 
 const resolveTimeoutMs = (timeout: number): number => {
   if (!Number.isFinite(timeout) || timeout <= 0) {
@@ -542,8 +463,8 @@ export class McpSession {
   readonly #onClose: () => void;
   readonly #onClosing: () => void;
   readonly #pluginData: string;
-  readonly #resolved: ResolvedSessionServer;
-  readonly #launch: ResolvedLaunch;
+  readonly #resolved: ResolvedMcpSessionServer;
+  readonly #launch: ResolvedMcpSessionLaunch;
   readonly #timeoutMs: number;
   readonly #traceLog: McpSessionTraceLog;
   readonly #workspaceRoot: string;
@@ -571,7 +492,7 @@ export class McpSession {
     readonly onClose: () => void;
     readonly onClosing?: () => void;
     readonly pluginData: string;
-    readonly resolved: ResolvedSessionServer;
+    readonly resolved: ResolvedMcpSessionServer;
     readonly timeoutMs?: number;
     readonly traceSink?: McpSessionTraceSink;
     readonly workspaceRoot: string;
@@ -589,7 +510,11 @@ export class McpSession {
     this.#timeoutMs = resolveTimeoutMs(options.timeoutMs ?? defaultTimeoutMs);
     this.#traceLog = new McpSessionTraceLog(this.#binding, options.traceSink);
     this.#workspaceRoot = options.workspaceRoot;
-    this.#launch = this.#resolveLaunch();
+    this.#launch = resolveMcpSessionLaunch({
+      pluginData: this.#pluginData,
+      resolved: this.#resolved,
+      workspaceRoot: this.#workspaceRoot,
+    });
   }
 
   get binding(): McpSessionBinding {
@@ -643,22 +568,7 @@ export class McpSession {
   }
 
   inspectorConfig(): McpSessionInspectorConfig {
-    if (this.#launch.kind === 'stdio') {
-      return Object.freeze({
-        launch: Object.freeze({
-          args: inspectorArguments(this.#launch.args, this.#resolved.targetRoot),
-          command: inspectorCommand(this.#launch.command),
-          ...(this.#launch.cwd === undefined ? {} : { cwd: this.#launch.cwd }),
-          env: this.#launch.inspectorEnv,
-          kind: 'stdio',
-        }),
-        origin: 'artifact',
-      });
-    }
-    return Object.freeze({
-      launch: Object.freeze({ kind: this.#launch.kind, url: inspectorUrl(this.#launch.url) }),
-      origin: 'artifact',
-    });
+    return mcpSessionInspectorConfig(this.#launch, this.#resolved.targetRoot);
   }
 
   stderr(): string {
@@ -977,40 +887,6 @@ export class McpSession {
     void this.close().catch(() => undefined);
   }
 
-  #resolveLaunch(): ResolvedLaunch {
-    const roots = {
-      pluginData: this.#pluginData,
-      pluginRoot: this.#resolved.targetRoot,
-      workspaceRoot: this.#workspaceRoot,
-    };
-    const resolved = resolveMcpPathTokens({
-      roots,
-      runtime: this.#resolved.runtime,
-      server: this.#resolved.server,
-      target: this.#resolved.target,
-    });
-    if (resolved.kind === 'stdio') {
-      const cwd = resolved.cwd === undefined ? undefined : resolveContained(this.#resolved.targetRoot, resolved.cwd);
-      const inheritedEnv = Object.fromEntries(
-        Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-      );
-      return Object.freeze({
-        args: Object.freeze([...resolved.args]),
-        command: resolved.command,
-        ...(cwd === undefined ? {} : { cwd }),
-        env: Object.freeze({ ...inheritedEnv, ...(resolved.env ?? {}) }),
-        inspectorEnv: inspectorEnvironment(resolved.env),
-        kind: 'stdio',
-      });
-    }
-
-    const headers = resolved.headers === undefined ? undefined : Object.freeze({ ...resolved.headers });
-    return Object.freeze({
-      ...(headers === undefined ? {} : { headers }),
-      kind: 'streamable-http',
-      url: new URL(resolved.url),
-    });
-  }
 }
 
 /** Owns persistent MCP sessions and releases every epoch reference on shutdown. */
