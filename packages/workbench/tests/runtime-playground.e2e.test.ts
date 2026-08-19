@@ -33,6 +33,15 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(page.getByRole('link', { name: 'Inspector' })).toHaveCount(0, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Runtime' })).toBeVisible({ timeout: browserTimeout });
 
+    for (const sibling of ['hooks', 'artifacts', 'playground', 'logs', 'evals', 'comparisons'] as const) {
+      await page.goto(`${fixture.url}#${sibling}`);
+      await expect(page.locator(`#${sibling}`)).toBeVisible({ timeout: browserTimeout });
+      expect(
+        await page.getByRole('link', { name: 'Runtime' }).count(),
+        `Runtime navigation disappeared from the ${sibling} page.`,
+      ).toBe(1);
+    }
+
     await page.goto(`${fixture.url}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });

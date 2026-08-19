@@ -482,14 +482,14 @@ const SkillsScreen = ({ connectionError, evalClient, onNavigate, runtimeAvailabl
   </main>
 </div>;
 
-const WorkbenchScreen = ({ children, connectionError, inert = false, onNavigate, page, runtimeAvailable = false, runtimeDiagnostic }: {
+const WorkbenchScreen = ({ children, connectionError, inert = false, onNavigate, page, runtimeAvailable, runtimeDiagnostic }: {
   readonly children: ReactNode;
   readonly connectionError?: string;
   readonly inert?: boolean;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
-  readonly runtimeAvailable?: boolean;
-  readonly runtimeDiagnostic?: string;
+  readonly runtimeAvailable: boolean;
+  readonly runtimeDiagnostic: string | undefined;
 }) => <div className="workbench-shell" inert={inert || undefined}>
   <Navigation onNavigate={onNavigate} page={page} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic} />
   <div className="canvas" id={page}>
@@ -504,39 +504,47 @@ const WorkbenchScreen = ({ children, connectionError, inert = false, onNavigate,
   </div>
 </div>;
 
-const EvalsScreen = ({ connectionError, evalClient, onNavigate }: {
+const EvalsScreen = ({ connectionError, evalClient, onNavigate, runtimeAvailable, runtimeDiagnostic }: {
   readonly connectionError?: string;
   readonly evalClient: EvalClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="evals">
+  readonly runtimeAvailable: boolean;
+  readonly runtimeDiagnostic: string | undefined;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="evals" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
   <EvalsPage client={evalClient} />
 </WorkbenchScreen>;
 
-const ComparisonsScreen = ({ comparisonClient, connectionError, evalClient, onNavigate }: {
+const ComparisonsScreen = ({ comparisonClient, connectionError, evalClient, onNavigate, runtimeAvailable, runtimeDiagnostic }: {
   readonly comparisonClient: ComparisonClient;
   readonly connectionError?: string;
   readonly evalClient: EvalClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="comparisons">
+  readonly runtimeAvailable: boolean;
+  readonly runtimeDiagnostic: string | undefined;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="comparisons" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
   <ComparisonsPage comparisonClient={comparisonClient} evalClient={evalClient} />
 </WorkbenchScreen>;
 
-const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }: {
+const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, runtimeAvailable, runtimeDiagnostic, status }: {
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly runtimeAvailable: boolean;
+  readonly runtimeDiagnostic: string | undefined;
   readonly status: ProjectStatus;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="artifacts">
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="artifacts" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
   <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, playgroundClient, run, status }: {
+const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, playgroundClient, run, runtimeAvailable, runtimeDiagnostic, status }: {
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly playgroundClient: PlaygroundClient;
   readonly run: PlaygroundRun | undefined;
+  readonly runtimeAvailable: boolean;
+  readonly runtimeDiagnostic: string | undefined;
   readonly status: ProjectStatus;
 }) => {
   const epoch = activeEpochFor(status);
@@ -586,7 +594,7 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
     return () => { current = false; };
   }, [artifactClient, epoch?.id]);
 
-  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
+  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
     <PlaygroundPage
       catalog={visibleNativeCatalog}
       catalogError={nativeCatalogError}
@@ -601,20 +609,24 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
   </WorkbenchScreen>;
 };
 
-const LogsScreen = ({ connectionError, logClient, onNavigate }: {
+const LogsScreen = ({ connectionError, logClient, onNavigate, runtimeAvailable, runtimeDiagnostic }: {
   readonly connectionError?: string;
   readonly logClient: LogClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="logs">
+  readonly runtimeAvailable: boolean;
+  readonly runtimeDiagnostic: string | undefined;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="logs" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
   <LogsPage client={logClient} />
 </WorkbenchScreen>;
 
-const HooksScreen = ({ connectionError, hookClient, onNavigate, status }: {
+const HooksScreen = ({ connectionError, hookClient, onNavigate, runtimeAvailable, runtimeDiagnostic, status }: {
   readonly connectionError?: string;
   readonly hookClient: HookClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly runtimeAvailable: boolean;
+  readonly runtimeDiagnostic: string | undefined;
   readonly status: ProjectStatus;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks">
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
   <HooksPage client={hookClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
@@ -1256,6 +1268,8 @@ const Workbench = () => {
         onRunChange={setPlaygroundRun}
         playgroundClient={playgroundClient.current}
         run={playgroundRun}
+        runtimeAvailable={runtimeAvailable}
+        runtimeDiagnostic={runtimeError}
         status={status}
       />;
     }
@@ -1264,10 +1278,12 @@ const Workbench = () => {
         connectionError={connectionError}
         logClient={logClient.current}
         onNavigate={navigate}
+        runtimeAvailable={runtimeAvailable}
+        runtimeDiagnostic={runtimeError}
       />;
     }
     if (page === 'evals') {
-      return <EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} />;
+      return <EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} />;
     }
     if (page === 'comparisons') {
       return <ComparisonsScreen
@@ -1275,16 +1291,20 @@ const Workbench = () => {
         connectionError={connectionError}
         evalClient={evalClient.current}
         onNavigate={navigate}
+        runtimeAvailable={runtimeAvailable}
+        runtimeDiagnostic={runtimeError}
       />;
     }
     if (page === 'artifacts') {
-      return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} />;
+      return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />;
     }
     if (page === 'hooks') {
       return <HooksScreen
         connectionError={connectionError}
         hookClient={hookClient.current}
         onNavigate={navigate}
+        runtimeAvailable={runtimeAvailable}
+        runtimeDiagnostic={runtimeError}
         status={status}
       />;
     }
