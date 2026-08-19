@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { basename } from 'node:path';
@@ -429,8 +429,6 @@ export class ForegroundServer {
   readonly #now: () => Date;
   readonly #playgroundRoutes: PlaygroundRoutes;
   readonly #port: number;
-  /** Per-listener cookie names prevent two loopback workbenches sharing a host cookie jar. */
-  readonly #sessionCookieName: string;
   readonly #server: Server;
   readonly #skillDocuments: SkillDocumentService | undefined;
   readonly #sockets = new Set<Socket>();
@@ -467,7 +465,6 @@ export class ForegroundServer {
     this.#mcpAppPreviews = options.mcpAppPreviews;
     this.#now = options.now ?? (() => new Date());
     this.#port = port;
-    this.#sessionCookieName = `agent-bundle-foreground-session-${randomUUID().replaceAll('-', '')}`;
     this.#skillDocuments = options.skillDocuments;
     this.#testing = options.testing;
     this.sessionToken = options.sessionToken ?? randomUUID();
@@ -744,13 +741,14 @@ export class ForegroundServer {
     if (pathname === '/api/project/session') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       this.#assertSessionBootstrapOrigin(request);
+      const cookieName = this.#sessionCookieName();
       response.writeHead(200, {
         'cache-control': 'no-store',
         'content-type': 'application/json; charset=utf-8',
-        'set-cookie': `${this.#sessionCookieName}=${this.sessionToken}; HttpOnly; SameSite=Strict; Path=/api`,
+        'set-cookie': `${cookieName}=${this.sessionToken}; HttpOnly; SameSite=Strict; Path=/api`,
         'x-content-type-options': 'nosniff',
       });
-      response.end(JSON.stringify({ cookieName: this.#sessionCookieName, instanceId: this.instanceId, origin: this.url, token: this.sessionToken }));
+      response.end(JSON.stringify({ cookieName, instanceId: this.instanceId, origin: this.url, token: this.sessionToken }));
       return;
     }
     if (pathname === '/api/project/rebuild') {
@@ -840,9 +838,14 @@ export class ForegroundServer {
     if (origin !== this.url && (origin !== undefined || singleHeader(request.headers['sec-fetch-site']) !== 'same-origin')) {
       throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
     }
-    if (cookieValue(request, this.#sessionCookieName) !== this.sessionToken) {
+    if (cookieValue(request, this.#sessionCookieName()) !== this.sessionToken) {
       throw requestError(diagnostic('AB8004', 'A valid foreground session cookie is required.', 403));
     }
+  }
+
+  /** Stable per-origin names overwrite restart credentials while isolating concurrent loopback ports. */
+  #sessionCookieName(): string {
+    return `agent-bundle-foreground-session-${createHash('sha256').update(this.url).digest('hex').slice(0, 32)}`;
   }
 
   #streamEvents(request: IncomingMessage, response: ServerResponse): void {

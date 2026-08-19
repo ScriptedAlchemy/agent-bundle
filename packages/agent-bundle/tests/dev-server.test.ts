@@ -506,6 +506,34 @@ it('isolates foreground event cookies across simultaneous loopback listeners', a
   }
 });
 
+it('reuses the foreground cookie name when the same loopback origin restarts', async () => {
+  const first = await startForegroundServer({
+    coordinator: new RecordingCoordinator(), eventHub: new ProjectEventHub(), port: 0, sessionToken: 'first-token',
+  });
+  const port = Number(new URL(first.url).port);
+  let second: Awaited<ReturnType<typeof startForegroundServer>> | undefined;
+  try {
+    const firstBootstrap = await fetch(`${first.url}/api/project/session`, { headers: { origin: first.url } });
+    const firstBody = await firstBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
+    const firstCookie = firstBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
+    await first.close();
+
+    second = await startForegroundServer({
+      coordinator: new RecordingCoordinator(), eventHub: new ProjectEventHub(), port, sessionToken: 'second-token',
+    });
+    const secondBootstrap = await fetch(`${second.url}/api/project/session`, { headers: { origin: second.url } });
+    const secondBody = await secondBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
+    const secondCookie = secondBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
+
+    expect(secondBody.cookieName).toBe(firstBody.cookieName);
+    expect(firstCookie?.split('=', 1)[0]).toBe(secondCookie?.split('=', 1)[0]);
+    expect(firstCookie).toContain('=first-token');
+    expect(secondCookie).toContain('=second-token');
+  } finally {
+    await Promise.allSettled([first.close(), second?.close()]);
+  }
+});
+
 it('closes an unconsumed live event stream without retaining its subscription', async () => {
   const coordinator = new RecordingCoordinator();
   const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
