@@ -561,3 +561,89 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
     await removeProjectFixture(project.root);
   }
 });
+
+e2e('gates the Workbench and resets browser-local state for a same-origin replacement foreground generation', { timeout: 120_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  await writeMcpPlaygroundProject(project.root);
+  const eventHubs: ProjectEventHub[] = [];
+  const sessions = [
+    { instanceId: 'foreground-a', token: 'foreground-token-a' },
+    { instanceId: 'foreground-b', token: 'foreground-token-b' },
+  ];
+  let started = 0;
+  const startRestartableServer = async (port: number) => startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port,
+    root: project.root,
+    testing: {
+      startForegroundServer: async (options) => {
+        const session = sessions[started];
+        started += 1;
+        if (session === undefined) throw new Error('Unexpected foreground server restart.');
+        eventHubs.push(options.eventHub);
+        return startForegroundServer({ ...options, instanceId: session.instanceId, sessionToken: session.token });
+      },
+    },
+  });
+  let server = await startRestartableServer(0);
+  const pageErrors: Error[] = [];
+  const releasedMcpSessions: Readonly<{ readonly token: string | undefined }>[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('request', (request) => {
+    if (request.method() === 'DELETE' && /\/api\/mcp\/sessions\/[^/]+$/u.test(new URL(request.url()).pathname)) {
+      releasedMcpSessions.push({ token: request.headers()['x-agent-bundle-session'] });
+    }
+  });
+  try {
+    await page.goto(server.url);
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await page.waitForTimeout(100);
+    const firstEvents = eventHubs[0];
+    if (firstEvents === undefined) throw new Error('Expected the first foreground event hub.');
+    firstEvents.publish({
+      payload: {
+        occurredAt: '2026-08-19T12:00:00.000Z',
+        paths: ['src/restart-a.ts'],
+        reason: 'source-change',
+      },
+      type: 'source.changed',
+    });
+    await expect(page.getByRole('region', { name: 'Latest changed files (1)' })).toContainText('src/restart-a.ts', { timeout: browserTimeout });
+
+    await page.getByRole('link', { name: 'MCP playground' }).click();
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('#mcp-target').selectOption('portable');
+    await page.locator('#mcp-server-name').fill('fixture');
+    await page.getByRole('button', { name: 'Open MCP session' }).click();
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+
+    const port = Number(new URL(server.url).port);
+    await server.close();
+    await expect(page.getByRole('heading', { name: 'Foreground connection unavailable' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Overview' })).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeHidden();
+
+    server = await startRestartableServer(port);
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('#mcp-target')).toHaveValue('');
+    await expect(page.locator('#mcp-server-name')).toHaveValue('');
+    await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
+    await expect.poll(() => releasedMcpSessions.length, { timeout: browserTimeout }).toBe(1);
+    expect(releasedMcpSessions).toEqual([{ token: 'foreground-token-a' }]);
+
+    await page.getByRole('link', { name: 'Overview' }).click();
+    await expect(page.getByRole('region', { name: 'Latest changed files (0)' })).toContainText('No source changes have been reported in this browser session.');
+    const rebuild = page.getByRole('button', { name: 'Rebuild' });
+    const rebuildRequest = page.waitForRequest((request) =>
+      request.method() === 'POST' && request.url() === `${server.url}/api/project/rebuild`);
+    await rebuild.click();
+    expect((await rebuildRequest).headers()['x-agent-bundle-session']).toBe('foreground-token-b');
+    await expect(rebuild).toBeEnabled({ timeout: browserTimeout });
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await Promise.allSettled([server.close()]);
+    await removeProjectFixture(project.root);
+  }
+});

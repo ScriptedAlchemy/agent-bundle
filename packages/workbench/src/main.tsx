@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
@@ -31,7 +31,7 @@ import {
   type PlaygroundScriptCatalog,
 } from './playground/playground-page.tsx';
 import { overviewFor } from './overview-model.ts';
-import { ProjectClient } from './project-client.ts';
+import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
 import './styles.css';
@@ -509,7 +509,9 @@ const Workbench = () => {
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const mcpAppClient = useRef<McpAppClient | undefined>(undefined);
   const skillClient = useRef<SkillClient | undefined>(undefined);
+  const foregroundGeneration = useRef<number | undefined>(undefined);
   const authority = sessionAuthority.current ?? (sessionAuthority.current = new ForegroundSessionAuthority());
+  const [connection, setConnection] = useState<ProjectConnectionState>({ state: 'connecting' });
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
   const [mcpController, setMcpController] = useState(() => createMcpController(authority));
@@ -550,10 +552,24 @@ const Workbench = () => {
     const unsubscribeActivity = next.onActivity((activity) => {
       if (mounted) setChangedFiles(activity.changedFiles);
     });
+    const unsubscribeConnection = next.onConnection((nextConnection) => {
+      if (!mounted) return;
+      const previousGeneration = foregroundGeneration.current;
+      if (
+        nextConnection.generation !== undefined && previousGeneration !== undefined &&
+        previousGeneration !== nextConnection.generation
+      ) {
+        setChangedFiles([]);
+        setPlaygroundRun(undefined);
+        resetMcpSession();
+      }
+      if (nextConnection.generation !== undefined) foregroundGeneration.current = nextConnection.generation;
+      setConnection(nextConnection);
+      if (nextConnection.state === 'connected') setConnectionError(undefined);
+    });
     void next.connect(
       (nextStatus) => {
         if (!mounted) return;
-        setConnectionError(undefined);
         setStatus(nextStatus);
       },
       (reason) => {
@@ -565,6 +581,7 @@ const Workbench = () => {
     return () => {
       mounted = false;
       unsubscribeActivity();
+      unsubscribeConnection();
       next.close();
     };
   }, []);
@@ -582,9 +599,17 @@ const Workbench = () => {
   useEffect(() => () => { void mcpController.close().catch(() => undefined); }, [mcpController]);
   useEffect(() => mcpController.subscribe(setMcpModel), [mcpController]);
 
+  if (connection.state !== 'connected') {
+    const unavailable = connection.state === 'unavailable';
+    return <main aria-live="polite" className="loading-state">
+      <h1>{unavailable ? 'Foreground connection unavailable' : 'Foreground connection reconnecting'}</h1>
+      <p>{unavailable ? 'Waiting for the foreground server to recover.' : 'Connecting to the foreground server.'}</p>
+      {connectionError === undefined ? undefined : <p role="alert">{connectionError}</p>}
+    </main>;
+  }
   if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
     if (page === 'mcp') {
-      return <McpScreen
+      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><McpScreen
         appPreviewClient={mcpAppClient.current}
         connectionError={connectionError}
         controller={mcpController}
@@ -594,10 +619,10 @@ const Workbench = () => {
         presentation={mcpPresentation}
         setPresentation={setMcpPresentation}
         status={status}
-      />;
+      /></Fragment>;
     }
     if (page === 'playground') {
-      return <PlaygroundScreen
+      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><PlaygroundScreen
         artifactClient={artifactClient.current}
         connectionError={connectionError}
         onNavigate={navigate}
@@ -605,40 +630,40 @@ const Workbench = () => {
         playgroundClient={playgroundClient.current}
         run={playgroundRun}
         status={status}
-      />;
+      /></Fragment>;
     }
     if (page === 'logs') {
-      return <LogsScreen
+      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><LogsScreen
         connectionError={connectionError}
         logClient={logClient.current}
         onNavigate={navigate}
-      />;
+      /></Fragment>;
     }
     if (page === 'evals') {
-      return <EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} />;
+      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} /></Fragment>;
     }
     if (page === 'comparisons') {
-      return <ComparisonsScreen
+      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><ComparisonsScreen
         comparisonClient={comparisonClient.current}
         connectionError={connectionError}
         evalClient={evalClient.current}
         onNavigate={navigate}
-      />;
+      /></Fragment>;
     }
     if (page === 'artifacts') {
-      return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} />;
+      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} /></Fragment>;
     }
     if (page === 'hooks') {
-      return <HooksScreen
+      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><HooksScreen
         connectionError={connectionError}
         hookClient={hookClient.current}
         onNavigate={navigate}
         status={status}
-      />;
+      /></Fragment>;
     }
-    return page === 'skills'
+    return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}>{page === 'skills'
       ? <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} skillClient={skillClient.current} status={status} />
-      : <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} status={status} />;
+      : <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} status={status} />}</Fragment>;
   }
   return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}</main>;
 };
