@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, it } from '@rstest/core';
 import { spawn } from 'node:child_process';
+import { createJiti } from 'jiti';
 
 import { build as buildArtifact, type BuildOptions as LowLevelBuildOptions, type BuildResult } from '../src/build/build.ts';
 import { publishArtifact } from '../src/build/emit.ts';
@@ -16,6 +17,7 @@ import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 
 interface TestProject {
+  readonly assetPath: string;
   readonly localModulePath: string;
   readonly outputRoot: string;
   readonly pythonScriptPath: string;
@@ -112,9 +114,11 @@ const createProject = async (): Promise<TestProject> => {
   const localModulePath = join(skillScriptsRoot, 'local greeting module.ts');
   const shellScriptPath = join(skillScriptsRoot, 'review helper.sh');
   const pythonScriptPath = join(skillScriptsRoot, 'review helper.py');
+  const assetPath = join(root, 'assets', 'branding', 'logo.svg');
 
   await Promise.all([
     writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
+    mkdir(dirname(assetPath), { recursive: true }),
     mkdir(join(skillRoot, 'assets'), { recursive: true }),
     mkdir(join(skillRoot, 'references'), { recursive: true }),
     mkdir(skillScriptsRoot, { recursive: true }),
@@ -131,6 +135,7 @@ const createProject = async (): Promise<TestProject> => {
     writeFile(join(skillRoot, 'assets', 'icon.bin'), Buffer.from([0, 1, 2, 255])),
     writeFile(shellScriptPath, skillFixture.shell),
     writeFile(pythonScriptPath, skillFixture.python),
+    writeFile(assetPath, '<svg>project logo</svg>\n'),
   ]);
   await Promise.all([
     chmod(join(skillRoot, 'assets', 'icon.bin'), 0o751),
@@ -139,6 +144,7 @@ const createProject = async (): Promise<TestProject> => {
   ]);
 
   return {
+    assetPath,
     localModulePath,
     outputRoot: join(root, 'dist'),
     pythonScriptPath,
@@ -176,7 +182,29 @@ const build = async (
   projectContext: await projectContextFor(options.projectRoot, options.outputRoot, options.model),
 });
 
+const buildFromSource = async (
+  options: Omit<LowLevelBuildOptions, 'projectContext'>,
+): Promise<BuildResult> => {
+  const jiti = createJiti(import.meta.url, { interopDefault: false, moduleCache: false });
+  const module = await jiti.import<typeof import('../src/build/build.ts')>(
+    fileURLToPath(new URL('../src/build/build.ts', import.meta.url)),
+  );
+  return module.build({
+    ...options,
+    projectContext: await projectContextFor(options.projectRoot, options.outputRoot, options.model),
+  });
+};
+
 const modelFor = (project: TestProject): NormalizedPlugin => ({
+  assets: [{
+    bytes: Buffer.byteLength('<svg>project logo</svg>\n'),
+    id: 'asset:branding/logo.svg',
+    name: 'branding/logo.svg',
+    provenance: { kind: 'explicit', sourcePath: project.assetPath },
+    relativePath: 'branding/logo.svg',
+    source: project.assetPath,
+    targets: ['portable'],
+  }],
   extensions: {},
   hooks: [],
   mcpServers: [],
@@ -343,6 +371,13 @@ it('low-level build writes and returns the exact canonical manifest for a config
     expect(
       (await stat(join(project.outputRoot, 'portable', 'skills', 'review', 'assets', 'icon.bin'))).mode & 0o777,
     ).toBe(0o751);
+    const emittedProjectAsset = join(project.outputRoot, 'portable', 'assets', 'branding', 'logo.svg');
+    await expect(readFile(emittedProjectAsset)).resolves.toEqual(await readFile(project.assetPath));
+    expect(manifest.files).toContainEqual(expect.objectContaining({
+      kind: 'copy',
+      path: 'portable/assets/branding/logo.svg',
+      sourceInputs: ['assets/branding/logo.svg'],
+    }));
     for (const resource of model.skills[0]!.resources) {
       await expect(
         readFile(join(project.outputRoot, 'portable', 'skills', 'review', resource.relativePath)),
@@ -376,6 +411,33 @@ it('low-level build writes and returns the exact canonical manifest for a config
         ]),
       }));
     }
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
+it('uses the package version in a manifest produced by the raw source build module', async () => {
+  const project = await createProject();
+  const model = modelFor(project);
+  const packageManifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  ) as { readonly version: string };
+
+  try {
+    const result = await buildFromSource({
+      model,
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register(
+        (await import('../src/adapters/portable.ts')).portableAdapter,
+        { default: true },
+      ),
+    });
+
+    expect(result.manifest.producer).toEqual({ name: 'agent-bundle', version: packageManifest.version });
+    await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).resolves.toContain(
+      `"version":"${packageManifest.version}"`,
+    );
   } finally {
     await cleanupProject(project);
   }
@@ -783,6 +845,7 @@ it('rejects duplicate planned destinations before replacing an existing artifact
         { content: 'first\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] },
         { content: 'second\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] },
       ],
+      hookEntries: [],
     }),
     validateModel: () => [],
   };
@@ -816,6 +879,7 @@ it('rejects an escaped target name before it can write outside the staging artif
     plan: () => ({
       diagnostics: [],
       entries: [{ content: 'escaped\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] }],
+      hookEntries: [],
     }),
     validateModel: () => [],
   };
@@ -921,6 +985,7 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
         { content: 'first\n', kind: 'write', relativePath: 'same.txt', sourceInputs: [] },
         { content: 'second\n', kind: 'write', relativePath: 'dir/../same.txt', sourceInputs: [] },
       ],
+      hookEntries: [],
     }),
     validateModel: () => [],
   };
@@ -933,6 +998,7 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
       entries: [
         { content: 'adapter output\n', kind: 'write', relativePath: 'scripts/greeting.mjs', sourceInputs: [] },
       ],
+      hookEntries: [],
     }),
     validateModel: () => [],
   };

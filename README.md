@@ -10,6 +10,7 @@ Install the package in the project that owns the plugin:
 
 ```sh
 npm install --save-dev agent-bundle
+agent-bundle dev --root .
 agent-bundle build --root . --output artifact
 ```
 
@@ -20,10 +21,19 @@ The implemented commands are:
 - `agent-bundle validate` validates source; `agent-bundle validate --artifact <dir>` validates a previously built artifact without reading source configuration.
 - `agent-bundle mcp list` and `agent-bundle mcp invoke` operate a local artifact MCP server.
 - `agent-bundle hooks list` and `agent-bundle hooks simulate` inspect and simulate generated hooks.
+- `agent-bundle dev` starts the local development server and Workbench for an
+  ordinary project. Runtime remains an advanced optional extension:
+  `dev.runtime.provider` selects an application-owned provider when configured.
 - `agent-bundle eval` runs deterministic or native Claude/Codex eval suites and records a run.
-- `agent-bundle dev` serves the packaged loopback developer workbench.
 
 `inspect` is intentionally a source/config-plan command; run it before source removal. Artifact-only inspection is the validation contract (`validate --artifact`).
+
+`agent-bundle dev` is available without the RSC example. Installing
+`agent-bundle` does not install the example provider or React/RSC dependencies.
+The optional example and Workbench architecture are documented in
+[the RSC Runtime topology](docs/architecture/rsc-runtime-workbench.md). Native
+evaluation evidence is example-owned, reuses an already signed-in host session
+when a contributor runs it, and never accepts or stores API keys.
 
 ## Developer workbench and Agent API
 
@@ -127,6 +137,18 @@ export default defineConfig({
 Skills follow the Agent Skills directory layout and may contain references and binary assets. Local MCP server entries and hook handlers are bundled. A local MCP App may import its generated browser resource list with `import apps from 'agent-bundle/mcp-apps'`; the generated resource uses the configured `resourceUri` and metadata.
 
 The compiler rejects unsafe output names, unsupported extensions, nonexistent or escaping source paths, unknown targets, and output collisions before it stages an artifact. It does not call Codex, Claude, or another host CLI, and it does not require API keys.
+
+### Adapter-owned extensions
+
+Ordinary projects need no runtime extension key. `AgentBundleConfig` explicitly
+intersects the bundled portable, Codex, and Claude extension interfaces through
+`AgentBundleConfigExtensions`, so packed declarations retain their author
+fields. `TargetRegistry` owns each unique descriptor and adapter. Extension
+values are strict finite JSON; host-specific values belong to their adapter. A
+new host registers an adapter and exports/merges its interface rather than adding
+a raw compiler or Runtime configuration parser. ChatGPT/OpenAI and Claude
+Workbench profiles are local simulation profiles, not configuration-extension
+claims.
 
 ## Artifact contract
 

@@ -12,12 +12,6 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
 const cliPath = join(packageRoot, 'dist/cli.js');
-let buildPackage: Promise<void> | undefined;
-
-const buildCliPackage = async (): Promise<void> => {
-  buildPackage ??= execFile('npm', ['run', 'build'], { cwd: workspaceRoot }).then(() => undefined);
-  await buildPackage;
-};
 
 const runExecutable = async (executable: string, root: string, args: readonly string[]) => {
   try {
@@ -134,7 +128,6 @@ const createPackedConsumer = async (): Promise<{ readonly cli: string; readonly 
 };
 
 it('builds a selected target through the built executable from a path containing spaces', async () => {
-  await buildCliPackage();
   const project = await createCliProject();
   try {
     const { stdout, stderr } = await execFile(process.execPath, [
@@ -164,7 +157,6 @@ it('builds a selected target through the built executable from a path containing
 }, 30_000);
 
 it('runs MCP and hook operations from a packed consumer with explicit and temporary artifacts', async () => {
-  await buildCliPackage();
   const source = await createServiceProject();
   const consumer = await createPackedConsumer();
   const artifact = join(source, 'artifact');
@@ -295,7 +287,6 @@ it('runs MCP and hook operations from a packed consumer with explicit and tempor
 }, 60_000);
 
 it('keeps inspect JSON stable and validates only the supplied artifact', async () => {
-  await buildCliPackage();
   const project = await createCliProject();
   try {
     const inspectArgs = ['inspect', '--root', project.root, '--json'];
@@ -416,7 +407,6 @@ it('reports an unselected inspect target on JSON and human output', async () => 
 }, 30_000);
 
 it('reports source validation diagnostics on stderr before staging an artifact', async () => {
-  await buildCliPackage();
   const project = await createCliProject();
   const output = join(project.root, 'must remain untouched');
   try {

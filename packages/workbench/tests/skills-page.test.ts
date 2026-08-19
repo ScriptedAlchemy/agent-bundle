@@ -3,7 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { expect, it } from '@rstest/core';
 
-import { SkillDocumentPanel } from '../src/skills-page.tsx';
+import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import { EvalClient } from '../src/evals/eval-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { SkillClient } from '../src/skill-client.ts';
+import { SkillDocumentPanel, SkillsPage } from '../src/skills-page.tsx';
 
 const document = {
   base: { kind: 'source' as const, skillId: 'skill:review' },
@@ -93,6 +97,27 @@ it('gives both two-option groups a complete roving-tab and labelled-tabpanel con
   expect(markup).toContain('role="tabpanel"');
   expect(markup).toContain('id="skill-review-panel"');
   expect(markup).toContain('aria-labelledby="skill-review-document-tab-source skill-review-view-tab-rendered"');
+});
+
+it('keeps the source and generated document selector available without an active epoch or selected document', () => {
+  const status: ProjectStatus = {
+    artifact: { state: 'missing' },
+    build: { state: 'idle' },
+    source: { diagnostics: [], state: 'unknown' },
+  };
+  const client = new SkillClient({ fetch: async () => { throw new Error('Effects do not run during server rendering.'); } });
+  const evalClient = new EvalClient({
+    foreground: new ForegroundRouteClient({
+      fetch: async () => { throw new Error('Effects do not run during server rendering.'); },
+    }),
+  });
+
+  const markup = renderToStaticMarkup(createElement(SkillsPage, { client, evalClient, status }));
+
+  expect(markup).toContain('aria-label="Skill document"');
+  expect(markup).toContain('>Source</button>');
+  expect(markup).toContain('>Generated</button>');
+  expect(markup).toContain('Loading source Skills…');
 });
 
 it('renders eval coverage with per-case kind badges beneath the resource tree', () => {

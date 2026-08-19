@@ -6,16 +6,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import {
-  ScriptPlaygroundService,
-  type ResolvedPlaygroundScript,
-} from '../src/dev/script-playground-service.ts';
-
-const script: ResolvedPlaygroundScript = Object.freeze({
-  interpreter: Object.freeze({ args: Object.freeze([]), command: process.execPath }),
-  name: 'review.mjs',
-  path: '/validated/epoch/codex/scripts/review.mjs',
-});
+import { ScriptPlaygroundService } from '../src/dev/script-playground-service.ts';
 
 const temporaryScript = async (source: string): Promise<Readonly<{ readonly close: () => Promise<void>; readonly path: string }>> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-playground-test-'));
@@ -383,7 +374,7 @@ it('reports a stable interpreter-unavailable failure without exposing a command 
     resolveScript: async () => Object.freeze({
       interpreter: Object.freeze({ args: Object.freeze([]), command: join(tmpdir(), 'agent-bundle-missing-script-interpreter') }),
       name: 'review',
-      path: script.path,
+      path: join(tmpdir(), 'agent-bundle-unreached-script.mjs'),
     }),
   });
 

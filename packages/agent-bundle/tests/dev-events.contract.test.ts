@@ -39,28 +39,28 @@ const sourceChanged: ProjectEventInput = {
 };
 
 const runtimeEvent: ProjectEventInput = {
-  epochId: epoch.id,
   payload: {
     details: { connected: true },
-    sessionId: 'run-1',
-    type: 'mcp.connected',
+    providerSessionId: 'provider-a',
+    runId: 'run-1',
+    runtimeGenerationId: 'generation-a',
+    type: 'runtime.hmr.client-connected',
   },
   type: 'runtime.event',
 };
 
 const genericRuntimeEvent: ProjectEventOf<ProjectEventType> = {
-  epochId: epoch.id,
   occurredAt: '2026-08-14T12:00:00.000Z',
   payload: runtimeEvent.payload,
   sequence: 1,
   type: 'runtime.event',
 };
 
-const runtimeEpochAndSession = (event: ProjectEventOf<ProjectEventType>): string => {
+const runtimeGenerationAndRun = (event: ProjectEventOf<ProjectEventType>): string => {
   if (event.type === 'runtime.event') {
-    const epochId: string = event.epochId;
-    const sessionId: string = event.payload.sessionId;
-    return `${epochId}:${sessionId}`;
+    const generationId: string | undefined = event.payload.runtimeGenerationId;
+    const runId: string | undefined = event.payload.runId;
+    return `${generationId}:${runId}`;
   }
 
   return event.type;
@@ -106,12 +106,6 @@ const mismatchedPayload: ProjectEventInput = {
   type: 'source.status',
 };
 
-// @ts-expect-error runtime events must name the epoch that executed them.
-const runtimeWithoutEpoch: ProjectEventInput = {
-  payload: runtimeEvent.payload,
-  type: 'runtime.event',
-};
-
 // @ts-expect-error an available artifact event must name the active epoch.
 const artifactWithoutEpoch: ProjectEventInput = {
   payload: activeArtifact,
@@ -147,7 +141,6 @@ const incompleteSuccess: BuildAttempt = {
 const impossibleBuildingStatus: BuildStatus = { state: 'building' };
 
 void mismatchedPayload;
-void runtimeWithoutEpoch;
 void artifactWithoutEpoch;
 void activeWithoutEpoch;
 void incompleteFailure;
@@ -155,7 +148,7 @@ void incompleteSuccess;
 void impossibleBuildingStatus;
 void genericMismatchedPayload;
 void genericRuntimeEvent;
-void runtimeEpochAndSession;
+void runtimeGenerationAndRun;
 
 it('rejects non-JSON event payloads before allocating a sequence ID', () => {
   const hub = new ProjectEventHub();

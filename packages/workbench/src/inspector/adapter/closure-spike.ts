@@ -8,6 +8,18 @@ import {
   ToolsScreen,
 } from './closure-screens.jsx';
 
+export { AppRenderer, snapshotHostContext } from './inspector-closure-vendor.js';
+export type {
+  AppRendererBridge,
+  AppRendererHandle,
+  AppRendererProps,
+  BridgeFactory,
+  McpAppRendererDisplayMode,
+  McpAppRendererHostContext,
+  McpAppRendererMessage,
+  McpAppRendererTool,
+} from './inspector-closure-vendor.js';
+
 /**
  * Compile-only adapter boundary for the phase-zero Inspector snapshot.
  *

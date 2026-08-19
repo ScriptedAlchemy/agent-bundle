@@ -5,19 +5,18 @@ import {
   explicitInvocationProvenancePattern,
   semanticGraderIdentityPattern,
 } from '../../../agent-bundle/src/eval/provenance.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import {
   nonnegativeIntegerSchema,
   nonnegativeNumberSchema,
   probabilitySchema,
-  provenanceIdentifierSchema,
   safeIntegerSchema,
   safeNumberSchema,
 } from '../schema-atoms.ts';
 
 export interface ComparisonClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
+  /** Workbench-owned memory-only session authority shared by all foreground routes. */
+  readonly foreground: ForegroundRequestAuthority;
 }
 
 export interface ComparisonRequest {
@@ -41,13 +40,21 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 const invalidResponse = (): ComparisonClientError =>
   new ComparisonClientError('AB8083', 'Eval comparison route returned an invalid response.');
 
+const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
+const provenanceIdentifierSchema = z.string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u)
+  .refine((value) => !provenancePathMarker.test(value));
 const invocationProvenanceSchema = z.union([
   z.enum(['automatic', 'none']),
-  z.string().regex(explicitInvocationProvenancePattern),
+  z.string()
+    .regex(explicitInvocationProvenancePattern)
+    .refine((value) => !provenancePathMarker.test(value)),
 ]);
 const semanticGraderIdentitySchema = z.union([
   z.literal('none'),
-  z.string().regex(semanticGraderIdentityPattern),
+  z.string()
+    .regex(semanticGraderIdentityPattern)
+    .refine((value) => !provenancePathMarker.test(value)),
 ]);
 const conditionProvenanceSchema = z.strictObject({
   hostCliVersion: provenanceIdentifierSchema.optional(),
@@ -152,6 +159,14 @@ const frozenJson = (value: unknown): unknown => {
   return value;
 };
 
+const diagnosticError = (value: unknown, status: number): ComparisonClientError => {
+  if (isRecord(value) && isRecord(value.diagnostic) &&
+    typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
+    return new ComparisonClientError(value.diagnostic.code, value.diagnostic.message);
+  }
+  return new ComparisonClientError('AB8083', `Eval comparison request failed with HTTP ${status}.`);
+};
+
 const comparisonResult = (value: unknown): EvalComparison => {
   const parsed = comparisonEnvelopeSchema.safeParse(value);
   if (!parsed.success) throw invalidResponse();
@@ -160,25 +175,25 @@ const comparisonResult = (value: unknown): EvalComparison => {
 
 /** A typed, credential-memory-only browser client for the eval comparison route. */
 export class ComparisonClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: ComparisonClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message) => new ComparisonClientError(code, message),
-      fallbackCode: 'AB8083',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Eval comparison',
-    });
+  constructor(options: ComparisonClientOptions) {
+    this.#foreground = options.foreground;
   }
 
   /** The route aligns the two runs; the page never derives a delta of its own. */
   async compare(request: ComparisonRequest, signal?: AbortSignal): Promise<EvalComparison> {
     const query = new URLSearchParams({ base: request.base, candidate: request.candidate });
-    return comparisonResult(await this.#transport.json(
+    return comparisonResult(await this.#json(
       `/api/evals/comparisons?${query.toString()}`,
       signal === undefined ? {} : { signal },
     ));
   }
 
+  async #json(path: string, init: RequestInit = {}): Promise<unknown> {
+    const response = await this.#foreground.protectedRequest(path, init);
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw diagnosticError(body, response.status);
+    return body;
+  }
 }

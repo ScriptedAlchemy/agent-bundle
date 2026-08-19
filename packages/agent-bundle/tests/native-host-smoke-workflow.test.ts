@@ -4,6 +4,8 @@ import { expect, it } from '@rstest/core';
 import { parse as parseYaml } from 'yaml';
 
 const workflowUrl = new URL('../../../.github/workflows/native-host-smoke.yml', import.meta.url);
+const packageUrl = new URL('../../../package.json', import.meta.url);
+const launcherUrl = new URL('../../../scripts/run-packed-native-smoke.mjs', import.meta.url);
 
 interface NativeSmokeMatrixRow {
   readonly host: string;
@@ -12,7 +14,12 @@ interface NativeSmokeMatrixRow {
 }
 
 it('keeps source and installed-tarball native smokes in the manual self-hosted matrix', async () => {
-  const workflow = await readFile(workflowUrl, 'utf8');
+  const [workflow, packageBytes, launcher] = await Promise.all([
+    readFile(workflowUrl, 'utf8'),
+    readFile(packageUrl, 'utf8'),
+    readFile(launcherUrl, 'utf8'),
+  ]);
+  const packageDocument = JSON.parse(packageBytes) as { readonly scripts?: Readonly<Record<string, string>> };
   const parsed = parseYaml(workflow) as {
     readonly on?: { readonly workflow_dispatch?: unknown };
     readonly jobs?: {
@@ -45,4 +52,9 @@ it('keeps source and installed-tarball native smokes in the manual self-hosted m
   expect(workflow).not.toMatch(/\b(?:push|pull_request):/u);
   expect(workflow).not.toMatch(/\bsecrets\./u);
   expect(workflow).not.toMatch(/API[_-]?KEY/iu);
+  expect(packageDocument.scripts?.['test:packed:native:claude']).toBe('node scripts/run-packed-native-smoke.mjs claude');
+  expect(packageDocument.scripts?.['test:packed:native:codex']).toBe('node scripts/run-packed-native-smoke.mjs codex');
+  expect(launcher).toContain("process.platform === 'win32' ? 'npm.cmd' : 'npm'");
+  expect(launcher).toContain("spawn(npm, args, { env: environment, stdio: 'inherit' })");
+  expect(launcher).not.toMatch(/(?:^|\s)AGENT_BUNDLE_PACKED_NATIVE_[A-Z_]+=1\s+npm/u);
 });

@@ -17,8 +17,9 @@ import {
 import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol/node';
 
 import { stableJson } from '../core/digest.ts';
-import { snapshotStrictJsonValue } from '../core/strict-json.ts';
+import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type { EvalService } from './eval-service.ts';
+import { runtimeAppFiniteOrdinaryJsonByteLength } from './runtime-app-message-limits.ts';
 import type { ProjectStatus } from './types.ts';
 
 export const agentApiToolNames = Object.freeze([
@@ -77,7 +78,7 @@ export interface AgentApiOptions {
   readonly coordinator: Readonly<{ readonly status: () => ProjectStatus }>;
   readonly diagnostics: Readonly<{ readonly list: () => Promise<unknown> }>;
   readonly epochs: AgentApiEpochStore;
-  readonly evals: Pick<EvalService, 'list' | 'read' | 'start' | 'subscribeEvents' | 'suites'>;
+  readonly evals: Pick<EvalService, 'cancel' | 'list' | 'read' | 'start' | 'subscribeEvents' | 'suites'>;
   readonly hooks: Readonly<{
     readonly list: (options: Readonly<{ readonly epochId: string; readonly target?: string }>) => Promise<unknown>;
     readonly simulate: (options: Readonly<{
@@ -121,9 +122,11 @@ const objectSchema = (
 ) => fromJsonSchema({ additionalProperties: false, properties, required: [...required], type: 'object' });
 
 const noArguments = objectSchema({});
-const epochArgument = { minLength: 1, type: 'string' };
-const targetArgument = { minLength: 1, type: 'string' };
-const identifierArgument = { minLength: 1, type: 'string' };
+const maximumArgumentItems = 256;
+const maximumIdentifierLength = 128;
+const epochArgument = { maxLength: maximumIdentifierLength, minLength: 1, type: 'string' };
+const targetArgument = { maxLength: maximumIdentifierLength, minLength: 1, type: 'string' };
+const identifierArgument = { maxLength: maximumIdentifierLength, minLength: 1, type: 'string' };
 
 const skillListSchema = objectSchema({ epoch: epochArgument, target: targetArgument }, ['target']);
 const skillInspectSchema = objectSchema({ epoch: epochArgument, skill_id: identifierArgument, target: targetArgument }, ['skill_id', 'target']);
@@ -144,9 +147,9 @@ const hookSimulateSchema = objectSchema({
   target: targetArgument,
 }, ['hook', 'input', 'target']);
 const evalRunSchema = objectSchema({
-  case_ids: { items: identifierArgument, type: 'array' },
+  case_ids: { items: identifierArgument, maxItems: maximumArgumentItems, type: 'array', uniqueItems: true },
   epoch: epochArgument,
-  suites: { items: identifierArgument, type: 'array' },
+  suites: { items: identifierArgument, maxItems: maximumArgumentItems, type: 'array', uniqueItems: true },
   trials: { maximum: 100, minimum: 1, type: 'integer' },
 });
 const evalGetSchema = objectSchema({ run_id: identifierArgument }, ['run_id']);
@@ -215,7 +218,6 @@ const stableErrorCodes = new Set([
   'SKILL_EPOCH_UNAVAILABLE',
   'SKILL_RESOURCE_UNAVAILABLE',
   'SKILL_TARGET_UNAVAILABLE',
-  'EVAL_ARTIFACT_OUTSIDE_PROJECT',
   'EVAL_HARNESS_UNSUPPORTED',
   'EVAL_RUN_NOT_FOUND',
   'EVAL_SELECTION_EMPTY',
@@ -223,6 +225,71 @@ const stableErrorCodes = new Set([
   'EVAL_TARGET_MISSING',
   'EVAL_TRIALS_INVALID',
 ] as const);
+
+const maximumAgentApiRequestBytes = 64 * 1_024;
+const maximumAgentApiJsonDepth = 32;
+const maximumAgentApiJsonNodes = 4_096;
+const maximumAgentApiToolResultBytes = 1_024 * 1_024;
+
+class AgentApiRequestError extends Error {
+  readonly code: 'AGENT_API_REQUEST_INVALID' | 'AGENT_API_REQUEST_TOO_LARGE';
+  readonly status: 400 | 413;
+
+  constructor(code: AgentApiRequestError['code'], message: string, status: AgentApiRequestError['status']) {
+    super(message);
+    this.name = 'AgentApiRequestError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+const readAgentApiRequest = async (request: IncomingMessage): Promise<unknown> => new Promise((resolvePromise, rejectPromise) => {
+  let bytes = 0;
+  let settled = false;
+  const chunks: Buffer[] = [];
+  const reject = (error: unknown): void => {
+    if (settled) return;
+    settled = true;
+    chunks.length = 0;
+    rejectPromise(error);
+  };
+  request.on('data', (chunk: Buffer) => {
+    if (settled) return;
+    bytes += chunk.length;
+    if (bytes > maximumAgentApiRequestBytes) {
+      request.resume();
+      reject(new AgentApiRequestError('AGENT_API_REQUEST_TOO_LARGE', 'Agent API request exceeds 64 KiB.', 413));
+      return;
+    }
+    chunks.push(chunk);
+  });
+  request.once('error', reject);
+  request.once('end', () => {
+    if (settled) return;
+    try {
+      const body = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+      const parsed = parseJsonWithoutDuplicateKeys(body);
+      if (runtimeAppFiniteOrdinaryJsonByteLength(parsed, {
+        maximumBytes: maximumAgentApiRequestBytes,
+        maximumDepth: maximumAgentApiJsonDepth,
+        maximumNodes: maximumAgentApiJsonNodes,
+      }) === undefined) {
+        throw new AgentApiRequestError('AGENT_API_REQUEST_INVALID', 'Agent API request must contain bounded JSON.', 400);
+      }
+      settled = true;
+      resolvePromise(parsed);
+    } catch (error) {
+      reject(error instanceof AgentApiRequestError
+        ? error
+        : new AgentApiRequestError('AGENT_API_REQUEST_INVALID', 'Agent API request is not valid JSON.', 400));
+    }
+  });
+});
+
+const writeAgentApiRequestError = (response: ServerResponse, error: AgentApiRequestError): void => {
+  response.writeHead(error.status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(stableJson({ error: { code: error.code, message: error.message } }));
+};
 
 /** Reads only an own data descriptor: hostile accessors and Proxy traps are never evaluated. */
 const ownDataProperty = (value: unknown, key: string): unknown => {
@@ -288,6 +355,11 @@ const hasControlCharacter = (value: string): boolean => {
 
 const snapshotValue = (value: unknown): unknown => {
   try {
+    if (runtimeAppFiniteOrdinaryJsonByteLength(value, {
+      maximumBytes: maximumAgentApiToolResultBytes,
+      maximumDepth: maximumAgentApiJsonDepth,
+      maximumNodes: maximumAgentApiJsonNodes,
+    }) === undefined) return undefined;
     return snapshotStrictJsonValue(value);
   } catch {
     return undefined;
@@ -509,7 +581,10 @@ const diagnosticsListWireDto = (value: unknown): readonly AgentApiDiagnostic[] =
 };
 
 const safeToolResult = (value: unknown) => {
-  const snapshot = snapshotStrictJsonValue(value === undefined ? null : value);
+  const snapshot = snapshotValue(value === undefined ? null : value);
+  if (snapshot === undefined) {
+    throw apiError('AGENT_API_OPERATION_FAILED', 'Tool result exceeds the Agent API JSON limit.');
+  }
   const structured = snapshot !== null && typeof snapshot === 'object' && !Array.isArray(snapshot)
     ? snapshot
     : Object.freeze({ value: snapshot });
@@ -622,7 +697,19 @@ export class AgentApi {
     const authorized = request as IncomingMessage & { auth?: AuthInfo };
     authorized.auth = auth;
     try {
-      await this.#nodeHandler(authorized, response);
+      let parsedBody: unknown;
+      if (request.method === 'POST') {
+        try {
+          parsedBody = await readAgentApiRequest(request);
+        } catch (error) {
+          if (error instanceof AgentApiRequestError) {
+            writeAgentApiRequestError(response, error);
+            return;
+          }
+          throw error;
+        }
+      }
+      await this.#nodeHandler(authorized, response, parsedBody);
     } finally {
       delete authorized.auth;
     }
@@ -742,62 +829,75 @@ export class AgentApi {
           : await this.#epochs.acquireEpochReference(requestedEpochId);
         const lifecycle = new AbortController();
         const lifecycleSettled = Promise.withResolvers<void>();
+        this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
+        let lifecycleCompleted = false;
         const completeLifecycle = (): void => {
-          if (this.#evalLifecycles.delete(lifecycle)) lifecycleSettled.resolve();
+          if (lifecycleCompleted) return;
+          lifecycleCompleted = true;
+          this.#evalLifecycles.delete(lifecycle);
+          lifecycleSettled.resolve();
         };
-        let releaseStarted = false;
+        const abortAdmission = (): void => lifecycle.abort(signal.reason);
+        signal.addEventListener('abort', abortAdmission, { once: true });
+        if (signal.aborted) abortAdmission();
+        let released: Promise<void> | undefined;
+        let admission: Awaited<ReturnType<AgentApiOptions['evals']['start']>> | undefined;
         let subscription: Awaited<ReturnType<AgentApiOptions['evals']['subscribeEvents']>> | undefined;
-        try {
-          // Request cancellation governs admission only; an admitted run belongs to its lifecycle.
-          signal.throwIfAborted();
-          this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
-          const admission = await this.#evals.start({
-            artifact: reference.root,
-            ...(caseIds === undefined ? {} : { caseIds }),
-            harness: 'deterministic',
-            ...(suites === undefined ? {} : { suites }),
-            ...(trials === undefined ? {} : { trials }),
-            signal: lifecycle.signal,
-          });
-          subscription = await this.#evals.subscribeEvents(admission.run.id, 0);
-          const eventSubscription = subscription;
-          let released: Promise<void> | undefined;
-          const release = (): Promise<void> => {
-            releaseStarted = true;
-            released ??= Promise.allSettled([
-              Promise.resolve().then(() => eventSubscription.close()),
-              reference.close(),
-            ]).then((results) => {
-              const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-              if (failures.length > 0) {
-                throw new AggregateError(failures, 'Agent API eval lifecycle cleanup failed.', { cause: failures[0] });
-              }
-            }).catch((error) => {
-              this.#evalLifecycleFailures.add(error);
-              throw error;
-            }).finally(completeLifecycle);
-            return released;
-          };
-          const terminal = (kind: string): boolean =>
-            kind === 'run.cancelled' || kind === 'run.completed' || kind === 'run.failed';
-          if (eventSubscription.replay.events.some((event) => terminal(event.kind))) await release();
-          else eventSubscription.activate((event) => {
-            if (terminal(event.kind)) void release().catch(() => undefined);
-          });
-          return { run: evalRunAdmissionWireDto(admission.run) };
-        } catch (error) {
-          lifecycle.abort(error);
-          completeLifecycle();
-          if (!releaseStarted) {
+        const release = (options: Readonly<{ readonly cancelRun: boolean; readonly retainFailure: boolean }>): Promise<void> => {
+          released ??= Promise.resolve().then(async () => {
+            const cancellation = options.cancelRun && admission !== undefined
+              ? await Promise.allSettled([this.#evals.cancel(admission.run.id)])
+              : [];
             const closingSubscription = subscription;
-            const cleanup = await Promise.allSettled([
+            const resources = await Promise.allSettled([
               ...(closingSubscription === undefined ? [] : [Promise.resolve().then(() => closingSubscription.close())]),
               reference.close(),
             ]);
-            const failures = cleanup.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+            const failures = [...cancellation, ...resources]
+              .flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
             if (failures.length > 0) {
-              throw new AggregateError([error, ...failures], 'Agent API eval admission and epoch release both failed.', { cause: error });
+              throw new AggregateError(failures, 'Agent API eval lifecycle cleanup failed.', { cause: failures[0] });
             }
+          }).catch((error) => {
+            if (options.retainFailure) this.#evalLifecycleFailures.add(error);
+            throw error;
+          }).finally(completeLifecycle);
+          return released;
+        };
+        try {
+          try {
+            lifecycle.signal.throwIfAborted();
+            admission = await this.#evals.start({
+              artifact: reference.root,
+              ...(caseIds === undefined ? {} : { caseIds }),
+              harness: 'deterministic',
+              ...(suites === undefined ? {} : { suites }),
+              ...(trials === undefined ? {} : { trials }),
+              signal: lifecycle.signal,
+            });
+          } finally {
+            signal.removeEventListener('abort', abortAdmission);
+          }
+          subscription = await this.#evals.subscribeEvents(admission.run.id, 0);
+          const eventSubscription = subscription;
+          const terminal = (kind: string): boolean =>
+            kind === 'run.cancelled' || kind === 'run.completed' || kind === 'run.failed';
+          if (eventSubscription.replay.events.some((event) => terminal(event.kind))) {
+            await release({ cancelRun: false, retainFailure: true });
+          }
+          else eventSubscription.activate((event) => {
+            if (terminal(event.kind)) void release({ cancelRun: false, retainFailure: true }).catch(() => undefined);
+          });
+          return { run: evalRunAdmissionWireDto(admission.run) };
+        } catch (error) {
+          signal.removeEventListener('abort', abortAdmission);
+          const cleanup = release({ cancelRun: true, retainFailure: false });
+          lifecycle.abort(error);
+          const cleanupResult = await Promise.allSettled([cleanup]);
+          const failures = cleanupResult.flatMap((result) =>
+            result.status === 'rejected' && result.reason !== error ? [result.reason] : []);
+          if (failures.length > 0) {
+            throw new AggregateError([error, ...failures], 'Agent API eval admission cleanup failed.', { cause: error });
           }
           throw error;
         }

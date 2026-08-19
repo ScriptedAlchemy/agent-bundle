@@ -1,11 +1,10 @@
-import { chmod, mkdtemp, mkdir, open, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
 import { EpochStore, type EpochStaging } from '../src/dev/epoch-store.ts';
-import { publishNativePlaygroundCatalogSnapshot } from '../src/dev/native-playground-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 
 const epochFor = (
@@ -41,6 +40,26 @@ const nativeCatalogPathFor = (root: string, epochId: string): string =>
 
 const settleMicrotasks = async (): Promise<void> => {
   for (let step = 0; step < 16; step += 1) await Promise.resolve();
+};
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: T | PromiseLike<T>) => void;
+};
+
+const deferred = <T>(): Deferred<T> => {
+  let resolve: Deferred<T>['resolve'] = () => {
+    throw new Error('Deferred resolver invoked before initialization.');
+  };
+  let reject: Deferred<T>['reject'] = () => {
+    throw new Error('Deferred rejecter invoked before initialization.');
+  };
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
 };
 
 it('publishes a validated staging directory as the active immutable epoch', async () => {
@@ -669,10 +688,10 @@ it('waits for every eligible cleanup deletion before admitting a later reference
   const epochOneRoot = join(root, '.agent-bundle', 'epochs', 'epoch-1');
   const epochTwoRoot = join(root, '.agent-bundle', 'epochs', 'epoch-2');
   const firstFailure = new Error('epoch-1 directory removal failed');
-  const earlyGate = Promise.withResolvers<void>();
-  const lateGate = Promise.withResolvers<void>();
-  const earlyStarted = Promise.withResolvers<void>();
-  const lateStarted = Promise.withResolvers<void>();
+  const earlyGate = deferred<void>();
+  const lateGate = deferred<void>();
+  const earlyStarted = deferred<void>();
+  const lateStarted = deferred<void>();
   let preserveDuringPublication = true;
 
   const cleanupRemove: typeof rm = async (path, options) => {
@@ -751,8 +770,10 @@ it('aggregates sorted cleanup failures and retries retained metadata after a met
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch cleanup aggregate '));
   const epochOneRoot = join(root, '.agent-bundle', 'epochs', 'epoch-1');
   const epochTwoMetadata = epochMetadataPathFor(root, 'epoch-2');
+  const epochThreeCatalog = nativeCatalogPathFor(root, 'epoch-3');
   const directoryFailure = new Error('epoch-1 directory removal failed');
   const metadataFailure = new Error('epoch-2 metadata removal failed');
+  const catalogFailure = new Error('epoch-3 native catalog removal failed');
   let preserveDuringPublication = true;
   let failuresEnabled = true;
 
@@ -761,13 +782,17 @@ it('aggregates sorted cleanup failures and retries retained metadata after a met
       preserveDuringPublication &&
       (path === epochOneRoot ||
         path === join(root, '.agent-bundle', 'epochs', 'epoch-2') ||
+        path === join(root, '.agent-bundle', 'epochs', 'epoch-3') ||
         path === epochMetadataPathFor(root, 'epoch-1') ||
-        path === epochTwoMetadata)
+        path === epochTwoMetadata ||
+        path === epochMetadataPathFor(root, 'epoch-3') ||
+        path === epochThreeCatalog)
     ) {
       return;
     }
     if (failuresEnabled && path === epochOneRoot) throw directoryFailure;
     if (failuresEnabled && path === epochTwoMetadata) throw metadataFailure;
+    if (failuresEnabled && path === epochThreeCatalog) throw catalogFailure;
     await rm(path, options);
   };
 
@@ -776,17 +801,21 @@ it('aggregates sorted cleanup failures and retries retained metadata after a met
     for (let sequence = 1; sequence <= 9; sequence += 1) {
       await publishEpoch(store, epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`));
     }
+    await mkdir(join(root, '.agent-bundle', 'epochs', '.metadata', 'native-playground'), { recursive: true });
+    await writeFile(epochThreeCatalog, '{"epochId":"epoch-3"}\n');
     preserveDuringPublication = false;
 
     await expect(store.cleanup()).rejects.toMatchObject({
       failures: [
         { epochId: 'epoch-1', reason: directoryFailure, resource: 'directory' },
         { epochId: 'epoch-2', reason: metadataFailure, resource: 'metadata' },
+        { epochId: 'epoch-3', reason: catalogFailure, resource: 'native-playground-catalog' },
       ],
     });
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
     await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8')).resolves.toBe('epoch-1\n');
     await expect(readFile(epochTwoMetadata, 'utf8')).resolves.toContain('epoch-2');
+    await expect(readFile(epochThreeCatalog, 'utf8')).resolves.toContain('epoch-3');
     await expect(
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-2', 'claude', 'plugin.json'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
@@ -795,6 +824,7 @@ it('aggregates sorted cleanup failures and retries retained metadata after a met
     await store.cleanup();
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(epochTwoMetadata, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(epochThreeCatalog, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1146,11 +1176,77 @@ it('keeps epoch metadata and contents retryable when native catalog sidecar dele
   }
 });
 
+it('keeps an epoch committed when active-metadata rename succeeds but its parent fsync fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle active metadata fsync failure '));
+  const previous = epochFor(root, 'epoch-previous', '2026-08-14T12:00:01.000Z');
+  const candidate = epochFor(root, 'epoch-candidate', '2026-08-14T12:00:02.000Z');
+  const durabilityFailure = new Error('active metadata directory sync failed');
+  let failed = false;
+  try {
+    await publishEpoch(new EpochStore({ projectRoot: root }), previous);
+    const controlledOpen: typeof open = async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      if (String(path) !== join(root, '.agent-bundle')) return handle;
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync') {
+            return async () => {
+              if (!failed) {
+                failed = true;
+                throw durabilityFailure;
+              }
+              await target.sync();
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+    const store = new EpochStore({
+      durabilityStorage: Object.freeze({ open: controlledOpen, remove: rm }),
+      projectRoot: root,
+    });
+
+    await expect(publishEpoch(store, candidate)).rejects.toMatchObject({
+      cause: durabilityFailure,
+      committedEpoch: candidate,
+      name: 'EpochPostCommitDurabilityError',
+    });
+    expect(failed).toBe(true);
+    await expect(store.readActiveEpoch()).resolves.toEqual(candidate);
+    await expect(readFile(epochMetadataPathFor(root, candidate.id), 'utf8')).resolves.toContain(candidate.id);
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', candidate.id, 'claude', 'plugin.json'), 'utf8'))
+      .resolves.toBe(`${candidate.id}\n`);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('rolls back a publisher-owned catalog sidecar when activation fails after publication', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle native catalog publication rollback '));
   const epoch = epochFor(root, 'epoch-sidecar-rollback');
+  const syncedPaths: string[] = [];
   try {
-    const store = new EpochStore({ projectRoot: root });
+    const recordingOpen: typeof open = async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync') {
+            return async () => {
+              syncedPaths.push(String(path));
+              await target.sync();
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+    const store = new EpochStore({
+      durabilityStorage: Object.freeze({ open: recordingOpen, remove: rm }),
+      projectRoot: root,
+    });
     const staging = await store.createStagingEpoch({ epoch, targets: ['claude', 'codex'] });
     await Promise.all([
       mkdir(join(staging.root, 'claude'), { recursive: true }),
@@ -1164,74 +1260,79 @@ it('rolls back a publisher-owned catalog sidecar when activation fails after pub
     await expect(staging.publish(async () => undefined, async () => {
       await mkdir(dirname(nativeCatalogPathFor(root, epoch.id)), { recursive: true });
       await writeFile(nativeCatalogPathFor(root, epoch.id), '{"epochId":"epoch-sidecar-rollback","selections":[]}\n');
-      await rm(staging.root, { force: true, recursive: true });
-      return Object.freeze({ rollback: async () => rm(nativeCatalogPathFor(root, epoch.id), { force: true }) });
-    })).rejects.toMatchObject({ code: 'ENOENT' });
+      await mkdir(activeMetadataPathFor(root), { recursive: true });
+      return Object.freeze({
+        rollback: async () => rm(nativeCatalogPathFor(root, epoch.id), { force: true }),
+      });
+    })).rejects.toBeDefined();
     await expect(readFile(nativeCatalogPathFor(root, epoch.id), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(store.readActiveEpoch()).resolves.toBeUndefined();
+    await expect(readFile(epochMetadataPathFor(root, epoch.id), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', epoch.id, 'claude', 'plugin.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    expect(syncedPaths.filter((path) => path === join(root, '.agent-bundle', 'epochs'))).toHaveLength(3);
+    expect(syncedPaths.filter((path) => path === join(root, '.agent-bundle', 'epochs', '.metadata'))).toHaveLength(2);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
 });
 
-it('never rolls back an accepted native catalog sidecar winner from a concurrent epoch publisher', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent bundle native catalog publication race '));
-  const epoch = epochFor(root, 'epoch-sidecar-race');
-  let markFirstReady: (() => void) | undefined;
-  let markSecondReady: (() => void) | undefined;
-  let permitSecondFinish: (() => void) | undefined;
-  const firstReady = new Promise<void>((resolve) => { markFirstReady = resolve; });
-  const secondReady = new Promise<void>((resolve) => { markSecondReady = resolve; });
-  const secondMayFinish = new Promise<void>((resolve) => { permitSecondFinish = resolve; });
-  let firstReceipt: Awaited<ReturnType<typeof publishNativePlaygroundCatalogSnapshot>> | undefined;
-  let secondReceipt: Awaited<ReturnType<typeof publishNativePlaygroundCatalogSnapshot>> | undefined;
+it('does not let a losing concurrent publisher remove the winning epoch catalog', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle concurrent epoch catalog '));
+  const epoch = epochFor(root, 'epoch-concurrent-catalog');
+  const catalogPath = nativeCatalogPathFor(root, epoch.id);
+  const firstMoving = deferred<void>();
+  const releaseMoves = deferred<void>();
+  let moveCount = 0;
+  let publicationCount = 0;
+  const move: typeof rename = async (source, destination) => {
+    moveCount += 1;
+    firstMoving.resolve();
+    await releaseMoves.promise;
+    await rename(source, destination);
+  };
+  const prepare = async (store: EpochStore) => {
+    const staging = await store.createStagingEpoch({ epoch, targets: ['claude', 'codex'] });
+    await Promise.all([
+      mkdir(join(staging.root, 'claude'), { recursive: true }),
+      mkdir(join(staging.root, 'codex'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(staging.root, 'claude', 'plugin.json'), 'claude\n'),
+      writeFile(join(staging.root, 'codex', 'plugin.json'), 'codex\n'),
+      writeFile(join(staging.root, 'agent-bundle.manifest.json'), '{}\n'),
+    ]);
+    return staging;
+  };
   try {
-    const firstStore = new EpochStore({ projectRoot: root });
-    const secondStore = new EpochStore({ projectRoot: root });
-    const first = await firstStore.createStagingEpoch({ epoch, targets: ['claude', 'codex'] });
-    const second = await secondStore.createStagingEpoch({ epoch, targets: ['claude', 'codex'] });
-    for (const staging of [first, second]) {
-      await Promise.all([
-        mkdir(join(staging.root, 'claude'), { recursive: true }),
-        mkdir(join(staging.root, 'codex'), { recursive: true }),
-        writeFile(join(staging.root, 'agent-bundle.manifest.json'), '{}\n'),
-      ]);
-      await Promise.all([
-        writeFile(join(staging.root, 'claude', 'plugin.json'), 'claude\n'),
-        writeFile(join(staging.root, 'codex', 'plugin.json'), 'codex\n'),
-      ]);
-    }
+    const [leftStore, rightStore] = [
+      new EpochStore({ move, projectRoot: root }),
+      new EpochStore({ move, projectRoot: root }),
+    ];
+    const [left, right] = await Promise.all([prepare(leftStore), prepare(rightStore)]);
+    const beforeActivate = async (): Promise<void> => {
+      await mkdir(dirname(catalogPath), { recursive: true });
+      await writeFile(catalogPath, `${JSON.stringify({ epochId: epoch.id, selections: [] })}\n`);
+      publicationCount += 1;
+    };
+    const settled = Promise.allSettled([
+      left.publish(async () => undefined, beforeActivate),
+      right.publish(async () => undefined, beforeActivate),
+    ]);
+    await firstMoving.promise;
+    releaseMoves.resolve();
+    const results = await settled;
 
-    const firstPublication = first.publish(async () => undefined, async (publishingEpoch) => {
-      firstReceipt = await publishNativePlaygroundCatalogSnapshot({
-        discover: async () => Object.freeze([]),
-        epoch: publishingEpoch,
-        projectRoot: root,
-      });
-      markFirstReady!();
-      await secondReady;
-      return firstReceipt;
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: { code: 'EPOCH_ALREADY_EXISTS' },
+      status: 'rejected',
     });
-    await firstReady;
-    const secondPublication = second.publish(async () => undefined, async (publishingEpoch) => {
-      secondReceipt = await publishNativePlaygroundCatalogSnapshot({
-        discover: async () => Object.freeze([]),
-        epoch: publishingEpoch,
-        projectRoot: root,
-      });
-      markSecondReady!();
-      await secondMayFinish;
-      return secondReceipt;
-    });
-    await secondReady;
-    await expect(firstPublication).resolves.toEqual(epoch);
-    permitSecondFinish!();
-    await expect(secondPublication).rejects.toBeDefined();
-
-    expect(firstReceipt?.created).toBe(true);
-    expect(secondReceipt?.created).toBe(false);
-    await expect(readFile(nativeCatalogPathFor(root, epoch.id), 'utf8')).resolves.toContain('epoch-sidecar-race');
+    expect(moveCount).toBe(1);
+    expect(publicationCount).toBe(1);
+    await expect(readFile(catalogPath, 'utf8')).resolves.toContain(epoch.id);
+    await expect(leftStore.readActiveEpoch()).resolves.toEqual(epoch);
   } finally {
+    releaseMoves.resolve();
     await rm(root, { force: true, recursive: true });
   }
 });

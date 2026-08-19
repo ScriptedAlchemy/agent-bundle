@@ -1,6 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import { ComparisonClient } from '../src/comparisons/comparison-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 
 interface RecordedRequest {
   readonly method: string;
@@ -27,7 +28,7 @@ const comparison = {
       outcome: 'fail',
       passRate: 0.666667,
       passes: 2,
-      provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'none' },
+      provenance: { hostCliVersion: 'claude@1.0.0', invocation: 'explicit:hook:fixture', semanticGrader: 'none' },
       reliability: { passAtK: 1, passPowerK: 0, sampleSize: 3 },
       runId: 'run-base',
       trials: 3,
@@ -43,7 +44,7 @@ const comparison = {
       outcome: 'pass',
       passRate: 1,
       passes: 3,
-      provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'none' },
+      provenance: { hostCliVersion: 'claude@1.0.0', invocation: 'explicit:hook:fixture', semanticGrader: 'none' },
       reliability: { passAtK: 1, passPowerK: 1, sampleSize: 3 },
       runId: 'run-candidate',
       trials: 3,
@@ -63,7 +64,11 @@ const comparison = {
 const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
   async (input, init) => {
     const url = String(input);
-    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    if (url === '/api/project/session') return response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
+    });
     calls.push({
       method: init?.method ?? 'GET',
       token: new Headers(init?.headers).get('x-agent-bundle-session'),
@@ -72,11 +77,15 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
     return reply();
   };
 
+const client = (fetch: typeof globalThis.fetch): ComparisonClient => new ComparisonClient({
+  foreground: new ForegroundRouteClient({ fetch }),
+});
+
 it('requests an aligned comparison for a baseline and a candidate run', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new ComparisonClient({ fetch: recordingFetch(calls, () => response({ comparison })) });
+  const comparisonClient = client(recordingFetch(calls, () => response({ comparison })));
 
-  const result = await client.compare({ base: 'run-base', candidate: 'run-candidate' });
+  const result = await comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' });
 
   expect(result).toMatchObject({ baselineRunId: 'run-base', sampleSize: 3 });
   expect(result.rows[0]).toMatchObject({ caseId: 'direct-review', comparable: true });
@@ -88,9 +97,9 @@ it('requests an aligned comparison for a baseline and a candidate run', async ()
 });
 
 it('freezes the decoded comparison so a page cannot mutate it', async () => {
-  const client = new ComparisonClient({ fetch: recordingFetch([], () => response({ comparison })) });
+  const comparisonClient = client(recordingFetch([], () => response({ comparison })));
 
-  const result = await client.compare({ base: 'run-base', candidate: 'run-candidate' });
+  const result = await comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' });
 
   expect(Object.isFrozen(result)).toBe(true);
   expect(Object.isFrozen(result.rows)).toBe(true);
@@ -104,9 +113,9 @@ it('strictly decodes nested provenance and usage while preserving unrecorded sem
   const baseline = unrecorded.rows[0]?.baseline;
   if (baseline === undefined) throw new Error('Comparison fixture must include a baseline.');
   baseline.provenance.semanticGrader = { state: 'unrecorded' };
-  const client = new ComparisonClient({ fetch: recordingFetch([], () => response({ comparison: unrecorded })) });
+  const comparisonClient = client(recordingFetch([], () => response({ comparison: unrecorded })));
 
-  const result = await client.compare({ base: 'run-base', candidate: 'run-candidate' });
+  const result = await comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' });
 
   expect(result.rows[0]).toMatchObject({ baseline: { provenance: { semanticGrader: { state: 'unrecorded' } } } });
   expect(Object.isFrozen(result.rows[0]?.baseline?.provenance)).toBe(true);
@@ -120,9 +129,9 @@ it('accepts the canonical semantic grader identity without a schema-version suff
   const baseline = canonical.rows[0]?.baseline;
   if (baseline === undefined) throw new Error('Comparison fixture must include a baseline.');
   baseline.provenance.semanticGrader = 'claude-semantic@sonnet';
-  const client = new ComparisonClient({ fetch: recordingFetch([], () => response({ comparison: canonical })) });
+  const comparisonClient = client(recordingFetch([], () => response({ comparison: canonical })));
 
-  const result = await client.compare({ base: 'run-base', candidate: 'run-candidate' });
+  const result = await comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' });
 
   expect(result.rows[0]).toMatchObject({
     baseline: { provenance: { semanticGrader: 'claude-semantic@sonnet' } },
@@ -148,9 +157,9 @@ it('decodes the canonical semantic-grader identity mismatch cause', async () => 
     }],
     summary: { comparable: 0, nonComparable: 1, reliability: 0, smoke: 0 },
   };
-  const client = new ComparisonClient({ fetch: recordingFetch([], () => response({ comparison: semanticMismatch })) });
+  const comparisonClient = client(recordingFetch([], () => response({ comparison: semanticMismatch })));
 
-  const result = await client.compare({ base: 'run-base', candidate: 'run-candidate' });
+  const result = await comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' });
 
   expect(result.rows[0]).toMatchObject({
     causes: [{ code: 'semantic-grader-identity-mismatch' }],
@@ -173,45 +182,82 @@ it('rejects extra, path-shaped, or negative nested comparison data', async () =>
     const baseline = malformed.rows[0]?.baseline;
     if (baseline === undefined) throw new Error('Comparison fixture must include a baseline.');
     Object.assign(baseline, mutation);
-    const client = new ComparisonClient({ fetch: recordingFetch([], () => response({ comparison: malformed })) });
-    await expect(client.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({ code: 'AB8083' });
+    const comparisonClient = client(recordingFetch([], () => response({ comparison: malformed })));
+    await expect(comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({ code: 'AB8083' });
   }
 });
 
 it('decodes a route diagnostic body into a coded client error', async () => {
-  const client = new ComparisonClient({
-    fetch: recordingFetch([], () => response({
+  const comparisonClient = client(
+    recordingFetch([], () => response({
       diagnostic: { code: 'AB8071', message: 'Eval comparison requires two recorded runs.' },
     }, 400)),
-  });
+  );
 
-  await expect(client.compare({ base: 'run-base', candidate: 'missing' })).rejects.toMatchObject({
+  await expect(comparisonClient.compare({ base: 'run-base', candidate: 'missing' })).rejects.toMatchObject({
     code: 'AB8071',
     message: 'Eval comparison requires two recorded runs.',
   });
 });
 
 it('reports an unrecognised failure body with the transport status', async () => {
-  const client = new ComparisonClient({ fetch: recordingFetch([], () => response({}, 503)) });
+  const comparisonClient = client(recordingFetch([], () => response({}, 503)));
 
-  await expect(client.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({
+  await expect(comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({
     code: 'AB8083',
     message: 'Eval comparison request failed with HTTP 503.',
   });
 });
 
 it('rejects a response that is not a comparison', async () => {
-  const client = new ComparisonClient({ fetch: recordingFetch([], () => response({ comparison: { rows: 'none' } })) });
+  const comparisonClient = client(recordingFetch([], () => response({ comparison: { rows: 'none' } })));
 
-  await expect(client.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({
+  await expect(comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({
     code: 'AB8083',
   });
 });
 
-it('refuses a foreground session bootstrap that does not match this browser origin', async () => {
-  const client = new ComparisonClient({
-    fetch: async () => response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173/', token: 'foreground-token' }),
-  });
+it('rejects missing, path-like, or structurally extended metric provenance', async () => {
+  const row = comparison.rows[0];
+  const invalidProvenance = [
+    undefined,
+    { hostCliVersion: '/private/claude' },
+    ...['C:private', 'C:\\private', 'C:/private', '\\\\server\\share', 'file:///private/claude']
+      .map((hostCliVersion) => ({ hostCliVersion })),
+    { hostCliVersion: 'claude@1.0.0', unexpected: 'value' },
+  ];
 
-  await expect(client.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({ code: 'AB8083' });
+  for (const provenance of invalidProvenance) {
+    const comparisonClient = client(recordingFetch([], () => response({
+      comparison: {
+        ...comparison,
+        rows: [{ ...row, baseline: { ...row.baseline, provenance } }],
+      },
+    })));
+
+    await expect(comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({
+      code: 'AB8083',
+    });
+  }
+});
+
+it('uses the shared foreground authority error when its authentication is invalidated', async () => {
+  let resolveComparison: ((value: Response) => void) | undefined;
+  const pendingComparison = new Promise<Response>((resolvePromise) => { resolveComparison = resolvePromise; });
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => String(input) === '/api/project/session'
+      ? response({
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+        origin: 'http://127.0.0.1:5173',
+        token: 'foreground-token',
+      })
+      : pendingComparison,
+  });
+  const comparisonClient = new ComparisonClient({ foreground });
+  const request = comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' });
+  await Promise.resolve();
+  foreground.forgetAuthentication();
+  resolveComparison?.(response({ comparison }));
+
+  await expect(request).rejects.toMatchObject({ code: 'AB8019' });
 });

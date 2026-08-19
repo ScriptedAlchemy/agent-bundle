@@ -1,11 +1,10 @@
 import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
 import { snapshotStrictJsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/dev/types.ts';
+import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 
 export interface ArtifactClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
+  readonly foreground: ForegroundRequestAuthority;
 }
 
 const noDiagnostics: readonly Diagnostic[] = Object.freeze([]);
@@ -134,6 +133,14 @@ const failureDiagnostics = (value: unknown): readonly Diagnostic[] => {
   catch { return noDiagnostics; }
 };
 
+const diagnosticError = (value: unknown, status: number): ArtifactClientError => {
+  if (isRecord(value) && isRecord(value.diagnostic) &&
+    typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
+    return new ArtifactClientError(value.diagnostic.code, value.diagnostic.message, failureDiagnostics(value));
+  }
+  return new ArtifactClientError('AB8063', `Artifact inspection request failed with HTTP ${status}.`);
+};
+
 const inspectionBody = (value: unknown): ArtifactInspection => {
   const body = detachedRecord(value);
   if (!exactRecord(body, ['inspection']) || !isInspection(body.inspection)) throw invalidResponse();
@@ -148,25 +155,25 @@ const diffBody = (value: unknown): ArtifactEpochDiff => {
 
 /** A typed, credential-memory-only browser client for the read-only artifact epoch routes. */
 export class ArtifactClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: ArtifactClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message, body) => new ArtifactClientError(code, message, failureDiagnostics(body)),
-      fallbackCode: 'AB8063',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Artifact inspection',
-    });
+  constructor(options: ArtifactClientOptions) {
+    this.#foreground = options.foreground;
   }
 
   async inspect(epochId: string, signal?: AbortSignal): Promise<ArtifactInspection> {
-    return inspectionBody(await this.#transport.json(`/api/artifacts/epochs/${encodeURIComponent(epochId)}`, { signal }));
+    return inspectionBody(await this.#json(`/api/artifacts/epochs/${encodeURIComponent(epochId)}`, signal));
   }
 
   async diff(baseEpochId: string, candidateEpochId: string, signal?: AbortSignal): Promise<ArtifactEpochDiff> {
     const query = new URLSearchParams({ base: baseEpochId, candidate: candidateEpochId });
-    return diffBody(await this.#transport.json(`/api/artifacts/diff?${query.toString()}`, { signal }));
+    return diffBody(await this.#json(`/api/artifacts/diff?${query.toString()}`, signal));
   }
 
+  async #json(path: string, signal?: AbortSignal): Promise<unknown> {
+    const response = await this.#foreground.protectedRequest(path, signal === undefined ? {} : { signal });
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw diagnosticError(body, response.status);
+    return body;
+  }
 }

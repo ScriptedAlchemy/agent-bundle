@@ -227,9 +227,19 @@ export type ActiveArtifactStatus = Extract<ArtifactStatus, { state: 'active' }>;
 export type StaleArtifactStatus = Extract<ArtifactStatus, { state: 'stale' }>;
 export type ArtifactState = ArtifactStatus['state'];
 
+/**
+ * A non-secret, foreground-topology capability. It is present only when this
+ * foreground owns a fixed development Runtime controller; it is not Runtime
+ * state and deliberately carries no provider or declaration details.
+ */
+export interface ProjectRuntimeTopology {
+  readonly state: 'configured';
+}
+
 export interface ProjectStatus {
   readonly artifact: ArtifactStatus;
   readonly build: BuildStatus;
+  readonly runtime?: ProjectRuntimeTopology;
   readonly source: SourceStatus;
 }
 
@@ -243,9 +253,15 @@ export interface Invalidation {
 }
 
 export interface RuntimeEvent {
+  readonly correlationId?: string;
   readonly details?: JsonObject;
-  readonly sessionId: string;
-  readonly type: string;
+  readonly mcpRegistryRevision?: number;
+  readonly mcpSessionId?: string;
+  readonly mcpSessionRevision?: number;
+  readonly providerSessionId: string;
+  readonly runId?: string;
+  readonly runtimeGenerationId?: string;
+  readonly type: import('./runtime-provider.ts').DevRuntimeEventInput['type'];
 }
 
 export interface ProjectEventPayloadMap {
@@ -260,7 +276,7 @@ export interface ProjectEventPayloadMap {
 }
 
 export type ProjectEventType = keyof ProjectEventPayloadMap;
-type EpochScopedProjectEventType = 'artifact.available' | 'runtime.event';
+type EpochScopedProjectEventType = 'artifact.available';
 
 type ProjectEventFor<TType extends ProjectEventType> = TType extends ProjectEventType
   ? Readonly<{

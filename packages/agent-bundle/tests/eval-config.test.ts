@@ -143,10 +143,11 @@ it('takes one detached plain-data snapshot before validating the semantic grader
   expect(normalized.semanticGrader).not.toBe(proxiedSemantic);
 });
 
-it('rejects credential fields, unknown keys, and escaping run directories', () => {
+it('rejects credential fields, unknown keys, and non-directory eval run roots', () => {
   expect(() => normalizeEvalConfig({ apiKey: 'sk-ant-0123456789abcdefghij' })).toThrow(EvalConfigError);
   expect(() => normalizeEvalConfig({ unknown: true })).toThrow(EvalConfigError);
   expect(() => normalizeEvalConfig({ runsDir: '../elsewhere' })).toThrow(EvalConfigError);
+  expect(() => normalizeEvalConfig({ runsDir: '.' })).toThrow(expect.objectContaining({ code: 'EVAL_RUNS_DIR_INVALID' }));
   expect(() => normalizeEvalConfig({ include: [] })).toThrow(EvalConfigError);
 });
 

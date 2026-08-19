@@ -96,6 +96,14 @@ export type AgentBundleHookInput =
   | AgentBundleHookEntry
   | readonly (string | AgentBundleHookEntry)[];
 
+export interface AgentBundleDevRuntimeConfig {
+  readonly provider: string;
+}
+
+export interface AgentBundleDevConfig {
+  readonly runtime?: AgentBundleDevRuntimeConfig;
+}
+
 export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   /** Project-level static files copied byte-for-byte into every target artifact under `assets/`. */
   assets?: string[];

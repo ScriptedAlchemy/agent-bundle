@@ -9,7 +9,12 @@ import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../core/project-context.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
-import { EpochStore, type EpochStaging } from './epoch-store.ts';
+import {
+  EpochPostCommitCleanupError,
+  EpochPostCommitDurabilityError,
+  EpochStore,
+  type EpochStaging,
+} from './epoch-store.ts';
 import {
   publishNativePlaygroundCatalogSnapshot,
   type NativePlaygroundCatalogPublicationOptions,
@@ -142,6 +147,13 @@ const cleanupDiagnostic = (
   sourcePath: configPath,
 });
 
+const postCommitDiagnostic = (error: Error, configPath: string): Diagnostic => Object.freeze({
+  code: 'AB7102',
+  message: `Artifact epoch was committed, but follow-up work was incomplete: ${error.message}`,
+  severity: 'warning',
+  sourcePath: configPath,
+});
+
 /** Compiles one prepared project into an immutable, fully validated epoch. */
 export class ArtifactService {
   readonly #compile: ArtifactCompiler;
@@ -190,6 +202,7 @@ export class ArtifactService {
     let staging: EpochStaging | undefined;
     let stagingClosed = false;
     let result: ArtifactEpochResult;
+    let buildDiagnostics = freezeDiagnostics(prepared.diagnostics);
 
     try {
       await this.#compile({
@@ -203,8 +216,8 @@ export class ArtifactService {
         artifactRoot,
         registry: prepared.registry,
       }));
-      const diagnostics = freezeDiagnostics([...prepared.diagnostics, ...validationDiagnostics]);
-      if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);
+      buildDiagnostics = freezeDiagnostics([...prepared.diagnostics, ...validationDiagnostics]);
+      if (hasErrors(buildDiagnostics)) throw new DiagnosticError(buildDiagnostics);
 
       const currentSource = await snapshotProjectSource(
         prepared.root,
@@ -219,7 +232,7 @@ export class ArtifactService {
       const epoch = freezeArtifactEpoch({
         configDigest: projectContext.configDigest,
         createdAt: this.#now().toISOString(),
-        diagnostics: summarizeDiagnostics(diagnostics),
+        diagnostics: summarizeDiagnostics(buildDiagnostics),
         id: epochId,
         manifestPath: join(prepared.root, '.agent-bundle', 'epochs', epochId, 'agent-bundle.manifest.json'),
         modelDigest: projectContext.modelDigest,
@@ -242,12 +255,21 @@ export class ArtifactService {
         return this.#publishNativeCatalog(Object.freeze({ epoch: publishingEpoch, projectRoot: prepared.root }));
       });
       stagingClosed = true;
-      result = Object.freeze({ diagnostics, epoch: published, outcome: 'succeeded' });
+      result = Object.freeze({ diagnostics: buildDiagnostics, epoch: published, outcome: 'succeeded' });
     } catch (error) {
-      result = Object.freeze({
-        diagnostics: failureDiagnostics(error, prepared.configPath),
-        outcome: 'failed',
-      });
+      if (error instanceof EpochPostCommitCleanupError || error instanceof EpochPostCommitDurabilityError) {
+        stagingClosed = true;
+        result = Object.freeze({
+          diagnostics: freezeDiagnostics([...buildDiagnostics, postCommitDiagnostic(error, prepared.configPath)]),
+          epoch: error.committedEpoch,
+          outcome: 'succeeded',
+        });
+      } else {
+        result = Object.freeze({
+          diagnostics: failureDiagnostics(error, prepared.configPath),
+          outcome: 'failed',
+        });
+      }
     }
 
     const cleanups: readonly Readonly<{

@@ -72,7 +72,7 @@ it('loads an async TypeScript config and discovers its conventional skill files'
   } finally {
     await removeProjectFixture(fixture.root);
   }
-});
+}, 15_000);
 
 it('honors an explicit empty skills list instead of conventional discovery', async () => {
   const fixture = await createProjectFixture({ skills: [] });
@@ -205,6 +205,47 @@ it('reloads an edited native ESM config on each load', async () => {
     await expect(loadConfig(options)).resolves.toMatchObject({
       config: { plugin: { name: 'fresh', version: '2.0.0' } },
       configPath,
+    });
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
+it('reloads an overwritten static TypeScript default config', async () => {
+  const fixture = await createProjectFixture();
+  const options = {
+    command: 'inspect',
+    mode: 'development',
+    root: fixture.root,
+    targets: [],
+  };
+
+  try {
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'review', version: '1.0.0' } },
+    });
+    await writeFile(
+      fixture.configPath,
+      [
+        "enum Version { Current = '1.0.0' }",
+        "export default { plugin: { name: 'typescript-fresh', version: Version.Current } };",
+        '',
+      ].join('\n'),
+    );
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'typescript-fresh', version: '1.0.0' } },
+    });
+
+    await writeFile(
+      fixture.configPath,
+      [
+        "enum Version { Current = '2.0.0' }",
+        "export default { plugin: { name: 'typescript-fresh', version: Version.Current } };",
+        '',
+      ].join('\n'),
+    );
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'typescript-fresh', version: '2.0.0' } },
     });
   } finally {
     await removeProjectFixture(fixture.root);

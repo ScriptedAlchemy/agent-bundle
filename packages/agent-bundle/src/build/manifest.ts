@@ -1,4 +1,9 @@
 import { digest, stableJson } from '../core/digest.ts';
+import {
+  formatRuntimeVersion,
+  parseRuntimeVersion,
+  satisfiesGeneratedRuntimeFloor,
+} from '../core/runtime.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated';
@@ -90,7 +95,6 @@ type JsonRecord = Record<string, unknown>;
 
 const manifestFileName = 'agent-bundle.manifest.json';
 const sha256Pattern = /^[a-f0-9]{64}$/u;
-const runtimeVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
 const fail = (message: string): never => {
   throw new TypeError(`Artifact manifest ${message}`);
@@ -278,8 +282,15 @@ const parseRuntime = (value: unknown): ArtifactManifestRuntime => {
   const runtime = requireRecord(value, 'runtime');
   requireExactKeys(runtime, 'runtime', ['node']);
   const node = requireString(runtime.node, 'runtime.node');
-  if (!runtimeVersionPattern.test(node)) {
+  const version = parseRuntimeVersion(node);
+  if (version === undefined) {
+    return fail('runtime.node must be a canonical major.minor.patch version.');
+  }
+  if (formatRuntimeVersion(version) !== node) {
     fail('runtime.node must be a canonical major.minor.patch version.');
+  }
+  if (!satisfiesGeneratedRuntimeFloor(version)) {
+    fail('runtime.node must satisfy the generated runtime floor.');
   }
   return { node };
 };
@@ -361,15 +372,21 @@ const freezeDeep = <Value>(value: Value): Value => {
   return Object.freeze(value);
 };
 
+const isDuplicateJsonKeyError = (error: unknown): boolean =>
+  error instanceof SyntaxError && error.message.startsWith('JSON has duplicate key ');
+
+const manifestJsonSyntaxError = (message: string): SyntaxError =>
+  new SyntaxError(message, { cause: new SyntaxError('Artifact manifest JSON parsing failed.') });
+
 export const parseArtifactManifest = (bytes: string): ArtifactManifest => {
   let value: unknown;
   try {
     value = parseJsonWithoutDuplicateKeys(bytes);
   } catch (error) {
-    if (error instanceof SyntaxError && error.message.startsWith('JSON has duplicate key ')) {
-      throw new SyntaxError('Artifact manifest JSON has a duplicate key.', { cause: error });
+    if (isDuplicateJsonKeyError(error)) {
+      throw manifestJsonSyntaxError('Artifact manifest contains a duplicate JSON key.');
     }
-    throw new SyntaxError('Artifact manifest is not valid JSON.', { cause: error });
+    throw manifestJsonSyntaxError('Artifact manifest is not valid JSON.');
   }
   const manifest = validateManifest(value);
   if (bytes !== `${stableJson(manifest)}\n`) {

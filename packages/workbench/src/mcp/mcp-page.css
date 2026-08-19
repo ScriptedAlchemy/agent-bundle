@@ -84,6 +84,11 @@
   gap: 1rem;
 }
 
+.mcp-page-trace details {
+  display: grid;
+  gap: 0.45rem;
+}
+
 .mcp-page-binding,
 .mcp-page-catalog-grid {
   align-items: start;

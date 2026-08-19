@@ -1,4 +1,5 @@
-import { access, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -123,6 +124,30 @@ it('evaluates exactly the artifact the caller named instead of building a new on
     await expect(access(join(project.root, '.agent-bundle', 'runs', result.run.id, 'artifacts', 'target')))
       .rejects.toThrow();
   } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('persists an explicit artifact outside the project as an opaque portable identity', async () => {
+  const project = await createProjectFixture();
+  const externalRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-external-eval-artifact-'));
+  try {
+    await seedEvalProject(project.root);
+    const localArtifact = join(project.root, 'prebuilt');
+    const artifactRoot = join(externalRoot, 'artifact');
+    await build({ output: localArtifact, root: project.root });
+    await cp(localArtifact, artifactRoot, { recursive: true });
+
+    const result = await runEvals({ artifact: artifactRoot, caseIds: ['reads-result'], root: project.root });
+
+    expect(result.run.artifact).toMatchObject({
+      manifestPath: expect.stringMatching(/^external\/[a-f0-9]{64}\.json$/u),
+      source: 'explicit',
+    });
+    expect(result.run.artifact.manifestPath).not.toContain(artifactRoot);
+    expect(result.run.artifact.manifestPath).not.toContain('..');
+  } finally {
+    await rm(externalRoot, { force: true, recursive: true });
     await removeProjectFixture(project.root);
   }
 }, 120_000);

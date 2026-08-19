@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 
 import { ArtifactService } from '../../agent-bundle/src/dev/artifact-service.ts';
 import { EpochStore } from '../../agent-bundle/src/dev/epoch-store.ts';
@@ -15,11 +15,33 @@ import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 5_000;
+
+interface RuntimeAppOperation {
+  readonly body: unknown;
+  readonly path: string;
+  readonly response?: unknown;
+}
+
+interface RuntimeAppWireMessage {
+  readonly href: string;
+  readonly message: unknown;
+  readonly senderOrigin: string;
+}
+
+const requestBody = (body: string | null): unknown => {
+  if (body === null) return undefined;
+  try {
+    return JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+};
 
 const e2e = test.extend({
   playwright: {
@@ -97,7 +119,10 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
       "import { defineConfig } from 'agent-bundle';",
       '',
       'export default defineConfig({',
+      '  claude: {},',
+      '  codex: {},',
       "  mcp: { servers: { fixture: { entry: './src/server.ts', env: { NO_COLOR: '1', SECRET_TOKEN: 'fixture-secret' } } } },",
+      "  portable: { fixtureMarker: 'artifact-extension-initial' },",
       "  plugin: { name: 'workbench-mcp-fixture', version: '1.0.0' },",
       "  skills: ['skills/review'],",
       "  targets: ['portable'],",
@@ -124,6 +149,1011 @@ const expectSafeLaunchConfiguration = async (page: Page, { command, compiledEntr
   expect(await launchConfiguration.textContent()).not.toContain('fixture-secret');
 };
 
+e2e('preserves a direct Runtime deep link until capability discovery succeeds', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  let releaseRuntimeStatus = (): void => undefined;
+  const runtimeStatusGate = new Promise<void>((resolve) => { releaseRuntimeStatus = resolve; });
+  let runtimeStatusRequests = 0;
+  await page.route(`${fixture.url}/api/runtime/status`, async (route) => {
+    runtimeStatusRequests += 1;
+    await runtimeStatusGate;
+    await route.continue();
+  });
+  try {
+    await page.goto(`${fixture.url}#runtime`, { waitUntil: 'domcontentloaded' });
+    await expect.poll(() => runtimeStatusRequests, { timeout: browserTimeout }).toBe(1);
+    expect(new URL(page.url()).hash).toBe('#runtime');
+
+    releaseRuntimeStatus();
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
+    expect(new URL(page.url()).hash).toBe('#runtime');
+  } finally {
+    releaseRuntimeStatus();
+    await fixture.close();
+  }
+});
+
+e2e('redirects a direct Runtime deep link only after capability discovery reports unavailable', { timeout: 60_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  const { server } = await startFrozenEpochServer(project.root);
+  let releaseProjectStatus = (): void => undefined;
+  const projectStatusGate = new Promise<void>((resolve) => { releaseProjectStatus = resolve; });
+  let projectStatusRequests = 0;
+  await page.route(`${server.url}/api/project/status`, async (route) => {
+    projectStatusRequests += 1;
+    await projectStatusGate;
+    await route.continue();
+  });
+  try {
+    await page.goto(`${server.url}#runtime`, { waitUntil: 'domcontentloaded' });
+    await expect.poll(() => projectStatusRequests, { timeout: browserTimeout }).toBe(1);
+    expect(new URL(page.url()).hash).toBe('#runtime');
+
+    releaseProjectStatus();
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    expect(new URL(page.url()).hash).toBe('#overview');
+    expect(await page.locator('a[href="#runtime"]').count()).toBe(0);
+  } finally {
+    releaseProjectStatus();
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
+
+e2e('offers the host-owned MCP playground handoff only after a selected Runtime App succeeds', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  let clientPage: Page | undefined;
+  let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
+  const pageErrors: Error[] = [];
+  const artifactMcpSessionRequests: string[] = [];
+  const projectEventStreams: string[] = [];
+  const runtimeAppRequests: string[] = [];
+  const runtimeAppResponses: unknown[] = [];
+  const runtimeAppOperationRequests: RuntimeAppOperation[] = [];
+  const runtimeAppOperationResponses: RuntimeAppOperation[] = [];
+  const runtimeAppWireMessages: RuntimeAppWireMessage[] = [];
+  const runtimeMcpSessionRequests: string[] = [];
+  const runtimePreviewHmrSockets: string[] = [];
+  const runtimePreviewHmrMessages: string[] = [];
+  await page.exposeBinding('__recordOverviewRuntimeAppMessage', (_source, payload: unknown) => {
+    if (payload !== null && typeof payload === 'object') runtimeAppWireMessages.push(payload as RuntimeAppWireMessage);
+  });
+  await page.addInitScript(() => {
+    window.addEventListener('message', (event) => {
+      const message = event.data;
+      if (message === null || typeof message !== 'object' || (message as { readonly jsonrpc?: unknown }).jsonrpc !== '2.0') return;
+      const record = (globalThis as typeof globalThis & {
+        __recordOverviewRuntimeAppMessage?: (payload: unknown) => Promise<void>;
+      }).__recordOverviewRuntimeAppMessage;
+      if (record !== undefined) void record({ href: window.location.href, message, senderOrigin: event.origin });
+    });
+  });
+  page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('websocket', (socket) => {
+    if (new URL(socket.url()).pathname !== '/rsbuild-hmr') return;
+    runtimePreviewHmrSockets.push(socket.url());
+    socket.on('framereceived', (frame) => {
+      runtimePreviewHmrMessages.push(typeof frame.payload === 'string' ? frame.payload : frame.payload.toString());
+    });
+  });
+  page.on('request', (request) => {
+    const requestUrl = new URL(request.url());
+    if (requestUrl.origin !== fixture.url) return;
+    if (requestUrl.pathname.startsWith('/api/mcp/sessions')) artifactMcpSessionRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    if (requestUrl.pathname === '/api/project/events') projectEventStreams.push(`${request.method()} ${requestUrl.pathname}`);
+    if (requestUrl.pathname.startsWith('/api/runtime/apps')) {
+      runtimeAppRequests.push(`${request.method()} ${requestUrl.pathname}`);
+      if (request.method() === 'POST' && requestUrl.pathname.endsWith('/operations')) {
+        runtimeAppOperationRequests.push(Object.freeze({ body: requestBody(request.postData()), path: requestUrl.pathname }));
+      }
+    }
+    if (requestUrl.pathname.startsWith('/api/runtime/mcp/sessions')) {
+      runtimeMcpSessionRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    }
+  });
+  page.on('response', (response) => {
+    const requestUrl = new URL(response.url());
+    if (requestUrl.origin !== fixture.url || response.request().method() !== 'POST') return;
+    if (requestUrl.pathname === '/api/runtime/apps') {
+      void response.json().then((body: unknown) => { runtimeAppResponses.push(body); }).catch(() => undefined);
+    }
+    if (requestUrl.pathname.endsWith('/operations')) {
+      void response.json().then((body: unknown) => {
+        runtimeAppOperationResponses.push(Object.freeze({
+          body: requestBody(response.request().postData()),
+          path: requestUrl.pathname,
+          response: body,
+        }));
+      }).catch(() => undefined);
+    }
+  });
+  try {
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    const runtimeIdentity = page.locator('[data-runtime-provider-session]');
+    const runtimeSurface = page.getByLabel('Runtime surface');
+    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
+    await runtimeSurface.selectOption('mcp.edit-timeline');
+    clientSurface = await fixture.openRuntimeClientSurface('mcp.edit-timeline');
+    if (clientSurface === undefined) throw new Error('Runtime client surface was not available.');
+    clientPage = await page.context().newPage();
+    clientPage.on('pageerror', (error) => pageErrors.push(error));
+    const bootstrapResponse = await clientPage.goto(clientSurface.bootstrapUrl, { waitUntil: 'domcontentloaded' });
+    expect(bootstrapResponse?.status()).toBe(200);
+    await expect.poll(async () => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    await expect(page.locator('.runtime-status')).toHaveText('HMR endpoint ready · active', { timeout: 15_000 });
+    await runtimeSurface.selectOption('mcp.render_edit_timeline');
+    await page.getByLabel('Runtime target').selectOption('portable');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await page.locator('#runtime-input-raw').fill('{}');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    await expect.poll(async () => page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li').count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    await expect(page.getByRole('button', { name: 'Open in MCP playground' })).toBeEnabled({ timeout: 15_000 });
+    await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(1);
+    await expect.poll(() => runtimeAppResponses.length, { timeout: 15_000 }).toBe(1);
+    const expectedRegisteredConfiguration = [
+      { configured: true, id: 'extension:claude', key: 'claude', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'claude' },
+      { configured: true, id: 'extension:codex', key: 'codex', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'codex' },
+      { configured: true, id: 'extension:portable', key: 'portable', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'portable' },
+    ] as const;
+    const configInspection = (runtimeAppResponses[0] as {
+      readonly preview: { readonly kind: string; readonly profile: { readonly configExtensions: unknown } };
+    }).preview.profile.configExtensions;
+    expect(runtimeAppResponses[0]).toMatchObject({ preview: { kind: 'apps' } });
+    expect(configInspection).toEqual({ entries: expectedRegisteredConfiguration, sourceRevision: expect.any(String) });
+    const configInspectionSnapshot = JSON.stringify(configInspection);
+    const sourceRevision = (configInspection as { readonly sourceRevision: string }).sourceRevision;
+    expect(sourceRevision.length).toBeGreaterThan(0);
+    type ProjectSourceStatus = Readonly<{
+      readonly diagnostics: readonly Readonly<{ readonly code: string; readonly message: string }>[];
+      readonly revision?: string;
+      readonly state: string;
+    }>;
+    const readProjectSource = async (): Promise<ProjectSourceStatus> => page.evaluate(async (origin) => {
+      const response = await fetch(new URL('/api/project/status', origin));
+      if (!response.ok) throw new Error(`Project status failed with ${String(response.status)}.`);
+      return (await response.json() as { readonly status: { readonly source: ProjectSourceStatus } }).status.source;
+    }, fixture.url);
+    type RuntimeStatus = Readonly<{
+      readonly activeVector?: Readonly<{ readonly providerSessionId: string }>;
+      readonly diagnostics: readonly Readonly<{ readonly code?: string; readonly message?: string }>[];
+      readonly state: string;
+    }>;
+    const readRuntimeStatus = async (): Promise<RuntimeStatus> => page.evaluate(async (origin) => {
+      const response = await fetch(new URL('/api/runtime/status', origin));
+      if (!response.ok) throw new Error(`Runtime status failed with ${String(response.status)}.`);
+      return (await response.json() as { readonly status: RuntimeStatus }).status;
+    }, fixture.url);
+    const initialProjectSource = await readProjectSource();
+    expect(initialProjectSource).toEqual({ diagnostics: [], revision: sourceRevision, state: 'ready' });
+    const expectRuntimeProfileInspection = async (preview: Locator, expectedSourceRevision: string): Promise<void> => {
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Portable MCP Apps');
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('agent-bundle:mcp-apps:2026-01-26');
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Not certified for real-host parity');
+      const configuration = preview.getByLabel('Registered configuration');
+      await expect(configuration).toContainText(expectedSourceRevision);
+      await expect(configuration.getByRole('listitem')).toHaveCount(3);
+      await expect(configuration.getByRole('listitem').nth(0)).toContainText('extension:claude');
+      await expect(configuration.getByRole('listitem').nth(1)).toContainText('extension:codex');
+      await expect(configuration.getByRole('listitem').nth(2)).toContainText('extension:portable');
+    };
+    await page.locator('iframe').waitFor({ state: 'attached', timeout: 15_000 });
+    await expectRuntimeProfileInspection(page.locator('.runtime-stage .mcp-app-preview'), sourceRevision);
+    const sourceBinding = (runtimeAppResponses[0] as {
+      readonly preview: { readonly binding: Readonly<{
+        readonly id: string;
+        readonly runVector: Readonly<{ readonly runtimeGenerationId: string; readonly sourceRevision: string; readonly stateVersion: number }>;
+        readonly sessionId: string;
+        readonly sessionRevision: number;
+      }> };
+    }).preview.binding;
+    expect(sourceBinding).toMatchObject({
+      id: expect.any(String),
+      runVector: { runtimeGenerationId: expect.any(String), sourceRevision: expect.any(String), stateVersion: expect.any(Number) },
+      sessionId: expect.any(String),
+      sessionRevision: expect.any(Number),
+    });
+    const sourcePreview = page.locator('.runtime-stage .mcp-app-preview iframe');
+    await expect(sourcePreview).toBeVisible({ timeout: 15_000 });
+    const sourcePreviewHandle = await sourcePreview.elementHandle();
+    if (sourcePreviewHandle === null) throw new Error('Runtime App outer preview iframe was unavailable.');
+    const sourcePreviewUrl = await sourcePreviewHandle.getAttribute('src');
+    if (sourcePreviewUrl === null) throw new Error('Runtime App outer preview iframe did not expose its binding source.');
+    const hmrSentinel = `runtime-hmr-sentinel-${Math.random().toString(36).slice(2)}`;
+    await sourcePreviewHandle.evaluate((element, value) => { element.setAttribute('data-runtime-hmr-sentinel', value); }, hmrSentinel);
+    const source = await readFile(fixture.widgetAppSource, 'utf8');
+    const styles = await readFile(fixture.appStyles, 'utf8');
+    const hmrMarker = `Runtime HMR marker ${Math.random().toString(36).slice(2)}`;
+    const editedSource = source.replace(
+      '<h1>Runtime edit timeline</h1>',
+      `<h1>Runtime edit timeline</h1><p data-testid="runtime-hmr-marker">${hmrMarker}</p>`,
+    );
+    const editedStyles = `${styles}\n.timeline__header [data-testid="runtime-hmr-marker"] { color: rgb(1, 2, 3); }\n`;
+    expect(editedSource).not.toBe(source);
+    await Promise.all([
+      writeFile(fixture.widgetAppSource, editedSource),
+      writeFile(fixture.appStyles, editedStyles),
+    ]);
+    await expect.poll(() => runtimePreviewHmrMessages.some((message) => message === JSON.stringify({ type: 'full-reload' })), { timeout: 15_000 })
+      .toBe(true);
+    const refreshedWidget = async () => {
+      for (const frame of page.frames()) {
+        if (await frame.getByTestId('runtime-hmr-marker').count() === 1) return frame;
+      }
+      return undefined;
+    };
+    await expect.poll(refreshedWidget, { timeout: 15_000 }).toBeDefined();
+    const refreshedFrame = await refreshedWidget();
+    if (refreshedFrame === undefined) throw new Error('Runtime App did not receive the App compiler full reload.');
+    await expect(refreshedFrame.getByTestId('runtime-hmr-marker')).toHaveText(hmrMarker);
+    await expect(refreshedFrame.getByTestId('runtime-hmr-marker')).toHaveCSS('color', 'rgb(1, 2, 3)');
+    expect(await sourcePreviewHandle.evaluate((element) => element.isConnected &&
+      document.querySelector('.runtime-stage .mcp-app-preview iframe') === element)).toBe(true);
+    expect(await sourcePreviewHandle.getAttribute('data-runtime-hmr-sentinel')).toBe(hmrSentinel);
+    expect(await sourcePreviewHandle.getAttribute('src')).toBe(sourcePreviewUrl);
+    expect(runtimePreviewHmrSockets).toHaveLength(1);
+    expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
+    expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
+    expect(runtimeAppResponses).toHaveLength(1);
+    const hmrMessagesBeforeConfigReconcile = [...runtimePreviewHmrMessages];
+    const runtimeAttribute = async (name: string): Promise<string> => {
+      const value = await runtimeIdentity.getAttribute(name);
+      if (value === null) throw new Error(`Runtime identity omitted ${name}.`);
+      return value;
+    };
+    const sourceRuntimeIdentity = {
+      hmrClients: await runtimeAttribute('data-runtime-hmr-client-count'),
+      providerSession: await runtimeAttribute('data-runtime-provider-session'),
+      sourceRevision: await runtimeAttribute('data-runtime-source-revision'),
+      stateVersion: await runtimeAttribute('data-runtime-state-version'),
+    };
+    const expectOriginalPreview = async (): Promise<void> => {
+      await expectRuntimeProfileInspection(page.locator('.runtime-stage .mcp-app-preview'), sourceRevision);
+      expect(JSON.stringify((runtimeAppResponses[0] as {
+        readonly preview: { readonly profile: { readonly configExtensions: unknown } };
+      }).preview.profile.configExtensions)).toBe(configInspectionSnapshot);
+      expect(await sourcePreviewHandle.evaluate((element) => element.isConnected &&
+        document.querySelector('.runtime-stage .mcp-app-preview iframe') === element)).toBe(true);
+      await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-client-count', sourceRuntimeIdentity.hmrClients);
+      await expect(runtimeIdentity).toHaveAttribute('data-runtime-provider-session', sourceRuntimeIdentity.providerSession);
+      await expect(runtimeIdentity).toHaveAttribute('data-runtime-source-revision', sourceRuntimeIdentity.sourceRevision);
+      await expect(runtimeIdentity).toHaveAttribute('data-runtime-state-version', sourceRuntimeIdentity.stateVersion);
+      expect(runtimePreviewHmrSockets).toHaveLength(1);
+      expect(runtimePreviewHmrMessages).toEqual(hmrMessagesBeforeConfigReconcile);
+      expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
+      expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
+      expect(runtimeAppResponses).toHaveLength(1);
+    };
+    const expectRetainedRuntime = async (): Promise<void> => {
+      const status = await readRuntimeStatus();
+      expect(status.state).toBe('active');
+      expect(status.activeVector?.providerSessionId).toBe(sourceRuntimeIdentity.providerSession);
+      expect(status.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB8200');
+      expect(status.diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Development runtime declaration changed; restart required.');
+    };
+    const sourceConfig = await readFile(fixture.configSource, 'utf8');
+    const finiteConfigMarker = `config-reconcile-finite-${Math.random().toString(36).slice(2)}`;
+    const finiteConfig = sourceConfig.replace('  codex: {},', `  codex: { configReconcileMarker: '${finiteConfigMarker}' },`);
+    expect(finiteConfig).not.toBe(sourceConfig);
+    await writeFile(fixture.configSource, finiteConfig);
+    await expect.poll(async () => {
+      const source = await readProjectSource();
+      return source.state === 'ready' && source.revision !== sourceRevision ? source.revision : undefined;
+    }, { timeout: 15_000 }).toEqual(expect.any(String));
+    const finiteSource = await readProjectSource();
+    const finiteSourceRevision = finiteSource.revision;
+    if (finiteSourceRevision === undefined) throw new Error('Finite configuration update did not expose a source revision.');
+    expect(finiteSource.diagnostics).toEqual([]);
+    await expectOriginalPreview();
+    const invalidConfig = finiteConfig.replace(
+      `configReconcileMarker: '${finiteConfigMarker}'`,
+      'configReconcileMarker: Number.NaN',
+    );
+    expect(invalidConfig).not.toBe(finiteConfig);
+    await writeFile(fixture.configSource, invalidConfig);
+    await expect.poll(async () => {
+      const source = await readProjectSource();
+      const diagnostic = source.diagnostics.find((candidate) => candidate.code === 'AB4500');
+      return source.state === 'invalid' && diagnostic?.message === 'A registered config extension must contain strict finite JSON data.'
+        ? source
+        : undefined;
+    }, { timeout: 15_000 }).toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB4500',
+        message: 'A registered config extension must contain strict finite JSON data.',
+      })],
+      state: 'invalid',
+    });
+    const invalidSource = await readProjectSource();
+    expect(invalidSource.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB7001');
+    await expect(page.getByRole('button', { name: 'Open in MCP playground' })).toBeEnabled();
+    await expect(refreshedFrame.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+    await expectOriginalPreview();
+    await expectRetainedRuntime();
+    const sourceControllerOrigin = new URL(sourcePreviewUrl).origin;
+    const resourceUri = 'ui://rsc-agent-runtime/edit-timeline-v1.html';
+    const resourceRequestId = `config-reconcile-resource-${Math.random().toString(36).slice(2)}`;
+    const resourceOperationPath = `/api/runtime/apps/${encodeURIComponent(sourceBinding.id)}/operations`;
+    const resourceOperationRequests = (): readonly RuntimeAppOperation[] => runtimeAppOperationRequests.filter((operation) =>
+      operation.path === resourceOperationPath && JSON.stringify(operation.body) === JSON.stringify({ kind: 'resources/read', uri: resourceUri }));
+    const resourceOperationResponses = (): readonly RuntimeAppOperation[] => runtimeAppOperationResponses.filter((operation) =>
+      operation.path === resourceOperationPath && JSON.stringify(operation.body) === JSON.stringify({ kind: 'resources/read', uri: resourceUri }));
+    const wireMessage = (
+      receiverOrigin: string,
+      senderOrigin: string,
+      matches: (message: Readonly<Record<string, unknown>>) => boolean,
+    ): RuntimeAppWireMessage | undefined => runtimeAppWireMessages.find((candidate) =>
+      new URL(candidate.href).origin === receiverOrigin && candidate.senderOrigin === senderOrigin && candidate.message !== null && typeof candidate.message === 'object' &&
+      matches(candidate.message as Readonly<Record<string, unknown>>));
+    await refreshedFrame.evaluate(({ id, uri }) => {
+      window.parent.postMessage({ id, jsonrpc: '2.0', method: 'resources/read', params: { uri } }, '*');
+    }, { id: resourceRequestId, uri: resourceUri });
+    await expect.poll(resourceOperationRequests, { timeout: 15_000 }).toHaveLength(1);
+    expect(resourceOperationRequests()[0]?.body).toEqual({ kind: 'resources/read', uri: resourceUri });
+    await expect.poll(resourceOperationResponses, { timeout: 15_000 }).toHaveLength(1);
+    const resourceOperationResult = (resourceOperationResponses()[0]?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result;
+    expect(resourceOperationResult).toMatchObject({
+      operationId: expect.any(String),
+      sessionId: sourceBinding.sessionId,
+      sessionRevision: sourceBinding.sessionRevision,
+      value: {
+        contents: [{
+          mimeType: 'text/html;profile=mcp-app',
+          text: expect.stringMatching(/^<!doctype html>/iu),
+          uri: resourceUri,
+        }],
+      },
+      vector: sourceBinding.runVector,
+    });
+    const resourceValue = (resourceOperationResult as Readonly<{ readonly value?: unknown }> | undefined)?.value;
+    if (resourceValue === null || typeof resourceValue !== 'object') throw new Error('Retained Runtime App resource operation omitted its result value.');
+    await expect.poll(() => wireMessage(fixture.url, sourceControllerOrigin, (message) =>
+      message.id === resourceRequestId && message.method === 'resources/read'), { timeout: 15_000 }).toBeDefined();
+    expect(wireMessage(fixture.url, sourceControllerOrigin, (message) =>
+      message.id === resourceRequestId && message.method === 'resources/read')?.message).toEqual({
+      id: resourceRequestId,
+      jsonrpc: '2.0',
+      method: 'resources/read',
+      params: { uri: resourceUri },
+    });
+    await expect.poll(() => wireMessage(sourceControllerOrigin, fixture.url, (message) =>
+      message.id === resourceRequestId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    expect(wireMessage(sourceControllerOrigin, fixture.url, (message) =>
+      message.id === resourceRequestId && Object.hasOwn(message, 'result'))?.message).toEqual({
+      id: resourceRequestId,
+      jsonrpc: '2.0',
+      result: resourceValue,
+    });
+    await expectRetainedRuntime();
+    const repairedConfigMarker = `config-reconcile-repaired-${Math.random().toString(36).slice(2)}`;
+    const repairedConfig = invalidConfig.replace(
+      'configReconcileMarker: Number.NaN',
+      `configReconcileMarker: '${repairedConfigMarker}'`,
+    );
+    await writeFile(fixture.configSource, repairedConfig);
+    await expect.poll(async () => {
+      const source = await readProjectSource();
+      return source.state === 'ready' && source.revision !== finiteSourceRevision ? source.revision : undefined;
+    }, { timeout: 15_000 }).toEqual(expect.any(String));
+    const repairedSource = await readProjectSource();
+    const repairedSourceRevision = repairedSource.revision;
+    if (repairedSourceRevision === undefined) throw new Error('Repaired configuration update did not expose a source revision.');
+    expect(repairedSource.diagnostics).toEqual([]);
+    await expectOriginalPreview();
+    const handoff = page.getByRole('button', { name: 'Open in MCP playground' });
+    await handoff.click({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(2);
+    await expect.poll(() => runtimeAppResponses.length, { timeout: 15_000 }).toBe(2);
+    await expect.poll(() => runtimeAppRequests.findIndex((request) => request.startsWith('DELETE /api/runtime/apps/')), { timeout: 15_000 }).toBeGreaterThan(-1);
+
+    const runtimeDelete = runtimeAppRequests.findIndex((request) => request.startsWith('DELETE /api/runtime/apps/'));
+    const secondRuntimeCreate = runtimeAppRequests.lastIndexOf('POST /api/runtime/apps');
+    expect(runtimeDelete).toBeGreaterThan(0);
+    expect(runtimeDelete).toBeLessThan(secondRuntimeCreate);
+    expect(artifactMcpSessionRequests).toEqual([]);
+    expect(runtimeMcpSessionRequests.filter((request) => request === 'POST /api/runtime/mcp/sessions')).toEqual([]);
+    expect(projectEventStreams).toEqual(['GET /api/project/events']);
+    await page.locator('.mcp-page-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
+    expect(await page.locator('.mcp-page-app-preview iframe').count()).toBe(1);
+    const handedOffConfigInspection = (runtimeAppResponses[1] as {
+      readonly preview: { readonly profile: { readonly configExtensions: { readonly sourceRevision: string } } };
+    }).preview.profile.configExtensions;
+    expect(handedOffConfigInspection).toEqual({ entries: expectedRegisteredConfiguration, sourceRevision: repairedSourceRevision });
+    expect(JSON.stringify(handedOffConfigInspection)).not.toContain(repairedConfigMarker);
+    await expectRuntimeProfileInspection(page.locator('.mcp-page-app-preview'), repairedSourceRevision);
+    const handedOffBinding = (runtimeAppResponses[1] as {
+      readonly preview: { readonly binding: Readonly<{
+        readonly id: string;
+        readonly runVector: typeof sourceBinding.runVector;
+        readonly sessionId: string;
+        readonly sessionRevision: number;
+      }> };
+    }).preview.binding;
+    expect(handedOffBinding.id).not.toBe(sourceBinding.id);
+    expect(handedOffBinding.runVector).toEqual(sourceBinding.runVector);
+    expect(handedOffBinding.sessionId).toBe(sourceBinding.sessionId);
+    expect(handedOffBinding.sessionRevision).toBe(sourceBinding.sessionRevision);
+    expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(2);
+    expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(1);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await clientPage?.close();
+    await clientSurface?.close();
+    await fixture.close();
+  }
+});
+
+e2e('retains the exact Runtime App owner when its handoff close rejects, then retries it once', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  let clientPage: Page | undefined;
+  let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
+  const runtimeAppRequests: string[] = [];
+  let rejectFirstRuntimeClose = true;
+  page.on('request', (request) => {
+    const requestUrl = new URL(request.url());
+    if (requestUrl.origin === fixture.url && requestUrl.pathname.startsWith('/api/runtime/apps')) {
+      runtimeAppRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    }
+  });
+  await page.route(`${fixture.url}/api/runtime/apps/**`, async (route) => {
+    if (route.request().method() === 'DELETE' && rejectFirstRuntimeClose) {
+      rejectFirstRuntimeClose = false;
+      await route.fulfill({ body: JSON.stringify({ error: 'close rejected for retry proof' }), contentType: 'application/json', status: 500 });
+      return;
+    }
+    await route.continue();
+  });
+  try {
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    const runtimeIdentity = page.locator('[data-runtime-provider-session]');
+    const runtimeSurface = page.getByLabel('Runtime surface');
+    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
+    await runtimeSurface.selectOption('mcp.edit-timeline');
+    clientSurface = await fixture.openRuntimeClientSurface('mcp.edit-timeline');
+    if (clientSurface === undefined) throw new Error('Runtime client surface was not available.');
+    clientPage = await page.context().newPage();
+    const bootstrapResponse = await clientPage.goto(clientSurface.bootstrapUrl, { waitUntil: 'domcontentloaded' });
+    expect(bootstrapResponse?.status()).toBe(200);
+    await expect.poll(async () => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    await runtimeSurface.selectOption('mcp.render_edit_timeline');
+    await page.getByLabel('Runtime target').selectOption('portable');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await page.locator('#runtime-input-raw').fill('{}');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Open in MCP playground' })).toBeEnabled({ timeout: 15_000 });
+    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
+    await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(1);
+
+    const handoff = page.getByRole('button', { name: 'Open in MCP playground' });
+    await handoff.click();
+    await expect(page.locator('.runtime-content > p[role="alert"]')).toContainText('MCP playground handoff could not close the Runtime App', { timeout: 15_000 });
+    await expect.poll(() => new URL(page.url()).hash, { timeout: 15_000 }).toBe('#runtime');
+    await page.waitForTimeout(250);
+    await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(1);
+    await expect(page.locator('.runtime-stage .mcp-app-preview')).toHaveCount(1, { timeout: 15_000 });
+    await expect(handoff).toBeEnabled({ timeout: 15_000 });
+
+    await handoff.click();
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('.mcp-page-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
+    await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(2);
+    await expect.poll(() => runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/')).length, { timeout: 15_000 }).toBe(2);
+  } finally {
+    await clientPage?.close();
+    await clientSurface?.close();
+    await fixture.close();
+  }
+});
+
+e2e('keeps runtime Inspector routing constrained after direct MCP navigation from a bound source', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  let clientPage: Page | undefined;
+  let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
+  const artifactMcpSessionRequests: string[] = [];
+  const unsupportedOperationRequests: string[] = [];
+  page.on('request', (request) => {
+    const requestUrl = new URL(request.url());
+    if (requestUrl.origin === fixture.url && requestUrl.pathname.startsWith('/api/mcp/sessions')) {
+      artifactMcpSessionRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    }
+    if (requestUrl.origin === fixture.url && requestUrl.pathname.startsWith('/api/runtime/apps/') && requestUrl.pathname.endsWith('/operations')) {
+      unsupportedOperationRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    }
+  });
+  try {
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    const runtimeIdentity = page.locator('[data-runtime-provider-session]');
+    const runtimeSurface = page.getByLabel('Runtime surface');
+    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
+    await runtimeSurface.selectOption('mcp.edit-timeline');
+    clientSurface = await fixture.openRuntimeClientSurface('mcp.edit-timeline');
+    if (clientSurface === undefined) throw new Error('Runtime client surface was not available.');
+    clientPage = await page.context().newPage();
+    const bootstrapResponse = await clientPage.goto(clientSurface.bootstrapUrl, { waitUntil: 'domcontentloaded' });
+    expect(bootstrapResponse?.status()).toBe(200);
+    await expect.poll(async () => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    await runtimeSurface.selectOption('mcp.render_edit_timeline');
+    await page.getByLabel('Runtime target').selectOption('portable');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await page.locator('#runtime-input-raw').fill('{}');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
+
+    await page.getByRole('link', { name: 'MCP playground' }).click();
+    await expect(page.getByLabel('Runtime-bound MCP session')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#mcp-epoch')).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Open MCP session' })).toHaveCount(0, { timeout: 15_000 });
+    expect(artifactMcpSessionRequests).toEqual([]);
+    await page.getByRole('tab', { name: 'Inspector' }).click();
+    await expect(page.getByRole('button', { name: 'Prompts' })).toBeDisabled({ timeout: 15_000 });
+    await expect(page.getByText('Prompts are unavailable for this runtime session.')).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Resources' }).click();
+    await expect(page.getByText('Resource templates are unavailable for this runtime session.')).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => unsupportedOperationRequests.length, { timeout: 15_000 }).toBe(0);
+  } finally {
+    await clientPage?.close();
+    await clientSurface?.close();
+    await fixture.close();
+  }
+});
+
+e2e('restarts the real Runtime MCP App session when definition or transport authority changes', { timeout: 150_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  const serverOwnedProjectSubscriptions = fixture.eventHubState.subscriptionCount;
+  expect(serverOwnedProjectSubscriptions).toBe(1);
+  const pageErrors: Error[] = [];
+  const artifactMcpSessionRequests: string[] = [];
+  const projectEventStreams: string[] = [];
+  const projectEventStreamCursors = new Map<number, string>();
+  const runtimeMcpSessionRequests: string[] = [];
+  const runtimeAppRequests: string[] = [];
+  const runtimeRunRequests: string[] = [];
+  const runtimeAppCreates: Array<{ readonly body: unknown; response?: unknown; readonly sessionToken: string | undefined }> = [];
+  const runtimeRuns: Array<{ readonly body: unknown; response?: unknown }> = [];
+  let runtimeAppResponseCount = 0;
+  const runtimeAppResponseWaiters = new Map<number, () => void>();
+  const awaitRuntimeAppResponse = (count: number): Promise<void> => {
+    if (runtimeAppResponseCount >= count) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (runtimeAppResponseWaiters.get(count) !== settle) return;
+        runtimeAppResponseWaiters.delete(count);
+        reject(new Error(`Runtime App create ${String(count)} did not return a response.`));
+      }, 15_000);
+      const settle = () => {
+        clearTimeout(timeout);
+        runtimeAppResponseWaiters.delete(count);
+        resolve();
+      };
+      runtimeAppResponseWaiters.set(count, settle);
+    });
+  };
+  const runtimeEvents: Array<Readonly<{
+    readonly lastEventId: string;
+    readonly payload: Readonly<{
+      readonly details?: Readonly<Record<string, unknown>>;
+      readonly mcpRegistryRevision?: number;
+      readonly mcpSessionId?: string;
+      readonly mcpSessionRevision?: number;
+      readonly runtimeGenerationId?: string;
+      readonly type?: string;
+    }>;
+    readonly type?: string;
+  }>> = [];
+  const replayGaps: Array<Readonly<{ readonly data: string; readonly lastEventId: string }>> = [];
+  await page.exposeBinding('__recordRuntimeRestartEvent', (_source, value: unknown) => {
+    if (value === null || typeof value !== 'object') return;
+    const payload = value as Readonly<{ readonly data?: unknown; readonly lastEventId?: unknown }>;
+    if (typeof payload.data !== 'string' || typeof payload.lastEventId !== 'string') return;
+    try {
+      const parsed = JSON.parse(payload.data) as Readonly<{
+        readonly payload?: unknown;
+        readonly type?: unknown;
+      }>;
+      if (parsed.type !== 'runtime.event' || parsed.payload === null || typeof parsed.payload !== 'object') return;
+      runtimeEvents.push(Object.freeze({ ...parsed, lastEventId: payload.lastEventId }) as (typeof runtimeEvents)[number]);
+    } catch {
+      // The real EventSource listener remains authoritative; malformed test observation is ignored.
+    }
+  });
+  await page.exposeBinding('__recordRuntimeReplayGap', (_source, payload: unknown) => {
+    if (payload === null || typeof payload !== 'object') return;
+    const value = payload as Readonly<{ readonly data?: unknown; readonly lastEventId?: unknown }>;
+    if (typeof value.data !== 'string' || typeof value.lastEventId !== 'string') return;
+    replayGaps.push(Object.freeze({ data: value.data, lastEventId: value.lastEventId }));
+  });
+  await page.addInitScript(() => {
+    const addEventListener = EventSource.prototype.addEventListener;
+    Object.defineProperty(EventSource.prototype, 'addEventListener', { value: function (
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ): void {
+      const wrapped = function (this: EventSource, event: Event): void {
+        const data = (event as Event & Readonly<{ readonly data?: unknown }>).data;
+        if (type === 'runtime.event' && typeof data === 'string') {
+          const record = (globalThis as typeof globalThis & {
+            __recordRuntimeRestartEvent?: (payload: Readonly<{ readonly data: string; readonly lastEventId: string }>) => Promise<void>;
+          }).__recordRuntimeRestartEvent;
+          if (record !== undefined) {
+            void record(Object.freeze({
+              data,
+              lastEventId: (event as Event & Readonly<{ readonly lastEventId?: unknown }>).lastEventId === undefined
+                ? ''
+                : String((event as Event & Readonly<{ readonly lastEventId?: unknown }>).lastEventId),
+            }));
+          }
+        }
+        if (type === 'replay.gap' && typeof data === 'string') {
+          const record = (globalThis as typeof globalThis & {
+            __recordRuntimeReplayGap?: (payload: Readonly<{ readonly data: string; readonly lastEventId: string }>) => Promise<void>;
+          }).__recordRuntimeReplayGap;
+          if (record !== undefined) {
+            void record(Object.freeze({
+              data,
+              lastEventId: (event as Event & Readonly<{ readonly lastEventId?: unknown }>).lastEventId === undefined
+                ? ''
+                : String((event as Event & Readonly<{ readonly lastEventId?: unknown }>).lastEventId),
+            }));
+          }
+        }
+        if (typeof listener === 'function') listener.call(this, event);
+        else listener.handleEvent(event);
+      };
+      Reflect.apply(addEventListener, this, [type, wrapped, options]);
+    } });
+  });
+  page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.origin !== fixture.url) return;
+    if (url.pathname.startsWith('/api/mcp/sessions')) artifactMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
+    if (url.pathname.startsWith('/api/runtime/mcp/sessions')) runtimeMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
+    if (url.pathname === '/api/runtime/runs') {
+      runtimeRunRequests.push(`${request.method()} ${url.pathname}`);
+      if (request.method() === 'POST') runtimeRuns.push({ body: requestBody(request.postData()) });
+    }
+    if (!url.pathname.startsWith('/api/runtime/apps')) return;
+    runtimeAppRequests.push(`${request.method()} ${url.pathname}`);
+    if (request.method() === 'POST' && url.pathname === '/api/runtime/apps') {
+      runtimeAppCreates.push({ body: requestBody(request.postData()), sessionToken: request.headers()['x-agent-bundle-session'] });
+    }
+  });
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.origin === fixture.url && response.request().method() === 'GET' && response.status() === 200 && url.pathname === '/api/project/events') {
+      const streamIndex = projectEventStreams.length;
+      projectEventStreams.push(`${response.request().method()} ${url.pathname}`);
+      void response.request().allHeaders().then((headers) => {
+        projectEventStreamCursors.set(streamIndex, headers['last-event-id'] ?? url.searchParams.get('after') ?? '');
+      }).catch(() => undefined);
+    }
+    if (url.origin !== fixture.url || response.request().method() !== 'POST' || url.pathname !== '/api/runtime/apps') return;
+    const index = runtimeAppCreates.findIndex((candidate) => candidate.response === undefined && JSON.stringify(candidate.body) === response.request().postData());
+    if (index < 0) return;
+    void response.json().then((body: unknown) => {
+      runtimeAppCreates[index]!.response = body;
+      runtimeAppResponseCount += 1;
+      for (const [count, settle] of runtimeAppResponseWaiters) {
+        if (runtimeAppResponseCount >= count) settle();
+      }
+    }).catch(() => undefined);
+  });
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.origin !== fixture.url || response.request().method() !== 'POST' || url.pathname !== '/api/runtime/runs') return;
+    const index = runtimeRuns.findIndex((candidate) => candidate.response === undefined && JSON.stringify(candidate.body) === response.request().postData());
+    if (index < 0) return;
+    void response.json().then((body: unknown) => { runtimeRuns[index]!.response = body; }).catch(() => undefined);
+  });
+  type Binding = Readonly<{
+    readonly definitionDigest: string;
+    readonly id: string;
+    readonly registryRevision: number;
+    readonly runVector: Readonly<{ readonly runtimeGenerationId: string; readonly sourceRevision: string }>;
+    readonly sessionId: string;
+    readonly sessionRevision: number;
+    readonly transportDigest: string;
+  }>;
+  type RunOutcome = Readonly<{
+    readonly diagnostics: readonly Readonly<{ readonly code: string; readonly message: string; readonly phase: string; readonly severity: string }>[];
+    readonly id: string;
+    readonly status: 'failed' | 'succeeded';
+    readonly vector: Readonly<{ readonly runtimeGenerationId: string }>;
+  }>;
+  const binding = (index: number): Binding => {
+    const body = runtimeAppCreates[index]?.response as { readonly preview?: { readonly binding?: Binding } } | undefined;
+    const value = body?.preview?.binding;
+    if (value === undefined) throw new Error(`Runtime App create ${String(index)} omitted its binding.`);
+    return value;
+  };
+  const eventsSince = (index: number, type: string, session: Binding): readonly (typeof runtimeEvents)[number][] => runtimeEvents.slice(index).filter((event) =>
+    event.payload.type === type && event.payload.mcpSessionId === session.sessionId,
+  );
+  type RuntimeStatus = Readonly<{
+    readonly activeVector?: Readonly<{
+      readonly providerSessionId: string;
+      readonly runtimeGenerationId: string;
+    }>;
+    readonly state: string;
+  }>;
+  const readRuntimeStatus = async (): Promise<RuntimeStatus> => page.evaluate(async (origin) => {
+    const response = await fetch(new URL('/api/runtime/status', origin));
+    if (!response.ok) throw new Error(`Runtime status failed with ${String(response.status)}.`);
+    const body = await response.json() as Readonly<{ readonly status?: RuntimeStatus }>;
+    if (body.status === undefined) throw new Error('Runtime status is unavailable.');
+    return body.status;
+  }, fixture.url);
+  const run = async (runCount: number, previewCreateCount?: number): Promise<Readonly<{ readonly binding?: Binding; readonly run: RunOutcome }>> => {
+    const initialAppCreateResponse = runCount === 1 && previewCreateCount !== undefined
+      ? awaitRuntimeAppResponse(previewCreateCount)
+      : undefined;
+    await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    const confirmation = page.getByRole('dialog', { name: 'Run mutable runtime surface?' }).getByRole('button', { name: 'Confirm' });
+    if (await confirmation.count() === 1) await confirmation.click();
+    await expect.poll(() => runtimeRunRequests.filter((request) => request === 'POST /api/runtime/runs').length, { timeout: 15_000 }).toBe(runCount);
+    await expect.poll(() => runtimeRuns.filter((candidate) => candidate.response !== undefined).length, { timeout: 15_000 }).toBe(runCount);
+    const response = runtimeRuns[runCount - 1]?.response as { readonly run?: RunOutcome } | undefined;
+    const outcome = response?.run;
+    if (outcome === undefined || typeof outcome.id !== 'string' || (outcome.status !== 'succeeded' && outcome.status !== 'failed')) {
+      throw new Error('Explicit Runtime run omitted a canonical history result.');
+    }
+    let appCreateResponse = initialAppCreateResponse;
+    if (runCount > 1) {
+      await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe((previewCreateCount ?? 3) - 1);
+      const runId = outcome.id;
+      const history = page.locator(`[data-runtime-run-id="${runId}"]`);
+      await expect(history).toHaveCount(1, { timeout: 15_000 });
+      if (outcome.status === 'succeeded' && previewCreateCount !== undefined) appCreateResponse = awaitRuntimeAppResponse(previewCreateCount);
+      await history.getByRole('button').first().click();
+      await expect(history.getByRole('button').first()).toHaveAttribute('aria-pressed', 'true');
+    }
+    if (appCreateResponse === undefined) return Object.freeze({ run: outcome });
+    await appCreateResponse;
+    if (previewCreateCount === undefined) throw new Error('Runtime App preview response lacks a create count.');
+    expect(runtimeAppCreates).toHaveLength(previewCreateCount);
+    expect(runtimeAppCreates.filter((candidate) => candidate.response !== undefined)).toHaveLength(previewCreateCount);
+    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
+    expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(1);
+    return Object.freeze({ binding: binding(previewCreateCount - 1), run: outcome });
+  };
+  try {
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    const runtimeIdentity = page.locator('[data-runtime-provider-session]');
+    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
+    await page.getByLabel('Runtime surface').selectOption('mcp.render_edit_timeline');
+    await page.getByLabel('Runtime target').selectOption('portable');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await page.locator('#runtime-input-raw').fill('{}');
+
+    const initialResult = await run(1, 1);
+    const initial = initialResult.binding;
+    if (initial === undefined) throw new Error('Initial Runtime run did not create an App binding.');
+    expect(runtimeAppCreates[0]?.body).toEqual({
+      expectedGenerationId: initial.runVector.runtimeGenerationId,
+      profileId: 'portable',
+      runId: expect.any(String),
+    });
+    const resourceUri = 'ui://rsc-agent-runtime/edit-timeline-v1.html';
+    const resourceOperationPath = `/api/runtime/apps/${encodeURIComponent(initial.id)}/operations`;
+    const initialSessionToken = runtimeAppCreates[0]?.sessionToken;
+    if (initialSessionToken === undefined) throw new Error('Initial Runtime App create omitted the foreground session token.');
+    const initialProviderSession = await runtimeIdentity.getAttribute('data-runtime-provider-session');
+    if (initialProviderSession === null) throw new Error('Runtime identity omitted the provider session.');
+    const definitionSource = await readFile(fixture.definitionSource, 'utf8');
+    const changedDefinitionDescription = `Render the timeline after definition restart ${Math.random().toString(36).slice(2)}.`;
+    const changedDefinition = definitionSource.replace(
+      "description: 'Render the interactive file edit timeline.'",
+      `description: '${changedDefinitionDescription}'`,
+    );
+    expect(changedDefinition).not.toBe(definitionSource);
+    const definitionEventStart = runtimeEvents.length;
+    await writeFile(fixture.definitionSource, changedDefinition);
+    await expect.poll(() => eventsSince(definitionEventStart, 'runtime.mcp.restarting', initial), { timeout: 15_000 }).not.toEqual([]);
+    await expect.poll(() => eventsSince(definitionEventStart, 'runtime.mcp.ready', initial), { timeout: 15_000 }).not.toEqual([]);
+    expect(runtimeEvents.findIndex((event, index) => index >= definitionEventStart && event.payload.type === 'runtime.mcp.restarting')).toBeLessThan(
+      runtimeEvents.findIndex((event, index) => index >= definitionEventStart && event.payload.type === 'runtime.mcp.ready'),
+    );
+    await expect.poll(() => runtimeEvents.slice(definitionEventStart).find((event) =>
+      event.payload.type === 'runtime.app.updated' && event.payload.details?.bindingId === initial.id &&
+      event.payload.details.reason === 'session-restarted' && event.payload.details.state === 'revoked'), { timeout: 15_000 }).toBeDefined();
+    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'detached', timeout: 15_000 });
+    expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(0);
+    expect(runtimeAppRequests.filter((request) => request === `DELETE /api/runtime/apps/${encodeURIComponent(initial.id)}`)).toEqual([]);
+    const revokedInitialOperation = await page.evaluate(async ({ body, path, sessionToken }) => {
+      const response = await fetch(path, {
+        body: JSON.stringify(body),
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-agent-bundle-session': sessionToken },
+        method: 'POST',
+      });
+      return Object.freeze({ body: await response.json(), status: response.status });
+    }, { body: { kind: 'resources/read', uri: resourceUri }, path: resourceOperationPath, sessionToken: initialSessionToken });
+    expect(revokedInitialOperation).toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'Runtime MCP App preview was revoked.' } },
+      status: 410,
+    });
+    await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe(1);
+    const definitionReady = eventsSince(definitionEventStart, 'runtime.mcp.ready', initial).at(-1);
+    expect(definitionReady?.payload.mcpSessionRevision).toBeGreaterThan(initial.sessionRevision);
+    expect(definitionReady?.payload.mcpRegistryRevision).toBeGreaterThan(initial.registryRevision);
+
+    const definitionResult = await run(2, 2);
+    const definitionRun = definitionResult.binding;
+    if (definitionRun === undefined) throw new Error('Definition Runtime run did not create an App binding.');
+    expect(definitionRun.id).not.toBe(initial.id);
+    expect(definitionRun.sessionId).toBe(initial.sessionId);
+    expect(definitionRun.sessionRevision).toBeGreaterThan(initial.sessionRevision);
+    expect(definitionRun.registryRevision).toBeGreaterThan(initial.registryRevision);
+    expect(definitionRun.runVector.runtimeGenerationId).not.toBe(initial.runVector.runtimeGenerationId);
+    expect(definitionRun.runVector.sourceRevision).not.toBe(initial.runVector.sourceRevision);
+    expect(definitionRun.definitionDigest).not.toBe(initial.definitionDigest);
+    expect(definitionRun.transportDigest).toBe(initial.transportDigest);
+    expect(await runtimeIdentity.getAttribute('data-runtime-provider-session')).toBe(initialProviderSession);
+
+    const configSource = await readFile(fixture.configSource, 'utf8');
+    const transportMarker = `transport-restart-${Math.random().toString(36).slice(2)}`;
+    const changedTransport = configSource.replace(
+      "entry: './src/mcp/stdio.ts',",
+      `entry: './src/mcp/stdio.ts',\n        env: { TIMELINE_TRANSPORT_SENTINEL: '${transportMarker}' },`,
+    );
+    expect(changedTransport).not.toBe(configSource);
+    const transportEventStart = runtimeEvents.length;
+    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 })
+      .toBe(serverOwnedProjectSubscriptions + 1);
+    await page.locator('.connection-content').evaluate((element) => {
+      element.setAttribute('data-recovery-probe', 'same-instance');
+    });
+    await page.context().setOffline(true);
+    fixture.disconnectProjectEventStream();
+    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 })
+      .toBe(serverOwnedProjectSubscriptions);
+    await writeFile(fixture.configSource, changedTransport);
+    const definitionOperationPath = `/api/runtime/apps/${encodeURIComponent(definitionRun.id)}/operations`;
+    await expect.poll(async () => {
+      const response = await fetch(new URL(definitionOperationPath, fixture.url), {
+        body: JSON.stringify({ kind: 'resources/read', uri: resourceUri }),
+        headers: {
+          'content-type': 'application/json',
+          origin: fixture.url,
+          'x-agent-bundle-session': initialSessionToken,
+        },
+        method: 'POST',
+      });
+      return Object.freeze({ body: await response.json(), status: response.status });
+    }, { timeout: 15_000 }).toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'Runtime MCP App preview was revoked.' } },
+      status: 410,
+    });
+    await expect.poll(async () => {
+      const response = await fetch(new URL('/api/runtime/status', fixture.url), {
+        headers: { origin: fixture.url, 'x-agent-bundle-session': initialSessionToken },
+      });
+      if (!response.ok) return false;
+      const body = await response.json() as Readonly<{ readonly status?: RuntimeStatus }>;
+      return body.status?.state === 'active' && body.status.activeVector?.providerSessionId === initialProviderSession;
+    }, { timeout: 15_000 }).toBe(true);
+    const sequenceBeforeReplayNoise = fixture.eventHubState.latestSequence;
+    fixture.publishReplayNoise();
+    expect(fixture.eventHubState.latestSequence).toBe(sequenceBeforeReplayNoise + 257);
+    await page.context().setOffline(false);
+    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 })
+      .toBe(serverOwnedProjectSubscriptions + 1);
+    await expect.poll(() => projectEventStreams, { timeout: 15_000 }).toEqual([
+      'GET /api/project/events',
+      'GET /api/project/events',
+    ]);
+    await expect.poll(() => projectEventStreamCursors.size, { timeout: 15_000 }).toBe(2);
+    expect(projectEventStreamCursors.get(0)).toBe('');
+    const reconnectCursor = projectEventStreamCursors.get(1);
+    if (reconnectCursor === undefined || !/^(0|[1-9]\d*)$/u.test(reconnectCursor)) {
+      throw new Error('Replacement EventSource did not carry a canonical replay cursor.');
+    }
+    await expect.poll(() => replayGaps.length, { timeout: 15_000 }).toBe(1);
+    const replayGap = replayGaps[0];
+    if (replayGap === undefined) throw new Error('Project EventSource did not deliver a replay gap.');
+    // The replacement source is seeded by its query, while an id-less gap leaves the
+    // browser-owned Last-Event-ID empty until the first sequenced frame arrives.
+    expect(replayGap.lastEventId).toBe('');
+    expect(JSON.parse(replayGap.data)).toMatchObject({
+      latestDroppedSequence: expect.any(Number),
+      requestedAfterSequence: Number(reconnectCursor),
+      type: 'replay.gap',
+    });
+    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'detached', timeout: 15_000 });
+    expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(0);
+    await expect(page.locator('.connection-content')).toHaveAttribute('data-recovery-probe', 'same-instance');
+    await expect(page.getByText('Interactive App rendering is unavailable (registry-replay-gap). Showing the ordinary tool result instead.')).toBeVisible();
+    expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toEqual([]);
+    await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe(2);
+
+    const runButton = page.getByRole('button', { name: 'Run', exact: true });
+    await expect.poll(async () => {
+      const status = await readRuntimeStatus();
+      const latestActivation = runtimeEvents.slice(transportEventStart).filter((event) =>
+        event.payload.type === 'runtime.generation.activated' && typeof event.payload.runtimeGenerationId === 'string'
+      ).at(-1);
+      const activatedGeneration = latestActivation?.payload.runtimeGenerationId;
+      const statusGeneration = status.activeVector?.runtimeGenerationId;
+      const uiGeneration = await runtimeIdentity.getAttribute('data-runtime-generation');
+      return (await runButton.isEnabled()) && statusGeneration !== undefined && statusGeneration === uiGeneration &&
+        (activatedGeneration === undefined || activatedGeneration === statusGeneration);
+    }, { timeout: 15_000 }).toBe(true);
+    const authoritativeStatus = await readRuntimeStatus();
+    const activeGenerationId = authoritativeStatus.activeVector?.runtimeGenerationId;
+    if (typeof activeGenerationId !== 'string') throw new Error('Transport restart did not expose an active runtime generation.');
+    expect(authoritativeStatus.state).toBe('active');
+    expect(authoritativeStatus.activeVector?.providerSessionId).toBe(initialProviderSession);
+    expect(await runtimeIdentity.getAttribute('data-runtime-generation')).toBe(activeGenerationId);
+    await expect(runButton).toBeEnabled();
+
+    const firstTransportResult = await run(3, 3);
+    let transportRun: Binding | undefined = firstTransportResult.binding;
+    if (firstTransportResult.run.status === 'failed') {
+      const conflict = firstTransportResult.run.diagnostics.find((diagnostic) => diagnostic.phase === 'rsc-render');
+      expect(conflict?.code).toBe('AB8203');
+      expect(conflict?.message).toBe(`Expected runtime generation ${JSON.stringify(firstTransportResult.run.vector.runtimeGenerationId)} is not active.`);
+      await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe(2);
+      expect(runtimeRunRequests.filter((request) => request === 'POST /api/runtime/runs')).toHaveLength(3);
+      await expect(page.locator('#runtime-input-raw')).toHaveValue('{}');
+      await expect(runButton).toBeEnabled();
+      const failedGenerationId = firstTransportResult.run.vector.runtimeGenerationId;
+      let stableSnapshots = 0;
+      let stableGenerationId: string | undefined;
+      await expect.poll(async () => {
+        const status = await readRuntimeStatus();
+        const generationId = status.activeVector?.runtimeGenerationId;
+        const uiGeneration = await runtimeIdentity.getAttribute('data-runtime-generation');
+        const runEnabled = await runButton.isEnabled();
+        if (!runEnabled || generationId === undefined || uiGeneration !== generationId) {
+          stableSnapshots = 0;
+          stableGenerationId = undefined;
+          return 0;
+        }
+        stableSnapshots = stableGenerationId === generationId ? stableSnapshots + 1 : 1;
+        stableGenerationId = generationId;
+        return stableSnapshots;
+      }, { interval: 200, timeout: 15_000 }).toBeGreaterThanOrEqual(3);
+      expect(stableGenerationId).toBe(failedGenerationId);
+      const retryResult = await run(4, 3);
+      expect(retryResult.run.status).toBe('succeeded');
+      transportRun = retryResult.binding;
+    }
+    if (transportRun === undefined) throw new Error('Transport Runtime run did not create an App binding.');
+    expect(transportRun.id).not.toBe(definitionRun.id);
+    expect(transportRun.sessionId).toBe(initial.sessionId);
+    expect(transportRun.sessionRevision).toBeGreaterThan(definitionRun.sessionRevision);
+    expect(transportRun.registryRevision).toBeGreaterThan(definitionRun.registryRevision);
+    await expect.poll(async () => {
+      const status = await readRuntimeStatus();
+      return status.activeVector?.runtimeGenerationId === transportRun.runVector.runtimeGenerationId &&
+        await runtimeIdentity.getAttribute('data-runtime-generation') === transportRun.runVector.runtimeGenerationId;
+    }, { timeout: 15_000 }).toBe(true);
+    const finalRuntimeStatus = await readRuntimeStatus();
+    expect(transportRun.runVector.runtimeGenerationId).toBe(finalRuntimeStatus.activeVector?.runtimeGenerationId);
+    expect(transportRun.definitionDigest).toBe(definitionRun.definitionDigest);
+    expect(transportRun.transportDigest).not.toBe(definitionRun.transportDigest);
+    expect(await runtimeIdentity.getAttribute('data-runtime-provider-session')).toBe(initialProviderSession);
+    expect(artifactMcpSessionRequests).toEqual([]);
+    expect(runtimeMcpSessionRequests.filter((request) => request === 'POST /api/runtime/mcp/sessions')).toEqual([]);
+    expect(projectEventStreams).toEqual([
+      'GET /api/project/events',
+      'GET /api/project/events',
+    ]);
+    expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(1);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
 e2e('opens one real epoch MCP session and keeps its playground operations responsive', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
   let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
@@ -139,10 +1169,13 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
       port: 0,
       root: project.root,
     });
-    const foregroundOrigin = server.url;
+    const serverUrl = server.url;
+    const serverOrigin = new URL(serverUrl).origin;
     const artifact = server.status().artifact;
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
     const epochId = artifact.activeEpoch.id;
+    const modelDigest = artifact.activeEpoch.modelDigest;
+    await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
     const manifest = JSON.parse(await readFile(join(project.root, '.agent-bundle', 'epochs', epochId, 'portable', 'mcp.json'), 'utf8')) as {
       readonly mcpServers: Readonly<{
         readonly fixture: Readonly<{ readonly args?: readonly string[]; readonly command: string }>;
@@ -151,13 +1184,26 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     const compiledEntry = manifest.mcpServers.fixture.args?.[0];
     if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
     const pageErrors: Error[] = [];
+    const artifactMcpSessionRequests: string[] = [];
+    const projectEventRequests: string[] = [];
+    const runtimeRequests: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${foregroundOrigin}#mcp`);
+    page.on('request', (request) => {
+      const requestUrl = new URL(request.url());
+      if (requestUrl.origin !== serverOrigin) return;
+      if (requestUrl.pathname.startsWith('/api/mcp/sessions')) {
+        artifactMcpSessionRequests.push(`${request.method()} ${requestUrl.pathname}`);
+      }
+      if (requestUrl.pathname === '/api/project/events') projectEventRequests.push(`${request.method()} ${requestUrl.pathname}`);
+      if (requestUrl.pathname.startsWith('/api/runtime/')) runtimeRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    });
+    await page.goto(`${serverUrl}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    expect(await page.locator('a[href="#runtime"]').count()).toBe(0);
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
-      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST');
+      response.url() === `${serverUrl}/api/mcp/sessions` && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     const openedSession = await (await opened).json() as { readonly session: Readonly<{
       readonly binding: Readonly<{ readonly epochId: string; readonly serverName: string; readonly target: string }>;
@@ -209,7 +1255,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
       }>;
       return trace.direction === 'client' && trace.kind === 'frame' && trace.message?.jsonrpc === '2.0' &&
         trace.message.method === 'tools/call' && trace.message.params?.name === 'echo' &&
-        trace.message.params.arguments?.message === 'equivalent' && trace.sequence !== undefined &&
+        trace.message.params.arguments?.message === 'equivalent' && typeof trace.sequence === 'number' &&
         Number.isSafeInteger(trace.sequence) && trace.sequence > 0;
     }), { timeout: browserTimeout }).toBe(true);
 
@@ -251,11 +1297,37 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
     await expect(history).toContainText('No completed invocations yet.', { timeout: browserTimeout });
     const reopened = page.waitForResponse((response) =>
-      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST');
+      response.url() === `${serverUrl}/api/mcp/sessions` && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     const reopenedSession = await (await reopened).json() as { readonly session: Readonly<{ readonly id: string }> };
     expect(reopenedSession.session.id).not.toBe(openedSession.session.id);
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+
+    const initialConfigValue = 'artifact-extension-initial';
+    const changedConfigValue = `artifact-extension-${Math.random().toString(36).slice(2)}`;
+    const configPath = join(project.root, 'agent-bundle.config.ts');
+    const sourceConfig = await readFile(configPath, 'utf8');
+    const changedConfig = sourceConfig.replace(initialConfigValue, changedConfigValue);
+    expect(changedConfig).not.toBe(sourceConfig);
+    await writeFile(configPath, changedConfig);
+    await expect.poll(() => {
+      const next = server!.status().artifact;
+      return next.state === 'active' && next.activeEpoch.id !== epochId && next.activeEpoch.modelDigest !== modelDigest
+        ? next.activeEpoch
+        : undefined;
+    }, { timeout: 15_000 }).toEqual(expect.objectContaining({ modelDigest: expect.any(String) }));
+    const changedArtifact = server.status().artifact;
+    if (changedArtifact.state === 'missing') throw new Error('Registered extension update removed the active artifact epoch.');
+    expect(changedArtifact.activeEpoch.id).not.toBe(epochId);
+    expect(changedArtifact.activeEpoch.modelDigest).not.toBe(modelDigest);
+    await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
+    expect(await page.locator('body').textContent()).not.toContain(initialConfigValue);
+    expect(await page.locator('body').textContent()).not.toContain(changedConfigValue);
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible();
+    expect(artifactMcpSessionRequests).toContain('POST /api/mcp/sessions');
+    expect(artifactMcpSessionRequests.some((request) => request.startsWith('POST /api/mcp/sessions/'))).toBe(true);
+    expect(runtimeRequests).toEqual([]);
+    expect(projectEventRequests).toEqual(['GET /api/project/events']);
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
@@ -284,7 +1356,7 @@ e2e('renders the safe launch configuration for one real artifact MCP session', {
       port: 0,
       root: project.root,
     });
-    const foregroundOrigin = server.url;
+    const serverUrl = server.url;
     const artifact = server.status().artifact;
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
     const epochId = artifact.activeEpoch.id;
@@ -297,12 +1369,12 @@ e2e('renders the safe launch configuration for one real artifact MCP session', {
     if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${foregroundOrigin}#mcp`);
+    await page.goto(`${serverUrl}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
-      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST');
+      response.url() === `${serverUrl}/api/mcp/sessions` && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     await opened;
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
@@ -544,14 +1616,19 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
   try {
     await page.goto(server.url);
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
-    await page.route('**/api/project/status', (route) => route.fulfill({
-      body: JSON.stringify({ diagnostic: { code: 'AB8007', message: 'Request could not be completed.' } }),
-      contentType: 'application/json',
-      status: 500,
-    }));
+    let failedStatusRequests = 0;
+    await page.route('**/api/project/status', async (route) => {
+      failedStatusRequests += 1;
+      await route.fulfill({
+        body: JSON.stringify({ diagnostic: { code: 'AB8007', message: 'Request could not be completed.' } }),
+        contentType: 'application/json',
+        status: 500,
+      });
+    });
 
     await page.getByRole('button', { name: 'Rebuild' }).click();
 
+    await expect.poll(() => failedStatusRequests, { timeout: browserTimeout }).toBe(1);
     await expect(page.getByRole('status')).toContainText('Foreground server unavailable', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
@@ -618,15 +1695,22 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+    await page.locator('.connection-content').evaluate((element) => {
+      element.setAttribute('data-recovery-probe', 'foreground-a');
+    });
 
     const port = Number(new URL(server.url).port);
     await server.close();
     await expect(page.getByRole('heading', { name: 'Foreground connection unavailable' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'Overview' })).toBeHidden();
-    await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeHidden();
+    const retainedNavigation = page.getByRole('link', { name: 'Overview' });
+    await expect(page.locator('.connection-content')).toHaveAttribute('inert', '');
+    await expect(retainedNavigation).toBeVisible();
+    await retainedNavigation.focus();
+    expect(await retainedNavigation.evaluate((element) => element === document.activeElement)).toBe(false);
 
     server = await startRestartableServer(port);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.connection-content')).not.toHaveAttribute('data-recovery-probe', 'foreground-a');
     await expect(page.locator('#mcp-target')).toHaveValue('');
     await expect(page.locator('#mcp-server-name')).toHaveValue('');
     await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
@@ -638,9 +1722,12 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
     const rebuild = page.getByRole('button', { name: 'Rebuild' });
     const rebuildRequest = page.waitForRequest((request) =>
       request.method() === 'POST' && request.url() === `${server.url}/api/project/rebuild`);
+    const rebuildResponse = page.waitForResponse((response) =>
+      response.request().method() === 'POST' && response.url() === `${server.url}/api/project/rebuild`, { timeout: 60_000 });
     await rebuild.click();
     expect((await rebuildRequest).headers()['x-agent-bundle-session']).toBe('foreground-token-b');
-    await expect(rebuild).toBeEnabled({ timeout: browserTimeout });
+    expect((await rebuildResponse).status()).toBe(200);
+    await expect(rebuild).toBeEnabled({ timeout: 60_000 });
     expect(pageErrors).toEqual([]);
   } finally {
     await Promise.allSettled([server.close()]);

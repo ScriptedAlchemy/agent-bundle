@@ -13,6 +13,8 @@ const runCommand = promisify(execFile);
 
 /** Server-owned result identity; authored graders and expectations may never claim it. */
 export const claudeSemanticGraderId = 'claude-semantic';
+/** Revision of the server-owned semantic grader request/result contract. */
+export const claudeSemanticGraderContractRevision = 'v1';
 
 export interface EvalGraderContext {
   readonly artifactRoot: string;

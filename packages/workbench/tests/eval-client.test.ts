@@ -1,6 +1,8 @@
 import { expect, it } from '@rstest/core';
 
+import { ComparisonClient } from '../src/comparisons/comparison-client.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 
 interface RecordedRequest {
   readonly body: unknown;
@@ -67,6 +69,14 @@ const trialRecord = {
 
 const runResult = { aggregates: [], diagnostics: [], run: runRecord, trials: [trialRecord] };
 
+const comparison = {
+  baselineRunId: runRecord.id,
+  candidateRunId: runRecord.id,
+  rows: [],
+  sampleSize: 1,
+  summary: { comparable: 0, nonComparable: 0, reliability: 0, smoke: 0 },
+};
+
 const listing = {
   diagnostics: [],
   suites: [{
@@ -91,7 +101,11 @@ const listing = {
 const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
   async (input, init) => {
     const url = String(input);
-    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    if (url === '/api/project/session') return response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
+    });
     calls.push({
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
       method: init?.method ?? 'GET',
@@ -101,11 +115,15 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
     return reply();
   };
 
+const client = (fetch: typeof globalThis.fetch): EvalClient => new EvalClient({
+  foreground: new ForegroundRouteClient({ fetch }),
+});
+
 it('lists discovered suites over the same foreground session', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new EvalClient({ fetch: recordingFetch(calls, () => response(listing)) });
+  const evalClient = client(recordingFetch(calls, () => response(listing)));
 
-  await expect(client.suites()).resolves.toMatchObject({
+  await expect(evalClient.suites()).resolves.toMatchObject({
     suites: [{
       cases: [{ assertions: [{ kind: 'outcome' }, { kind: 'skill-activation', skill: 'review' }] }],
       name: 'review-change',
@@ -116,9 +134,9 @@ it('lists discovered suites over the same foreground session', async () => {
 
 it('admits a run with the selected closed harness and keeps the response detached', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ run: runRecord }, 202)) });
+  const evalClient = client(recordingFetch(calls, () => response({ run: runRecord }, 202)));
 
-  await expect(client.start({ caseIds: ['reads-result'], harness: 'codex', suites: ['review-change'], trials: 2 }))
+  await expect(evalClient.start({ caseIds: ['reads-result'], harness: 'codex', suites: ['review-change'], trials: 2 }))
     .resolves.toMatchObject({ run: { id: runRecord.id } });
   expect(calls).toEqual([{
     body: { caseIds: ['reads-result'], harness: 'codex', suites: ['review-change'], trials: 2 },
@@ -130,22 +148,22 @@ it('admits a run with the selected closed harness and keeps the response detache
 
 it('omits an absent selection field instead of sending an empty one', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ run: runRecord }, 202)) });
+  const evalClient = client(recordingFetch(calls, () => response({ run: runRecord }, 202)));
 
-  await client.start({ suites: ['review-change'] });
+  await evalClient.start({ suites: ['review-change'] });
 
   expect(calls[0]?.body).toEqual({ suites: ['review-change'] });
 });
 
 it('requires the documented 202 admission status', async () => {
-  const client = new EvalClient({ fetch: recordingFetch([], () => response({ run: runRecord })) });
+  const evalClient = client(recordingFetch([], () => response({ run: runRecord })));
 
-  await expect(client.start({ suites: ['review-change'] })).rejects.toMatchObject({ code: 'AB8073' });
+  await expect(evalClient.start({ suites: ['review-change'] })).rejects.toMatchObject({ code: 'AB8073' });
 });
 
 it('rejects malformed detached admission and cancellation DTOs', async () => {
-  const admission = new EvalClient({ fetch: recordingFetch([], () => response({ run: runRecord, trials: [] }, 202)) });
-  const cancellation = new EvalClient({ fetch: recordingFetch([], () => response({ cancelled: true, runId: 'other-run' }, 202)) });
+  const admission = client(recordingFetch([], () => response({ run: runRecord, trials: [] }, 202)));
+  const cancellation = client(recordingFetch([], () => response({ cancelled: true, runId: 'other-run' }, 202)));
 
   await expect(admission.start({ suites: ['review-change'] })).rejects.toMatchObject({ code: 'AB8073' });
   await expect(cancellation.cancel(runRecord.id)).rejects.toMatchObject({ code: 'AB8073' });
@@ -153,9 +171,9 @@ it('rejects malformed detached admission and cancellation DTOs', async () => {
 
 it('posts an exact empty body to cancel a server-owned run and decodes the idempotent result', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ cancelled: false, runId: runRecord.id }, 202)) });
+  const evalClient = client(recordingFetch(calls, () => response({ cancelled: false, runId: runRecord.id }, 202)));
 
-  await expect(client.cancel(runRecord.id)).resolves.toEqual({ cancelled: false, runId: runRecord.id });
+  await expect(evalClient.cancel(runRecord.id)).resolves.toEqual({ cancelled: false, runId: runRecord.id });
   expect(calls).toEqual([{
     body: {},
     method: 'POST',
@@ -164,19 +182,45 @@ it('posts an exact empty body to cancel a server-owned run and decodes the idemp
   }]);
 });
 
+it('rejects a cancellation response for another run', async () => {
+  const evalClient = client(recordingFetch([], () => response({ cancelled: true, runId: 'another-run' }, 202)));
+
+  await expect(evalClient.cancel(runRecord.id)).rejects.toMatchObject({ code: 'AB8073' });
+});
+
 it('reads one recorded run and lists every recorded run', async () => {
   const calls: RecordedRequest[] = [];
   let reply = 0;
-  const client = new EvalClient({
-    fetch: recordingFetch(calls, () => response(reply++ === 0 ? { run: runResult } : { runs: [runRecord] })),
-  });
+  const evalClient = client(
+    recordingFetch(calls, () => response(reply++ === 0 ? { run: runResult } : { runs: [runRecord] })),
+  );
 
-  await expect(client.read('20260817t000000000z-abcdef01')).resolves.toMatchObject({ trials: [{ id: 'portable-1' }] });
-  await expect(client.runs()).resolves.toMatchObject([{ id: runRecord.id }]);
+  await expect(evalClient.read('20260817t000000000z-abcdef01')).resolves.toMatchObject({ trials: [{ id: 'portable-1' }] });
+  await expect(evalClient.runs()).resolves.toMatchObject([{ id: runRecord.id }]);
   expect(calls.map((call) => call.url)).toEqual([
     '/api/evals/runs/20260817t000000000z-abcdef01',
     '/api/evals/runs',
   ]);
+});
+
+it('decodes automatic invocation Skill provenance without weakening identifier safety', async () => {
+  const resultWithSkill = (skill: string) => ({
+    run: {
+      ...runResult,
+      trials: [{
+        ...trialRecord,
+        provenance: { ...trialRecord.provenance, invocation: { mode: 'automatic', skill } },
+      }],
+    },
+  });
+
+  await expect(client(recordingFetch([], () => response(resultWithSkill('release-notes')))).read(runRecord.id))
+    .resolves.toMatchObject({ trials: [{ provenance: { invocation: { mode: 'automatic', skill: 'release-notes' } } }] });
+
+  for (const skill of ['../outside', 'C:private', 'C:\\private', 'C:/private', '\\\\server\\share', 'file:///private/skill']) {
+    await expect(client(recordingFetch([], () => response(resultWithSkill(skill)))).read(runRecord.id))
+      .rejects.toMatchObject({ code: 'AB8073' });
+  }
 });
 
 it('requires canonical trial provenance while allowing omitted usage', async () => {
@@ -186,39 +230,64 @@ it('requires canonical trial provenance while allowing omitted usage', async () 
     { run: { ...runResult, trials: [withoutProvenance] } },
     { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, extra: true } }] } },
     { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, hostCliVersion: '/private/cli' } }] } },
+    ...['C:private', 'C:\\private', 'C:/private', '\\\\server\\share', 'file:///private/cli'].map((hostCliVersion) => ({
+      run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, hostCliVersion } }] },
+    })),
     { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, invocation: { mode: 'explicit' } } }] } },
+    { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6' } } }] } },
+    { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, semanticGrader: { contractRevision: 'C:private', id: 'claude-semantic', model: 'claude-opus-4-6' } } }] } },
     { run: { ...runResult, trials: [{ ...trialRecord, usage: { inputTokens: 9, outputTokens: -1 } }] } },
   ];
 
-  const usageOptional = new EvalClient({ fetch: recordingFetch([], () => response({
+  const usageOptional = client(recordingFetch([], () => response({
     run: { ...runResult, trials: [withoutUsage] },
-  })) });
+  })));
   const resultWithoutUsage = await usageOptional.read(runRecord.id);
   expect(resultWithoutUsage.trials[0]).toMatchObject({ id: trialRecord.id, provenance: trialRecord.provenance });
   expect(resultWithoutUsage.trials[0]).not.toHaveProperty('usage');
 
-  const unrecorded = new EvalClient({ fetch: recordingFetch([], () => response({
+  const unrecorded = client(recordingFetch([], () => response({
     run: {
       ...runResult,
       trials: [{
         ...trialRecord,
-        provenance: { ...trialRecord.provenance, semanticGrader: { state: 'unrecorded' } },
+        provenance: {
+          ...trialRecord.provenance,
+          invocation: { mode: 'explicit', skill: 'hook:fixture' },
+          semanticGrader: { state: 'unrecorded' },
+        },
       }],
     },
-  })) });
+  })));
   await expect(unrecorded.read(runRecord.id)).resolves.toMatchObject({
-    trials: [{ provenance: { semanticGrader: { state: 'unrecorded' } } }],
+    trials: [{ provenance: { invocation: { mode: 'explicit', skill: 'hook:fixture' }, semanticGrader: { state: 'unrecorded' } } }],
+  });
+
+  const recordedGrader = client(recordingFetch([], () => response({
+    run: {
+      ...runResult,
+      trials: [{
+        ...trialRecord,
+        provenance: {
+          ...trialRecord.provenance,
+          semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-6' },
+        },
+      }],
+    },
+  })));
+  await expect(recordedGrader.read(runRecord.id)).resolves.toMatchObject({
+    trials: [{ provenance: { semanticGrader: { contractRevision: 'v1' } } }],
   });
 
   for (const body of cases) {
-    const client = new EvalClient({ fetch: recordingFetch([], () => response(body)) });
-    await expect(client.read(runRecord.id)).rejects.toMatchObject({ code: 'AB8073' });
+    const evalClient = client(recordingFetch([], () => response(body)));
+    await expect(evalClient.read(runRecord.id)).rejects.toMatchObject({ code: 'AB8073' });
   }
 });
 
 it('replays only a detached, contiguous persisted event timeline from its cursor', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({
+  const evalClient = client(recordingFetch(calls, () => response({
     replay: {
       cursor: { afterSequence: 2 },
       events: [
@@ -226,9 +295,9 @@ it('replays only a detached, contiguous persisted event timeline from its cursor
         { kind: 'trial.completed', payload: { outcome: 'pass' }, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
       ],
     },
-  })) });
+  })));
 
-  const replay = await client.events(runRecord.id, 0);
+  const replay = await evalClient.events(runRecord.id, 0);
 
   expect(replay.cursor).toEqual({ afterSequence: 2 });
   expect(replay.events.map((event) => event.sequence)).toEqual([1, 2]);
@@ -238,23 +307,16 @@ it('replays only a detached, contiguous persisted event timeline from its cursor
 });
 
 it('rejects a duplicate-key or reordered event replay instead of retaining a hostile response object', async () => {
-  const duplicate = new EvalClient({
-    fetch: async (input) => String(input) === '/api/project/session'
-      ? response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
-      : new Response('{"replay":{"cursor":{"afterSequence":1},"events":[{"kind":"run.started","payload":{},"sequence":1,"sequence":2,"timestamp":"2026-08-17T00:00:00.000Z"}]}}', {
-        headers: { 'content-type': 'application/json' },
-      }),
-  });
-  const reordered = new EvalClient({
-    fetch: async (input) => String(input) === '/api/project/session'
-      ? response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
-      : response({ replay: {
-        cursor: { afterSequence: 2 },
-        events: [
-          { kind: 'trial.completed', payload: {}, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
-        ],
-      } }),
-  });
+  const duplicate = client(recordingFetch([], () => new Response(
+    '{"replay":{"cursor":{"afterSequence":1},"events":[{"kind":"run.started","payload":{},"sequence":1,"sequence":2,"timestamp":"2026-08-17T00:00:00.000Z"}]}}',
+    { headers: { 'content-type': 'application/json' } },
+  )));
+  const reordered = client(recordingFetch([], () => response({ replay: {
+    cursor: { afterSequence: 2 },
+    events: [
+      { kind: 'trial.completed', payload: {}, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
+    ],
+  } })));
 
   await expect(duplicate.events(runRecord.id, 0)).rejects.toMatchObject({ code: 'AB8073' });
   await expect(reordered.events(runRecord.id, 0)).rejects.toMatchObject({ code: 'AB8073' });
@@ -271,35 +333,37 @@ it('decodes fragmented NDJSON in sequence and aborts a replacement stream withou
   let cancelled = false;
   let opened!: () => void;
   const replacementOpened = new Promise<void>((resolvePromise) => { opened = resolvePromise; });
-  const client = new EvalClient({
-    fetch: async (input) => {
-      const url = String(input);
-      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
-      streamCalls += 1;
-      if (streamCalls === 1) {
-        return new Response(new ReadableStream<Uint8Array>({
-          start: (controller) => {
-            const bytes = encoder.encode(frames);
-            controller.enqueue(bytes.subarray(0, 11));
-            controller.enqueue(bytes.subarray(11));
-            controller.close();
-          },
-        }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
-      }
+  const evalClient = client(async (input) => {
+    const url = String(input);
+    if (url === '/api/project/session') return response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
+    });
+    streamCalls += 1;
+    if (streamCalls === 1) {
       return new Response(new ReadableStream<Uint8Array>({
-        cancel: () => { cancelled = true; },
-        pull: () => {
-          opened();
-          return new Promise<void>(() => undefined);
+        start: (controller) => {
+          const bytes = encoder.encode(frames);
+          controller.enqueue(bytes.subarray(0, 11));
+          controller.enqueue(bytes.subarray(11));
+          controller.close();
         },
       }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
-    },
+    }
+    return new Response(new ReadableStream<Uint8Array>({
+      cancel: () => { cancelled = true; },
+      pull: () => {
+        opened();
+        return new Promise<void>(() => undefined);
+      },
+    }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
   });
   const events: number[] = [];
-  const complete = client.stream({ afterSequence: 0, onEvent: (event) => { events.push(event.sequence); }, runId: runRecord.id });
+  const complete = evalClient.stream({ afterSequence: 0, onEvent: (event) => { events.push(event.sequence); }, runId: runRecord.id });
   await complete.done;
   expect(events).toEqual([1, 2]);
-  const replacement = client.stream({ afterSequence: 2, onEvent: () => { throw new Error('An aborted stream must not publish.'); }, runId: runRecord.id });
+  const replacement = evalClient.stream({ afterSequence: 2, onEvent: () => { throw new Error('An aborted stream must not publish.'); }, runId: runRecord.id });
   await replacementOpened;
   replacement.close();
   await replacement.done;
@@ -308,22 +372,24 @@ it('decodes fragmented NDJSON in sequence and aborts a replacement stream withou
 
 it('fetches an opaque persisted artifact through the foreground session without exposing a direct path', async () => {
   const calls: string[] = [];
-  const client = new EvalClient({
-    fetch: async (input) => {
-      const url = String(input);
-      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
-      calls.push(url);
-      return new Response('{"evidence":true}\n', {
-        headers: {
-          'content-disposition': 'attachment; filename="evidence.json"',
-          'content-length': '18',
-          'content-type': 'application/json; charset=utf-8',
-        },
-      });
-    },
+  const evalClient = client(async (input) => {
+    const url = String(input);
+    if (url === '/api/project/session') return response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
+    });
+    calls.push(url);
+    return new Response('{"evidence":true}\n', {
+      headers: {
+        'content-disposition': 'attachment; filename="evidence.json"',
+        'content-length': '18',
+        'content-type': 'application/json; charset=utf-8',
+      },
+    });
   });
 
-  const artifact = await client.artifact(runRecord.id, 'artifacts/portable-1/evidence.json');
+  const artifact = await evalClient.artifact(runRecord.id, 'artifacts/portable-1/evidence.json');
 
   expect(artifact.filename).toBe('evidence.json');
   await expect(artifact.blob.text()).resolves.toBe('{"evidence":true}\n');
@@ -332,39 +398,81 @@ it('fetches an opaque persisted artifact through the foreground session without 
 
 it('encodes a run identifier into the request path', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ run: runResult })) });
+  const evalClient = client(recordingFetch(calls, () => response({ run: runResult })));
 
-  await client.read('run a/b');
+  await evalClient.read('run a/b');
 
   expect(calls[0]?.url).toBe('/api/evals/runs/run%20a%2Fb');
 });
 
 it('decodes a route diagnostic body into a coded client error', async () => {
-  const client = new EvalClient({
-    fetch: recordingFetch([], () => response({
+  const evalClient = client(
+    recordingFetch([], () => response({
       diagnostic: { code: 'AB8076', message: 'No discovered eval suite or case matched this selection.' },
     }, 422)),
-  });
+  );
 
-  await expect(client.start({ suites: ['absent'] })).rejects.toMatchObject({
+  await expect(evalClient.start({ suites: ['absent'] })).rejects.toMatchObject({
     code: 'AB8076',
     message: 'No discovered eval suite or case matched this selection.',
   });
 });
 
 it('reports an unrecognised failure body with the transport status', async () => {
-  const client = new EvalClient({ fetch: recordingFetch([], () => response({}, 503)) });
+  const evalClient = client(recordingFetch([], () => response({}, 503)));
 
-  await expect(client.suites()).rejects.toMatchObject({
+  await expect(evalClient.suites()).rejects.toMatchObject({
     code: 'AB8073',
     message: 'Eval request failed with HTTP 503.',
   });
 });
 
 it('rejects a response that does not carry the documented shape', async () => {
-  const client = new EvalClient({ fetch: recordingFetch([], () => response({ suites: 'review-change' })) });
+  const evalClient = client(recordingFetch([], () => response({ suites: 'review-change' })));
 
-  await expect(client.suites()).rejects.toMatchObject({ code: 'AB8073' });
+  await expect(evalClient.suites()).rejects.toMatchObject({ code: 'AB8073' });
+});
+
+it('shares one foreground bootstrap across eval and comparison routes and fences both after invalidation', async () => {
+  let bootstraps = 0;
+  let resolveHeld: ((response: Response) => void) | undefined;
+  const held = new Promise<Response>((resolvePromise) => { resolveHeld = resolvePromise; });
+  let holdSuite = false;
+  const fetch: typeof globalThis.fetch = async (input) => {
+    const path = String(input);
+    if (path === '/api/project/session') {
+      bootstraps += 1;
+      return response({
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+        origin: 'http://127.0.0.1:5173',
+        token: 'foreground-token',
+      });
+    }
+    if (path === '/api/evals/suites') return holdSuite ? held : response(listing);
+    if (path === '/api/evals/comparisons?base=baseline&candidate=candidate') return response({ comparison });
+    throw new Error(`Unexpected route ${path}`);
+  };
+  const foreground = new ForegroundRouteClient({ fetch });
+  const evalClient = new EvalClient({ foreground });
+  const comparisonClient = new ComparisonClient({ foreground });
+
+  await Promise.all([
+    evalClient.suites(),
+    comparisonClient.compare({ base: 'baseline', candidate: 'candidate' }),
+  ]);
+  expect(bootstraps).toBe(1);
+
+  holdSuite = true;
+  const stale = evalClient.suites();
+  await Promise.resolve();
+  foreground.forgetAuthentication();
+  resolveHeld?.(response(listing));
+
+  await expect(stale).rejects.toMatchObject({ code: 'AB8019' });
+  await expect(comparisonClient.compare({ base: 'baseline', candidate: 'candidate' })).resolves.toMatchObject({
+    baselineRunId: runRecord.id,
+  });
+  expect(bootstraps).toBe(2);
 });
 
 it('rejects extra or nonsensical fields anywhere in suite and run DTOs', async () => {
@@ -376,7 +484,7 @@ it('rejects extra or nonsensical fields anywhere in suite and run DTOs', async (
   ];
 
   for (const [body, operation] of cases) {
-    const client = new EvalClient({ fetch: recordingFetch([], () => response(body)) });
-    await expect(operation(client)).rejects.toMatchObject({ code: 'AB8073' });
+    const evalClient = client(recordingFetch([], () => response(body)));
+    await expect(operation(evalClient)).rejects.toMatchObject({ code: 'AB8073' });
   }
 });

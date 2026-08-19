@@ -41,6 +41,7 @@ import type { EvalTrialRecord, EvalTrialWriter } from './run-store.ts';
 import type {
   EvalCase,
   EvalHarnessFailure,
+  EvalMcpEvidence,
   EvalTrialEvidence,
 } from './types.ts';
 
@@ -195,6 +196,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
   const childEnvironment = codexChildEnvironment(environment, temporary.home);
   const lifecycle: string[] = [];
   let execution: CodexExecution | undefined;
+  let incompleteMcpEvidence: EvalMcpEvidence | undefined;
   let harnessFailure: EvalHarnessFailure | undefined;
   let fixtureDigest = options.fixturePlan.digest;
   let hostCliVersion: string | undefined;
@@ -301,6 +303,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       await options.onProgress?.('host.started');
       const result = await executionResult;
       const run = normalizeCodexEventStream(result.stdout);
+      incompleteMcpEvidence = codexMcpEvidence(run);
       if (result.failure !== 'timeout' && (run.malformedLines > 0 || run.envelopes.length === 0)) {
         throw new CodexEvalHarnessError(
           'CODEX_TRACE_INVALID',
@@ -327,7 +330,9 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
     });
 
     const evidence: EvalTrialEvidence = execution === undefined
-      ? unavailableEvidence
+      ? incompleteMcpEvidence === undefined || incompleteMcpEvidence.calls.length === 0
+        ? unavailableEvidence
+        : Object.freeze({ ...unavailableEvidence, mcp: incompleteMcpEvidence })
       : Object.freeze({
         mcp: codexMcpEvidence(execution.run),
         process: Object.freeze({

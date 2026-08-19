@@ -12,6 +12,8 @@ import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 export interface EpochStoreOptions {
   /** @internal Deterministic cleanup-failure seam. */
   readonly cleanupRemove?: typeof rm;
+  /** @internal Deterministic publication-race seam. */
+  readonly move?: typeof rename;
   /** @internal Deterministic durability-failure seam. */
   readonly durabilityStorage?: EpochDurabilityStorage;
   readonly projectRoot: string;
@@ -84,6 +86,19 @@ export class EpochPostCommitCleanupError extends Error {
   }
 }
 
+export class EpochPostCommitDurabilityError extends Error {
+  readonly committedEpoch: ArtifactEpoch;
+
+  constructor(committedEpoch: ArtifactEpoch, durabilityError: unknown) {
+    super('Epoch publication changed the active epoch, but active metadata durability could not be confirmed.', {
+      cause: durabilityError,
+    });
+    this.name = 'EpochPostCommitDurabilityError';
+    this.committedEpoch = freezeArtifactEpoch(committedEpoch);
+    Object.freeze(this);
+  }
+}
+
 export class EpochStoreError extends Error {
   readonly code: EpochStoreErrorCode;
 
@@ -105,6 +120,10 @@ interface StagingRecord {
   readonly rootDevice: number;
   readonly rootInode: number;
   readonly targets: readonly string[];
+}
+
+interface AtomicWriteProgress {
+  renamed: boolean;
 }
 
 const activeEpochFileName = 'active-epoch.json';
@@ -314,6 +333,7 @@ export class EpochStore {
   readonly #durabilityStorage: EpochDurabilityStorage;
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
+  readonly #move: typeof rename;
   readonly #leaseTransitions: ReturnType<typeof serialQueue>;
   readonly #staging = new Map<symbol, StagingRecord>();
   readonly #transitions = serialQueue();
@@ -325,6 +345,7 @@ export class EpochStore {
     this.#durabilityStorage = options.durabilityStorage ?? Object.freeze({ open, remove: rm });
     this.#epochsPath = join(agentBundlePath, 'epochs');
     this.#epochMetadataPath = join(this.#epochsPath, metadataDirectoryName);
+    this.#move = options.move ?? rename;
     this.#leaseTransitions = leaseQueueFor(agentBundlePath);
   }
 
@@ -544,15 +565,9 @@ export class EpochStore {
 
   async #publishVerifiedStaging(record: StagingRecord, beforeActivate: EpochPreActivation | undefined): Promise<ArtifactEpoch> {
     const epochRoot = join(this.#epochsPath, record.epoch.id);
-    if (await pathExists(epochRoot)) {
-      throw new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(record.epoch.id)} already exists.`);
-    }
-
-    let publication: EpochPublicationReceipt | undefined;
-    if (beforeActivate !== undefined) {
-      publication = (await beforeActivate(record.epoch)) ?? undefined;
-    }
     return this.#leaseTransitions.run(async () => {
+      const activeMetadata: AtomicWriteProgress = { renamed: false };
+      let publication: EpochPublicationReceipt | undefined;
       let moved = false;
       try {
         if (await pathExists(epochRoot)) {
@@ -560,16 +575,22 @@ export class EpochStore {
         }
         await this.#syncTree(record.root);
         await this.#removeStagingMarker(record);
-        await rename(record.root, epochRoot);
+        await this.#move(record.root, epochRoot);
         moved = true;
         await this.#syncPath(this.#epochsPath, true);
+        if (beforeActivate !== undefined) {
+          publication = (await beforeActivate(record.epoch)) ?? undefined;
+        }
         await this.#writeEpochMetadata(record.epoch);
-        await this.#writeActiveMetadata(record.epoch);
+        await this.#writeActiveMetadata(record.epoch, activeMetadata);
       } catch (error) {
+        if (activeMetadata.renamed) {
+          throw new EpochPostCommitDurabilityError(record.epoch, error);
+        }
         const cleanupResults = await Promise.allSettled([
           ...(moved ? [
-            rm(epochRoot, { force: true, recursive: true }),
-            rm(this.#metadataPathFor(record.epoch.id), { force: true }),
+            this.#removePublicationPath(epochRoot, this.#epochsPath, true),
+            this.#removePublicationPath(this.#metadataPathFor(record.epoch.id), this.#epochMetadataPath),
           ] : []),
           ...(publication === undefined ? [] : [publication.rollback()]),
         ]);
@@ -593,6 +614,15 @@ export class EpochStore {
     await this.#syncPath(markerPath);
     await this.#durabilityStorage.remove(markerPath);
     await this.#syncPath(record.root, true);
+  }
+
+  async #removePublicationPath(path: string, parent: string, recursive = false): Promise<void> {
+    await rm(path, recursive ? { force: true, recursive: true } : { force: true });
+    try {
+      await this.#syncPath(parent, true);
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+    }
   }
 
   async #syncPath(path: string, directory = false): Promise<void> {
@@ -835,11 +865,11 @@ export class EpochStore {
     await this.#writeJsonAtomically(this.#metadataPathFor(epoch.id), { epoch });
   }
 
-  async #writeActiveMetadata(epoch: ArtifactEpoch): Promise<void> {
-    await this.#writeJsonAtomically(this.#activeEpochPath, { epoch });
+  async #writeActiveMetadata(epoch: ArtifactEpoch, progress?: AtomicWriteProgress): Promise<void> {
+    await this.#writeJsonAtomically(this.#activeEpochPath, { epoch }, progress);
   }
 
-  async #writeJsonAtomically(path: string, value: EpochMetadata): Promise<void> {
+  async #writeJsonAtomically(path: string, value: EpochMetadata, progress?: AtomicWriteProgress): Promise<void> {
     const directory = dirname(path);
     await mkdir(directory, { recursive: true });
     await this.#syncPath(dirname(directory), true);
@@ -851,6 +881,7 @@ export class EpochStore {
       await writeFile(temporaryPath, `${stableJson(value)}\n`, 'utf8');
       await this.#syncPath(temporaryPath);
       await rename(temporaryPath, path);
+      if (progress !== undefined) progress.renamed = true;
       await this.#syncPath(directory, true);
     } finally {
       await rm(temporaryPath, { force: true });

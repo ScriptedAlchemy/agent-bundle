@@ -4,6 +4,7 @@ import type {
   McpSessionBinding,
   McpSessionConnectionState,
   McpSessionInspectorConfig,
+  McpSessionTraceListener,
   McpSessionTraceReplay,
   McpSessionTraceSubscription,
 } from './mcp-session-service.ts';
@@ -52,7 +53,7 @@ export interface McpSessionRouteSession {
   restart(): Promise<McpSessionConnectionState>;
   subscribeTrace(
     options: { readonly afterSequence?: number },
-    listener: (entry: unknown) => void,
+    listener: McpSessionTraceListener,
   ): McpSessionTraceSubscription;
   trace(afterSequence?: number): McpSessionTraceReplay;
 }

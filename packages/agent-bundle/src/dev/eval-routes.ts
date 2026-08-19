@@ -85,7 +85,6 @@ const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
 /** Service messages name project paths, so each code keeps one fixed browser-facing sentence. */
 const serviceDiagnostics: Readonly<Record<EvalServiceErrorCode, RequestDiagnostic>> = Object.freeze({
   EVAL_ARTIFACT_NOT_FOUND: diagnostic('AB8085', 'Recorded raw evidence was not found.', 404),
-  EVAL_ARTIFACT_OUTSIDE_PROJECT: diagnostic('AB8084', 'The evaluated artifact must be inside the project.', 422),
   EVAL_ARTIFACT_UNAVAILABLE: diagnostic('AB8086', 'Recorded raw evidence is not available.', 422),
   EVAL_EVENTS_CURSOR_INVALID: diagnostic('AB8087', 'Eval event cursor is not valid.', 400),
   EVAL_HARNESS_UNSUPPORTED: diagnostic('AB8075', 'The requested eval harness is unknown or unsupported.', 422),
@@ -515,10 +514,6 @@ export class EvalRoutes {
     response.once('close', markResponseClosed);
     try {
       const subscription = await service.subscribeEvents(runId, afterSequence);
-      if (responseClosed || this.#closePromise !== undefined) {
-        subscription.close();
-        throw this.#unavailable(503);
-      }
       let buffered = 0;
       let blocked = false;
       let blockedBytes = 0;
@@ -542,14 +537,18 @@ export class EvalRoutes {
         blockedBytes = 0;
         this.#closeReaders.delete(closeFromShutdown);
         response.off('close', closeFromPeer);
+        response.off('close', markResponseClosed);
         response.off('drain', onDrain);
-        subscription.close();
         if (abortResponse && !response.destroyed && !response.writableEnded) response.destroy();
-        closePromise = Promise.resolve();
+        closePromise = this.#trackReaderClose(Promise.resolve().then(() => subscription.close()));
         return closePromise;
       };
       const closeFromPeer = (): void => { void close().catch(() => undefined); };
       const closeFromShutdown = (): Promise<void> => close(true);
+      if (responseClosed || this.#closePromise !== undefined) {
+        await close();
+        throw this.#unavailable(503);
+      }
       const flush = (): void => {
         if (flushing || blocked || closed || response.destroyed || response.writableEnded) return;
         flushing = true;
@@ -588,7 +587,7 @@ export class EvalRoutes {
       const replayBytes = subscription.replay.events.reduce((total, event) =>
         total + Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8'), 0);
       if (replayBytes > streamByteLimit) {
-        subscription.close();
+        await close();
         responseDiagnostic(response, diagnostic('AB8088', 'Eval event replay exceeds the stream limit.', 413));
         return;
       }
@@ -598,6 +597,7 @@ export class EvalRoutes {
       });
       this.#closeReaders.add(closeFromShutdown);
       response.once('close', closeFromPeer);
+      response.off('close', markResponseClosed);
       for (const event of subscription.replay.events) enqueue(event);
       if (!closed && !terminalQueued) subscription.activate(enqueue);
       flush();

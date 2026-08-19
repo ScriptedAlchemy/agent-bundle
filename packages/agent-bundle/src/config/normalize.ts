@@ -80,14 +80,14 @@ const asEntries = (input: AgentBundleHookInput): readonly (string | AgentBundleH
 
 const normalizeNativeHookTools = (
   selectors: readonly string[],
-  targets: readonly string[],
+  registry: NormalizationTargetRegistry,
 ): NativeHookToolSelector[] => {
   const seen = new Set<string>();
   const nativeTools: NativeHookToolSelector[] = [];
   for (const selector of selectors) {
     if (knownHookTools.has(selector as CanonicalHookTool)) continue;
     const parsed = parseNativeHookToolSelector(selector);
-    if (parsed === undefined || !targets.includes(parsed.target)) continue;
+    if (parsed === undefined || !registry.supports(parsed.target, 'hooks')) continue;
     const key = `${parsed.target}:${parsed.name}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -103,6 +103,7 @@ const normalizeHook = (
   root: string,
   defaultTargets: readonly string[],
   provenance: SourceProvenance,
+  registry: NormalizationTargetRegistry,
 ): NormalizedHook => {
   const entry = typeof input === 'string' ? { handler: input } : input;
   const source = resolve(root, entry.handler);
@@ -111,7 +112,7 @@ const normalizeHook = (
     (tool): tool is CanonicalHookTool => knownHookTools.has(tool as CanonicalHookTool),
   );
   const targets = sortedUnique(entry.targets ?? defaultTargets);
-  const nativeTools = normalizeNativeHookTools(entry.tools ?? [], targets);
+  const nativeTools = normalizeNativeHookTools(entry.tools ?? [], registry);
   const timeout = entry.timeout;
   const identity = {
     event,
@@ -157,7 +158,7 @@ const normalizeHooks = (
       const hookTargets = inherited
         ? targetNames.filter((target) => registry.supports(target, 'hooks'))
         : targetNames;
-      hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, hookTargets, provenance));
+      hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, hookTargets, provenance, registry));
     }
   }
 
@@ -347,12 +348,27 @@ const deepFreeze = <Value>(value: Value): Value => {
   return Object.freeze(value);
 };
 
-const invalidExtensionValue = (key: string): never => {
-  throw new Error(`AB4500: Config extension "${key}" must contain strict finite JSON data.`);
+export const configExtensionFiniteJsonDiagnosticMessage = 'A registered config extension must contain strict finite JSON data.';
+
+const finiteJsonExtensionErrors = new WeakSet<object>();
+
+class ConfigExtensionFiniteJsonError extends Error {
+  constructor() {
+    super(`AB4500: ${configExtensionFiniteJsonDiagnosticMessage}`);
+    this.name = 'ConfigExtensionFiniteJsonError';
+    finiteJsonExtensionErrors.add(this);
+  }
+}
+
+/** Identifies only finite-JSON failures constructed by this module. */
+export const isConfigExtensionFiniteJsonError = (value: unknown): boolean =>
+  typeof value === 'object' && value !== null && finiteJsonExtensionErrors.has(value);
+
+const invalidExtensionValue = (): never => {
+  throw new ConfigExtensionFiniteJsonError();
 };
 
 const cloneExtensionValue = (
-  key: string,
   value: unknown,
   ancestors = new Set<object>(),
 ): unknown => {
@@ -360,10 +376,10 @@ const cloneExtensionValue = (
     return value;
   }
   if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : invalidExtensionValue(key);
+    return Number.isFinite(value) ? value : invalidExtensionValue();
   }
   if (typeof value !== 'object' || ancestors.has(value)) {
-    return invalidExtensionValue(key);
+    return invalidExtensionValue();
   }
 
   ancestors.add(value);
@@ -373,14 +389,14 @@ const cloneExtensionValue = (
       for (let index = 0; index < value.length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
-          return invalidExtensionValue(key);
+          return invalidExtensionValue();
         }
-        clone.push(cloneExtensionValue(key, descriptor.value, ancestors));
+        clone.push(cloneExtensionValue(descriptor.value, ancestors));
       }
       for (const property of Reflect.ownKeys(value)) {
         if (property === 'length') continue;
         if (typeof property !== 'string' || !/^(?:0|[1-9]\d*)$/u.test(property) || Number(property) >= value.length) {
-          return invalidExtensionValue(key);
+          return invalidExtensionValue();
         }
       }
       return clone;
@@ -388,16 +404,16 @@ const cloneExtensionValue = (
 
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
-      return invalidExtensionValue(key);
+      return invalidExtensionValue();
     }
     const clone = Object.create(null) as Record<string, unknown>;
     for (const property of Reflect.ownKeys(value)) {
-      if (typeof property !== 'string') return invalidExtensionValue(key);
+      if (typeof property !== 'string') return invalidExtensionValue();
       const descriptor = Object.getOwnPropertyDescriptor(value, property);
       if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
-        return invalidExtensionValue(key);
+        return invalidExtensionValue();
       }
-      clone[property] = cloneExtensionValue(key, descriptor.value, ancestors);
+      clone[property] = cloneExtensionValue(descriptor.value, ancestors);
     }
     return clone;
   } finally {
@@ -421,7 +437,7 @@ const normalizeExtensions = (
       key: descriptor.key,
       provenance: { ...provenance },
       target: descriptor.target,
-      value: cloneExtensionValue(descriptor.key, value),
+      value: cloneExtensionValue(value),
     };
   }
 

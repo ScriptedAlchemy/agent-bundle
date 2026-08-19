@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import { chmod, mkdir, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
@@ -13,7 +13,7 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 8_000;
-const nativePathFallback = '/usr/bin:/bin';
+const nativePathFallback = `${dirname(process.execPath)}:/usr/bin:/bin`;
 
 const e2e = test.extend({
   playwright: {
@@ -235,6 +235,9 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     const waiting = await waitingStarted;
     const pinnedEpoch = waiting.run.session.identity.epoch.id;
     await expect(page.getByRole('button', { name: 'Cancel run' })).toBeEnabled({ timeout: browserTimeout });
+    await page.getByRole('button', { name: 'Cancel run' }).click();
+    await expect(page.getByText('operation.cancelled')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('epoch.bound')).toBeVisible({ timeout: browserTimeout });
 
     await page.getByRole('link', { name: 'Overview' }).click();
     const rebuildCompleted = page.waitForResponse((response) =>
@@ -247,7 +250,6 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('link', { name: 'Playground', exact: true }).click();
     await expect(page.getByText(pinnedEpoch, { exact: true })).toBeVisible({ timeout: browserTimeout });
-    await page.getByRole('button', { name: 'Cancel run' }).click();
     await expect(page.getByText('operation.cancelled')).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('epoch.bound')).toBeVisible({ timeout: browserTimeout });
 

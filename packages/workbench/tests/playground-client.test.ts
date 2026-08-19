@@ -2,6 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import type { PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 
 interface RecordedRequest {
   readonly body: unknown;
@@ -61,7 +62,11 @@ const event = (sequence: number, summary: string): PlaygroundTraceEvent => ({
 const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
   async (input, init) => {
     const url = String(input);
-    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    if (url === '/api/project/session') return response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
+    });
     calls.push({
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
       method: init?.method ?? 'GET',
@@ -71,14 +76,18 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
     return reply();
   };
 
+const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
+
 const hostileFetch = (body: unknown): typeof fetch => async (input) =>
   String(input) === '/api/project/session'
-    ? response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+    ? response({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
     : decodedResponse(body);
 
-it('starts one server-owned skill inspection without browser-authored identity or evidence', async () => {
+it('starts one server-owned skill inspection without browser-authored identity or evidence over the shared foreground session', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new PlaygroundClient({ fetch: recordingFetch(calls, () => response({ run: { id: 'run-1', session } })) });
+  const client = new PlaygroundClient({
+    foreground: foreground(recordingFetch(calls, () => response({ run: { id: 'run-1', session } }))),
+  });
 
   await expect(client.run({ operation: 'skill.inspect', skillId: 'review', target: 'portable' }))
     .resolves.toMatchObject({ id: 'run-1', session: { id: 'session-1' } });
@@ -93,7 +102,9 @@ it('starts one server-owned skill inspection without browser-authored identity o
 
 it('starts only the exact hook and MCP operation shapes that the server accepts', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new PlaygroundClient({ fetch: recordingFetch(calls, () => response({ run: { id: 'run-1', session } })) });
+  const client = new PlaygroundClient({
+    foreground: foreground(recordingFetch(calls, () => response({ run: { id: 'run-1', session } }))),
+  });
 
   await client.run({ hook: 'beforeTool', input: { tool: 'read' }, operation: 'hook.simulate', target: 'portable' });
   await client.run({ arguments: { city: 'Berlin' }, operation: 'mcp.call-tool', serverName: 'weather', target: 'portable', tool: 'forecast' });
@@ -106,7 +117,7 @@ it('starts only the exact hook and MCP operation shapes that the server accepts'
 
 it('loads a detached exact native catalog for the requested epoch through the authenticated foreground lifecycle', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new PlaygroundClient({ fetch: recordingFetch(calls, () => response({ catalog: nativeCatalog })) });
+  const client = new PlaygroundClient({ foreground: foreground(recordingFetch(calls, () => response({ catalog: nativeCatalog }))) });
 
   const catalog = await client.catalog('epoch/native');
 
@@ -121,16 +132,49 @@ it('loads a detached exact native catalog for the requested epoch through the au
   expect(Object.isFrozen(catalog.selections[0])).toBe(true);
 });
 
+it('shares one foreground bootstrap across catalog admission and run admission', async () => {
+  let bootstraps = 0;
+  const routeCalls: string[] = [];
+  const sharedForeground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      const url = String(input);
+      if (url === '/api/project/session') {
+        bootstraps += 1;
+        return response({
+          cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+          origin: 'http://127.0.0.1:5173',
+          token: 'foreground-token',
+        });
+      }
+      routeCalls.push(url);
+      return url.startsWith('/api/playground/catalog')
+        ? response({ catalog: nativeCatalog })
+        : response({ run: { id: 'run-1', session } });
+    },
+  });
+  const client = new PlaygroundClient({ foreground: sharedForeground });
+
+  await client.catalog('epoch/native');
+  await client.run({ operation: 'skill.inspect', skillId: 'review', target: 'portable' });
+
+  expect(bootstraps).toBe(1);
+  expect(routeCalls).toEqual(['/api/playground/catalog?epochId=epoch%2Fnative', '/api/playground/runs']);
+});
+
 it('forwards catalog cancellation through the authenticated foreground transport', async () => {
   const controller = new AbortController();
   let catalogSignal: AbortSignal | null | undefined;
   const client = new PlaygroundClient({
-    fetch: async (input, init) => {
-      if (String(input) === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    foreground: foreground(async (input, init) => {
+      if (String(input) === '/api/project/session') return response({
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+        origin: 'http://127.0.0.1:5173',
+        token: 'foreground-token',
+      });
       expect(String(input)).toBe('/api/playground/catalog?epochId=epoch%2Fnative');
       catalogSignal = init?.signal;
       return response({ catalog: nativeCatalog });
-    },
+    }),
   });
 
   await expect(client.catalog('epoch/native', controller.signal)).resolves.toEqual(nativeCatalog);
@@ -139,7 +183,9 @@ it('forwards catalog cancellation through the authenticated foreground transport
 
 it('sends an exact native prompt admission body without arbitrary browser execution fields', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new PlaygroundClient({ fetch: recordingFetch(calls, () => response({ run: { id: 'run-1', session } })) });
+  const client = new PlaygroundClient({
+    foreground: foreground(recordingFetch(calls, () => response({ run: { id: 'run-1', session } }))),
+  });
 
   await client.run({
     caseId: 'case:review', epochId: 'epoch-native', fixtureId: 'fixture:clean', host: 'claude', modelPinId: 'pin:claude-sonnet',
@@ -166,31 +212,47 @@ it('rejects malformed native catalogs, catalog tuple incoherence, and an epoch r
   ];
 
   for (const body of malformed) {
-    const client = new PlaygroundClient({ fetch: hostileFetch(body) });
+    const client = new PlaygroundClient({ foreground: foreground(recordingFetch([], () => response(body))) });
     await expect(client.catalog('epoch/native')).rejects.toMatchObject({ code: 'AB8043' });
   }
 });
 
-it('rejects native catalog arrays with enumerable non-index own properties before Zod snapshots them', async () => {
-  const withExtraArrayKey = <Entry,>(entries: readonly Entry[]): Entry[] => {
-    const hostile = [...entries];
-    Object.defineProperty(hostile, '4294967295', { enumerable: true, value: 'not-an-array-index' });
-    return hostile;
-  };
-  const malformed: readonly unknown[] = [
-    { catalog: { ...nativeCatalog, selections: withExtraArrayKey(nativeCatalog.selections) } },
-    { catalog: { ...nativeCatalog, modelPins: withExtraArrayKey(nativeCatalog.modelPins) } },
+it('rejects native catalogs that exceed the server selection and text bounds', async () => {
+  const tooManyCases = Array.from({ length: 257 }, (_, index) => ({ id: `case:${String(index)}`, label: `Case ${String(index)}` }));
+  let tooDeep: unknown = 'label';
+  for (let depth = 0; depth < 8; depth += 1) tooDeep = { nested: tooDeep };
+  const oversized: readonly unknown[] = [
+    { catalog: { ...nativeCatalog, cases: tooManyCases } },
+    { catalog: { ...nativeCatalog, cases: [{ ...nativeCatalog.cases[0], label: 'x'.repeat(16_385) }] } },
+    { catalog: { ...nativeCatalog, cases: [{ ...nativeCatalog.cases[0], label: tooDeep }] } },
   ];
 
-  for (const body of malformed) {
-    const client = new PlaygroundClient({ fetch: hostileFetch(body) });
+  for (const body of oversized) {
+    const client = new PlaygroundClient({ foreground: foreground(recordingFetch([], () => response(body))) });
     await expect(client.catalog('epoch/native')).rejects.toMatchObject({ code: 'AB8043' });
   }
 });
 
+it('bounds the catalog response stream before parsing or calling Response.json', async () => {
+  let jsonCalls = 0;
+  const oversizedResponse = new Response(new Uint8Array((8 * 1024 * 1024) + 1), {
+    headers: { 'content-type': 'application/json' },
+    status: 200,
+  });
+  Object.defineProperty(oversizedResponse, 'json', {
+    value: async () => {
+      jsonCalls += 1;
+      return { catalog: nativeCatalog };
+    },
+  });
+  const client = new PlaygroundClient({ foreground: foreground(recordingFetch([], () => oversizedResponse)) });
+
+  await expect(client.catalog('epoch/native')).rejects.toMatchObject({ code: 'AB8043' });
+  expect(jsonCalls).toBe(0);
+});
 it('cancels a run then reads its server-owned session by encoded identity', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new PlaygroundClient({ fetch: recordingFetch(calls, () => response(calls.length === 1 ? { cancelled: true } : { session })) });
+  const client = new PlaygroundClient({ foreground: foreground(recordingFetch(calls, () => response(calls.length === 1 ? { cancelled: true } : { session }))) });
 
   await expect(client.cancel('run/1')).resolves.toBe(true);
   await client.session('session/1');
@@ -206,7 +268,7 @@ it('replays, exports, and promotes persisted raw event references only', async (
   const calls: RecordedRequest[] = [];
   const terminal = { ...session, outcome: { status: 'passed' }, state: 'finalized' } as const;
   const client = new PlaygroundClient({
-    fetch: recordingFetch(calls, () => response(calls.length === 1
+    foreground: foreground(recordingFetch(calls, () => response(calls.length === 1
       ? { replay: { cursor: { afterSequence: 2 }, events: [event(1, 'Bound.'), event(2, 'Inspected.')], session: terminal } }
       : calls.length === 2
         ? { export: { events: [event(1, 'Bound.')], session: terminal } }
@@ -215,8 +277,7 @@ it('replays, exports, and promotes persisted raw event references only', async (
               assertions: [], epoch: identity.epoch, fixture: identity.fixture, invocation: identity.invocation,
               outcome: { status: 'passed' }, target: identity.target, task: identity.task,
             },
-          }),
-    ),
+          }))),
   });
 
   await client.replay('session-1', 1);
@@ -237,12 +298,16 @@ it('decodes NDJSON trace frames split across transport chunks', async () => {
   const second = JSON.stringify(event(2, 'Inspected.'));
   const half = Math.floor(second.length / 2);
   const client = new PlaygroundClient({
-    fetch: async (input) => {
+    foreground: foreground(async (input) => {
       const url = String(input);
-      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (url === '/api/project/session') return response({
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+        origin: 'http://127.0.0.1:5173',
+        token: 'foreground-token',
+      });
       expect(url).toBe('/api/playground/sessions/session-1/stream?after=1');
       return ndjson([`${first}\n${second.slice(0, half)}`, `${second.slice(half)}\n`]);
-    },
+    }),
   });
 
   const stream = client.stream('session-1', { afterSequence: 1, onEvent: (entry) => received.push(entry) });
@@ -252,12 +317,58 @@ it('decodes NDJSON trace frames split across transport chunks', async () => {
   expect(Object.isFrozen(received[0])).toBe(true);
 });
 
-it('decodes a route diagnostic body into a coded client error', async () => {
+it('rejects one NDJSON frame that exceeds the foreground stream queue bound', async () => {
+  const received: PlaygroundTraceEvent[] = [];
+  const oversizedEvent = { ...event(1, 'x'), summary: 'x'.repeat((1024 * 1024) + 1) };
   const client = new PlaygroundClient({
-    fetch: recordingFetch([], () => response({ diagnostic: { code: 'AB8046', message: 'Playground session is already finalized.' } }, 409)),
+    foreground: foreground(recordingFetch([], () => ndjson([`${JSON.stringify(oversizedEvent)}\n`]))),
+  });
+  const stream = client.stream('session-1', { onEvent: (entry) => received.push(entry) });
+
+  await expect(stream.done).rejects.toMatchObject({ code: 'AB8043' });
+  expect(received).toEqual([]);
+});
+
+it('ends a stream without delivering more events once it is closed', async () => {
+  const received: PlaygroundTraceEvent[] = [];
+  const client = new PlaygroundClient({
+    foreground: foreground(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/project/session') return response({
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+        origin: 'http://127.0.0.1:5173',
+        token: 'foreground-token',
+      });
+      init?.signal?.throwIfAborted();
+      return ndjson([`${JSON.stringify(event(1, 'First.'))}\n`]);
+    }),
   });
 
-  await expect(client.session('session-1')).rejects.toMatchObject({ code: 'AB8046' });
+  const stream = client.stream('session-1', { onEvent: (entry) => received.push(entry) });
+  stream.close();
+  await stream.done;
+
+  expect(received).toEqual([]);
+});
+
+it('decodes a route diagnostic body into a coded client error', async () => {
+  const client = new PlaygroundClient({
+    foreground: foreground(recordingFetch([], () => response({
+      diagnostic: { code: 'AB8046', message: 'Playground session is already finalized.' },
+    }, 409))),
+  });
+
+  await expect(client.session('session-1'))
+    .rejects.toMatchObject({ code: 'AB8046', message: 'Playground session is already finalized.' });
+});
+
+it('reports an unrecognised failure body with the transport status', async () => {
+  const client = new PlaygroundClient({ foreground: foreground(recordingFetch([], () => response({}, 503))) });
+
+  await expect(client.session('session-1')).rejects.toMatchObject({
+    code: 'AB8043',
+    message: 'Playground request failed with HTTP 503.',
+  });
 });
 
 it('rejects malformed or hostile server envelopes through the stable foreground diagnostic', async () => {
@@ -349,14 +460,14 @@ it('rejects malformed or hostile server envelopes through the stable foreground 
   ];
 
   for (const entry of cases) {
-    const client = new PlaygroundClient({ fetch: hostileFetch(entry.body) });
+    const client = new PlaygroundClient({ foreground: foreground(hostileFetch(entry.body)) });
     await expect(entry.invoke(client), entry.name).rejects.toMatchObject({ code: 'AB8043' });
   }
 });
 
 it('detaches and freezes every accepted nested server envelope before returning it to React', async () => {
   const mutable = JSON.parse(JSON.stringify({ run: { id: 'run-1', session } })) as { run: { id: string; session: typeof session } };
-  const client = new PlaygroundClient({ fetch: hostileFetch(mutable) });
+  const client = new PlaygroundClient({ foreground: foreground(hostileFetch(mutable)) });
 
   const run = await client.run({ operation: 'skill.inspect', skillId: 'review', target: 'portable' });
   mutable.run.session.identity.epoch.id = 'mutated-after-decode';

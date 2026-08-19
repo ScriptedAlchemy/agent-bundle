@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { appendFile, link, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -29,6 +29,7 @@ type PlaygroundDirectorySyncReason =
   | 'layout-project-entry'
   | 'layout-storage-entry'
   | 'new-file'
+  | 'object-admission-cleanup'
   | 'object-created'
   | 'owner-lock-create'
   | 'owner-lock-create-recovery'
@@ -42,6 +43,8 @@ type PlaygroundOwnerMutationReason = 'create-recovery' | 'recovery' | 'release';
 
 type PlaygroundDurabilityTestPhase =
   | 'after-final-index-link'
+  | 'after-object-admission-ownership-check'
+  | 'before-object-admission-cleanup'
   | 'before-owner-lock-recovery'
   | 'before-directory-sync:owner-lock-create'
   | 'before-directory-sync:session-metadata-rename'
@@ -277,7 +280,7 @@ const prepublicationFailurePhases = [
 ] as const;
 
 for (const phase of prepublicationFailurePhases) {
-  it(`leaves an unreachable object and ignores an unpublished directory session when ${phase} fails before publication`, async () => {
+  it(`rolls back its unpublished object and preserves an existing unpublished directory when ${phase} fails before publication`, async () => {
     const fixture = await createFixture();
     const sessionId = `prepublication-${phase.replaceAll(':', '-')}`;
     let reader: PlaygroundService | undefined;
@@ -295,7 +298,7 @@ for (const phase of prepublicationFailurePhases) {
       });
       expect(observed).toBe(true);
       await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(1);
+      await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(0);
       await expect(snapshotDirectory(unpublishedRoot)).resolves.toEqual(unpublishedBefore);
       await expect(fixture.service.close()).resolves.toBeUndefined();
       reader = new PlaygroundService({
@@ -425,6 +428,73 @@ it('serializes concurrent writers into complete JSONL records and rejects invali
     const persisted = await readFile(join(await objectRoot(fixture.storageRoot, 'concurrent'), 'events.jsonl'), 'utf8');
     expect(persisted.trim().split('\n')).toHaveLength(48);
     expect(persisted.trim().split('\n').every((line) => Number.isSafeInteger(JSON.parse(line).sequence))).toBe(true);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects exotic JSON arrays without evaluating indexed accessors', async () => {
+  const fixture = await createFixture();
+  let accessorReads = 0;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'exotic-arrays' });
+    const sparse = new Array<unknown>(1);
+    const accessor = ['safe'];
+    Object.defineProperty(accessor, '0', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return 'getter-value';
+      },
+    });
+    const augmented = ['safe'];
+    Object.defineProperty(augmented, 'hidden', { enumerable: false, value: 'hidden' });
+    Object.defineProperty(augmented, 'extra', { enumerable: true, value: 'extra' });
+    Object.defineProperty(augmented, Symbol('extra'), { enumerable: true, value: 'symbol' });
+    const nonordinary = ['safe'];
+    Object.setPrototypeOf(nonordinary, Object.create(Array.prototype));
+
+    for (const value of [sparse, accessor, augmented, nonordinary]) {
+      await expect(fixture.service.append(
+        'exotic-arrays',
+        event('mcp', 'invalid', 'Invalid JSON array.', { value } as unknown as PlaygroundJsonObject),
+      )).rejects.toMatchObject({ code: 'PLAYGROUND_VALUE_INVALID' });
+    }
+    expect(accessorReads).toBe(0);
+    expect((await fixture.service.replay('exotic-arrays')).events).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects hidden, symbolic, and accessor JSON object properties without evaluating accessors', async () => {
+  const fixture = await createFixture();
+  let accessorReads = 0;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'exotic-objects' });
+    const hidden = { safe: 'value' } as Record<string, unknown>;
+    Object.defineProperty(hidden, 'hidden', { enumerable: false, value: 'hidden' });
+    const symbolic = { safe: 'value' } as Record<string | symbol, unknown>;
+    symbolic[Symbol('extra')] = 'symbol';
+    const accessor = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(accessor, 'computed', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return 'getter-value';
+      },
+    });
+
+    for (const value of [hidden, symbolic, accessor]) {
+      await expect(fixture.service.append(
+        'exotic-objects',
+        event('mcp', 'invalid', 'Invalid JSON object.', value as PlaygroundJsonObject),
+      )).rejects.toMatchObject({ code: 'PLAYGROUND_VALUE_INVALID' });
+    }
+    expect(accessorReads).toBe(0);
+    expect((await fixture.service.replay('exotic-objects')).events).toEqual([]);
   } finally {
     await fixture.close();
   }
@@ -598,6 +668,34 @@ it('gives exactly one service instance the durable writer claim for an open sess
     await expect(contender.replay('owned')).resolves.toMatchObject({ events: [{ sequence: 1 }] });
   } finally {
     await Promise.allSettled([fixture.close(), contender.close()]);
+  }
+});
+
+it('rejects persisted trace records with unsupported source values', async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'invalid-event-source' });
+    await fixture.service.append('invalid-event-source', event('project', 'loaded', 'Project loaded.', { revision: 'a' }));
+    await fixture.service.close();
+
+    const eventPath = join(await objectRoot(fixture.storageRoot, 'invalid-event-source'), 'events.jsonl');
+    const persisted = JSON.parse((await readFile(eventPath, 'utf8')).trim()) as Record<string, unknown>;
+    await writeFile(eventPath, `${JSON.stringify({ ...persisted, source: 'unsupported-source' })}\n`, 'utf8');
+
+    const reopened = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(reopened.reopen('invalid-event-source')).rejects.toMatchObject({
+        code: 'PLAYGROUND_STORE_CORRUPT',
+      });
+    } finally {
+      await reopened.close().catch(() => undefined);
+    }
+  } finally {
+    await fixture.close();
   }
 });
 
@@ -1114,7 +1212,7 @@ it('ignores unpublished directory sessions and admits only the canonical index-o
   }
 });
 
-it('publishes one complete session index for concurrent same-ID contenders and leaves the loser object unreachable', async () => {
+it('publishes one complete session index for concurrent same-ID contenders and rolls back the losing object', async () => {
   const fixture = await createFixture();
   const contender = new PlaygroundService({
     projectId: 'project-1',
@@ -1143,9 +1241,8 @@ it('publishes one complete session index for concurrent same-ID contenders and l
       sessionId,
     });
     const objects = await readdir(join(fixture.storageRoot, 'session-objects'));
-    expect(objects).toHaveLength(2);
+    expect(objects).toHaveLength(1);
     expect(objects).toContain(index.objectId);
-    expect(objects.filter((objectId) => objectId !== index.objectId)).toHaveLength(1);
 
     await fixture.service.close();
     await contender.close();
@@ -1165,11 +1262,18 @@ it('publishes one complete session index for concurrent same-ID contenders and l
   }
 });
 
-it('leaves an object orphaned but unpublished when close wins before final index publication, then permits a retry', async () => {
-  const lifecycle: { closing?: Promise<void>; service?: PlaygroundService } = {};
+it('drains and rolls back a held admission when close wins before publication, then permits a retry', async () => {
+  const lifecycle: { closeSettled: boolean; closing?: Promise<void>; observedPending: boolean; service?: PlaygroundService } = {
+    closeSettled: false,
+    observedPending: false,
+  };
   const fixture = await createFixture({
     now: () => {
-      lifecycle.closing ??= lifecycle.service!.close();
+      if (lifecycle.closing === undefined) {
+        lifecycle.closing = lifecycle.service!.close();
+        void lifecycle.closing.then(() => { lifecycle.closeSettled = true; });
+        queueMicrotask(() => { lifecycle.observedPending = !lifecycle.closeSettled; });
+      }
       return new Date('2026-08-16T00:00:00.000Z');
     },
   });
@@ -1178,9 +1282,10 @@ it('leaves an object orphaned but unpublished when close wins before final index
   try {
     await expect(fixture.service.openSession({ ...sessionInput(), sessionId })).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
     await expect(lifecycle.closing).resolves.toBeUndefined();
+    expect(lifecycle.observedPending).toBe(true);
     expect(fixture.service.session(sessionId)).toBeUndefined();
     await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toBeDefined();
-    expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(1);
+    expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(0);
 
     const retry = new PlaygroundService({
       projectId: 'project-1',
@@ -1192,6 +1297,143 @@ it('leaves an object orphaned but unpublished when close wins before final index
     } finally {
       await retry.close().catch(() => undefined);
     }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('surfaces and retains a failed cold-admission rollback for the same service close retry', async () => {
+  const fixture = await createFixture();
+  let failCleanup = true;
+  try {
+    await withDurabilityTestHook((phase) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'before-object-admission-cleanup' && failCleanup) {
+        failCleanup = false;
+        throw injectedIoFailure('admission cleanup failed');
+      }
+    }, async () => {
+      const failure = await fixture.service.openSession({ ...sessionInput(), sessionId: 'cleanup-retry' }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toHaveLength(2);
+      expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(1);
+      await expect(fixture.service.close()).resolves.toBeUndefined();
+    });
+    await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('retains a post-removal cold-admission cleanup failure for service-close aggregation', async () => {
+  const fixture = await createFixture();
+  try {
+    await withDurabilityTestHook((phase) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'before-directory-sync:object-admission-cleanup') {
+        throw injectedIoFailure('post-removal cleanup sync failed');
+      }
+    }, async () => {
+      const admission = await fixture.service.openSession({ ...sessionInput(), sessionId: 'cleanup-sync-failure' }).catch((error: unknown) => error);
+      expect(admission).toBeInstanceOf(AggregateError);
+      await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(0);
+
+      const closing = await fixture.service.close().catch((error: unknown) => error);
+      expect(closing).toBeInstanceOf(PlaygroundServiceCloseError);
+      expect((closing as PlaygroundServiceCloseError).failures).toMatchObject([
+        { error: { code: 'EIO', message: 'post-removal cleanup sync failed' }, sessionId: 'cleanup-sync-failure' },
+      ]);
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('refuses to roll back a path-swapped cold-admission root', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'swapped-cold-admission';
+  let swappedRoot: string | undefined;
+  try {
+    await withDurabilityTestHook((phase, root) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'before-object-admission-cleanup' && swappedRoot === undefined) {
+        const moved = `${root}.owned`;
+        renameSync(root, moved);
+        mkdirSync(root);
+        writeFileSync(join(root, 'victim.txt'), 'preserve this victim', 'utf8');
+        swappedRoot = root;
+      }
+    }, async () => {
+      const failure = await fixture.service.openSession({ ...sessionInput(), sessionId }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toHaveLength(2);
+    });
+    expect(swappedRoot).toBeDefined();
+    await expect(readFile(join(swappedRoot!, 'victim.txt'), 'utf8')).resolves.toBe('preserve this victim');
+    await expect(fixture.service.close()).rejects.toBeInstanceOf(PlaygroundServiceCloseError);
+    await expect(readFile(join(swappedRoot!, 'victim.txt'), 'utf8')).resolves.toBe('preserve this victim');
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('preserves a foreign root swapped after cold-admission ownership verification', async () => {
+  const fixture = await createFixture();
+  let foreignRoot: string | undefined;
+  try {
+    await withDurabilityTestHook((phase, root) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'after-object-admission-ownership-check' && foreignRoot === undefined) {
+        renameSync(root, `${root}.owned`);
+        mkdirSync(root);
+        writeFileSync(join(root, 'foreign.txt'), 'foreign admission root', 'utf8');
+        foreignRoot = root;
+      }
+    }, async () => {
+      const failure = await fixture.service.openSession({ ...sessionInput(), sessionId: 'post-check-root-swap' }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toMatchObject([
+        { code: 'EIO', message: 'admission write failed' },
+        { code: 'PLAYGROUND_ROOT_INVALID' },
+      ]);
+    });
+    expect(foreignRoot).toBeDefined();
+    await expect(readFile(join(foreignRoot!, 'foreign.txt'), 'utf8')).resolves.toBe('foreign admission root');
+    await expect(fixture.service.close()).rejects.toBeInstanceOf(PlaygroundServiceCloseError);
+    await expect(readFile(join(foreignRoot!, 'foreign.txt'), 'utf8')).resolves.toBe('foreign admission root');
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('does not descend through a parent symlink swapped after cold-admission ownership verification', async () => {
+  const fixture = await createFixture();
+  let foreignRoot: string | undefined;
+  try {
+    await withDurabilityTestHook((phase, root) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'after-object-admission-ownership-check' && foreignRoot === undefined) {
+        const objectParent = dirname(root);
+        const foreignParent = join(fixture.projectRoot, 'foreign-session-objects');
+        renameSync(objectParent, `${objectParent}.owned`);
+        mkdirSync(foreignParent);
+        symlinkSync(foreignParent, objectParent, 'dir');
+        foreignRoot = join(foreignParent, root.slice(objectParent.length + 1));
+        mkdirSync(foreignRoot);
+        writeFileSync(join(foreignRoot, 'foreign.txt'), 'foreign symlink root', 'utf8');
+      }
+    }, async () => {
+      const failure = await fixture.service.openSession({ ...sessionInput(), sessionId: 'post-check-parent-symlink' }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toMatchObject([
+        { code: 'EIO', message: 'admission write failed' },
+        { code: 'PLAYGROUND_ROOT_INVALID' },
+      ]);
+    });
+    expect(foreignRoot).toBeDefined();
+    await expect(readFile(join(foreignRoot!, 'foreign.txt'), 'utf8')).resolves.toBe('foreign symlink root');
+    await expect(fixture.service.close()).rejects.toBeInstanceOf(PlaygroundServiceCloseError);
+    await expect(readFile(join(foreignRoot!, 'foreign.txt'), 'utf8')).resolves.toBe('foreign symlink root');
   } finally {
     await fixture.close();
   }
@@ -1358,7 +1600,7 @@ it('retains unindexed objects and pending indexes across startup while readers o
   }
 });
 
-it('leaves a failed pre-publication object orphaned without changing an unrelated directory', async () => {
+it('rolls back a failed pre-publication object without changing an unrelated directory', async () => {
   const fixture = await createFixture();
   const targetId = 'blocked-pending-write';
   try {
@@ -1379,7 +1621,7 @@ it('leaves a failed pre-publication object orphaned without changing an unrelate
     try {
       await expect(blocked.openSession({ ...sessionInput(), sessionId: targetId })).rejects.toBeDefined();
       await expect(readFile(indexPath(fixture.storageRoot, targetId), 'utf8')).rejects.toBeDefined();
-      expect((await readdir(join(fixture.storageRoot, 'session-objects'))).length).toBeGreaterThan(1);
+      expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(1);
       await expect(snapshotDirectory(unrelatedRoot)).resolves.toEqual(victimBefore);
     } finally {
       await blocked.close().catch(() => undefined);
@@ -1414,7 +1656,12 @@ it('rejects a replaced session object before it can write or publish an unrelate
       storageRoot: fixture.storageRoot,
     });
 
-    await expect(contender.openSession({ ...sessionInput(), sessionId })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_OWNED' });
+    const failure = await contender.openSession({ ...sessionInput(), sessionId }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toMatchObject([
+      { code: 'PLAYGROUND_SESSION_OWNED' },
+      { code: 'PLAYGROUND_ROOT_INVALID' },
+    ]);
     await expect(readFile(join(objectsRoot, readdirSync(objectsRoot)[0]!, 'unrelated'), 'utf8')).resolves.toBe('unchanged\n');
     await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toBeDefined();
     const displacedOwner = JSON.parse(await readFile(join(displacedRoot, '.owner.lock'), 'utf8')) as unknown;

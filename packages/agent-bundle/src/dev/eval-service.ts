@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { lstat, open, realpath, rm } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { loadConfig } from '../config/load.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { digest } from '../core/digest.ts';
 import { aggregateEvalTrials, summarizeEvalRun, type EvalCaseAggregate } from '../eval/aggregate.ts';
 import { compareEvalRuns, type EvalComparison } from '../eval/compare.ts';
 import { prepareEvalArtifact, type PreparedEvalArtifact } from '../eval/artifact.ts';
@@ -27,7 +28,6 @@ import {
   readEvalRun,
   readEvalRunEvents,
   readEvalTrials,
-  type EvalArtifactBinding,
   type EvalRunEvent,
   type EvalRunRecord,
   type EvalTrialRecord,
@@ -39,7 +39,6 @@ import { isErrno } from '../core/errors.ts';
 
 export type EvalServiceErrorCode =
   | 'EVAL_ARTIFACT_NOT_FOUND'
-  | 'EVAL_ARTIFACT_OUTSIDE_PROJECT'
   | 'EVAL_ARTIFACT_UNAVAILABLE'
   | 'EVAL_EVENTS_CURSOR_INVALID'
   | 'EVAL_HARNESS_UNSUPPORTED'
@@ -197,31 +196,62 @@ const safeArtifactSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const serviceError = (code: EvalServiceErrorCode, message: string): EvalServiceError =>
   new EvalServiceError(code, message);
 
+/** Explicit evidence that Eval shutdown observed more distinct background failures than it retained. */
+export class EvalServiceBackgroundFailureOverflowError extends Error {
+  readonly droppedCount: number;
+
+  constructor(droppedCount: number) {
+    super(`Eval service omitted ${droppedCount} additional background failure${droppedCount === 1 ? '' : 's'} after its bounded retention limit.`);
+    this.name = 'EvalServiceBackgroundFailureOverflowError';
+    this.droppedCount = droppedCount;
+  }
+}
+
+/** @internal Bounded, loss-aware retention used by the long-lived Eval service. */
+export class EvalServiceBackgroundFailureRetention {
+  readonly #failures = new Set<unknown>();
+  readonly #limit: number;
+  #droppedCount = 0;
+
+  constructor(limit = maximumRetainedBackgroundFailures) {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError('Eval background failure retention limit must be positive.');
+    this.#limit = limit;
+  }
+
+  retain(error: unknown): void {
+    if (this.#failures.has(error)) return;
+    if (this.#failures.size < this.#limit) {
+      this.#failures.add(error);
+      return;
+    }
+    this.#droppedCount += 1;
+  }
+
+  snapshot(): readonly unknown[] {
+    return Object.freeze([
+      ...this.#failures,
+      ...(this.#droppedCount === 0 ? [] : [new EvalServiceBackgroundFailureOverflowError(this.#droppedCount)]),
+    ]);
+  }
+}
+
 const projectRelative = (projectRoot: string, path: string): string =>
   relative(projectRoot, path).replaceAll('\\', '/');
 
-const persistedArtifactBinding = (
+/** Persist artifact identity without leaking or trusting an absolute host path. */
+const storedArtifactBinding = (
   projectRoot: string,
   runDirectory: string,
-  binding: EvalArtifactBinding,
-): EvalArtifactBinding => {
-  const base = binding.source === 'run-owned' ? runDirectory : projectRoot;
-  const manifestPath = relative(base, binding.manifestPath);
-  if (
-    manifestPath.length === 0 ||
-    isAbsolute(manifestPath) ||
-    manifestPath === '..' ||
-    manifestPath.startsWith(`..${sep}`)
-  ) {
-    throw serviceError(
-      'EVAL_ARTIFACT_OUTSIDE_PROJECT',
-      'The evaluated artifact must be inside the project so its durable run record never exposes an absolute path.',
-    );
-  }
+  artifact: PreparedEvalArtifact,
+) => {
+  const base = artifact.binding.source === 'run-owned' ? runDirectory : projectRoot;
+  const manifestPath = projectRelative(base, artifact.binding.manifestPath);
+  const storedManifestPath = manifestPath !== '..' && !manifestPath.startsWith('../')
+    ? manifestPath
+    : `external/${digest({ targetDigests: artifact.binding.targetDigests })}.json`;
   return Object.freeze({
-    manifestPath: manifestPath.replaceAll('\\', '/'),
-    source: binding.source,
-    targetDigests: binding.targetDigests,
+    ...artifact.binding,
+    manifestPath: storedManifestPath,
   });
 };
 
@@ -408,7 +438,7 @@ class OpenedEvalArtifact implements EvalArtifactReader {
  */
 export class EvalService {
   readonly #artifactReaders = new Set<OpenedEvalArtifact>();
-  readonly #backgroundFailures = new Set<unknown>();
+  readonly #backgroundFailures = new EvalServiceBackgroundFailureRetention();
   readonly #configPath: string | undefined;
   readonly #mode: string;
   readonly #logger: DevLogSink | undefined;
@@ -555,7 +585,7 @@ export class EvalService {
         ...[...starts, ...results]
           .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
           .map((result) => result.reason),
-        ...this.#backgroundFailures,
+        ...this.#backgroundFailures.snapshot(),
       ];
       if (failures.length > 0) {
         throw new AggregateError([...new Set(failures)], 'Eval service could not close.');
@@ -637,7 +667,7 @@ export class EvalService {
     }
 
     const writer = await createEvalRun({
-      artifact: persistedArtifactBinding(this.#projectRoot, directory, artifact.binding),
+      artifact: storedArtifactBinding(this.#projectRoot, directory, artifact),
       projectRoot: this.#projectRoot,
       provenance: Object.freeze({
         agentBundleVersion: artifact.manifest.producer.version,
@@ -694,7 +724,7 @@ export class EvalService {
       harness,
       planned,
     }).then(resolveResult, (error: unknown) => {
-      if (this.#backgroundFailures.size < maximumRetainedBackgroundFailures) this.#backgroundFailures.add(error);
+      this.#backgroundFailures.retain(error);
       rejectResult(error);
     });
     void active.result.catch(() => undefined);

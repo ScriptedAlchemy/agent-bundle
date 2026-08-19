@@ -9,6 +9,7 @@ import {
 } from './mcp-route-client.ts';
 
 const maxEmptyStreamReconnects = 3;
+const browserRoutedMethods = new Set(['tools/list', 'resources/list', 'tools/call', 'resources/read'] as const);
 
 interface JsonRpcRequest {
   readonly id: number | string;
@@ -110,6 +111,64 @@ const errorMessage = (method: string): string =>
 
 const invalidParamsMessage = (method: string): string =>
   `MCP method ${JSON.stringify(method)} has invalid parameters.`;
+
+export interface AgentBundleMcpDispatchResult {
+  readonly value: unknown;
+  readonly vector?: import('../../../agent-bundle/src/dev/runtime-protocol.ts').RuntimeVector;
+}
+
+type AgentBundleMcpRoutedMethod = 'tools/list' | 'resources/list' | 'tools/call' | 'resources/read';
+
+export const dispatchAgentBundleMcpRequest = async (
+  message: JSONRPCMessage,
+  options: Readonly<{
+    readonly allowedMethods: ReadonlySet<AgentBundleMcpRoutedMethod>;
+    readonly connection: McpRouteConnection;
+    readonly execute: (operation: McpRouteOperation) => Promise<AgentBundleMcpDispatchResult>;
+  }>,
+): Promise<JSONRPCMessage | undefined> => {
+  const nextRequest = request(message);
+  if (nextRequest === undefined) {
+    const nextNotification = notification(message);
+    if (nextNotification?.method === 'notifications/initialized') return undefined;
+    if (nextNotification !== undefined) {
+      throw new AgentBundleRemoteTransportError('MCP remote transport received an invalid notification.');
+    }
+    return undefined;
+  }
+  if (nextRequest.method === 'initialize') {
+    try {
+      return { id: nextRequest.id, jsonrpc: '2.0', result: resultFor('initialize', options.connection) } as JSONRPCMessage;
+    } catch (error) {
+      return {
+        error: { code: -32603, message: error instanceof Error ? error.message : 'Foreground MCP operation failed.' },
+        id: nextRequest.id,
+        jsonrpc: '2.0',
+      } as JSONRPCMessage;
+    }
+  }
+  if (nextRequest.method === 'ping') return { id: nextRequest.id, jsonrpc: '2.0', result: {} } as JSONRPCMessage;
+  const resolved = operationFor(nextRequest);
+  if (resolved === undefined || resolved.kind === 'invalid' || !options.allowedMethods.has(nextRequest.method as AgentBundleMcpRoutedMethod)) {
+    return {
+      error: resolved === undefined || !options.allowedMethods.has(nextRequest.method as AgentBundleMcpRoutedMethod)
+        ? { code: -32601, message: errorMessage(nextRequest.method) }
+        : { code: -32602, message: invalidParamsMessage(nextRequest.method) },
+      id: nextRequest.id,
+      jsonrpc: '2.0',
+    } as JSONRPCMessage;
+  }
+  try {
+    const result = await options.execute(resolved.operation);
+    return { id: nextRequest.id, jsonrpc: '2.0', result: resultFor(nextRequest.method, result.value) } as JSONRPCMessage;
+  } catch (error) {
+    return {
+      error: { code: -32603, message: error instanceof Error ? error.message : 'Foreground MCP operation failed.' },
+      id: nextRequest.id,
+      jsonrpc: '2.0',
+    } as JSONRPCMessage;
+  }
+};
 
 const settled = async (value: Promise<unknown> | undefined): Promise<void> => {
   await value?.catch(() => undefined);
@@ -229,6 +288,26 @@ export class AgentBundleRemoteTransport implements Transport {
   async #send(message: JSONRPCMessage): Promise<void> {
     if (this.#closed) throw new AgentBundleRemoteTransportError('MCP remote transport is closed.');
     const nextRequest = request(message);
+    if (
+      nextRequest !== undefined && nextRequest.method !== 'initialize' &&
+      !['prompts/list', 'resources/templates/list', 'prompts/get'].includes(nextRequest.method)
+    ) {
+      const response = await dispatchAgentBundleMcpRequest(message, {
+        allowedMethods: browserRoutedMethods,
+        connection: this.session.connection,
+        execute: async (operation) => {
+          const controller = new AbortController();
+          this.#operationControllers.add(controller);
+          try {
+            return { value: await this.#routes.operation(this.sessionId, operation, controller.signal) };
+          } finally {
+            this.#operationControllers.delete(controller);
+          }
+        },
+      });
+      if (!this.#closed && response !== undefined) this.#emit(response);
+      return;
+    }
     if (nextRequest !== undefined) {
       const resolved = operationFor(nextRequest);
       if (resolved === undefined || resolved.kind === 'invalid') {
@@ -248,7 +327,6 @@ export class AgentBundleRemoteTransport implements Transport {
         if (!this.#closed) this.#emit({ id: nextRequest.id, jsonrpc: '2.0', result: resultFor(nextRequest.method, result) } as JSONRPCMessage);
       } catch (error) {
         if (!this.#closed) {
-          this.#report(error);
           this.#emit({
             error: { code: -32603, message: error instanceof Error ? error.message : 'Foreground MCP operation failed.' },
             id: nextRequest.id,

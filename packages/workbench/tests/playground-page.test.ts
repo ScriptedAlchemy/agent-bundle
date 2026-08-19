@@ -7,8 +7,10 @@ import { expect, it } from '@rstest/core';
 import type { PlaygroundReplay, PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
 import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { playgroundViewFor } from '../src/playground/playground-model.ts';
 import {
+  cancelPlaygroundRun,
   createPlaygroundCancelFlight,
   createPlaygroundCatalogLifecycle,
   createPlaygroundObservationLifecycle,
@@ -28,6 +30,23 @@ const session: PlaygroundSession = { cleanupFailures: [], createdAt: '2026-08-14
 const event = (sequence: number): PlaygroundTraceEvent => ({
   kind: sequence === 1 ? 'epoch.bound' : 'skill.inspected', raw: { sequence }, rawEventRef: `events.jsonl#${sequence}`,
   sequence, source: sequence === 1 ? 'build' : 'skill-evidence', summary: `Event ${sequence}`, timestamp: `2026-08-14T10:00:0${sequence}.000Z`,
+});
+
+const events: readonly PlaygroundTraceEvent[] = [event(1), event(2)];
+
+const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
+
+it('renders every trace row with its sequence, source, kind, epoch, and raw event reference', () => {
+  const markup = renderToStaticMarkup(createElement(PlaygroundTraceView, {
+    view: playgroundViewFor({ epoch, events, exported: undefined, selectedRefs: ['session-1/1'], session }),
+  }));
+
+  expect(markup).toContain('events.jsonl#1');
+  expect(markup).toContain('events.jsonl#2');
+  expect(markup).toContain('epoch-pinned');
+  expect(markup).toContain('skill.inspected');
+  expect(markup).toContain('Event 2');
+  expect(markup).toContain('2026-08-14T10:00:01.000Z');
 });
 
 const run: PlaygroundRun = { id: 'run-1', session };
@@ -51,7 +70,7 @@ const replay = (nextSession: PlaygroundSession, events: readonly PlaygroundTrace
 });
 
 it('renders typed server-owned operation drafts including a catalog-selected script capability', () => {
-  const client = new PlaygroundClient({ fetch: async () => { throw new Error('Static rendering issues no request.'); } });
+  const client = new PlaygroundClient({ foreground: foreground(async () => { throw new Error('Static rendering issues no request.'); }) });
   const markup = renderToStaticMarkup(createElement(PlaygroundPage, {
     client, epoch, onRunChange: () => undefined, run: undefined, targets: [{ digest: 'portable', name: 'portable' }],
     scripts: [{ id: 'script:review', name: 'review', target: 'portable' }],
@@ -174,6 +193,85 @@ it('starts exactly one synchronous cancel flight until server drain and replay s
   await first.done;
   expect(lifecycle.start(async () => { calls += 1; }).started).toBe(true);
   expect(calls).toBe(2);
+});
+
+it('invalidates a held cancel flight before a replacement run can accept its replay', async () => {
+  const lifecycle = createPlaygroundCancelFlight();
+  const blocked = deferred<void>();
+  let accepted = false;
+  const stale = lifecycle.start(async (lease) => {
+    await blocked.promise;
+    if (lease.current()) accepted = true;
+  });
+
+  lifecycle.invalidate();
+  blocked.resolve();
+  await stale.done;
+
+  expect(stale.signal.aborted).toBe(true);
+  expect(accepted).toBe(false);
+});
+
+it('lets a cancel claim supersede held observer evidence before terminal replay commits', async () => {
+  const observationLifecycle = createPlaygroundObservationLifecycle();
+  const observation = observationLifecycle.begin();
+  const heldSession = deferred<PlaygroundSession>();
+  const terminalSession: PlaygroundSession = {
+    ...session,
+    outcome: { status: 'cancelled' },
+    state: 'finalized',
+  };
+  const acceptedStates: string[] = [];
+  const staleCommit = heldSession.promise.then((next) => {
+    if (observation.current()) acceptedStates.push(next.state);
+  });
+  const cancellation = createPlaygroundCancelFlight().start((lease) => cancelPlaygroundRun({
+    client: {
+      cancel: async () => {
+        expect(observation.current()).toBe(false);
+        return true;
+      },
+      replay: async () => replay(terminalSession, [event(1)]),
+    },
+    lease,
+    observation: observationLifecycle,
+    onEvents: () => undefined,
+    onObservationRestart: () => undefined,
+    onSession: (next) => acceptedStates.push(next.state),
+    runId: 'run-1',
+    sessionId: 'session-1',
+  }));
+
+  await cancellation.done;
+  heldSession.resolve(session);
+  await staleCommit;
+
+  expect(observation.signal.aborted).toBe(true);
+  expect(acceptedStates).toEqual(['finalized']);
+});
+
+it('requests a fresh observation when a current cancel attempt fails', async () => {
+  const observationLifecycle = createPlaygroundObservationLifecycle();
+  const original = observationLifecycle.begin();
+  let replacement: ReturnType<typeof observationLifecycle.begin> | undefined;
+  const cancellation = createPlaygroundCancelFlight().start((lease) => cancelPlaygroundRun({
+    client: {
+      cancel: async () => { throw new Error('cancel unavailable'); },
+      replay: async () => replay(session),
+    },
+    lease,
+    observation: observationLifecycle,
+    onEvents: () => undefined,
+    onObservationRestart: () => { replacement = observationLifecycle.begin(); },
+    onSession: () => undefined,
+    runId: 'run-1',
+    sessionId: 'session-1',
+  }));
+
+  await expect(cancellation.done).rejects.toThrow('cancel unavailable');
+
+  expect(original.signal.aborted).toBe(true);
+  expect(replacement?.current()).toBe(true);
 });
 
 it('aborts and rejects a stale catalog completion before accepting a replacement client or epoch', () => {

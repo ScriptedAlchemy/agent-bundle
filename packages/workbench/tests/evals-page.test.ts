@@ -4,15 +4,19 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from '@rstest/core';
 
 import type { EvalRunResult, EvalSuiteListing } from '../../agent-bundle/src/dev/eval-service.ts';
-import type { EvalRunRecord, EvalTrialRecord } from '../../agent-bundle/src/eval/run-store.ts';
+import type { EvalRunEvent, EvalRunRecord, EvalTrialRecord } from '../../agent-bundle/src/eval/run-store.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { evalRunSelectionFor, evalRunViewFor } from '../src/evals/evals-model.ts';
 import {
   beginEvalCancellation,
+  discardedSequenceForActiveEvalRun,
   evalArtifactPresentationKey,
   EvalRunControls,
   EvalRunReport,
   EvalsPage,
+  EvalsRequestLifecycle,
+  eventsForActiveEvalRun,
   observeEvalRunEvents,
   openEvalRun,
   prepareEvalArtifactDisplay,
@@ -137,6 +141,24 @@ const response = (body: unknown): Response => new Response(JSON.stringify(body),
   status: 200,
 });
 
+const client = (fetch: typeof globalThis.fetch): EvalClient => new EvalClient({
+  foreground: new ForegroundRouteClient({ fetch }),
+});
+
+const deferred = (): { readonly promise: Promise<void>; readonly resolve: () => void } => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+};
+
+const observedEvent = (sequence: number, kind: string): EvalRunEvent => Object.freeze({
+  kind,
+  payload: Object.freeze({}),
+  schemaVersion: 1,
+  sequence,
+  timestamp: `2026-08-17T00:00:0${String(sequence)}.000Z`,
+});
+
 const view = (result_: EvalRunResult | undefined) =>
   evalRunViewFor({ listing, result: result_, selectedSuite: 'review-change' });
 
@@ -210,6 +232,17 @@ it('renders the persisted timeline, server evidence channels, host/model matrix,
   expect(markup).toContain('Matched the expected risk.');
   expect(markup).toContain('Raw evidence');
   expect(markup).toContain('evidence.json');
+});
+
+it('does not paint held prior-run events while a replacement run waits for replay', () => {
+  const priorRunEvents = Object.freeze([
+    Object.freeze({ kind: 'run.started', payload: Object.freeze({ trials: 3 }), schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
+  ]);
+
+  expect(eventsForActiveEvalRun('run-b', 'run-a', priorRunEvents)).toEqual([]);
+  expect(eventsForActiveEvalRun('run-a', 'run-a', priorRunEvents)).toEqual(priorRunEvents);
+  expect(discardedSequenceForActiveEvalRun('run-b', 'run-a', 12)).toBeUndefined();
+  expect(discardedSequenceForActiveEvalRun('run-a', 'run-a', 12)).toBe(12);
 });
 
 it('labels a bounded timeline when earlier durable events are not shown', () => {
@@ -325,6 +358,106 @@ it('reconnects a cleanly ended stream from the last cursor but treats stream rej
     signal: new AbortController().signal,
     wait: async () => undefined,
   })).rejects.toThrow('malformed frame');
+});
+
+it('refreshes results only for newly accepted completion events and serializes a live burst', async () => {
+  const firstRefreshStarted = deferred();
+  const releaseFirstRefresh = deferred();
+  const secondRefreshStarted = deferred();
+  const releaseSecondRefresh = deferred();
+  const unrelatedEventPublished = deferred();
+  const releaseCompletionBurst = deferred();
+  let activeRefreshes = 0;
+  let maximumActiveRefreshes = 0;
+  let refreshes = 0;
+  const signal = new AbortController();
+  const options = {
+    client: {
+      events: async () => ({ cursor: { afterSequence: 1 }, events: [observedEvent(1, 'run.started')] }),
+      stream: ({ onEvent }: Parameters<EvalClient['stream']>[0]) => ({
+        close: () => undefined,
+        done: (async () => {
+          onEvent(observedEvent(2, 'trial.completed'));
+          await firstRefreshStarted.promise;
+          onEvent(observedEvent(3, 'trial.started'));
+          unrelatedEventPublished.resolve();
+          await releaseCompletionBurst.promise;
+          onEvent(observedEvent(4, 'trial.completed'));
+          onEvent(observedEvent(5, 'run.completed'));
+        })(),
+      }),
+    },
+    onEvents: () => undefined,
+    onRefresh: async () => {
+      refreshes += 1;
+      activeRefreshes += 1;
+      maximumActiveRefreshes = Math.max(maximumActiveRefreshes, activeRefreshes);
+      if (refreshes === 1) {
+        firstRefreshStarted.resolve();
+        await releaseFirstRefresh.promise;
+      } else {
+        secondRefreshStarted.resolve();
+        await releaseSecondRefresh.promise;
+      }
+      activeRefreshes -= 1;
+    },
+    runId: runRecord.id,
+    signal: signal.signal,
+    wait: async () => undefined,
+  };
+
+  const observation = observeEvalRunEvents(options);
+  await unrelatedEventPublished.promise;
+  expect(refreshes).toBe(1);
+  releaseCompletionBurst.resolve();
+  await Promise.resolve();
+  expect(refreshes).toBe(1);
+  releaseFirstRefresh.resolve();
+  await secondRefreshStarted.promise;
+  expect(refreshes).toBe(2);
+  expect(maximumActiveRefreshes).toBe(1);
+  releaseSecondRefresh.resolve();
+  await observation;
+  signal.abort();
+});
+
+it('discards a queued result refresh when observation is replaced', async () => {
+  const firstRefreshStarted = deferred();
+  const releaseFirstRefresh = deferred();
+  const eventsPublished = deferred();
+  const signal = new AbortController();
+  let refreshes = 0;
+  const options = {
+    client: {
+      events: async () => ({ cursor: { afterSequence: 1 }, events: [observedEvent(1, 'run.started')] }),
+      stream: ({ onEvent }: Parameters<EvalClient['stream']>[0]) => ({
+        close: () => undefined,
+        done: (async () => {
+          onEvent(observedEvent(2, 'trial.completed'));
+          await firstRefreshStarted.promise;
+          onEvent(observedEvent(3, 'trial.completed'));
+          eventsPublished.resolve();
+        })(),
+      }),
+    },
+    onEvents: () => undefined,
+    onRefresh: async () => {
+      refreshes += 1;
+      firstRefreshStarted.resolve();
+      await releaseFirstRefresh.promise;
+    },
+    runId: runRecord.id,
+    signal: signal.signal,
+    wait: async () => undefined,
+  };
+
+  const observation = observeEvalRunEvents(options);
+  await eventsPublished.promise;
+  signal.abort();
+  releaseFirstRefresh.resolve();
+  await observation;
+  await Promise.resolve();
+  expect(refreshes).toBe(1);
 });
 
 it('lists the cases of the selected suite before any run exists', () => {
@@ -498,8 +631,8 @@ it('marks an invalid trial count instead of letting the run start', () => {
 });
 
 it('states that no eval evidence exists before the suites have loaded', () => {
-  const client = new EvalClient({ fetch: async () => response(listing) });
-  const markup = renderToStaticMarkup(createElement(EvalsPage, { client }));
+  const evalClient = client(async () => response(listing));
+  const markup = renderToStaticMarkup(createElement(EvalsPage, { client: evalClient }));
 
   expect(markup).toContain('Looking for authored eval suites');
   expect(markup).not.toContain('id="eval-suite"');
@@ -507,21 +640,23 @@ it('states that no eval evidence exists before the suites have loaded', () => {
 
 it('starts a durable run from the selected suite, trial count, and closed harness only', async () => {
   const bodies: unknown[] = [];
-  const client = new EvalClient({
-    fetch: async (input, init) => {
-      const url = String(input);
-      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
-      bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
-      return new Response(JSON.stringify({ run: { ...runRecord, completedAt: undefined, summary: undefined } }), {
-        headers: { 'content-type': 'application/json' },
-        status: 202,
-      });
-    },
+  const evalClient = client(async (input, init) => {
+    const url = String(input);
+    if (url === '/api/project/session') return response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
+    });
+    bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
+    return new Response(JSON.stringify({ run: { ...runRecord, completedAt: undefined, summary: undefined } }), {
+      headers: { 'content-type': 'application/json' },
+      status: 202,
+    });
   });
   const selection = evalRunSelectionFor(view(undefined), '2');
   if (selection === undefined) throw new Error('Expected a runnable selection.');
 
-  const started = await startEvalRun(client, { ...selection, harness: 'claude' });
+  const started = await startEvalRun(evalClient, { ...selection, harness: 'claude' });
 
   expect(bodies).toEqual([{ harness: 'claude', suites: ['review-change'], trials: 2 }]);
   expect(started.run.id).toBe(runRecord.id);
@@ -530,17 +665,38 @@ it('starts a durable run from the selected suite, trial count, and closed harnes
 
 it('reopens a recorded run by identifier without restarting it', async () => {
   const requests: string[] = [];
-  const client = new EvalClient({
-    fetch: async (input, init) => {
+  const evalClient = client(async (input, init) => {
       const url = String(input);
-      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (url === '/api/project/session') return response({
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+        origin: 'http://127.0.0.1:5173',
+        token: 'foreground-token',
+      });
       requests.push(`${init?.method ?? 'GET'} ${url}`);
       return response({ run: result });
-    },
-  });
+    });
 
-  const reopened = await openEvalRun(client, runRecord.id);
+  const reopened = await openEvalRun(evalClient, runRecord.id);
 
   expect(requests).toEqual([`GET /api/evals/runs/${runRecord.id}`]);
   expect(reopened.run.summary).toEqual(runRecord.summary);
+});
+
+it('supersedes a held initial run listing before a post-action refresh and aborts all work on navigation', () => {
+  const lifecycle = new EvalsRequestLifecycle();
+  const initialRuns = lifecycle.begin('runs');
+  const action = lifecycle.begin('action');
+  const refreshedRuns = lifecycle.begin('runs');
+
+  expect(initialRuns.signal.aborted).toBe(true);
+  expect(lifecycle.isCurrent(initialRuns)).toBe(false);
+  expect(lifecycle.isCurrent(action)).toBe(true);
+  expect(lifecycle.isCurrent(refreshedRuns)).toBe(true);
+
+  lifecycle.invalidate();
+
+  expect(action.signal.aborted).toBe(true);
+  expect(refreshedRuns.signal.aborted).toBe(true);
+  expect(lifecycle.isCurrent(action)).toBe(false);
+  expect(lifecycle.isCurrent(refreshedRuns)).toBe(false);
 });

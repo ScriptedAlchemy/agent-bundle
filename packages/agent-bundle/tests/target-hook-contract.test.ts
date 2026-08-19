@@ -13,7 +13,8 @@ import {
 } from '../src/adapters/hook-contract.ts';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import type { NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
+import { normalizeProject, type NormalizationTargetRegistry } from '../src/config/index.ts';
+import type { AgentBundleConfig, NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
 import { build } from './support/build.ts';
 
 const metadata = Object.freeze({
@@ -353,5 +354,36 @@ it('rejects a target left without any applicable tool selector', () => {
     severity: 'error',
     target: 'synthetic',
   }]);
+  expect(plan.hookEntries).toEqual([]);
+});
+
+it('keeps a mismatched native selector visible so normalized planning fails closed', async () => {
+  const registry: NormalizationTargetRegistry = {
+    configExtensions: () => [],
+    defaultTargetNames: () => ['codex'],
+    has: (name) => name === 'claude' || name === 'codex',
+    supports: (_name, capability) => capability === 'hooks',
+  };
+  const config = {
+    hooks: { beforeTool: { handler: './hooks/guard.ts', tools: ['claude:WebSearch'] } },
+    plugin: { name: 'native-selector-fixture', version: '1.0.0' },
+    targets: ['codex'],
+  } satisfies AgentBundleConfig;
+  const model = await normalizeProject({
+    config,
+    configPath: '/workspace/agent-bundle.config.ts',
+    context: {
+      command: 'build',
+      mode: 'production',
+      projectRoot: '/workspace',
+      selectedTargets: [],
+    },
+  }, { skills: [] }, registry);
+
+  const plan = planHooks(model, 'codex', nativeSelectorContract({}));
+
+  expect(model.hooks[0]?.nativeTools).toEqual([{ name: 'WebSearch', target: 'claude' }]);
+  expect(plan.diagnostics.map(({ code }) => code)).toEqual(['codex.hook.tool.unselected']);
+  expect(plan.document).toBeUndefined();
   expect(plan.hookEntries).toEqual([]);
 });

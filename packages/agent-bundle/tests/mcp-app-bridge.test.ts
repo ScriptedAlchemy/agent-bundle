@@ -2,12 +2,18 @@ import { Buffer } from 'node:buffer';
 
 import { expect, it } from '@rstest/core';
 
+import { createMcpAppConsentAuthority } from '../src/dev/mcp-app-sandbox.ts';
 import {
   createMcpAppBridge,
+  createMcpAppFailClosedSender,
+  parseMcpAppResource,
   type McpAppBridgeBindingOperations,
   type McpAppBridgeHost,
   type McpAppBridgeMessage,
   type McpAppBridgeRequestId,
+  validateMcpAppDisplayModeRequest,
+  validateMcpAppDownloadRequest,
+  validateMcpAppExternalLink,
 } from '../src/dev/mcp-app-bridge.ts';
 import type { McpAppBinding, McpAppJsonValue } from '../src/dev/mcp-app-binding-service.ts';
 
@@ -797,4 +803,254 @@ it('deep-snapshots caller-owned binding and host values before exposing them to 
 
   expect(fixture.sent).toContainEqual({ jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', nested: { day: 'today' } } } });
   expect(fixture.sent[0]).toMatchObject({ result: { hostContext: { styles: { variables: { '--font-sans': 'system-ui' } } } } });
+});
+
+it('strictly validates external actions, bounded downloads, and exact MCP App resources', () => {
+  expect(validateMcpAppExternalLink({ url: 'https://weather.example/forecast?day=today' })).toEqual({
+    url: 'https://weather.example/forecast?day=today',
+  });
+  expect(validateMcpAppExternalLink({ url: 'https://weather.example:443/' })).toBeUndefined();
+  expect(validateMcpAppExternalLink({ url: 'https://user:password@weather.example/forecast' })).toBeUndefined();
+  expect(validateMcpAppExternalLink({ url: 'https://weather.example/#fragment' })).toBeUndefined();
+  expect(validateMcpAppDisplayModeRequest({ mode: 'fullscreen' })).toEqual({ mode: 'fullscreen' });
+  expect(validateMcpAppDisplayModeRequest({ mode: 'windowed' })).toBeUndefined();
+
+  expect(validateMcpAppDownloadRequest({
+    contents: [{ text: '', type: 'text' }],
+  })).toEqual({ contents: [{ text: '', type: 'text' }], embeddedBytes: 0, itemCount: 1 });
+  expect(validateMcpAppDownloadRequest({
+    contents: Array.from({ length: 21 }, () => ({ text: 'x', type: 'text' })),
+  })).toBeUndefined();
+  expect(validateMcpAppDownloadRequest({
+    contents: [{ type: 'unsupported' }],
+  })).toBeUndefined();
+  expect(validateMcpAppDownloadRequest({
+    contents: [{ data: Buffer.alloc(10 * 1024 * 1024 + 1).toString('base64'), mimeType: 'image/png', type: 'image' }],
+  })).toBeUndefined();
+
+  expect(parseMcpAppResource({
+    contents: [{ mimeType: 'text/html;profile=mcp-app', text: '<main>weather</main>', uri: 'ui://weather/forecast.html' }],
+  }, 'ui://weather/forecast.html')).toMatchObject({ html: '<main>weather</main>' });
+  expect(parseMcpAppResource({
+    contents: [{ mimeType: 'text/html', text: '<main>weather</main>', uri: 'ui://weather/forecast.html' }],
+  }, 'ui://weather/forecast.html')).toBeUndefined();
+});
+
+it('bounds canonical App HTML by UTF-8 bytes for text and decoded blobs', () => {
+  const exact = 'x'.repeat(2_097_152);
+  const response = (content: Record<string, unknown>) => ({
+    contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html', ...content }],
+  });
+  expect(parseMcpAppResource(response({ text: exact }), 'ui://weather/forecast.html')).toMatchObject({ html: exact });
+  expect(parseMcpAppResource(response({ text: `${exact}x` }), 'ui://weather/forecast.html')).toBeUndefined();
+  expect(parseMcpAppResource(response({ blob: Buffer.from(exact).toString('base64') }), 'ui://weather/forecast.html')).toMatchObject({ html: exact });
+  expect(parseMcpAppResource(response({ blob: Buffer.from(`${exact}x`).toString('base64') }), 'ui://weather/forecast.html')).toBeUndefined();
+});
+
+it('closes a bounded asynchronous sender once after consecutive transport errors and clears queued traffic', async () => {
+  const delivered: string[] = [];
+  let attempts = 0;
+  let closes = 0;
+  const sender = createMcpAppFailClosedSender({
+    onClose: () => { closes += 1; },
+    send: async (message: string) => {
+      attempts += 1;
+      if (attempts <= 3) throw new Error(`blocked ${message}`);
+      delivered.push(message);
+      return true;
+    },
+  });
+
+  await expect(sender.send('input')).resolves.toBe(false);
+  await expect(sender.send('result')).resolves.toBe(false);
+  await expect(sender.send('late')).resolves.toBe(false);
+  expect(sender.closed).toBe(true);
+  expect(sender.blockedAttempts).toBe(3);
+  expect(closes).toBe(1);
+  expect(delivered).toEqual([]);
+  await expect(sender.send('after-close')).resolves.toBe(false);
+  expect(closes).toBe(1);
+});
+
+it('keeps a blocked input ahead of a later result in the shared asynchronous sender', async () => {
+  const attempts: string[] = [];
+  let closes = 0;
+  const sender = createMcpAppFailClosedSender({
+    onClose: () => { closes += 1; },
+    send: async (message: string) => {
+      attempts.push(message);
+      return false;
+    },
+  });
+
+  const input = sender.send('input');
+  const result = sender.send('result');
+  await Promise.all([input, result]);
+  expect(attempts).toEqual(['input']);
+  await sender.send('retry-1');
+  expect(attempts).toEqual(['input', 'input']);
+  await sender.send('retry-2');
+  expect(sender.closed).toBe(true);
+  expect(closes).toBe(1);
+  expect(attempts).toEqual(['input', 'input', 'input']);
+  await expect(sender.send('late-result')).resolves.toBe(false);
+});
+
+it('fails closed on a bounded shared-sender flood and never sends mutable queued values', async () => {
+  const attempted: Array<{ readonly id: string }> = [];
+  let closes = 0;
+  const sender = createMcpAppFailClosedSender({
+    maxQueuedMessages: 1,
+    onClose: () => { closes += 1; },
+    send: async (message: { readonly id: string }) => {
+      attempted.push(message);
+      return false;
+    },
+  });
+  const input: { id: string } = { id: 'input' };
+  const first = sender.send(input);
+  input.id = 'mutated';
+  await first;
+  await sender.send({ id: 'result-1' });
+  await sender.send({ id: 'result-2' });
+  expect(sender.closed).toBe(true);
+  expect(closes).toBe(1);
+  expect(attempted).toEqual([{ id: 'input' }]);
+  await expect(sender.send({ id: 'late' })).resolves.toBe(false);
+});
+
+it('keeps a privileged tool continuation host-private and consumes it exactly once', async () => {
+  const fixture = fixtureFor();
+  const authority = createMcpAppConsentAuthority({ now: () => 1_000 });
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    consentAuthority: authority,
+    host: fixture.host,
+    operations: fixture.operations,
+    profile: 'portable',
+    send: (message) => (fixture.sent.push(message), true),
+  });
+  await bridge.receive(initialize('init:consent'));
+  await bridge.receive(initialized());
+  const details = { arguments: { city: 'Paris' }, name: 'refresh-weather' } as const;
+  await bridge.receive({ id: 'tool:approved', jsonrpc: '2.0', method: 'tools/call', params: details });
+  const challenge = authority.pending().find((candidate) => candidate.request.capability === 'call-tool');
+  expect(challenge?.request).toMatchObject({ capability: 'call-tool', scope: 'action' });
+  expect(fixture.calls).toEqual([]);
+  expect(await bridge.decideConsent('forged-challenge', true)).toBe(false);
+  expect(await bridge.decideConsent(challenge?.id ?? '', true)).toBe(true);
+  expect(await bridge.decideConsent(challenge?.id ?? '', true)).toBe(false);
+  expect(fixture.calls).toEqual([{ arguments: { city: 'Paris' }, bindingId: 'binding-app', name: 'refresh-weather' }]);
+  expect(JSON.stringify(fixture.sent)).not.toContain('grant-');
+  expect(fixture.sent.at(-1)).toMatchObject({ id: 'tool:approved', result: {} });
+});
+
+it('does not invoke a download handler until its route-owned challenge decision resumes it', async () => {
+  const downloads: unknown[] = [];
+  const fixture = fixtureFor({ host: { onDownload: (download) => { downloads.push(download); } } });
+  const authority = createMcpAppConsentAuthority({ now: () => 1_000 });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, consentAuthority: authority, host: fixture.host, operations: fixture.operations, profile: 'portable', send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:download-consent'));
+  await bridge.receive(initialized());
+  const details = { contents: [{ text: 'forecast', type: 'text' }] } as const;
+  await bridge.receive({ id: 'download:denied', jsonrpc: '2.0', method: 'ui/download-file', params: details });
+  const challenge = authority.pending().find((candidate) => candidate.request.capability === 'download-file');
+  expect(downloads).toEqual([]);
+  expect(await bridge.decideConsent(challenge?.id ?? '', false)).toBe(true);
+  expect(downloads).toEqual([]);
+  await bridge.receive({ id: 'download:approved', jsonrpc: '2.0', method: 'ui/download-file', params: details });
+  const approved = authority.pending().find((candidate) => candidate.request.capability === 'download-file');
+  expect(await bridge.decideConsent(approved?.id ?? '', true)).toBe(true);
+  expect(downloads).toEqual([{ ...details, embeddedBytes: 0, itemCount: 1 }]);
+});
+
+it('keeps concurrent same-capability consent labels opaque and resumes only their exact digest-bound action', async () => {
+  const links: string[] = [];
+  const downloads: unknown[] = [];
+  const fixture = fixtureFor({
+    host: {
+      onDownload: (download) => { downloads.push(download); },
+      onOpenLink: (url) => { links.push(url); },
+    },
+  });
+  const authority = createMcpAppConsentAuthority({ now: () => 1_000 });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, consentAuthority: authority, host: fixture.host, operations: fixture.operations, profile: 'portable', send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:concurrent-consent'));
+  await bridge.receive(initialized());
+  await bridge.receive({ id: 'link-a', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://example.test/export?account=first&token=secret-link-a' } });
+  await bridge.receive({ id: 'link-b', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://example.test/export?report=second&token=secret-link-b' } });
+  await bridge.receive({ id: 'download-a', jsonrpc: '2.0', method: 'ui/download-file', params: { contents: [{ text: 'secret-download-a', type: 'text' }] } });
+  await bridge.receive({ id: 'download-b', jsonrpc: '2.0', method: 'ui/download-file', params: { contents: [{ text: 'secret-download-bb', type: 'text' }] } });
+  const pending = authority.pending();
+  const linkChallenges = pending.filter((challenge) => challenge.request.capability === 'open-external-link');
+  const downloadChallenges = pending.filter((challenge) => challenge.request.capability === 'download-file');
+  const publicSnapshot = JSON.stringify([...linkChallenges, ...downloadChallenges]);
+
+  expect(linkChallenges).toHaveLength(2);
+  expect(downloadChallenges).toHaveLength(2);
+  expect(new Set([...linkChallenges, ...downloadChallenges].map((challenge) => challenge.request.actionFingerprint)).size).toBe(4);
+  expect(linkChallenges.map((challenge) => challenge.request.details)).toEqual([
+    { queryKeys: ['[redacted]', 'account'], target: 'https://example.test/export' },
+    { queryKeys: ['[redacted]', 'report'], target: 'https://example.test/export' },
+  ]);
+  expect(downloadChallenges.map((challenge) => challenge.request.details)).toEqual([
+    { itemCount: 1, items: [{ bytes: 17, type: 'text' }] },
+    { itemCount: 1, items: [{ bytes: 18, type: 'text' }] },
+  ]);
+  expect(publicSnapshot).not.toContain('secret-');
+  expect(publicSnapshot).not.toContain('grant-');
+  expect(publicSnapshot).not.toContain('authorizationId');
+
+  await expect(bridge.decideConsent(linkChallenges[0]?.id ?? '', true)).resolves.toBe(true);
+  await expect(bridge.decideConsent(linkChallenges[0]?.id ?? '', true)).resolves.toBe(false);
+  expect(links).toEqual(['https://example.test/export?account=first&token=secret-link-a']);
+  expect(downloads).toEqual([]);
+  await expect(bridge.decideConsent(downloadChallenges[1]?.id ?? '', true)).resolves.toBe(true);
+  expect(downloads).toEqual([expect.objectContaining({ contents: [{ text: 'secret-download-bb', type: 'text' }] })]);
+  expect(fixture.sent.filter((message) => message.id === 'link-b' || message.id === 'download-a')).toEqual([]);
+});
+
+it('resumes each privileged effect at most once and expires queued continuations before effects', async () => {
+  let now = 1_000;
+  const links: string[] = [];
+  const downloads: unknown[] = [];
+  const modes: string[] = [];
+  const fixture = fixtureFor({
+    host: {
+      onDisplayMode: async (mode) => (modes.push(mode), mode),
+      onDownload: (download) => { downloads.push(download); },
+      onOpenLink: (url) => { links.push(url); },
+    },
+  });
+  const authority = createMcpAppConsentAuthority({ now: () => now });
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding, consentAuthority: authority, host: fixture.host, operations: fixture.operations, profile: 'portable',
+    send: (message) => (fixture.sent.push(message), true),
+  });
+  await bridge.receive(initialize('init:all-consents'));
+  await bridge.receive(initialized());
+  await bridge.receive({ id: 'tool', jsonrpc: '2.0', method: 'tools/call', params: { name: 'refresh-weather' } });
+  await bridge.receive({ id: 'link', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://weather.example.test/forecast' } });
+  await bridge.receive({ id: 'download', jsonrpc: '2.0', method: 'ui/download-file', params: { contents: [{ text: 'forecast', type: 'text' }] } });
+  await bridge.receive({ id: 'display', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'fullscreen' } });
+  const challenges = authority.pending();
+  const idFor = (capability: string): string => challenges.find((challenge) => challenge.request.capability === capability)?.id ?? '';
+  const tool = idFor('call-tool');
+  expect(await Promise.all([bridge.decideConsent(tool, true), bridge.decideConsent(tool, true)])).toEqual([true, false]);
+  await expect(bridge.decideConsent(idFor('open-external-link'), true)).resolves.toBe(true);
+  await expect(bridge.decideConsent(idFor('download-file'), true)).resolves.toBe(true);
+  await expect(bridge.decideConsent(idFor('request-display-mode'), true)).resolves.toBe(true);
+  expect(fixture.calls).toHaveLength(1);
+  expect(links).toEqual(['https://weather.example.test/forecast']);
+  expect(downloads).toHaveLength(1);
+  expect(modes).toEqual(['fullscreen']);
+
+  await bridge.receive({ id: 'expired-link', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://weather.example.test/expired' } });
+  const expired = authority.pending().find((challenge) => challenge.request.capability === 'open-external-link');
+  now += 30_001;
+  await expect(Promise.all([bridge.decideConsent(expired?.id ?? '', true), bridge.decideConsent(expired?.id ?? '', true)])).resolves.toEqual([true, false]);
+  expect(links).toEqual(['https://weather.example.test/forecast']);
+  expect(fixture.sent.filter((message) => message.id === 'expired-link')).toEqual([expect.objectContaining({
+    error: expect.objectContaining({ code: -32001 }), id: 'expired-link',
+  })]);
 });

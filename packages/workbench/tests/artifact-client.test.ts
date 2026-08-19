@@ -1,7 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import { ArtifactClient } from '../src/artifacts/artifact-client.ts';
-import { ForegroundSessionAuthority } from '../src/foreground-session.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 
 interface RecordedRequest {
   readonly method: string;
@@ -57,7 +57,11 @@ const diff = {
 const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
   async (input, init) => {
     const url = String(input);
-    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    if (url === '/api/project/session') return response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
+    });
     calls.push({
       method: init?.method ?? 'GET',
       token: new Headers(init?.headers).get('x-agent-bundle-session'),
@@ -66,34 +70,11 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
     return reply();
   };
 
-it('uses refreshed authority credentials for later artifact requests without reconstruction', async () => {
-  const tokens = ['token-a', 'token-b'];
-  const authority = new ForegroundSessionAuthority({
-    fetch: async () => response({
-      instanceId: 'foreground-instance-a',
-      origin: 'http://127.0.0.1:5173',
-      token: tokens.shift(),
-    }),
-  });
-  const requestTokens: Array<string | null> = [];
-  const client = new ArtifactClient({
-    authority,
-    fetch: async (_input, init) => {
-      requestTokens.push(new Headers(init?.headers).get('x-agent-bundle-session'));
-      return response({ inspection });
-    },
-  });
-
-  await client.inspect('epoch-1');
-  await authority.refresh();
-  await client.inspect('epoch-1');
-
-  expect(requestTokens).toEqual(['token-a', 'token-b']);
-});
+const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
 
 it('reads one epoch inspection over the same foreground session', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new ArtifactClient({ fetch: recordingFetch(calls, () => response({ inspection })) });
+  const client = new ArtifactClient({ foreground: foreground(recordingFetch(calls, () => response({ inspection }))) });
 
   await expect(client.inspect('epoch-1')).resolves.toMatchObject({ epochId: 'epoch-1' });
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/artifacts/epochs/epoch-1' }]);
@@ -101,7 +82,7 @@ it('reads one epoch inspection over the same foreground session', async () => {
 
 it('encodes the requested epoch id into the inspection path', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new ArtifactClient({ fetch: recordingFetch(calls, () => response({ inspection })) });
+  const client = new ArtifactClient({ foreground: foreground(recordingFetch(calls, () => response({ inspection }))) });
 
   await client.inspect('epoch 1+2');
 
@@ -109,7 +90,7 @@ it('encodes the requested epoch id into the inspection path', async () => {
 });
 
 it('freezes the decoded inspection so no page can mutate epoch facts', async () => {
-  const client = new ArtifactClient({ fetch: recordingFetch([], () => response({ inspection })) });
+  const client = new ArtifactClient({ foreground: foreground(recordingFetch([], () => response({ inspection }))) });
 
   const decoded = await client.inspect('epoch-1');
 
@@ -120,7 +101,7 @@ it('freezes the decoded inspection so no page can mutate epoch facts', async () 
 
 it('compares two epochs through the base and candidate query parameters', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new ArtifactClient({ fetch: recordingFetch(calls, () => response({ diff })) });
+  const client = new ArtifactClient({ foreground: foreground(recordingFetch(calls, () => response({ diff }))) });
 
   await expect(client.diff('epoch-1', 'epoch-2')).resolves.toMatchObject({
     baseEpochId: 'epoch-1',
@@ -135,9 +116,9 @@ it('compares two epochs through the base and candidate query parameters', async 
 
 it('decodes a route diagnostic body into a coded client error', async () => {
   const client = new ArtifactClient({
-    fetch: recordingFetch([], () => response({
+    foreground: foreground(recordingFetch([], () => response({
       diagnostic: { code: 'AB8062', message: 'Artifact request has an invalid shape.' },
-    }, 400)),
+    }, 400))),
   });
 
   await expect(client.diff('epoch-1', 'epoch-2')).rejects.toMatchObject({
@@ -149,7 +130,7 @@ it('decodes a route diagnostic body into a coded client error', async () => {
 
 it('carries artifact validation diagnostics on the thrown client error', async () => {
   const client = new ArtifactClient({
-    fetch: recordingFetch([], () => response({
+    foreground: foreground(recordingFetch([], () => response({
       diagnostic: { code: 'AB8064', message: 'Artifact epoch failed validation.' },
       diagnostics: [{
         code: 'AB4301',
@@ -158,7 +139,7 @@ it('carries artifact validation diagnostics on the thrown client error', async (
         severity: 'error',
         target: 'claude',
       }],
-    }, 422)),
+    }, 422))),
   });
 
   await expect(client.inspect('epoch-1')).rejects.toMatchObject({
@@ -168,7 +149,7 @@ it('carries artifact validation diagnostics on the thrown client error', async (
 });
 
 it('reports an unrecognised failure body with the transport status', async () => {
-  const client = new ArtifactClient({ fetch: recordingFetch([], () => response({}, 503)) });
+  const client = new ArtifactClient({ foreground: foreground(recordingFetch([], () => response({}, 503))) });
 
   await expect(client.inspect('epoch-1')).rejects.toMatchObject({
     code: 'AB8063',
@@ -177,7 +158,7 @@ it('reports an unrecognised failure body with the transport status', async () =>
 });
 
 it('rejects a success body that is not an artifact inspection or diff', async () => {
-  const client = new ArtifactClient({ fetch: recordingFetch([], () => response({ inspection: 'epoch-1' })) });
+  const client = new ArtifactClient({ foreground: foreground(recordingFetch([], () => response({ inspection: 'epoch-1' }))) });
 
   await expect(client.inspect('epoch-1')).rejects.toMatchObject({
     code: 'AB8063',
@@ -212,7 +193,7 @@ it.each([
     read: (client: ArtifactClient): Promise<unknown> => client.diff('epoch-1', 'epoch-2'),
   },
 ])('rejects $name that is not part of the canonical artifact wire DTO', async ({ body, read }) => {
-  const client = new ArtifactClient({ fetch: recordingFetch([], () => response(body)) });
+  const client = new ArtifactClient({ foreground: foreground(recordingFetch([], () => response(body))) });
 
   await expect(read(client)).rejects.toMatchObject({
     code: 'AB8063',

@@ -62,6 +62,14 @@ const requireContainedRelativePath = (
   return value;
 };
 
+const requireRunsDirectory = (value: unknown): string => {
+  const runsDir = requireContainedRelativePath(value, 'EVAL_RUNS_DIR_INVALID', 'Eval configuration runsDir');
+  if (runsDir === '.') {
+    throw configError('EVAL_RUNS_DIR_INVALID', 'Eval configuration runsDir must name a child directory of the project root.');
+  }
+  return runsDir;
+};
+
 const semanticGraderKeys = Object.freeze(['harness', 'model']);
 
 const normalizeSemanticGrader = (value: unknown): NormalizedEvalSemanticGrader => {
@@ -117,7 +125,7 @@ export const normalizeEvalConfig = (value: unknown): NormalizedEvalConfig => {
   }
   const runsDir = snapshot.runsDir === undefined
     ? defaultEvalRunsDir
-    : requireContainedRelativePath(snapshot.runsDir, 'EVAL_RUNS_DIR_INVALID', 'Eval configuration runsDir');
+    : requireRunsDirectory(snapshot.runsDir);
   const semanticGrader = Object.hasOwn(snapshot, 'semanticGrader')
     ? normalizeSemanticGrader(snapshot.semanticGrader)
     : undefined;

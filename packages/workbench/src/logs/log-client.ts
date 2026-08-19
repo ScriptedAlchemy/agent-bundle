@@ -4,13 +4,21 @@ import type {
   DevLogReplay,
   DevLogReplayGap,
 } from '../../../agent-bundle/src/dev/dev-log-service.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
+import {
+  parseJsonWithoutDuplicateKeys,
+  snapshotStrictJsonValue,
+  type JsonValue,
+} from '../../../agent-bundle/src/core/strict-json.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
-import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import {
+  awaitWithAbort,
+  ForegroundRouteClientError,
+  type ForegroundRequestAuthority,
+} from '../mcp/mcp-route-client.ts';
 
 export interface LogClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
+  /** Reuses Workbench's single foreground session and invalidation authority. */
+  readonly foreground: ForegroundRequestAuthority;
 }
 
 export interface LogStream {
@@ -69,7 +77,8 @@ const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
 const isSafeWireText = (value: unknown, maximum = maximumLogFrameBytes): value is string => {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || redactEvalCredentialText(value) !== value) return false;
   const withoutProjectPaths = value.replace(safeProjectRelativePath, '');
-  return !hasControlOrSeparators(withoutProjectPaths) && !/(?:file:|[A-Za-z]:[\\/]|\\\\)/iu.test(withoutProjectPaths);
+  return !hasControlOrSeparators(withoutProjectPaths) &&
+    !/(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu.test(withoutProjectPaths);
 };
 const isSafeDetailKey = (value: string): boolean =>
   !isCredentialKey(value) && !hasControlOrSeparators(value);
@@ -163,16 +172,10 @@ const diagnosticFor = (value: unknown): LogClientError => {
 
 /** Same-origin cursor client for redacted production logs; it has no raw attachment API. */
 export class LogClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: LogClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message) => new LogClientError(code, message),
-      fallbackCode: 'AB8093',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Dev Log',
-    });
+  constructor(options: LogClientOptions) {
+    this.#foreground = options.foreground;
   }
 
   async replay(afterSequence = 0, signal?: AbortSignal): Promise<DevLogReplay> {
@@ -205,12 +208,13 @@ export class LogClient {
 
   async #response(path: string, init: RequestInit): Promise<Response> {
     try {
-      const response = await this.#transport.request(path, init);
+      const response = await this.#foreground.protectedRequest(path, init);
       if (response.ok) return response;
       const bytes = await awaitWithAbort(init.signal, () => response.arrayBuffer());
       throw diagnosticFor(parseResponseJson(new Uint8Array(bytes)));
     } catch (error) {
       if (error instanceof LogClientError || isAbort(error) || init.signal?.aborted) throw error;
+      if (error instanceof ForegroundRouteClientError) throw new LogClientError(error.code, error.message);
       throw invalid();
     }
   }
@@ -231,7 +235,6 @@ export class LogClient {
     const frameParts: Uint8Array[] = [];
     let frameBytes = 0;
     let expectedSequence = options.afterSequence + 1;
-    let receivedMessage = false;
     const append = (part: Uint8Array): void => {
       if (frameBytes + part.byteLength > maximumLogFrameBytes) throw invalid();
       if (part.byteLength > 0) frameParts.push(part);
@@ -246,6 +249,7 @@ export class LogClient {
       }
       frameParts.length = 0;
       frameBytes = 0;
+      if (signal.aborted) return;
       const line = decoder.decode(bytes).trim();
       if (line.length === 0) return;
       const message = messageFor(line);
@@ -253,10 +257,9 @@ export class LogClient {
         if (message.sequence !== expectedSequence) throw invalid();
         expectedSequence += 1;
       } else {
-        if (receivedMessage || message.requestedAfterSequence !== options.afterSequence) throw invalid();
+        if (message.requestedAfterSequence !== expectedSequence - 1) throw invalid();
         expectedSequence = message.earliestAvailableSequence;
       }
-      receivedMessage = true;
       options.onMessage(message);
     };
     try {
@@ -284,4 +287,5 @@ export class LogClient {
       await reader.cancel().catch(() => undefined);
     }
   }
+
 }

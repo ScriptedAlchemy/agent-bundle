@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { basename } from 'node:path';
@@ -15,6 +15,9 @@ import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './hook-pl
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session-service.ts';
+import { RuntimeMcpRoutes } from './runtime-mcp-routes.ts';
+import { RuntimeRoutes } from './runtime-routes.ts';
+import type { DevRuntimeSession } from './runtime-provider.ts';
 import { PlaygroundRoutes, type PlaygroundRouteService } from './playground-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
@@ -44,7 +47,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'playground' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'mcp-apps' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -82,6 +85,16 @@ export interface ForegroundCoordinator {
   status(): ProjectStatus;
 }
 
+/** Test-only ownership of one already-authenticated SSE response. */
+export interface ForegroundProjectEventStreamHandle {
+  disconnect(): void;
+}
+
+export interface ForegroundServerTesting {
+  /** Observes the current stream only after its subscription and close listeners exist. */
+  readonly onProjectEventStream?: (stream: ForegroundProjectEventStreamHandle) => void;
+}
+
 export interface WorkbenchAsset {
   readonly body: string | Uint8Array;
   readonly contentType: string;
@@ -103,7 +116,7 @@ export interface ForegroundServerOptions {
   readonly logs?: DevLogService;
   /** Deterministic and native eval runs; the browser names discovered suites, never a path or command. */
   readonly evals?: EvalRouteService;
-  /** The project-owned Eval service is closed only after foreground Eval routes have drained. */
+  /** The project-owned Eval service closes after foreground Eval routes and Agent API admissions drain. */
   readonly evalLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
@@ -118,13 +131,15 @@ export interface ForegroundServerOptions {
   readonly now?: () => Date;
   /** Durable playground trace store; the browser never selects its storage root or project identity. */
   readonly playground?: PlaygroundRouteService;
-  /** Native Playground runs drain after their routes close and before Eval or epochs are released. */
-  readonly playgroundLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly port?: number;
+  /** Optional runtime session; its lifecycle remains Workbench-owned. */
+  readonly runtime?: DevRuntimeSession;
   /** Read-only Skill document/resource service for the workbench. */
   readonly skillDocuments?: SkillDocumentService;
   /** Injectable only to make integration contracts deterministic. */
   readonly sessionToken?: string;
+  /** Test-only foreground stream observation; production callers never supply this. */
+  readonly testing?: ForegroundServerTesting;
 }
 
 interface RequestDiagnostic {
@@ -183,6 +198,17 @@ const attachmentHeader = (relativePath: string): string =>
 
 const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
   typeof value === 'string' ? value : undefined;
+
+const cookieValue = (request: IncomingMessage, name: string): string | undefined => {
+  const header = singleHeader(request.headers.cookie);
+  if (header === undefined) return undefined;
+  for (const pair of header.split(';')) {
+    const index = pair.indexOf('=');
+    if (index < 1) continue;
+    if (pair.slice(0, index).trim() === name) return pair.slice(index + 1).trim();
+  }
+  return undefined;
+};
 
 const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
   let size = 0;
@@ -342,13 +368,18 @@ const eventFrame = (event: ProjectEventMessage): string => {
 
 const afterSequence = (request: IncomingMessage, latestSequence: number): number => {
   const header = singleHeader(request.headers['last-event-id']);
-  if (header === undefined || header.length === 0) return 0;
-  if (!/^(0|[1-9]\d*)$/u.test(header)) {
-    throw requestError(diagnostic('AB8006', 'Last-Event-ID must be a non-negative integer.', 400));
+  const queryValues = new URL(request.url ?? '/', 'http://foreground.invalid').searchParams.getAll('after');
+  if (queryValues.length > 1) {
+    throw requestError(diagnostic('AB8006', 'Project event cursor must be singular.', 400));
   }
-  const sequence = Number(header);
+  const cursor = header === undefined || header.length === 0 ? queryValues[0] : header;
+  if (cursor === undefined || cursor.length === 0) return 0;
+  if (!/^(0|[1-9]\d*)$/u.test(cursor)) {
+    throw requestError(diagnostic('AB8006', 'Project event cursor must be a non-negative integer.', 400));
+  }
+  const sequence = Number(cursor);
   if (!Number.isSafeInteger(sequence) || sequence > latestSequence) {
-    throw requestError(diagnostic('AB8006', 'Last-Event-ID must not be ahead of the project event stream.', 400));
+    throw requestError(diagnostic('AB8006', 'Project event cursor must not be ahead of the project event stream.', 400));
   }
   return sequence;
 };
@@ -390,16 +421,19 @@ export class ForegroundServer {
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
   readonly #host: string;
+  readonly #mcpAppPreviews: McpAppRoutePreviewService | undefined;
   readonly #mcpAppRoutes: McpAppRoutes;
+  readonly #runtimeMcpRoutes: RuntimeMcpRoutes;
   readonly #mcpSessionRoutes: McpSessionRoutes;
+  readonly #runtimeRoutes: RuntimeRoutes;
   readonly #now: () => Date;
-  readonly #playgroundLifecycle: Readonly<{ close(): Promise<void> }> | undefined;
   readonly #playgroundRoutes: PlaygroundRoutes;
   readonly #port: number;
   readonly #server: Server;
   readonly #skillDocuments: SkillDocumentService | undefined;
   readonly #sockets = new Set<Socket>();
   readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
+  readonly #testing: ForegroundServerTesting | undefined;
   #closePromise: Promise<void> | undefined;
   #closing = false;
   #listenStarted = false;
@@ -417,10 +451,7 @@ export class ForegroundServer {
       throw new ForegroundServerError('AB8000', 'Foreground server port must be a safe TCP port number.');
     }
     const instanceId = options.instanceId ?? randomUUID();
-    if (
-      instanceId.length === 0 || instanceId.length > instanceIdLengthLimit ||
-      instanceId.trim() !== instanceId
-    ) {
+    if (instanceId.length === 0 || instanceId.length > instanceIdLengthLimit || instanceId.trim() !== instanceId) {
       throw new ForegroundServerError('AB8000', 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.');
     }
 
@@ -431,10 +462,11 @@ export class ForegroundServer {
     this.#eventHub = options.eventHub;
     this.#host = host;
     this.instanceId = instanceId;
+    this.#mcpAppPreviews = options.mcpAppPreviews;
     this.#now = options.now ?? (() => new Date());
-    this.#playgroundLifecycle = options.playgroundLifecycle;
     this.#port = port;
     this.#skillDocuments = options.skillDocuments;
+    this.#testing = options.testing;
     this.sessionToken = options.sessionToken ?? randomUUID();
     this.#mcpAppRoutes = new McpAppRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -443,6 +475,22 @@ export class ForegroundServer {
     this.#mcpSessionRoutes = new McpSessionRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.mcpSessions === undefined ? {} : { service: options.mcpSessions }),
+    });
+    this.#runtimeMcpRoutes = new RuntimeMcpRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.mcpAppPreviews === undefined
+        ? {}
+        : {
+            awaitRegistryMutation: async () => { await options.mcpAppPreviews?.runtime?.flushRegistry?.(); },
+            awaitSessionClose: async ({ expectedSessionRevision, sessionId }) => {
+              await options.mcpAppPreviews?.runtime?.closeSession?.(sessionId, expectedSessionRevision);
+            },
+          }),
+      ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
+    });
+    this.#runtimeRoutes = new RuntimeRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     });
     this.#hookPlaygroundRoutes = new HookPlaygroundRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -585,21 +633,52 @@ export class ForegroundServer {
   async #release(): Promise<readonly ForegroundServerCloseFailure[]> {
     this.#mcpAppRoutes.close();
     this.#mcpSessionRoutes.close();
-    // Cancelled hook simulations own wrapper processes and clones, so their
-    // drain is released alongside the other resources and awaited with them.
+    this.#runtimeMcpRoutes.close();
+    this.#runtimeRoutes.close();
+    // Publish the hook playground drain before awaiting App tombstones. Its
+    // abort callbacks may synchronously re-enter foreground shutdown, and
+    // must observe the already-published close outcome.
     const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
+    // App tombstone publication below deliberately yields once before joining
+    // resource drains. Observe this promise now so a fast drain failure cannot
+    // become an unhandled rejection during that handoff; allSettled below still
+    // records and reports the same rejection.
+    void releaseHookPlayground.catch(() => undefined);
     this.#playgroundRoutes.close();
-    // The route admission gate is closed before native work starts draining.
-    // Its runner can retain an epoch reference while final evidence is written,
-    // so Eval and the coordinator must remain available until it settles.
-    const releasePlayground = this.#playgroundLifecycle?.close() ?? Promise.resolve();
     this.#artifactRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
+    void releaseEvals.catch(() => undefined);
+    // Fence both public Eval authorities in this turn. Agent API handlers can
+    // still enter EvalService while Eval routes drain their readers, so the
+    // service waits for both fences rather than letting either admit new work.
+    const releaseAgentApi = this.#agentApi?.close() ?? Promise.resolve();
+    void releaseAgentApi.catch(() => undefined);
+    const releaseEvalService = Promise.allSettled([releaseEvals, releaseAgentApi])
+      .then(() => this.#evalLifecycle?.close());
+    void releaseEvalService.catch(() => undefined);
+    // Fence all authenticated log streams before the shared coordinator begins
+    // producer shutdown.  Observe an early rejection until the all-settled
+    // aggregation below can report it with its fixed resource label.
     const releaseLogs = this.#devLogRoutes.close();
+    void releaseLogs.catch(() => undefined);
     // The Agent API owns admissions over every shared foreground service. It
     // must publish closure and drain active handlers before those services or
     // the epoch-owning coordinator begin their own shutdown.
-    const [agentApi] = await Promise.allSettled([this.#agentApi?.close() ?? Promise.resolve()]);
+    const [agentApi] = await Promise.allSettled([releaseAgentApi]);
+    // Publish runtime App tombstones while authenticated event streams are
+    // still subscribed. Lifecycle close below owns proxies and sandboxes.
+    const appPreparation = await Promise.allSettled([this.#mcpAppPreviews?.prepareClose?.() ?? Promise.resolve()]);
+    // EventHub delivery is synchronous, while a socket write may need one
+    // turn to leave Node's stream buffer before shutdown destroys sockets.
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    // Eval terminal events are producer-owned diagnostics.  Fence their
+    // lifecycle drain before the coordinator can close that producer, even
+    // when route closure itself reported an independent failure.
+    const releaseCoordinator = releaseEvalService.then(
+      () => this.#coordinator.close(),
+      () => this.#coordinator.close(),
+    );
+    void releaseCoordinator.catch(() => undefined);
     const releaseServer = this.#listenStarted
       ? (() => {
           this.#listenStarted = false;
@@ -609,22 +688,23 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    const [playground] = await Promise.allSettled([releasePlayground]);
-    const [evalRoutes] = await Promise.allSettled([releaseEvals]);
-    const [evalService] = await Promise.allSettled([this.#evalLifecycle?.close() ?? Promise.resolve()]);
-    const [server, coordinator, hookPlayground, logs] = await Promise.allSettled([
+    const [server, coordinator, evalRoutes, evalService, hookPlayground, logs] = await Promise.allSettled([
       releaseServer,
-      this.#coordinator.close(),
+      releaseCoordinator,
+      releaseEvals,
+      releaseEvalService,
       releaseHookPlayground,
       releaseLogs,
     ]);
     const failures: ForegroundServerCloseFailure[] = [];
     if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
+    for (const result of appPreparation) {
+      if (result.status === 'rejected') failures.push(Object.freeze({ error: result.reason, resource: 'mcp-apps' }));
+    }
     if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
     if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
     if (evalRoutes.status === 'rejected') failures.push(Object.freeze({ error: evalRoutes.reason, resource: 'eval-routes' }));
     if (evalService.status === 'rejected') failures.push(Object.freeze({ error: evalService.reason, resource: 'eval-service' }));
-    if (playground.status === 'rejected') failures.push(Object.freeze({ error: playground.reason, resource: 'playground' }));
     if (hookPlayground.status === 'rejected') {
       failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
     }
@@ -645,6 +725,8 @@ export class ForegroundServer {
     }
     if (await this.#mcpAppRoutes.handle(request, response)) return;
     if (await this.#mcpSessionRoutes.handle(request, response)) return;
+    if (await this.#runtimeMcpRoutes.handle(request, response)) return;
+    if (await this.#runtimeRoutes.handle(request, response)) return;
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
     if (await this.#playgroundRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;
@@ -659,7 +741,15 @@ export class ForegroundServer {
     if (pathname === '/api/project/session') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       this.#assertSessionBootstrapOrigin(request);
-      return responseJson(response, { instanceId: this.instanceId, origin: this.url, token: this.sessionToken });
+      const cookieName = this.#sessionCookieName();
+      response.writeHead(200, {
+        'cache-control': 'no-store',
+        'content-type': 'application/json; charset=utf-8',
+        'set-cookie': `${cookieName}=${this.sessionToken}; HttpOnly; SameSite=Strict; Path=/api`,
+        'x-content-type-options': 'nosniff',
+      });
+      response.end(JSON.stringify({ cookieName, instanceId: this.instanceId, origin: this.url, token: this.sessionToken }));
+      return;
     }
     if (pathname === '/api/project/rebuild') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -743,10 +833,39 @@ export class ForegroundServer {
     }
   }
 
+  #assertEventSession(request: IncomingMessage): void {
+    const origin = singleHeader(request.headers.origin);
+    if (origin !== this.url && (origin !== undefined || singleHeader(request.headers['sec-fetch-site']) !== 'same-origin')) {
+      throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
+    }
+    if (cookieValue(request, this.#sessionCookieName()) !== this.sessionToken) {
+      throw requestError(diagnostic('AB8004', 'A valid foreground session cookie is required.', 403));
+    }
+  }
+
+  /** Stable per-origin names overwrite restart credentials while isolating concurrent loopback ports. */
+  #sessionCookieName(): string {
+    return `agent-bundle-foreground-session-${createHash('sha256').update(this.url).digest('hex').slice(0, 32)}`;
+  }
+
   #streamEvents(request: IncomingMessage, response: ServerResponse): void {
+    try {
+      this.#assertEventSession(request);
+    } catch (error) {
+      const failure = isRequestDiagnostic(error)
+        ? error
+        : diagnostic('AB8007', 'Request could not be completed.', 500);
+      response.writeHead(failure.status, {
+        'cache-control': 'no-store',
+        'content-type': 'application/json; charset=utf-8',
+        'x-content-type-options': 'nosniff',
+      });
+      response.end(JSON.stringify({ diagnostic: { code: failure.code, message: failure.message } }));
+      return;
+    }
     const sequence = afterSequence(request, this.#eventHub.latestSequence);
     response.writeHead(200, {
-      'cache-control': 'no-cache',
+      'cache-control': 'no-store',
       connection: 'keep-alive',
       'content-type': 'text/event-stream; charset=utf-8',
     });
@@ -816,6 +935,17 @@ export class ForegroundServer {
     this.#streamSubscriptions.add(subscription);
     request.once('close', closeStream);
     response.once('close', closeStream);
+    const handle = Object.freeze({
+      disconnect: () => {
+        if (closed) return;
+        closeSlowStream();
+      },
+    });
+    try {
+      this.#testing?.onProjectEventStream?.(handle);
+    } catch {
+      // Test observation cannot perturb an authenticated project stream.
+    }
   }
 
   async #serveAsset(request: IncomingMessage, response: ServerResponse, method: string): Promise<void> {

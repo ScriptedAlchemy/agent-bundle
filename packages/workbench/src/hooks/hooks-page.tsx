@@ -113,7 +113,7 @@ const JsonBlock = ({ empty, label, value }: {
   <h2>{label}</h2>
   {value === undefined
     ? <p className="empty-row">{empty}</p>
-    : <pre className="hook-json"><code>{serializeJsonRecord(value)}</code></pre>}
+    : <pre className="hook-json"><code>{serializeJsonRecord(value as ImmutableJsonRecord)}</code></pre>}
 </section>;
 
 /** The canonical intent, host mapping, and native codec trace of the latest hook run. */

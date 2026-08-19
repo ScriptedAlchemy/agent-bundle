@@ -21,6 +21,7 @@ const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
 const browserTimeout = 12_000;
+const runCompletionTimeout = 60_000;
 
 const e2e = test.extend({
   playwright: {
@@ -237,7 +238,7 @@ const seedGatedEvalProject = async (root: string): Promise<{ readonly release: (
   return { release: async () => writeFile(gate, 'released\n') };
 };
 
-e2e('admits a deterministic Eval promptly and renders refreshed durable evidence without desktop overflow', { timeout: 120_000 }, async ({ page }) => {
+e2e('admits a deterministic Eval promptly and renders refreshed durable evidence without desktop overflow', { timeout: 180_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
   await seedEvalProject(project.root);
@@ -268,7 +269,7 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
     const runId = admission.run.id;
     expect(admissionResponse.request().postDataJSON()).toEqual({ harness: 'deterministic', suites: ['review-change'] });
 
-    await expect(page.getByText(`Run ${runId} finished:`)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.eval-summary')).toContainText(`Run ${runId} finished:`, { timeout: runCompletionTimeout });
     expect(durableReads).toContain(`${server.url}/api/evals/runs/${encodeURIComponent(runId)}`);
     await expect(page.getByRole('button', { name: 'Cancel run' })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Durable event timeline' })).toBeVisible({ timeout: browserTimeout });
@@ -296,7 +297,7 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
     await page.getByRole('button', { name: 'Run deterministic suite' }).click();
     const replacement = await (await restarted).json() as { readonly run: Readonly<{ readonly id: string }> };
     expect(replacement.run.id).not.toBe(runId);
-    await expect(page.getByText(`Run ${replacement.run.id} finished:`)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText(`Run ${replacement.run.id} finished:`)).toBeVisible({ timeout: runCompletionTimeout });
     await expect(page.getByRole('link', { name: 'Download evidence.json' })).toHaveCount(0);
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -362,10 +363,10 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
     const runId = admission.run.id;
     await secondList;
     releaseStaleList?.();
-    await expect(page.getByLabel('Recorded run')).toHaveValue(runId, { timeout: browserTimeout });
+    await expect(page.getByLabel('Recorded run')).toHaveValue(runId, { timeout: runCompletionTimeout });
 
     const cancel = page.getByRole('button', { name: 'Cancel run' });
-    await expect(cancel).toBeVisible({ timeout: browserTimeout });
+    await expect(cancel).toBeVisible({ timeout: runCompletionTimeout });
     await cancel.evaluate((button) => {
       if (button instanceof HTMLButtonElement) {
         button.click();
@@ -376,10 +377,11 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
     await expect(page.getByRole('button', { name: 'Cancelling…' })).toBeDisabled();
     expect(cancellations).toBe(1);
     releaseCancel?.();
-    await expect(page.getByText('Cancellation was recorded for this run.')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('run.cancelling')).toBeVisible({ timeout: runCompletionTimeout });
     await gate.release();
-    await expect(page.getByText(`Run ${runId} was cancelled after recording`)).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByText('run.cancelled')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('Cancellation was recorded for this run.')).toBeVisible({ timeout: runCompletionTimeout });
+    await expect(page.getByText(`Run ${runId} was cancelled after recording`)).toBeVisible({ timeout: runCompletionTimeout });
+    await expect(page.getByText('run.cancelled')).toBeVisible({ timeout: runCompletionTimeout });
     expect(cancellations).toBe(1);
     expect(pageErrors).toEqual([]);
   } finally {

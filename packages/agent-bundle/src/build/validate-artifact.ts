@@ -560,17 +560,13 @@ const snapshotSchemaIssues = (value: unknown): readonly TargetArtifactDocumentIs
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
     return schemaValidationFailure();
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
-  if (
-    lengthDescriptor === undefined ||
-    !('value' in lengthDescriptor) ||
-    typeof lengthDescriptor.value !== 'number'
-  ) {
+  const descriptors = Object.getOwnPropertyDescriptors(value) as Record<string, PropertyDescriptor>;
+  const length = descriptors.length;
+  if (length === undefined || !('value' in length) || typeof length.value !== 'number') {
     return schemaValidationFailure();
   }
   const issues: TargetArtifactDocumentIssue[] = [];
-  for (let index = 0; index < lengthDescriptor.value; index += 1) {
+  for (let index = 0; index < length.value; index += 1) {
     const entry = descriptors[index];
     if (entry === undefined || !('value' in entry)) return schemaValidationFailure();
     const issue = snapshotSchemaIssue(entry.value);
@@ -1136,6 +1132,12 @@ const isSkillArtifactPath = (relativePath: string, skills: string | undefined): 
   return layout === skills && name !== undefined && resource !== undefined;
 };
 
+const isRecursiveLayoutPath = (relativePath: string, directory: string | undefined): boolean => {
+  if (directory === undefined) return false;
+  const [layout, ...segments] = relativePath.split('/');
+  return layout === directory && segments.length > 0 && segments.every((segment) => segment.length > 0);
+};
+
 const isTargetArtifactPath = (
   path: string,
   target: string,
@@ -1148,7 +1150,8 @@ const isTargetArtifactPath = (
   const layout = registry.artifactLayout(target);
   const hookContract = registry.hookContract(target);
   const mcpRuntime = registry.mcpRuntime(target);
-  return isDirectLayoutPath(relativePath, layout.hookWrappers) ||
+  return isRecursiveLayoutPath(relativePath, layout.assets) ||
+    isDirectLayoutPath(relativePath, layout.hookWrappers) ||
     isDirectLayoutPath(relativePath, layout.mcpApps) ||
     isDirectLayoutPath(relativePath, layout.mcpEntries) ||
     isDirectLayoutPath(relativePath, layout.scripts) ||

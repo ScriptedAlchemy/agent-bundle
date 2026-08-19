@@ -8,13 +8,12 @@ import type {
 } from '../../../agent-bundle/src/dev/hook-playground-service.ts';
 import { z } from 'zod';
 
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 
 export type HookSimulationResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation;
 
 export interface HookClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
+  readonly foreground: ForegroundRequestAuthority;
 }
 
 export interface HookSimulationOptions {
@@ -165,6 +164,14 @@ const frozenJson = <T>(value: T): T => {
   }
 };
 
+const diagnosticError = (value: unknown, status: number): HookClientError => {
+  if (isRecord(value) && isRecord(value.diagnostic) &&
+    typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
+    return new HookClientError(value.diagnostic.code, value.diagnostic.message);
+  }
+  return new HookClientError('AB8033', `Hook playground request failed with HTTP ${status}.`);
+};
+
 const hookList = (value: unknown): readonly HookPlaygroundHook[] => {
   const parsed = hookListSchema.safeParse(value);
   if (!parsed.success) throw invalidResponse();
@@ -181,28 +188,22 @@ const simulationResult = (value: unknown): HookSimulationResult => {
 
 /** A typed, credential-memory-only browser client for the epoch-bound hook playground routes. */
 export class HookClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: HookClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message) => new HookClientError(code, message),
-      fallbackCode: 'AB8033',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Hook playground',
-    });
+  constructor(options: HookClientOptions) {
+    this.#foreground = options.foreground;
   }
 
   async list(options: HookPlaygroundListOptions, signal?: AbortSignal): Promise<readonly HookPlaygroundHook[]> {
     const query = new URLSearchParams({ epochId: options.epochId });
     if (options.target !== undefined) query.set('target', options.target);
-    return hookList(await this.#transport.json(`/api/hooks?${query.toString()}`, {
+    return hookList(await this.#json(`/api/hooks?${query.toString()}`, {
       ...(signal === undefined ? {} : { signal }),
     }));
   }
 
   async simulate(options: HookSimulationOptions, signal?: AbortSignal): Promise<HookSimulationResult> {
-    return simulationResult(await this.#transport.json('/api/hooks/simulations', {
+    return simulationResult(await this.#json('/api/hooks/simulations', {
       body: JSON.stringify({ epochId: options.epochId, hook: options.hook, input: options.input, target: options.target }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -212,7 +213,7 @@ export class HookClient {
 
   /** The saved replay travels back exactly as the service emitted it, epoch binding included. */
   async replay(replay: HookPlaygroundReplay, signal?: AbortSignal): Promise<HookSimulationResult> {
-    return simulationResult(await this.#transport.json('/api/hooks/replays', {
+    return simulationResult(await this.#json('/api/hooks/replays', {
       body: JSON.stringify({ binding: replay.binding, input: replay.input }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -220,4 +221,10 @@ export class HookClient {
     }));
   }
 
+  async #json(path: string, init: RequestInit = {}): Promise<unknown> {
+    const response = await this.#foreground.protectedRequest(path, init);
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw diagnosticError(body, response.status);
+    return body;
+  }
 }

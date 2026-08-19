@@ -1,0 +1,36 @@
+{
+  "name": "@agent-bundle/rsc-agent-runtime-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "rsbuild build --mode production && npm run package:hosts",
+    "package:hosts": "node scripts/package-hosts.mjs",
+    "test": "rstest --config rstest.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "npm run build && npm test && npm run typecheck",
+    "eval:hosts": "node scripts/eval-hosts.mjs",
+    "capture:widget": "node scripts/capture-widget.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "express": "5.2.1",
+    "proper-lockfile": "^4.1.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-server-dom-rspack": "0.0.3",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "2.1.13",
+    "@rsbuild/plugin-react": "2.1.0",
+    "@rstest/core": "0.11.8",
+    "@types/express": "5.0.6",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "agent-bundle": "0.1.0",
+    "playwright-core": "1.62.1",
+    "rsbuild-plugin-rsc": "0.1.1"
+  }
+}

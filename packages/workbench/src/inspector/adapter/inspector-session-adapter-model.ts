@@ -1,4 +1,5 @@
 import type { McpSessionTraceEntry } from '../../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import type { DevRuntimeDiagnostic, DevRuntimeInspectionEnvelope, DevRuntimeTraceSpan } from '../../../../agent-bundle/src/dev/runtime-protocol.ts';
 import type { McpBrowserSessionModel, McpBrowserSessionTimelineEntry } from '../../mcp/mcp-session-model.ts';
 
 export type InspectorTab = 'tools' | 'resources' | 'prompts' | 'protocol' | 'logging';
@@ -17,6 +18,11 @@ export interface InspectorLogEntry {
   readonly receivedAt: Date;
   readonly sequence: number;
 }
+
+export type InspectorRuntimeEvidenceInput =
+  | Readonly<{ readonly kind: 'protocol'; readonly protocol?: DevRuntimeInspectionEnvelope['protocol']; readonly trace: readonly DevRuntimeTraceSpan[] }>
+  | Readonly<{ readonly diagnostics: readonly DevRuntimeDiagnostic[]; readonly kind: 'diagnostics' }>
+  | Readonly<{ readonly kind: 'trace'; readonly trace: readonly DevRuntimeTraceSpan[] }>;
 
 type FrameTraceEntry = McpSessionTraceEntry & Readonly<{
   readonly direction: 'client' | 'server';
@@ -60,8 +66,15 @@ const logParams = (payload: unknown): InspectorLogEntry['params'] | undefined =>
   return payload as InspectorLogEntry['params'];
 };
 
-export const inspectorSessionBindingKey = (binding: McpBrowserSessionModel['binding']): string =>
-  binding === undefined ? '' : `${binding.epochId}\u0000${binding.target}\u0000${binding.serverName}`;
+export const inspectorSessionBindingKey = (binding: McpBrowserSessionModel['binding']): string => {
+  if (binding === undefined) return '';
+  if ('kind' in binding) {
+    return binding.kind === 'runtime'
+      ? `runtime\u0000${binding.binding.sessionId}\u0000${binding.binding.sessionRevision}\u0000${binding.binding.target}\u0000${binding.binding.serverName}`
+      : '';
+  }
+  return `${binding.epochId}\u0000${binding.target}\u0000${binding.serverName}`;
+};
 
 export const inspectorProtocolEntries = (
   timeline: readonly McpBrowserSessionTimelineEntry[],

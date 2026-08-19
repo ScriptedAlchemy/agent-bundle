@@ -8,17 +8,16 @@ import type {
 } from '../../../agent-bundle/src/dev/eval-service.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
-import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { awaitWithAbort, type ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import {
   nonnegativeIntegerSchema,
   positiveIntegerSchema,
-  provenanceIdentifierSchema,
   safeIntegerSchema,
 } from '../schema-atoms.ts';
 
 export interface EvalClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
+  /** Workbench-owned memory-only session authority shared by all foreground routes. */
+  readonly foreground: ForegroundRequestAuthority;
 }
 
 export type EvalHarness = 'claude' | 'codex' | 'deterministic';
@@ -57,7 +56,6 @@ export interface EvalArtifact {
   readonly filename: string;
   readonly mediaType: string;
 }
-
 export class EvalClientError extends Error {
   readonly code: string;
 
@@ -85,6 +83,10 @@ const invalidResponse = (): EvalClientError =>
 const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
 
 const textSchema = z.string();
+const provenanceIdentifier = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u;
+const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
+const provenanceIdentifierSchema = z.string().refine((value) =>
+  provenanceIdentifier.test(value) && !provenancePathMarker.test(value));
 const timestampSchema = z.string().refine(isIsoTimestamp);
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const evidenceLevelSchema = z.enum(['inferred', 'observed', 'unavailable']);
@@ -178,12 +180,14 @@ const pluginFailureSchema = z.strictObject({
   message: textSchema,
 });
 const trialInvocationProvenanceSchema = z.union([
-  z.strictObject({ mode: z.enum(['automatic', 'none']) }),
+  z.strictObject({ mode: z.literal('automatic'), skill: provenanceIdentifierSchema.optional() }),
+  z.strictObject({ mode: z.literal('none') }),
   z.strictObject({ mode: z.literal('explicit'), skill: provenanceIdentifierSchema }),
 ]);
 const semanticGraderProvenanceSchema = z.union([
   z.null(),
   z.strictObject({
+    contractRevision: provenanceIdentifierSchema,
     id: provenanceIdentifierSchema,
     model: provenanceIdentifierSchema,
   }),
@@ -338,28 +342,22 @@ const filenameFor = (value: string | null): string | undefined => {
 
 /** A typed, credential-memory-only browser client for persisted Eval evidence. */
 export class EvalClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: EvalClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message) => new EvalClientError(code, message),
-      fallbackCode: 'AB8073',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Eval',
-    });
+  constructor(options: EvalClientOptions) {
+    this.#foreground = options.foreground;
   }
 
-  async suites(): Promise<EvalSuiteListing> {
-    return suiteListing(await this.#json('/api/evals/suites'));
+  async suites(signal?: AbortSignal): Promise<EvalSuiteListing> {
+    return suiteListing(await this.#json('/api/evals/suites', signal === undefined ? {} : { signal }));
   }
 
-  async runs(): Promise<readonly EvalRunRecord[]> {
-    return runRecords(await this.#json('/api/evals/runs'));
+  async runs(signal?: AbortSignal): Promise<readonly EvalRunRecord[]> {
+    return runRecords(await this.#json('/api/evals/runs', signal === undefined ? {} : { signal }));
   }
 
   async read(runId: string, signal?: AbortSignal): Promise<EvalRunResult> {
-    return runResult(await this.#json(`/api/evals/runs/${encodeURIComponent(runId)}`, { signal }));
+    return runResult(await this.#json(`/api/evals/runs/${encodeURIComponent(runId)}`, signal === undefined ? {} : { signal }));
   }
 
   async start(selection: EvalRunStart, signal?: AbortSignal): Promise<EvalRunAdmission> {
@@ -425,8 +423,8 @@ export class EvalClient {
   }
 
   async #json(path: string, init: RequestInit = {}, expectedStatus?: number): Promise<JsonValue> {
+    const response = await this.#response(path, init, expectedStatus);
     try {
-      const response = await this.#response(path, init, expectedStatus);
       return parseResponseJson(new Uint8Array(await awaitWithAbort(init.signal, () => response.arrayBuffer())));
     } catch (error) {
       if (error instanceof EvalClientError || isAbort(error) || init.signal?.aborted) throw error;
@@ -435,10 +433,10 @@ export class EvalClient {
   }
 
   async #response(path: string, init: RequestInit = {}, expectedStatus?: number): Promise<Response> {
+    const response = await this.#foreground.protectedRequest(path, init);
+    if (response.ok && (expectedStatus === undefined || response.status === expectedStatus)) return response;
+    if (response.ok) throw invalidResponse();
     try {
-      const response = await this.#transport.request(path, init);
-      if (response.ok && (expectedStatus === undefined || response.status === expectedStatus)) return response;
-      if (response.ok) throw invalidResponse();
       const body = parseResponseJson(new Uint8Array(await awaitWithAbort(init.signal, () => response.arrayBuffer())));
       if (exactKeys(body, ['diagnostic']) && exactKeys(body.diagnostic, ['code', 'message']) &&
         typeof body.diagnostic.code === 'string' && typeof body.diagnostic.message === 'string') {

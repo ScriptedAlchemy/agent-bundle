@@ -21,6 +21,11 @@ export default defineConfig({
     ],
     filenameHash: false,
     legalComments: 'linked',
+    minify: {
+      jsOptions: {
+        exclude: /^workbench[\\/]/u,
+      },
+    },
     distPath: {
       root: './packages/agent-bundle/dist',
     },

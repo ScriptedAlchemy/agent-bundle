@@ -132,6 +132,43 @@ const provenanceLabel = (selected: ServedSkillDocument): string => selected.base
     ? 'Source document'
     : `Source · ${selected.provenance.kind}`;
 
+const SkillDocumentTabs = ({ document, onDocumentChange, panelId, skillId }: {
+  readonly document: SkillDocumentKind;
+  readonly onDocumentChange: (document: SkillDocumentKind) => void;
+  readonly panelId: string;
+  readonly skillId: string;
+}) => {
+  const buttons = useRef<Partial<Record<SkillDocumentKind, HTMLButtonElement | null>>>({});
+  const selectDocument = (next: SkillDocumentKind): void => {
+    onDocumentChange(next);
+    buttons.current[next]?.focus();
+  };
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, current: SkillDocumentKind): void => {
+    const next = nextTab(documentTabs, current, event);
+    if (next !== undefined) selectDocument(next);
+  };
+
+  return <div aria-label="Skill document" className="skill-tabs skill-tabs--document" role="tablist">
+    {documentTabs.map((candidate) => (
+      <button
+        aria-controls={panelId}
+        aria-selected={document === candidate}
+        className={document === candidate ? 'skill-tab skill-tab--active' : 'skill-tab'}
+        id={tabIdFor(skillId, 'document', candidate)}
+        key={candidate}
+        onClick={() => selectDocument(candidate)}
+        onKeyDown={(event) => onKeyDown(event, candidate)}
+        ref={(element) => { buttons.current[candidate] = element; }}
+        role="tab"
+        tabIndex={document === candidate ? 0 : -1}
+        type="button"
+      >
+        {candidate[0]!.toUpperCase()}{candidate.slice(1)}
+      </button>
+    ))}
+  </div>;
+};
+
 /** The selected served Skill document and its rendered or raw Markdown view. */
 export const SkillDocumentPanel = ({
   document,
@@ -145,19 +182,10 @@ export const SkillDocumentPanel = ({
   targetNames = [],
   view,
 }: SkillDocumentPanelProps) => {
-  const documentTabButtons = useRef<Partial<Record<SkillDocumentKind, HTMLButtonElement | null>>>({});
   const viewTabButtons = useRef<Partial<Record<SkillView, HTMLButtonElement | null>>>({});
-  const selectDocument = (next: SkillDocumentKind): void => {
-    onDocumentChange(next);
-    documentTabButtons.current[next]?.focus();
-  };
   const selectView = (next: SkillView): void => {
     onViewChange(next);
     viewTabButtons.current[next]?.focus();
-  };
-  const onDocumentTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, current: SkillDocumentKind): void => {
-    const next = nextTab(documentTabs, current, event);
-    if (next !== undefined) selectDocument(next);
   };
   const onViewTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, current: SkillView): void => {
     const next = nextTab(viewTabs, current, event);
@@ -192,25 +220,7 @@ export const SkillDocumentPanel = ({
     <div className="skill-controls">
       <div className="skill-control-group">
         <span className="skill-control-label">Document</span>
-        <div aria-label="Skill document" className="skill-tabs skill-tabs--document" role="tablist">
-          {documentTabs.map((candidate) => (
-            <button
-              aria-controls={panelId}
-              aria-selected={document === candidate}
-              className={document === candidate ? 'skill-tab skill-tab--active' : 'skill-tab'}
-              id={tabIdFor(selectedId, 'document', candidate)}
-              key={candidate}
-              onClick={() => selectDocument(candidate)}
-              onKeyDown={(event) => onDocumentTabKeyDown(event, candidate)}
-              ref={(element) => { documentTabButtons.current[candidate] = element; }}
-              role="tab"
-              tabIndex={document === candidate ? 0 : -1}
-              type="button"
-            >
-              {candidate[0]!.toUpperCase()}{candidate.slice(1)}
-            </button>
-          ))}
-        </div>
+        <SkillDocumentTabs document={document} onDocumentChange={onDocumentChange} panelId={panelId} skillId={selectedId} />
       </div>
       <div className="skill-control-group">
         <span className="skill-control-label">View</span>
@@ -341,13 +351,17 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
   }, [client, status.source.revision]);
 
   useEffect(() => {
+    const controller = new AbortController();
     let current = true;
     setSuitesState({ state: 'loading' });
-    void evalClient.suites().then(
+    void evalClient.suites(controller.signal).then(
       (listing) => { if (current) setSuitesState(Object.freeze({ state: 'ready', suites: listing.suites })); },
       () => { if (current) setSuitesState(Object.freeze({ state: 'unavailable' })); },
     );
-    return () => { current = false; };
+    return () => {
+      current = false;
+      controller.abort();
+    };
   }, [evalClient, status.source.revision]);
 
   const evalCoverage = useMemo<SkillEvalCoverageState>(() => {

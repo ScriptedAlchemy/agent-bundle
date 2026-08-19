@@ -137,30 +137,58 @@ export interface PlaygroundObservationLifecycle {
   invalidate(): void;
 }
 
-export interface PlaygroundCancelFlight {
+export interface PlaygroundCancelLease {
+  current(): boolean;
+  readonly signal: AbortSignal;
+}
+
+export interface PlaygroundCancelFlight extends PlaygroundCancelLease {
   readonly done: Promise<void>;
   readonly started: boolean;
 }
 
 export interface PlaygroundCancelFlightLifecycle {
-  start(operation: () => Promise<void>): PlaygroundCancelFlight;
+  start(operation: (lease: PlaygroundCancelLease) => Promise<void>): PlaygroundCancelFlight;
+  invalidate(): void;
 }
 
 /** Guards the server-draining cancel/replay sequence before React re-renders the button disabled. */
 export const createPlaygroundCancelFlight = (): PlaygroundCancelFlightLifecycle => {
-  let active: Promise<void> | undefined;
+  let active: { readonly controller: AbortController; done: Promise<void> } | undefined;
+  const flight = (
+    owner: NonNullable<typeof active>,
+    started: boolean,
+  ): PlaygroundCancelFlight => Object.freeze({
+    current: () => active === owner && !owner.controller.signal.aborted,
+    done: owner.done,
+    signal: owner.controller.signal,
+    started,
+  });
+  const invalidate = (): void => {
+    const previous = active;
+    active = undefined;
+    previous?.controller.abort();
+  };
   return Object.freeze({
-    start: (operation: () => Promise<void>): PlaygroundCancelFlight => {
-      if (active !== undefined) return Object.freeze({ done: active, started: false });
+    start: (operation: (lease: PlaygroundCancelLease) => Promise<void>): PlaygroundCancelFlight => {
+      if (active !== undefined) return flight(active, false);
+      const controller = new AbortController();
+      const owner = { controller, done: Promise.resolve() };
+      active = owner;
+      const lease = Object.freeze({
+        current: () => active === owner && !controller.signal.aborted,
+        signal: controller.signal,
+      });
       let done: Promise<void>;
-      try { done = Promise.resolve(operation()); }
+      try { done = Promise.resolve(operation(lease)); }
       catch (reason) { done = Promise.reject(reason); }
-      active = done;
+      owner.done = done;
       void done.finally(() => {
-        if (active === done) active = undefined;
+        if (active === owner) active = undefined;
       }).catch(() => undefined);
-      return Object.freeze({ done, started: true });
+      return flight(owner, true);
     },
+    invalidate,
   });
 };
 
@@ -268,6 +296,35 @@ const createGenerationLifecycle = (): { begin(): GenerationLease; invalidate(): 
     },
     invalidate,
   });
+};
+
+export interface PlaygroundCancelRunOptions {
+  readonly client: Pick<PlaygroundClient, 'cancel' | 'replay'>;
+  readonly lease: PlaygroundCancelLease;
+  readonly observation: PlaygroundObservationLifecycle;
+  readonly onEvents: (events: readonly PlaygroundTraceEvent[]) => void;
+  readonly onObservationRestart: () => void;
+  readonly onSession: (session: PlaygroundSession) => void;
+  readonly runId: string;
+  readonly sessionId: string;
+}
+
+/** Claims same-run evidence before cancellation so an older observer cannot overwrite the terminal replay. */
+export const cancelPlaygroundRun = async ({
+  client, lease, observation, onEvents, onObservationRestart, onSession, runId, sessionId,
+}: PlaygroundCancelRunOptions): Promise<void> => {
+  observation.invalidate();
+  try {
+    await client.cancel(runId, lease.signal);
+    if (!lease.current()) return;
+    const replay = await client.replay(sessionId, 0, lease.signal);
+    if (!lease.current()) return;
+    onEvents(replay.events);
+    onSession(replay.session);
+  } catch (reason) {
+    if (lease.current()) onObservationRestart();
+    throw reason;
+  }
 };
 
 /** Every request owns a key, so a late catalog cannot repopulate a replacement client or artifact epoch. */
@@ -532,6 +589,7 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
 export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, client, epoch, onRunChange, run, scripts, targets }: PlaygroundPageProps) => {
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [observationRevision, setObservationRevision] = useState(0);
   const [draftEvalCase, setDraftEvalCase] = useState<DraftEvalCase>();
   const [error, setError] = useState<string>();
   const [events, setEvents] = useState<readonly PlaygroundTraceEvent[]>([]);
@@ -549,6 +607,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const [nativeSelection, setNativeSelection] = useState<NativePlaygroundSelection>(emptyNativeSelection);
   const [targetName, setTargetName] = useState('');
   const cancelFlight = useRef(createPlaygroundCancelFlight());
+  const cancelPresentation = useRef<Promise<void> | undefined>(undefined);
   const clientOwner = useRef(client);
   const clientResetPending = useRef(false);
   const actionLifecycle = useRef(createPlaygroundActionLifecycle(client));
@@ -558,13 +617,18 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     clientOwner.current = client;
     clientResetPending.current = true;
     actionLifecycle.current.replace(client);
-    cancelFlight.current = createPlaygroundCancelFlight();
+    cancelFlight.current.invalidate();
     observationLifecycle.current.invalidate();
   }
   const activeRun = clientReplaced ? undefined : run;
   const session = activeRun?.session;
   const sessionId = session?.id;
   const runId = activeRun?.id;
+  const cancelOwner = useRef({ client, runId, sessionId });
+  if (cancelOwner.current.client !== client || cancelOwner.current.runId !== runId || cancelOwner.current.sessionId !== sessionId) {
+    cancelOwner.current = { client, runId, sessionId };
+    cancelFlight.current.invalidate();
+  }
   const hookInputObject = parseRawJsonRecord(hookInput);
   const mcpArgumentsObject = parseRawJsonRecord(mcpArguments);
   const view = playgroundViewFor({
@@ -628,7 +692,12 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     return () => {
       observation.abort();
     };
-  }, [client, onRunChange, runId, sessionId]);
+  }, [client, observationRevision, onRunChange, runId, sessionId]);
+
+  useEffect(() => () => {
+    cancelPresentation.current = undefined;
+    cancelFlight.current.invalidate();
+  }, []);
 
   const runAction = async (action: (lease: PlaygroundActionLease) => Promise<void>): Promise<void> => {
     const lease = actionLifecycle.current.begin(client);
@@ -670,6 +739,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     if (operation === 'script.run') {
       return selectedScriptId.length === 0 ? undefined : { operation, scriptId: selectedScriptId, target: selectedTargetName };
     }
+    if (operation !== 'mcp.call-tool') return undefined;
     return mcpServerName.length === 0 || mcpTool.length === 0 || mcpArgumentsObject === null
       ? undefined
       : {
@@ -695,31 +765,33 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
 
   const cancel = (): Promise<void> => {
     if (runId === undefined || sessionId === undefined) return Promise.resolve();
-    let lease: PlaygroundActionLease | undefined;
-    const flight = cancelFlight.current.start(async () => {
-      lease = actionLifecycle.current.begin(client);
-      if (!lease.current()) {
-        lease.release();
-        return;
-      }
+    const flight = cancelFlight.current.start(async (lease) => {
       try {
         setError(undefined);
-        await client.cancel(runId, lease.signal);
-        if (!lease.current()) return;
-        const replay = await client.replay(sessionId, 0, lease.signal);
-        if (!lease.current()) return;
-        setEvents(replay.events);
-        onRunChange({ id: runId, session: replay.session });
+        await cancelPlaygroundRun({
+          client,
+          lease,
+          observation: observationLifecycle.current,
+          onEvents: setEvents,
+          onObservationRestart: () => setObservationRevision((previous) => previous + 1),
+          onSession: (next) => onRunChange({ id: runId, session: next }),
+          runId,
+          sessionId,
+        });
       } catch (reason) {
-        if (lease.current()) setError(errorMessage(reason));
-      } finally {
-        lease.release();
+        if (lease.current()) {
+          setError(errorMessage(reason));
+        }
       }
     });
     if (flight.started) {
+      cancelPresentation.current = flight.done;
       setCancelling(true);
       void flight.done.finally(() => {
-        if (lease?.current()) setCancelling(false);
+        if (cancelPresentation.current === flight.done) {
+          cancelPresentation.current = undefined;
+          setCancelling(false);
+        }
       }).catch(() => undefined);
     }
     return flight.done;

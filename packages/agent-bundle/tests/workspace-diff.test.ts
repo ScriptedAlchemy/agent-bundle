@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -43,6 +43,45 @@ it('marks an oversized diff as truncated instead of expanding unbounded native w
       plan: Object.freeze({ digest: 'fixture-digest', entries: Object.freeze([]), git: false, sourcePath: '/private/source-fixture' }),
       workspace: root,
     })).resolves.toMatchObject({ changes: expect.any(Array), truncated: true });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('bounds workspace traversal and file bytes before producing native evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-workspace-diff-'));
+  try {
+    await Promise.all([
+      writeFile(join(root, 'a.txt'), 'four'),
+      writeFile(join(root, 'b.txt'), 'five!'),
+      writeFile(join(root, 'c.txt'), 'sixsix'),
+    ]);
+    const plan = Object.freeze({
+      digest: 'fixture-digest',
+      entries: Object.freeze([]),
+      git: false,
+      sourcePath: '/private/source-fixture',
+    });
+
+    await expect(workspaceDiff({ fileByteLimit: 4, plan, scanLimit: 3, totalByteLimit: 12, workspace: root }))
+      .resolves.toMatchObject({ changes: [{ kind: 'added' }], truncated: true });
+    await expect(workspaceDiff({ fileByteLimit: 8, plan, scanLimit: 2, totalByteLimit: 16, workspace: root }))
+      .resolves.toMatchObject({ changes: expect.any(Array), truncated: true });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('charges every visited empty directory against the native workspace traversal budget', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-workspace-diff-'));
+  try {
+    await mkdir(join(root, 'first', 'second'), { recursive: true });
+
+    await expect(workspaceDiff({
+      plan: Object.freeze({ digest: 'fixture-digest', entries: Object.freeze([]), git: false, sourcePath: '/private/source-fixture' }),
+      scanLimit: 1,
+      workspace: root,
+    })).resolves.toEqual(Object.freeze({ changes: Object.freeze([]), truncated: true }));
   } finally {
     await rm(root, { force: true, recursive: true });
   }

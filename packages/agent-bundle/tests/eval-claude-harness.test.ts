@@ -514,6 +514,7 @@ it('runs one server-owned configured semantic Claude grader after deterministic 
     });
 
     expect(trial.provenance?.semanticGrader).toEqual({
+      contractRevision: 'v1',
       id: 'claude-semantic',
       model: 'claude-opus-4-6',
     });

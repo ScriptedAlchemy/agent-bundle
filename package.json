@@ -7,7 +7,8 @@
     "node": ">=22.19.0"
   },
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "examples/*"
   ],
   "scripts": {
     "build": "npm run build:workbench && rslib build",
@@ -17,10 +18,13 @@
     "lint": "rslint .",
     "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json",
     "check": "npm run build && npm test && npm run lint && npm run typecheck",
+    "docs:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md",
+    "eval:spot": "npm run build --workspace @agent-bundle/rsc-agent-runtime-demo && npm test --workspace @agent-bundle/rsc-agent-runtime-demo -- tests/micro-eval.spot.test.ts",
+    "check:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md --check",
     "test:packed": "rstest --config rstest.config.ts packages/agent-bundle/tests/release-audit.test.ts packages/agent-bundle/tests/packed-consumer.test.ts packages/agent-bundle/tests/dev-workbench-packaging.test.ts packages/workbench/tests/packed-release.e2e.test.ts",
     "test:packed:native": "rstest --config rstest.config.ts packages/agent-bundle/tests/packed-native-smoke.test.ts",
-    "test:packed:native:claude": "npm run build && AGENT_BUNDLE_PACKED_NATIVE_CLAUDE_SMOKE=1 npm run test:packed:native",
-    "test:packed:native:codex": "npm run build && AGENT_BUNDLE_PACKED_NATIVE_CODEX_SMOKE=1 npm run test:packed:native",
+    "test:packed:native:claude": "node scripts/run-packed-native-smoke.mjs claude",
+    "test:packed:native:codex": "node scripts/run-packed-native-smoke.mjs codex",
     "pack:dry-run": "npm run build && npm pack --workspace agent-bundle --dry-run --json",
     "audit:release:sbom": "node scripts/audit-packed-sbom.mjs",
     "audit:release": "publint packages/agent-bundle && attw --pack --profile esm-only packages/agent-bundle && npm ls --omit=dev --workspace agent-bundle && npm audit --omit=dev --workspace agent-bundle && npm audit signatures --workspace agent-bundle && npm run audit:release:sbom",
@@ -34,8 +38,11 @@
     "@rslint/core": "0.8.0",
     "@rspack/core": "2.1.10",
     "@rstest/adapter-rslib": "0.11.8",
+    "@rstest/browser": "0.11.8",
+    "@rstest/browser-react": "0.11.8",
     "@rstest/core": "0.11.8",
     "@arethetypeswrong/cli": "0.18.5",
+    "@rstest/coverage-v8": "0.11.8",
     "@rstest/playwright": "0.11.8",
     "@types/node": "26.2.0",
     "commander": "15.0.0",

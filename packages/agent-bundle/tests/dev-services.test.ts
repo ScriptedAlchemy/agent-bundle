@@ -5,6 +5,8 @@ import { join, win32 } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { TargetRegistry } from '../src/adapters/registry.ts';
+import type { TargetAdapter } from '../src/adapters/types.ts';
 import { containedPathComponents } from '../src/dev/project-service.ts';
 import { validate } from '../src/api.ts';
 import { digest } from '../src/core/digest.ts';
@@ -49,6 +51,321 @@ const createProject = async (skillMarkdown: string): Promise<string> => {
   ]);
   return root;
 };
+
+const createRuntimeProject = async (options: Readonly<{
+  readonly appMeta?: string;
+  readonly appDeclaration?: string;
+  readonly configExtension?: string;
+  readonly configSetup?: (metadataSentinel: string) => string;
+  readonly provider?: string;
+}> = {}): Promise<{
+  readonly metadataSentinel: string;
+  readonly root: string;
+  readonly sentinel: string;
+}> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-runtime-'));
+  const metadataSentinel = join(root, 'metadata-accessed');
+  const sentinel = join(root, 'provider-imported');
+  const appDeclaration = options.appDeclaration ?? (
+    '{ _meta: ' + (options.appMeta ?? "{ ui: { preferred: 'compact' }, labels: ['one', 'two'] }") +
+    ", entry: './src/app.ts', resourceUri: 'ui://timeline/v1/dashboard', targets: ['portable'], template: './src/shell.html' }"
+  );
+  await mkdir(join(root, 'skills', 'review'), { recursive: true });
+  await mkdir(join(root, 'src', 'dev'), { recursive: true });
+  await Promise.all([
+    writeFile(join(root, 'skills', 'review', 'SKILL.md'), [
+      '---',
+      'name: review',
+      'description: Reviews changes',
+      '---',
+      'Review the changed files.',
+      '',
+    ].join('\n')),
+    writeFile(join(root, 'src', 'server.ts'), 'export const server = true;\n'),
+    writeFile(join(root, 'src', 'app.ts'), 'export const app = true;\n'),
+    writeFile(join(root, 'src', 'shell.html'), '<main>fixture</main>\n'),
+    writeFile(join(root, 'src', 'dev', 'provider.ts'), [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(sentinel)}, 'imported');`,
+      "export const createDevRuntimeProvider = () => ({ descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 }, start: async () => ({}) });",
+      '',
+    ].join('\n')),
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      options.configSetup?.(metadataSentinel) ?? '',
+      'export default {',
+      "  dev: { runtime: { provider: " + JSON.stringify(options.provider ?? './src/dev/provider.ts') + ' } },',
+      "  mcp: { servers: { timeline: { apps: { dashboard: " + appDeclaration + " }, entry: './src/server.ts', targets: ['portable'] } } },",
+      "  plugin: { name: 'dev-runtime-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      ...(options.configExtension === undefined ? [] : ["  portable: " + options.configExtension + ',']),
+      '};',
+      '',
+    ].join('\n')),
+  ]);
+  return { metadataSentinel, root, sentinel };
+};
+
+it('prepares a frozen server-only runtime declaration only for development callers', async () => {
+  const { root, sentinel } = await createRuntimeProject();
+  try {
+    const ordinary = await new ProjectService({ includeDevRuntime: false, mode: 'development', root }).prepare('build');
+    const runtime = await new ProjectService({ includeDevRuntime: true, mode: 'development', root }).prepare('build');
+
+    expect(ordinary.devRuntime).toBeUndefined();
+    await expect(readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(runtime.source.state).toBe('ready');
+    expect(runtime.devRuntime).toEqual({
+      apps: [{
+        _meta: { labels: ['one', 'two'], ui: { preferred: 'compact' } },
+        id: 'mcp-app:timeline:dashboard',
+        name: 'dashboard',
+        resourceUri: 'ui://timeline/v1/dashboard',
+        serverId: 'mcp:timeline',
+        serverName: 'timeline',
+        source: join(root, 'src', 'app.ts'),
+        targets: ['portable'],
+        template: join(root, 'src', 'shell.html'),
+      }],
+      provider: './src/dev/provider.ts',
+      servers: [expect.objectContaining({
+        id: 'mcp:timeline',
+        name: 'timeline',
+        source: join(root, 'src', 'server.ts'),
+        targets: ['portable'],
+        transport: 'stdio',
+      })],
+      sourceRevision: runtime.source.revision,
+    });
+    expect(Object.isFrozen(runtime.devRuntime)).toBe(true);
+    expect(Object.isFrozen(runtime.devRuntime?.apps)).toBe(true);
+    expect(Object.isFrozen(runtime.devRuntime?.apps[0]!._meta)).toBe(true);
+    expect(Object.isFrozen(runtime.devRuntime?.apps[0]!._meta?.labels)).toBe(true);
+    expect('provenance' in runtime.devRuntime!.apps[0]!).toBe(false);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('keeps supplemental runtime declaration and App metadata failures out of the artifact source lane', async () => {
+  const malformedDeclaration = await createRuntimeProject({ provider: '  ' });
+  const nonfiniteMetadata = await createRuntimeProject({ appMeta: '{ count: Number.NaN }' });
+  try {
+    const declaration = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: malformedDeclaration.root }).prepare('build');
+    const metadata = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: nonfiniteMetadata.root }).prepare('build');
+
+    expect(declaration.source.state).toBe('ready');
+    expect(declaration.devRuntime).toBeUndefined();
+    expect(declaration.devRuntimeDiagnostic).toMatchObject({ code: 'AB8200' });
+    expect(metadata.source.state).toBe('ready');
+    expect(metadata.devRuntime).toBeUndefined();
+    expect(metadata.devRuntimeDiagnostic).toMatchObject({ code: 'AB8200' });
+  } finally {
+    await Promise.all([
+      rm(malformedDeclaration.root, { force: true, recursive: true }),
+      rm(nonfiniteMetadata.root, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('surfaces a non-finite registered config extension as the closed AB4500 project diagnostic', async () => {
+  const project = await createRuntimeProject({ configExtension: 'Number.NaN' });
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('dev');
+
+    expect(prepared.source).toEqual({
+      diagnostics: [{
+        code: 'AB4500',
+        message: 'A registered config extension must contain strict finite JSON data.',
+        recovery: 'Correct the project configuration field named by this diagnostic, then inspect again.',
+        severity: 'error',
+        sourcePath: join(project.root, 'agent-bundle.config.ts'),
+      }],
+      revision: expect.any(String),
+      state: 'invalid',
+    });
+    expect(JSON.stringify(prepared.source)).not.toContain('NaN');
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
+
+it('keeps constructor-shaped extension failures from config proxies behind AB7001', async () => {
+  const project = await createRuntimeProject({
+    configExtension: 'portable',
+    configSetup: () => [
+      "const Candidate = class ConfigExtensionFiniteJsonError extends Error { constructor() { super('forged-extension-secret'); this.diagnosticMessage = 'forged-extension-secret'; this.name = 'ConfigExtensionFiniteJsonError'; } };",
+      'const forged = new Candidate();',
+      "const portable = new Proxy({}, { getPrototypeOf: () => { throw forged; } });",
+      '',
+    ].join('\n'),
+  });
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('dev');
+
+    expect(prepared.source.diagnostics).toEqual([{
+      code: 'AB7001',
+      message: 'Unable to normalize project source.',
+      recovery: 'Fix normalized project configuration and source references, then inspect again.',
+      severity: 'error',
+      sourcePath: join(project.root, 'agent-bundle.config.ts'),
+    }]);
+    expect(JSON.stringify(prepared.source)).not.toContain('forged-extension-secret');
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
+
+it('keeps lookalike proxy failures and control-character extension keys redacted', async () => {
+  const proxyProject = await createRuntimeProject({
+    configExtension: 'portable',
+    configSetup: () => [
+      "const forged = Object.assign(new Error('proxy-extension-secret'), { diagnosticMessage: 'forged\\n\\u0000-extension-secret', name: 'ConfigExtensionFiniteJsonError' });",
+      "const portable = new Proxy({}, { getPrototypeOf: () => { throw forged; } });",
+      '',
+    ].join('\n'),
+  });
+  const longKey = `extension-${'x'.repeat(8_192)}\\u0000\\nsecret`;
+  const adapter: TargetAdapter = Object.freeze({
+    capabilities: Object.freeze({}),
+    configExtension: Object.freeze({ key: longKey }),
+    metadata: Object.freeze({
+      adapterRevision: 'test',
+      capabilityRevision: 'test',
+      capabilitySha256: '0'.repeat(64),
+      observedVersion: 'test',
+      schemas: Object.freeze([]),
+    }),
+    name: 'bounded-extension',
+    plan: () => ({ diagnostics: [], entries: [] }),
+    validateModel: () => [],
+  });
+  const keyedProject = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  try {
+    await writeFile(keyedProject + '/agent-bundle.config.ts', [
+      'const config = {',
+      "  plugin: { name: 'bounded-extension-fixture', version: '1.0.0' },",
+      "  targets: ['bounded-extension'],",
+      '};',
+      `config[${JSON.stringify(longKey)}] = Number.NaN;`,
+      'export default config;',
+      '',
+    ].join('\n'));
+    const proxyPrepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: proxyProject.root }).prepare('dev');
+    const keyedPrepared = await new ProjectService({
+      includeDevRuntime: true,
+      mode: 'development',
+      registry: new TargetRegistry().register(adapter, { default: true }),
+      root: keyedProject,
+    }).prepare('dev');
+
+    expect(proxyPrepared.source.diagnostics).toEqual([{
+      code: 'AB7001',
+      message: 'Unable to normalize project source.',
+      recovery: 'Fix normalized project configuration and source references, then inspect again.',
+      severity: 'error',
+      sourcePath: join(proxyProject.root, 'agent-bundle.config.ts'),
+    }]);
+    expect(JSON.stringify(proxyPrepared.source)).not.toContain('proxy-extension-secret');
+    expect(keyedPrepared.source.diagnostics).toEqual([{
+      code: 'AB4500',
+      message: 'A registered config extension must contain strict finite JSON data.',
+      recovery: 'Correct the project configuration field named by this diagnostic, then inspect again.',
+      severity: 'error',
+      sourcePath: join(keyedProject, 'agent-bundle.config.ts'),
+    }]);
+    expect(JSON.stringify(keyedPrepared.source)).not.toContain(longKey);
+    expect(keyedPrepared.source.diagnostics[0]!.message.length).toBeLessThan(128);
+  } finally {
+    await Promise.all([
+      rm(proxyProject.root, { force: true, recursive: true }),
+      rm(keyedProject, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('keeps hostile config-extension accessors redacted behind AB7001', async () => {
+  const project = await createRuntimeProject();
+  try {
+    await writeFile(project.root + '/agent-bundle.config.ts', [
+      'const config = {',
+      "  plugin: { name: 'hostile-extension-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      "Object.defineProperty(config, 'portable', { enumerable: true, get: () => { throw new Error('hostile-extension-secret'); } });",
+      'export default config;',
+      '',
+    ].join('\n'));
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('dev');
+
+    expect(prepared.source.diagnostics).toEqual([{
+      code: 'AB7001',
+      message: 'Unable to normalize project source.',
+      recovery: 'Fix normalized project configuration and source references, then inspect again.',
+      severity: 'error',
+      sourcePath: join(project.root, 'agent-bundle.config.ts'),
+    }]);
+    expect(JSON.stringify(prepared.source)).not.toContain('hostile-extension-secret');
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
+
+it('sanitizes top-level MCP App metadata accessors before source validation without evaluating them', async () => {
+  const accessorProject = (behavior: 'return' | 'throw') => createRuntimeProject({
+    appDeclaration: 'dashboard',
+    configSetup: (metadataSentinel) => [
+      "import { writeFileSync } from 'node:fs';",
+      "const dashboard = { entry: './src/app.ts', resourceUri: 'ui://timeline/v1/dashboard', targets: ['portable'], template: './src/shell.html' };",
+      "Object.defineProperty(dashboard, '_meta', { enumerable: true, get: () => {",
+      `  writeFileSync(${JSON.stringify(metadataSentinel)}, 'evaluated');`,
+      behavior === 'return'
+        ? "  return { token: 'metadata-accessor-secret' };"
+        : "  throw new Error('metadata-accessor-secret');",
+      '} });',
+      '',
+    ].join('\n'),
+  });
+  const returned = await accessorProject('return');
+  const thrown = await accessorProject('throw');
+  try {
+    for (const project of [returned, thrown]) {
+      const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('build');
+      expect(prepared.source.state).toBe('ready');
+      expect(prepared.devRuntime).toBeUndefined();
+      expect(prepared.devRuntimeDiagnostic).toMatchObject({ code: 'AB8200' });
+      expect(prepared.devRuntimeDiagnostic?.message).not.toContain('metadata-accessor-secret');
+      await expect(readFile(project.metadataSentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  } finally {
+    await Promise.all([
+      rm(returned.root, { force: true, recursive: true }),
+      rm(thrown.root, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('does not let supplemental metadata sanitization suppress unrelated source diagnostics', async () => {
+  const project = await createRuntimeProject({ appMeta: '{ count: Number.NaN }' });
+  try {
+    await writeFile(join(project.root, 'skills', 'review', 'SKILL.md'), '# Missing frontmatter\n');
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('build');
+
+    expect(prepared.source).toMatchObject({
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB3001' })]),
+      state: 'invalid',
+    });
+    expect(prepared.model).toBeUndefined();
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
 
 it('stops the shared project pipeline on source errors with a frozen structured status', async () => {
   const root = await createProject('# Missing frontmatter\n');
@@ -329,6 +646,40 @@ it('excludes configured output trees from project identity and reports unsafe ou
     });
     expect(invalid.model).toBeUndefined();
     expect(invalid.projectContext).toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('treats a configured eval run directory as generated output, not project source', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const runs = join(root, 'recorded-evals');
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  evals: { runsDir: 'recorded-evals' },",
+      "  plugin: { name: 'review', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    await mkdir(runs, { recursive: true });
+    await writeFile(join(runs, 'run.json'), '{"state":"first"}\n');
+
+    const initial = await new ProjectService({ root }).prepare('dev');
+    await writeFile(join(runs, 'run.json'), '{"state":"second"}\n');
+    const changed = await new ProjectService({ root }).prepare('dev');
+
+    expect(initial.outputRoots).toContain(runs);
+    expect(changed.projectContext).toEqual(initial.projectContext);
+    expect(changed.projectContext?.sourceInputs.map((input) => input.path)).not.toContain('recorded-evals/run.json');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

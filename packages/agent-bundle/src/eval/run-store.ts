@@ -11,7 +11,6 @@ import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue 
 import { defaultEvalRunsDir } from './config.ts';
 import { findCredentialConfiguration } from './credentials.ts';
 import { EvalRunStoreError } from './errors.ts';
-import { provenanceIdentifierPattern } from './provenance.ts';
 import type {
   EvalAssertionOutcome,
   EvalAssertionResult,
@@ -59,6 +58,7 @@ export interface EvalTrialInvocationProvenance {
 
 /** The server-owned semantic grader identity used to produce a semantic outcome. */
 export interface EvalSemanticGraderProvenance {
+  readonly contractRevision: string;
   readonly id: string;
   readonly model: string;
 }
@@ -186,10 +186,11 @@ const eventsFileName = 'events.jsonl';
 const ownerFileName = 'owner.json';
 const runFileName = 'run.json';
 const safeSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
+const safeRelativeSegment = /^(?!\.{1,2}$)[a-z0-9._-]+$/iu;
 const maximumTrialRecordBytes = 1024 * 1024;
 const maximumProvenanceTextLength = 256;
 type EvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write' | 'before-event-open' | 'before-event-write',
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
   event: EvalRunEvent,
   path: string,
   journal: FileHandle | undefined,
@@ -203,7 +204,7 @@ const storeError = (
 
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
 const runEvalRunStoreDurabilityTestHook = async (
-  phase: 'after-event-write' | 'before-event-open' | 'before-event-write',
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
   event: EvalRunEvent,
   path: string,
   journal: FileHandle | undefined,
@@ -239,7 +240,7 @@ const requireSafeRelativePath = (value: string, label: string): string => {
   if (
     value.length === 0 ||
     value.includes('\\') ||
-    segments.some((segment) => segment !== '.agent-bundle' && !safeSegment.test(segment))
+    segments.some((segment) => !safeRelativeSegment.test(segment))
   ) {
     throw storeError('EVAL_RUN_RECORD_INVALID', `${label} must be a path-safe relative path.`);
   }
@@ -423,10 +424,13 @@ const requireBoundedText = (value: JsonValue, code: RunStoreValidationCode, labe
   return text;
 };
 
+const safeProvenanceIdentifier = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u;
+const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
+
 /** Durable comparison values are labels, never paths, commands, or credential material. */
 const requireProvenanceIdentifier = (value: JsonValue, code: RunStoreValidationCode, label: string): string => {
   const text = requireBoundedText(value, code, label);
-  if (!provenanceIdentifierPattern.test(text) || findCredentialConfiguration(text) !== undefined) {
+  if (provenancePathMarker.test(text) || !safeProvenanceIdentifier.test(text) || findCredentialConfiguration(text) !== undefined) {
     return validationError(code, 'Eval trial provenance contains an unsafe identifier.');
   }
   return text;
@@ -831,8 +835,9 @@ const parseSemanticGraderProvenance = (
     }
     return Object.freeze({ state: 'unrecorded' });
   }
-  requireKeys(record, ['id', 'model'], code, 'Eval trial semantic grader provenance');
+  requireKeys(record, ['contractRevision', 'id', 'model'], code, 'Eval trial semantic grader provenance');
   return Object.freeze({
+    contractRevision: requireProvenanceIdentifier(property(record, 'contractRevision', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader contract revision'),
     id: requireProvenanceIdentifier(property(record, 'id', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader id'),
     model: requireProvenanceIdentifier(property(record, 'model', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader model'),
   });
@@ -923,10 +928,10 @@ export class EvalRunWriter implements EvalTrialWriter {
   #closed = false;
   #closeFailures: unknown[] = [];
   #closePromise: Promise<void> | undefined;
+  #eventJournalFailure: EvalRunEventWriteUncertainError | undefined;
   #record: EvalRunRecord;
   #sequence = 0;
   readonly #queue = serialQueue();
-  #uncertainEventWrite = false;
 
   constructor(directory: string, record: EvalRunRecord) {
     this.#directory = directory;
@@ -951,7 +956,9 @@ export class EvalRunWriter implements EvalTrialWriter {
       sequence: 1,
       timestamp: new Date().toISOString(),
     }, 'EVAL_RUN_RECORD_INVALID');
+    if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
     return this.#serialize(async () => {
+      if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
       const sequence = this.#sequence + 1;
       const record: EvalRunEvent = Object.freeze({
         ...input,
@@ -963,13 +970,19 @@ export class EvalRunWriter implements EvalTrialWriter {
       await runEvalRunStoreDurabilityTestHook('before-event-open', record, eventPath, undefined);
       const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
       const failures: unknown[] = [];
-      let boundary: number | undefined;
-      let rollbackUncertain = false;
-      let writeStarted = false;
-      let written = false;
+      let originalSize: number;
       try {
-        boundary = (await journal.stat()).size;
-        writeStarted = true;
+        originalSize = (await journal.stat()).size;
+      } catch (error) {
+        failures.push(error);
+        try { await journal.close(); }
+        catch (closeFailure) { failures.push(closeFailure); }
+        if (failures.length === 1) throw error;
+        throw new AggregateError(failures, 'Eval run event journal could not be inspected.', { cause: error });
+      }
+      let written = false;
+      let rollbackConfirmed = false;
+      try {
         await runEvalRunStoreDurabilityTestHook('before-event-write', record, eventPath, journal);
         await journal.writeFile(`${stableJson(record)}\n`, 'utf8');
         written = true;
@@ -978,34 +991,33 @@ export class EvalRunWriter implements EvalTrialWriter {
         await journal.sync();
       } catch (error) {
         failures.push(error);
-        if (writeStarted && !written) {
-          if (boundary === undefined) {
-            rollbackUncertain = true;
-          } else {
-            try {
-              await journal.truncate(boundary);
-              await journal.sync();
-            } catch (rollbackFailure) {
-              rollbackUncertain = true;
-              failures.push(rollbackFailure);
-            }
+        if (!written) {
+          try {
+            await runEvalRunStoreDurabilityTestHook('before-event-rollback', record, eventPath, journal);
+            await journal.truncate(originalSize);
+            await journal.sync();
+            rollbackConfirmed = true;
+          } catch (rollbackFailure) {
+            failures.push(rollbackFailure);
           }
         }
       }
       try { await journal.close(); }
-      catch (error) {
-        failures.push(error);
-        if (writeStarted && !written) rollbackUncertain = true;
-      }
+      catch (error) { failures.push(error); }
       if (failures.length > 0) {
         if (written) throw new EvalRunEventDurabilityError(record, failures);
-        if (rollbackUncertain) {
-          this.#uncertainEventWrite = true;
+        if (!rollbackConfirmed) {
+          const uncertain = new EvalRunEventWriteUncertainError(record, failures);
+          this.#eventJournalFailure = uncertain;
           this.#closed = true;
-          throw new EvalRunEventWriteUncertainError(record, failures);
+          throw uncertain;
         }
         if (failures.length === 1) throw failures[0];
-        throw new AggregateError(failures, `Eval run event ${JSON.stringify(record.kind)} could not be written.`);
+        throw new AggregateError(
+          failures,
+          `Eval run event ${JSON.stringify(record.kind)} could not be written and was rolled back.`,
+          { cause: failures[0] },
+        );
       }
       return record;
     });
@@ -1070,6 +1082,7 @@ export class EvalRunWriter implements EvalTrialWriter {
   }
 
   #assertOpen(): void {
+    if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
     if (this.#closed) {
       throw storeError('EVAL_RUN_CLOSED', `Eval run ${JSON.stringify(this.#record.id)} is closed.`);
     }
@@ -1079,7 +1092,7 @@ export class EvalRunWriter implements EvalTrialWriter {
     this.#assertOpen();
     return this.#queue.run(async () => {
       try {
-        if (this.#uncertainEventWrite) this.#assertOpen();
+        if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
         return await operation();
       } catch (error) {
         this.#closeFailures.push(error);

@@ -6,7 +6,7 @@ import { DiagnosticService, type DiagnosticReport } from './diagnostic-service.t
 import { acquireDevLock, type DevLockOptions } from './dev-lock.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectEventHub } from './events.ts';
-import { ProjectService, type PreparedProject } from './project-service.ts';
+import { ProjectService, type PreparedProject, type ProjectCommand } from './project-service.ts';
 import { ProjectWatcher, type ProjectWatcherOptions } from './watcher.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
 import {
@@ -28,7 +28,7 @@ export interface DevLockHandle {
 }
 
 export interface ProjectPreparer {
-  prepare(command: 'build'): Promise<PreparedProject>;
+  prepare(command: ProjectCommand): Promise<PreparedProject>;
 }
 
 export interface ArtifactBuilder {
@@ -41,6 +41,7 @@ export interface AffectedFileDiagnostics {
 }
 
 export interface DevelopmentWatcher {
+  addOutputPaths?(paths: readonly string[]): void;
   close(): Promise<void>;
   ready?(): Promise<void>;
 }
@@ -75,8 +76,12 @@ export interface DevCoordinatorOptions {
   readonly epochStore?: EpochStore;
   readonly eventHub?: ProjectEventHub;
   readonly now?: () => Date;
+  /** A pre-loaded initial config avoids evaluating a development config factory twice. */
+  readonly initialPreparedProject?: PreparedProject;
   readonly ignoredPaths?: readonly string[];
+  readonly onPreparedProject?: (prepared: PreparedProject) => Promise<void>;
   readonly outputPaths?: readonly string[];
+  readonly prepareCommand?: 'build' | 'dev';
   readonly projectService?: ProjectPreparer;
   readonly root: string;
 }
@@ -198,6 +203,8 @@ export class DevCoordinator {
   readonly #now: () => Date;
   readonly #ignoredPaths: readonly string[];
   readonly #outputPaths: readonly string[];
+  readonly #onPreparedProject: ((prepared: PreparedProject) => Promise<void>) | undefined;
+  readonly #prepareCommand: 'build' | 'dev';
   readonly #projectService: ProjectPreparer;
   readonly #root: string;
   readonly #startRebuildToken = Symbol('DevCoordinator initial rebuild');
@@ -209,6 +216,7 @@ export class DevCoordinator {
   #lock: DevLockHandle | undefined;
   #lockClosePromise: Promise<void> | undefined;
   #queued: QueuedBuild | undefined;
+  #nextPreparedProject: PreparedProject | undefined;
   #startPromise: Promise<DevSession> | undefined;
   #status: ProjectStatus = initialStatus();
   #session: DevSession | undefined;
@@ -231,7 +239,13 @@ export class DevCoordinator {
     this.#eventHub = options.eventHub ?? new ProjectEventHub({ now: options.now });
     this.#ignoredPaths = Object.freeze([...(options.ignoredPaths ?? [])]);
     this.#now = options.now ?? (() => new Date());
-    this.#outputPaths = Object.freeze([...(options.outputPaths ?? ['dist'])]);
+    this.#nextPreparedProject = options.initialPreparedProject;
+    this.#onPreparedProject = options.onPreparedProject;
+    this.#outputPaths = Object.freeze([...new Set([
+      ...(options.outputPaths ?? ['dist']),
+      ...(options.initialPreparedProject?.outputRoots ?? []),
+    ])]);
+    this.#prepareCommand = options.prepareCommand ?? 'build';
     this.#projectService = options.projectService ?? new ProjectService({
       outputRoots: this.#outputPaths,
       root: this.#root,
@@ -436,13 +450,22 @@ export class DevCoordinator {
   async #performBuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
     let prepared: PreparedProject;
     try {
-      prepared = await this.#projectService.prepare('build');
+      const initial = this.#nextPreparedProject;
+      this.#nextPreparedProject = undefined;
+      prepared = initial ?? await this.#projectService.prepare(this.#prepareCommand);
     } catch (error) {
       const source = withDiagnostics(this.#status.source, [phaseDiagnostic('prepare', error)]);
       return this.#completeFailure(this.#beginBuild(invalidation, source), source, source.diagnostics);
     }
 
+    this.#watcher?.addOutputPaths?.(prepared.outputRoots);
     const running = this.#beginBuild(invalidation, prepared.source);
+    try {
+      await this.#onPreparedProject?.(prepared);
+    } catch (error) {
+      const source = withDiagnostics(prepared.source, [phaseDiagnostic('prepare', error)]);
+      return this.#completeFailure(running, source, source.diagnostics);
+    }
     let lintDiagnostics: readonly Diagnostic[];
     try {
       const report = await this.#diagnosticService.lint(invalidation.paths);

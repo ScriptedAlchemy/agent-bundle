@@ -7,13 +7,12 @@ import type {
   PlaygroundSession,
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/services/playground-service.ts';
+import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
 import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/dev/native-playground-service.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 
 export interface PlaygroundClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
+  readonly foreground: ForegroundRequestAuthority;
 }
 
 export interface PlaygroundStreamOptions {
@@ -45,9 +44,30 @@ const invalidResponse = (): PlaygroundClientError =>
 
 const invalidJson = Symbol('invalid playground JSON');
 
+interface DetachedJsonLimits {
+  readonly maxArrayLength: number;
+  readonly maxDepth: number;
+  readonly maxObjectKeys: number;
+  readonly maxStringLength: number;
+  readonly maxValues: number;
+}
+
+interface DetachedJsonState {
+  remaining: number;
+}
+
 /** Decodes only own data properties, so boundary values cannot retain getters, prototypes, or mutable references. */
-const detachedJson = (value: unknown, seen = new WeakSet<object>()): unknown | typeof invalidJson => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+const detachedJson = (
+  value: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+  limits?: DetachedJsonLimits,
+  state: DetachedJsonState = { remaining: limits?.maxValues ?? Number.POSITIVE_INFINITY },
+): unknown | typeof invalidJson => {
+  if (state.remaining <= 0 || (limits !== undefined && depth > limits.maxDepth)) return invalidJson;
+  state.remaining -= 1;
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'string') return limits === undefined || value.length <= limits.maxStringLength ? value : invalidJson;
   if (typeof value === 'number') return Number.isFinite(value) ? value : invalidJson;
   if (typeof value !== 'object') return invalidJson;
   try {
@@ -58,12 +78,14 @@ const detachedJson = (value: unknown, seen = new WeakSet<object>()): unknown | t
       const keys = Reflect.ownKeys(value);
       const length = Object.getOwnPropertyDescriptor(value, 'length');
       if (length === undefined || !('value' in length) || !Number.isSafeInteger(length.value) || length.value < 0 ||
-        keys.length !== length.value + 1 || keys.some((key) => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/u.test(key)))) return invalidJson;
+        (limits !== undefined && length.value > limits.maxArrayLength) ||
+        keys.length !== length.value + 1 ||
+        keys.some((key) => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/u.test(key)))) return invalidJson;
       const detached: unknown[] = [];
       for (let index = 0; index < length.value; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return invalidJson;
-        const entry = detachedJson(descriptor.value, seen);
+        const entry = detachedJson(descriptor.value, seen, depth + 1, limits, state);
         if (entry === invalidJson) return invalidJson;
         detached.push(entry);
       }
@@ -72,11 +94,13 @@ const detachedJson = (value: unknown, seen = new WeakSet<object>()): unknown | t
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return invalidJson;
     const detached = Object.create(null) as Record<string, unknown>;
-    for (const key of Reflect.ownKeys(value)) {
+    const keys = Reflect.ownKeys(value);
+    if (limits !== undefined && keys.length > limits.maxObjectKeys) return invalidJson;
+    for (const key of keys) {
       if (typeof key !== 'string') return invalidJson;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return invalidJson;
-      const entry = detachedJson(descriptor.value, seen);
+      const entry = detachedJson(descriptor.value, seen, depth + 1, limits, state);
       if (entry === invalidJson) return invalidJson;
       Object.defineProperty(detached, key, { configurable: false, enumerable: true, value: entry, writable: false });
     }
@@ -100,7 +124,18 @@ const nonemptyString = (value: unknown): value is string => typeof value === 'st
 
 const jsonObject = (value: unknown): value is Readonly<Record<string, unknown>> => isRecord(value);
 
-const textSchema = z.string().min(1);
+const maximumNativeCatalogEntries = 256;
+const maximumNativeCatalogResponseBytes = 8 * 1024 * 1024;
+const maximumNativeCatalogStringLength = 16_384;
+const maximumPlaygroundStreamFrameBytes = 1024 * 1024;
+const nativeCatalogJsonLimits: DetachedJsonLimits = Object.freeze({
+  maxArrayLength: maximumNativeCatalogEntries,
+  maxDepth: 5,
+  maxObjectKeys: 5,
+  maxStringLength: maximumNativeCatalogStringLength,
+  maxValues: 4_096,
+});
+const textSchema = z.string().min(1).max(maximumNativeCatalogStringLength);
 const nativeHostSchema = z.enum(['claude', 'codex']);
 const nativeCatalogItemSchema = z.strictObject({ id: textSchema, label: textSchema });
 const nativeModelPinSchema = nativeCatalogItemSchema.extend({ host: nativeHostSchema });
@@ -111,18 +146,12 @@ const nativeCatalogSelectionSchema = z.strictObject({
   modelPinId: textSchema,
 });
 const nativeCatalogSchema = z.strictObject({
-  cases: z.array(nativeCatalogItemSchema),
+  cases: z.array(nativeCatalogItemSchema).max(maximumNativeCatalogEntries),
   epochId: textSchema,
-  fixtures: z.array(nativeCatalogItemSchema),
-  modelPins: z.array(nativeModelPinSchema),
-  selections: z.array(nativeCatalogSelectionSchema),
+  fixtures: z.array(nativeCatalogItemSchema).max(maximumNativeCatalogEntries),
+  modelPins: z.array(nativeModelPinSchema).max(maximumNativeCatalogEntries),
+  selections: z.array(nativeCatalogSelectionSchema).max(maximumNativeCatalogEntries),
 });
-
-/** Zod receives only inert plain JSON after the hostile boundary value has been detached. */
-const zodJsonSnapshot = (value: unknown): unknown | typeof invalidJson => {
-  try { return JSON.parse(JSON.stringify(value)); }
-  catch { return invalidJson; }
-};
 
 const nativeCatalogCoherent = (catalog: NativePlaygroundCatalog): boolean => {
   const uniqueIds = (entries: readonly { readonly id: string }[]): Set<string> | undefined => {
@@ -149,6 +178,30 @@ const nativeCatalogCoherent = (catalog: NativePlaygroundCatalog): boolean => {
     tuples.add(tuple);
   }
   return true;
+};
+
+const boundedJsonResponse = async (response: Response, maximumBytes: number): Promise<unknown> => {
+  const body = response.body;
+  if (body === null) throw invalidResponse();
+  const reader = body.getReader();
+  const bytes = new Uint8Array(maximumBytes);
+  let total = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (total + chunk.value.byteLength > maximumBytes) throw invalidResponse();
+      bytes.set(chunk.value, total);
+      total += chunk.value.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  try {
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, total)));
+  } catch {
+    throw invalidResponse();
+  }
 };
 
 const isIdentity = (value: unknown): boolean => {
@@ -201,8 +254,8 @@ const isSession = (value: unknown): boolean =>
 const isRun = (value: unknown): boolean =>
   isRecord(value) && exactKeys(value, ['id', 'session']) && nonemptyString(value.id) && isSession(value.session);
 
-const detachedRecord = (value: unknown): Readonly<Record<string, unknown>> => {
-  const detached = detachedJson(value);
+const detachedRecord = (value: unknown, limits?: DetachedJsonLimits): Readonly<Record<string, unknown>> => {
+  const detached = detachedJson(value, new WeakSet<object>(), 0, limits);
   if (detached === invalidJson || !isRecord(detached)) throw invalidResponse();
   return detached;
 };
@@ -224,10 +277,9 @@ const runBody = (value: unknown): PlaygroundRun => {
 };
 
 const catalogBody = (value: unknown, requestedEpochId: string | undefined): NativePlaygroundCatalog => {
-  const envelope = detachedRecord(value);
+  const envelope = detachedRecord(value, nativeCatalogJsonLimits);
   const catalog = envelope.catalog;
-  const zodCatalog = zodJsonSnapshot(catalog);
-  if (!exactKeys(envelope, ['catalog']) || zodCatalog === invalidJson || !nativeCatalogSchema.safeParse(zodCatalog).success) throw invalidResponse();
+  if (!exactKeys(envelope, ['catalog']) || !nativeCatalogSchema.safeParse(catalog).success) throw invalidResponse();
   const decoded = catalog as NativePlaygroundCatalog;
   if ((requestedEpochId !== undefined && decoded.epochId !== requestedEpochId) || !nativeCatalogCoherent(decoded)) throw invalidResponse();
   return decoded;
@@ -311,16 +363,10 @@ const isAbort = (error: unknown): boolean => error instanceof Error && error.nam
 
 /** A typed, credential-memory-only browser client for the durable playground trace routes. */
 export class PlaygroundClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: PlaygroundClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message) => new PlaygroundClientError(code, message),
-      fallbackCode: 'AB8043',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Playground',
-    });
+  constructor(options: PlaygroundClientOptions) {
+    this.#foreground = options.foreground;
   }
 
   /** Starts a server-owned operation and receives its live run and session identity promptly. */
@@ -328,7 +374,7 @@ export class PlaygroundClient {
     const body = input.operation === 'native.prompt'
       ? this.#nativePromptBody(input)
       : input;
-    return runBody(await this.#transport.json('/api/playground/runs', {
+    return runBody(await this.#json('/api/playground/runs', {
       body: JSON.stringify(body),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -339,12 +385,15 @@ export class PlaygroundClient {
   /** Reads the immutable server-owned native choices for exactly one active or retained epoch. */
   async catalog(epochId?: string, signal?: AbortSignal): Promise<NativePlaygroundCatalog> {
     const query = epochId === undefined ? '' : `?epochId=${encodeURIComponent(epochId)}`;
-    return catalogBody(await this.#transport.json(`/api/playground/catalog${query}`, { signal }), epochId);
+    const response = await this.#foreground.protectedRequest(`/api/playground/catalog${query}`, { signal });
+    const body = await boundedJsonResponse(response, maximumNativeCatalogResponseBytes);
+    if (!response.ok) throw diagnosticError(body, response.status);
+    return catalogBody(body, epochId);
   }
 
   /** Cancellation is an operation-level action; callers refresh the durable session afterwards. */
   async cancel(runId: string, signal?: AbortSignal): Promise<boolean> {
-    return cancelledBody(await this.#transport.json(`${this.#runPath(runId)}/cancel`, {
+    return cancelledBody(await this.#json(`${this.#runPath(runId)}/cancel`, {
       body: '{}',
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -353,17 +402,17 @@ export class PlaygroundClient {
   }
 
   async session(sessionId: string, signal?: AbortSignal): Promise<PlaygroundSession> {
-    return sessionBody(await this.#transport.json(this.#path(sessionId), { signal }));
+    return sessionBody(await this.#json(this.#path(sessionId), { signal }));
   }
 
   /** The cursor stays exactly where the caller left it, so replayed order and epoch binding survive. */
   async replay(sessionId: string, afterSequence?: number, signal?: AbortSignal): Promise<PlaygroundReplay> {
     const query = afterSequence === undefined ? '' : `?after=${String(afterSequence)}`;
-    return replayBody(await this.#transport.json(`${this.#path(sessionId)}/replay${query}`, { signal }));
+    return replayBody(await this.#json(`${this.#path(sessionId)}/replay${query}`, { signal }));
   }
 
   async export(sessionId: string, signal?: AbortSignal): Promise<PlaygroundExport> {
-    return exportBody(await this.#transport.json(`${this.#path(sessionId)}/export`, { signal }));
+    return exportBody(await this.#json(`${this.#path(sessionId)}/export`, { signal }));
   }
 
   async promoteToDraftEval(
@@ -371,7 +420,7 @@ export class PlaygroundClient {
     rawEventRefs: readonly string[],
     signal?: AbortSignal,
   ): Promise<DraftEvalCase> {
-    return draftEvalBody(await this.#transport.json(`${this.#path(sessionId)}/draft-eval`, {
+    return draftEvalBody(await this.#json(`${this.#path(sessionId)}/draft-eval`, {
       body: JSON.stringify({ rawEventRefs }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -416,7 +465,7 @@ export class PlaygroundClient {
     const after = options.afterSequence ?? 0;
     let response: Response;
     try {
-      response = await this.#transport.request(`${this.#path(sessionId)}/stream?after=${String(after)}`, { signal });
+      response = await this.#foreground.protectedRequest(`${this.#path(sessionId)}/stream?after=${String(after)}`, { signal });
     } catch (error) {
       if (isAbort(error) || signal.aborted) return;
       throw error;
@@ -427,23 +476,36 @@ export class PlaygroundClient {
     const body = response.body;
     if (body === null) throw invalidResponse();
     const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let buffered = '';
+    const frameBuffer = new Uint8Array(maximumPlaygroundStreamFrameBytes);
+    let frameBytes = 0;
+    const appendFrameBytes = (chunk: Uint8Array): void => {
+      if (frameBytes + chunk.byteLength > maximumPlaygroundStreamFrameBytes) throw invalidResponse();
+      frameBuffer.set(chunk, frameBytes);
+      frameBytes += chunk.byteLength;
+    };
+    const emitFrame = (): void => {
+      const bytes = frameBuffer.subarray(0, frameBytes);
+      frameBytes = 0;
+      if (signal.aborted) return;
+      let line: string;
+      try { line = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim(); }
+      catch { throw invalidResponse(); }
+      if (line.length > 0 && !signal.aborted) options.onEvent(traceEventLine(line));
+    };
     try {
       for (;;) {
         const chunk = await reader.read();
         if (chunk.done) break;
-        buffered += decoder.decode(chunk.value, { stream: true });
-        let newline = buffered.indexOf('\n');
-        while (newline >= 0) {
-          const line = buffered.slice(0, newline).trim();
-          buffered = buffered.slice(newline + 1);
-          if (line.length > 0) options.onEvent(traceEventLine(line));
-          newline = buffered.indexOf('\n');
+        let start = 0;
+        for (let index = 0; index < chunk.value.byteLength; index += 1) {
+          if (chunk.value[index] !== 0x0a) continue;
+          appendFrameBytes(chunk.value.subarray(start, index));
+          emitFrame();
+          start = index + 1;
         }
+        appendFrameBytes(chunk.value.subarray(start));
       }
-      const tail = buffered.trim();
-      if (tail.length > 0) options.onEvent(traceEventLine(tail));
+      if (frameBytes > 0) emitFrame();
     } catch (error) {
       if (!isAbort(error) && !signal.aborted) throw error;
     } finally {
@@ -451,4 +513,10 @@ export class PlaygroundClient {
     }
   }
 
+  async #json(path: string, init: RequestInit = {}): Promise<unknown> {
+    const response = await this.#foreground.protectedRequest(path, init);
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw diagnosticError(body, response.status);
+    return body;
+  }
 }

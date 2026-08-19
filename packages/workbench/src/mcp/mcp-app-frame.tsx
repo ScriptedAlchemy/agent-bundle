@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 import type {
   McpAppJsonValue,
@@ -6,6 +6,9 @@ import type {
   McpAppRouteClose,
   McpAppRouteMessages,
 } from './mcp-app-client.ts';
+import { assertCurrentMcpAppDocumentPolicy, type McpAppRuntimeClient, type McpAppTrustedDocumentPolicy } from './mcp-app-client.ts';
+import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
+import { AppRenderer, type BridgeFactory, type AppRendererProps } from '../inspector/adapter/closure-spike.ts';
 
 const proxyReadyMethod = 'ui/notifications/sandbox-proxy-ready';
 const resourceReadyMethod = 'ui/notifications/sandbox-resource-ready';
@@ -59,6 +62,16 @@ export interface McpAppFrameProps {
   readonly title?: string;
 }
 
+export interface SecureAppRendererProps {
+  readonly bindingId: string;
+  readonly bootstrapUrl: string;
+  readonly bridgeFactory: BridgeFactory;
+  readonly documentPolicy: McpAppTrustedDocumentPolicy;
+  /** Opaque policy authority; never serialized or passed into the iframe. */
+  readonly policyClient: Pick<McpAppRuntimeClient, 'currentDocumentPolicy'>;
+  readonly rendererProps: Omit<AppRendererProps, 'bridgeFactory' | 'sandboxPath'>;
+}
+
 type RelayState = 'closed' | 'closing' | 'open';
 
 interface CanonicalResource {
@@ -77,22 +90,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) &&
   (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
-const byteLength = (value: unknown): number | undefined => {
-  try {
-    const encoded = JSON.stringify(value);
-    return typeof encoded === 'string' ? new TextEncoder().encode(encoded).byteLength : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
 const validRequestId = (value: unknown): boolean =>
   value === null || typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
 
 const asMessage = (value: unknown, maximumBytes: number): RpcMessage | undefined => {
-  if (!isRecord(value) || value.jsonrpc !== '2.0' || Object.hasOwn(value, 'bindingId')) return undefined;
-  const size = byteLength(value);
-  if (size === undefined || size > maximumBytes) return undefined;
+  if (finiteOrdinaryJsonByteLength(value, { maximumBytes }) === undefined || !isRecord(value) || value.jsonrpc !== '2.0' || Object.hasOwn(value, 'bindingId')) return undefined;
   const hasMethod = typeof value.method === 'string' && value.method.length > 0;
   const hasId = Object.hasOwn(value, 'id') && validRequestId(value.id);
   const hasResponse = hasId && !hasMethod && (Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error'));
@@ -113,13 +115,15 @@ const resource = (value: McpAppJsonValue): CanonicalResource => {
   });
 };
 
-const messageForResource = (value: CanonicalResource): RpcMessage => Object.freeze({
+const messageForResource = (frame: McpAppRelayFrame, value: CanonicalResource): RpcMessage => Object.freeze({
   jsonrpc: '2.0',
   method: resourceReadyMethod,
   params: Object.freeze({
-    ...(value.csp === undefined ? {} : { csp: value.csp }),
+    // The proxy accepts its policy only from this server-issued frame.  The
+    // resource declaration is intentionally never relayed as an authority.
+    allow: frame.allow,
+    contentSecurityPolicy: frame.policy.contentSecurityPolicy,
     html: value.html,
-    ...(value.permissions === undefined ? {} : { permissions: value.permissions }),
   }),
 });
 
@@ -201,7 +205,7 @@ export class McpAppFrameRelay {
     if (isProxyReady(message)) {
       if (this.#resourceProvided) return false;
       this.#resourceProvided = true;
-      return this.#post(messageForResource(this.#resource));
+      return this.#post(messageForResource(this.#frame, this.#resource));
     }
     if (!this.#resourceProvided) return false;
     return this.#enqueue(() => this.#deliver(message));
@@ -215,6 +219,26 @@ export class McpAppFrameRelay {
     this.#closeTimer = setTimeout(() => { void this.#forceClose(); }, this.#closeTimeoutMs);
     this.#enqueue(() => this.#beginClose(), true);
     return this.#closePromise;
+  }
+
+  /** Detaches one remounted document without closing the server binding. */
+  detach(): void {
+    if (!this.#listening || this.#state === 'closed') return;
+    this.#window.removeEventListener('message', this.#listener);
+    this.#listening = false;
+    this.#queue.length = 0;
+  }
+
+  /** Delivers authenticated route continuations to the exact current proxy. */
+  deliverHostMessages(messages: readonly McpAppJsonValue[]): boolean {
+    if (this.#state !== 'open' || !this.#listening) return false;
+    try {
+      this.#postAll(messages);
+      return true;
+    } catch (cause) {
+      this.#report(new McpAppFrameRelayError('MCP App consent continuation delivery failed.', cause));
+      return false;
+    }
   }
 
   #enqueue(operation: () => Promise<void>, essential = false): boolean {
@@ -305,7 +329,7 @@ export class McpAppFrameRelay {
 
   #post(message: RpcMessage): boolean {
     const proxy = this.#iframe.contentWindow;
-    if (proxy === null || byteLength(message) === undefined || byteLength(message)! > this.#frame.relay.maxMessageBytes) return false;
+    if (proxy === null || finiteOrdinaryJsonByteLength(message, { maximumBytes: this.#frame.relay.maxMessageBytes }) === undefined) return false;
     try {
       proxy.postMessage(message, this.#frame.targetOrigin);
       return true;
@@ -351,6 +375,74 @@ export class McpAppFrameRelayError extends Error {
 }
 
 export const createMcpAppFrameRelay = (options: McpAppFrameRelayOptions): McpAppFrameRelay => new McpAppFrameRelay(options);
+
+/** Applies and immediately verifies the non-negotiable outer-frame policy. */
+export const applyMcpAppFramePolicy = (iframe: HTMLIFrameElement, policy: McpAppTrustedDocumentPolicy): void => {
+  iframe.setAttribute('allow', policy.snapshot.allow);
+  iframe.setAttribute('referrerpolicy', 'no-referrer');
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+  if (
+    iframe.getAttribute('allow') !== policy.snapshot.allow ||
+    iframe.getAttribute('referrerpolicy') !== 'no-referrer' ||
+    iframe.getAttribute('sandbox') !== 'allow-scripts allow-same-origin'
+  ) throw new McpAppFrameRelayError('MCP App outer frame policy was not applied.');
+};
+
+// AppRenderer starts its bridge in a passive effect.  This inert bridge keeps
+// the first about:blank commit entirely local while the layout barrier verifies
+// the frame attributes; it owns neither a Client nor a runtime binding.
+const inertBridgeFactory: BridgeFactory = () => ({
+  addEventListener: () => undefined,
+  close: async () => undefined,
+  sendHostContextChange: async () => undefined,
+  sendToolCancelled: async () => undefined,
+  sendToolInput: async () => undefined,
+  sendToolInputPartial: async () => undefined,
+  sendToolResult: async () => undefined,
+  teardownResource: async () => Object.freeze({}),
+});
+
+/**
+ * Renders exactly the official AppRenderer after a synchronous blank-frame
+ * policy barrier.  A trusted policy handle is deliberately checked during
+ * render, before React can create or navigate the iframe.
+ */
+export const SecureAppRenderer = ({ bindingId, bootstrapUrl, bridgeFactory, documentPolicy, policyClient, rendererProps }: SecureAppRendererProps): ReactNode => {
+  const policy = assertCurrentMcpAppDocumentPolicy(policyClient, documentPolicy);
+  if (policy.bindingId !== bindingId) throw new McpAppFrameRelayError('MCP App document policy belongs to another binding.');
+  if (policyClient.currentDocumentPolicy(bindingId) !== policy) throw new McpAppFrameRelayError('MCP App document policy is no longer current.');
+  let parsed: URL;
+  try { parsed = new URL(bootstrapUrl); } catch { throw new McpAppFrameRelayError('MCP App bootstrap URL is invalid.'); }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new McpAppFrameRelayError('MCP App bootstrap URL is invalid.');
+
+  const policyKey = `${bindingId}:${policy.snapshot.revision}:${bootstrapUrl}`;
+  const root = useRef<HTMLDivElement>(null);
+  const [armedKey, setArmedKey] = useState<string>();
+  const armed = armedKey === policyKey;
+  useLayoutEffect(() => {
+    // The second assertion fences a policy replacement between render and DOM
+    // mutation.  It is intentionally before the first resource navigation.
+    const current = assertCurrentMcpAppDocumentPolicy(policyClient, documentPolicy);
+    if (current !== policy || current.bindingId !== bindingId || current.snapshot.revision !== policy.snapshot.revision) {
+      throw new McpAppFrameRelayError('MCP App document policy changed before the frame could arm.');
+    }
+    const iframe = root.current?.querySelector('iframe');
+    if (iframe === null || iframe === undefined) throw new McpAppFrameRelayError('MCP App outer frame is unavailable.');
+    applyMcpAppFramePolicy(iframe, current);
+    setArmedKey(policyKey);
+  }, [bindingId, documentPolicy, policy, policyClient, policyKey]);
+
+  return (
+    <div ref={root}>
+      <AppRenderer
+        {...rendererProps}
+        bridgeFactory={armed ? bridgeFactory : inertBridgeFactory}
+        key={policyKey}
+        sandboxPath={armed ? bootstrapUrl : 'about:blank'}
+      />
+    </div>
+  );
+};
 
 /** A browser-owned iframe that receives only the server-issued proxy URL. */
 export const McpAppFrame = ({ bindingId, closeTimeoutMs, frame, onError, resource: previewResource, routes, title = 'MCP App preview' }: McpAppFrameProps) => {

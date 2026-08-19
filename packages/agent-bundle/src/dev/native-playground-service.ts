@@ -1,11 +1,11 @@
-import { constants as fsConstants } from 'node:fs';
+import { constants } from 'node:fs';
 import { link, lstat, mkdir, mkdtemp, open, realpath, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { digest, stableJson } from '../core/digest.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { loadConfig } from '../config/load.ts';
-import { prepareEvalArtifact, type PreparedEvalArtifact } from '../eval/artifact.ts';
+import type { PreparedEvalArtifact } from '../eval/artifact.ts';
 import { runClaudeTrial } from '../eval/claude-harness.ts';
 import { runCodexEvalTrial, type CodexCommandRunner } from '../eval/codex-harness.ts';
 import { normalizeEvalConfig } from '../eval/config.ts';
@@ -21,8 +21,8 @@ import type { PlaygroundEventInput, PlaygroundJsonObject } from '../services/pla
 import { safeDevWireText } from './dev-log-service.ts';
 import type { ArtifactEpoch } from './types.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../eval/workspace-diff.ts';
-import { isInsideOrEqual } from '../core/paths.ts';
 import { isErrno } from '../core/errors.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
 
 export type NativePlaygroundHost = 'claude' | 'codex';
 
@@ -105,13 +105,16 @@ export interface NativePlaygroundServiceOptions {
   }>;
   readonly planFixture?: (options: { readonly baseDir: string; readonly fixture: EvalCase['fixture'] }) => Promise<EvalFixturePlan>;
   readonly projectRoot: string;
+  /** @internal Deterministic cleanup seam for lifecycle tests. */
+  readonly removeWorkspace?: (root: string) => Promise<void>;
 }
 
 export interface NativePlaygroundCatalogStorage {
   readonly link: typeof link;
   readonly mkdir: typeof mkdir;
+  /** @internal Deterministic rollback-race seam. */
+  readonly move?: typeof rename;
   readonly open: typeof open;
-  readonly rename: typeof rename;
   readonly remove: typeof rm;
 }
 
@@ -137,7 +140,7 @@ export interface NativePlaygroundCatalogPublicationReceipt {
   rollback(): Promise<void>;
 }
 
-interface CatalogSelection {
+interface PersistedCatalogSelection {
   readonly caseId: string;
   readonly caseLabel: string;
   readonly evalCase: EvalCase;
@@ -147,36 +150,26 @@ interface CatalogSelection {
   readonly host: NativePlaygroundHost;
   readonly modelPinId: string;
   readonly modelPinLabel: string;
-  readonly suiteDir: string;
-}
-
-/** Persisted paths are deliberately relative to their owning project/suite. */
-interface PersistedFixturePlan {
-  readonly digest: string;
-  readonly entries: readonly EvalFixturePlan['entries'][number][];
-  readonly git: boolean;
-  readonly sourcePath: string;
-}
-
-interface PersistedCatalogSelection {
-  readonly caseId: string;
-  readonly caseLabel: string;
-  readonly evalCase: EvalCase;
-  readonly fixtureId: string;
-  readonly fixtureLabel: string;
-  readonly fixturePlan: PersistedFixturePlan;
-  readonly host: NativePlaygroundHost;
-  readonly modelPinId: string;
-  readonly modelPinLabel: string;
-  readonly suiteDir: string;
+  readonly suiteCaseDigests: readonly string[];
   readonly suiteDigest: string;
   readonly suiteName: string;
+  readonly suiteSourcePath: string;
+}
+
+interface CatalogSelection extends PersistedCatalogSelection {
+  readonly suiteDir: string;
 }
 
 interface CatalogSnapshot {
   readonly artifact: Pick<PreparedEvalArtifact, 'binding' | 'root'>;
   readonly catalog: NativePlaygroundCatalog;
   readonly selections: ReadonlyMap<string, CatalogSelection>;
+}
+
+interface NativePlaygroundOperation {
+  readonly controller: AbortController;
+  readonly settled: Promise<void>;
+  settle(): void;
 }
 
 interface PersistedCatalogSnapshot {
@@ -211,9 +204,15 @@ const maximumCatalogSelections = 256;
 const maximumCatalogSnapshotBytes = 8 * 1_024 * 1_024;
 const maximumCatalogSnapshotNodes = 65_536;
 const maximumFixtureEntries = 4_096;
+const maximumSnapshotDepth = 16;
 const maximumSnapshotStringLength = 16_384;
+const maximumNativeEvidenceEntries = 64;
+const maximumNativeEvidenceTextBytes = 4 * 1024;
+const maximumNativeResponseBytes = 256 * 1024;
+const sha256 = /^[a-f0-9]{64}$/u;
 const safeEpochSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
-const fixtureSha256Text = /^[a-f0-9]{64}$/u;
+const safeIdentifier = /^[a-z0-9][a-z0-9._-]*$/iu;
+const catalogOpenFlags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK);
 
 const catalogDurabilityPlatform = (): NodeJS.Platform => {
   if (process.env.NODE_ENV !== 'test') return process.platform;
@@ -221,36 +220,46 @@ const catalogDurabilityPlatform = (): NodeJS.Platform => {
   return platforms[catalogDurabilityPlatformKey] ?? process.platform;
 };
 
-const isSafeRelativePath = (value: JsonValue | undefined, allowCurrentDirectory = false): value is string =>
-  nonemptySnapshotText(value) &&
-  !isAbsolute(value) &&
-  (allowCurrentDirectory && value === '.' ||
-    value !== '.' &&
-    !value.split(/[\\/]/u).some((part) => part.length === 0 || part === '.' || part === '..'));
-
-const relativePathInside = (root: string, path: string, allowCurrentDirectory = false): string => {
-  const normalizedRoot = resolve(root);
-  const candidate = resolve(path);
-  if (!isInsideOrEqual(normalizedRoot, candidate)) {
-    throw new Error('Native Playground catalog snapshot contains an invalid path.');
-  }
-  const value = relative(normalizedRoot, candidate) || '.';
-  if (!isSafeRelativePath(value, allowCurrentDirectory)) {
-    throw new Error('Native Playground catalog snapshot contains an invalid path.');
-  }
-  return value;
+const containedPath = (root: string, candidate: string, allowRoot = false): boolean => {
+  const path = relative(resolve(root), resolve(candidate));
+  return (allowRoot && path.length === 0) || (
+    path.length > 0 && !isAbsolute(path) && path !== '..' && !path.startsWith('../') && !path.startsWith('..\\')
+  );
 };
 
-const resolveContainedPath = (root: string, value: string, allowCurrentDirectory = false): string => {
-  if (!isSafeRelativePath(value, allowCurrentDirectory)) {
-    throw new Error('Native Playground catalog snapshot is invalid.');
-  }
-  const candidate = resolve(root, value);
-  if (!isInsideOrEqual(resolve(root), candidate)) {
-    throw new Error('Native Playground catalog snapshot is invalid.');
-  }
-  return candidate;
+const safeRelativePath = (value: string): boolean => {
+  const segments = value.split('/');
+  return value.length > 0 && !isAbsolute(value) && !/^[a-z]:/iu.test(value) && !value.includes('\\') && !value.includes('\0')
+    && segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
+    && segments.join('/') === value;
 };
+
+const projectRelativePath = (projectRoot: string, candidate: string): string | undefined => {
+  if (!containedPath(projectRoot, candidate)) return undefined;
+  const path = relative(resolve(projectRoot), resolve(candidate)).replaceAll('\\', '/');
+  return safeRelativePath(path) ? path : undefined;
+};
+
+const truncateUtf8 = (value: string, maximumBytes: number): string => {
+  if (Buffer.byteLength(value, 'utf8') <= maximumBytes) return value;
+  const suffix = '…';
+  const budget = maximumBytes - Buffer.byteLength(suffix, 'utf8');
+  let bytes = 0;
+  let result = '';
+  for (const character of value) {
+    const size = Buffer.byteLength(character, 'utf8');
+    if (bytes + size > budget) break;
+    result += character;
+    bytes += size;
+  }
+  return `${result}${suffix}`;
+};
+
+const safeNativeEvidenceText = (value: string, projectRoot: string): string =>
+  truncateUtf8(safeDevWireText(value, projectRoot), maximumNativeEvidenceTextBytes);
+
+const truncated = (length: number): Readonly<{ readonly truncated: true }> | Readonly<Record<string, never>> =>
+  length > maximumNativeEvidenceEntries ? Object.freeze({ truncated: true as const }) : Object.freeze({});
 
 const opaqueId = (epoch: ArtifactEpoch, kind: string, content: unknown): string =>
   digest({
@@ -264,29 +273,6 @@ const opaqueId = (epoch: ArtifactEpoch, kind: string, content: unknown): string 
     }),
     kind,
   });
-
-const catalogSelectionIdentity = (options: Readonly<{
-  readonly epoch: ArtifactEpoch;
-  readonly evalCase: EvalCase;
-  readonly fixturePlan: Pick<PersistedFixturePlan, 'digest'>;
-  readonly host: NativePlaygroundHost;
-  readonly suiteDigest: string;
-  readonly suiteName: string;
-}>): Readonly<{
-  readonly caseId: string;
-  readonly caseLabel: string;
-  readonly fixtureId: string;
-  readonly fixtureLabel: string;
-  readonly modelPinId: string;
-  readonly modelPinLabel: string;
-}> => Object.freeze({
-  caseId: opaqueId(options.epoch, 'case', { digest: options.evalCase.digest, suite: options.suiteDigest }),
-  caseLabel: `${options.suiteName} / ${options.evalCase.id}`,
-  fixtureId: opaqueId(options.epoch, 'fixture', { case: options.evalCase.digest, digest: options.fixturePlan.digest }),
-  fixtureLabel: `${options.suiteName} / ${options.evalCase.id}`,
-  modelPinId: opaqueId(options.epoch, 'model', { case: options.evalCase.digest, host: options.host, model: options.evalCase.hosts[options.host]!.model }),
-  modelPinLabel: `${options.host} pinned model`,
-});
 
 const hardcodedProgress = (phase: NativePlaygroundProgress): PlaygroundEventInput => Object.freeze({
   kind: `native.${phase}`,
@@ -329,6 +315,7 @@ const nativeTrialProvenance = (trial: EvalTrialRecord, projectRoot: string): Pla
             : 'state' in semanticGrader
               ? Object.freeze({ state: 'unrecorded' })
               : Object.freeze({
+                contractRevision: safeNativeProvenanceText(semanticGrader.contractRevision, projectRoot),
                 id: safeNativeProvenanceText(semanticGrader.id, projectRoot),
                 model: safeNativeProvenanceText(semanticGrader.model, projectRoot),
               }) }),
@@ -338,9 +325,12 @@ const nativeTrialProvenance = (trial: EvalTrialRecord, projectRoot: string): Pla
 };
 
 /** A completed response is user-facing evidence, but never a raw host stream. */
-const safeResponse = (value: string): string => redactEvalCredentialText(value)
-  .replace(/(?:[A-Za-z]:)?(?:[/\\][^\s`'"<>|]*)+/gu, '[path]')
-  .replaceAll('\0', '');
+const safeResponse = (value: string): string => truncateUtf8(
+  redactEvalCredentialText(value)
+    .replace(/(?:[A-Za-z]:)?(?:[/\\][^\s`'"<>|]*)+/gu, '[path]')
+    .replaceAll('\0', ''),
+  maximumNativeResponseBytes,
+);
 
 const workspaceEvidence = (diff: WorkspaceDiff): PlaygroundJsonObject => Object.freeze({
   changes: Object.freeze(diff.changes.map((change) => Object.freeze({
@@ -367,8 +357,11 @@ const normalizedTrialEvents = (
   Object.freeze({
     kind: 'native.activation',
     raw: Object.freeze({
-      activated: Object.freeze(trial.evidence.skillActivation.activated.map((name) => safeDevWireText(name, projectRoot))),
+      activated: Object.freeze(trial.evidence.skillActivation.activated
+        .slice(0, maximumNativeEvidenceEntries)
+        .map((name) => safeNativeEvidenceText(name, projectRoot))),
       level: trial.evidence.skillActivation.level,
+      ...truncated(trial.evidence.skillActivation.activated.length),
     }),
     source: 'skill-evidence',
     summary: 'Recorded normalized native Skill activation evidence.',
@@ -376,11 +369,12 @@ const normalizedTrialEvents = (
   Object.freeze({
     kind: 'native.mcp',
     raw: Object.freeze({
-      calls: Object.freeze(trial.evidence.mcp.calls.map((call) => Object.freeze({
-        server: safeDevWireText(call.server, projectRoot),
-        tool: safeDevWireText(call.tool, projectRoot),
+      calls: Object.freeze(trial.evidence.mcp.calls.slice(0, maximumNativeEvidenceEntries).map((call) => Object.freeze({
+        server: safeNativeEvidenceText(call.server, projectRoot),
+        tool: safeNativeEvidenceText(call.tool, projectRoot),
       }))),
       level: trial.evidence.mcp.level,
+      ...truncated(trial.evidence.mcp.calls.length),
     }),
     source: 'mcp',
     summary: 'Recorded normalized native MCP evidence.',
@@ -388,12 +382,13 @@ const normalizedTrialEvents = (
   Object.freeze({
     kind: 'native.assertions',
     raw: Object.freeze({
-      assertions: Object.freeze(trial.assertions.map((assertion) => Object.freeze({
+      assertions: Object.freeze(trial.assertions.slice(0, maximumNativeEvidenceEntries).map((assertion) => Object.freeze({
         evidence: assertion.evidence,
-        id: safeDevWireText(assertion.assertionId, projectRoot),
-        kind: safeDevWireText(assertion.kind, projectRoot),
+        id: safeNativeEvidenceText(assertion.assertionId, projectRoot),
+        kind: safeNativeEvidenceText(assertion.kind, projectRoot),
         outcome: assertion.outcome,
       }))),
+      ...truncated(trial.assertions.length),
     }),
     source: 'diagnostics',
     summary: 'Recorded normalized native assertion evidence.',
@@ -402,7 +397,11 @@ const normalizedTrialEvents = (
     ? []
     : [Object.freeze({
       kind: 'native.hooks',
-      raw: Object.freeze({ events: Object.freeze(hookEvents.map((event) => safeDevWireText(event, projectRoot))) }),
+      raw: Object.freeze({
+        events: Object.freeze(hookEvents.slice(0, maximumNativeEvidenceEntries)
+          .map((event) => safeNativeEvidenceText(event, projectRoot))),
+        ...truncated(hookEvents.length),
+      }),
       source: 'hook' as const,
       summary: 'Recorded normalized native Hook evidence.',
     })]),
@@ -412,11 +411,14 @@ const normalizedTrialEvents = (
       kind: 'native.scripts',
       raw: Object.freeze({
         level: trial.evidence.scripts.level,
-        results: Object.freeze(Object.entries(trial.evidence.scripts.results).map(([id, result]) => Object.freeze({
-          detail: safeDevWireText(result.detail, projectRoot),
-          id: safeDevWireText(id, projectRoot),
+        results: Object.freeze(Object.entries(trial.evidence.scripts.results)
+          .slice(0, maximumNativeEvidenceEntries)
+          .map(([id, result]) => Object.freeze({
+          detail: safeNativeEvidenceText(result.detail, projectRoot),
+          id: safeNativeEvidenceText(id, projectRoot),
           outcome: result.outcome,
         }))),
+        ...truncated(Object.keys(trial.evidence.scripts.results).length),
       }),
       source: 'script' as const,
       summary: 'Recorded normalized native script evidence.',
@@ -453,6 +455,16 @@ const selectionKey = (selection: NativePlaygroundCatalogSelection): string =>
 const isRecord = (value: JsonValue): value is Readonly<Record<string, JsonValue>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const boundedJson = (value: JsonValue, depth = 0): boolean => {
+  if (depth > maximumSnapshotDepth) return false;
+  if (typeof value === 'string') return value.length <= maximumSnapshotStringLength;
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return true;
+  if (Array.isArray(value)) return value.length <= maximumFixtureEntries && value.every((entry) => boundedJson(entry, depth + 1));
+  const entries = Object.entries(value);
+  return entries.length <= maximumFixtureEntries && entries.every(([key, entry]) =>
+    key.length <= 256 && boundedJson(entry, depth + 1));
+};
+
 const nonemptySnapshotText = (value: JsonValue | undefined): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= maximumSnapshotStringLength;
 
@@ -478,106 +490,75 @@ const withinCatalogSnapshotNodeBudget = (root: unknown): boolean => {
   return true;
 };
 
-const activationEvidence = (value: JsonValue | undefined): value is 'inferred' | 'observed' | 'unavailable' =>
-  value === 'inferred' || value === 'observed' || value === 'unavailable';
-
-const safeInteger = (value: JsonValue | undefined): value is number =>
-  typeof value === 'number' && Number.isSafeInteger(value);
-
-const persistedAssertion = (value: JsonValue): EvalCase['assertions'][number] | undefined => {
-  if (!isRecord(value) || !nonemptySnapshotText(value.id) || !activationEvidence(value.minimumEvidence) || typeof value.kind !== 'string') return undefined;
-  if (value.kind === 'exit-code' && exactKeys(value, ['expected', 'id', 'kind', 'minimumEvidence']) && safeInteger(value.expected)) {
-    return Object.freeze({ expected: value.expected, id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence });
-  }
-  if (value.kind === 'mcp-call' && exactKeys(value, ['atLeast', 'id', 'kind', 'minimumEvidence', 'server', 'tool']) &&
-    safeInteger(value.atLeast) && value.atLeast >= 0 && nonemptySnapshotText(value.server) && nonemptySnapshotText(value.tool)) {
-    return Object.freeze({ atLeast: value.atLeast, id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence, server: value.server, tool: value.tool });
-  }
-  if (value.kind === 'no-mcp-call' && nonemptySnapshotText(value.server) &&
-    ((exactKeys(value, ['id', 'kind', 'minimumEvidence', 'server'])) ||
-      (exactKeys(value, ['id', 'kind', 'minimumEvidence', 'server', 'tool']) && nonemptySnapshotText(value.tool)))) {
-    return Object.freeze({
-      ...(value.tool === undefined ? {} : { tool: value.tool as string }),
-      id: value.id,
-      kind: value.kind,
-      minimumEvidence: value.minimumEvidence,
-      server: value.server,
-    });
-  }
-  if (value.kind === 'no-skill-activation' &&
-    ((exactKeys(value, ['id', 'kind', 'minimumEvidence'])) || (exactKeys(value, ['id', 'kind', 'minimumEvidence', 'skill']) && nonemptySnapshotText(value.skill)))) {
-    return Object.freeze({ ...(value.skill === undefined ? {} : { skill: value.skill as string }), id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence });
-  }
-  if (value.kind === 'outcome' && exactKeys(value, ['id', 'kind', 'minimumEvidence', 'script']) && nonemptySnapshotText(value.script)) {
-    return Object.freeze({ id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence, script: value.script });
-  }
-  if (value.kind === 'skill-activation' && exactKeys(value, ['id', 'kind', 'minimumEvidence', 'skill']) && nonemptySnapshotText(value.skill)) {
-    return Object.freeze({ id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence, skill: value.skill });
-  }
-  return undefined;
-};
-
-const persistedEvalCase = (value: JsonValue): EvalCase | undefined => {
-  if (!isRecord(value) || !exactKeys(value, ['assertions', 'digest', 'fixture', 'hosts', 'id', 'invocation', 'prompt', 'trials']) ||
-    !Array.isArray(value.assertions) || value.assertions.length > maximumFixtureEntries ||
-    !nonemptySnapshotText(value.digest) || !nonemptySnapshotText(value.id) || !nonemptySnapshotText(value.prompt) ||
-    !safeInteger(value.trials) || value.trials < 1 || !isRecord(value.fixture) || !isRecord(value.hosts) || !isRecord(value.invocation)) return undefined;
-  if (!exactKeys(value.fixture, ['git', 'include', 'path']) || typeof value.fixture.git !== 'boolean' ||
-    !Array.isArray(value.fixture.include) || value.fixture.include.length > maximumFixtureEntries ||
-    !value.fixture.include.every(nonemptySnapshotText) || !isSafeRelativePath(value.fixture.path, true)) return undefined;
-  const hostEntries = Object.entries(value.hosts);
-  if (hostEntries.length > maximumFixtureEntries || hostEntries.some(([host, binding]) => !nonemptySnapshotText(host) ||
-    !isRecord(binding) || !exactKeys(binding, ['model']) || !nonemptySnapshotText(binding.model))) return undefined;
-  const invocation = value.invocation;
-  if (!((invocation.mode === 'automatic' || invocation.mode === 'none') && exactKeys(invocation, ['mode'])) &&
-    !(invocation.mode === 'explicit' && exactKeys(invocation, ['mode', 'skill']) && nonemptySnapshotText(invocation.skill))) return undefined;
-  const assertions = value.assertions.map(persistedAssertion);
-  if (assertions.some((assertion) => assertion === undefined)) return undefined;
-  try {
-    const normalized = normalizeEvalCase({
-      assertions: assertions as EvalCase['assertions'][number][],
-      fixture: Object.freeze({ git: value.fixture.git, include: Object.freeze([...value.fixture.include] as string[]), path: value.fixture.path }),
-      hosts: Object.freeze(Object.fromEntries(hostEntries.map(([host, binding]) => [host, Object.freeze({ model: (binding as Readonly<Record<string, string>>).model })]))),
-      id: value.id,
-      invocation: Object.freeze(invocation.mode === 'explicit' ? { mode: 'explicit' as const, skill: invocation.skill as string } : { mode: invocation.mode }),
-      prompt: value.prompt,
-      trials: value.trials,
-    });
-    return normalized.digest === value.digest ? normalized : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const persistedFixturePlan = (value: JsonValue): PersistedFixturePlan | undefined => {
+const persistedFixturePlan = (
+  value: JsonValue,
+  evalCase: EvalCase,
+  suiteDir: string,
+): EvalFixturePlan | undefined => {
   if (!isRecord(value) || !exactKeys(value, ['digest', 'entries', 'git', 'sourcePath']) ||
-    !nonemptySnapshotText(value.digest) || typeof value.git !== 'boolean' || !isSafeRelativePath(value.sourcePath, true) ||
-    !Array.isArray(value.entries) || value.entries.length > maximumFixtureEntries) return undefined;
-  const entries = value.entries.map((entry) => {
-    if (!isRecord(entry) || !exactKeys(entry, ['executable', 'path', 'sha256']) || typeof entry.executable !== 'boolean' ||
-      !isSafeRelativePath(entry.path) || typeof entry.sha256 !== 'string' || !fixtureSha256Text.test(entry.sha256)) return undefined;
+    !nonemptySnapshotText(value.digest) || !sha256.test(value.digest) ||
+    !Array.isArray(value.entries) || value.entries.length > maximumFixtureEntries ||
+    typeof value.git !== 'boolean' || value.git !== evalCase.fixture.git || !nonemptySnapshotText(value.sourcePath)) return undefined;
+  const expectedSourcePath = resolve(suiteDir, evalCase.fixture.path);
+  if (resolve(value.sourcePath) !== expectedSourcePath || !containedPath(suiteDir, expectedSourcePath)) return undefined;
+  const entries = value.entries.map((entry): EvalFixturePlan['entries'][number] | undefined => {
+    if (!isRecord(entry) || !exactKeys(entry, ['executable', 'path', 'sha256']) ||
+      typeof entry.executable !== 'boolean' || !nonemptySnapshotText(entry.path) || !safeRelativePath(entry.path) ||
+      !nonemptySnapshotText(entry.sha256) || !sha256.test(entry.sha256)) return undefined;
     return Object.freeze({ executable: entry.executable, path: entry.path, sha256: entry.sha256 });
   });
-  if (entries.some((entry) => entry === undefined) || new Set(entries.map((entry) => entry?.path)).size !== entries.length) return undefined;
-  const normalizedEntries = Object.freeze(entries as EvalFixturePlan['entries'][number][]);
-  return digest({ entries: normalizedEntries, git: value.git }) === value.digest
-    ? Object.freeze({ digest: value.digest, entries: normalizedEntries, git: value.git, sourcePath: value.sourcePath })
-    : undefined;
+  if (entries.some((entry) => entry === undefined)) return undefined;
+  const resolvedEntries = entries as EvalFixturePlan['entries'][number][];
+  const paths = resolvedEntries.map((entry) => entry.path);
+  if (new Set(paths).size !== paths.length || paths.some((path, index) => index > 0 && paths[index - 1]!.localeCompare(path) >= 0)) {
+    return undefined;
+  }
+  const frozenEntries = Object.freeze(resolvedEntries);
+  if (digest({ entries: frozenEntries, git: value.git }) !== value.digest) return undefined;
+  return Object.freeze({ digest: value.digest, entries: frozenEntries, git: value.git, sourcePath: expectedSourcePath });
 };
 
-const persistedSelection = (value: JsonValue): PersistedCatalogSelection | undefined => {
+const persistedSelection = (
+  value: JsonValue,
+  reference: NativePlaygroundEpochReference,
+  projectRoot: string,
+): PersistedCatalogSelection | undefined => {
   if (!isRecord(value) || !exactKeys(value, [
-    'caseId', 'caseLabel', 'evalCase', 'fixtureId', 'fixtureLabel', 'fixturePlan', 'host', 'modelPinId', 'modelPinLabel', 'suiteDigest', 'suiteDir', 'suiteName',
-  ]) ||
-  !nonemptySnapshotText(value.caseId) || !nonemptySnapshotText(value.caseLabel) ||
-  !nonemptySnapshotText(value.fixtureId) || !nonemptySnapshotText(value.fixtureLabel) ||
-  !nonemptySnapshotText(value.modelPinId) || !nonemptySnapshotText(value.modelPinLabel) ||
-  !nonemptySnapshotText(value.suiteDigest) || !nonemptySnapshotText(value.suiteName) ||
-  !isSafeRelativePath(value.suiteDir, true) ||
-  (value.host !== 'claude' && value.host !== 'codex')) return undefined;
-  const evalCase = persistedEvalCase(value.evalCase);
-  const fixturePlan = persistedFixturePlan(value.fixturePlan);
-  if (evalCase === undefined || fixturePlan === undefined || evalCase.hosts[value.host] === undefined) return undefined;
+    'caseId', 'caseLabel', 'evalCase', 'fixtureId', 'fixtureLabel', 'fixturePlan', 'host', 'modelPinId', 'modelPinLabel',
+    'suiteCaseDigests', 'suiteDigest', 'suiteName', 'suiteSourcePath',
+  ])) return undefined;
+  if (
+    !nonemptySnapshotText(value.caseId) || !nonemptySnapshotText(value.caseLabel) ||
+    !nonemptySnapshotText(value.fixtureId) || !nonemptySnapshotText(value.fixtureLabel) ||
+    !nonemptySnapshotText(value.modelPinId) || !nonemptySnapshotText(value.modelPinLabel) ||
+    !Array.isArray(value.suiteCaseDigests) || value.suiteCaseDigests.length === 0 ||
+    !nonemptySnapshotText(value.suiteDigest) || !sha256.test(value.suiteDigest) ||
+    !nonemptySnapshotText(value.suiteName) || !safeIdentifier.test(value.suiteName) ||
+    !nonemptySnapshotText(value.suiteSourcePath) || !safeRelativePath(value.suiteSourcePath) ||
+    (value.host !== 'claude' && value.host !== 'codex') ||
+    !isRecord(value.evalCase) || !isRecord(value.fixturePlan) ||
+    !boundedJson(value.evalCase) || !boundedJson(value.fixturePlan)
+  ) return undefined;
+  const suiteCaseDigests = value.suiteCaseDigests;
+  if (suiteCaseDigests.some((entry) => typeof entry !== 'string' || !sha256.test(entry)) ||
+    new Set(suiteCaseDigests).size !== suiteCaseDigests.length ||
+    digest({ cases: suiteCaseDigests, name: value.suiteName }) !== value.suiteDigest) return undefined;
+  let evalCase: EvalCase;
+  try { evalCase = normalizeEvalCase(value.evalCase as unknown as EvalCase); }
+  catch { return undefined; }
+  if (evalCase.digest !== value.evalCase.digest || stableJson(evalCase) !== stableJson(value.evalCase) ||
+    !suiteCaseDigests.includes(evalCase.digest)) return undefined;
+  const suiteSourcePath = resolve(projectRoot, value.suiteSourcePath);
+  if (!containedPath(projectRoot, suiteSourcePath)) return undefined;
+  const suiteDir = dirname(suiteSourcePath);
+  const fixturePlan = persistedFixturePlan(value.fixturePlan, evalCase, suiteDir);
+  const model = evalCase.hosts[value.host]?.model;
+  if (fixturePlan === undefined || model === undefined ||
+    value.caseLabel !== `${value.suiteName} / ${evalCase.id}` || value.fixtureLabel !== value.caseLabel ||
+    value.modelPinLabel !== `${value.host} pinned model` ||
+    value.caseId !== opaqueId(reference.epoch, 'case', { digest: evalCase.digest, suite: value.suiteDigest }) ||
+    value.fixtureId !== opaqueId(reference.epoch, 'fixture', { case: evalCase.digest, digest: fixturePlan.digest }) ||
+    value.modelPinId !== opaqueId(reference.epoch, 'model', { case: evalCase.digest, host: value.host, model })) return undefined;
   return Object.freeze({
     caseId: value.caseId,
     caseLabel: value.caseLabel,
@@ -588,27 +569,11 @@ const persistedSelection = (value: JsonValue): PersistedCatalogSelection | undef
     host: value.host,
     modelPinId: value.modelPinId,
     modelPinLabel: value.modelPinLabel,
-    suiteDir: value.suiteDir,
+    suiteCaseDigests: Object.freeze([...suiteCaseDigests]),
     suiteDigest: value.suiteDigest,
     suiteName: value.suiteName,
+    suiteSourcePath: value.suiteSourcePath,
   });
-};
-
-const hasCanonicalSelectionIdentity = (epoch: ArtifactEpoch, selection: PersistedCatalogSelection): boolean => {
-  const expected = catalogSelectionIdentity({
-    epoch,
-    evalCase: selection.evalCase,
-    fixturePlan: selection.fixturePlan,
-    host: selection.host,
-    suiteDigest: selection.suiteDigest,
-    suiteName: selection.suiteName,
-  });
-  return selection.caseId === expected.caseId &&
-    selection.caseLabel === expected.caseLabel &&
-    selection.fixtureId === expected.fixtureId &&
-    selection.fixtureLabel === expected.fixtureLabel &&
-    selection.modelPinId === expected.modelPinId &&
-    selection.modelPinLabel === expected.modelPinLabel;
 };
 
 /**
@@ -619,35 +584,46 @@ const hasCanonicalSelectionIdentity = (epoch: ArtifactEpoch, selection: Persiste
  */
 export class NativePlaygroundService {
   readonly #catalogDirectory: string | undefined;
+  readonly #catalogMove: typeof rename;
   readonly #catalogStorage: NativePlaygroundCatalogStorage;
   readonly #catalogs = new Map<string, Promise<CatalogSnapshot>>();
   readonly #catalogPublications = new Map<string, NativePlaygroundCatalogPublicationReceipt>();
+  readonly #cleanupFailures = new Set<unknown>();
+  readonly #closeReason = new Error('Native Playground service is closed.');
   /** Abort listeners run synchronously and cannot await the close they help complete. */
   readonly #abortReentryCompletion = Promise.resolve();
-  readonly #controllers = new Set<AbortController>();
-  readonly #runs = new Set<Promise<NativePlaygroundRunResult>>();
   readonly #discover: NonNullable<NativePlaygroundServiceOptions['discover']>;
   readonly #environment: Readonly<NodeJS.ProcessEnv> | undefined;
   readonly #inspectArtifact: NonNullable<NativePlaygroundServiceOptions['inspectArtifact']>;
   readonly #native: NativePlaygroundServiceOptions['native'];
+  readonly #operations = new Set<NativePlaygroundOperation>();
   readonly #planFixture: NonNullable<NativePlaygroundServiceOptions['planFixture']>;
   readonly #projectRoot: string;
+  readonly #removeWorkspace: NonNullable<NativePlaygroundServiceOptions['removeWorkspace']>;
   #abortDispatchDepth = 0;
   #closePromise: Promise<void> | undefined;
   #closed = false;
 
   constructor(options: NativePlaygroundServiceOptions) {
     this.#catalogDirectory = options.catalogDirectory;
-    this.#catalogStorage = options.catalogStorage ?? Object.freeze({ link, mkdir, open, rename, remove: rm });
+    this.#catalogStorage = options.catalogStorage ?? Object.freeze({ link, mkdir, open, remove: rm });
+    this.#catalogMove = options.catalogStorage?.move ?? rename;
     this.#projectRoot = options.projectRoot;
+    this.#removeWorkspace = options.removeWorkspace ?? (async (root) => rm(root, { force: true, recursive: true }));
     this.#environment = options.environment;
     this.#native = options.native;
     this.#discover = options.discover ?? (async (projectRoot) => {
       const loaded = await loadConfig({ command: 'eval', mode: 'development', root: projectRoot });
       return discoverEvalSuites({ config: normalizeEvalConfig(loaded.config.evals), projectRoot });
     });
-    this.#inspectArtifact = options.inspectArtifact ?? (async (reference) =>
-      prepareEvalArtifact({ artifact: reference.root, projectRoot: this.#projectRoot, runDirectory: reference.root }));
+    this.#inspectArtifact = options.inspectArtifact ?? (async (reference) => Object.freeze({
+      binding: Object.freeze({
+        manifestPath: reference.epoch.manifestPath,
+        source: 'explicit' as const,
+        targetDigests: Object.freeze({ ...reference.epoch.targetDigests }),
+      }),
+      root: reference.root,
+    }));
     this.#planFixture = options.planFixture ?? planEvalFixture;
   }
 
@@ -696,7 +672,7 @@ export class NativePlaygroundService {
     });
   }
 
-  run(
+  async run(
     prepared: NativePlaygroundPrepared,
     options: Readonly<{
       readonly emit: (event: PlaygroundEventInput) => Promise<void>;
@@ -705,29 +681,19 @@ export class NativePlaygroundService {
   ): Promise<NativePlaygroundRunResult> {
     this.#assertOpen();
     const controller = new AbortController();
+    let settle!: () => void;
+    const operation: NativePlaygroundOperation = {
+      controller,
+      settled: new Promise<void>((resolvePromise) => { settle = resolvePromise; }),
+      settle: () => { settle(); },
+    };
+    this.#operations.add(operation);
     const externalSignal = options.signal;
     const abortFromExternal = (): void => this.#dispatchAbort(controller, externalSignal.reason);
     if (externalSignal.aborted) abortFromExternal();
     else externalSignal.addEventListener('abort', abortFromExternal, { once: true });
-    this.#controllers.add(controller);
-    const running = this.#run(prepared, Object.freeze({ ...options, signal: controller.signal })).finally(() => {
-      externalSignal.removeEventListener('abort', abortFromExternal);
-      this.#controllers.delete(controller);
-      this.#runs.delete(running);
-    });
-    this.#runs.add(running);
-    return running;
-  }
-
-  async #run(
-    prepared: NativePlaygroundPrepared,
-    options: Readonly<{
-      readonly emit: (event: PlaygroundEventInput) => Promise<void>;
-      readonly signal: AbortSignal;
-    }>,
-  ): Promise<NativePlaygroundRunResult> {
-    const signal = options.signal;
-    const nativeRoot = await this.#createWorkspaceRoot();
+    const signal = controller.signal;
+    let nativeRoot: string | undefined;
     let completedResponse: string | undefined;
     let completedWorkspace: WorkspaceDiff | undefined;
     let completedHooks: readonly string[] = Object.freeze([]);
@@ -744,6 +710,7 @@ export class NativePlaygroundService {
       if (result.workspacePath !== undefined) completedWorkspace = await this.#workspaceDiff(result.workspacePath, prepared);
     };
     try {
+      nativeRoot = await this.#createWorkspaceRoot();
       const writer = new DiscardingTrialWriter();
       let trial: EvalTrialRecord;
       if (prepared.host === 'claude') {
@@ -788,40 +755,65 @@ export class NativePlaygroundService {
         ...(completedWorkspace === undefined ? {} : { workspace: workspaceEvidence(completedWorkspace) }),
       });
     } finally {
-      await rm(nativeRoot, { force: true, recursive: true });
+      try {
+        if (nativeRoot !== undefined) await this.#cleanupWorkspace(nativeRoot);
+      } finally {
+        externalSignal.removeEventListener('abort', abortFromExternal);
+        this.#operations.delete(operation);
+        operation.settle();
+      }
     }
   }
 
   close(): Promise<void> {
-    if (this.#abortDispatchDepth > 0) return this.#abortReentryCompletion;
-    if (this.#closePromise !== undefined) {
-      return this.#closePromise;
+    const reentrantAbortListener = this.#abortDispatchDepth > 0;
+    if (this.#closePromise === undefined) {
+      let resolvePromise!: () => void;
+      let rejectPromise!: (reason: unknown) => void;
+      const closing = new Promise<void>((resolvePromiseInput, rejectPromiseInput) => {
+        resolvePromise = resolvePromiseInput;
+        rejectPromise = rejectPromiseInput;
+      });
+      this.#closePromise = closing;
+      void this.#close().then(resolvePromise, rejectPromise);
     }
-    let resolvePromise!: () => void;
-    let rejectPromise!: (reason: unknown) => void;
-    const closing = new Promise<void>((resolvePromiseInput, rejectPromiseInput) => {
-      resolvePromise = resolvePromiseInput;
-      rejectPromise = rejectPromiseInput;
-    });
-    this.#closePromise = closing;
-    void this.#close().then(resolvePromise, rejectPromise);
-    return closing;
+    return reentrantAbortListener ? this.#abortReentryCompletion : this.#closePromise;
   }
 
   async #close(): Promise<void> {
     this.#closed = true;
-    for (const controller of this.#controllers) {
-      this.#dispatchAbort(controller, new Error('Native Playground service is closed.'));
-    }
-    await Promise.allSettled([...this.#runs, ...this.#catalogs.values()]);
+    const operations = [...this.#operations];
+    const catalogs = [...this.#catalogs.values()];
+    for (const operation of operations) this.#dispatchAbort(operation.controller, this.#closeReason);
+    const results = await Promise.allSettled([
+      ...operations.map((operation) => operation.settled),
+      ...catalogs,
+    ]);
     this.#catalogs.clear();
     this.#catalogPublications.clear();
+    const failures = [
+      ...results.flatMap((result) =>
+        result.status === 'rejected' && result.reason !== this.#closeReason ? [result.reason] : []),
+      ...this.#cleanupFailures,
+    ];
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Native Playground cleanup failed.', { cause: failures[0] });
+    }
   }
 
   #dispatchAbort(controller: AbortController, reason: unknown): void {
     this.#abortDispatchDepth += 1;
     try { controller.abort(reason); }
     finally { this.#abortDispatchDepth -= 1; }
+  }
+
+  async #cleanupWorkspace(root: string): Promise<void> {
+    try {
+      await this.#removeWorkspace(root);
+    } catch (error) {
+      this.#cleanupFailures.add(error);
+      throw error;
+    }
   }
 
   async #snapshot(reference: NativePlaygroundEpochReference): Promise<CatalogSnapshot> {
@@ -849,9 +841,14 @@ export class NativePlaygroundService {
     this.#catalogPublications.set(reference.epoch.id, receipt);
     try {
       this.#assertOpen();
-      return await this.#hydrateSnapshot(artifact, snapshot);
+      return this.#hydrateSnapshot(artifact, snapshot);
     } catch (error) {
-      return this.#rollbackPublicationAndThrow(receipt, error, 'Native Playground catalog hydration and rollback both failed.');
+      this.#catalogPublications.delete(reference.epoch.id);
+      return this.#rollbackPublicationAndThrow(
+        receipt,
+        error,
+        'Native Playground catalog hydration and rollback both failed.',
+      );
     }
   }
 
@@ -859,44 +856,44 @@ export class NativePlaygroundService {
     const suites = await this.#discover(this.#projectRoot);
     const selections: PersistedCatalogSelection[] = [];
     for (const discovered of suites) {
-      for (const evalCase of discovered.suite.cases) {
-        const fixturePlan = await this.#planFixture({ baseDir: this.#suiteDirectory(discovered.sourcePath), fixture: evalCase.fixture });
-        const suiteDir = this.#suiteDirectory(discovered.sourcePath);
-        const persistedEvalCase = normalizeEvalCase({
-          ...evalCase,
-          fixture: Object.freeze({
-            ...evalCase.fixture,
-            path: relativePathInside(suiteDir, resolve(suiteDir, evalCase.fixture.path), true),
-          }),
-        });
-        const persistedFixturePlan = Object.freeze({
-          digest: fixturePlan.digest,
-          entries: Object.freeze(fixturePlan.entries.map((entry) => Object.freeze({ ...entry }))),
-          git: fixturePlan.git,
-          sourcePath: relativePathInside(suiteDir, fixturePlan.sourcePath, true),
-        });
+      const suiteSourcePath = projectRelativePath(this.#projectRoot, discovered.sourcePath);
+      const suiteCaseDigests = Object.freeze(discovered.suite.cases.map((entry) => entry.digest));
+      if (suiteSourcePath === undefined || digest({ cases: suiteCaseDigests, name: discovered.suite.name }) !== discovered.suite.digest) {
+        throw new Error('Native Playground discovered an invalid eval suite.');
+      }
+      for (const authoredCase of discovered.suite.cases) {
+        const evalCase = normalizeEvalCase(authoredCase);
+        if (stableJson(evalCase) !== stableJson(authoredCase)) {
+          throw new Error('Native Playground discovered an invalid eval case.');
+        }
+        const plannedFixture = await this.#planFixture({ baseDir: this.#suiteDirectory(discovered.sourcePath), fixture: evalCase.fixture });
+        const fixturePlan = persistedFixturePlan(
+          plannedFixture as unknown as JsonValue,
+          evalCase,
+          this.#suiteDirectory(discovered.sourcePath),
+        );
+        if (fixturePlan === undefined) {
+          throw new Error('Native Playground discovered an invalid fixture plan.');
+        }
+        const caseId = opaqueId(reference.epoch, 'case', { digest: evalCase.digest, suite: discovered.suite.digest });
+        const fixtureId = opaqueId(reference.epoch, 'fixture', { case: evalCase.digest, digest: fixturePlan.digest });
+        const caseLabel = `${discovered.suite.name} / ${evalCase.id}`;
         for (const host of Object.keys(evalCase.hosts).filter((host): host is NativePlaygroundHost => nativeHosts.has(host as NativePlaygroundHost)).sort()) {
-          const identity = catalogSelectionIdentity({
-            epoch: reference.epoch,
-            evalCase: persistedEvalCase,
-            fixturePlan: persistedFixturePlan,
-            host,
-            suiteDigest: discovered.suite.digest,
-            suiteName: discovered.suite.name,
-          });
+          const modelPinId = opaqueId(reference.epoch, 'model', { case: evalCase.digest, host, model: evalCase.hosts[host]!.model });
           selections.push(Object.freeze({
-            caseId: identity.caseId,
-            caseLabel: identity.caseLabel,
-            evalCase: persistedEvalCase,
-            fixtureId: identity.fixtureId,
-            fixtureLabel: identity.fixtureLabel,
-            fixturePlan: persistedFixturePlan,
+            caseId,
+            caseLabel,
+            evalCase,
+            fixtureId,
+            fixtureLabel: caseLabel,
+            fixturePlan,
             host,
-            modelPinId: identity.modelPinId,
-            modelPinLabel: identity.modelPinLabel,
-            suiteDir: relativePathInside(this.#projectRoot, suiteDir, true),
+            modelPinId,
+            modelPinLabel: `${host} pinned model`,
+            suiteCaseDigests,
             suiteDigest: discovered.suite.digest,
             suiteName: discovered.suite.name,
+            suiteSourcePath,
           }));
         }
       }
@@ -910,16 +907,15 @@ export class NativePlaygroundService {
     });
   }
 
-  async #hydrateSnapshot(
+  #hydrateSnapshot(
     artifact: Pick<PreparedEvalArtifact, 'binding' | 'root'>,
     snapshot: PersistedCatalogSnapshot,
-  ): Promise<CatalogSnapshot> {
+  ): CatalogSnapshot {
     const cases = new Map<string, NativePlaygroundCatalogItem>();
     const fixtures = new Map<string, NativePlaygroundCatalogItem>();
     const modelPins = new Map<string, NativePlaygroundModelPin>();
     const selections = new Map<string, CatalogSelection>();
-    for (const persisted of snapshot.selections) {
-      const selection = await this.#hydrateSelection(persisted);
+    for (const selection of snapshot.selections) {
       const key = selectionKey(selection);
       if (selections.has(key)) throw new Error('Native Playground catalog snapshot contains duplicate selections.');
       cases.set(selection.caseId, Object.freeze({ id: selection.caseId, label: selection.caseLabel }));
@@ -929,7 +925,10 @@ export class NativePlaygroundService {
         id: selection.modelPinId,
         label: selection.modelPinLabel,
       }));
-      selections.set(key, selection);
+      selections.set(key, Object.freeze({
+        ...selection,
+        suiteDir: dirname(resolve(this.#projectRoot, selection.suiteSourcePath)),
+      }));
     }
     return Object.freeze({
       artifact,
@@ -949,57 +948,6 @@ export class NativePlaygroundService {
     });
   }
 
-  async #hydrateSelection(persisted: PersistedCatalogSelection): Promise<CatalogSelection> {
-    const suiteDir = resolveContainedPath(this.#projectRoot, persisted.suiteDir, true);
-    const sourcePath = resolveContainedPath(suiteDir, persisted.fixturePlan.sourcePath, true);
-    await this.#assertLivePath(suiteDir, 'directory', this.#projectRoot);
-    await this.#assertLivePath(sourcePath, 'directory', suiteDir);
-    const entries = await Promise.all(persisted.fixturePlan.entries.map(async (entry) => {
-      const source = resolveContainedPath(sourcePath, entry.path);
-      await this.#assertLivePath(source, 'file', sourcePath);
-      return Object.freeze({ ...entry });
-    }));
-    return Object.freeze({
-      caseId: persisted.caseId,
-      caseLabel: persisted.caseLabel,
-      evalCase: persisted.evalCase,
-      fixtureId: persisted.fixtureId,
-      fixtureLabel: persisted.fixtureLabel,
-      fixturePlan: Object.freeze({
-        digest: persisted.fixturePlan.digest,
-        entries: Object.freeze(entries),
-        git: persisted.fixturePlan.git,
-        sourcePath,
-      }),
-      host: persisted.host,
-      modelPinId: persisted.modelPinId,
-      modelPinLabel: persisted.modelPinLabel,
-      suiteDir,
-    });
-  }
-
-  async #assertLivePath(path: string, kind: 'directory' | 'file', root: string): Promise<void> {
-    let metadata;
-    try { metadata = await lstat(path); }
-    catch (error) {
-      // A retained catalog remains browseable after authored sources disappear;
-      // materialization will report its existing stable fixture failure later.
-      if (isErrno(error, 'ENOENT')) return;
-      throw new Error('Native Playground catalog snapshot is invalid.', { cause: error });
-    }
-    if (metadata.isSymbolicLink() || (kind === 'directory' ? !metadata.isDirectory() : !metadata.isFile())) {
-      throw new Error('Native Playground catalog snapshot is invalid.');
-    }
-    try {
-      if (!isInsideOrEqual(await realpath(root), await realpath(path))) {
-        throw new Error('Native Playground catalog snapshot is invalid.');
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message === 'Native Playground catalog snapshot is invalid.') throw error;
-      throw new Error('Native Playground catalog snapshot is invalid.', { cause: error });
-    }
-  }
-
   async #readSnapshot(reference: NativePlaygroundEpochReference): Promise<PersistedCatalogSnapshot | undefined> {
     const path = this.#snapshotPath(reference);
     await this.#assertCatalogDirectory(reference, dirname(path), true);
@@ -1016,49 +964,89 @@ export class NativePlaygroundService {
       value.epochId !== reference.epoch.id || !Array.isArray(value.selections) || value.selections.length > maximumCatalogSelections) {
       throw new Error('Native Playground catalog snapshot is invalid.');
     }
-    const selections = value.selections.map(persistedSelection);
+    const selections = value.selections.map((selection) => persistedSelection(selection, reference, this.#projectRoot));
     if (selections.some((selection) => selection === undefined)) throw new Error('Native Playground catalog snapshot is invalid.');
     const resolved = selections as PersistedCatalogSelection[];
-    if (new Set(resolved.map(selectionKey)).size !== resolved.length || !resolved.every((selection) => hasCanonicalSelectionIdentity(reference.epoch, selection))) {
-      throw new Error('Native Playground catalog snapshot is invalid.');
+    if (new Set(resolved.map(selectionKey)).size !== resolved.length) throw new Error('Native Playground catalog snapshot is invalid.');
+    const suites = new Map<string, string>();
+    const cases = new Map<string, string>();
+    const fixtures = new Map<string, string>();
+    const models = new Map<string, string>();
+    const hosts = new Map<string, Set<NativePlaygroundHost>>();
+    for (const selection of resolved) {
+      const suiteIdentity = stableJson({
+        caseDigests: selection.suiteCaseDigests,
+        digest: selection.suiteDigest,
+        name: selection.suiteName,
+      });
+      const caseIdentity = stableJson({
+        evalCase: selection.evalCase,
+        suiteDigest: selection.suiteDigest,
+        suiteSourcePath: selection.suiteSourcePath,
+      });
+      const fixtureIdentity = stableJson({ caseId: selection.caseId, fixturePlan: selection.fixturePlan });
+      const modelIdentity = stableJson({
+        caseId: selection.caseId,
+        host: selection.host,
+        model: selection.evalCase.hosts[selection.host]?.model,
+      });
+      if (
+        (suites.has(selection.suiteSourcePath) && suites.get(selection.suiteSourcePath) !== suiteIdentity) ||
+        (cases.has(selection.caseId) && cases.get(selection.caseId) !== caseIdentity) ||
+        (fixtures.has(selection.fixtureId) && fixtures.get(selection.fixtureId) !== fixtureIdentity) ||
+        (models.has(selection.modelPinId) && models.get(selection.modelPinId) !== modelIdentity)
+      ) throw new Error('Native Playground catalog snapshot is invalid.');
+      suites.set(selection.suiteSourcePath, suiteIdentity);
+      cases.set(selection.caseId, caseIdentity);
+      fixtures.set(selection.fixtureId, fixtureIdentity);
+      models.set(selection.modelPinId, modelIdentity);
+      const selectedHosts = hosts.get(selection.caseId) ?? new Set<NativePlaygroundHost>();
+      selectedHosts.add(selection.host);
+      hosts.set(selection.caseId, selectedHosts);
+    }
+    for (const selection of resolved) {
+      const expectedHosts = Object.keys(selection.evalCase.hosts)
+        .filter((host): host is NativePlaygroundHost => nativeHosts.has(host as NativePlaygroundHost))
+        .sort();
+      const actualHosts = [...(hosts.get(selection.caseId) ?? [])].sort();
+      if (stableJson(actualHosts) !== stableJson(expectedHosts)) throw new Error('Native Playground catalog snapshot is invalid.');
     }
     return Object.freeze({ epochId: value.epochId, selections: Object.freeze(resolved) });
   }
 
-  async #readSidecar(path: string): Promise<SidecarFile | undefined> {
-    let before;
-    try { before = await lstat(path); }
-    catch (error) {
-      if (isErrno(error, 'ENOENT')) return undefined;
-      throw new Error('Native Playground catalog snapshot is invalid.', { cause: error });
-    }
-    if (!before.isFile() || before.isSymbolicLink()) throw new Error('Native Playground catalog snapshot is invalid.');
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
+  async #readSidecar(path: string, allowMultipleLinks = false): Promise<SidecarFile | undefined> {
     try {
-      handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-      const opened = await handle.stat();
-      if (opened.dev !== before.dev || opened.ino !== before.ino) {
-        throw new Error('Native Playground catalog snapshot is invalid.');
-      }
-      if (opened.size > maximumCatalogSnapshotBytes) throw new Error('Native Playground catalog snapshot is invalid.');
-      const bytes = Buffer.allocUnsafe(Math.min(maximumCatalogSnapshotBytes + 1, opened.size + 1));
-      let bytesRead = 0;
-      while (bytesRead < bytes.length) {
-        const read = await handle.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
-        if (read.bytesRead === 0) break;
-        bytesRead += read.bytesRead;
-      }
-      const after = await handle.stat();
-      if (bytesRead > maximumCatalogSnapshotBytes || after.size !== bytesRead) {
-        throw new Error('Native Playground catalog snapshot is invalid.');
-      }
-      const raw = bytes.subarray(0, bytesRead).toString('utf8');
-      return Object.freeze({ identity: digest({ contents: raw, dev: opened.dev, ino: opened.ino }), raw });
+      const file = await open(path, catalogOpenFlags);
+      try {
+        const metadata = await file.stat();
+        if (
+          !metadata.isFile() ||
+          metadata.nlink < 1 ||
+          (!allowMultipleLinks && metadata.nlink !== 1) ||
+          metadata.size > maximumCatalogSnapshotBytes
+        ) {
+          throw new Error('Native Playground catalog snapshot is invalid.');
+        }
+        const buffer = Buffer.allocUnsafe(maximumCatalogSnapshotBytes + 1);
+        let offset = 0;
+        while (offset < buffer.byteLength) {
+          const { bytesRead } = await file.read(buffer, offset, buffer.byteLength - offset, offset);
+          if (bytesRead === 0) break;
+          offset += bytesRead;
+        }
+        if (offset > maximumCatalogSnapshotBytes) {
+          throw new Error('Native Playground catalog snapshot is invalid.');
+        }
+        const raw = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, offset));
+        return Object.freeze({
+          identity: digest({ contents: raw, dev: metadata.dev, ino: metadata.ino }),
+          raw,
+        });
+      } finally { await file.close(); }
     } catch (error) {
+      if (isErrno(error, 'ENOENT')) return undefined;
       if (error instanceof Error && error.message === 'Native Playground catalog snapshot is invalid.') throw error;
-      throw new Error('Native Playground catalog snapshot is invalid.', { cause: error });
-    } finally {
-      await handle?.close().catch(() => undefined);
+      throw new Error('Native Playground catalog snapshot could not be read.', { cause: error });
     }
   }
 
@@ -1068,17 +1056,27 @@ export class NativePlaygroundService {
   ): Promise<PersistedCatalogPublication> {
     const path = this.#snapshotPath(reference);
     const directory = dirname(path);
+    const contents = `${stableJson(snapshot)}\n`;
+    if (Buffer.byteLength(contents, 'utf8') > maximumCatalogSnapshotBytes) {
+      throw new Error('Native Playground catalog snapshot is too large.');
+    }
     await this.#catalogStorage.mkdir(directory, { recursive: true });
     await this.#assertCatalogDirectory(reference, directory, false);
     const temporary = join(directory, `.${reference.epoch.id}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`);
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     let created = false;
+    let publicationIdentity: string | undefined;
     let primary: unknown;
     const cleanupFailures: unknown[] = [];
     try {
       handle = await this.#catalogStorage.open(temporary, 'wx', 0o600);
-      await handle.writeFile(`${stableJson(snapshot)}\n`, 'utf8');
+      await handle.writeFile(contents, 'utf8');
       await handle.sync();
+      const staged = await handle.stat();
+      if (!staged.isFile() || staged.nlink !== 1) {
+        throw new Error('Native Playground catalog staging file is invalid.');
+      }
+      publicationIdentity = digest({ contents, dev: staged.dev, ino: staged.ino });
       await handle.close();
       handle = undefined;
       try {
@@ -1098,26 +1096,41 @@ export class NativePlaygroundService {
       }
       try { await this.#catalogStorage.remove(temporary, { force: true }); }
       catch (error) { cleanupFailures.push(error); }
-      if (primary !== undefined && created) {
-        try {
-          await (await this.#snapshotReceipt(reference, true)).rollback();
-        } catch (error) { cleanupFailures.push(error); }
-      }
+    }
+    if ((primary !== undefined || cleanupFailures.length > 0) && created && publicationIdentity !== undefined) {
+      try { await this.#publicationReceipt(path, publicationIdentity, true, true).rollback(); }
+      catch (error) { cleanupFailures.push(error); }
     }
     if (primary !== undefined) {
       if (cleanupFailures.length > 0) {
-        throw new AggregateError([primary, ...cleanupFailures], 'Native Playground catalog publication and cleanup both failed.', { cause: primary });
+        throw new AggregateError(
+          [primary, ...cleanupFailures],
+          'Native Playground catalog publication and cleanup both failed.',
+          { cause: primary },
+        );
       }
       throw primary;
     }
-    if (cleanupFailures.length > 0) throw new AggregateError(cleanupFailures, 'Native Playground catalog staging cleanup failed.', { cause: cleanupFailures[0] });
-    const receipt = await this.#snapshotReceipt(reference, created);
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError(
+        cleanupFailures,
+        'Native Playground catalog staging cleanup failed.',
+        { cause: cleanupFailures[0] },
+      );
+    }
+    const receipt = created && publicationIdentity !== undefined
+      ? this.#publicationReceipt(path, publicationIdentity, true)
+      : await this.#snapshotReceipt(reference, false);
     try {
       const persisted = await this.#readSnapshot(reference);
       if (persisted === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
       return Object.freeze({ receipt, snapshot: persisted });
     } catch (error) {
-      return this.#rollbackPublicationAndThrow(receipt, error, 'Native Playground catalog validation and rollback both failed.');
+      return this.#rollbackPublicationAndThrow(
+        receipt,
+        error,
+        'Native Playground catalog validation and rollback both failed.',
+      );
     }
   }
 
@@ -1140,36 +1153,70 @@ export class NativePlaygroundService {
     path: string,
     identity: string,
     created: boolean,
+    allowMultipleLinks = false,
   ): NativePlaygroundCatalogPublicationReceipt {
     return Object.freeze({
       created,
       identity,
       rollback: async () => {
         if (!created) return;
-        const current = await this.#readSidecar(path);
-        if (current === undefined || current.identity !== identity) return;
-        const directory = dirname(path);
-        const quarantine = join(directory, `.rollback-${process.pid}-${Math.random().toString(16).slice(2)}`);
-        try { await this.#catalogStorage.rename(path, quarantine); }
-        catch (error) {
-          if (isErrno(error, 'ENOENT')) return;
-          throw error;
-        }
-        const moved = await this.#readSidecar(quarantine);
-        if (moved === undefined) throw new Error('Native Playground catalog rollback lost its quarantined sidecar.');
-        if (moved.identity !== identity) {
-          try { await this.#catalogStorage.link(quarantine, path); }
-          catch (error) {
-            if (isErrno(error, 'EEXIST')) {
-              throw new Error('Native Playground catalog changed during rollback; the raced replacement remains quarantined.', { cause: error });
-            }
-            throw error;
-          }
-        }
-        await this.#catalogStorage.remove(quarantine, { force: true });
-        await this.#syncCatalogDirectory(directory);
+        await this.#rollbackPublication(path, identity, allowMultipleLinks);
       },
     });
+  }
+
+  async #rollbackPublication(path: string, identity: string, allowMultipleLinks: boolean): Promise<void> {
+    const quarantineRoot = await mkdtemp(join(dirname(path), '.native-playground-rollback-'));
+    const quarantined = join(quarantineRoot, 'catalog.json');
+    let quarantineOccupied = false;
+    let primary: unknown;
+    try {
+      try {
+        await this.#catalogMove(path, quarantined);
+        quarantineOccupied = true;
+      } catch (error) {
+        if (!isErrno(error, 'ENOENT')) throw error;
+      }
+      if (quarantineOccupied) {
+        let current: SidecarFile | undefined;
+        let inspectionFailure: unknown;
+        try { current = await this.#readSidecar(quarantined, allowMultipleLinks); }
+        catch (error) { inspectionFailure = error; }
+        if (inspectionFailure === undefined && current?.identity === identity) {
+          await this.#catalogStorage.remove(quarantined, { force: true });
+          quarantineOccupied = false;
+        } else {
+          try { await this.#catalogStorage.link(quarantined, path); }
+          catch (error) {
+            throw new Error('Native Playground catalog rollback could not restore a replaced sidecar.', { cause: error });
+          }
+          try {
+            await this.#catalogStorage.remove(quarantined, { force: true });
+            quarantineOccupied = false;
+          } catch (error) {
+            throw new Error('Native Playground catalog rollback could not release its restored quarantine.', { cause: error });
+          }
+          if (inspectionFailure !== undefined) throw inspectionFailure;
+        }
+      }
+    } catch (error) {
+      primary = error;
+    }
+    let cleanupFailure: unknown;
+    if (!quarantineOccupied) {
+      try { await this.#catalogStorage.remove(quarantineRoot, { force: true, recursive: true }); }
+      catch (error) { cleanupFailure = error; }
+    }
+    if (primary !== undefined && cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [primary, cleanupFailure],
+        'Native Playground catalog rollback and quarantine cleanup both failed.',
+        { cause: primary },
+      );
+    }
+    if (primary !== undefined) throw primary;
+    if (cleanupFailure !== undefined) throw cleanupFailure;
+    await this.#syncCatalogDirectory(dirname(path));
   }
 
   async #syncCatalogDirectory(directory: string): Promise<void> {
@@ -1191,7 +1238,9 @@ export class NativePlaygroundService {
   ): Promise<never> {
     if (!receipt.created) throw primary;
     try { await receipt.rollback(); }
-    catch (rollbackFailure) { throw new AggregateError([primary, rollbackFailure], message, { cause: rollbackFailure }); }
+    catch (rollbackFailure) {
+      throw new AggregateError([primary, rollbackFailure], message, { cause: rollbackFailure });
+    }
     throw primary;
   }
 
@@ -1249,7 +1298,7 @@ export class NativePlaygroundService {
   }
 
   #assertOpen(): void {
-    if (this.#closed) throw new Error('Native Playground service is closed.');
+    if (this.#closed) throw this.#closeReason;
   }
 }
 
@@ -1264,7 +1313,7 @@ export const publishNativePlaygroundCatalogSnapshot = async (
     ...(options.discover === undefined ? {} : { discover: options.discover }),
     inspectArtifact: async (reference) => Object.freeze({
       binding: Object.freeze({
-        manifestPath: join(reference.root, 'agent-bundle.manifest.json'),
+        manifestPath: reference.epoch.manifestPath,
         source: 'explicit' as const,
         targetDigests: reference.epoch.targetDigests,
       }),
@@ -1273,9 +1322,40 @@ export const publishNativePlaygroundCatalogSnapshot = async (
     ...(options.planFixture === undefined ? {} : { planFixture: options.planFixture }),
     projectRoot: options.projectRoot,
   });
+  let receipt: NativePlaygroundCatalogPublicationReceipt | undefined;
+  let primary: unknown;
   try {
-    return await service.publishCatalogSnapshot(Object.freeze({ close: async () => undefined, epoch: options.epoch, root }));
-  } finally {
-    await service.close();
+    receipt = await service.publishCatalogSnapshot(Object.freeze({
+      close: async () => undefined,
+      epoch: options.epoch,
+      root,
+    }));
   }
+  catch (error) { primary = error; }
+  let closeFailure: unknown;
+  try { await service.close(); }
+  catch (error) { closeFailure = error; }
+  if (primary !== undefined && closeFailure !== undefined) {
+    throw new AggregateError(
+      [primary, closeFailure],
+      'Native Playground catalog publication and close both failed.',
+      { cause: primary },
+    );
+  }
+  if (primary !== undefined) throw primary;
+  if (receipt === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
+  if (closeFailure !== undefined) {
+    let rollbackFailure: unknown;
+    try { await receipt.rollback(); }
+    catch (error) { rollbackFailure = error; }
+    if (rollbackFailure !== undefined) {
+      throw new AggregateError(
+        [closeFailure, rollbackFailure],
+        'Native Playground catalog close and rollback both failed.',
+        { cause: closeFailure },
+      );
+    }
+    throw closeFailure;
+  }
+  return receipt;
 };

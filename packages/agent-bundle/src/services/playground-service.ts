@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { serialQueue, type SerialQueue } from '../core/async.ts';
@@ -262,6 +262,18 @@ interface SessionPersistenceProgress {
   metadataRenamed: boolean;
 }
 
+interface ColdAdmission {
+  cleanupAttempt: Promise<void> | undefined;
+  cleanupFailure: unknown | undefined;
+  readonly objectId: string;
+  ownerToken: string | undefined;
+  published: boolean;
+  readonly root: string;
+  readonly rootDevice: number;
+  readonly rootInode: number;
+  rootRemoved: boolean;
+  readonly sessionId: string;
+}
 const objectDirectoryName = 'session-objects';
 const indexDirectoryName = 'session-index';
 const pendingIndexDirectoryName = '.pending';
@@ -276,6 +288,7 @@ type DirectorySyncReason =
   | 'layout-project-entry'
   | 'layout-storage-entry'
   | 'new-file'
+  | 'object-admission-cleanup'
   | 'object-created'
   | 'owner-lock-create'
   | 'owner-lock-create-recovery'
@@ -287,6 +300,8 @@ type DurableFilePhase = 'event' | 'owner' | 'pending-index' | 'session-metadata'
 type OwnerMutationReason = 'create-recovery' | 'recovery' | 'release';
 type DurabilityTestPhase =
   | 'after-final-index-link'
+  | 'after-object-admission-ownership-check'
+  | 'before-object-admission-cleanup'
   | 'before-owner-lock-recovery'
   | 'before-final-index-link'
   | `before-directory-fsync:${DirectorySyncReason}`
@@ -437,6 +452,11 @@ const nonempty = (value: unknown, label: string): string => {
   return value;
 };
 
+const traceSource = (value: unknown): PlaygroundTraceSource => {
+  if (isTraceSource(value)) return value;
+  throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event source must be supported.');
+};
+
 const safeSessionId = (value: string): string => {
   if (!pathSegment.test(value) || value === '.' || value === '..') {
     throw serviceError('PLAYGROUND_SESSION_ID_INVALID', 'Playground session id must be a path-safe identifier.');
@@ -454,9 +474,35 @@ const json = (value: unknown, label: string, seen = new WeakSet<object>()): Play
   if (seen.has(value)) throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain cycles.`);
   seen.add(value);
   if (Array.isArray(value)) {
-    const copied = Object.freeze(value.map((item) => json(item, label, seen)));
+    const prototype = Object.getPrototypeOf(value);
+    const names = Object.getOwnPropertyNames(value);
+    const symbols = Object.getOwnPropertySymbols(value);
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (prototype !== Array.prototype
+      || symbols.length !== 0
+      || lengthDescriptor === undefined
+      || !('value' in lengthDescriptor)
+      || !Number.isInteger(lengthDescriptor.value)
+      || lengthDescriptor.value < 0
+      || names.length !== lengthDescriptor.value + 1) {
+      seen.delete(value);
+      throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
+    }
+    const copied = new Array<PlaygroundJsonValue>(lengthDescriptor.value);
+    for (let index = 0; index < lengthDescriptor.value; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !('value' in descriptor)) {
+        seen.delete(value);
+        throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain accessors.`);
+      }
+      if (!descriptor.enumerable) {
+        seen.delete(value);
+        throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
+      }
+      copied[index] = json(descriptor.value, label, seen);
+    }
     seen.delete(value);
-    return copied;
+    return Object.freeze(copied);
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
@@ -464,11 +510,20 @@ const json = (value: unknown, label: string, seen = new WeakSet<object>()): Play
     throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
   }
   const copied = Object.create(null) as Record<string, PlaygroundJsonValue>;
-  for (const key of Object.keys(value).sort()) {
+  const names = Object.getOwnPropertyNames(value);
+  if (Object.getOwnPropertySymbols(value).length !== 0) {
+    seen.delete(value);
+    throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
+  }
+  for (const key of names.sort()) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined) {
+    if (descriptor === undefined || !('value' in descriptor)) {
       seen.delete(value);
       throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain accessors.`);
+    }
+    if (!descriptor.enumerable) {
+      seen.delete(value);
+      throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
     }
     copied[key] = json(descriptor.value, label, seen);
   }
@@ -528,17 +583,18 @@ const normalizeIdentity = (value: PlaygroundSessionIdentity): PlaygroundSessionI
       text: nonempty(value?.task?.text, 'Playground task text'),
     }),
   });
-  assertNoProviderCredentials(identity as PlaygroundJsonValue);
+  assertNoProviderCredentials(json(identity, 'Playground identity'));
   return identity;
 };
 
-const normalizeOutcome = (value: PlaygroundDurableOutcome): PlaygroundDurableOutcome => {
+const normalizeOutcome = (value: unknown): PlaygroundDurableOutcome => {
+  if (!isRecord(value)) throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground outcome must be an object.');
   const outcome = Object.freeze({
-    ...(value?.response === undefined ? {} : { response: nonempty(value.response, 'Playground outcome response') }),
-    status: nonempty(value?.status, 'Playground outcome status'),
-    ...(value?.workspace === undefined ? {} : { workspace: jsonObject(value.workspace, 'Playground outcome workspace') }),
+    ...(value.response === undefined ? {} : { response: nonempty(value.response, 'Playground outcome response') }),
+    status: nonempty(value.status, 'Playground outcome status'),
+    ...(value.workspace === undefined ? {} : { workspace: jsonObject(value.workspace, 'Playground outcome workspace') }),
   });
-  assertNoProviderCredentials(outcome as PlaygroundJsonValue);
+  assertNoProviderCredentials(json(outcome, 'Playground outcome'));
   return outcome;
 };
 
@@ -546,20 +602,14 @@ const sameOutcome = (left: PlaygroundDurableOutcome, right: PlaygroundDurableOut
   JSON.stringify(left) === JSON.stringify(right);
 
 const normalizeEventInput = (value: unknown): PlaygroundEventInput => {
-  if (!isRecord(value)) {
-    throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event must be a JSON object.');
-  }
-  const source = value.source;
-  if (!isTraceSource(source)) {
-    throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event source is unsupported.');
-  }
+  if (!isRecord(value)) throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event must be an object.');
   const event = Object.freeze({
     kind: nonempty(value.kind, 'Playground event kind'),
     raw: json(value.raw, 'Playground event raw value'),
-    source,
+    source: traceSource(value.source),
     summary: nonempty(value.summary, 'Playground event summary'),
   });
-  assertNoProviderCredentials(event as PlaygroundJsonValue);
+  assertNoProviderCredentials(json(event, 'Playground event'));
   return event;
 };
 
@@ -608,6 +658,7 @@ const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelec
 
 export class PlaygroundService {
   readonly #admissions = new Set<Promise<void>>();
+  readonly #coldAdmissions = new Set<ColdAdmission>();
   readonly #maxSubscriberQueue: number;
   readonly #logger: DevLogSink | undefined;
   readonly #now: () => Date;
@@ -620,6 +671,8 @@ export class PlaygroundService {
   #ready: Promise<void> | undefined;
   #resolvedIndexRoot: string | undefined;
   #resolvedObjectRoot: string | undefined;
+  #resolvedObjectRootDevice: number | undefined;
+  #resolvedObjectRootInode: number | undefined;
   #resolvedPendingIndexRoot: string | undefined;
 
   constructor(options: PlaygroundServiceOptions) {
@@ -650,43 +703,64 @@ export class PlaygroundService {
       const storageObjectId = safeSessionId(randomUUID());
       const root = this.#objectRoot(storageObjectId);
       mkdirSync(root);
-      this.#syncDirectory(this.#requireObjectRoot(), 'object-created');
       const stat = lstatSync(root);
       if (!stat.isDirectory() || stat.isSymbolicLink()) {
         throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object must be a real contained directory.');
       }
-      await this.#assertObjectDirectory(root, storageObjectId);
-      this.#assertAvailable();
-      const ownerToken = await this.#acquireOwner(root, id);
-      const record: SessionRecord = {
-        admissionFailed: false,
-        cleanupFailures: [],
-        createdAt: this.#timestamp(),
-        durability: undefined,
-        events: [],
-        id,
-        identity,
-        nextSequence: 1,
-        outcome: undefined,
-        root,
-        state: 'open',
-        storageObjectId,
-        subscribers: new Set(),
-        queue: serialQueue(),
-        ownerToken,
-      };
-      await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
-      await this.#writeNewFile(join(root, eventDocumentName), '', 'event');
-      await this.#persistSession(record);
-      await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
-      await this.#readPersistedSession(root, id, storageObjectId);
-      await this.#readEvents(root);
-      await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
-      this.#assertAvailable();
+      const admission = this.#beginColdAdmission(root, storageObjectId, id, stat.dev, stat.ino);
+      let record: SessionRecord | undefined;
       try {
+        this.#syncDirectory(this.#requireObjectRoot(), 'object-created');
+        await this.#assertObjectDirectory(root, storageObjectId);
+        this.#assertAvailable();
+        const ownerToken = await this.#acquireOwner(root, id, (token) => {
+          admission.ownerToken = token;
+        });
+        admission.ownerToken = ownerToken;
+        record = {
+          admissionFailed: false,
+          cleanupFailures: [],
+          createdAt: this.#timestamp(),
+          durability: undefined,
+          events: [],
+          id,
+          identity,
+          nextSequence: 1,
+          outcome: undefined,
+          root,
+          state: 'open',
+          storageObjectId,
+          subscribers: new Set(),
+          queue: serialQueue(),
+          ownerToken,
+        };
+        await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
+        await this.#writeNewFile(join(root, eventDocumentName), '', 'event');
+        await this.#persistSession(record);
+        await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
+        await this.#readPersistedSession(root, id, storageObjectId);
+        await this.#readEvents(root);
+        await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
+        this.#assertAvailable();
         this.#publishSession(record);
+        admission.published = true;
+        this.#coldAdmissions.delete(admission);
       } catch (error) {
-        if (this.#sessions.get(id) === record) record.admissionFailed = true;
+        if (record !== undefined && this.#sessions.get(id) === record) {
+          record.admissionFailed = true;
+          admission.published = true;
+          this.#coldAdmissions.delete(admission);
+          throw error;
+        }
+        try {
+          await this.#rollbackColdAdmission(admission);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'Playground session admission and cleanup both failed.',
+            { cause: cleanupError },
+          );
+        }
         throw error;
       }
       return snapshotSession(record);
@@ -901,11 +975,19 @@ export class PlaygroundService {
     this.#closing = true;
     this.#closePromise = (async () => {
       await Promise.allSettled([...this.#admissions]);
+      const coldAdmissions = [...this.#coldAdmissions];
+      const coldSettled = await Promise.allSettled(coldAdmissions.map(async (admission) => {
+        await this.#rollbackColdAdmission(admission);
+      }));
       const sessions = [...this.#sessions.entries()];
       const settled = await Promise.allSettled(sessions.map(async ([, record]) => {
         await this.#closeRecord(record);
       }));
       const failures = [
+        ...coldSettled.flatMap((result, index): PlaygroundServiceCloseFailure[] =>
+          result.status === 'rejected'
+            ? [Object.freeze({ error: result.reason, sessionId: coldAdmissions[index]!.sessionId })]
+            : []),
         ...settled.flatMap((result, index): PlaygroundServiceCloseFailure[] =>
           result.status === 'rejected'
             ? [Object.freeze({ error: result.reason, sessionId: sessions[index]![0] })]
@@ -958,6 +1040,142 @@ export class PlaygroundService {
       this.#admissions.delete(admission);
       resolveAdmission();
     }
+  }
+
+  #beginColdAdmission(
+    root: string,
+    objectId: string,
+    sessionId: string,
+    rootDevice: number,
+    rootInode: number,
+  ): ColdAdmission {
+    const admission: ColdAdmission = {
+      cleanupAttempt: undefined,
+      cleanupFailure: undefined,
+      objectId,
+      ownerToken: undefined,
+      published: false,
+      root,
+      rootDevice,
+      rootInode,
+      rootRemoved: false,
+      sessionId,
+    };
+    this.#coldAdmissions.add(admission);
+    return admission;
+  }
+
+  async #rollbackColdAdmission(admission: ColdAdmission): Promise<void> {
+    if (admission.published) return;
+    if (admission.cleanupAttempt !== undefined) return admission.cleanupAttempt;
+    if (admission.rootRemoved) {
+      if (admission.cleanupFailure !== undefined) throw admission.cleanupFailure;
+      return;
+    }
+    const attempt = (async () => {
+      runDurabilityTestHook('before-object-admission-cleanup', admission.root);
+      const quarantine = await this.#quarantineColdAdmission(admission);
+      try {
+        await this.#assertQuarantinedColdAdmission(admission, quarantine);
+        await rm(quarantine, { force: false, recursive: true });
+        admission.rootRemoved = true;
+        this.#syncDirectory(this.#requireObjectRoot(), 'object-admission-cleanup');
+      } catch (error) {
+        if (!admission.rootRemoved) {
+          try {
+            await this.#restoreQuarantinedColdAdmission(admission, quarantine);
+          } catch (restoreError) {
+            throw new AggregateError(
+              [error, restoreError],
+              'Playground admission quarantine cleanup could not be restored safely.',
+              { cause: restoreError },
+            );
+          }
+        } else {
+          admission.cleanupFailure = error;
+        }
+        throw error;
+      }
+      this.#coldAdmissions.delete(admission);
+    })();
+    admission.cleanupAttempt = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (admission.cleanupAttempt === attempt) admission.cleanupAttempt = undefined;
+    }
+  }
+
+  async #assertColdAdmissionOwnership(admission: ColdAdmission): Promise<void> {
+    const stat = await lstat(admission.root);
+    if (!stat.isDirectory()
+      || stat.isSymbolicLink()
+      || stat.dev !== admission.rootDevice
+      || stat.ino !== admission.rootInode) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground admission object identity changed before cleanup.');
+    }
+    await this.#assertObjectDirectory(admission.root, admission.objectId);
+    if (admission.ownerToken === undefined) return;
+    const owner = await this.#readOwnerLock(admission.root);
+    if (owner.token !== admission.ownerToken) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(admission.sessionId)} object ownership changed before cleanup.`);
+    }
+  }
+
+  async #quarantineColdAdmission(admission: ColdAdmission): Promise<string> {
+    await this.#assertColdAdmissionOwnership(admission);
+    runDurabilityTestHook('after-object-admission-ownership-check', admission.root);
+    await this.#assertObjectRootIdentity();
+    const quarantine = join(this.#requireObjectRoot(), `.admission-cleanup-${randomUUID()}`);
+    await rename(admission.root, quarantine);
+    try {
+      await this.#assertQuarantinedColdAdmission(admission, quarantine);
+      return quarantine;
+    } catch (error) {
+      try {
+        await this.#restoreQuarantinedColdAdmission(admission, quarantine);
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          'Playground admission quarantine ownership could not be restored safely.',
+          { cause: restoreError },
+        );
+      }
+      throw error;
+    }
+  }
+
+  async #assertQuarantinedColdAdmission(admission: ColdAdmission, quarantine: string): Promise<void> {
+    await this.#assertObjectRootIdentity();
+    const [stat, resolved] = await Promise.all([lstat(quarantine), realpath(quarantine)]);
+    if (!stat.isDirectory()
+      || stat.isSymbolicLink()
+      || stat.dev !== admission.rootDevice
+      || stat.ino !== admission.rootInode
+      || dirname(resolved) !== this.#requireObjectRoot()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground admission quarantine identity could not be proven.');
+    }
+    if (admission.ownerToken === undefined) return;
+    const owner = await this.#readOwnerLock(quarantine);
+    if (owner.token !== admission.ownerToken) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(admission.sessionId)} quarantine ownership changed before cleanup.`);
+    }
+  }
+
+  async #restoreQuarantinedColdAdmission(admission: ColdAdmission, quarantine: string): Promise<void> {
+    await this.#assertObjectRootIdentity();
+    const [parent, original] = await Promise.all([realpath(dirname(quarantine)), lstat(quarantine)]);
+    if (parent !== this.#requireObjectRoot() || !original.isDirectory() || original.isSymbolicLink()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground admission quarantine cannot be restored safely.');
+    }
+    try {
+      await lstat(admission.root);
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground admission cleanup slot is no longer empty.');
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+    }
+    await this.#assertObjectRootIdentity();
+    await rename(quarantine, admission.root);
   }
 
   #publishSession(record: SessionRecord): void {
@@ -1103,6 +1321,10 @@ export class PlaygroundService {
     if (!isInsideOrEqual(resolvedStorageRoot, resolvedObjectRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root resolves outside configured storage.');
     }
+    const objectRootStat = await lstat(resolvedObjectRoot);
+    if (!objectRootStat.isDirectory() || objectRootStat.isSymbolicLink()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root must be a real contained directory.');
+    }
     const indexRoot = join(requestedStorageRoot, indexDirectoryName);
     const pendingIndexRoot = join(indexRoot, pendingIndexDirectoryName);
     await this.#createLayoutDirectory(indexRoot, requestedStorageRoot, 'layout-index-entry');
@@ -1114,6 +1336,8 @@ export class PlaygroundService {
     }
     this.#resolvedIndexRoot = resolvedIndexRoot;
     this.#resolvedObjectRoot = resolvedObjectRoot;
+    this.#resolvedObjectRootDevice = objectRootStat.dev;
+    this.#resolvedObjectRootInode = objectRootStat.ino;
     this.#resolvedPendingIndexRoot = resolvedPendingIndexRoot;
   }
 
@@ -1173,6 +1397,28 @@ export class PlaygroundService {
     const root = this.#resolvedObjectRoot;
     if (root === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
     return root;
+  }
+
+  async #assertObjectRootIdentity(): Promise<void> {
+    const root = this.#requireObjectRoot();
+    const device = this.#resolvedObjectRootDevice;
+    const inode = this.#resolvedObjectRootInode;
+    if (device === undefined || inode === undefined) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    }
+    try {
+      const [stat, resolved] = await Promise.all([lstat(root), realpath(root)]);
+      if (!stat.isDirectory()
+        || stat.isSymbolicLink()
+        || stat.dev !== device
+        || stat.ino !== inode
+        || resolved !== root) {
+        throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root identity changed during cleanup.');
+      }
+    } catch (error) {
+      if (error instanceof PlaygroundServiceError) throw error;
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root identity could not be proven during cleanup.');
+    }
   }
 
   #requireIndexRoot(): string {
@@ -1350,7 +1596,11 @@ export class PlaygroundService {
     }
   }
 
-  async #acquireOwner(root: string, sessionId: string): Promise<string> {
+  async #acquireOwner(
+    root: string,
+    sessionId: string,
+    retainUnsettledOwner?: (token: string) => void,
+  ): Promise<string> {
     const token = randomUUID();
     const path = join(root, ownerLockName);
     const document = Object.freeze({ pid: process.pid, token });
@@ -1382,6 +1632,7 @@ export class PlaygroundService {
           try {
             await this.#removeJustCreatedOwnerLock(root, token);
           } catch (cleanupError) {
+            retainUnsettledOwner?.(token);
             throw new AggregateError(
               [error, cleanupError],
               'Playground owner-lock durability failure could not be cleaned up.',
@@ -1510,7 +1761,7 @@ export class PlaygroundService {
         ...documentBase,
         storageObjectId: record.storageObjectId,
       });
-      assertNoProviderCredentials(document as unknown as PlaygroundJsonValue);
+      assertNoProviderCredentials(json(document, 'Playground persisted session'));
       await this.#assertMutableFile(record.root, sessionDocumentName, true);
       const temporary = join(record.root, `.${sessionDocumentName}.${randomUUID()}.tmp`);
       await this.#writeNewFile(temporary, `${JSON.stringify(document)}\n`, 'session-metadata');
@@ -1622,8 +1873,13 @@ export class PlaygroundService {
       }
       let event: PlaygroundTraceEvent;
       try {
-        assertNoProviderCredentials(parsed as PlaygroundJsonValue);
-        const input = normalizeEventInput(parsed);
+        assertNoProviderCredentials(json(parsed, 'Playground persisted event record'));
+        const input = normalizeEventInput({
+          kind: parsed.kind,
+          raw: parsed.raw,
+          source: parsed.source,
+          summary: parsed.summary,
+        });
         const sequence = parsed.sequence;
         if (!Number.isSafeInteger(sequence) || sequence !== index + 1 || typeof parsed.timestamp !== 'string'
           || parsed.rawEventRef !== `${eventDocumentName}#${sequence}`) {

@@ -74,6 +74,7 @@ const artifactValidation = Object.freeze({
 const mcpRuntime = createTargetMcpRuntime({
   manifestPath: 'mcp.json',
   remoteTypes: ['streamable-http'],
+  validatedButNonModernRemoteTypes: ['sse'],
   resolveValue: createMcpPathTokenResolver({
     knownTokens: standardMcpPathTokens,
     target: portableName,
@@ -332,6 +333,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 export const portableAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: Object.freeze({
+    assets: 'assets',
     mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
     scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.bash', '.mjs', '.py', '.sh']), directory: 'scripts' }),

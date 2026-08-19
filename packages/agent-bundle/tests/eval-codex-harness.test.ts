@@ -14,6 +14,7 @@ import {
   createEvalRun,
   expectExitCode,
   expectMcpCall,
+  expectNoMcpCall,
   expectSkillActivation,
   normalizeEvalCase,
   planEvalFixture,
@@ -206,6 +207,49 @@ it('runs an ephemeral Codex trial and records inferred activation beside observe
     expect(execution.args[execution.args.indexOf('-m') + 1]).toBe('gpt-5-codex');
   });
 });
+
+it.each([
+  {
+    calls: [{ server: 'payments', tool: 'charge' }],
+    kind: 'known forbidden call',
+    outcome: 'fail',
+    stdout: [
+      '{"type":"item.completed","item":{"id":"mcp-1","type":"mcp_tool_call","server":"payments","tool":"charge"}}',
+      '{"type":"item.completed","item":',
+    ].join('\n'),
+  },
+  {
+    calls: [],
+    kind: 'no known forbidden call',
+    outcome: 'inconclusive',
+    stdout: [
+      '{"type":"turn.started"}',
+      '{"type":"item.completed","item":',
+    ].join('\n'),
+  },
+] as const)(
+  'resolves partial Codex MCP evidence conservatively for $kind',
+  async ({ calls, outcome, stdout }) => {
+    await withWorld(async (world) => {
+      const forbiddenCase = normalizeEvalCase({
+        assertions: [expectNoMcpCall({ server: 'payments', tool: 'charge' })],
+        fixture: './fixtures/repo',
+        hosts: { codex: { model: 'gpt-5-codex' } },
+        id: 'forbidden-mcp',
+        invocation: { mode: 'automatic' },
+        prompt: 'Do not charge a payment.',
+        trials: 1,
+      });
+      const trial = await runTrial(world, {
+        exec: { exitCode: 0, stderr: '', stdout },
+      }, { evalCase: forbiddenCase });
+
+      expect(trial.evidence.mcp).toEqual({ calls, level: 'unavailable' });
+      expect(trial.assertions).toMatchObject([{ kind: 'no-mcp-call', outcome }]);
+    });
+  },
+  240_000,
+);
 
 it('persists an automatic invocation Skill identity', async () => {
   await withWorld(async (world) => {

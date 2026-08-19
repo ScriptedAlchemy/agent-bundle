@@ -78,7 +78,7 @@ const withProject = async (task: (root: string) => Promise<void>): Promise<void>
 };
 
 type EvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write' | 'before-event-open' | 'before-event-write',
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
   event: Readonly<{ readonly kind: string }>,
   path: string,
   journal: Readonly<{ close(): Promise<void>; writeFile(contents: string, options?: string): Promise<void> }> | undefined,
@@ -120,6 +120,25 @@ it('publishes one canonical run document with its exact target digest', async ()
     } finally {
       await writer.close();
     }
+  });
+});
+
+it('keeps a dot-prefixed generated manifest path while rejecting traversal segments', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root, {
+      artifact: {
+        ...artifact,
+        manifestPath: '.agent-bundle/epochs/active/agent-bundle.manifest.json',
+      },
+    }));
+    try {
+      expect(writer.record.artifact.manifestPath).toBe('.agent-bundle/epochs/active/agent-bundle.manifest.json');
+    } finally {
+      await writer.close();
+    }
+    await expect(createEvalRun(runOptions(root, {
+      artifact: { ...artifact, manifestPath: '.agent-bundle/../escape.json' },
+    }))).rejects.toMatchObject({ code: 'EVAL_RUN_RECORD_INVALID' });
   });
 });
 
@@ -213,6 +232,20 @@ it('stores trials and raw artifacts under the run directory without a database',
   });
 });
 
+it('retains safe generated artifact segments that begin with punctuation', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      await expect(writer.writeArtifactFile('_meta/evidence.json', '{}\n'))
+        .resolves.toBe('artifacts/_meta/evidence.json');
+      await expect(writer.writeArtifactFile('.trace/evidence.json', '{}\n'))
+        .resolves.toBe('artifacts/.trace/evidence.json');
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
 it('round-trips forbidden MCP-call assertion results', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));
@@ -241,7 +274,7 @@ it('round-trips bounded provenance and normalized token usage with a trial', asy
         provenance: {
           hostCliVersion: '2.1.232',
           invocation: { mode: 'explicit', skill: 'review' },
-          semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6' },
+          semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-6' },
         },
         usage: { inputTokens: 9, outputTokens: 3 },
       }));
@@ -249,10 +282,31 @@ it('round-trips bounded provenance and normalized token usage with a trial', asy
       expect(written.provenance).toEqual({
         hostCliVersion: '2.1.232',
         invocation: { mode: 'explicit', skill: 'review' },
-        semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6' },
+        semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-6' },
       });
       expect(written.usage).toEqual({ inputTokens: 9, outputTokens: 3 });
       expect(await readEvalTrials(writer.directory)).toEqual([written]);
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
+it('reopens automatic Skill invocation provenance from the durable trial record', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      const written = await writer.writeTrial(trialInput({
+        provenance: {
+          hostCliVersion: 'codex-cli@0.147.0',
+          invocation: { mode: 'automatic', skill: 'release-notes' },
+          semanticGrader: null,
+        },
+      }));
+
+      expect(written.provenance.invocation).toEqual({ mode: 'automatic', skill: 'release-notes' });
+      expect((await readEvalTrials(writer.directory))[0]?.provenance.invocation)
+        .toEqual({ mode: 'automatic', skill: 'release-notes' });
     } finally {
       await writer.close();
     }
@@ -272,6 +326,31 @@ it('rejects a trial without canonical provenance', async () => {
   });
 });
 
+it('requires a safe semantic grader contract revision', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      const recorded = Object.freeze({
+        contractRevision: 'v1',
+        id: 'claude-semantic',
+        model: 'claude-opus-4-6',
+      });
+      await expect(writer.writeTrial(trialInput({
+        provenance: { ...trialProvenance, semanticGrader: recorded },
+      }))).resolves.toMatchObject({ provenance: { semanticGrader: recorded } });
+      const { contractRevision: _contractRevision, ...missingRevision } = recorded;
+      for (const semanticGrader of [missingRevision, { ...recorded, contractRevision: 'C:private' }]) {
+        await expect(writer.writeTrial(trialInput({
+          id: 'invalid-grader-provenance',
+          provenance: { ...trialProvenance, semanticGrader } as EvalTrialRecordInput['provenance'],
+        }))).rejects.toMatchObject({ code: 'EVAL_RUN_RECORD_INVALID' });
+      }
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
+  });
+});
+
 it('rejects path-shaped or credential-shaped trial provenance without echoing it', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));
@@ -287,6 +366,11 @@ it('rejects path-shaped or credential-shaped trial provenance without echoing it
           invocation: { mode: 'automatic' as const },
           semanticGrader: null,
         },
+        ...['C:private', 'C:\\private', 'C:/private', '\\\\server\\share', 'file:///private/cli'].map((hostCliVersion) => ({
+          hostCliVersion,
+          invocation: { mode: 'automatic' as const },
+          semanticGrader: null,
+        })),
       ]) {
         await expect(writer.writeTrial(trialInput({ provenance }))).rejects.toMatchObject({
           code: 'EVAL_RUN_RECORD_INVALID',
@@ -394,15 +478,13 @@ it('reuses an uncommitted event sequence after an open failure', async () => {
           throw openFailure;
         }
       }, async () => {
-        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toThrow(openFailure);
+        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toBe(openFailure);
       });
 
       const fallback = await writer.appendEvent({ kind: 'run.failed', payload: {} });
       expect(injected).toBe(true);
       expect(fallback.sequence).toBe(1);
-      expect(await readEvalRunEvents(writer.directory)).toMatchObject({
-        events: [{ kind: 'run.failed', sequence: 1 }],
-      });
+      expect(await readEvalRunEvents(writer.directory)).toMatchObject({ events: [{ kind: 'run.failed', sequence: 1 }] });
       await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
     } finally {
       await writer.close().catch(() => undefined);
@@ -424,15 +506,13 @@ it('restores partial event bytes before retrying the uncommitted sequence', asyn
           throw partialWriteFailure;
         }
       }, async () => {
-        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toThrow(partialWriteFailure);
+        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toBe(partialWriteFailure);
       });
 
       const fallback = await writer.appendEvent({ kind: 'run.failed', payload: {} });
       expect(injected).toBe(true);
       expect(fallback.sequence).toBe(1);
-      expect(await readEvalRunEvents(writer.directory)).toMatchObject({
-        events: [{ kind: 'run.failed', sequence: 1 }],
-      });
+      expect(await readEvalRunEvents(writer.directory)).toMatchObject({ events: [{ kind: 'run.failed', sequence: 1 }] });
       await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
     } finally {
       await writer.close().catch(() => undefined);
@@ -440,30 +520,51 @@ it('restores partial event bytes before retrying the uncommitted sequence', asyn
   });
 });
 
-it('closes an event writer when partial-write rollback is uncertain', async () => {
+it('poisons every writer mutation when a partial event cannot be rolled back', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));
-    const partialWriteFailure = new Error('event journal partial write failed');
-    let injected = false;
+    const writeFailure = new Error('event journal partial write failed');
+    const rollbackFailure = new Error('event journal rollback failed');
+    const partial = '{"kind":"run.completed"';
+    let uncertainty: unknown;
+    let writeInjected = false;
+    let rollbackInjected = false;
     try {
       await withEvalRunStoreDurabilityTestHook(async (phase, event, _path, journal) => {
-        if (phase === 'before-event-write' && event.kind === 'run.completed' && !injected) {
+        if (phase === 'before-event-write' && event.kind === 'run.completed' && !writeInjected) {
           if (journal === undefined) throw new Error('The partial-write hook did not receive the event journal.');
-          injected = true;
-          await journal.writeFile('{"kind":"run.completed"', 'utf8');
-          await journal.close();
-          throw partialWriteFailure;
+          writeInjected = true;
+          await journal.writeFile(partial, 'utf8');
+          throw writeFailure;
+        }
+        if (phase === 'before-event-rollback' && event.kind === 'run.completed' && !rollbackInjected) {
+          rollbackInjected = true;
+          throw rollbackFailure;
         }
       }, async () => {
-        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toMatchObject({
-          event: { kind: 'run.completed' },
-          name: 'EvalRunEventWriteUncertainError',
-        });
+        try {
+          await writer.appendEvent({ kind: 'run.completed', payload: {} });
+          throw new Error('The partial event append unexpectedly succeeded.');
+        } catch (error) {
+          uncertainty = error;
+          expect(error).toMatchObject({
+            event: { kind: 'run.completed' },
+            failures: [writeFailure, rollbackFailure],
+            name: 'EvalRunEventWriteUncertainError',
+          });
+        }
       });
 
-      expect(injected).toBe(true);
-      await expect(writer.appendEvent({ kind: 'run.failed', payload: {} })).rejects.toMatchObject({ code: 'EVAL_RUN_CLOSED' });
-      expect((await readFile(join(writer.directory, 'events.jsonl'), 'utf8'))).toBe('{"kind":"run.completed"');
+      expect(writeInjected).toBe(true);
+      expect(rollbackInjected).toBe(true);
+      await expect(writer.appendEvent({ kind: 'run.failed', payload: {} })).rejects.toBe(uncertainty);
+      await expect(writer.writeArtifactFile('later.json', '{}')).rejects.toBe(uncertainty);
+      await expect(writer.writeTrial(trialInput())).rejects.toBe(uncertainty);
+      await expect(writer.finish({ cases: 1, fail: 1, inconclusive: 0, pass: 0, trials: 1 })).rejects.toBe(uncertainty);
+      expect(await readEvalRunEvents(writer.directory)).toEqual({
+        events: [],
+        incompleteTrailingRecord: partial,
+      });
       await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
     } finally {
       await writer.close().catch(() => undefined);
@@ -489,8 +590,9 @@ it('rejects a write queued behind an uncertain event append', async () => {
         const cancelling = writer.appendEvent({ kind: 'run.cancelling', payload: {} });
         const terminal = writer.appendEvent({ kind: 'run.cancelled', payload: {} });
 
-        await expect(cancelling).rejects.toMatchObject({ name: 'EvalRunEventWriteUncertainError' });
-        await expect(terminal).rejects.toMatchObject({ code: 'EVAL_RUN_CLOSED' });
+        const uncertainty = await cancelling.catch((error: unknown) => error);
+        expect(uncertainty).toMatchObject({ name: 'EvalRunEventWriteUncertainError' });
+        await expect(terminal).rejects.toBe(uncertainty);
       });
 
       expect(injected).toBe(true);

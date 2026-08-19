@@ -152,6 +152,8 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
 
     const result = await readyInspection({ registry, root });
 
+    expect(result.state).toBe('ready');
+    if (result.state !== 'ready') throw new Error('Expected the synthetic target inspection to be ready.');
     expect(result.model.extensions).toEqual({
       synthetic: expect.objectContaining({ target: 'synthetic', value: { enabled: true } }),
     });
@@ -529,11 +531,34 @@ it('reports skipped target/component pairs with intersection-rule reasons', asyn
     const planFor = (target: string) => result.plans.find((plan) => plan.target === target);
 
     expect(planFor('portable')?.skipped).toEqual([
-      expect.objectContaining({ kind: 'hook', name: 'sessionStart', reason: 'unsupported-capability' }),
+      expect.objectContaining({ kind: 'hook', name: 'sessionStart', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
     ]);
     expect(planFor('codex')?.skipped).toEqual([]);
     expect(Object.isFrozen(planFor('portable')?.skipped)).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('reports target exclusion before unsupported capability when both omit a component', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  hooks: { sessionStart: { handler: './src/hook.ts', targets: ['codex'] } },",
+      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  targets: ['portable', 'codex'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await readyInspection({ root });
+    const skippedHook = result.plans
+      .find((plan) => plan.target === 'portable')
+      ?.skipped.find((component) => component.kind === 'hook' && component.name === 'sessionStart');
+
+    expect(skippedHook).toMatchObject({ reason: 'excluded-by-targets' });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
@@ -664,12 +689,13 @@ it('prepares a factory-configured project into a frozen inspection and build res
   try {
     const inspection = await readyInspection({ root, targets: ['portable'] });
 
+    expect(inspection.state).toBe('ready');
+    if (inspection.state !== 'ready') throw new Error('Expected the factory-configured inspection to be ready.');
     expect(inspection.model).toMatchObject({
       metadata: { name: 'api-fixture' },
       targets: [{ name: 'portable' }],
     });
     expect(inspection.plans).toHaveLength(1);
-    expect(inspection.state).toBe('ready');
     expect(inspection.projectContext).toEqual(expect.objectContaining({ revision: expect.any(String) }));
     expect(Object.isFrozen(inspection.model)).toBe(true);
     expect(Object.isFrozen(inspection.projectContext)).toBe(true);
@@ -874,6 +900,8 @@ it('normalizes named top-level scripts with stable IDs, modes, and sorted target
   try {
     const result = await readyInspection({ root });
 
+    expect(result.state).toBe('ready');
+    if (result.state !== 'ready') throw new Error('Expected the script fixture inspection to be ready.');
     expect(result.model.scripts).toEqual([
       {
         id: 'script:bundle',
