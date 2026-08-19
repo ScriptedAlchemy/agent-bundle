@@ -4,174 +4,51 @@ import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { serialQueue, type SerialQueue } from '../core/async.ts';
-import { CodedError, isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
+import { isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type { DevLogSink } from '../dev/dev-log-service.ts';
+import {
+  PlaygroundServiceError,
+  playgroundServiceError as serviceError,
+  type DraftEvalCase,
+  type PlaygroundCleanupFailure,
+  type PlaygroundDurableOutcome,
+  type PlaygroundEpochIdentity,
+  type PlaygroundEventInput,
+  type PlaygroundExport,
+  type PlaygroundFixtureIdentity,
+  type PlaygroundInvocation,
+  type PlaygroundJsonValue,
+  type PlaygroundReplay,
+  type PlaygroundReplayCursor,
+  type PlaygroundSelectedAssertion,
+  type PlaygroundServiceOptions,
+  type PlaygroundSession,
+  type PlaygroundSessionIdentity,
+  type PlaygroundSessionInput,
+  type PlaygroundSubscribeOptions,
+  type PlaygroundSubscription,
+  type PlaygroundTarget,
+  type PlaygroundTask,
+  type PlaygroundTraceEvent,
+} from './playground-protocol.ts';
+import {
+  assertNoProviderCredentials,
+  clone,
+  nonempty,
+  normalizeAssertion,
+  normalizeCursor,
+  normalizeEventInput,
+  normalizeIdentity,
+  normalizeOutcome,
+  safeSessionId,
+  sameOutcome,
+  snapshotEvent,
+} from './playground-values.ts';
 
-export type PlaygroundJsonPrimitive = boolean | null | number | string;
-export type PlaygroundJsonArray = readonly PlaygroundJsonValue[];
-export interface PlaygroundJsonObject {
-  readonly [key: string]: PlaygroundJsonValue;
-}
-export type PlaygroundJsonValue = PlaygroundJsonPrimitive | PlaygroundJsonArray | PlaygroundJsonObject;
+export * from './playground-protocol.ts';
 
-export type PlaygroundTraceSource =
-  | 'build'
-  | 'diagnostics'
-  | 'hook'
-  | 'host-preflight'
-  | 'mcp'
-  | 'project'
-  | 'response'
-  | 'script'
-  | 'skill-evidence'
-  | 'workspace-change';
-
-export interface PlaygroundEpochIdentity {
-  readonly digest: string;
-  readonly id: string;
-}
-
-export interface PlaygroundFixtureIdentity {
-  readonly digest: string;
-  readonly id: string;
-}
-
-export interface PlaygroundTask {
-  readonly id: string;
-  readonly text: string;
-}
-
-export interface PlaygroundTarget {
-  readonly digest?: string;
-  readonly name: string;
-}
-
-export interface PlaygroundInvocation {
-  readonly intent: PlaygroundJsonObject;
-  readonly kind: string;
-}
-
-export interface PlaygroundSessionIdentity {
-  readonly epoch: PlaygroundEpochIdentity;
-  readonly fixture: PlaygroundFixtureIdentity;
-  readonly invocation: PlaygroundInvocation;
-  readonly target: PlaygroundTarget;
-  readonly task: PlaygroundTask;
-}
-
-export interface PlaygroundSessionInput extends PlaygroundSessionIdentity {
-  readonly sessionId?: string;
-}
-
-export interface PlaygroundDurableOutcome {
-  readonly response?: string;
-  readonly status: string;
-  readonly workspace?: PlaygroundJsonObject;
-}
-
-export interface PlaygroundEventInput {
-  readonly kind: string;
-  readonly raw: PlaygroundJsonValue;
-  readonly source: PlaygroundTraceSource;
-  readonly summary: string;
-}
-
-export interface PlaygroundTraceEvent extends PlaygroundEventInput {
-  readonly rawEventRef: string;
-  readonly sequence: number;
-  readonly timestamp: string;
-}
-
-export interface PlaygroundCleanupFailure {
-  readonly message: string;
-  readonly operation: 'admission' | 'subscriber';
-}
-
-export interface PlaygroundSession {
-  readonly cleanupFailures: readonly PlaygroundCleanupFailure[];
-  readonly createdAt: string;
-  readonly id: string;
-  readonly identity: PlaygroundSessionIdentity;
-  readonly outcome?: PlaygroundDurableOutcome;
-  readonly state: 'closed' | 'finalized' | 'open';
-}
-
-export interface PlaygroundReplayCursor {
-  readonly afterSequence: number;
-}
-
-export interface PlaygroundReplay {
-  readonly cursor: PlaygroundReplayCursor;
-  readonly events: readonly PlaygroundTraceEvent[];
-  readonly session: PlaygroundSession;
-}
-
-export interface PlaygroundExport {
-  readonly events: readonly PlaygroundTraceEvent[];
-  readonly session: PlaygroundSession;
-}
-
-export interface PlaygroundSelectedAssertion {
-  readonly evidence: PlaygroundJsonValue;
-  readonly expectation: PlaygroundJsonValue;
-  readonly id: string;
-  readonly kind: string;
-}
-
-/** A deliberately narrow payload that converts unchanged into authored eval DSL. */
-export interface DraftEvalCase {
-  readonly assertions: readonly PlaygroundSelectedAssertion[];
-  readonly epoch: PlaygroundEpochIdentity;
-  readonly fixture: PlaygroundFixtureIdentity;
-  readonly invocation: PlaygroundInvocation;
-  readonly outcome: PlaygroundDurableOutcome;
-  readonly target: PlaygroundTarget;
-  readonly task: PlaygroundTask;
-}
-
-export interface PlaygroundSubscription {
-  close(): Promise<void>;
-  readonly closed: boolean;
-}
-
-export interface PlaygroundSubscribeOptions {
-  readonly afterSequence?: number;
-  readonly onEvent: (event: PlaygroundTraceEvent) => void | Promise<void>;
-}
-
-export interface PlaygroundServiceOptions {
-  /** Emits only durable append metadata after the event file fsync succeeds. */
-  readonly logger?: DevLogSink;
-  readonly maxSubscriberQueue?: number;
-  readonly now?: () => Date;
-  readonly projectId: string;
-  readonly projectRoot: string;
-  readonly storageRoot: string;
-}
-
-export type PlaygroundServiceErrorCode =
-  | 'PLAYGROUND_CURSOR_AHEAD'
-  | 'PLAYGROUND_CURSOR_INVALID'
-  | 'PLAYGROUND_CREDENTIAL_REJECTED'
-  | 'PLAYGROUND_OUTCOME_REQUIRED'
-  | 'PLAYGROUND_PROJECT_MISMATCH'
-  | 'PLAYGROUND_ROOT_INVALID'
-  | 'PLAYGROUND_SERVICE_CLOSED'
-  | 'PLAYGROUND_SESSION_CONFLICT'
-  | 'PLAYGROUND_SESSION_FINALIZED'
-  | 'PLAYGROUND_SESSION_ID_INVALID'
-  | 'PLAYGROUND_SESSION_NOT_FOUND'
-  | 'PLAYGROUND_SESSION_OWNED'
-  | 'PLAYGROUND_STORE_CORRUPT'
-  | 'PLAYGROUND_VALUE_INVALID';
-
-export class PlaygroundServiceError extends CodedError<PlaygroundServiceErrorCode> {
-  constructor(code: PlaygroundServiceErrorCode, message: string) {
-    super('PlaygroundServiceError', code, message);
-  }
-}
 
 export class PlaygroundSessionCloseError extends Error {
   readonly failures: readonly PlaygroundCleanupFailure[];
@@ -295,40 +172,8 @@ type DurabilityTestHook = (phase: DurabilityTestPhase, path: string) => Promise<
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
 const durabilityTestHookKey = Symbol.for('agent-bundle.playground-service.durability-test-hook');
 const durabilityTestPlatformKey = Symbol.for('agent-bundle.playground-service.durability-test-platform');
-const pathSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const canonicalOwnerToken = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const ownerMutationTails = new Map<string, Promise<void>>();
-const traceSources: ReadonlySet<string> = new Set<PlaygroundTraceSource>([
-  'build',
-  'diagnostics',
-  'hook',
-  'host-preflight',
-  'mcp',
-  'project',
-  'response',
-  'script',
-  'skill-evidence',
-  'workspace-change',
-]);
-
-const isTraceSource = (value: unknown): value is PlaygroundTraceSource =>
-  typeof value === 'string' && traceSources.has(value);
-const providerCredentialPatterns = Object.freeze([
-  /\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b/iu,
-  /\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b/iu,
-  /\bbearer[ \t]+[a-z0-9._~+/=-]{20,}\b/iu,
-]);
-
-const sensitiveKey = (key: string): boolean => {
-  const segments = key
-    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
-    .toLocaleLowerCase('en-US')
-    .split(/[^a-z0-9]+/u)
-    .filter((segment) => segment.length > 0);
-  const compact = segments.join('');
-  return segments.some((segment) => ['authorization', 'credential', 'credentials', 'password', 'secret', 'token'].includes(segment))
-    || /(?:apikey|apitoken|authtoken|accesstoken)$/u.test(compact);
-};
 
 const hasExactOwnKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean => {
   const actual = Object.keys(value).sort();
@@ -365,9 +210,6 @@ const hasPersistedOutcomeSchema = (value: unknown): boolean => {
     || hasExactOwnKeys(value, ['status', 'workspace'])
     || hasExactOwnKeys(value, ['status', 'response', 'workspace']);
 };
-
-const serviceError = (code: PlaygroundServiceErrorCode, message: string): PlaygroundServiceError =>
-  new PlaygroundServiceError(code, message);
 
 const parseOwnerLockDocument = (document: string): OwnerLock => {
   let parsed: unknown;
@@ -422,148 +264,6 @@ const durabilityPlatform = (): NodeJS.Platform => {
   return platforms[durabilityTestPlatformKey] ?? process.platform;
 };
 
-const nonempty = (value: unknown, label: string): string => {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be a nonempty string.`);
-  }
-  return value;
-};
-
-const safeSessionId = (value: string): string => {
-  if (!pathSegment.test(value) || value === '.' || value === '..') {
-    throw serviceError('PLAYGROUND_SESSION_ID_INVALID', 'Playground session id must be a path-safe identifier.');
-  }
-  return value;
-};
-
-const json = (value: unknown, label: string, seen = new WeakSet<object>()): PlaygroundJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
-    return value;
-  }
-  if (typeof value !== 'object') throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
-  if (seen.has(value)) throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain cycles.`);
-  seen.add(value);
-  if (Array.isArray(value)) {
-    const copied = Object.freeze(value.map((item) => json(item, label, seen)));
-    seen.delete(value);
-    return copied;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
-    seen.delete(value);
-    throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
-  }
-  const copied = Object.create(null) as Record<string, PlaygroundJsonValue>;
-  for (const key of Object.keys(value).sort()) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined) {
-      seen.delete(value);
-      throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain accessors.`);
-    }
-    copied[key] = json(descriptor.value, label, seen);
-  }
-  seen.delete(value);
-  return Object.freeze(copied);
-};
-
-const jsonObject = (value: unknown, label: string): PlaygroundJsonObject => {
-  const copied = json(value, label);
-  if (!isRecord(copied)) throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be a JSON object.`);
-  return copied;
-};
-
-const clone = <T>(value: T, label = 'Playground value'): T => json(value, label) as T;
-
-const assertNoProviderCredentials = (value: PlaygroundJsonValue): void => {
-  if (typeof value === 'string') {
-    if (providerCredentialPatterns.some((pattern) => pattern.test(value))) {
-      throw serviceError('PLAYGROUND_CREDENTIAL_REJECTED', 'Playground records must not contain provider credential material.');
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) assertNoProviderCredentials(item);
-    return;
-  }
-  if (isRecord(value)) {
-    for (const [key, item] of Object.entries(value)) {
-      if (sensitiveKey(key)) {
-        throw serviceError('PLAYGROUND_CREDENTIAL_REJECTED', 'Playground records must not contain provider credential material.');
-      }
-      assertNoProviderCredentials(item);
-    }
-  }
-};
-
-const normalizeIdentity = (value: PlaygroundSessionIdentity): PlaygroundSessionIdentity => {
-  const identity = Object.freeze({
-    epoch: Object.freeze({
-      digest: nonempty(value?.epoch?.digest, 'Playground epoch digest'),
-      id: nonempty(value?.epoch?.id, 'Playground epoch id'),
-    }),
-    fixture: Object.freeze({
-      digest: nonempty(value?.fixture?.digest, 'Playground fixture digest'),
-      id: nonempty(value?.fixture?.id, 'Playground fixture id'),
-    }),
-    invocation: Object.freeze({
-      intent: jsonObject(value?.invocation?.intent, 'Playground invocation intent'),
-      kind: nonempty(value?.invocation?.kind, 'Playground invocation kind'),
-    }),
-    target: Object.freeze({
-      ...(value?.target?.digest === undefined ? {} : { digest: nonempty(value.target.digest, 'Playground target digest') }),
-      name: nonempty(value?.target?.name, 'Playground target name'),
-    }),
-    task: Object.freeze({
-      id: nonempty(value?.task?.id, 'Playground task id'),
-      text: nonempty(value?.task?.text, 'Playground task text'),
-    }),
-  });
-  assertNoProviderCredentials(identity as PlaygroundJsonValue);
-  return identity;
-};
-
-const normalizeOutcome = (value: PlaygroundDurableOutcome): PlaygroundDurableOutcome => {
-  const outcome = Object.freeze({
-    ...(value?.response === undefined ? {} : { response: nonempty(value.response, 'Playground outcome response') }),
-    status: nonempty(value?.status, 'Playground outcome status'),
-    ...(value?.workspace === undefined ? {} : { workspace: jsonObject(value.workspace, 'Playground outcome workspace') }),
-  });
-  assertNoProviderCredentials(outcome as PlaygroundJsonValue);
-  return outcome;
-};
-
-const sameOutcome = (left: PlaygroundDurableOutcome, right: PlaygroundDurableOutcome): boolean =>
-  JSON.stringify(left) === JSON.stringify(right);
-
-const normalizeEventInput = (value: unknown): PlaygroundEventInput => {
-  if (!isRecord(value)) {
-    throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event must be a JSON object.');
-  }
-  const source = value.source;
-  if (!isTraceSource(source)) {
-    throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event source is unsupported.');
-  }
-  const event = Object.freeze({
-    kind: nonempty(value.kind, 'Playground event kind'),
-    raw: json(value.raw, 'Playground event raw value'),
-    source,
-    summary: nonempty(value.summary, 'Playground event summary'),
-  });
-  assertNoProviderCredentials(event as PlaygroundJsonValue);
-  return event;
-};
-
-const snapshotEvent = (value: PlaygroundTraceEvent): PlaygroundTraceEvent => Object.freeze({
-  kind: value.kind,
-  raw: clone(value.raw, 'Playground event raw value'),
-  rawEventRef: value.rawEventRef,
-  sequence: value.sequence,
-  source: value.source,
-  summary: value.summary,
-  timestamp: value.timestamp,
-});
 
 const snapshotCleanupFailures = (value: readonly PlaygroundCleanupFailure[]): readonly PlaygroundCleanupFailure[] =>
   Object.freeze(value.map((failure) => Object.freeze({ message: failure.message, operation: failure.operation })));
@@ -577,26 +277,7 @@ const snapshotSession = (record: SessionRecord): PlaygroundSession => Object.fre
   state: record.state,
 });
 
-const normalizeCursor = (value: PlaygroundReplayCursor | undefined): number => {
-  const sequence = value?.afterSequence ?? 0;
-  if (!Number.isSafeInteger(sequence) || sequence < 0) {
-    throw serviceError('PLAYGROUND_CURSOR_INVALID', 'Playground replay cursor must be a non-negative safe integer.');
-  }
-  return sequence;
-};
-
 const asErrorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
-
-const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelectedAssertion => {
-  const assertion = Object.freeze({
-    evidence: json(value?.evidence, 'Playground assertion evidence'),
-    expectation: json(value?.expectation, 'Playground assertion expectation'),
-    id: nonempty(value?.id, 'Playground assertion id'),
-    kind: nonempty(value?.kind, 'Playground assertion kind'),
-  });
-  assertNoProviderCredentials(assertion as PlaygroundJsonValue);
-  return assertion;
-};
 
 export class PlaygroundService {
   readonly #admissions = new Set<Promise<void>>();
