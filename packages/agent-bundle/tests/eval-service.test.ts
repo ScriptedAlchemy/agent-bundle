@@ -56,6 +56,8 @@ it('lists authored suites and their cases without exposing absolute filesystem p
     expect(suite.cases.map((entry) => entry.id)).toEqual(['inconclusive-activation', 'reads-result', 'wrong-result']);
     expect(suite.cases[1]).toMatchObject({ hosts: ['portable'], trials: 1 });
     expect(suite.cases[1]?.assertions.map((entry) => entry.kind)).toEqual(['outcome']);
+    expect(suite.cases[0]?.assertions[0]).toMatchObject({ kind: 'skill-activation', skill: 'review' });
+    expect(suite.cases[1]?.assertions[0]).not.toHaveProperty('skill');
     expect(Object.isFrozen(listing.suites)).toBe(true);
   } finally {
     await removeProjectFixture(project.root);

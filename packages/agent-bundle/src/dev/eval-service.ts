@@ -63,6 +63,8 @@ export class EvalServiceError extends Error {
 export interface EvalAssertionSummary {
   readonly id: string;
   readonly kind: EvalAssertionKind;
+  /** The Skill an activation assertion references; absent for blanket and non-Skill assertions. */
+  readonly skill?: string;
 }
 
 export interface EvalCaseSummary {
@@ -225,7 +227,11 @@ const persistedArtifactBinding = (
 
 const caseSummary = (evalCase: EvalCase): EvalCaseSummary => Object.freeze({
   assertions: Object.freeze(evalCase.assertions.map((assertion) =>
-    Object.freeze({ id: assertion.id, kind: assertion.kind }))),
+    Object.freeze({
+      id: assertion.id,
+      kind: assertion.kind,
+      ...('skill' in assertion && assertion.skill !== undefined ? { skill: assertion.skill } : {}),
+    }))),
   digest: evalCase.digest,
   hosts: Object.freeze(Object.keys(evalCase.hosts).sort((left, right) => left.localeCompare(right))),
   id: evalCase.id,

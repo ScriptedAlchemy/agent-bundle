@@ -73,7 +73,10 @@ const listing = {
   diagnostics: [],
   suites: [{
     cases: [{
-      assertions: [{ id: 'outcome:0123456789abcdef', kind: 'outcome' }],
+      assertions: [
+        { id: 'outcome:0123456789abcdef', kind: 'outcome' },
+        { id: 'skill-activation:0123456789abcdef', kind: 'skill-activation', skill: 'review' },
+      ],
       digest: 'a'.repeat(64),
       hosts: ['portable'],
       id: 'reads-result',
@@ -104,7 +107,12 @@ it('lists discovered suites over the same foreground session', async () => {
   const calls: RecordedRequest[] = [];
   const client = new EvalClient({ fetch: recordingFetch(calls, () => response(listing)) });
 
-  await expect(client.suites()).resolves.toMatchObject({ suites: [{ name: 'review-change' }] });
+  await expect(client.suites()).resolves.toMatchObject({
+    suites: [{
+      cases: [{ assertions: [{ kind: 'outcome' }, { kind: 'skill-activation', skill: 'review' }] }],
+      name: 'review-change',
+    }],
+  });
   expect(calls).toEqual([{ body: undefined, method: 'GET', token: 'foreground-token', url: '/api/evals/suites' }]);
 });
 

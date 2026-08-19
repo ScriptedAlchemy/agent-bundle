@@ -98,7 +98,7 @@ const diagnosticSchema = z.strictObject({
   sourcePath: textSchema.optional(),
   target: textSchema.optional(),
 });
-const assertionSummarySchema = z.strictObject({ id: textSchema, kind: assertionKindSchema });
+const assertionSummarySchema = z.strictObject({ id: textSchema, kind: assertionKindSchema, skill: textSchema.optional() });
 const invocationSchema = z.strictObject({
   mode: z.enum(['automatic', 'explicit', 'none']),
   skill: textSchema.optional(),
