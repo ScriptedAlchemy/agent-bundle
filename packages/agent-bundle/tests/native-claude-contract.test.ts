@@ -636,7 +636,10 @@ nativeIt('runs the checked-in candidate with the existing signed-in Claude subsc
       cwd: fixture,
       enabled: harness!.nativeClaudeSmokeEnabled(),
       pluginDirectory,
-      prompt: 'Use the agent-bundle-native-smoke Skill now. Reply exactly: CLAUDE_NATIVE_SMOKE_OK. Do not access tools or files.',
+      // The Skill invocation is itself a tool call, so only forbid other tools;
+      // a blanket "no tools" instruction suppresses the activation event this
+      // smoke asserts.
+      prompt: 'Invoke the agent-bundle-native-smoke Skill with the Skill tool now, then reply exactly: CLAUDE_NATIVE_SMOKE_OK. Do not use any other tool and do not access files.',
       // Loaded machines routinely exceed the 60s default; stay under the 120s test budget.
       timeoutMs: 100_000,
     });
