@@ -16,6 +16,15 @@ agent-bundle dev --root .
 
 `inspect` reads source configuration; use `validate --artifact artifact` for source-free artifact validation. `dev.runtime.provider` is an advanced optional extension: a normal project starts the dev server and Workbench without loading an RSC provider.
 
+Generated executables target Node.js 22.12 or newer by default. `runtime: { node: '24.0' }` raises
+that floor (it can never be lowered), and the selected floor is recorded as `runtime.node` in the
+artifact manifest.
+
+Hook `tools` accept the canonical selectors (`shell`, `file.read`, `file.write`, `mcp`, `agent`)
+plus explicit host-native selectors such as `claude:WebSearch` or `codex:view_image`, which
+contribute only to that host's native matcher. A hook that selects tools must leave every selected
+target with at least one applicable selector, otherwise the build fails.
+
 ## Commands
 
 | Command | Purpose |

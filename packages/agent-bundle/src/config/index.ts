@@ -5,7 +5,7 @@ import type { AgentBundleConfig as CoreAgentBundleConfig } from '../core/types.t
 
 export { discoverProject } from './discover.ts';
 export { defineConfig } from '../core/types.ts';
-export type { ConfigFactory, ConfigFactoryContext } from '../core/types.ts';
+export type { AgentBundleRuntimeConfig, ConfigFactory, ConfigFactoryContext } from '../core/types.ts';
 export type { DiscoveredProject } from './discover.ts';
 export { loadConfig } from './load.ts';
 export type { LoadedConfig, LoadConfigOptions } from './load.ts';
@@ -34,6 +34,7 @@ export type {
   NormalizedMcpApp,
   NormalizedMcpServer,
   NormalizedPlugin,
+  NormalizedRuntime,
   NormalizedScript,
   NormalizedSkill,
   NormalizedSkillResource,

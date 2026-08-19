@@ -13,7 +13,8 @@ import {
 } from '../src/adapters/hook-contract.ts';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import type { NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
+import { normalizeProject, type NormalizationTargetRegistry } from '../src/config/index.ts';
+import type { AgentBundleConfig, NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
 import { build } from './support/build.ts';
 
 const metadata = Object.freeze({
@@ -39,6 +40,7 @@ const planningModel = (hooks: readonly NormalizedHook[]): NormalizedPlugin => ({
     provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
     version: '1.0.0',
   },
+  runtime: { node: '22.12.0' },
   scripts: [],
   skills: [],
   targets: [{
@@ -146,6 +148,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
       provenance: { kind: 'config', sourcePath: configPath },
       version: '1.0.0',
     },
+    runtime: { node: '22.12.0' },
     scripts: [],
     skills: [],
     targets: [{
@@ -303,4 +306,84 @@ it('continues planning valid hooks after a prior hook mapping error', () => {
     },
   });
   expect(plan.hookEntries.map((entry) => entry.event)).toEqual(['afterTool']);
+});
+
+const nativeSelectorContract = (matchers: TargetHookContract['matchers']): TargetHookContract => ({
+  commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+  ...playgroundCodec,
+  eventNames: {
+    afterTool: 'SyntheticAfterTool',
+    beforeTool: 'SyntheticBeforeTool',
+    sessionStart: 'SyntheticSessionStart',
+    stop: 'SyntheticStop',
+  },
+  manifestPath: 'native-events/registration.json',
+  matchers,
+  readNativeCommands: () => ({ commands: [], status: 'found' as const }),
+  wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
+  wrapperSource: () => 'export default undefined;\n',
+});
+
+it('folds explicit host-native tool selectors into the target matcher with escaping', () => {
+  const hook: NormalizedHook = {
+    ...planningHook('beforeTool', ['shell']),
+    nativeTools: [
+      { name: 'WebSearch', target: 'synthetic' },
+      { name: 'weird.tool+name', target: 'synthetic' },
+      { name: 'ElsewhereOnly', target: 'other-host' },
+    ],
+  };
+
+  const plan = planHooks(planningModel([hook]), 'synthetic', nativeSelectorContract({ shell: '^Bash$' }));
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(plan.hookEntries[0]?.nativeMatcher).toBe(String.raw`(?:^Bash$|^WebSearch$|^weird\.tool\+name$)`);
+});
+
+it('rejects a target left without any applicable tool selector', () => {
+  const hook: NormalizedHook = {
+    ...planningHook('beforeTool', []),
+    nativeTools: [{ name: 'ElsewhereOnly', target: 'other-host' }],
+  };
+
+  const plan = planHooks(planningModel([hook]), 'synthetic', nativeSelectorContract({}));
+
+  expect(plan.diagnostics).toEqual([{
+    code: 'synthetic.hook.tool.unselected',
+    message: expect.stringContaining('receives no tool selector'),
+    severity: 'error',
+    target: 'synthetic',
+  }]);
+  expect(plan.hookEntries).toEqual([]);
+});
+
+it('keeps a mismatched native selector visible so normalized planning fails closed', async () => {
+  const registry: NormalizationTargetRegistry = {
+    configExtensions: () => [],
+    defaultTargetNames: () => ['codex'],
+    has: (name) => name === 'claude' || name === 'codex',
+    supports: (_name, capability) => capability === 'hooks',
+  };
+  const config = {
+    hooks: { beforeTool: { handler: './hooks/guard.ts', tools: ['claude:WebSearch'] } },
+    plugin: { name: 'native-selector-fixture', version: '1.0.0' },
+    targets: ['codex'],
+  } satisfies AgentBundleConfig;
+  const model = await normalizeProject({
+    config,
+    configPath: '/workspace/agent-bundle.config.ts',
+    context: {
+      command: 'build',
+      mode: 'production',
+      projectRoot: '/workspace',
+      selectedTargets: [],
+    },
+  }, { skills: [] }, registry);
+
+  const plan = planHooks(model, 'codex', nativeSelectorContract({}));
+
+  expect(model.hooks[0]?.nativeTools).toEqual([{ name: 'WebSearch', target: 'claude' }]);
+  expect(plan.diagnostics.map(({ code }) => code)).toEqual(['codex.hook.tool.unselected']);
+  expect(plan.document).toBeUndefined();
+  expect(plan.hookEntries).toEqual([]);
 });

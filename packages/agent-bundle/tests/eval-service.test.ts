@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
-import { EvalService, EvalServiceError } from '../src/dev/eval-service.ts';
+import {
+  EvalService,
+  EvalServiceBackgroundFailureOverflowError,
+  EvalServiceBackgroundFailureRetention,
+  EvalServiceError,
+} from '../src/dev/eval-service.ts';
 import { evalCaseFromDraft } from '../src/eval/index.ts';
 import { EvalRunWriter } from '../src/eval/run-store.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
@@ -39,6 +44,18 @@ const withEvalRunStoreDurabilityTestHook = async <T>(
     else process.env.NODE_ENV = previousNodeEnvironment;
   }
 };
+
+it('bounds background failures while retaining explicit overflow evidence', () => {
+  const retention = new EvalServiceBackgroundFailureRetention();
+  const failures = Array.from({ length: 257 }, (_, index) => new Error(`background failure ${index}`));
+  failures.forEach((failure) => retention.retain(failure));
+
+  const retained = retention.snapshot();
+  expect(retained.slice(0, 256)).toEqual(failures.slice(0, 256));
+  expect(retained[256]).toBeInstanceOf(EvalServiceBackgroundFailureOverflowError);
+  expect(retained[256]).toMatchObject({ droppedCount: 1 });
+  expect((retained[256] as Error).message).not.toContain('background failure 256');
+});
 
 it('lists authored suites and their cases without exposing absolute filesystem paths', async () => {
   const project = await createProjectFixture();

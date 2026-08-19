@@ -1,4 +1,9 @@
 import { digest, stableJson } from '../core/digest.ts';
+import {
+  formatRuntimeVersion,
+  parseRuntimeVersion,
+  satisfiesGeneratedRuntimeFloor,
+} from '../core/runtime.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated';
@@ -27,6 +32,11 @@ export interface ArtifactManifestFile {
 export interface ArtifactManifestProducer {
   readonly name: 'agent-bundle';
   readonly version: string;
+}
+
+/** The selected generated-executable runtime floor recorded with the artifact. */
+export interface ArtifactManifestRuntime {
+  readonly node: string;
 }
 
 export interface ArtifactManifestProject {
@@ -66,19 +76,19 @@ export interface ArtifactManifestValidation {
   readonly targets: readonly ArtifactManifestTargetValidation[];
 }
 
-export interface ArtifactManifestV2 {
+export interface ArtifactManifest {
   readonly agentSkills: ArtifactManifestAgentSkills;
   readonly files: readonly ArtifactManifestFile[];
   readonly producer: ArtifactManifestProducer;
   readonly project: ArtifactManifestProject;
+  readonly runtime: ArtifactManifestRuntime;
   readonly targets: readonly ArtifactManifestTarget[];
   readonly validation: ArtifactManifestValidation;
-  readonly version: 2;
 }
 
 export interface AssembledArtifactManifest {
   readonly bytes: string;
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -87,7 +97,7 @@ const manifestFileName = 'agent-bundle.manifest.json';
 const sha256Pattern = /^[a-f0-9]{64}$/u;
 
 const fail = (message: string): never => {
-  throw new TypeError(`Artifact manifest v2 ${message}`);
+  throw new TypeError(`Artifact manifest ${message}`);
 };
 
 const isPlainObject = (value: unknown): value is JsonRecord => {
@@ -268,10 +278,26 @@ const parseValidation = (value: unknown): ArtifactManifestValidation => {
   };
 };
 
-const validateManifest = (value: unknown): ArtifactManifestV2 => {
+const parseRuntime = (value: unknown): ArtifactManifestRuntime => {
+  const runtime = requireRecord(value, 'runtime');
+  requireExactKeys(runtime, 'runtime', ['node']);
+  const node = requireString(runtime.node, 'runtime.node');
+  const version = parseRuntimeVersion(node);
+  if (version === undefined) {
+    return fail('runtime.node must be a canonical major.minor.patch version.');
+  }
+  if (formatRuntimeVersion(version) !== node) {
+    fail('runtime.node must be a canonical major.minor.patch version.');
+  }
+  if (!satisfiesGeneratedRuntimeFloor(version)) {
+    fail('runtime.node must satisfy the generated runtime floor.');
+  }
+  return { node };
+};
+
+const validateManifest = (value: unknown): ArtifactManifest => {
   const manifest = requireRecord(value, 'root');
-  requireExactKeys(manifest, 'root', ['agentSkills', 'files', 'producer', 'project', 'targets', 'validation', 'version']);
-  if (manifest.version !== 2) fail('version must be 2.');
+  requireExactKeys(manifest, 'root', ['agentSkills', 'files', 'producer', 'project', 'runtime', 'targets', 'validation']);
 
   const agentSkills = requireRecord(manifest.agentSkills, 'agentSkills');
   requireExactKeys(agentSkills, 'agentSkills', ['schemaSha256', 'sourceRevision', 'specification']);
@@ -331,9 +357,9 @@ const validateManifest = (value: unknown): ArtifactManifestV2 => {
       revision,
       sourceInputs,
     },
+    runtime: parseRuntime(manifest.runtime),
     targets,
     validation,
-    version: 2,
   };
 };
 
@@ -352,7 +378,7 @@ const isDuplicateJsonKeyError = (error: unknown): boolean =>
 const manifestJsonSyntaxError = (message: string): SyntaxError =>
   new SyntaxError(message, { cause: new SyntaxError('Artifact manifest JSON parsing failed.') });
 
-export const parseArtifactManifest = (bytes: string): ArtifactManifestV2 => {
+export const parseArtifactManifest = (bytes: string): ArtifactManifest => {
   let value: unknown;
   try {
     value = parseJsonWithoutDuplicateKeys(bytes);
@@ -370,15 +396,15 @@ export const parseArtifactManifest = (bytes: string): ArtifactManifestV2 => {
 };
 
 /**
- * Serializes a valid v2 manifest. Caller arrays must already be sorted and unique;
+ * Serializes a valid manifest. Caller arrays must already be sorted and unique;
  * this function validates rather than reordering them.
  */
-export const serializeArtifactManifest = (manifest: ArtifactManifestV2): string => {
+export const serializeArtifactManifest = (manifest: ArtifactManifest): string => {
   const validated = validateManifest(manifest);
   return `${stableJson(validated)}\n`;
 };
 
-export const assembleArtifactManifest = (manifest: ArtifactManifestV2): AssembledArtifactManifest => {
+export const assembleArtifactManifest = (manifest: ArtifactManifest): AssembledArtifactManifest => {
   const bytes = serializeArtifactManifest(manifest);
   return Object.freeze({ bytes, manifest: parseArtifactManifest(bytes) });
 };

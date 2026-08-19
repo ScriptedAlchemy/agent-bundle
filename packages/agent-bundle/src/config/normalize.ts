@@ -3,7 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { basename, extname, relative, resolve } from 'node:path';
 
 import { digest } from '../core/digest.ts';
-import { pathTokens } from '../core/types.ts';
+import {
+  defaultGeneratedRuntime,
+  formatRuntimeVersion,
+  parseRuntimeVersion,
+  satisfiesGeneratedRuntimeFloor,
+} from '../core/runtime.ts';
+import { parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
@@ -12,6 +18,7 @@ import type {
   AgentBundleScriptInput,
   CanonicalHookEvent,
   CanonicalHookTool,
+  NativeHookToolSelector,
   NormalizationTargetRegistry,
   NormalizedConfigExtension,
   NormalizedHook,
@@ -19,6 +26,7 @@ import type {
   NormalizedMcpServer,
   NormalizedNativeHook,
   NormalizedPlugin,
+  NormalizedRuntime,
   NormalizedScript,
   NormalizedSkill,
   SourceProvenance,
@@ -69,12 +77,32 @@ const isHookEntryList = (
 const asEntries = (input: AgentBundleHookInput): readonly (string | AgentBundleHookEntry)[] =>
   isHookEntryList(input) ? input : [input];
 
+const normalizeNativeHookTools = (
+  selectors: readonly string[],
+  registry: NormalizationTargetRegistry,
+): NativeHookToolSelector[] => {
+  const seen = new Set<string>();
+  const nativeTools: NativeHookToolSelector[] = [];
+  for (const selector of selectors) {
+    if (knownHookTools.has(selector as CanonicalHookTool)) continue;
+    const parsed = parseNativeHookToolSelector(selector);
+    if (parsed === undefined || !registry.supports(parsed.target, 'hooks')) continue;
+    const key = `${parsed.target}:${parsed.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    nativeTools.push(parsed);
+  }
+  return nativeTools.sort((left, right) =>
+    left.target.localeCompare(right.target) || left.name.localeCompare(right.name));
+};
+
 const normalizeHook = (
   event: CanonicalHookEvent,
   input: string | AgentBundleHookEntry,
   root: string,
   defaultTargets: readonly string[],
   provenance: SourceProvenance,
+  registry: NormalizationTargetRegistry,
 ): NormalizedHook => {
   const entry = typeof input === 'string' ? { handler: input } : input;
   const source = resolve(root, entry.handler);
@@ -83,10 +111,12 @@ const normalizeHook = (
     (tool): tool is CanonicalHookTool => knownHookTools.has(tool as CanonicalHookTool),
   );
   const targets = sortedUnique(entry.targets ?? defaultTargets);
+  const nativeTools = normalizeNativeHookTools(entry.tools ?? [], registry);
   const timeout = entry.timeout;
   const identity = {
     event,
     handler,
+    ...(nativeTools.length === 0 ? {} : { nativeTools }),
     targets,
     timeout: timeout ?? 'host-default',
     tools,
@@ -100,6 +130,7 @@ const normalizeHook = (
     event,
     id: `hook:${eventName}:${handlerName}:${hash}`,
     name,
+    ...(nativeTools.length === 0 ? {} : { nativeTools }),
     provenance: { ...provenance },
     source,
     targets,
@@ -126,7 +157,7 @@ const normalizeHooks = (
       const hookTargets = inherited
         ? targetNames.filter((target) => registry.supports(target, 'hooks'))
         : targetNames;
-      hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, hookTargets, provenance));
+      hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, hookTargets, provenance, registry));
     }
   }
 
@@ -435,6 +466,15 @@ const skillProvenance = (
   sourcePath,
 });
 
+/** Selects the generated-executable floor; invalid raises fall back to the default the validator rejected. */
+const normalizeRuntime = (loaded: LoadedConfig): NormalizedRuntime => {
+  const node = loaded.config.runtime?.node;
+  const version = typeof node === 'string' ? parseRuntimeVersion(node) : undefined;
+  return version !== undefined && satisfiesGeneratedRuntimeFloor(version)
+    ? { node: formatRuntimeVersion(version) }
+    : defaultGeneratedRuntime;
+};
+
 export const normalizeProject = async (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -485,6 +525,7 @@ export const normalizeProject = async (
     mcpServers,
     hooks: normalizeHooks(loaded, targetNames, registry),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
+    runtime: normalizeRuntime(loaded),
     scripts,
     skills,
     targets: targetNames.map((name) => ({

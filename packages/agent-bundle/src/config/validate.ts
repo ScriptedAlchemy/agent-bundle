@@ -3,6 +3,12 @@ import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'no
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import {
+  defaultGeneratedRuntime,
+  parseRuntimeVersion,
+  satisfiesGeneratedRuntimeFloor,
+} from '../core/runtime.ts';
+import { parseNativeHookToolSelector } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
@@ -47,6 +53,9 @@ const validateHooks = (
 ): Diagnostic[] => {
   const hooks = loaded.config.hooks;
   if (hooks === undefined) return [];
+  const selectedTargets = loaded.context.selectedTargets.length > 0
+    ? loaded.context.selectedTargets
+    : (loaded.config.targets ?? registry.defaultTargetNames());
 
   const diagnostics: Diagnostic[] = [];
   for (const event of hookEvents) {
@@ -69,10 +78,30 @@ const validateHooks = (
         ));
       }
       for (const tool of entry.tools ?? []) {
-        if (!hookTools.has(tool)) {
+        if (hookTools.has(tool)) continue;
+        const selector = parseNativeHookToolSelector(tool);
+        if (selector === undefined) {
           diagnostics.push(sourceDiagnostic(
             'AB4202',
             `Hook ${event} selects unknown tool ${JSON.stringify(tool)}.`,
+            loaded.configPath,
+          ));
+        } else if (!registry.has(selector.target)) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4210',
+            `Hook ${event} native tool selector ${JSON.stringify(tool)} names unknown target ${JSON.stringify(selector.target)}.`,
+            loaded.configPath,
+          ));
+        } else if (!registry.supports(selector.target, 'hooks')) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4211',
+            `Hook ${event} native tool selector ${JSON.stringify(tool)} names target ${JSON.stringify(selector.target)}, which cannot emit hooks.`,
+            loaded.configPath,
+          ));
+        } else if (!(entry.targets ?? selectedTargets).includes(selector.target)) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4212',
+            `Hook ${event} native tool selector ${JSON.stringify(tool)} names target ${JSON.stringify(selector.target)} outside the hook's selected targets.`,
             loaded.configPath,
           ));
         }
@@ -550,6 +579,39 @@ const validateMcpServer = (
   return diagnostics;
 };
 
+const validateRuntime = (loaded: LoadedConfig): Diagnostic[] => {
+  const runtime = loaded.config.runtime;
+  if (runtime === undefined) return [];
+  if (!isRecord(runtime) || !isPlainRecord(runtime)) {
+    return [sourceDiagnostic('AB4600', 'Runtime configuration must be an object.', loaded.configPath)];
+  }
+  const keys = Object.keys(runtime);
+  if (keys.length !== 1 || keys[0] !== 'node') {
+    return [sourceDiagnostic(
+      'AB4600',
+      'Runtime configuration must contain exactly one node version.',
+      loaded.configPath,
+    )];
+  }
+  const node = runtime.node;
+  const version = typeof node === 'string' ? parseRuntimeVersion(node) : undefined;
+  if (version === undefined) {
+    return [sourceDiagnostic(
+      'AB4601',
+      'Runtime node floor must be a version string such as "22.16" or "24.0.0".',
+      loaded.configPath,
+    )];
+  }
+  if (!satisfiesGeneratedRuntimeFloor(version)) {
+    return [sourceDiagnostic(
+      'AB4602',
+      `Runtime node floor ${JSON.stringify(node)} cannot lower the Node.js ${defaultGeneratedRuntime.node} default.`,
+      loaded.configPath,
+    )];
+  }
+  return [];
+};
+
 const validateMcp = (loaded: LoadedConfig): Diagnostic[] => {
   const mcp = loaded.config.mcp;
   if (mcp === undefined) return [];
@@ -662,6 +724,7 @@ export const validateSource = (
 
   diagnostics.push(...validateHooks(loaded, registry));
   diagnostics.push(...validateMcp(loaded));
+  diagnostics.push(...validateRuntime(loaded));
   diagnostics.push(...validateScripts(loaded, registry));
 
   return diagnostics;

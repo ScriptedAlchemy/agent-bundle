@@ -46,6 +46,7 @@ const plugin = Object.freeze({
     provenance: Object.freeze({ kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' }),
     version: '1.2.3',
   }),
+  runtime: Object.freeze({ node: '22.12.0' }),
   scripts: Object.freeze([]),
   skills: Object.freeze([
     Object.freeze({

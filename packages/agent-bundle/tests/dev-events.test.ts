@@ -96,6 +96,22 @@ it('assigns monotonic sequence IDs and freezes published event payloads', () => 
   expect(Object.isFrozen((first.payload as { paths: readonly string[] }).paths)).toBe(true);
 });
 
+it('reports every listener failure while retaining only the latest bounded window', () => {
+  const reported: unknown[] = [];
+  const hub = new ProjectEventHub({ onListenerError: ({ error }) => reported.push(error) });
+  const failures = Array.from({ length: 257 }, (_, index) => new Error(`listener failure ${index}`));
+
+  for (const failure of failures) {
+    hub.subscribe({ afterSequence: hub.latestSequence }, () => { throw failure; });
+    hub.publish({ payload: invalidation([failure.message]), type: 'source.changed' });
+  }
+
+  expect(reported).toEqual(failures);
+  expect(hub.listenerErrors).toHaveLength(256);
+  expect(hub.listenerErrors[0]?.error).toBe(failures[1]);
+  expect(hub.listenerErrors[255]?.error).toBe(failures[256]);
+});
+
 it('queues live events published during replay until retained events are delivered', () => {
   const hub = new ProjectEventHub();
   hub.publish({ payload: invalidation(['agent-bundle.config.ts']), type: 'source.changed' });

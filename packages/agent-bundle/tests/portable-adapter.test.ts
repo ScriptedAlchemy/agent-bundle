@@ -18,6 +18,7 @@ const plugin = (): NormalizedPlugin => ({
     version: '1.2.3',
   },
   mcpServers: [],
+  runtime: { node: '22.12.0' },
   scripts: [],
   skills: [
     {

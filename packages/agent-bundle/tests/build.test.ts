@@ -200,6 +200,7 @@ const modelFor = (project: TestProject): NormalizedPlugin => ({
     provenance: { kind: 'config', sourcePath: join(project.root, 'agent-bundle.config.ts') },
     version: '1.0.0',
   },
+  runtime: { node: '22.12.0' },
   scripts: [
     {
       id: 'script:greeting',
@@ -291,7 +292,7 @@ const cleanupProject = async (project: TestProject): Promise<void> => {
   await rm(project.root, { force: true, recursive: true });
 };
 
-it('low-level build writes and returns the exact canonical v2 manifest for a configured Skill script', async () => {
+it('low-level build writes and returns the exact canonical manifest for a configured Skill script', async () => {
   const project = await createProject();
   const model = modelFor(project);
 
@@ -336,13 +337,13 @@ it('low-level build writes and returns the exact canonical v2 manifest for a con
           expect.objectContaining({ path: 'skills/review/SKILL.md' }),
         ]),
       },
+      runtime: { node: '22.12.0' },
       targets: [expect.objectContaining({ name: 'portable' })],
       validation: {
         artifact: { status: 'passed' },
         source: { status: 'passed' },
         targets: [{ name: 'portable', status: 'passed' }],
       },
-      version: 2,
     });
     for (const file of files.filter((entry) => entry.path.endsWith('.json'))) {
       expect(JSON.parse(await readFile(join(project.outputRoot, file.path), 'utf8'))).toBeDefined();

@@ -20,7 +20,7 @@ import {
   assembleArtifactManifest,
   parseArtifactManifest,
   type ArtifactManifestFile,
-  type ArtifactManifestV2,
+  type ArtifactManifest,
 } from './manifest.ts';
 import type { ArtifactOutputProvenance } from './provenance.ts';
 
@@ -254,8 +254,8 @@ export const createArtifactManifestFiles = (options: {
 
 export const writeManifest = async (options: {
   readonly artifactRoot: string;
-  readonly manifest: ArtifactManifestV2;
-}): Promise<ArtifactManifestV2> => {
+  readonly manifest: ArtifactManifest;
+}): Promise<ArtifactManifest> => {
   const assembled = assembleArtifactManifest(options.manifest);
   const manifestPath = join(options.artifactRoot, artifactManifestName);
   await writeFile(manifestPath, assembled.bytes, 'utf8');

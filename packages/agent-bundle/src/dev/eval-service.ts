@@ -186,11 +186,52 @@ interface ActiveEvalRun {
 
 const maximumTrials = 100;
 const maximumArtifactBytes = 8 * 1024 * 1024;
+/** Background failures are surfaced once at close; retain a bounded window so long-lived services cannot grow without limit. */
+const maximumRetainedBackgroundFailures = 256;
 const safeRunId = /^[a-z0-9][a-z0-9._-]*$/u;
 const safeArtifactSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 
 const serviceError = (code: EvalServiceErrorCode, message: string): EvalServiceError =>
   new EvalServiceError(code, message);
+
+/** Explicit evidence that Eval shutdown observed more distinct background failures than it retained. */
+export class EvalServiceBackgroundFailureOverflowError extends Error {
+  readonly droppedCount: number;
+
+  constructor(droppedCount: number) {
+    super(`Eval service omitted ${droppedCount} additional background failure${droppedCount === 1 ? '' : 's'} after its bounded retention limit.`);
+    this.name = 'EvalServiceBackgroundFailureOverflowError';
+    this.droppedCount = droppedCount;
+  }
+}
+
+/** @internal Bounded, loss-aware retention used by the long-lived Eval service. */
+export class EvalServiceBackgroundFailureRetention {
+  readonly #failures = new Set<unknown>();
+  readonly #limit: number;
+  #droppedCount = 0;
+
+  constructor(limit = maximumRetainedBackgroundFailures) {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError('Eval background failure retention limit must be positive.');
+    this.#limit = limit;
+  }
+
+  retain(error: unknown): void {
+    if (this.#failures.has(error)) return;
+    if (this.#failures.size < this.#limit) {
+      this.#failures.add(error);
+      return;
+    }
+    this.#droppedCount += 1;
+  }
+
+  snapshot(): readonly unknown[] {
+    return Object.freeze([
+      ...this.#failures,
+      ...(this.#droppedCount === 0 ? [] : [new EvalServiceBackgroundFailureOverflowError(this.#droppedCount)]),
+    ]);
+  }
+}
 
 const projectRelative = (projectRoot: string, path: string): string =>
   relative(projectRoot, path).replaceAll('\\', '/');
@@ -391,7 +432,7 @@ class OpenedEvalArtifact implements EvalArtifactReader {
  */
 export class EvalService {
   readonly #artifactReaders = new Set<OpenedEvalArtifact>();
-  readonly #backgroundFailures = new Set<unknown>();
+  readonly #backgroundFailures = new EvalServiceBackgroundFailureRetention();
   readonly #configPath: string | undefined;
   readonly #mode: string;
   readonly #logger: DevLogSink | undefined;
@@ -538,7 +579,7 @@ export class EvalService {
         ...[...starts, ...results]
           .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
           .map((result) => result.reason),
-        ...this.#backgroundFailures,
+        ...this.#backgroundFailures.snapshot(),
       ];
       if (failures.length > 0) {
         throw new AggregateError([...new Set(failures)], 'Eval service could not close.');
@@ -677,7 +718,7 @@ export class EvalService {
       harness,
       planned,
     }).then(resolveResult, (error: unknown) => {
-      this.#backgroundFailures.add(error);
+      this.#backgroundFailures.retain(error);
       rejectResult(error);
     });
     void active.result.catch(() => undefined);

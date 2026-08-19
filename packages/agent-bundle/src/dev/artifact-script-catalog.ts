@@ -1,7 +1,7 @@
 import { extname } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
-import type { ArtifactManifestV2 } from '../build/manifest.ts';
+import type { ArtifactManifest } from '../build/manifest.ts';
 
 /** A validated, target-scoped emitted script chosen by a browser-safe id. */
 export interface ArtifactScriptCatalogEntry {
@@ -25,7 +25,7 @@ const scriptName = (file: string, allowedSuffixes: readonly string[]): string | 
 
 /** Derives the sole browser-selectable script catalog from a strictly validated manifest snapshot. */
 export const artifactScriptCatalog = (
-  manifest: ArtifactManifestV2,
+  manifest: ArtifactManifest,
   registry: TargetRegistry,
 ): readonly ArtifactScriptCatalogEntry[] => {
   const entries: ArtifactScriptCatalogEntry[] = [];

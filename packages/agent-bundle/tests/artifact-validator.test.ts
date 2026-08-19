@@ -15,7 +15,7 @@ import {
   type TargetAdapter,
   type TargetArtifactDocumentValidator,
 } from '../src/adapters/types.ts';
-import { assembleArtifactManifest, type ArtifactManifestV2 } from '../src/build/manifest.ts';
+import { assembleArtifactManifest, type ArtifactManifest } from '../src/build/manifest.ts';
 import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
@@ -46,8 +46,8 @@ const withHookIndex = (files: readonly ArtifactFixtureFile[]): readonly Artifact
 const manifestFor = (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
-  targets: readonly ArtifactManifestV2['targets'][number][] = [],
-): ArtifactManifestV2 => {
+  targets: readonly ArtifactManifest['targets'][number][] = [],
+): ArtifactManifest => {
   const configHash = hash('export default {};\n');
   const sourceInputs = [{ path: 'agent-bundle.config.ts', sha256: configHash }];
   return {
@@ -70,20 +70,20 @@ const manifestFor = (
       revision: digest({ inputs: sourceInputs }),
       sourceInputs,
     },
+    runtime: { node: '22.12.0' },
     targets,
     validation: {
       artifact: { status: 'passed' },
       source: { status: 'passed' },
       targets: targets.map(({ name }) => ({ name, status: 'passed' })),
     },
-    version: 2,
   };
 };
 
 const writeArtifact = async (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
-  targets: readonly ArtifactManifestV2['targets'][number][] = [],
+  targets: readonly ArtifactManifest['targets'][number][] = [],
   includeHookIndex = true,
 ): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-validator-'));
@@ -198,7 +198,7 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
   validateModel: () => [],
 } satisfies TargetAdapter);
 
-const targetFromRegistry = (registry: TargetRegistry, name: string): ArtifactManifestV2['targets'][number] => {
+const targetFromRegistry = (registry: TargetRegistry, name: string): ArtifactManifest['targets'][number] => {
   const metadata = registry.metadata(name);
   return {
     ...metadata,
@@ -546,6 +546,25 @@ it('rejects a special manifest without following its symlink target', async () =
   }
 });
 
+it('rejects a canonical manifest whose runtime is below the generated floor', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+
+  try {
+    const manifestPath = join(root, 'agent-bundle.manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { runtime: { node: string } };
+    manifest.runtime.node = '22.11.9';
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+
+    expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6001', generatedPath: 'agent-bundle.manifest.json' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('settles promptly when the artifact manifest is a FIFO', async () => {
   const root = await writeArtifact([
     { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
@@ -716,17 +735,18 @@ it('validates emitted Skill frontmatter against the pinned contract and director
   }
 });
 
-it('rejects legacy, noncanonical, and duplicate-key manifests as strict v2 parse failures', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-v1-validator-'));
+it('rejects noncanonical and duplicate-key manifests as strict parse failures', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-manifest-validator-'));
 
   try {
-    await writeFile(join(root, 'agent-bundle.manifest.json'), '{"files":[],"targets":[],"version":1}\n');
-    expect(await validateArtifact({ artifactRoot: root })).toEqual([
-      expect.objectContaining({ code: 'AB6001', generatedPath: 'agent-bundle.manifest.json' }),
-    ]);
-
     const canonical = assembleArtifactManifest(manifestFor(withHookIndex([]))).bytes;
-    for (const bytes of [JSON.stringify(JSON.parse(canonical), null, 2), canonical.replace(',"version":2', ',"version":2,"version":2')]) {
+    for (const bytes of [
+      JSON.stringify(JSON.parse(canonical), null, 2),
+      canonical.replace(
+        '"runtime":{"node":"22.12.0"}',
+        '"runtime":{"node":"22.12.0"},"runtime":{"node":"22.12.0"}',
+      ),
+    ]) {
       await writeFile(join(root, 'agent-bundle.manifest.json'), bytes);
       expect(await validateArtifact({ artifactRoot: root })).toEqual([
         expect.objectContaining({ code: 'AB6001', generatedPath: 'agent-bundle.manifest.json' }),
@@ -765,7 +785,7 @@ it('rejects a canonical manifest that omits an executable file mode', async () =
   }
 });
 
-it('preserves structural artifact diagnostics after a strict v2 manifest passes', async () => {
+it('preserves structural artifact diagnostics after a strict manifest passes', async () => {
   const files = [
     { contents: 'export const broken = ;\n', kind: 'bundle' as const, path: 'broken.mjs' },
     { contents: '{', kind: 'generated' as const, path: 'invalid.json' },

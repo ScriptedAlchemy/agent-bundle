@@ -33,7 +33,7 @@ import {
   writeHookIndex,
   writeManifest,
 } from './emit.ts';
-import type { ArtifactManifestV2 } from './manifest.ts';
+import type { ArtifactManifest } from './manifest.ts';
 import {
   createOutputProvenance,
   type ArtifactOutputCandidate,
@@ -46,7 +46,7 @@ export interface BuildResult {
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly compiledMcpApps: readonly CompiledMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
   readonly outputProvenance: readonly ArtifactOutputProvenance[];
   readonly outputRoot: string;
 }
@@ -204,7 +204,7 @@ const assertOutputProvenanceSources = (options: {
 const manifestTargets = (
   registry: TargetRegistry,
   targets: readonly StagedTarget[],
-): ArtifactManifestV2['targets'] => Object.freeze(targets
+): ArtifactManifest['targets'] => Object.freeze(targets
   .map(({ name }) => {
     const metadata = registry.metadata(name);
     return Object.freeze({
@@ -221,24 +221,25 @@ const manifestTargets = (
   .sort((left, right) => left.name.localeCompare(right.name)));
 
 const manifestFor = (options: {
-  readonly files: ArtifactManifestV2['files'];
+  readonly files: ArtifactManifest['files'];
+  readonly model: NormalizedPlugin;
   readonly projectContext: ProjectContext;
   readonly registry: TargetRegistry;
   readonly targets: readonly StagedTarget[];
-}): ArtifactManifestV2 => {
+}): ArtifactManifest => {
   const targets = manifestTargets(options.registry, options.targets);
   return {
     agentSkills: agentSkillsSchemaRevision,
     files: options.files,
     producer: { name: 'agent-bundle', version: packageManifest.version },
     project: options.projectContext,
+    runtime: { ...options.model.runtime },
     targets,
     validation: {
       artifact: { status: 'passed' },
       source: { status: 'passed' },
       targets: targets.map(({ name }) => ({ name, status: 'passed' })),
     },
-    version: 2,
   };
 };
 
@@ -334,6 +335,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       artifactRoot: stageRoot,
       manifest: manifestFor({
         files,
+        model: options.model,
         projectContext: options.projectContext,
         registry: options.registry,
         targets: stagedTargets,

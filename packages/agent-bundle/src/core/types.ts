@@ -9,6 +9,21 @@ export type CanonicalHookEvent = 'sessionStart' | 'beforeTool' | 'afterTool' | '
 
 export type CanonicalHookTool = 'shell' | 'file.read' | 'file.write' | 'mcp' | 'agent';
 
+/** A host-native tool named through the explicit `<target>:<native-name>` selector escape hatch. */
+export interface NativeHookToolSelector {
+  readonly name: string;
+  readonly target: string;
+}
+
+/** Parses one `<target>:<native-name>` hook tool selector; canonical selectors return undefined. */
+export const parseNativeHookToolSelector = (value: string): NativeHookToolSelector | undefined => {
+  const separator = value.indexOf(':');
+  if (separator === -1) return undefined;
+  const target = value.slice(0, separator).trim();
+  const name = value.slice(separator + 1).trim();
+  return target.length === 0 || name.length === 0 ? undefined : { name, target };
+};
+
 export interface AgentBundleHookEntry {
   handler: string;
   targets?: readonly string[];
@@ -54,6 +69,12 @@ export interface AgentBundleDevConfig {
   agentApi?: boolean;
 }
 
+/** Runtime requirements for generated executable artifacts. */
+export interface AgentBundleRuntimeConfig {
+  /** Minimum supported Node.js version in `major.minor[.patch]` form. */
+  node: string;
+}
+
 /** Adapter-owned config is contributed by declaration merging, not compiler core. */
 // rslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration-merge extension point
 export interface AgentBundleConfigExtensions {}
@@ -89,6 +110,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
   plugin: AgentBundlePluginConfig;
+  runtime?: AgentBundleRuntimeConfig;
   scripts?: Readonly<Record<string, AgentBundleScriptInput>>;
   skills?: string[];
   targets?: string[];
@@ -179,6 +201,8 @@ export interface NormalizedHook {
   readonly event: CanonicalHookEvent;
   readonly id: string;
   readonly name: string;
+  /** Host-native tools selected explicitly per target, alongside the canonical selectors. */
+  readonly nativeTools?: readonly NativeHookToolSelector[];
   readonly provenance: SourceProvenance;
   readonly source: string;
   readonly targets: readonly string[];
@@ -203,6 +227,11 @@ export interface NormalizedConfigExtension {
   readonly value: unknown;
 }
 
+/** The selected runtime floor for generated executables, written to artifact metadata. */
+export interface NormalizedRuntime {
+  readonly node: string;
+}
+
 export interface NormalizedPlugin {
   readonly extensions: Readonly<Record<string, NormalizedConfigExtension>>;
   readonly hooks: readonly NormalizedHook[];
@@ -216,6 +245,8 @@ export interface NormalizedPlugin {
    */
   readonly mcpApps?: readonly NormalizedMcpApp[];
   readonly nativeHooks?: readonly NormalizedNativeHook[];
+  /** The generated-executable runtime floor selected during normalization. */
+  readonly runtime: NormalizedRuntime;
   readonly scripts: readonly NormalizedScript[];
   readonly skills: readonly NormalizedSkill[];
   readonly targets: readonly NormalizedTarget[];

@@ -524,6 +524,108 @@ it('does not treat definitions as uses and reserves an external first definition
   expect(validateSource(loaded, { skills: [externalFirst] }, registry)).toEqual([]);
 });
 
+it('normalizes explicit host-native hook tool selectors alongside canonical tools', async () => {
+  const model = await normalizeProject(
+    loadedProject({
+      hooks: {
+        beforeTool: {
+          handler: './hooks/guard.ts',
+          targets: ['claude', 'codex'],
+          tools: ['shell', 'codex:view_image', 'claude:WebSearch', 'claude:WebSearch', 'portable:Nope'],
+        },
+      },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['claude', 'codex'],
+    }),
+    { skills: [] },
+    registry,
+  );
+
+  expect(model.hooks[0]?.tools).toEqual(['shell']);
+  expect(model.hooks[0]?.nativeTools).toEqual([
+    { name: 'WebSearch', target: 'claude' },
+    { name: 'view_image', target: 'codex' },
+  ]);
+
+  const withoutSelectors = await normalizeProject(
+    loadedProject({
+      hooks: { beforeTool: { handler: './hooks/guard.ts', tools: ['shell'] } },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['claude', 'codex'],
+    }),
+    { skills: [] },
+    registry,
+  );
+  expect(withoutSelectors.hooks[0]?.nativeTools).toBeUndefined();
+  expect(withoutSelectors.hooks[0]?.id).not.toBe(model.hooks[0]?.id);
+});
+
+it('validates host-native hook tool selectors against the registry and hook targets', () => {
+  const diagnosticsFor = (tools: readonly string[], targets?: readonly string[]): readonly string[] =>
+    validateSource(
+      loadedProject({
+        hooks: { beforeTool: { handler: './hooks/guard.ts', ...(targets === undefined ? {} : { targets: [...targets] }), tools: [...tools] } },
+        plugin: { name: 'review-tools', version: '1.0.0' },
+      }),
+      { skills: [] },
+      registry,
+    ).map(({ code }) => code);
+
+  expect(diagnosticsFor(['claude:WebSearch'], ['claude'])).toEqual([]);
+  expect(validateSource(
+    loadedProject({
+      hooks: { beforeTool: { handler: './hooks/guard.ts', tools: ['claude:WebSearch'] } },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['codex'],
+    }),
+    { skills: [] },
+    registry,
+  ).map(({ code }) => code)).toEqual(['AB4212']);
+  expect(diagnosticsFor(['future-host:tool'])).toEqual(['AB4210']);
+  expect(diagnosticsFor(['portable:tool'])).toEqual(['AB4211']);
+  expect(diagnosticsFor(['claude:WebSearch'], ['codex'])).toEqual(['AB4212']);
+  expect(diagnosticsFor(['claude:'])).toEqual(['AB4202']);
+  expect(diagnosticsFor([':WebSearch'])).toEqual(['AB4202']);
+});
+
+it('normalizes the generated-executable runtime floor and validates raises only', async () => {
+  const defaulted = await normalizeProject(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { skills: [] },
+    registry,
+  );
+  expect(defaulted.runtime).toEqual({ node: '22.12.0' });
+
+  const raised = await normalizeProject(
+    loadedProject({
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      runtime: { node: '24.1' },
+    }),
+    { skills: [] },
+    registry,
+  );
+  expect(raised.runtime).toEqual({ node: '24.1.0' });
+
+  const diagnosticsFor = (runtime: unknown): readonly string[] =>
+    validateSource(
+      loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' }, runtime } as AgentBundleConfig),
+      { skills: [] },
+      registry,
+    ).map(({ code }) => code);
+
+  expect(diagnosticsFor(undefined)).toEqual([]);
+  expect(diagnosticsFor({ node: '22.12' })).toEqual([]);
+  expect(diagnosticsFor({ node: '24.0.0' })).toEqual([]);
+  expect(diagnosticsFor('22.16')).toEqual(['AB4600']);
+  expect(diagnosticsFor({})).toEqual(['AB4600']);
+  expect(diagnosticsFor({ node: '24.0', extra: true })).toEqual(['AB4600']);
+  expect(diagnosticsFor({ node: 'v22.16' })).toEqual(['AB4601']);
+  expect(diagnosticsFor({ node: 'latest' })).toEqual(['AB4601']);
+  expect(diagnosticsFor({ node: `${'9'.repeat(400)}.0` })).toEqual(['AB4601']);
+  expect(diagnosticsFor({ node: '22.11.9' })).toEqual(['AB4602']);
+  expect(diagnosticsFor({ node: '20.19.0' })).toEqual(['AB4602']);
+});
+
 it('reports unknown targets, duplicate IDs, and portable output collisions', async () => {
   const root = '/workspace/project';
   const loaded = loadedProject({
