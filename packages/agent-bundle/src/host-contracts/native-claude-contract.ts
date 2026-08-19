@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout } from 'node:timers/promises';
 
 import { digest } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
@@ -208,6 +209,8 @@ export interface NativeClaudeSmokeOptions extends NativeClaudeCommandOptions {
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
   readonly run?: NativeClaudeProcessRunner;
   readonly signal?: AbortSignal;
+  /** Per-process timeout override for slow or heavily loaded machines. */
+  readonly timeoutMs?: number;
 }
 
 export interface NativeClaudeSmokeDiagnostic {
@@ -312,24 +315,31 @@ const resolveClaudeNormalHome = (environment: Readonly<NodeJS.ProcessEnv>): Clau
 const volatileClaudeStateKeys = Object.freeze(['cachedGrowthBookFeaturesAt', 'pluginUsage'] as const);
 
 const digestClaudeStateFile = async (path: string): Promise<string> => {
-  let bytes: string;
-  try {
-    bytes = await readFile(path, 'utf8');
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return 'absent';
-    throw error;
+  // Concurrent Claude sessions rewrite the state file every few seconds, so a
+  // snapshot read can catch a torn write. Retry briefly before treating
+  // unparseable bytes as a real mutation.
+  for (let attempt = 0; ; attempt += 1) {
+    let bytes: string;
+    try {
+      bytes = await readFile(path, 'utf8');
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) return 'absent';
+      throw error;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(bytes) as unknown;
+    } catch {
+      if (attempt >= 2) return digest(bytes);
+      await setTimeout(25);
+      continue;
+    }
+    if (!isRecord(parsed)) return digest(parsed);
+    const meaningful = Object.fromEntries(
+      Object.entries(parsed).filter(([key]) => !volatileClaudeStateKeys.includes(key as (typeof volatileClaudeStateKeys)[number])),
+    );
+    return digest(meaningful);
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(bytes) as unknown;
-  } catch {
-    return digest(bytes);
-  }
-  if (!isRecord(parsed)) return digest(parsed);
-  const meaningful = Object.fromEntries(
-    Object.entries(parsed).filter(([key]) => !volatileClaudeStateKeys.includes(key as (typeof volatileClaudeStateKeys)[number])),
-  );
-  return digest(meaningful);
 };
 
 // The CLI re-touches plugin-cache bookkeeping on every startup: `.in_use`
@@ -492,7 +502,8 @@ const runNativeClaudeSmokeUnchecked = async (options: NativeClaudeSmokeOptions):
   }
 
   const environment = createNativeClaudeChildEnvironment(options.environment);
-  const run = options.run ?? ((request: NativeClaudeProcessRequest) => runNativeClaudeProcess(request, options.signal));
+  const run = options.run ?? ((request: NativeClaudeProcessRequest) =>
+    runNativeClaudeProcess(request, Object.freeze({ signal: options.signal, timeoutMs: options.timeoutMs })));
   const versionRequest: NativeClaudeProcessRequest = Object.freeze({
     args: Object.freeze(['--version']),
     cwd: options.cwd,

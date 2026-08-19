@@ -637,6 +637,8 @@ nativeIt('runs the checked-in candidate with the existing signed-in Claude subsc
       enabled: harness!.nativeClaudeSmokeEnabled(),
       pluginDirectory,
       prompt: 'Use the agent-bundle-native-smoke Skill now. Reply exactly: CLAUDE_NATIVE_SMOKE_OK. Do not access tools or files.',
+      // Loaded machines routinely exceed the 60s default; stay under the 120s test budget.
+      timeoutMs: 100_000,
     });
     await mkdir(evidenceDirectory, { recursive: true });
     await writeFile(join(evidenceDirectory, 'w2-claude-native-smoke.json'), `${JSON.stringify({ report }, null, 2)}\n`);
