@@ -46,9 +46,11 @@ import {
   sameOutcome,
   snapshotEvent,
 } from './playground-values.ts';
+import {
+  PlaygroundSubscriptionSet,
+} from './playground-subscriptions.ts';
 
 export * from './playground-protocol.ts';
-
 
 export class PlaygroundSessionCloseError extends Error {
   readonly failures: readonly PlaygroundCleanupFailure[];
@@ -77,15 +79,6 @@ export class PlaygroundServiceCloseError extends Error {
   }
 }
 
-interface SubscriptionRecord {
-  active: boolean;
-  closed: boolean;
-  delivery: Promise<void>;
-  draining: boolean;
-  readonly onEvent: PlaygroundSubscribeOptions['onEvent'];
-  readonly queue: PlaygroundTraceEvent[];
-}
-
 interface SessionRecord {
   admissionFailed: boolean;
   readonly cleanupFailures: PlaygroundCleanupFailure[];
@@ -99,7 +92,7 @@ interface SessionRecord {
   readonly root: string;
   readonly storageObjectId: string;
   state: PlaygroundSession['state'];
-  readonly subscribers: Set<SubscriptionRecord>;
+  readonly subscribers: PlaygroundSubscriptionSet;
   readonly queue: SerialQueue;
   ownerToken: string | undefined;
 }
@@ -277,8 +270,6 @@ const snapshotSession = (record: SessionRecord): PlaygroundSession => Object.fre
   state: record.state,
 });
 
-const asErrorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
-
 export class PlaygroundService {
   readonly #admissions = new Set<Promise<void>>();
   readonly #maxSubscriberQueue: number;
@@ -331,9 +322,10 @@ export class PlaygroundService {
       await this.#assertObjectDirectory(root, storageObjectId);
       this.#assertAvailable();
       const ownerToken = await this.#acquireOwner(root, id);
+      const cleanupFailures: PlaygroundCleanupFailure[] = [];
       const record: SessionRecord = {
         admissionFailed: false,
-        cleanupFailures: [],
+        cleanupFailures,
         createdAt: this.#timestamp(),
         durability: undefined,
         events: [],
@@ -344,7 +336,7 @@ export class PlaygroundService {
         root,
         state: 'open',
         storageObjectId,
-        subscribers: new Set(),
+        subscribers: new PlaygroundSubscriptionSet(this.#maxSubscriberQueue, cleanupFailures),
         queue: serialQueue(),
         ownerToken,
       };
@@ -400,9 +392,10 @@ export class PlaygroundService {
         if (ownerToken !== undefined) await this.#releaseOwner(root, ownerToken).catch(() => undefined);
         throw error;
       }
+      const cleanupFailures = [...document.cleanupFailures];
       const record: SessionRecord = {
         admissionFailed: false,
-        cleanupFailures: [...document.cleanupFailures],
+        cleanupFailures,
         createdAt: document.createdAt,
         durability: undefined,
         events: [...events],
@@ -413,7 +406,7 @@ export class PlaygroundService {
         root,
         state: document.state,
         storageObjectId,
-        subscribers: new Set(),
+        subscribers: new PlaygroundSubscriptionSet(this.#maxSubscriberQueue, cleanupFailures),
         queue: serialQueue(),
         ownerToken,
       };
@@ -463,7 +456,7 @@ export class PlaygroundService {
       }
       record.events.push(stored);
       record.nextSequence = sequence + 1;
-      this.#publish(record, stored);
+      record.subscribers.publish(stored);
       this.#logDurableAppend(record, stored);
       return snapshotEvent(stored);
     });
@@ -517,20 +510,12 @@ export class PlaygroundService {
         throw serviceError('PLAYGROUND_CURSOR_AHEAD', 'Playground subscription cursor is ahead of persisted history.');
       }
       const backlog = record.events.filter((event) => event.sequence > afterSequence);
-      const subscription: SubscriptionRecord = {
-        active: backlog.length <= this.#maxSubscriberQueue,
-        closed: backlog.length > this.#maxSubscriberQueue,
-        delivery: Promise.resolve(),
-        draining: false,
-        onEvent: options.onEvent,
-        queue: backlog.length > this.#maxSubscriberQueue ? [] : backlog,
-      };
-      if (subscription.active) {
-        record.subscribers.add(subscription);
-        this.#drainSubscription(record, subscription);
-      }
+      const subscription = record.subscribers.add(backlog, options.onEvent);
       const view: PlaygroundSubscription = Object.freeze({
-        close: async () => this.#closeSubscription(record, subscription),
+        close: async () => {
+          await record.queue.run(async () => record.subscribers.deactivate(subscription));
+          await record.subscribers.waitFor(subscription);
+        },
         get closed(): boolean { return subscription.closed; },
       });
       return view;
@@ -599,11 +584,11 @@ export class PlaygroundService {
         }
         await this.#commitState(record, 'closed', record.outcome);
       }
-      return [...record.subscribers];
+      return record.subscribers.entries();
     });
-    await this.#drainSubscriptions(record, subscriptions);
+    await record.subscribers.drain(subscriptions);
     await record.queue.run(async () => {
-      for (const subscription of subscriptions) this.#deactivateSubscription(record, subscription);
+      for (const subscription of subscriptions) record.subscribers.deactivate(subscription);
       await this.#persistSession(record);
     });
     if (record.ownerToken !== undefined) {
@@ -730,7 +715,7 @@ export class PlaygroundService {
   }
 
   async #completeFinalization(record: SessionRecord): Promise<PlaygroundSession> {
-    await this.#drainSubscriptions(record);
+    await record.subscribers.drain();
     return record.queue.run(async () => {
       await this.#persistSession(record);
       return snapshotSession(record);
@@ -1311,18 +1296,6 @@ export class PlaygroundService {
     return Object.freeze(events);
   }
 
-  #publish(record: SessionRecord, event: PlaygroundTraceEvent): void {
-    for (const subscription of [...record.subscribers]) {
-      if (!subscription.active) continue;
-      if (subscription.queue.length >= this.#maxSubscriberQueue) {
-        this.#deactivateSubscription(record, subscription);
-        continue;
-      }
-      subscription.queue.push(event);
-      this.#drainSubscription(record, subscription);
-    }
-  }
-
   /** The event has reached its fsync boundary before this observation is emitted. */
   #logDurableAppend(record: SessionRecord, event: PlaygroundTraceEvent): void {
     try {
@@ -1341,56 +1314,4 @@ export class PlaygroundService {
     } catch { /* Durable playground behavior is independent of Dev Logs. */ }
   }
 
-  #drainSubscription(record: SessionRecord, subscription: SubscriptionRecord): void {
-    if (!subscription.active || subscription.draining) return;
-    subscription.draining = true;
-    subscription.delivery = (async () => {
-      try {
-        while (subscription.active && subscription.queue.length > 0) {
-          const event = subscription.queue.shift()!;
-          try {
-            await subscription.onEvent(snapshotEvent(event));
-          } catch (error) {
-            this.#recordCleanupFailure(record, error);
-            this.#deactivateSubscription(record, subscription);
-          }
-        }
-      } finally {
-        subscription.draining = false;
-        if (subscription.active && subscription.queue.length > 0) this.#drainSubscription(record, subscription);
-      }
-    })();
-    void subscription.delivery.catch((error: unknown) => {
-      this.#recordCleanupFailure(record, error);
-      this.#deactivateSubscription(record, subscription);
-    });
-  }
-
-  async #drainSubscriptions(record: SessionRecord, subscriptions = [...record.subscribers]): Promise<void> {
-    for (const subscription of subscriptions) this.#drainSubscription(record, subscription);
-    const settled = await Promise.allSettled(subscriptions.map(async (subscription) => {
-      await subscription.delivery;
-    }));
-    for (const result of settled) {
-      if (result.status === 'rejected') this.#recordCleanupFailure(record, result.reason);
-    }
-  }
-
-  async #closeSubscription(record: SessionRecord, subscription: SubscriptionRecord): Promise<void> {
-    await record.queue.run(async () => {
-      this.#deactivateSubscription(record, subscription);
-    });
-    await subscription.delivery;
-  }
-
-  #deactivateSubscription(record: SessionRecord, subscription: SubscriptionRecord): void {
-    subscription.active = false;
-    subscription.closed = true;
-    subscription.queue.length = 0;
-    record.subscribers.delete(subscription);
-  }
-
-  #recordCleanupFailure(record: SessionRecord, error: unknown): void {
-    record.cleanupFailures.push(Object.freeze({ message: asErrorMessage(error), operation: 'subscriber' }));
-  }
 }
