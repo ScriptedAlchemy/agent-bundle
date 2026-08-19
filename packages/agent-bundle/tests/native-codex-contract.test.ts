@@ -305,7 +305,7 @@ it('times out a slow Codex step and bounds oversized process output', async () =
     await mkdir(executableDirectory, { recursive: true });
     await mkdir(normalCodexHome, { recursive: true });
     await writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"state"}\n', { mode: 0o600 });
-    await writeFile(executable, `#!${process.execPath}\nconst args = process.argv.slice(2);\nconst mode = process.env.AGENT_BUNDLE_CODEX_PROCESS_TEST_MODE;\nif (args[0] === '--version') process.stdout.write('codex-cli 0.147.0\\n');\nelse if (args[0] === 'plugin' && args[1] === 'list') process.stdout.write('[{\\"name\\":\\"agent-bundle-codex-smoke\\"}]\\n');\nelse if (args[0] === 'exec' && mode === 'slow') { process.on('SIGTERM', () => undefined); setTimeout(() => process.exit(0), 120); }\nelse if (args[0] === 'exec' && mode === 'oversized') process.stdout.write('x'.repeat(1024));\nelse if (args[0] === 'exec') process.stdout.write('{\\"type\\":\\"turn.completed\\"}\\n');\n`);
+    await writeFile(executable, `#!${process.execPath}\nconst args = process.argv.slice(2);\nconst mode = process.env.AGENT_BUNDLE_CODEX_PROCESS_TEST_MODE;\nif (args[0] === '--version') process.stdout.write('codex-cli 0.147.0\\n');\nelse if (args[0] === 'plugin' && args[1] === 'list') process.stdout.write('[{\\"name\\":\\"agent-bundle-codex-smoke\\"}]\\n');\nelse if (args[0] === 'exec' && mode === 'slow') { process.on('SIGTERM', () => undefined); setTimeout(() => process.exit(0), 10_000); }\nelse if (args[0] === 'exec' && mode === 'oversized') process.stdout.write('x'.repeat(1024));\nelse if (args[0] === 'exec') process.stdout.write('{\\"type\\":\\"turn.completed\\"}\\n');\n`);
     await chmod(executable, 0o755);
 
     for (const [mode, code] of [
@@ -322,7 +322,7 @@ it('times out a slow Codex step and bounds oversized process output', async () =
         fixtureDirectory: new URL('workspace/', fixtureRoot).pathname,
         initializeFixture: async () => undefined,
         normalCodexHome,
-        processLimits: { killGraceMs: 10, maxOutputBytes: 128, timeoutMs: 75 },
+        processLimits: { killGraceMs: 50, maxOutputBytes: 128, timeoutMs: 1_000 },
         temporaryDirectoryParent: join(root, `temporary-homes-${mode}`),
       });
 
