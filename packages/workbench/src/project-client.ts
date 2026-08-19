@@ -377,10 +377,27 @@ export class ProjectClient {
       snapshot = await this.#foreground.sessionSnapshot();
       this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connecting' });
     } catch (error) {
-      throw projectError(error);
+      const reason = projectError(error);
+      if (!this.#closed) {
+        this.#setConnection({ state: 'unavailable' });
+        this.#reportError(reason);
+        this.#startRecovery(this.#eventSourceVersion);
+      }
+      throw reason;
     }
     if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
-    const status = await this.refresh();
+    let status: ProjectStatus;
+    try {
+      status = await this.refresh();
+    } catch (error) {
+      const reason = projectError(error);
+      if (!this.#closed) {
+        this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'unavailable' });
+        this.#reportError(reason);
+        this.#startRecovery(this.#eventSourceVersion);
+      }
+      throw reason;
+    }
     if (this.#closed) return status;
     const eventSource = this.#events('/api/project/events');
     if (this.#closed) {
@@ -501,15 +518,22 @@ export class ProjectClient {
   }
 
   async #refreshRecoveredSource(version: number): Promise<void> {
-    if (this.#closed || version !== this.#eventSourceVersion || this.#eventSource === undefined) return;
+    const source = this.#eventSource;
+    if (this.#closed || version !== this.#eventSourceVersion || source === undefined) return;
     try {
       const status = await this.#readStatus();
-      if (this.#closed || version !== this.#eventSourceVersion || this.#eventSource === undefined) return;
+      if (this.#closed || version !== this.#eventSourceVersion || source !== this.#eventSource) return;
       this.#listener?.(status);
       const snapshot = await this.#foreground.sessionSnapshot();
       if (version === this.#eventSourceVersion) this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connected' });
     } catch (error) {
-      if (version === this.#eventSourceVersion) this.#reportError(error);
+      if (version !== this.#eventSourceVersion || source !== this.#eventSource) return;
+      this.#statusGeneration += 1;
+      this.#eventSource = undefined;
+      source.close();
+      this.#setConnection({ ...this.#connection, state: 'unavailable' });
+      this.#reportError(error);
+      this.#startRecovery(version);
     }
   }
 

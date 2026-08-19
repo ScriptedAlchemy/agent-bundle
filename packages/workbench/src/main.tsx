@@ -821,7 +821,6 @@ const Workbench = () => {
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const [connectionError, setConnectionError] = useState<string>();
   const [connection, setConnection] = useState<ProjectConnectionState>({ state: 'connecting' });
-  const [error, setError] = useState<string>();
   if (foreground.current === undefined) foreground.current = new ForegroundRouteClient();
   if (mcpRoutes.current === undefined) mcpRoutes.current = new WorkbenchMcpRouteClient({ foreground: foreground.current });
 
@@ -1220,7 +1219,7 @@ const Workbench = () => {
       },
       (event) => { runtimeEvents.receive(event); },
     ).catch((reason: unknown) => {
-      if (mounted) setError(errorMessage(reason));
+      if (mounted) setConnectionError(errorMessage(reason));
     });
     return () => {
       mounted = false;
@@ -1379,7 +1378,7 @@ const Workbench = () => {
       : <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />);
   }
   if (connectionGate !== undefined) return connectionGate;
-  return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}{runtimeError === undefined ? undefined : <p className="runtime-capability-error">Runtime capability issue: {runtimeError}</p>}</main>;
+  return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{runtimeError === undefined ? undefined : <p className="runtime-capability-error">Runtime capability issue: {runtimeError}</p>}</main>;
 };
 
 createRoot(document.getElementById('root')!).render(<Workbench />);

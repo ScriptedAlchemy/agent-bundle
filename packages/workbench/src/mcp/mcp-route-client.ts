@@ -465,7 +465,7 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
     const headers = new Headers(init.headers);
     headers.set('x-agent-bundle-session', session.token);
     const response = await this.#fetch(route, { ...init, headers });
-    if (!this.#isAuthenticationCurrent(authentication)) {
+    if (!this.#isResponseAuthorityCurrent(authentication, session)) {
       throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
     }
     return response;
@@ -524,6 +524,15 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
 
   #isAuthenticationCurrent(authentication: ForegroundAuthentication): boolean {
     return this.#authentication === authentication && this.#authenticationGeneration === authentication.generation;
+  }
+
+  #isResponseAuthorityCurrent(
+    authentication: ForegroundAuthentication,
+    session: ForegroundSessionSnapshot,
+  ): boolean {
+    return this.#authenticationGeneration === authentication.generation &&
+      this.#snapshot?.generation === session.generation &&
+      this.#snapshot.instanceId === session.instanceId;
   }
 
   async #bootstrap(

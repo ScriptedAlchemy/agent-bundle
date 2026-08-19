@@ -379,6 +379,92 @@ it('seeds a same-instance replacement event stream from the last acknowledged cu
   client.close();
 });
 
+it('reports and retries a failed initial foreground bootstrap', async () => {
+  const stream = new RecordingEventSource();
+  const connections: string[] = [];
+  const errors: unknown[] = [];
+  let sessionRequests = 0;
+  let streams = 0;
+  const client = new ProjectClient({
+    events: () => {
+      streams += 1;
+      return stream;
+    },
+    fetch: async (input) => {
+      if (String(input) === '/api/project/session') {
+        sessionRequests += 1;
+        return sessionRequests === 1
+          ? Response.json({ code: 'AB8019', message: 'Foreground unavailable.' }, { status: 503 })
+          : Response.json(foregroundSession);
+      }
+      return Response.json({ status: status() });
+    },
+    retryDelay: async () => undefined,
+  });
+  client.onConnection((connection) => connections.push(`${connection.state}:${connection.instanceId ?? 'none'}`));
+
+  await expect(client.connect(() => undefined, (reason) => errors.push(reason))).rejects.toBeInstanceOf(ProjectClientError);
+  await flushEvents();
+  await flushEvents();
+
+  expect(errors).toHaveLength(1);
+  expect(connections).toContain('unavailable:none');
+  expect(sessionRequests).toBe(2);
+  expect(streams).toBe(1);
+  stream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+  expect(connections.at(-1)).toBe('connected:foreground-instance-a');
+  client.close();
+});
+
+it('retries recovery when the replacement stream status probe fails', async () => {
+  const firstStream = new RecordingEventSource();
+  const secondStream = new RecordingEventSource();
+  const thirdStream = new RecordingEventSource();
+  const streams = [firstStream, secondStream, thirdStream];
+  const connections: string[] = [];
+  const errors: unknown[] = [];
+  let sessionRequests = 0;
+  let statusRequests = 0;
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      if (String(input) === '/api/project/session') {
+        sessionRequests += 1;
+        return Response.json({ ...foregroundSession, token: `foreground-token-${String(sessionRequests)}` });
+      }
+      statusRequests += 1;
+      return statusRequests === 3
+        ? Response.json({ code: 'AB8019', message: 'Status unavailable.' }, { status: 503 })
+        : Response.json({ status: status() });
+    },
+  });
+  const client = new ProjectClient({
+    events: () => streams.shift()!,
+    foreground,
+    retryDelay: async () => undefined,
+  });
+  client.onConnection((connection) => connections.push(`${connection.state}:${connection.instanceId ?? 'none'}`));
+
+  await client.connect(() => undefined, (reason) => errors.push(reason));
+  firstStream.emit('error', { data: '', lastEventId: '' });
+  await flushEvents();
+  await flushEvents();
+  secondStream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+  await flushEvents();
+
+  expect(secondStream.closed).toBe(true);
+  expect(streams).toHaveLength(0);
+  expect(connections).toContain('unavailable:foreground-instance-a');
+  expect(connections.at(-1)).toBe('connecting:foreground-instance-a');
+  expect(errors).toHaveLength(2);
+  thirdStream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+  expect(connections.at(-1)).toBe('connected:foreground-instance-a');
+  expect(statusRequests).toBe(5);
+  client.close();
+});
+
 it('delivers synchronous runtime events once in FIFO order and refreshes after an unexplained sequence gap', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];

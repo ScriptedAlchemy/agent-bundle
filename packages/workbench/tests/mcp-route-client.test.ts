@@ -31,6 +31,41 @@ it('uses refreshed authority credentials for later MCP requests without reconstr
   expect(requestTokens).toEqual(['token-a', 'token-b']);
 });
 
+it('keeps an admitted request current across a same-instance foreground refresh', async () => {
+  let bootstraps = 0;
+  let resolveRequest!: (response: Response) => void;
+  let requestDispatched = false;
+  const heldRequest = new Promise<Response>((resolve) => { resolveRequest = resolve; });
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      if (String(input) === '/api/project/session') {
+        bootstraps += 1;
+        return json({
+          cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+          instanceId: 'foreground-instance-a',
+          origin: 'http://127.0.0.1:4100',
+          token: `token-${String(bootstraps)}`,
+        });
+      }
+      requestDispatched = true;
+      return heldRequest;
+    },
+  });
+  await foreground.sessionSnapshot();
+
+  const request = foreground.protectedRequest('/api/runtime/runs', { method: 'POST' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(requestDispatched).toBe(true);
+  await expect(foreground.refreshSession()).resolves.toMatchObject({
+    generation: 0,
+    instanceId: 'foreground-instance-a',
+    token: 'token-2',
+  });
+  resolveRequest(json({ runId: 'runtime-run-1' }));
+
+  await expect(request).resolves.toMatchObject({ ok: true, status: 200 });
+});
+
 const invalidSessionBodies: readonly [string, unknown][] = [
   ['a legacy two-field payload', { origin: 'http://127.0.0.1:4100', token: 'foreground-secret' }],
   ['a versioned payload', { cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', schemaVersion: 1, token: 'foreground-secret' }],
