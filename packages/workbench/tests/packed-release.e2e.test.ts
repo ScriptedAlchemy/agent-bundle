@@ -211,6 +211,382 @@ const descendantProcessIds = async (parentProcessId: number): Promise<readonly n
 const isAppRoute = (url: URL): boolean =>
   url.pathname.startsWith('/api/mcp/apps/') || /^\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(url.pathname);
 
+interface NetworkLedgerEntry {
+  readonly at: number;
+  readonly completedAt?: number;
+  readonly error?: string;
+  readonly method: string;
+  readonly origin: string;
+  readonly path: string;
+  readonly respondedAt?: number;
+  readonly status?: number;
+  readonly url: string;
+}
+
+interface ConsoleErrorRecord {
+  readonly at: number;
+  readonly text: string;
+  readonly url: string;
+}
+
+interface OutageLedger {
+  readonly consoleErrors: readonly ConsoleErrorRecord[];
+  readonly oldSessionId: string;
+  readonly origin: string;
+  readonly outageStartedAt: number;
+  readonly postRecovery?: Readonly<{
+    readonly freshMcpSession: Readonly<{ readonly closeCompletedAt: number; readonly closeStartedAt: number; readonly id: string; readonly openedAt: number }>;
+    readonly navigation: readonly Readonly<{ readonly leftAt: number; readonly openedAt: number; readonly url: string }>[];
+  }>;
+  readonly recoveredAt: number;
+  readonly requests: readonly NetworkLedgerEntry[];
+}
+
+const ledgerRequest = (input: Omit<NetworkLedgerEntry, 'origin' | 'url'> & Readonly<{ readonly origin?: string; readonly url?: string }>): NetworkLedgerEntry => {
+  const origin = input.origin ?? 'http://127.0.0.1:4100';
+  return Object.freeze({ ...input, origin, url: input.url ?? `${origin}${input.path}` });
+};
+
+const outageLedgerFixture = (): OutageLedger => {
+  const origin = 'http://127.0.0.1:4100';
+  const oldSessionId = 'old-browser-mcp-session';
+  const oldSessionPath = `/api/mcp/sessions/${encodeURIComponent(oldSessionId)}`;
+  const failure = (at: number, method: string, path: string, error: string): NetworkLedgerEntry =>
+    ledgerRequest({ at, completedAt: at + 1, error, method, path });
+  return Object.freeze({
+    consoleErrors: Object.freeze([
+      Object.freeze({ at: 1_003, text: 'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING', url: `${origin}/api/project/events` }),
+      Object.freeze({ at: 1_005, text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED', url: `${origin}${oldSessionPath}/stream` }),
+      Object.freeze({ at: 1_012, text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED', url: `${origin}/api/project/session` }),
+      Object.freeze({ at: 1_016, text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED', url: `${origin}${oldSessionPath}` }),
+    ]),
+    oldSessionId,
+    origin,
+    outageStartedAt: 1_000,
+    recoveredAt: 1_301,
+    requests: Object.freeze([
+      failure(1_001, 'GET', '/api/project/events', 'net::ERR_INCOMPLETE_CHUNKED_ENCODING'),
+      failure(1_003, 'GET', `${oldSessionPath}/stream`, 'net::ERR_CONNECTION_REFUSED'),
+      failure(1_010, 'GET', '/api/project/session', 'net::ERR_CONNECTION_REFUSED'),
+      ledgerRequest({ at: 1_300, completedAt: 1_301, method: 'GET', path: '/api/project/session', status: 200 }),
+      failure(1_014, 'DELETE', oldSessionPath, 'net::ERR_CONNECTION_REFUSED'),
+    ]),
+  });
+};
+
+const postRecoveryCancellationFixture = (): OutageLedger => {
+  const base = outageLedgerFixture();
+  const freshMcpSessionId = 'fresh-browser-mcp-session';
+  const freshMcpStreamPath = `/api/mcp/sessions/${encodeURIComponent(freshMcpSessionId)}/stream`;
+  const hooksUrl = `${base.origin}/api/hooks?epochId=recovered-epoch`;
+  return Object.freeze({
+    ...base,
+    postRecovery: Object.freeze({
+      freshMcpSession: Object.freeze({ closeCompletedAt: 1_321, closeStartedAt: 1_320, id: freshMcpSessionId, openedAt: 1_310 }),
+      navigation: Object.freeze([
+        Object.freeze({ leftAt: 1_340, openedAt: 1_330, url: hooksUrl }),
+      ]),
+    }),
+    requests: Object.freeze([
+      ...base.requests,
+      ledgerRequest({ at: 1_310, completedAt: 1_321, error: 'net::ERR_ABORTED', method: 'GET', path: freshMcpStreamPath, respondedAt: 1_311, status: 200, url: `${base.origin}${freshMcpStreamPath}?after=0` }),
+      ledgerRequest({ at: 1_330, completedAt: 1_341, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/hooks', url: hooksUrl }),
+    ]),
+  });
+};
+
+/** Models the old `some() + count` check so its false positives stay documented. */
+const legacyOutageLedgerPasses = (ledger: OutageLedger): boolean => {
+  const failures = ledger.requests.filter((request) => request.error !== undefined);
+  const consoleBackedFailures = failures.filter((request) => request.error !== 'net::ERR_ABORTED');
+  const matchedConsoleErrors = ledger.consoleErrors.filter((consoleError) => failures.some((failure) =>
+    failure.error !== 'net::ERR_ABORTED' && consoleError.text.includes(failure.error ?? '') &&
+    new URL(consoleError.url).pathname === failure.path,
+  ));
+  const oldSessionPath = `/api/mcp/sessions/${encodeURIComponent(ledger.oldSessionId)}`;
+  const oldSessionDeletes = failures.filter((failure) => failure.method === 'DELETE' && failure.path === oldSessionPath);
+  return matchedConsoleErrors.length === consoleBackedFailures.length && oldSessionDeletes.length <= 1;
+};
+
+type OutagePathClass = 'old-mcp-session' | 'old-mcp-stream' | 'project-events' | 'project-session';
+
+const outagePathClass = (path: string, oldSessionPath: string): OutagePathClass | undefined => {
+  if (path === '/api/project/events') return 'project-events';
+  if (path === '/api/project/session') return 'project-session';
+  if (path === oldSessionPath) return 'old-mcp-session';
+  if (path === `${oldSessionPath}/stream`) return 'old-mcp-stream';
+  return undefined;
+};
+
+const netCode = (text: string): string | undefined => /\b(net::ERR_[A-Z_]+)\b/u.exec(text)?.[1];
+
+const ledgerFailureAt = (request: NetworkLedgerEntry): number => request.completedAt ?? request.at;
+
+type KnownStreamClass = 'evals' | 'logs' | 'playground';
+
+const knownStreamClass = (path: string): KnownStreamClass | undefined => {
+  const segments = path.split('/').filter((segment) => segment.length > 0);
+  if (path === '/api/logs/stream') return 'logs';
+  if (segments.length !== 5 || segments[0] !== 'api' || segments[3]!.length === 0 || segments[4] !== 'stream') return undefined;
+  if (segments[1] === 'playground' && segments[2] === 'sessions') return 'playground';
+  return segments[1] === 'evals' && segments[2] === 'runs' ? 'evals' : undefined;
+};
+
+const isKnownPreOutageStreamCancellation = (request: NetworkLedgerEntry): boolean =>
+  request.error === 'net::ERR_ABORTED' && request.method === 'GET' && (
+    knownStreamClass(request.path) !== undefined ||
+    (request.path === '/api/logs/replay' && request.status !== undefined && request.status >= 200 && request.status < 300)
+  );
+
+const hasCanonicalAfterCursor = (url: URL): boolean => {
+  const values = url.searchParams.getAll('after');
+  if (url.searchParams.size !== 1 || values.length !== 1) return false;
+  const after = values[0]!;
+  const parsed = Number(after);
+  return Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === after;
+};
+
+const assertLedger: (condition: unknown, message: string) => asserts condition = (condition, message) => {
+  if (!condition) throw new Error(`Foreground outage ledger rejected: ${message}`);
+};
+
+/** Exhaustively validates only the one captured foreground generation and its recovery. */
+const validateOutageLedger = (ledger: OutageLedger): void => {
+  const oldSessionPath = `/api/mcp/sessions/${encodeURIComponent(ledger.oldSessionId)}`;
+  const sameOriginRequests = ledger.requests.filter((request) => request.origin === ledger.origin);
+  const requestFailed = sameOriginRequests.filter((request) => request.error !== undefined);
+  const preOutageFailures = requestFailed.filter((request) =>
+    ledgerFailureAt(request) < ledger.outageStartedAt && !isKnownPreOutageStreamCancellation(request),
+  );
+  assertLedger(preOutageFailures.length === 0, `unexpected pre-outage failures: ${JSON.stringify(preOutageFailures)}`);
+  const postRecoveryFailures = ledger.requests.filter((request) => request.error !== undefined && ledgerFailureAt(request) >= ledger.recoveredAt);
+  if (ledger.postRecovery === undefined) {
+    assertLedger(postRecoveryFailures.length === 0, `post-recovery failures: ${JSON.stringify(postRecoveryFailures)}`);
+  } else {
+    const freshMcpSession = ledger.postRecovery.freshMcpSession;
+    const freshMcpStreamPath = `/api/mcp/sessions/${encodeURIComponent(freshMcpSession.id)}/stream`;
+    const freshMcpStreamFailures = postRecoveryFailures.filter((request) => request.path === freshMcpStreamPath);
+    assertLedger(freshMcpStreamFailures.length >= 1 && freshMcpStreamFailures.length <= 2,
+      `fresh B MCP stream did not terminate exactly once or twice: ${JSON.stringify(freshMcpStreamFailures)}`);
+    for (const failure of freshMcpStreamFailures) {
+      let url: URL;
+      try { url = new URL(failure.url); }
+      catch { throw new Error(`Foreground outage ledger rejected: fresh B MCP stream URL is invalid: ${JSON.stringify(failure)}`); }
+      assertLedger(
+        failure.origin === ledger.origin && url.origin === ledger.origin && url.pathname === freshMcpStreamPath && hasCanonicalAfterCursor(url) &&
+        failure.method === 'GET' && failure.error === 'net::ERR_ABORTED' && failure.at >= freshMcpSession.openedAt &&
+        failure.respondedAt !== undefined && failure.respondedAt <= ledgerFailureAt(failure) &&
+        failure.status !== undefined && failure.status >= 200 && failure.status < 300 &&
+        ledgerFailureAt(failure) >= freshMcpSession.closeStartedAt && ledgerFailureAt(failure) <= freshMcpSession.closeCompletedAt,
+        `fresh B MCP stream cancellation is not action-induced: ${JSON.stringify(failure)}`,
+      );
+    }
+    const navigationFailures: NetworkLedgerEntry[] = [];
+    for (const navigation of ledger.postRecovery.navigation) {
+      const failures = postRecoveryFailures.filter((request) =>
+        request.url === navigation.url && request.at >= navigation.openedAt && request.at < navigation.leftAt && ledgerFailureAt(request) >= navigation.leftAt,
+      );
+      assertLedger(failures.length <= 1, `multiple action-induced navigation cancellations: ${JSON.stringify({ failures, navigation })}`);
+      for (const failure of failures) {
+        assertLedger(
+          failure.origin === ledger.origin && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED' &&
+          failure.respondedAt === undefined && failure.status === undefined,
+          `navigation cancellation did not remain a pending exact request: ${JSON.stringify({ failure, navigation })}`,
+        );
+      }
+      navigationFailures.push(...failures);
+    }
+    const recognizedPostRecoveryFailures = [...freshMcpStreamFailures, ...navigationFailures];
+    assertLedger(recognizedPostRecoveryFailures.length === postRecoveryFailures.length,
+      `unknown post-recovery failure: ${JSON.stringify(postRecoveryFailures)}`);
+    const postRecoveryConsoleErrors = ledger.consoleErrors.filter((consoleError) => consoleError.at >= ledger.recoveredAt);
+    assertLedger(postRecoveryConsoleErrors.length === 0, `post-recovery console errors: ${JSON.stringify(postRecoveryConsoleErrors)}`);
+  }
+  const outageFailures = requestFailed.filter((request) => {
+    const at = ledgerFailureAt(request);
+    return at >= ledger.outageStartedAt && at < ledger.recoveredAt;
+  });
+
+  const projectEvents = outageFailures.filter((request) => outagePathClass(request.path, oldSessionPath) === 'project-events');
+  assertLedger(projectEvents.length === 1 && projectEvents[0]?.method === 'GET' && projectEvents[0]?.error === 'net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+    `project stream failures: ${JSON.stringify(projectEvents)}`);
+  const oldStreams = outageFailures.filter((request) => outagePathClass(request.path, oldSessionPath) === 'old-mcp-stream');
+  assertLedger(oldStreams.length >= 1, 'the old browser MCP stream has no termination evidence');
+  assertLedger(oldStreams.filter((request) => request.method === 'GET' && request.error === 'net::ERR_CONNECTION_REFUSED').length <= 1,
+    `old MCP stream has duplicate refused failures: ${JSON.stringify(oldStreams)}`);
+  assertLedger(oldStreams.filter((request) => request.method === 'GET' && request.error === 'net::ERR_ABORTED').length <= 2,
+    `old MCP stream has too many abort failures: ${JSON.stringify(oldStreams)}`);
+  assertLedger(oldStreams.every((request) => request.method === 'GET' && (request.error === 'net::ERR_CONNECTION_REFUSED' || request.error === 'net::ERR_ABORTED')),
+    `old MCP stream has an unrecognized failure: ${JSON.stringify(oldStreams)}`);
+
+  const streamClasses: readonly KnownStreamClass[] = ['playground', 'logs', 'evals'];
+  for (const streamClass of streamClasses) {
+    const activeAtOutage = sameOriginRequests.filter((request) =>
+      request.at < ledger.outageStartedAt &&
+      (request.completedAt === undefined || request.completedAt >= ledger.outageStartedAt) &&
+      knownStreamClass(request.path) === streamClass,
+    );
+    assertLedger(activeAtOutage.length <= 1, `multiple active ${streamClass} streams at outage start: ${JSON.stringify(activeAtOutage)}`);
+    const terminations = outageFailures.filter((request) => knownStreamClass(request.path) === streamClass);
+    assertLedger(terminations.length <= 1 && terminations.every((request) =>
+      activeAtOutage.includes(request) && request.method === 'GET' && request.error === 'net::ERR_ABORTED',
+    ), `unexpected ${streamClass} stream termination: ${JSON.stringify(terminations)}`);
+  }
+
+  const oldSessionDeletes = sameOriginRequests.filter((request) => request.method === 'DELETE' && request.path === oldSessionPath);
+  assertLedger(oldSessionDeletes.length === 1, `expected exactly one old-session DELETE attempt: ${JSON.stringify(oldSessionDeletes)}`);
+  const oldSessionDelete = oldSessionDeletes[0]!;
+  const deleteSucceeded = oldSessionDelete.status !== undefined && oldSessionDelete.status >= 200 && oldSessionDelete.status < 300;
+  const deleteRefused = oldSessionDelete.error === 'net::ERR_CONNECTION_REFUSED';
+  assertLedger((deleteSucceeded ? 1 : 0) + (deleteRefused ? 1 : 0) === 1 && oldSessionDelete.completedAt !== undefined,
+    `old-session DELETE must succeed or fail exactly with ERR_CONNECTION_REFUSED: ${JSON.stringify(oldSessionDelete)}`);
+
+  const projectSessionAttempts = sameOriginRequests.filter((request) =>
+    request.method === 'GET' && request.path === '/api/project/session' && request.at >= ledger.outageStartedAt,
+  ).sort((left, right) => left.at - right.at);
+  const successfulSessions = projectSessionAttempts.filter((request) =>
+    request.status !== undefined && request.status >= 200 && request.status < 300,
+  );
+  assertLedger(successfulSessions.length >= 1, `the browser did not complete a B-generation project session: ${JSON.stringify(projectSessionAttempts)}`);
+  const firstSuccessfulBSession = successfulSessions[0]!;
+  assertLedger(firstSuccessfulBSession.completedAt === ledger.recoveredAt,
+    `recoveredAt does not identify the first successful B session: ${JSON.stringify(firstSuccessfulBSession)}`);
+  const retryAttempts = projectSessionAttempts.filter((request) => request.at <= firstSuccessfulBSession.at);
+  assertLedger(retryAttempts.length >= 1, 'the outage did not issue a project/session retry');
+  assertLedger(retryAttempts.every((request) => request.completedAt !== undefined && (request.error === undefined) !== (request.status === undefined)),
+    `project/session retry is missing or has multiple terminal states: ${JSON.stringify(retryAttempts)}`);
+  assertLedger(retryAttempts.slice(0, -1).every((request) => request.error === 'net::ERR_CONNECTION_REFUSED'),
+    `project/session retry had a non-refused failure: ${JSON.stringify(retryAttempts)}`);
+  assertLedger(retryAttempts.at(-1) === firstSuccessfulBSession && firstSuccessfulBSession.status === 200,
+    `project/session recovery did not finish with the first successful B session: ${JSON.stringify(retryAttempts)}`);
+  for (const [index, attempt] of retryAttempts.entries()) {
+    if (index > 0) assertLedger(attempt.at - retryAttempts[index - 1]!.at >= 225,
+      `project/session retries began too quickly: ${JSON.stringify(retryAttempts)}`);
+  }
+  const retryTimeline = retryAttempts.flatMap((request) => [
+    Object.freeze({ at: request.at, delta: 1 }),
+    Object.freeze({ at: request.completedAt!, delta: -1 }),
+  ]).sort((left, right) => left.at - right.at || left.delta - right.delta);
+  let inFlight = 0;
+  let maxInFlight = 0;
+  for (const event of retryTimeline) {
+    inFlight += event.delta;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+  }
+  assertLedger(maxInFlight <= 1 && inFlight === 0, `project/session retry concurrency exceeded one: ${JSON.stringify(retryAttempts)}`);
+  const retryUpperBound = 2 + Math.ceil((ledger.recoveredAt - ledger.outageStartedAt) / 250);
+  assertLedger(retryAttempts.length <= retryUpperBound,
+    `project/session retries exceeded the bounded cadence (${String(retryUpperBound)}): ${JSON.stringify(retryAttempts)}`);
+
+  for (const failure of outageFailures) {
+    const pathClass = outagePathClass(failure.path, oldSessionPath);
+    const recognized =
+      (pathClass === 'project-events' && failure.method === 'GET' && failure.error === 'net::ERR_INCOMPLETE_CHUNKED_ENCODING') ||
+      (pathClass === 'project-session' && failure.method === 'GET' && failure.error === 'net::ERR_CONNECTION_REFUSED') ||
+      (pathClass === 'old-mcp-stream' && failure.method === 'GET' && (failure.error === 'net::ERR_CONNECTION_REFUSED' || failure.error === 'net::ERR_ABORTED')) ||
+      (pathClass === 'old-mcp-session' && failure.method === 'DELETE' && failure.error === 'net::ERR_CONNECTION_REFUSED') ||
+      (knownStreamClass(failure.path) !== undefined && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED');
+    assertLedger(recognized, `unknown outage failure: ${JSON.stringify(failure)}`);
+  }
+
+  const pendingConsoleBackedFailures = outageFailures.filter((failure) => failure.error !== 'net::ERR_ABORTED').sort((left, right) => ledgerFailureAt(left) - ledgerFailureAt(right));
+  const outageConsoleErrors = ledger.consoleErrors.filter((consoleError) =>
+    consoleError.at >= ledger.outageStartedAt && consoleError.at < ledger.recoveredAt,
+  ).sort((left, right) => left.at - right.at);
+  for (const consoleError of outageConsoleErrors) {
+    let consoleUrl: URL;
+    try { consoleUrl = new URL(consoleError.url); }
+    catch { throw new Error(`Foreground outage ledger rejected: console URL is invalid: ${JSON.stringify(consoleError)}`); }
+    const code = netCode(consoleError.text);
+    const pathClass = outagePathClass(consoleUrl.pathname, oldSessionPath);
+    assertLedger(consoleUrl.origin === ledger.origin && code !== undefined && pathClass !== undefined,
+      `unknown outage console error: ${JSON.stringify(consoleError)}`);
+    const matchingFailureIndex = pendingConsoleBackedFailures.findIndex((failure) =>
+      failure.error === code && outagePathClass(failure.path, oldSessionPath) === pathClass &&
+      Math.abs(ledgerFailureAt(failure) - consoleError.at) <= 1_000,
+    );
+    assertLedger(matchingFailureIndex >= 0, `console error does not uniquely pair with an outage request failure: ${JSON.stringify(consoleError)}`);
+    pendingConsoleBackedFailures.splice(matchingFailureIndex, 1);
+  }
+  assertLedger(pendingConsoleBackedFailures.length === 0,
+    `outage request failures lack a unique paired console error: ${JSON.stringify(pendingConsoleBackedFailures)}`);
+  const nonOutageConsoleErrors = ledger.consoleErrors.filter((consoleError) => !outageConsoleErrors.includes(consoleError));
+  assertLedger(nonOutageConsoleErrors.length === 0, `unknown non-outage console errors: ${JSON.stringify(nonOutageConsoleErrors)}`);
+};
+
+test('outage ledger rejects the legacy duplicate, cross-origin, and missing-cleanup false positives', () => {
+  const valid = outageLedgerFixture();
+  const validPostRecovery = postRecoveryCancellationFixture();
+  const duplicateConsole = Object.freeze({
+    ...valid,
+    consoleErrors: Object.freeze([
+      valid.consoleErrors[0]!,
+      Object.freeze({ ...valid.consoleErrors[0]!, at: 1_004 }),
+      valid.consoleErrors[2]!,
+      valid.consoleErrors[3]!,
+    ]),
+  });
+  const crossOriginConsole = Object.freeze({
+    ...valid,
+    consoleErrors: Object.freeze([
+      Object.freeze({ ...valid.consoleErrors[0]!, url: 'http://127.0.0.2:4100/api/project/events' }),
+      ...valid.consoleErrors.slice(1),
+    ]),
+  });
+  const missingCleanup = Object.freeze({
+    ...valid,
+    consoleErrors: Object.freeze(valid.consoleErrors.slice(0, -1)),
+    requests: Object.freeze(valid.requests.slice(0, -1)),
+  });
+  const unknownPreOutageCancellation = Object.freeze({
+    ...valid,
+    requests: Object.freeze([
+      ledgerRequest({ at: 900, completedAt: 901, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/unknown/stream', status: 200 }),
+      ...valid.requests,
+    ]),
+  });
+  const knownPreOutageLogsReplayCancellation = Object.freeze({
+    ...valid,
+    requests: Object.freeze([
+      ledgerRequest({ at: 900, completedAt: 901, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/logs/replay', status: 200 }),
+      ...valid.requests,
+    ]),
+  });
+  const preStartedOutageStreamTermination = Object.freeze({
+    ...valid,
+    requests: Object.freeze(valid.requests.map((request) =>
+      request.path === '/api/project/events' || request.path.endsWith('/stream')
+        ? ledgerRequest({ ...request, at: 999 })
+        : request,
+    )),
+  });
+  const unknownOutageStreamTermination = Object.freeze({
+    ...valid,
+    requests: Object.freeze([
+      ledgerRequest({ at: 999, completedAt: 1_004, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/unknown/stream' }),
+      ...valid.requests,
+    ]),
+  });
+  const unknownPostRecoveryCancellation = Object.freeze({
+    ...validPostRecovery,
+    requests: Object.freeze([
+      ...validPostRecovery.requests,
+      ledgerRequest({ at: 1_350, completedAt: 1_351, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/unknown/stream' }),
+    ]),
+  });
+  const malformedLedgers = [duplicateConsole, crossOriginConsole, missingCleanup];
+
+  expect(malformedLedgers.map(legacyOutageLedgerPasses)).toEqual([true, true, true]);
+  expect(() => validateOutageLedger(valid)).not.toThrow();
+  expect(() => validateOutageLedger(preStartedOutageStreamTermination)).not.toThrow();
+  expect(() => validateOutageLedger(knownPreOutageLogsReplayCancellation)).not.toThrow();
+  expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
+  for (const malformed of malformedLedgers) expect(() => validateOutageLedger(malformed)).toThrow(/Foreground outage ledger rejected/u);
+  expect(() => validateOutageLedger(unknownPreOutageCancellation)).toThrow(/Foreground outage ledger rejected/u);
+  expect(() => validateOutageLedger(unknownOutageStreamTermination)).toThrow(/Foreground outage ledger rejected/u);
+  expect(() => validateOutageLedger(unknownPostRecoveryCancellation)).toThrow(/Foreground outage ledger rejected/u);
+});
+
 e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }, async ({ page }) => {
   await buildPackage();
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-release-'));
@@ -296,22 +672,38 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       if (productTemporaryRootPrefixes.some((prefix) => root.startsWith(prefix))) productTemporaryRootsBefore.add(root);
     }
     phase = 'browser startup status';
-    const consoleErrorRecords: Array<Readonly<{ at: number; text: string }>> = [];
+    const consoleErrorRecords: ConsoleErrorRecord[] = [];
     const pageErrors: Error[] = [];
     const appRouteRequests: Array<Record<string, unknown>> = [];
     const failedAppRouteRequests: Array<Record<string, unknown>> = [];
-    const foregroundRequestFailures: Array<Readonly<{ at: number; error: string | undefined; method: string; path: string }>> = [];
+    const browserRequests: Array<{
+      at: number;
+      completedAt?: number;
+      error?: string;
+      method: string;
+      origin: string;
+      path: string;
+      respondedAt?: number;
+      status?: number;
+      url: string;
+    }> = [];
+    const browserRequestByPlaywrightRequest = new WeakMap<object, typeof browserRequests[number]>();
     const nativeRequests: Array<Record<string, unknown>> = [];
     let logsReplayResponses = 0;
     page.on('console', (message) => {
       if (message.type() === 'error') {
-        const text = `${message.text()} (${message.location().url})`;
-        consoleErrorRecords.push(Object.freeze({ at: Date.now(), text }));
+        consoleErrorRecords.push(Object.freeze({ at: Date.now(), text: message.text(), url: message.location().url }));
       }
     });
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('response', (response) => {
       const url = new URL(response.url());
+      const tracked = browserRequestByPlaywrightRequest.get(response.request());
+      if (tracked !== undefined) {
+        tracked.respondedAt = Date.now();
+        tracked.completedAt = tracked.respondedAt;
+        tracked.status = response.status();
+      }
       if (url.pathname === '/api/logs/replay') logsReplayResponses += 1;
       if (!isAppRoute(url)) return;
       const request = response.request();
@@ -328,9 +720,11 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
     });
     page.on('requestfailed', (request) => {
       const url = new URL(request.url());
-      if (url.origin === origin) foregroundRequestFailures.push(Object.freeze({
-        at: Date.now(), error: request.failure()?.errorText, method: request.method(), path: url.pathname,
-      }));
+      const tracked = browserRequestByPlaywrightRequest.get(request);
+      if (tracked !== undefined) {
+        tracked.completedAt = Date.now();
+        tracked.error = request.failure()?.errorText;
+      }
       if (!isAppRoute(url)) return;
       failedAppRouteRequests.push(Object.freeze({
         error: request.failure()?.errorText,
@@ -344,7 +738,13 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       }));
     });
     page.on('request', (request) => {
-      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/playground/runs') return;
+      const url = new URL(request.url());
+      const tracked = {
+        at: Date.now(), method: request.method(), origin: url.origin, path: url.pathname, url: request.url(),
+      };
+      browserRequests.push(tracked);
+      browserRequestByPlaywrightRequest.set(request, tracked);
+      if (request.method() !== 'POST' || url.pathname !== '/api/playground/runs') return;
       try {
         const body: unknown = JSON.parse(request.postData() ?? 'null');
         if (
@@ -486,7 +886,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
       await page.locator('#mcp-target').selectOption('portable');
       await page.locator('#mcp-server-name').fill('fixture');
+      const openedOldBrowserMcpSession = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/mcp/sessions` && response.request().method() === 'POST' && response.ok(),
+      );
       await page.getByRole('button', { name: 'Open MCP session' }).click();
+      const oldBrowserMcpSessionResponse = record(await (await openedOldBrowserMcpSession).json(), 'old browser MCP session response');
+      const oldBrowserMcpSessionId = string(record(oldBrowserMcpSessionResponse.session, 'old browser MCP session').id, 'old browser MCP session id');
       await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
       await page.getByRole('button', { name: 'show-dashboard', exact: true }).click();
       await page.getByRole('button', { name: 'Call show-dashboard' }).click();
@@ -913,6 +1318,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect(page.locator('.comparison-matrix table')).toBeVisible({ timeout: browserTimeout });
 
       phase = 'foreground restart/reconnect';
+      const comparisonsHashBeforeRestart = new URL(page.url()).hash;
+      expect(comparisonsHashBeforeRestart).toBe('#comparisons');
       if (child === undefined) throw new Error('The packed dev server child was not created.');
       const stoppedChild = child;
       if (stoppedChild.pid !== undefined) {
@@ -931,63 +1338,68 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       child = startInstalledServer(port);
       await awaitReady(origin, child, () => commandOutput);
       await expect(page.locator('.connection')).toContainText('Foreground server connected', { timeout: browserTimeout });
-      await recoveredBrowserSession;
+      const recoveredBrowserSessionResponse = await recoveredBrowserSession;
+      const recoveredBrowserSessionPayload = record(await recoveredBrowserSessionResponse.json(), 'recovered browser session');
+      const browserGenerationBToken = string(recoveredBrowserSessionPayload.token, 'recovered browser session token');
+      const recoveredBrowserSessionRequest = browserRequestByPlaywrightRequest.get(recoveredBrowserSessionResponse.request());
+      if (recoveredBrowserSessionRequest?.completedAt === undefined) throw new Error('The recovered browser session was not recorded as a completed request.');
+      const recoveredAt = recoveredBrowserSessionRequest.completedAt;
+      expect(new URL(page.url()).hash).toBe(comparisonsHashBeforeRestart);
+      await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
       const rebuiltWithRecoveredSession = page.waitForResponse((response) =>
         response.url() === `${origin}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
       );
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
       await page.getByRole('button', { name: 'Rebuild' }).click();
-      await rebuiltWithRecoveredSession;
-      const recoveredAt = Date.now();
+      const rebuiltWithRecoveredSessionResponse = await rebuiltWithRecoveredSession;
+      expect(rebuiltWithRecoveredSessionResponse.request().headers()['x-agent-bundle-session']).toBe(browserGenerationBToken);
       phase = 'foreground restart/reconnect Agent API recovery';
       const recoveredStatus = await client.callTool({ name: 'project_status' });
-      expect(record(record(recoveredStatus.structuredContent, 'recovered project status').status, 'recovered project status DTO').artifact)
-        .toEqual(expect.objectContaining({ state: 'active' }));
-      await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 1_000); });
-      const outageFailures = foregroundRequestFailures.filter((failure) => failure.at >= outageStartedAt && failure.at < recoveredAt);
-      const postRecoveryFailures = foregroundRequestFailures.filter((failure) => failure.at >= recoveredAt);
-      expect(postRecoveryFailures).toEqual([]);
-      const expectedProjectStreamFailure = outageFailures.filter((failure) =>
-        failure.method === 'GET' && failure.path === '/api/project/events' && failure.error === 'net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+      const recoveredEpochStatus = activeEpochFrom(recoveredStatus, 'recovered project status');
+      expect(recoveredEpochStatus.artifactStatus).toEqual(expect.objectContaining({ state: 'active' }));
+      const recoveredEpochId = recoveredEpochStatus.epochId;
+
+      phase = 'foreground restart/reconnect fresh B browser MCP session';
+      await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeVisible({ timeout: browserTimeout });
+      await page.locator('#mcp-epoch').selectOption(recoveredEpochId);
+      await expect(page.locator('#mcp-epoch')).toHaveValue(recoveredEpochId);
+      await page.locator('#mcp-target').selectOption('portable');
+      await page.locator('#mcp-server-name').fill('fixture');
+      const openedBrowserMcpSessionB = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/mcp/sessions` && response.request().method() === 'POST' && response.ok(),
       );
-      expect(expectedProjectStreamFailure).toHaveLength(1);
-      const expectedMcpStreamFailures = outageFailures.filter((failure) =>
-        failure.method === 'GET' && /^\/api\/mcp\/sessions\/[^/]+\/stream$/u.test(failure.path) && failure.error === 'net::ERR_CONNECTION_REFUSED',
+      await page.getByRole('button', { name: 'Open MCP session' }).click();
+      const browserMcpSessionBResponse = await openedBrowserMcpSessionB;
+      expect(browserMcpSessionBResponse.request().headers()['x-agent-bundle-session']).toBe(browserGenerationBToken);
+      const browserMcpSessionB = record(await browserMcpSessionBResponse.json(), 'B browser MCP session response');
+      const browserMcpSessionBRecord = record(browserMcpSessionB.session, 'B browser MCP session');
+      const browserMcpSessionBId = string(browserMcpSessionBRecord.id, 'B browser MCP session id');
+      const browserMcpSessionBRequest = browserRequestByPlaywrightRequest.get(browserMcpSessionBResponse.request());
+      if (browserMcpSessionBRequest === undefined) throw new Error('The fresh B browser MCP session admission was not recorded.');
+      const browserMcpSessionBOpenedAt = browserMcpSessionBRequest.at;
+      expect(browserMcpSessionBId).not.toBe(oldBrowserMcpSessionId);
+      expect(record(browserMcpSessionBRecord.binding, 'B browser MCP session binding').epochId).toBe(recoveredEpochId);
+      await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+      await page.getByRole('button', { name: 'show-dashboard', exact: true }).click();
+      const browserMcpSessionBOperation = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/mcp/sessions/${encodeURIComponent(browserMcpSessionBId)}/operations` &&
+        response.request().method() === 'POST' && response.ok(),
       );
-      expect(expectedMcpStreamFailures.length).toBeLessThanOrEqual(1);
-      const abortedMcpStreamFailures = outageFailures.filter((failure) =>
-        failure.method === 'GET' && /^\/api\/mcp\/sessions\/[^/]+\/stream$/u.test(failure.path) && failure.error === 'net::ERR_ABORTED',
+      await page.getByRole('button', { name: 'Call show-dashboard' }).click();
+      await browserMcpSessionBOperation;
+      await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText('packed dashboard ready', { timeout: browserTimeout });
+      const closedBrowserMcpSessionB = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/mcp/sessions/${encodeURIComponent(browserMcpSessionBId)}` &&
+        response.request().method() === 'DELETE' && response.ok(),
       );
-      expect(abortedMcpStreamFailures.length).toBeLessThanOrEqual(2);
-      const expectedSessionFailures = outageFailures.filter((failure) =>
-        failure.method === 'GET' && failure.path === '/api/project/session' && failure.error === 'net::ERR_CONNECTION_REFUSED',
-      );
-      expect(expectedSessionFailures.length).toBeGreaterThanOrEqual(1);
-      for (const [index, failure] of expectedSessionFailures.entries()) {
-        if (index > 0) expect(failure.at - expectedSessionFailures[index - 1]!.at).toBeGreaterThanOrEqual(200);
-      }
-      const oldSessionDeleteFailures = outageFailures.filter((failure) => failure.method === 'DELETE' && /^\/api\/mcp\/sessions\/[^/]+$/u.test(failure.path));
-      expect(oldSessionDeleteFailures.length).toBeLessThanOrEqual(1);
-      const recognizedFailures = expectedProjectStreamFailure.length + expectedMcpStreamFailures.length + abortedMcpStreamFailures.length + expectedSessionFailures.length + oldSessionDeleteFailures.length;
-      expect(outageFailures).toHaveLength(recognizedFailures);
-      const matchedOutageConsoleErrors = consoleErrorRecords.filter((record) => record.at >= outageStartedAt && record.at < recoveredAt &&
-        outageFailures.some((failure) => failure.error !== 'net::ERR_ABORTED' && record.text.includes(failure.error ?? '') && new URL(record.text.slice(record.text.lastIndexOf('(') + 1, -1)).pathname === failure.path),
-      );
-      const consoleBackedFailures = outageFailures.filter((failure) => failure.error !== 'net::ERR_ABORTED');
-      if (matchedOutageConsoleErrors.length !== consoleBackedFailures.length) {
-        const normalizeConsole = (record: Readonly<{ at: number; text: string }>) => Object.freeze({
-          code: /net::[A-Z_]+/u.exec(record.text)?.[0],
-          path: new URL(record.text.slice(record.text.lastIndexOf('(') + 1, -1)).pathname,
-          relativeMs: record.at - outageStartedAt,
-        });
-        const normalizeFailure = (failure: Readonly<{ at: number; error: string | undefined; method: string; path: string }>) => Object.freeze({
-          code: failure.error, method: failure.method, path: failure.path, relativeMs: failure.at - outageStartedAt,
-        });
-        throw new Error(`Foreground outage console/requestfailed mismatch: ${JSON.stringify({
-          console: matchedOutageConsoleErrors.map(normalizeConsole), requestfailed: outageFailures.map(normalizeFailure),
-        })}`);
-      }
-      const unexpectedConsoleErrors = consoleErrorRecords.filter((record) => !matchedOutageConsoleErrors.includes(record));
+      const browserMcpSessionBCloseStartedAt = Date.now();
+      await page.getByRole('button', { name: 'Close MCP session' }).click();
+      const closedBrowserMcpSessionBResponse = await closedBrowserMcpSessionB;
+      expect(closedBrowserMcpSessionBResponse.request().headers()['x-agent-bundle-session']).toBe(browserGenerationBToken);
+      await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
+      const browserMcpSessionBCloseCompletedAt = Date.now();
 
       phase = 'mobile overflow floor';
       await page.setViewportSize({ height: 844, width: 390 });
@@ -996,27 +1408,70 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         { heading: 'MCP playground', label: 'MCP playground' }, { heading: 'Artifacts', label: 'Artifacts' }, { heading: 'Playground', label: 'Playground' },
         { heading: 'Logs', label: 'Logs' }, { heading: 'Evals', label: 'Evals' }, { heading: 'Comparisons', label: 'Comparisons' },
       ];
+      const postRecoveryNavigationUrls = new Map<string, string>([
+        ['Hooks', `${origin}/api/hooks?epochId=${encodeURIComponent(recoveredEpochId)}`],
+        ['Playground', `${origin}/api/playground/catalog?epochId=${encodeURIComponent(recoveredEpochId)}`],
+        ['Logs', `${origin}/api/logs/replay?after=0`],
+      ]);
+      const postRecoveryNavigation: Array<Readonly<{ leftAt: number; openedAt: number; url: string }>> = [];
+      let activeMobileRoute: Readonly<{ openedAt: number; url?: string }> | undefined;
       for (const route of mobileRoutes) {
+        const openedAt = Date.now();
+        if (activeMobileRoute?.url !== undefined) postRecoveryNavigation.push(Object.freeze({
+          leftAt: openedAt, openedAt: activeMobileRoute.openedAt, url: activeMobileRoute.url,
+        }));
         await page.getByRole('link', { name: route.label, exact: true }).click();
         await expect(page.getByRole('heading', { name: route.heading })).toBeVisible({ timeout: browserTimeout });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        activeMobileRoute = Object.freeze({ openedAt, url: postRecoveryNavigationUrls.get(route.label) });
       }
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
 
+      phase = 'foreground outage ledger quiet fence';
+      const quietFenceBaseline = Object.freeze({
+        consoleErrors: consoleErrorRecords.length,
+        pageErrors: pageErrors.length,
+        requestFailures: browserRequests.filter((request) => request.error !== undefined).length,
+      });
+      await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 1_000); });
+      assertLedger(consoleErrorRecords.length === quietFenceBaseline.consoleErrors && pageErrors.length === quietFenceBaseline.pageErrors &&
+        browserRequests.filter((request) => request.error !== undefined).length === quietFenceBaseline.requestFailures,
+      `quiet fence observed new console, page, or requestfailed events: ${JSON.stringify({
+        after: { consoleErrors: consoleErrorRecords.length, pageErrors: pageErrors.length, requestFailures: browserRequests.filter((request) => request.error !== undefined).length },
+        before: quietFenceBaseline,
+      })}`);
+      validateOutageLedger({
+        consoleErrors: consoleErrorRecords,
+        oldSessionId: oldBrowserMcpSessionId,
+        origin,
+        outageStartedAt,
+        postRecovery: Object.freeze({
+          freshMcpSession: Object.freeze({
+            closeCompletedAt: browserMcpSessionBCloseCompletedAt,
+            closeStartedAt: browserMcpSessionBCloseStartedAt,
+            id: browserMcpSessionBId,
+            openedAt: browserMcpSessionBOpenedAt,
+          }),
+          navigation: Object.freeze(postRecoveryNavigation),
+        }),
+        recoveredAt,
+        requests: browserRequests,
+      });
+
       phase = 'browser console and page errors';
       const diagnostics = await call('diagnostics_list');
       expect(record(diagnostics.structuredContent, 'diagnostic list').diagnostics).toEqual(expect.any(Array));
       expect([...called]).toEqual(expectedAgentApiToolNames);
-      if (unexpectedConsoleErrors.length > 0 || pageErrors.length > 0) {
+      if (pageErrors.length > 0) {
         const iframeSources = await page.locator('iframe').evaluateAll((frames) => frames.map((frame) => Object.freeze({
           src: frame.getAttribute('src'),
           title: frame.getAttribute('title'),
         })));
         throw new Error(`Chrome reported errors: ${JSON.stringify({
           appRouteRequests,
-          consoleErrors: unexpectedConsoleErrors.map((record) => record.text),
+          consoleErrors: consoleErrorRecords,
           failedAppRouteRequests,
           frames: page.frames().map((frame) => Object.freeze({
             parentUrl: frame.parentFrame()?.url(),
