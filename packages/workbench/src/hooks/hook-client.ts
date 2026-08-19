@@ -6,6 +6,8 @@ import type {
   HookPlaygroundReplay,
   HookPlaygroundSimulation,
 } from '../../../agent-bundle/src/dev/hook-playground-service.ts';
+import { z } from 'zod';
+
 import { ForegroundTransport } from '../foreground-session.ts';
 
 export type HookSimulationResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation;
@@ -41,6 +43,72 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 
 const invalidResponse = (): HookClientError =>
   new HookClientError('AB8033', 'Hook playground route returned an invalid response.');
+
+const textSchema = z.string();
+const canonicalHookEventSchema = z.enum(['sessionStart', 'beforeTool', 'afterTool', 'stop']);
+const canonicalRecordSchema = z.record(z.string(), z.json());
+const bindingSchema = z.strictObject({
+  epochId: textSchema,
+  hook: textSchema,
+  target: textSchema,
+});
+const hookSchema = z.strictObject({
+  event: textSchema,
+  id: textSchema,
+  name: textSchema,
+  path: textSchema,
+  target: textSchema,
+  timeout: z.number().optional(),
+});
+const hookListSchema = z.strictObject({
+  hooks: z.array(z.strictObject({ binding: bindingSchema, hook: hookSchema })),
+});
+const canonicalIntentSchema = z.strictObject({
+  event: canonicalHookEventSchema,
+  hook: textSchema,
+  input: canonicalRecordSchema,
+});
+const hostMappingSchema = z.strictObject({
+  canonicalEvent: canonicalHookEventSchema,
+  matcher: textSchema.optional(),
+  nativeEvent: textSchema,
+  nativeProjection: z.literal('deterministic'),
+  nativeSelector: textSchema,
+  target: textSchema,
+  wrapperPath: textSchema,
+});
+const replaySchema = z.strictObject({
+  binding: bindingSchema,
+  input: canonicalRecordSchema,
+});
+const simulationSchema = z.strictObject({
+  binding: bindingSchema,
+  canonicalIntent: canonicalIntentSchema,
+  canonicalResult: canonicalRecordSchema.optional(),
+  hostMapping: hostMappingSchema,
+  nativeInput: canonicalRecordSchema,
+  nativeOutput: canonicalRecordSchema.optional(),
+  replay: replaySchema,
+}).transform((simulation) => ({
+  ...simulation,
+  canonicalResult: simulation.canonicalResult,
+  nativeOutput: simulation.nativeOutput,
+} satisfies HookPlaygroundSimulation));
+const diagnosticSchema = z.strictObject({
+  code: z.enum([
+    'hook.playground.event.unsupported',
+    'hook.playground.manifest.missing',
+    'hook.playground.target.unsupported',
+  ]),
+  event: textSchema,
+  message: textSchema,
+  severity: z.literal('error'),
+  target: textSchema,
+});
+const simulationResponseSchema = z.union([
+  z.strictObject({ diagnostics: z.array(diagnosticSchema) }),
+  z.strictObject({ simulation: simulationSchema }),
+]);
 
 const dataValue = (descriptor: PropertyDescriptor): unknown => {
   if (!('value' in descriptor)) throw new TypeError('Hook playground response values must not expose accessors.');
@@ -93,33 +161,26 @@ export const deeplyFrozenHookValue = (value: unknown, ancestors = new WeakSet<ob
   }
 };
 
-const frozenJson = (value: unknown): unknown => {
+const frozenJson = <T>(value: T): T => {
   try {
-    return deeplyFrozenHookValue(value);
+    return deeplyFrozenHookValue(value) as T;
   } catch {
     throw invalidResponse();
   }
 };
 
-const asRecord = (value: unknown): Readonly<Record<string, unknown>> => {
-  if (!isRecord(value)) throw invalidResponse();
-  return value;
-};
-
 const hookList = (value: unknown): readonly HookPlaygroundHook[] => {
-  const hooks = asRecord(value).hooks;
-  if (!Array.isArray(hooks)) throw invalidResponse();
-  if (!hooks.every((entry) => isRecord(entry) && isRecord(entry.binding) && isRecord(entry.hook))) throw invalidResponse();
-  return frozenJson(hooks) as readonly HookPlaygroundHook[];
+  const parsed = hookListSchema.safeParse(value);
+  if (!parsed.success) throw invalidResponse();
+  return frozenJson(parsed.data.hooks);
 };
 
 const simulationResult = (value: unknown): HookSimulationResult => {
-  const body = asRecord(value);
-  if (Array.isArray(body.diagnostics)) {
-    return frozenJson({ diagnostics: body.diagnostics }) as HookPlaygroundDiagnosticResult;
-  }
-  if (isRecord(body.simulation)) return frozenJson(body.simulation) as HookPlaygroundSimulation;
-  throw invalidResponse();
+  const parsed = simulationResponseSchema.safeParse(value);
+  if (!parsed.success) throw invalidResponse();
+  return 'diagnostics' in parsed.data
+    ? frozenJson(parsed.data)
+    : frozenJson(parsed.data.simulation);
 };
 
 /** A typed, credential-memory-only browser client for the epoch-bound hook playground routes. */
