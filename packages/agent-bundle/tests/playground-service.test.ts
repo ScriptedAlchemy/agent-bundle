@@ -38,9 +38,11 @@ type PlaygroundDirectorySyncReason =
   | 'session-metadata-rename';
 
 type PlaygroundDurableFilePhase = 'event' | 'owner' | 'pending-index' | 'session-metadata';
+type PlaygroundOwnerMutationReason = 'create-recovery' | 'recovery' | 'release';
 
 type PlaygroundDurabilityTestPhase =
   | 'after-final-index-link'
+  | 'before-owner-lock-recovery'
   | 'before-directory-sync:owner-lock-create'
   | 'before-directory-sync:session-metadata-rename'
   | 'before-final-index-link'
@@ -48,9 +50,10 @@ type PlaygroundDurabilityTestPhase =
   | `before-directory-open:${PlaygroundDirectorySyncReason}`
   | `before-directory-sync:${PlaygroundDirectorySyncReason}`
   | `before-file-fsync:${PlaygroundDurableFilePhase}`
-  | `before-file-write:${PlaygroundDurableFilePhase}`;
+  | `before-file-write:${PlaygroundDurableFilePhase}`
+  | `before-owner-lock-unlink:${PlaygroundOwnerMutationReason}`;
 
-type PlaygroundDurabilityTestHook = (phase: PlaygroundDurabilityTestPhase, path: string) => void;
+type PlaygroundDurabilityTestHook = (phase: PlaygroundDurabilityTestPhase, path: string) => Promise<void> | void;
 
 const playgroundDurabilityTestHookKey = Symbol.for('agent-bundle.playground-service.durability-test-hook');
 const playgroundDurabilityTestPlatformKey = Symbol.for('agent-bundle.playground-service.durability-test-platform');
@@ -595,6 +598,77 @@ it('gives exactly one service instance the durable writer claim for an open sess
     await expect(contender.replay('owned')).resolves.toMatchObject({ events: [{ sequence: 1 }] });
   } finally {
     await Promise.allSettled([fixture.close(), contender.close()]);
+  }
+});
+
+it('serializes two contenders recovering the same stale owner without unlinking the winner', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'concurrent-stale-owner';
+  const first = new PlaygroundService({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
+  const second = new PlaygroundService({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
+  const recoveryEntered = deferred();
+  const releaseRecovery = deferred();
+  let blocked = false;
+  let firstAttempt: ReturnType<PlaygroundService['reopen']> | undefined;
+  let secondAttempt: ReturnType<PlaygroundService['reopen']> | undefined;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId });
+    await fixture.service.finalize(sessionId, { status: 'passed' });
+    await fixture.service.close();
+    const root = await objectRoot(fixture.storageRoot, sessionId);
+    const metadataPath = join(root, 'session.json');
+    const metadata = JSON.parse(await readFile(metadataPath, 'utf8')) as Record<string, unknown>;
+    delete metadata.outcome;
+    metadata.state = 'open';
+    await writeFile(metadataPath, `${JSON.stringify(metadata)}\n`, 'utf8');
+    await writeFile(join(root, '.owner.lock'), `${JSON.stringify({
+      pid: 2_147_483_647,
+      token: '00000000-0000-4000-8000-000000000001',
+    })}\n`, 'utf8');
+
+    await withDurabilityTestHook(async (phase) => {
+      if (phase === 'before-owner-lock-recovery' && !blocked) {
+        blocked = true;
+        recoveryEntered.resolve();
+        await releaseRecovery.promise;
+      }
+    }, async () => {
+      firstAttempt = first.reopen(sessionId);
+      const firstBoundary = await Promise.race([
+        recoveryEntered.promise.then(() => 'recovery-entered' as const),
+        firstAttempt.then(() => 'completed' as const, () => 'failed' as const),
+      ]);
+      expect(firstBoundary).toBe('recovery-entered');
+      secondAttempt = second.reopen(sessionId);
+      await Promise.resolve();
+      await Promise.resolve();
+      releaseRecovery.resolve();
+      const results = await Promise.allSettled([firstAttempt, secondAttempt]);
+      expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+      const rejection = results.find((result) => result.status === 'rejected');
+      expect(rejection).toMatchObject({ reason: { code: 'PLAYGROUND_SESSION_OWNED' } });
+      expect(JSON.parse(await readFile(join(root, '.owner.lock'), 'utf8'))).toEqual({
+        pid: process.pid,
+        token: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
+      });
+    });
+  } finally {
+    releaseRecovery.resolve();
+    await Promise.allSettled([
+      ...(firstAttempt === undefined ? [] : [firstAttempt]),
+      ...(secondAttempt === undefined ? [] : [secondAttempt]),
+      first.close(),
+      second.close(),
+      fixture.close(),
+    ]);
   }
 });
 
@@ -1532,6 +1606,109 @@ it('removes only a just-created owner lock when its directory sync fails during 
   }
 });
 
+it('preserves a replacement owner that appears during stale recovery', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'replaced-stale-owner';
+  const contender = new PlaygroundService({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
+  const replacement = Object.freeze({ pid: process.pid, token: '00000000-0000-4000-8000-000000000002' });
+  let displacedPath: string | undefined;
+  let replaced = false;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId });
+    await fixture.service.finalize(sessionId, { status: 'passed' });
+    await fixture.service.close();
+    const root = await objectRoot(fixture.storageRoot, sessionId);
+    const metadataPath = join(root, 'session.json');
+    const metadata = JSON.parse(await readFile(metadataPath, 'utf8')) as Record<string, unknown>;
+    delete metadata.outcome;
+    metadata.state = 'open';
+    await writeFile(metadataPath, `${JSON.stringify(metadata)}\n`, 'utf8');
+    await writeFile(join(root, '.owner.lock'), `${JSON.stringify({
+      pid: 2_147_483_647,
+      token: '00000000-0000-4000-8000-000000000001',
+    })}\n`, 'utf8');
+
+    await withDurabilityTestHook((phase, path) => {
+      if (phase === 'before-owner-lock-unlink:recovery') {
+        replaced = true;
+        displacedPath = `${path}.displaced`;
+        renameSync(path, displacedPath);
+        writeFileSync(path, `${JSON.stringify(replacement)}\n`, 'utf8');
+      }
+    }, async () => {
+      await expect(contender.reopen(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_OWNED' });
+    });
+    expect(replaced).toBe(true);
+    expect(JSON.parse(await readFile(join(root, '.owner.lock'), 'utf8'))).toEqual(replacement);
+    await expect(readFile(displacedPath!, 'utf8')).resolves.toContain('00000000-0000-4000-8000-000000000001');
+  } finally {
+    await Promise.allSettled([contender.close(), fixture.close()]);
+  }
+});
+
+it('preserves a replacement owner that appears during release', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'replaced-release-owner';
+  const replacement = Object.freeze({ pid: process.pid, token: '00000000-0000-4000-8000-000000000003' });
+  let displacedPath: string | undefined;
+  let replaced = false;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId });
+    const root = await objectRoot(fixture.storageRoot, sessionId);
+    await withDurabilityTestHook((phase, path) => {
+      if (phase === 'before-owner-lock-unlink:release') {
+        replaced = true;
+        displacedPath = `${path}.displaced`;
+        renameSync(path, displacedPath);
+        writeFileSync(path, `${JSON.stringify(replacement)}\n`, 'utf8');
+      }
+    }, async () => {
+      await expect(fixture.service.closeSession(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_OWNED' });
+    });
+    expect(replaced).toBe(true);
+    expect(JSON.parse(await readFile(join(root, '.owner.lock'), 'utf8'))).toEqual(replacement);
+    await expect(readFile(displacedPath!, 'utf8')).resolves.toContain('"token"');
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('preserves a replacement owner during failed-create cleanup', async () => {
+  const fixture = await createFixture();
+  const replacement = Object.freeze({ pid: process.pid, token: '00000000-0000-4000-8000-000000000004' });
+  let ownerPath: string | undefined;
+  let displacedPath: string | undefined;
+  let replaced = false;
+  let failedCreateSync = false;
+  try {
+    const failure = await withDurabilityTestHook((phase, path) => {
+      if (phase === 'before-directory-sync:owner-lock-create' && !failedCreateSync) {
+        failedCreateSync = true;
+        throw injectedIoFailure('owner create directory sync failed');
+      }
+      if (phase === 'before-owner-lock-unlink:create-recovery') {
+        replaced = true;
+        ownerPath = path;
+        displacedPath = `${path}.displaced`;
+        renameSync(path, displacedPath);
+        writeFileSync(path, `${JSON.stringify(replacement)}\n`, 'utf8');
+      }
+    }, async () => fixture.service.openSession({ ...sessionInput(), sessionId: 'replaced-create-cleanup' }))
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failedCreateSync).toBe(true);
+    expect(replaced).toBe(true);
+    expect(JSON.parse(await readFile(ownerPath!, 'utf8'))).toEqual(replacement);
+    await expect(readFile(displacedPath!, 'utf8')).resolves.toContain('"token"');
+  } finally {
+    await fixture.close();
+  }
+});
+
 it('rejects hard-linked event logs before a mutable event can alter the linked file', async () => {
   const fixture = await createFixture();
   try {
@@ -1646,6 +1823,33 @@ it('rejects duplicate and extra persisted envelope keys before reopening', async
         await Promise.allSettled([owner.close(), contender.close()]);
       }
     }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects empty and noncanonical owner tokens as corrupt', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'strict-owner-token';
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId });
+    const ownerPath = join(await objectRoot(fixture.storageRoot, sessionId), '.owner.lock');
+    const original = await readFile(ownerPath, 'utf8');
+    const owner = JSON.parse(original) as Record<string, unknown>;
+    for (const token of ['', 'not-a-uuid', 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA']) {
+      await writeFile(ownerPath, `${JSON.stringify({ ...owner, token })}\n`, 'utf8');
+      const contender = new PlaygroundService({
+        projectId: 'project-1',
+        projectRoot: fixture.projectRoot,
+        storageRoot: fixture.storageRoot,
+      });
+      try {
+        await expect(contender.reopen(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+      } finally {
+        await contender.close().catch(() => undefined);
+      }
+    }
+    await writeFile(ownerPath, original, 'utf8');
   } finally {
     await fixture.close();
   }
