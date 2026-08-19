@@ -189,15 +189,14 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     if (playgroundDownloadPath === null) throw new Error('The MCP trace download did not provide a local file.');
     const playgroundTrace = JSON.parse(await readFile(playgroundDownloadPath, 'utf8')) as {
       readonly kind: string;
-      readonly schemaVersion: number;
       readonly session: Readonly<{ readonly binding: unknown; readonly id: string | null }>;
       readonly timeline: Readonly<{ readonly entries: readonly unknown[] }>;
     };
     expect(playgroundTrace).toMatchObject({
       kind: 'agent-bundle.mcp-protocol-trace',
-      schemaVersion: 1,
       session: { binding: { epochId: expect.any(String), serverName: 'fixture', target: 'portable' }, id: expect.any(String) },
     });
+    expect(playgroundTrace).not.toHaveProperty('schemaVersion');
     expect(JSON.stringify(playgroundTrace.timeline.entries)).toContain('tools/call');
     expect(JSON.stringify(playgroundTrace.timeline.entries)).toContain('inspector');
 
