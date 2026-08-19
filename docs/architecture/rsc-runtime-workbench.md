@@ -65,6 +65,7 @@ packages/
     tests/mcp-app-sandbox.test.ts
     tests/mcp-session-routes.test.ts
     tests/mcp-session-service.test.ts
+    tests/native-host-smoke-workflow.test.ts
     tests/normalization.test.ts
     tests/playground-service.test.ts
     tests/portable-adapter.test.ts
