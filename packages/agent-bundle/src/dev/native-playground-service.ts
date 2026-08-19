@@ -205,11 +205,18 @@ class DiscardingTrialWriter implements EvalTrialWriter {
 }
 
 const nativeHosts = new Set<NativePlaygroundHost>(['claude', 'codex']);
+const catalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
 const maximumCatalogSelections = 256;
 const maximumFixtureEntries = 4_096;
 const maximumSnapshotStringLength = 16_384;
 const safeEpochSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const safeDigestText = /^[a-z0-9._:-]+$/iu;
+
+const catalogDurabilityPlatform = (): NodeJS.Platform => {
+  if (process.env.NODE_ENV !== 'test') return process.platform;
+  const platforms = globalThis as typeof globalThis & Record<symbol, NodeJS.Platform | undefined>;
+  return platforms[catalogDurabilityPlatformKey] ?? process.platform;
+};
 
 const isSafeRelativePath = (value: JsonValue | undefined, allowCurrentDirectory = false): value is string =>
   nonemptySnapshotText(value) &&
@@ -1046,9 +1053,7 @@ export class NativePlaygroundService {
       catch (error) {
         if (!isErrno(error, 'EEXIST')) throw error;
       }
-      const directoryHandle = await this.#catalogStorage.open(directory, 'r');
-      try { await directoryHandle.sync(); }
-      finally { await directoryHandle.close(); }
+      await this.#syncCatalogDirectory(directory);
     } catch (error) {
       primary = error;
     } finally {
@@ -1111,6 +1116,18 @@ export class NativePlaygroundService {
         await this.#catalogStorage.remove(path, { force: true });
       },
     });
+  }
+
+  async #syncCatalogDirectory(directory: string): Promise<void> {
+    const handle = await this.#catalogStorage.open(directory, 'r');
+    try {
+      await handle.sync();
+    } catch (error) {
+      if (catalogDurabilityPlatform() === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      throw error;
+    } finally {
+      await handle.close();
+    }
   }
 
   async #rollbackPublicationAndThrow(

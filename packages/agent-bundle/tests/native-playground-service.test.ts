@@ -56,6 +56,7 @@ const fixturePlan: EvalFixturePlan = Object.freeze({
 
 let catalogDirectoryIndex = 0;
 const testCatalogDirectory = (): string => join(tmpdir(), `agent-bundle-native-playground-catalog-${process.pid}-${catalogDirectoryIndex++}`);
+const nativeCatalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
 
 const claudeStream = [
   '{"type":"system","subtype":"init","plugins":[{"name":"review"}],"mcp_servers":[{"name":"project"}]}',
@@ -498,6 +499,63 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
     expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
     await Promise.all([left.close(), right.close()]);
   } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('tolerates only Windows directory fsync capability failures during catalog publication', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-windows-directory-sync-'));
+  const catalogDirectory = join(root, 'catalog');
+  const runtime = globalThis as typeof globalThis & Record<symbol, NodeJS.Platform | undefined>;
+  const previousPlatform = runtime[nativeCatalogDurabilityPlatformKey];
+  runtime[nativeCatalogDurabilityPlatformKey] = 'win32';
+  const serviceFor = (code: 'EACCES' | 'EINVAL' | 'EPERM'): NativePlaygroundService => {
+    const storage: NativePlaygroundCatalogStorage = {
+      link,
+      mkdir,
+      open: async (path, flags, mode) => {
+        const handle = await open(path, flags, mode);
+        if (String(path) !== catalogDirectory) return handle;
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === 'sync') {
+              return async () => {
+                throw Object.assign(new Error(`${code} directory sync`), { code });
+              };
+            }
+            const value = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      },
+      remove: rm,
+    };
+    return new NativePlaygroundService({
+      catalogDirectory,
+      catalogStorage: storage,
+      discover: async () => suite(),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      planFixture: async () => fixturePlan,
+      projectRoot: '/project',
+    });
+  };
+  try {
+    for (const code of ['EACCES', 'EINVAL'] as const) {
+      await rm(catalogDirectory, { force: true, recursive: true });
+      const service = serviceFor(code);
+      await expect(service.catalog(epoch(`epoch-${code.toLowerCase()}`, join(root, code)))).resolves.toMatchObject({ epochId: `epoch-${code.toLowerCase()}` });
+      await service.close();
+    }
+    await rm(catalogDirectory, { force: true, recursive: true });
+    const service = serviceFor('EPERM');
+    await expect(service.catalog(epoch('epoch-eperm', join(root, 'EPERM')))).rejects.toThrow('EPERM directory sync');
+    await service.close();
+  } finally {
+    if (previousPlatform === undefined) delete runtime[nativeCatalogDurabilityPlatformKey];
+    else runtime[nativeCatalogDurabilityPlatformKey] = previousPlatform;
     await rm(root, { force: true, recursive: true });
   }
 });
