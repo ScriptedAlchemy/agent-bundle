@@ -105,6 +105,24 @@ const run = async (
   }
 };
 
+export const packedNativeNodeCommand = (
+  entrypoint: string,
+  args: readonly string[],
+  nodeExecutable = process.execPath,
+) => Object.freeze({
+  args: Object.freeze([entrypoint, ...args]),
+  executable: nodeExecutable,
+});
+
+const runNodeEntrypoint = (
+  entrypoint: string,
+  args: readonly string[],
+  options: { readonly cwd: string; readonly environment: NodeJS.ProcessEnv },
+): Promise<CommandResult> => {
+  const command = packedNativeNodeCommand(entrypoint, args);
+  return run(command.executable, command.args, options);
+};
+
 const digestTree = async (path: string, contents: boolean): Promise<string> => {
   let entry;
   try {
@@ -189,6 +207,10 @@ export const runPackedNativeSmoke = async (options: {
 }): Promise<PackedNativeSmokeReport> => {
   const enabled = packedNativeSmokePlan(options.environment).hosts.filter((host) => host.enabled);
   if (enabled.length === 0) throw new Error('Packed native smoke requires an explicit host opt-in.');
+  const npmEntrypoint = options.environment.npm_execpath;
+  if (npmEntrypoint === undefined || npmEntrypoint.length === 0) {
+    throw new Error('Packed native smoke requires the npm JavaScript entrypoint.');
+  }
 
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-native-'));
   const consumer = join(root, 'consumer');
@@ -203,7 +225,7 @@ export const runPackedNativeSmoke = async (options: {
       cp(fixtureRoot, project, { recursive: true }),
     ]);
 
-    const packed = await run('npm', ['pack', '--json', '--pack-destination', tarballs], {
+    const packed = await runNodeEntrypoint(npmEntrypoint, ['pack', '--json', '--pack-destination', tarballs], {
       cwd: packageRoot,
       environment,
     });
@@ -211,7 +233,7 @@ export const runPackedNativeSmoke = async (options: {
     if (packed.exitCode !== 0 || listing.length !== 1 || listing[0] === undefined) {
       throw new Error('Packed native smoke could not create exactly one release tarball.');
     }
-    const installed = await run('npm', [
+    const installed = await runNodeEntrypoint(npmEntrypoint, [
       'install',
       '--omit=dev',
       '--ignore-scripts',
@@ -221,7 +243,7 @@ export const runPackedNativeSmoke = async (options: {
     ], { cwd: consumer, environment });
     if (installed.exitCode !== 0) throw new Error('Packed native smoke could not install the release tarball.');
 
-    const cli = join(consumer, 'node_modules', '.bin', 'agent-bundle');
+    const cli = join(consumer, 'node_modules', 'agent-bundle', 'dist', 'cli.js');
     const resolvedCli = await realpath(cli);
     if (resolvedCli.startsWith(workspaceRoot)) throw new Error('Packed native smoke resolved a workspace-linked binary.');
 
@@ -232,7 +254,7 @@ export const runPackedNativeSmoke = async (options: {
       const before = host === 'codex' ? await digestNormalCodexState(normalCodexHome) : undefined;
       let command: CommandResult | undefined;
       const executeEval = async (): Promise<void> => {
-        command = await run(cli, [
+        command = await runNodeEntrypoint(cli, [
           'eval',
           '--root',
           project,

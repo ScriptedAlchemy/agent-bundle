@@ -30,6 +30,30 @@ it('requires a host-specific opt-in and keeps the canonical Claude model pinned'
   });
 });
 
+it('runs npm and the installed CLI through Node entrypoints on Windows', async () => {
+  const harness = await loadPackedNativeSmoke() as undefined | {
+    readonly packedNativeNodeCommand?: (
+      entrypoint: string,
+      args: readonly string[],
+      nodeExecutable?: string,
+    ) => Readonly<{ readonly args: readonly string[]; readonly executable: string }>;
+  };
+  expect(harness?.packedNativeNodeCommand).toBeDefined();
+
+  const node = 'C:\\Program Files\\nodejs\\node.exe';
+  const npm = 'C:\\Users\\runner\\npm\\node_modules\\npm\\bin\\npm-cli.js';
+  const cli = 'C:\\work\\consumer\\node_modules\\agent-bundle\\dist\\cli.js';
+  expect(harness!.packedNativeNodeCommand!(npm, ['pack', '--json'], node)).toEqual({
+    args: [npm, 'pack', '--json'],
+    executable: node,
+  });
+  expect(harness!.packedNativeNodeCommand!(cli, ['eval', '--json'], node)).toEqual({
+    args: [cli, 'eval', '--json'],
+    executable: node,
+  });
+  expect(JSON.stringify(harness!.packedNativeNodeCommand!(cli, [], node))).not.toContain('.cmd');
+});
+
 it('removes workspace module resolution and credential-shaped environment values', async () => {
   const harness = await loadPackedNativeSmoke() as undefined | {
     readonly packedNativeEnvironment?: (environment: Readonly<NodeJS.ProcessEnv>) => NodeJS.ProcessEnv;
