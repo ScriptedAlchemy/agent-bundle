@@ -48,7 +48,7 @@ const isProcessRunning = (pid: number): boolean => {
   }
 };
 
-const parseOwnerValue = (value: unknown): DevLockOwner | undefined => {
+const parseOwnerValue = (value: unknown, projectRoot: string): DevLockOwner | undefined => {
   try {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
     const parsed = value as Partial<DevLockOwner>;
@@ -65,10 +65,11 @@ const parseOwnerValue = (value: unknown): DevLockOwner | undefined => {
       typeof pid !== 'number' ||
       !Number.isSafeInteger(pid) ||
       pid <= 0 ||
-      typeof parsed.projectRoot !== 'string'
+      parsed.projectRoot !== projectRoot
     ) {
       return undefined;
     }
+    if (new Date(parsed.createdAt).toISOString() !== parsed.createdAt) return undefined;
     return Object.freeze({
       createdAt: parsed.createdAt,
       nonce: parsed.nonce,
@@ -80,22 +81,25 @@ const parseOwnerValue = (value: unknown): DevLockOwner | undefined => {
   }
 };
 
-const parseOwner = (value: string): DevLockOwner | undefined => {
+const parseOwner = (value: string, projectRoot: string): DevLockOwner | undefined => {
   try {
-    return parseOwnerValue(JSON.parse(value));
+    const owner = parseOwnerValue(JSON.parse(value), projectRoot);
+    return owner !== undefined && value === `${stableJson(owner)}\n` ? owner : undefined;
   } catch {
     return undefined;
   }
 };
 
-const parseRecoveryRecord = (value: string): RecoveryRecord | undefined => {
+const parseRecoveryRecord = (value: string, projectRoot: string): RecoveryRecord | undefined => {
   try {
     const parsedValue: unknown = JSON.parse(value);
     if (typeof parsedValue !== 'object' || parsedValue === null || Array.isArray(parsedValue)) return undefined;
     const parsed = parsedValue as Partial<RecoveryRecord>;
     if (Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'owner')) return undefined;
-    const owner = parseOwnerValue(parsed.owner);
-    return owner === undefined ? undefined : Object.freeze({ owner });
+    const owner = parseOwnerValue(parsed.owner, projectRoot);
+    if (owner === undefined) return undefined;
+    const recovery = Object.freeze({ owner });
+    return value === `${stableJson(recovery)}\n` ? recovery : undefined;
   } catch {
     return undefined;
   }
@@ -149,7 +153,7 @@ const acquireRecoveryGate = async (
       if (isErrno(error, 'ENOENT')) continue;
       throw error;
     }
-    const recovery = parseRecoveryRecord(currentContents);
+    const recovery = parseRecoveryRecord(currentContents, owner.projectRoot);
     if (recovery === undefined) {
       throw new DevLockError(
         'DEV_LOCK_INVALID',
@@ -248,7 +252,7 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
       if (isErrno(error, 'ENOENT')) continue;
       throw error;
     }
-    const currentOwner = parseOwner(currentContents);
+    const currentOwner = parseOwner(currentContents, projectRoot);
     if (currentOwner === undefined) {
       throw new DevLockError(
         'DEV_LOCK_INVALID',
@@ -273,7 +277,7 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
         throw error;
       }
       if (currentDuringRecovery !== currentContents) continue;
-      const ownerDuringRecovery = parseOwner(currentDuringRecovery);
+      const ownerDuringRecovery = parseOwner(currentDuringRecovery, projectRoot);
       if (ownerDuringRecovery === undefined) {
         throw new DevLockError(
           'DEV_LOCK_INVALID',
