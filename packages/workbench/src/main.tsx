@@ -835,7 +835,9 @@ const Workbench = () => {
   pageRef.current = page;
 
   if (client.current === undefined) client.current = new ProjectClient({ foreground: foreground.current! });
-  if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient({ projectClient: client.current });
+  if (mcpAppClient.current === undefined) {
+    mcpAppClient.current = new McpAppClient({ foreground: foreground.current!, projectClient: client.current });
+  }
   if (mcpControllerRef.current !== mcpController) mcpControllerRef.current = mcpController;
   if (runtimeClient.current === undefined) runtimeClient.current = new RuntimeClient(foreground.current);
   if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient({ foreground: foreground.current! });

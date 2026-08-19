@@ -385,6 +385,22 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const skillId = string(skill.id, 'skill id');
       const inspectedSkill = await call('skill_inspect', { skill_id: skillId, target: 'portable' });
       expect(record(inspectedSkill.structuredContent, 'inspected skill').skill).toEqual(expect.objectContaining({ id: skillId }));
+      const expectGeneratedSkill = async (
+        label: string,
+        expectedEpoch: string,
+        expectedBodyMarker: string,
+        epoch?: string,
+      ): Promise<void> => {
+        const inspected = await call('skill_inspect', {
+          skill_id: skillId,
+          target: 'portable',
+          ...(epoch === undefined ? {} : { epoch }),
+        });
+        const inspectedSkill = record(record(inspected.structuredContent, `${label} inspection`).skill, `${label} skill`);
+        expect(string(record(inspectedSkill.base, `${label} skill base`).epochId, `${label} skill epoch`))
+          .toBe(expectedEpoch);
+        expect(string(inspectedSkill.body, `${label} skill body`)).toContain(expectedBodyMarker);
+      };
 
       const artifacts = await call('artifacts_list');
       const epoch = firstRecord(record(artifacts.structuredContent, 'artifact list').epochs, 'artifact list.epochs');
@@ -584,7 +600,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       expect(nativeEpochA).toBe(epochId);
 
       phase = 'good edit rebuild B';
-      await writeFile(skillSource, `${originalSkill}\n\nEpoch B changed the packed review guidance.\n`);
+      const epochBMarker = 'Epoch B changed the packed review guidance.';
+      await writeFile(skillSource, `${originalSkill}\n\n${epochBMarker}\n`);
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromOverview('epoch B');
@@ -594,6 +611,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       expect(epochB).not.toBe(epochId);
       const sameClientOnB = await call('skills_list', { target: 'portable' });
       expect(record(sameClientOnB.structuredContent, 'same client epoch B skills').skills).toEqual(expect.any(Object));
+      await expectGeneratedSkill('same client epoch B', epochB, epochBMarker);
 
       phase = 'artifact epoch diff';
       await page.getByRole('link', { name: 'Artifacts', exact: true }).click();
@@ -633,11 +651,13 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const staleDiagnosticRows = record(staleDiagnostics.structuredContent, 'stale diagnostics').diagnostics;
       expect(Array.isArray(staleDiagnosticRows)).toBe(true);
       expect(staleDiagnosticRows).not.toHaveLength(0);
+      await expectGeneratedSkill('stale epoch B', epochB, epochBMarker);
 
       phase = 'repaired edit rebuild C';
+      const epochCMarker = 'Epoch C repaired the packed review guidance.';
       await Promise.all([
         writeFile(configSource, originalConfig),
-        writeFile(skillSource, `${originalSkill}\n\nEpoch C repaired the packed review guidance.\n`),
+        writeFile(skillSource, `${originalSkill}\n\n${epochCMarker}\n`),
       ]);
       await rebuildFromOverview('epoch C');
       const epochCStatus = activeEpochFrom(await call('project_status'), 'epoch C');
@@ -646,6 +666,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       expect(epochC).not.toBe(epochB);
       const retainedEpochA = await call('skills_list', { epoch: epochId, target: 'portable' });
       expect(record(retainedEpochA.structuredContent, 'retained epoch-A skills').skills).toEqual(expect.any(Object));
+      await expectGeneratedSkill('same client epoch C', epochC, epochCMarker);
 
       phase = 'Playground native fake-host epoch C';
       await page.getByRole('link', { name: 'Playground', exact: true }).click();

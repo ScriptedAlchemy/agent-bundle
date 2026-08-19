@@ -2,6 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import {
   ProjectClient,
+  ProjectClientError,
   type EventSourceFactory,
   type EventSourceLike,
 } from '../src/project-client.ts';
@@ -113,6 +114,28 @@ it('calls the default browser fetch with its global receiver', async () => {
     await expect(new ProjectClient().refresh()).resolves.toMatchObject({ artifact: { state: 'active' } });
   } finally {
     Object.defineProperty(globalThis, 'fetch', { configurable: true, value: originalFetch });
+  }
+});
+
+it('rejects noncanonical project status envelopes and nested status DTOs', async () => {
+  const invalidResponses = [
+    { schemaVersion: 1, status: status() },
+    { status: { ...status(), version: '1' } },
+    {
+      status: {
+        ...status(),
+        source: {
+          ...status().source,
+          diagnostics: [{ code: 'AB8001', message: 'Invalid source.', severity: 'error', version: '1' }],
+        },
+      },
+    },
+    { status: { ...status(), build: { state: 'building' } } },
+  ];
+
+  for (const response of invalidResponses) {
+    const client = new ProjectClient({ fetch: async () => Response.json(response) });
+    await expect(client.refresh()).rejects.toBeInstanceOf(ProjectClientError);
   }
 });
 
@@ -241,7 +264,7 @@ it('refreshes Overview state after live named events and keeps the browser Event
   await client.connect((next) => observed.push(next.artifact.state));
   stream.emit('artifact.status', {
     data: JSON.stringify({
-      occurredAt: '2026-08-14T12:00:00.000Z',
+      occurredAt: '2026-08-16T12:00:00.000Z',
       payload: status('active').artifact,
       sequence: 7,
       type: 'artifact.status',
@@ -410,7 +433,7 @@ it('rejects project SSE records whose payload and EventSource sequence identitie
     lastEventId: '7',
   });
   stream.emit('artifact.status', {
-    data: JSON.stringify({ payload: status().artifact, type: 'artifact.status' }),
+    data: JSON.stringify({ occurredAt: '2026-08-16T12:01:00.000Z', payload: status().artifact, type: 'artifact.status' }),
     lastEventId: '8',
   });
   stream.emit('source.changed', {
@@ -432,13 +455,65 @@ it('rejects project SSE records whose payload and EventSource sequence identitie
     lastEventId: '11',
   });
   stream.emit('artifact.status', {
-    data: JSON.stringify({ payload: status().artifact, sequence: 13.5, type: 'artifact.status' }),
+    data: JSON.stringify({ occurredAt: '2026-08-16T12:04:00.000Z', payload: status().artifact, sequence: 13.5, type: 'artifact.status' }),
     lastEventId: '13',
   });
   await flushEvents();
 
   expect(client.activity.changedFiles).toEqual(['src/kept.ts']);
   expect(client.lastEventId).toBe(13);
+  expect(errors).toHaveLength(4);
+});
+
+it('rejects versioned, extra, and malformed SSE project event messages', async () => {
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  const errors: unknown[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async (input) => {
+      requests.push(String(input));
+      return Response.json({ status: status() });
+    }),
+  });
+  await client.connect(() => undefined, (reason) => errors.push(reason));
+
+  for (const [lastEventId, data] of [
+    ['7', {
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:00:00.000Z', paths: ['src/versioned.ts'], reason: 'source-change' },
+      schemaVersion: 1,
+      sequence: 7,
+      type: 'source.changed',
+    }],
+    ['8', {
+      occurredAt: '2026-08-16T12:01:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:01:00.000Z', paths: ['src/aliased.ts'], reason: 'source-change' },
+      sequence: 8,
+      type: 'source.changed',
+      version: '1',
+    }],
+    ['9', {
+      occurredAt: '2026-08-16T12:02:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:02:00.000Z', paths: ['src/extra.ts'], reason: 'source-change', version: '1' },
+      sequence: 9,
+      type: 'source.changed',
+    }],
+    ['10', {
+      occurredAt: '2026-08-16T12:03:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:03:00.000Z', paths: [10], reason: 'source-change' },
+      sequence: 10,
+      type: 'source.changed',
+    }],
+  ] as const) {
+    stream.emit('source.changed', { data: JSON.stringify(data), lastEventId });
+  }
+
+  await flushEvents();
+  expect(client.lastEventId).toBe(10);
+  expect(client.activity.changedFiles).toEqual([]);
+  expect(requests.length).toBeGreaterThan(1);
+  expect(requests.every((path) => path === '/api/project/status')).toBe(true);
   expect(errors).toHaveLength(4);
 });
 
@@ -609,7 +684,7 @@ it('reports one failed event refresh without an unhandled rejection and retains 
     await client.connect((next) => observed.push(next.artifact.state), (reason) => errors.push(reason));
     stream.emit('artifact.status', {
       data: JSON.stringify({
-        occurredAt: '2026-08-14T12:00:00.000Z',
+        occurredAt: '2026-08-16T12:00:00.000Z',
         payload: status().artifact,
         sequence: 7,
         type: 'artifact.status',
@@ -618,8 +693,8 @@ it('reports one failed event refresh without an unhandled rejection and retains 
     });
     stream.emit('source.changed', {
       data: JSON.stringify({
-        occurredAt: '2026-08-14T12:00:00.000Z',
-        payload: status().source,
+        occurredAt: '2026-08-16T12:00:01.000Z',
+        payload: { occurredAt: '2026-08-16T12:00:01.000Z', paths: [], reason: 'source-change' },
         sequence: 8,
         type: 'source.changed',
       }),
@@ -698,7 +773,7 @@ it('suppresses a late event-refresh error after close', async () => {
     await client.connect(() => undefined, (reason) => errors.push(reason));
     stream.emit('artifact.status', {
       data: JSON.stringify({
-        occurredAt: '2026-08-14T12:00:00.000Z',
+        occurredAt: '2026-08-16T12:00:00.000Z',
         payload: status().artifact,
         sequence: 7,
         type: 'artifact.status',

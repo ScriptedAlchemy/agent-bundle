@@ -67,7 +67,7 @@ export interface ForegroundRouteClientOptions {
 
 /** Closed authority shared by every foreground browser route client. */
 export interface ForegroundRequestAuthority {
-  protectedRequest(path: string, init?: RequestInit): Promise<Response>;
+  protectedRequest(path: string, init?: RequestInit, beforeDispatch?: () => void): Promise<Response>;
 }
 
 export interface McpRouteClientOptions extends ForegroundRouteClientOptions {
@@ -412,7 +412,17 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
     }
   }
 
-  async protectedRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  /** Returns the authenticated foreground origin without exposing the session token. */
+  async sessionOrigin(): Promise<string> {
+    const authentication = this.#authenticate();
+    const session = await authentication.promise;
+    if (!this.#isAuthenticationCurrent(authentication)) {
+      throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
+    }
+    return session.origin;
+  }
+
+  async protectedRequest(path: string, init: RequestInit = {}, beforeDispatch?: () => void): Promise<Response> {
     const route = foregroundRoute(path);
     const authentication = this.#authenticate();
     const signal = init.signal ?? undefined;
@@ -421,6 +431,7 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
     if (!this.#isAuthenticationCurrent(authentication)) {
       throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
     }
+    beforeDispatch?.();
     const headers = new Headers(init.headers);
     headers.set('x-agent-bundle-session', session.token);
     const response = await this.#fetch(route, { ...init, headers });
@@ -476,7 +487,7 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
     const body: unknown = await response.json().catch(() => undefined);
     if (!response.ok) throw ForegroundRouteClientError.fromResponse(body, response.status);
     if (
-      !isRecord(body) || typeof body.cookieName !== 'string' ||
+      !isRecord(body) || !hasExactKeys(body, ['cookieName', 'origin', 'token']) || typeof body.cookieName !== 'string' ||
       !/^agent-bundle-foreground-session-[a-f0-9]{32}$/u.test(body.cookieName) ||
       typeof body.origin !== 'string' || typeof body.token !== 'string' || body.token.length === 0
     ) {

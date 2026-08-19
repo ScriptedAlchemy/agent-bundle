@@ -20,6 +20,7 @@ import type {
 import type { McpAppConsentRequest, McpAppDocumentPolicySnapshot } from '../../../agent-bundle/src/dev/mcp-app-sandbox.ts';
 
 import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
+import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp-route-client.ts';
 
 export type McpAppJsonPrimitive = null | boolean | number | string;
 
@@ -109,7 +110,8 @@ export interface McpAppConsentDecision {
 }
 
 export interface McpAppClientOptions {
-  readonly fetch?: typeof fetch;
+  /** Workbench-owned foreground authentication shared by every protected browser client. */
+  readonly foreground: ForegroundRouteClient;
   /** Reuses the Workbench's authenticated project event stream when it is already connected. */
   readonly projectClient?: Pick<ProjectClient, 'subscribeEvents'>;
 }
@@ -129,11 +131,6 @@ export interface McpAppRuntimeClient {
   getRuntime(bindingId: string): Promise<McpAppPreviewSnapshot>;
   operateRuntime(bindingId: string, operation: McpAppBindingOperation, signal?: AbortSignal): Promise<McpAppBoundOperationResult>;
   subscribeInvalidations(listener: (details: McpAppRuntimeInvalidationDetails) => void): () => void;
-}
-
-interface ForegroundSession {
-  readonly origin: string;
-  readonly token: string;
 }
 
 interface Diagnostic {
@@ -1034,7 +1031,7 @@ const validRequestId = (value: unknown): value is McpAppRequestId =>
 
 /** Credential-memory-only browser client for binding-scoped MCP App routes. */
 export class McpAppClient implements McpAppRuntimeClient {
-  readonly #fetch: typeof fetch;
+  readonly #foreground: ForegroundRouteClient;
   readonly #runtimeCloseAttempts = new Map<string, RuntimeCloseAttempt>();
   readonly #runtimeConsentChallenges = new Map<string, Map<string, RuntimeConsentChallenge>>();
   readonly #invalidations = new Set<(details: McpAppRuntimeInvalidationDetails) => void>();
@@ -1042,21 +1039,20 @@ export class McpAppClient implements McpAppRuntimeClient {
   readonly #runtimeBindingGenerations = new Map<string, number>();
   readonly #runtimePolicies = new Map<string, McpAppTrustedDocumentPolicy>();
   readonly #unsubscribeProjectEvents: (() => void) | undefined;
-  #authentication: Promise<ForegroundSession> | undefined;
   #lastRuntimeEventSequence = -1;
   #runtimeBindingInvalidationEpoch = 0;
   #runtimeDisposed = false;
   #runtimeGeneration = 0;
 
-  constructor(options: McpAppClientOptions = {}) {
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  constructor(options: McpAppClientOptions) {
+    this.#foreground = options.foreground;
     this.#unsubscribeProjectEvents = options.projectClient?.subscribeEvents((event) => this.#onProjectEvent(event));
   }
 
   async createRuntime(request: RuntimeCreateRequest): Promise<McpAppPreviewSnapshot> {
     const submitted = runtimeCreateRequest(request);
     const admission = this.#admitRuntime();
-    const foreground = await this.#authenticate();
+    const foregroundOrigin = await this.#foregroundOrigin();
     this.#assertRuntimeAdmission(admission);
     const response = await this.#json('/api/runtime/apps', {
       body: JSON.stringify(submitted),
@@ -1065,7 +1061,7 @@ export class McpAppClient implements McpAppRuntimeClient {
     }, admission);
     this.#assertRuntimeAdmission(admission);
     const body = runtimeRecord(response, ['preview']);
-    const snapshot = runtimePreview(body.preview, foreground.origin);
+    const snapshot = runtimePreview(body.preview, foregroundOrigin);
     if (snapshot.binding.runVector.runtimeGenerationId !== submitted.expectedGenerationId || snapshot.binding.profileId !== submitted.profileId) {
       runtimeInvalid('Runtime MCP App preview does not match its create request.');
     }
@@ -1079,12 +1075,12 @@ export class McpAppClient implements McpAppRuntimeClient {
   async getRuntime(bindingId: string): Promise<McpAppPreviewSnapshot> {
     const id = decodeURIComponent(opaqueSegment(bindingId, 'Runtime MCP App binding'));
     const admission = this.#admitRuntime(id);
-    const foreground = await this.#authenticate();
+    const foregroundOrigin = await this.#foregroundOrigin();
     this.#assertRuntimeAdmission(admission);
     const response = await this.#json(`/api/runtime/apps/${opaqueSegment(id, 'Runtime MCP App binding')}`, {}, admission);
     this.#assertRuntimeAdmission(admission);
     const body = runtimeRecord(response, ['preview']);
-    const snapshot = runtimePreview(body.preview, foreground.origin);
+    const snapshot = runtimePreview(body.preview, foregroundOrigin);
     if (snapshot.binding.id !== id) runtimeInvalid('Runtime MCP App preview does not match its requested binding.');
     this.#assertRuntimeAdmission(admission);
     return this.#installRuntimePreview(snapshot);
@@ -1226,12 +1222,12 @@ export class McpAppClient implements McpAppRuntimeClient {
   }
 
   async create(sessionId: string, request: McpAppPreviewCreateRequest): Promise<McpAppPreview> {
-    const foreground = await this.#authenticate();
+    const foregroundOrigin = await this.#foregroundOrigin();
     return preview(asRecord(await this.#json(`/api/mcp/sessions/${opaqueSegment(sessionId, 'MCP session')}/apps`, {
       body: JSON.stringify(detachedJson(request)),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
-    })).preview, foreground.origin);
+    })).preview, foregroundOrigin);
   }
 
   async message(bindingId: string, message: McpAppJsonValue, signal?: AbortSignal): Promise<McpAppRouteMessages> {
@@ -1257,14 +1253,14 @@ export class McpAppClient implements McpAppRuntimeClient {
   }
 
   async decideConsent(bindingId: string, challengeId: string, approved: boolean): Promise<McpAppConsentDecision> {
-    const foreground = await this.#authenticate();
+    const foregroundOrigin = await this.#foregroundOrigin();
     opaqueSegment(challengeId, 'MCP App consent challenge');
     if (typeof approved !== 'boolean') throw new McpAppClientError('AB8016', 'MCP App consent decision is not valid.');
     const body = asRecord(await this.#json(`${this.#bindingPath(bindingId)}/consent`, {
       body: JSON.stringify({ approved, challengeId }), headers: { 'content-type': 'application/json' }, method: 'POST',
     }));
     if (typeof body.approved !== 'boolean') throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid consent decision.');
-    return Object.freeze({ approved: body.approved, messages: asArray(body.messages), preview: preview(body.preview, foreground.origin) });
+    return Object.freeze({ approved: body.approved, messages: asArray(body.messages), preview: preview(body.preview, foregroundOrigin) });
   }
 
   async close(bindingId: string, options: Readonly<{ readonly id: McpAppRequestId; readonly reason?: string }>): Promise<McpAppRouteClose> {
@@ -1293,7 +1289,7 @@ export class McpAppClient implements McpAppRuntimeClient {
 
   /** Erases the memory-only foreground credential once this relay closes. */
   forgetAuthentication(): void {
-    this.#authentication = undefined;
+    this.#foreground.forgetAuthentication();
   }
 
   #admitRuntime(bindingId?: string): RuntimeAdmission {
@@ -1591,7 +1587,6 @@ export class McpAppClient implements McpAppRuntimeClient {
     admission?: RuntimeAdmission,
     closeAttempt?: RuntimeCloseAttempt,
   ): Promise<Response> {
-    const authentication = await this.#authenticate();
     if (admission !== undefined) this.#assertRuntimeAdmission(admission);
     if (closeAttempt !== undefined) {
       this.#assertRuntimeCloseAdmission(closeAttempt);
@@ -1600,44 +1595,29 @@ export class McpAppClient implements McpAppRuntimeClient {
       }
       closeAttempt.dispatched = true;
     }
-    const headers = new Headers(init.headers);
-    headers.set('x-agent-bundle-session', authentication.token);
-    const response = await this.#fetch(path, { ...init, headers });
-    if (!response.ok) {
-      const body: unknown = await response.clone().json().catch(() => undefined);
-      const detail = diagnostic(body, response.status);
-      throw new McpAppClientError(detail.code, detail.message);
-    }
-    return response;
-  }
-
-  async #authenticate(): Promise<ForegroundSession> {
-    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
     try {
-      return await this.#authentication;
+      return await this.#foreground.protectedRequest(
+        path,
+        init,
+        admission === undefined ? undefined : () => this.#assertRuntimeAdmission(admission),
+      );
     } catch (error) {
-      this.#authentication = undefined;
-      throw error;
+      throw this.#foregroundError(error);
     }
   }
 
-  async #bootstrap(): Promise<ForegroundSession> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) {
-      const detail = diagnostic(body, response.status);
-      throw new McpAppClientError(detail.code, detail.message);
+  async #foregroundOrigin(): Promise<string> {
+    try {
+      return await this.#foreground.sessionOrigin();
+    } catch (error) {
+      throw this.#foregroundError(error);
     }
-    const session = asRecord(body);
-    if (typeof session.token !== 'string' || session.token.length === 0) {
-      throw new McpAppClientError('AB8019', 'Foreground session bootstrap returned an invalid response.');
-    }
-    const sessionOrigin = origin(session.origin);
-    const browserOrigin = globalThis.location?.origin;
-    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== sessionOrigin) {
-      throw new McpAppClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.');
-    }
-    return Object.freeze({ origin: sessionOrigin, token: session.token });
+  }
+
+  #foregroundError(error: unknown): McpAppClientError | unknown {
+    if (error instanceof McpAppClientError) return error;
+    if (error instanceof ForegroundRouteClientError) return new McpAppClientError(error.code, error.message);
+    return error;
   }
 
   #bindingPath(bindingId: string): string {

@@ -129,6 +129,10 @@ const usageDelta = (
   delta: EvalComparisonDelta,
 ): string => {
   if (delta.totalTokens !== undefined) return `${sign(delta.totalTokens)}${delta.totalTokens} tokens`;
+  const unequalTrialCounts = baseline.usage !== undefined && candidate.usage !== undefined &&
+    baseline.usage.recordedTrials === baseline.trials && candidate.usage.recordedTrials === candidate.trials &&
+    baseline.trials !== candidate.trials;
+  if (unequalTrialCounts) return 'Unavailable: unequal trial counts';
   const incomplete = baseline.usage !== undefined && candidate.usage !== undefined &&
     (baseline.usage.recordedTrials !== baseline.trials || candidate.usage.recordedTrials !== candidate.trials);
   return incomplete ? 'Unavailable: incomplete usage coverage' : 'Not recorded';

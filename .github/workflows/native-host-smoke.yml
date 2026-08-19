@@ -21,20 +21,32 @@ jobs:
   native-host-smoke:
     # This runs only on a trusted runner with existing CLI login state; no workflow secrets are passed.
     runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: claude
+            source_tests: packages/agent-bundle/tests/native-claude-contract.test.ts packages/agent-bundle/tests/eval-claude-harness.test.ts
+            packed_command: npm run test:packed:native:claude
+          - host: codex
+            source_tests: packages/agent-bundle/tests/native-codex-contract.test.ts packages/agent-bundle/tests/eval-codex-home.test.ts
+            packed_command: npm run test:packed:native:codex
     steps:
       - uses: actions/checkout@v7
+        if: inputs.host == 'both' || inputs.host == matrix.host
       - uses: actions/setup-node@v7
+        if: inputs.host == 'both' || inputs.host == matrix.host
         with:
           node-version: '22.19.0'
           cache: npm
       - run: npm ci
-      - name: Claude signed-in smoke
-        if: inputs.host == 'both' || inputs.host == 'claude'
+        if: inputs.host == 'both' || inputs.host == matrix.host
+      - name: ${{ matrix.host }} source signed-in smoke
+        if: inputs.host == 'both' || inputs.host == matrix.host
         env:
-          AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: '1'
-        run: npm run test -- packages/agent-bundle/tests/native-claude-contract.test.ts
-      - name: Codex signed-in smoke
-        if: inputs.host == 'both' || inputs.host == 'codex'
-        env:
-          AGENT_BUNDLE_NATIVE_CODEX_SMOKE: '1'
-        run: npm run test -- packages/agent-bundle/tests/eval-codex-home.test.ts
+          AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: ${{ matrix.host == 'claude' && '1' || '' }}
+          AGENT_BUNDLE_NATIVE_CODEX_SMOKE: ${{ matrix.host == 'codex' && '1' || '' }}
+        run: npm run test -- ${{ matrix.source_tests }}
+      - name: ${{ matrix.host }} installed-tarball native smoke
+        if: inputs.host == 'both' || inputs.host == matrix.host
+        run: ${{ matrix.packed_command }}

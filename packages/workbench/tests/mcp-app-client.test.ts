@@ -5,12 +5,64 @@ import { runtimeAppMessageLimits } from '../../agent-bundle/src/dev/runtime-app-
 import {
   assertCurrentMcpAppDocumentPolicy,
   isCurrentMcpAppDocumentPolicy,
-  McpAppClient,
+  McpAppClient as McpAppClientImplementation,
   type McpAppConsentChallenge,
   type McpAppPreviewCreateRequest,
 } from '../src/mcp/mcp-app-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { createRuntimeConsentQueue } from '../src/mcp/runtime-consent-queue.ts';
 import { ProjectClient, type EventSourceLike, type EventSourceMessage } from '../src/project-client.ts';
+
+const foregroundCookieName = 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef';
+const missingProjectStatusResponse = Object.freeze({
+  status: Object.freeze({
+    artifact: Object.freeze({ state: 'missing' }),
+    build: Object.freeze({ state: 'idle' }),
+    source: Object.freeze({ diagnostics: Object.freeze([]), state: 'unknown' }),
+  }),
+});
+
+const withCanonicalForegroundSession = (fetch: typeof globalThis.fetch): typeof globalThis.fetch =>
+  async (input, init) => {
+    const response = await fetch(input, init);
+    if (String(input) !== '/api/project/session' || !response.ok) return response;
+    let body: unknown;
+    try {
+      body = await response.clone().json();
+    } catch {
+      return response;
+    }
+    const record = body as Readonly<Record<string, unknown>>;
+    if (
+      body === null
+      || typeof body !== 'object'
+      || Array.isArray(body)
+      || Object.keys(record).length !== 2
+      || !Object.hasOwn(record, 'origin')
+      || !Object.hasOwn(record, 'token')
+      || typeof record.origin !== 'string'
+      || typeof record.token !== 'string'
+    ) {
+      return response;
+    }
+    return Response.json(
+      { cookieName: foregroundCookieName, origin: record.origin, token: record.token },
+      { headers: response.headers, status: response.status, statusText: response.statusText },
+    );
+  };
+
+class McpAppClient extends McpAppClientImplementation {
+  constructor(options: Readonly<{
+    readonly fetch: typeof globalThis.fetch;
+    readonly foreground?: ForegroundRouteClient;
+    readonly projectClient?: Pick<ProjectClient, 'subscribeEvents'>;
+  }>) {
+    super({
+      foreground: options.foreground ?? new ForegroundRouteClient({ fetch: withCanonicalForegroundSession(options.fetch) }),
+      ...(options.projectClient === undefined ? {} : { projectClient: options.projectClient }),
+    });
+  }
+}
 
 const request: McpAppPreviewCreateRequest = Object.freeze({
   host: Object.freeze({
@@ -184,6 +236,26 @@ const deferred = <Value>(): Deferred<Value> => {
 };
 
 describe('MCP App browser client', () => {
+  for (const [description, body] of [
+    ['a versioned payload', { cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', schemaVersion: 1, token: 'foreground-secret' }],
+    ['an unexpected payload field', { cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', scope: 'workbench', token: 'foreground-secret' }],
+    ['a malformed payload', { cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123' }],
+  ] as const) {
+    it(`rejects ${description} from the shared foreground session bootstrap`, async () => {
+      const routePaths: string[] = [];
+      const client = new McpAppClient({
+        fetch: (async (input) => {
+          if (String(input) === '/api/project/session') return json(body);
+          routePaths.push(String(input));
+          return json({ accepted: true, lifecycle: 'initialized', messages: [] });
+        }) as typeof globalThis.fetch,
+      });
+
+      await expect(client.message('binding-weather', { id: 'session-body', jsonrpc: '2.0', method: 'ping' })).rejects.toMatchObject({ code: 'AB8019' });
+      expect(routePaths).toEqual([]);
+    });
+  }
+
   it('uses only the closed runtime App routes and rotates one trusted policy per binding', async () => {
     const calls: Array<readonly [string, RequestInit | undefined]> = [];
     const nextPolicy = Object.freeze({
@@ -453,7 +525,7 @@ describe('MCP App browser client', () => {
     let closeAttempts = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/project/status') return json(missingProjectStatusResponse);
       if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
       if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') {
         closeAttempts += 1;
@@ -506,7 +578,7 @@ describe('MCP App browser client', () => {
     let closeAttempts = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/project/status') return json(missingProjectStatusResponse);
       if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
       if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') {
         closeAttempts += 1;
@@ -542,7 +614,7 @@ describe('MCP App browser client', () => {
     let closeAttempts = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/project/status') return json(missingProjectStatusResponse);
       if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
       if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') {
         closeAttempts += 1;
@@ -578,7 +650,7 @@ describe('MCP App browser client', () => {
     const stream = new RuntimeEventSource();
     const fetch = async (input: string | URL | Request): Promise<Response> => {
       if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/project/status') return json(missingProjectStatusResponse);
       if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
       throw new Error(`Unexpected request ${String(input)}.`);
     };
@@ -623,7 +695,7 @@ describe('MCP App browser client', () => {
     let creates = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/project/status') return json(missingProjectStatusResponse);
       if (String(input) === '/api/runtime/apps') {
         creates += 1;
         if (creates === 1) return json({ preview: runtimePreview });
@@ -668,7 +740,7 @@ describe('MCP App browser client', () => {
     previewB.session.binding.sessionId = 'runtime-session-b';
     const fetch = async (input: string | URL | Request): Promise<Response> => {
       if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/project/status') return json(missingProjectStatusResponse);
       if (String(input) === '/api/runtime/apps') {
         createStarted.resolve();
         return createResponse.promise;
@@ -1111,7 +1183,7 @@ describe('MCP App browser client', () => {
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const path = String(input);
       if (path === '/api/project/session') return bootstrap?.promise ?? json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (path === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (path === '/api/project/status') return json(missingProjectStatusResponse);
       protectedPaths.push(path);
       if (path === '/api/runtime/apps') return json({ preview: runtimePreview });
       if (path === '/api/runtime/apps/runtime-binding') return init?.method === 'DELETE' ? json({ closed: true }) : json({ preview: runtimePreview });
@@ -1120,7 +1192,8 @@ describe('MCP App browser client', () => {
       if (path === '/api/runtime/apps/runtime-binding/consents/consent-a') return json({ documentPolicy: runtimePolicy });
       throw new Error(`Unexpected request ${path}.`);
     };
-    const project = new ProjectClient({ events: () => stream, fetch: fetch as typeof globalThis.fetch });
+    const foreground = new ForegroundRouteClient({ fetch: withCanonicalForegroundSession(fetch as typeof globalThis.fetch) });
+    const project = new ProjectClient({ events: () => stream, foreground });
     await project.connect(() => undefined);
     const request = { actionFingerprint: 'fingerprint-a', capability: 'camera' as const, details: {}, scope: 'document' as const, summary: 'Use camera' };
     let sequence = 0;
@@ -1141,13 +1214,18 @@ describe('MCP App browser client', () => {
     };
     const seed = async (challenge = false): Promise<McpAppClient> => {
       bootstrap = undefined;
-      const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+      const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, foreground, projectClient: project });
       await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
       if (challenge) await runtime.createRuntimeConsent('runtime-binding', request);
       runtime.forgetAuthentication();
       return runtime;
     };
-    const fence = async (runtime: McpAppClient, work: () => Promise<unknown>, invalidate: () => void | Promise<void>): Promise<void> => {
+    const fence = async (
+      runtime: McpAppClient,
+      work: () => Promise<unknown>,
+      invalidate: () => void | Promise<void>,
+      expectedPaths: readonly string[] = [],
+    ): Promise<void> => {
       protectedPaths.length = 0;
       bootstrap = deferred<Response>();
       const pending = work();
@@ -1156,11 +1234,11 @@ describe('MCP App browser client', () => {
       await invalidate();
       bootstrap.resolve(json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' }));
       await expect(pending).rejects.toMatchObject({ code: 'AB8015' });
-      expect(protectedPaths).toEqual([]);
+      expect(protectedPaths).toEqual(expectedPaths);
       bootstrap = undefined;
     };
 
-    const creating = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+    const creating = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, foreground, projectClient: project });
     await fence(creating, () => creating.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' }), () => creating.disposeRuntime());
     const getting = await seed();
     await fence(getting, () => getting.getRuntime('runtime-binding'), () => gap());
@@ -1171,7 +1249,12 @@ describe('MCP App browser client', () => {
     const deciding = await seed(true);
     await fence(deciding, () => deciding.decideRuntimeConsent('runtime-binding', 'consent-a', 'deny'), () => gap());
     const closing = await seed();
-    await fence(closing, () => closing.closeRuntime('runtime-binding'), () => closing.disposeRuntime());
+    await fence(
+      closing,
+      () => closing.closeRuntime('runtime-binding'),
+      () => closing.disposeRuntime(),
+      ['/api/runtime/apps/runtime-binding'],
+    );
     project.close();
   });
 
@@ -1264,7 +1347,7 @@ describe('MCP App browser client', () => {
     let streamCount = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/project/status') return json(missingProjectStatusResponse);
       if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
       if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') return json({ closed: true });
       throw new Error(`Unexpected request ${String(input)}.`);
@@ -1321,7 +1404,7 @@ describe('MCP App browser client', () => {
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const path = String(input);
       if (path === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (path === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (path === '/api/project/status') return json(missingProjectStatusResponse);
       if (path === '/api/runtime/apps') return mode === 'create' ? pending!.promise : json({ preview: runtimePreview });
       if (path === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') return json({ closed: true });
       if (path === '/api/runtime/apps/runtime-binding') return mode === 'get' ? pending!.promise : json({ preview: runtimePreview });

@@ -406,7 +406,7 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
       path: 'codex/hooks/session-start-session-start-7ab7e8a5.mjs',
     });
     const epochMarker = join(artifact, '.agent-bundle-epoch-stage.json');
-    await writeFile(epochMarker, '{"token":"00000000-0000-4000-8000-000000000000","version":1}\n');
+    await writeFile(epochMarker, '{"token":"00000000-0000-4000-8000-000000000000"}\n');
     await expect(service.list({ artifact })).rejects.toThrow(/artifact files do not match/i);
     await expect(service.list({ allowEpochStagingMarker: true, artifact })).resolves.toHaveLength(8);
     await rm(epochMarker, { force: true });

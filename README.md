@@ -180,14 +180,17 @@ artifact/
 
 Portable artifacts contain portable plugin, skills, MCP, and App-resource files. Codex and Claude artifacts contain their respective native metadata and generated hook wrappers. Terminal hosts can use normal MCP tools and resources; visual rendering of an MCP App depends on the host supporting the standard resource metadata.
 
-## Contributor release gate
+## Contributor delivery and release gates
 
-From this repository, run the complete local release gate with:
+From this repository, run the complete local delivery gate with:
 
 ```sh
-npm run check:release
+npm run check && npm run check:release
 ```
 
-Its individual package-script checks are `npm run pack:dry-run`, `npm run audit:release`, and
-`npm run test:packed`. Publication has no repository script: selecting the npm package name/scope,
+`npm run check:release` is the release-only gate: it runs `npm run pack:dry-run`,
+`npm run audit:release`, and `npm run test:packed`; it does not replace `npm run check`.
+Repository-owned Chromium E2E runs independently of a connected ChatGPT Chrome extension. The
+extension is for the separate final manual visual pass, not a substitute for repository or packed
+consumer verification. Publication has no repository script: selecting the npm package name/scope,
 license, and `publishConfig` remains an explicit release-owner decision.

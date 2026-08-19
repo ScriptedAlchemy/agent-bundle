@@ -1,6 +1,6 @@
 # Agent Bundle developer workbench implementation plan
 
-**Status:** Implemented; delivery audit and packed-consumer release verification remain
+**Status:** Implemented; W26 delivery verification and packed-consumer release verification are in progress
 
 **Date:** 2026-08-14
 
@@ -439,6 +439,8 @@ Acceptance:
 - all processes, watchers, locks, sessions, sandboxes, and temp homes close cleanly;
 - full Rstest unit/integration/browser suite, native opt-in suite, lint, typecheck, Rsbuild/Rslib
   builds, dependency audit, and package dry run pass;
+- repository-owned Chrome E2E can run without a connected ChatGPT Chrome extension; a connected
+  extension is only part of the separate final manual visual pass;
 - an independent cross-cutting review finds no remaining concrete correctness issue.
 
 ## Review gates

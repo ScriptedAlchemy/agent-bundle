@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -159,6 +159,7 @@ it('runs strict validation before the subscription-backed stream command and ret
       validation: { exitCode: 0 },
       version: '2.1.232',
     },
+    normalHome: 'unchanged',
     status: 'passed',
   });
   expect(calls).toEqual([
@@ -200,6 +201,97 @@ it('runs strict validation before the subscription-backed stream command and ret
   expect(JSON.stringify(report)).not.toContain('private');
 });
 
+it('proves the normal Claude config, settings, and plugins stay unchanged without retaining local state', async () => {
+  const harness = await loadNativeClaudeContract();
+  expect(harness).toBeDefined();
+
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-normal-home-contract-'));
+  const initializeHome = async (home: string): Promise<void> => {
+    await mkdir(join(home, 'plugins'), { recursive: true });
+    await Promise.all([
+      writeFile(join(home, 'config.json'), '{"marker":"normal-config-marker"}\n'),
+      writeFile(join(home, 'settings.json'), '{"marker":"normal-settings-marker"}\n'),
+      writeFile(join(home, 'settings.local.json'), '{"marker":"normal-local-settings-marker"}\n'),
+      writeFile(join(home, 'plugins', 'installed.json'), '{"marker":"normal-plugin-marker"}\n'),
+      writeFile(join(home, 'session.json'), '{"marker":"normal-session-marker"}\n'),
+    ]);
+  };
+  const runSmoke = async (home: string, mutate: boolean, failExecution = false) => harness!.runNativeClaudeSmoke({
+    candidatePluginName,
+    candidateSkillName,
+    cwd: root,
+    enabled: true,
+    environment: {
+      AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: '1',
+      ANTHROPIC_API_KEY: 'must-not-reach-child',
+      CLAUDE_CONFIG_DIR: home,
+      PATH: '/usr/bin',
+    },
+    pluginDirectory: '/candidate/plugin',
+    prompt: 'Use the candidate Skill and reply with the sentinel.',
+    run: async (request: { readonly args: readonly string[] }) => {
+      if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.232 (Claude Code)\n' };
+      if (request.args[0] === 'auth') {
+        return { exitCode: 0, stderr: '', stdout: '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"pro"}\n' };
+      }
+      if (request.args[0] === 'plugin') return { exitCode: 0, stderr: '', stdout: 'Plugin is valid.\n' };
+      if (mutate) {
+        const pluginPath = join(home, 'plugins', 'installed.json');
+        await writeFile(pluginPath, '{"marker":"normal-plugin-change"}\n');
+        const fixedTime = new Date('2026-08-14T12:00:00.000Z');
+        await utimes(pluginPath, fixedTime, fixedTime);
+      }
+      return {
+        exitCode: failExecution ? 1 : 0,
+        stderr: '',
+        stdout: [
+          '{"type":"system","subtype":"init","apiKeySource":"none","plugins":[{"name":"agent-bundle-native-smoke"}]}',
+          '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"agent-bundle-native-smoke:agent-bundle-native-smoke"}}]}}',
+          '{"type":"result","subtype":"success"}',
+        ].join('\n'),
+      };
+    },
+  });
+
+  try {
+    const unchangedHome = join(root, 'normal-unchanged');
+    await initializeHome(unchangedHome);
+    const unchanged = await runSmoke(unchangedHome, false);
+    expect(unchanged).toMatchObject({ normalHome: 'unchanged', status: 'passed' });
+    expect(JSON.stringify(unchanged)).not.toContain(root);
+    expect(JSON.stringify(unchanged)).not.toMatch(/normal-(?:config|settings|local-settings|plugin|session)(?:-changed)?-marker/iu);
+
+    const changedHome = join(root, 'normal-changed');
+    await initializeHome(changedHome);
+    await utimes(
+      join(changedHome, 'plugins', 'installed.json'),
+      new Date('2026-08-14T12:00:00.000Z'),
+      new Date('2026-08-14T12:00:00.000Z'),
+    );
+    const changed = await runSmoke(changedHome, true);
+    expect(changed.status).toBe('harness-failure');
+    expect(changed.diagnostics.map((diagnostic) => diagnostic.code)).toContain('claude-native.normal-home.changed');
+    expect((changed as unknown as { readonly normalHome?: unknown }).normalHome).not.toBe('unchanged');
+    expect(JSON.stringify(changed)).not.toContain(root);
+    expect(JSON.stringify(changed)).not.toMatch(/normal-(?:config|settings|local-settings|plugin|session)(?:-changed)?-marker/iu);
+
+    const changedFailureHome = join(root, 'normal-changed-failure');
+    await initializeHome(changedFailureHome);
+    await utimes(
+      join(changedFailureHome, 'plugins', 'installed.json'),
+      new Date('2026-08-14T12:00:00.000Z'),
+      new Date('2026-08-14T12:00:00.000Z'),
+    );
+    const changedFailure = await runSmoke(changedFailureHome, true, true);
+    expect(changedFailure.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'claude-native.execution.failed',
+      'claude-native.normal-home.changed',
+    ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('reports an incompatible Claude version as a harness failure before candidate validation', async () => {
   const harness = await loadNativeClaudeContract();
   expect(harness).toBeDefined();
@@ -224,6 +316,7 @@ it('reports an incompatible Claude version as a harness failure before candidate
       code: 'claude-native.version.incompatible',
       message: 'Claude Code 2.1.231 is older than the required 2.1.232 native contract; upgrade the CLI.',
     }],
+    normalHome: 'unchanged',
     status: 'harness-failure',
   });
   expect(calls).toEqual([{

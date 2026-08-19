@@ -22,7 +22,7 @@
 .artifact-detail-rows div:last-child { border-right: 0; }
 .artifact-detail-rows dt { color: #596372; font-size: 12px; font-weight: 750; margin: 0 0 6px; }
 .artifact-detail-rows dd { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
-.artifact-table { border-collapse: collapse; display: block; font-size: 13px; margin: 0; overflow-x: auto; width: 100%; }
+.artifact-table { border-collapse: collapse; display: block; font-size: 13px; margin: 0; min-width: 0; overflow-x: auto; width: 100%; }
 .artifact-table th, .artifact-table td { border-bottom: 1px solid #e4e8ef; padding: 8px 14px 8px 12px; text-align: left; vertical-align: top; white-space: nowrap; }
 .artifact-table thead th { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
 .artifact-table tbody th { font-weight: 600; }
