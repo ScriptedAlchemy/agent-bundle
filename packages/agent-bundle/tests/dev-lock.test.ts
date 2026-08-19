@@ -200,3 +200,49 @@ it('does not let an old handle remove a lock acquired after its record disappear
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('makes concurrent close callers wait for the same cleanup operation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle concurrent dev lock close '));
+  let recoveryGateHeld = true;
+
+  try {
+    const lock = await acquireDevLock({
+      probeProcess: () => recoveryGateHeld,
+      projectRoot: root,
+    });
+    await writeFile(recoveryPathFor(root), `${JSON.stringify({ owner: lock.owner })}\n`);
+
+    const firstClose = lock.close();
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    const secondClose = lock.close();
+    const secondResolvedBeforeCleanup = await Promise.race([
+      secondClose.then(() => true),
+      new Promise<false>((resolvePromise) => setImmediate(() => resolvePromise(false))),
+    ]);
+
+    recoveryGateHeld = false;
+    await Promise.all([firstClose, secondClose]);
+    expect(secondResolvedBeforeCleanup).toBe(false);
+    await expect(readFile(lockPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    recoveryGateHeld = false;
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('allows close to retry after cleanup fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle retry dev lock close '));
+
+  try {
+    const lock = await acquireDevLock({ projectRoot: root });
+    await writeFile(recoveryPathFor(root), '{}\n');
+
+    await expect(lock.close()).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
+    await rm(recoveryPathFor(root));
+    await lock.close();
+
+    await expect(readFile(lockPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});

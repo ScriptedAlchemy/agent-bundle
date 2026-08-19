@@ -170,6 +170,7 @@ export class DevLock {
   readonly #probeProcess: (pid: number) => boolean;
   readonly #recoveryPath: string;
   #closed = false;
+  #closePromise: Promise<void> | undefined;
 
   constructor(
     path: string,
@@ -187,15 +188,29 @@ export class DevLock {
 
   readonly owner: DevLockOwner;
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    const recoveryContents = await acquireRecoveryGate(this.#recoveryPath, this.owner, this.#probeProcess);
-    try {
-      await removeIfOwned(this.#path, this.#contents);
-    } finally {
-      await removeIfOwned(this.#recoveryPath, recoveryContents);
-    }
+  close(): Promise<void> {
+    if (this.#closed) return Promise.resolve();
+    if (this.#closePromise !== undefined) return this.#closePromise;
+
+    const closePromise = (async () => {
+      const recoveryContents = await acquireRecoveryGate(this.#recoveryPath, this.owner, this.#probeProcess);
+      try {
+        await removeIfOwned(this.#path, this.#contents);
+      } finally {
+        await removeIfOwned(this.#recoveryPath, recoveryContents);
+      }
+    })();
+    this.#closePromise = closePromise;
+    void closePromise.then(
+      () => {
+        this.#closed = true;
+        if (this.#closePromise === closePromise) this.#closePromise = undefined;
+      },
+      () => {
+        if (this.#closePromise === closePromise) this.#closePromise = undefined;
+      },
+    );
+    return closePromise;
   }
 }
 
