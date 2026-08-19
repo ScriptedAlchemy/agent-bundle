@@ -209,11 +209,11 @@ it('replays, exports, and promotes persisted raw event references only', async (
     fetch: recordingFetch(calls, () => response(calls.length === 1
       ? { replay: { cursor: { afterSequence: 2 }, events: [event(1, 'Bound.'), event(2, 'Inspected.')], session: terminal } }
       : calls.length === 2
-        ? { export: { events: [event(1, 'Bound.')], schemaVersion: 1, session: terminal } }
+        ? { export: { events: [event(1, 'Bound.')], session: terminal } }
         : {
             draftEvalCase: {
               assertions: [], epoch: identity.epoch, fixture: identity.fixture, invocation: identity.invocation,
-              outcome: { status: 'passed' }, schemaVersion: 1, target: identity.target, task: identity.task,
+              outcome: { status: 'passed' }, target: identity.target, task: identity.task,
             },
           }),
     ),
@@ -302,19 +302,34 @@ it('rejects malformed or hostile server envelopes through the stable foreground 
       name: 'a replay with a negative cursor',
     },
     {
-      body: { export: { events: [{ ...event(1, 'Bound.'), rawEventRef: 'forged.jsonl#1' }], schemaVersion: 1, session: terminal } },
+      body: { export: { events: [{ ...event(1, 'Bound.'), rawEventRef: 'forged.jsonl#1' }], session: terminal } },
       invoke: (client) => client.export('session-1'),
       name: 'an export with a forged event reference',
+    },
+    {
+      body: { export: { events: [], schemaVersion: 1, session: terminal } },
+      invoke: (client) => client.export('session-1'),
+      name: 'a versioned export outside the canonical contract',
     },
     {
       body: {
         draftEvalCase: {
           assertions: [], epoch: identity.epoch, fixture: identity.fixture, invocation: identity.invocation,
-          outcome: { status: 7 }, schemaVersion: 1, target: identity.target, task: identity.task,
+          outcome: { status: 7 }, target: identity.target, task: identity.task,
         },
       },
       invoke: (client) => client.promoteToDraftEval('session-1', ['events.jsonl#1']),
       name: 'a draft with a malformed durable outcome',
+    },
+    {
+      body: {
+        draftEvalCase: {
+          assertions: [], epoch: identity.epoch, fixture: identity.fixture, invocation: identity.invocation,
+          outcome: { status: 'passed' }, schemaVersion: 1, target: identity.target, task: identity.task,
+        },
+      },
+      invoke: (client) => client.promoteToDraftEval('session-1', ['events.jsonl#1']),
+      name: 'a versioned draft outside the canonical contract',
     },
     {
       body: { run: { id: 'run-1', session: accessorSession } },

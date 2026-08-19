@@ -110,7 +110,6 @@ export interface PlaygroundReplay {
 
 export interface PlaygroundExport {
   readonly events: readonly PlaygroundTraceEvent[];
-  readonly schemaVersion: 1;
   readonly session: PlaygroundSession;
 }
 
@@ -121,14 +120,13 @@ export interface PlaygroundSelectedAssertion {
   readonly kind: string;
 }
 
-/** A deliberately narrow W17 payload. W18 converts this unchanged into authored eval DSL. */
+/** A deliberately narrow payload that converts unchanged into authored eval DSL. */
 export interface DraftEvalCase {
   readonly assertions: readonly PlaygroundSelectedAssertion[];
   readonly epoch: PlaygroundEpochIdentity;
   readonly fixture: PlaygroundFixtureIdentity;
   readonly invocation: PlaygroundInvocation;
   readonly outcome: PlaygroundDurableOutcome;
-  readonly schemaVersion: 1;
   readonly target: PlaygroundTarget;
   readonly task: PlaygroundTask;
 }
@@ -265,7 +263,6 @@ interface SessionPersistenceProgress {
   metadataRenamed: boolean;
 }
 
-const draftSchemaVersion = 1 as const;
 const objectDirectoryName = 'session-objects';
 const indexDirectoryName = 'session-index';
 const pendingIndexDirectoryName = '.pending';
@@ -824,7 +821,7 @@ export class PlaygroundService {
   async export(sessionId: string): Promise<PlaygroundExport> {
     this.#assertAvailable();
     const replay = await this.replay(sessionId);
-    return Object.freeze({ events: replay.events, schemaVersion: draftSchemaVersion, session: replay.session });
+    return Object.freeze({ events: replay.events, session: replay.session });
   }
 
   async promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase> {
@@ -840,7 +837,6 @@ export class PlaygroundService {
         fixture: clone(record.identity.fixture, 'Playground fixture') as PlaygroundFixtureIdentity,
         invocation: clone(record.identity.invocation, 'Playground invocation') as PlaygroundInvocation,
         outcome: clone(record.outcome, 'Playground durable outcome') as PlaygroundDurableOutcome,
-        schemaVersion: draftSchemaVersion,
         target: clone(record.identity.target, 'Playground target') as PlaygroundTarget,
         task: clone(record.identity.task, 'Playground task') as PlaygroundTask,
       });

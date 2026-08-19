@@ -346,12 +346,11 @@ const draft: DraftEvalCase = Object.freeze({
   fixture: Object.freeze({ digest: 'fixture-digest', id: 'fixture-1' }),
   invocation: Object.freeze({ intent: Object.freeze({ mode: 'automatic', skill: 'review-change' }), kind: 'skill-select' }),
   outcome: Object.freeze({ response: 'the highest risk regression is the cache eviction path', status: 'succeeded' }),
-  schemaVersion: 1,
   target: Object.freeze({ digest: 'target-digest', name: 'claude' }),
   task: Object.freeze({ id: 'direct-review', text: 'Review this change and report the highest-risk regression.' }),
 });
 
-it('converts a frozen W17 draft into an authored case without leaking the recorded answer', () => {
+it('converts a frozen Playground draft into an authored case without leaking the recorded answer', () => {
   const converted = evalCaseFromDraft(draft, { fixture: './fixtures/review-repo', hosts });
 
   expect(converted.case.id).toBe('direct-review');
@@ -361,7 +360,6 @@ it('converts a frozen W17 draft into an authored case without leaking the record
   expect(converted.provenance).toEqual({
     epoch: { digest: 'epoch-digest', id: 'epoch-1' },
     fixtureDigest: 'fixture-digest',
-    schemaVersion: 1,
     target: { digest: 'target-digest', name: 'claude' },
   });
   expect(JSON.stringify(converted)).not.toContain('cache eviction');
@@ -382,4 +380,10 @@ it('rejects a draft whose invocation intent has no supported mode', () => {
   });
 
   expect(() => evalCaseFromDraft(unsupported, { fixture: './fixtures/review-repo', hosts })).toThrow(EvalDefinitionError);
+});
+
+it('rejects a versioned draft instead of treating it as another contract', () => {
+  const versioned = Object.freeze({ ...draft, schemaVersion: 1 }) as unknown as DraftEvalCase;
+
+  expect(() => evalCaseFromDraft(versioned, { fixture: './fixtures/review-repo', hosts })).toThrow(EvalDefinitionError);
 });

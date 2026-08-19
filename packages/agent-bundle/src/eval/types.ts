@@ -199,7 +199,6 @@ export interface EvalSuiteInput {
 export interface EvalDraftProvenance {
   readonly epoch: PlaygroundEpochIdentity;
   readonly fixtureDigest: string;
-  readonly schemaVersion: 1;
   readonly target: PlaygroundTarget;
 }
 

@@ -857,11 +857,11 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
         </section>}
         <PlaygroundTraceView onToggle={toggle} view={view} />
         {view.exported === undefined ? undefined : <section className="playground-detail">
-          <h2>Exported trace (schema version {view.exported.schemaVersion})</h2>
+          <h2>Exported trace</h2>
           <pre className="playground-json"><code>{JSON.stringify(view.exported, undefined, 2)}</code></pre>
         </section>}
         {draftEvalCase === undefined ? undefined : <section className="playground-detail">
-          <h2>Draft eval case (schema version {draftEvalCase.schemaVersion})</h2>
+          <h2>Draft eval case</h2>
           <pre className="playground-json"><code>{JSON.stringify(draftEvalCase, undefined, 2)}</code></pre>
         </section>}
       </>}

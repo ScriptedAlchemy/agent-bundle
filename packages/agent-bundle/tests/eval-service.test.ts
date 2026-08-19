@@ -604,7 +604,6 @@ it('runs a playground draft promoted into typed suite material', async () => {
       fixture: { digest: 'b'.repeat(64), id: 'repo' },
       invocation: { intent: { mode: 'automatic' }, kind: 'automatic' },
       outcome: { response: 'The recorded answer is deliberately dropped.', status: 'completed' },
-      schemaVersion: 1,
       target: { name: 'portable' },
       task: { id: 'promoted-case', text: 'Report the highest-risk regression.' },
     }, { fixture: './fixtures/repo', hosts: { portable: { model: 'deterministic' } } });

@@ -388,7 +388,6 @@ it('persists a frozen, globally ordered whole-plugin timeline with raw replay re
       fixture: { digest: 'fixture-sha256', id: 'fixture-clean' },
       invocation: { intent: { command: 'inspect', path: 'README.md' }, kind: 'script' },
       outcome: { response: 'Workspace is clean.', status: 'passed', workspace: { changedPaths: ['README.md'], digest: 'workspace-sha256' } },
-      schemaVersion: 1,
       target: { digest: 'target-sha256', name: 'codex' },
       task: { id: 'task-1', text: 'Explain the current workspace state.' },
     });
