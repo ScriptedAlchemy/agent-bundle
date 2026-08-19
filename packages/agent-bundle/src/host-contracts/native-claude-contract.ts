@@ -289,8 +289,8 @@ const evidenceFor = (
   version,
 });
 
-const digestClaudeFileTree = (path: string, includeContents = true): Promise<string> =>
-  digestFileTree(path, Object.freeze({ hashContents: includeContents, includeIdentity: true }));
+const digestClaudeFileTree = (path: string): Promise<string> =>
+  digestFileTree(path, Object.freeze({ hashContents: true, includeIdentity: true }));
 
 interface ClaudeNormalHomePaths {
   readonly directory: string;
@@ -332,11 +332,20 @@ const digestClaudeStateFile = async (path: string): Promise<string> => {
   return digest(meaningful);
 };
 
+// The CLI re-touches plugin-cache bookkeeping on every startup: `.in_use`
+// markers and a byte-identical known_marketplaces.json rewrite. Hash the tree
+// by contents (not mtime identity) and skip the markers so only genuine plugin
+// installs, removals, or content changes register as mutations.
+const isClaudePluginRuntimeMarker = (name: string): boolean => name === '.in_use';
+
 const snapshotClaudeNormalHome = async (paths: ClaudeNormalHomePaths): Promise<ClaudeNormalHomeSnapshot> => Object.freeze({
   claudeJson: await digestClaudeStateFile(paths.stateFile),
   config: await digestClaudeFileTree(join(paths.directory, 'config.json')),
   localSettings: await digestClaudeFileTree(join(paths.directory, 'settings.local.json')),
-  plugins: await digestClaudeFileTree(join(paths.directory, 'plugins'), false),
+  plugins: await digestFileTree(
+    join(paths.directory, 'plugins'),
+    Object.freeze({ exclude: isClaudePluginRuntimeMarker, hashContents: true, includeIdentity: false }),
+  ),
   settings: await digestClaudeFileTree(join(paths.directory, 'settings.json')),
 });
 

@@ -218,6 +218,8 @@ export const copyOpaqueCodexAuthState = async (source: string, destination: stri
 };
 
 export interface DigestFileTreeOptions {
+  /** Directory entries whose name matches are left out of the preimage. */
+  readonly exclude?: (name: string) => boolean;
   /** When false, hash mtime instead of file bytes. Default true. */
   readonly hashContents?: boolean;
   /** When true, include mode and size in the file preimage. Default false. */
@@ -248,6 +250,7 @@ export const digestFileTree = async (
       digest.update('directory\0');
       const children = await readdir(path, { withFileTypes: true });
       for (const child of [...children].sort((left, right) => left.name.localeCompare(right.name))) {
+        if (options.exclude?.(child.name) === true) continue;
         digest.update(`${child.name}\0${await digestFileTree(join(path, child.name), options)}\0`);
       }
       return digest.digest('hex');
