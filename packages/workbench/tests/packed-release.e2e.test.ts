@@ -13,6 +13,7 @@ const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
 const browserTimeout = 12_000;
+const packedServerStartupBudget = 45_000;
 const productTemporaryRootPrefixes = [
   'agent-bundle-hook-playground-',
   'agent-bundle-mcp-',
@@ -72,8 +73,11 @@ const buildPackage = (): Promise<void> => builtPackage ??= (async (): Promise<vo
 })();
 
 const awaitReady = async (origin: string, child: ChildProcess, output: () => string): Promise<void> => {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`The packed dev server exited before readiness: ${output()}`);
+  const startedAt = Date.now();
+  const diagnostics = (): string =>
+    `after ${String(Date.now() - startedAt)}ms (PID ${String(child.pid ?? 'unknown')}): ${output()}`;
+  while (Date.now() - startedAt < packedServerStartupBudget) {
+    if (child.exitCode !== null) throw new Error(`The packed dev server exited before readiness ${diagnostics()}`);
     try {
       if ((await fetch(origin)).ok) return;
     } catch {
@@ -81,7 +85,7 @@ const awaitReady = async (origin: string, child: ChildProcess, output: () => str
     }
     await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 50); });
   }
-  throw new Error(`Timed out waiting for the packed dev server: ${output()}`);
+  throw new Error(`Timed out waiting for the packed dev server ${diagnostics()}`);
 };
 
 const childExitedWithin = (child: ChildProcess, timeoutMs: number): Promise<boolean> => {
