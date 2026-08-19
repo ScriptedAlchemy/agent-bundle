@@ -44,6 +44,7 @@ export const writeKeepAliveStreamHead = (
  * restringify the same object.
  */
 export const encodedFrame = (message: object, encode: () => string): string => {
+  if (!Object.isFrozen(message)) return encode();
   const cached = encodedFrames.get(message);
   if (cached !== undefined) return cached;
   const frame = encode();
