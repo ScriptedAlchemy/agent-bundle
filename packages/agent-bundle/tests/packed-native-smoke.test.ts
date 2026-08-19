@@ -55,6 +55,7 @@ it('detects normal Claude config, settings, or plugin changes without retaining 
     readonly normalClaudeHomeUnchanged?: (
       environment: Readonly<NodeJS.ProcessEnv>,
       operation: () => Promise<void>,
+      options?: Readonly<{ readonly homeDirectory: string }>,
     ) => Promise<boolean>;
   };
   expect(harness?.normalClaudeHomeUnchanged).toBeDefined();
@@ -76,6 +77,47 @@ it('detects normal Claude config, settings, or plugin changes without retaining 
     })).resolves.toBe(false);
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('opaquely detects default ~/.claude.json mutation without extending custom config scope', async () => {
+  const harness = await loadPackedNativeSmoke() as undefined | {
+    readonly normalClaudeHomeUnchanged?: (
+      environment: Readonly<NodeJS.ProcessEnv>,
+      operation: () => Promise<void>,
+      options?: Readonly<{ readonly homeDirectory: string }>,
+    ) => Promise<boolean>;
+  };
+  expect(harness?.normalClaudeHomeUnchanged).toBeDefined();
+
+  const userHome = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-claude-default-'));
+  const customHome = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-claude-custom-'));
+  const privateValue = 'opaque-default-claude-state';
+  try {
+    await Promise.all([
+      mkdir(join(userHome, '.claude'), { recursive: true }),
+      mkdir(customHome, { recursive: true }),
+      writeFile(join(userHome, '.claude.json'), `${privateValue}\n`),
+      writeFile(join(customHome, 'settings.json'), '{"model":"subscription"}\n'),
+    ]);
+
+    const changed = await harness!.normalClaudeHomeUnchanged!({}, async () => {
+      await writeFile(join(userHome, '.claude.json'), `${privateValue}-changed\n`);
+    }, { homeDirectory: userHome });
+    expect(changed).toBe(false);
+    expect(JSON.stringify(changed)).toBe('false');
+    expect(JSON.stringify(changed)).not.toContain(privateValue);
+    expect(JSON.stringify(changed)).not.toContain(userHome);
+
+    const customUnchanged = await harness!.normalClaudeHomeUnchanged!({ CLAUDE_CONFIG_DIR: customHome }, async () => {
+      await writeFile(join(userHome, '.claude.json'), `${privateValue}-changed-again\n`);
+    }, { homeDirectory: userHome });
+    expect(customUnchanged).toBe(true);
+  } finally {
+    await Promise.all([
+      rm(userHome, { force: true, recursive: true }),
+      rm(customHome, { force: true, recursive: true }),
+    ]);
   }
 });
 
