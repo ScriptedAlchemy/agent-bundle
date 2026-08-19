@@ -54,6 +54,7 @@ const record = (value: unknown): Record<string, unknown> | undefined => {
     if (Object.values(descriptors).some((descriptor) => !('value' in descriptor))) return undefined;
     return Object.fromEntries(Object.entries(descriptors).map(([name, descriptor]) => [name, descriptor.value]));
   } catch {
+    // Hostile accessors or prototype traps never become adapter configuration.
     return undefined;
   }
 };

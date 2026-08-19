@@ -4,9 +4,9 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
+import { CodedError, isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
 import { isInside } from '../core/paths.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 
 export interface EpochStoreOptions {
@@ -84,15 +84,21 @@ export class EpochPostCommitCleanupError extends Error {
   }
 }
 
-export class EpochStoreError extends Error {
-  readonly code: EpochStoreErrorCode;
-
+export class EpochStoreError extends CodedError<EpochStoreErrorCode> {
   constructor(code: EpochStoreErrorCode, message: string) {
-    super(message);
-    this.name = 'EpochStoreError';
-    this.code = code;
+    super('EpochStoreError', code, message);
   }
 }
+
+interface ActiveEpochPointerStat {
+  readonly ino: number;
+  readonly mtimeMs: number;
+  readonly size: number;
+}
+
+type ActiveEpochCache =
+  | Readonly<{ readonly epoch: ArtifactEpoch; readonly pointer: ActiveEpochPointerStat; readonly present: true }>
+  | Readonly<{ readonly present: false }>;
 
 interface EpochMetadata {
   readonly epoch: ArtifactEpoch;
@@ -125,10 +131,30 @@ const artifactEpochKeys = [
 const epochDiagnosticsKeys = ['errors', 'infos', 'warnings'] as const;
 const epochReferenceCounts = new Map<string, number>();
 const epochLeaseQueues = new Map<string, ReturnType<typeof serialQueue>>();
+const syncTreeConcurrency = 16;
 
 const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
   const actual = Object.keys(value);
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+};
+
+const sameActiveEpochPointer = (left: ActiveEpochPointerStat, right: ActiveEpochPointerStat): boolean =>
+  left.ino === right.ino && left.mtimeMs === right.mtimeMs && left.size === right.size;
+
+const mapBounded = async <T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> => {
+  if (items.length === 0) return;
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      await worker(items[index]!);
+    }
+  }));
 };
 
 const leaseQueueFor = (agentBundlePath: string): ReturnType<typeof serialQueue> => {
@@ -171,12 +197,7 @@ const assertSafeTarget = (value: string): void => {
 };
 
 const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    Array.isArray(value) ||
-    !hasExactOwnKeys(value, artifactEpochKeys)
-  ) return undefined;
+  if (!isRecord(value) || !hasExactOwnKeys(value, artifactEpochKeys)) return undefined;
   const epoch = value as Partial<ArtifactEpoch>;
   const diagnostics = epoch.diagnostics;
   const targetDigests = epoch.targetDigests;
@@ -187,8 +208,7 @@ const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
     typeof epoch.manifestPath !== 'string' ||
     typeof epoch.modelDigest !== 'string' ||
     typeof epoch.projectRevision !== 'string' ||
-    typeof diagnostics !== 'object' ||
-    diagnostics === null ||
+    !isRecord(diagnostics) ||
     !hasExactOwnKeys(diagnostics, epochDiagnosticsKeys) ||
     typeof diagnostics.errors !== 'number' ||
     typeof diagnostics.infos !== 'number' ||
@@ -199,9 +219,7 @@ const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
     diagnostics.errors < 0 ||
     diagnostics.infos < 0 ||
     diagnostics.warnings < 0 ||
-    typeof targetDigests !== 'object' ||
-    targetDigests === null ||
-    Array.isArray(targetDigests)
+    !isRecord(targetDigests)
   ) {
     return undefined;
   }
@@ -310,6 +328,8 @@ export class EpochReference {
 /** Filesystem-backed store for immutable artifact epochs in one project. */
 export class EpochStore {
   readonly #activeEpochPath: string;
+  #activeEpochCache: ActiveEpochCache | undefined;
+  #cleanupDirty = false;
   readonly #cleanupRemove: typeof rm;
   readonly #durabilityStorage: EpochDurabilityStorage;
   readonly #epochMetadataPath: string;
@@ -388,6 +408,7 @@ export class EpochStore {
       const count = epochReferenceCounts.get(referenceKey) ?? 0;
       if (count === 1) {
         epochReferenceCounts.delete(referenceKey);
+        if (!await this.#isCachedActiveEpoch(epochId)) this.#cleanupDirty = true;
         await this.#cleanupUnderLease();
         return;
       }
@@ -420,12 +441,21 @@ export class EpochStore {
     });
   }
 
-  async #readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
+  async #readActiveEpoch(options: { refresh?: boolean } = {}): Promise<ArtifactEpoch | undefined> {
+    if (options.refresh !== true) {
+      const cached = await this.#readActiveEpochFromCache();
+      if (cached !== 'miss') return cached;
+    }
+
     let value: unknown;
     try {
       value = parseJsonWithoutDuplicateKeys(await readFile(this.#activeEpochPath, 'utf8'));
     } catch (error) {
-      if (isErrno(error, 'ENOENT')) return undefined;
+      if (isErrno(error, 'ENOENT')) {
+        this.#activeEpochCache = { present: false };
+        return undefined;
+      }
+      this.#activeEpochCache = undefined;
       throw new EpochStoreError(
         'EPOCH_METADATA_INVALID',
         'Active epoch metadata cannot be parsed as JSON.',
@@ -433,13 +463,51 @@ export class EpochStore {
     }
     const metadata = this.#parseMetadata(value);
     if (metadata === undefined) {
+      this.#activeEpochCache = undefined;
       throw new EpochStoreError(
         'EPOCH_METADATA_INVALID',
         'Active epoch metadata does not match the ArtifactEpoch contract.',
       );
     }
-    await this.#validateActiveEpoch(metadata.epoch);
+    try {
+      await this.#validateActiveEpoch(metadata.epoch);
+    } catch (error) {
+      this.#activeEpochCache = undefined;
+      throw error;
+    }
+    const pointer = await this.#statActiveEpochPointer();
+    this.#activeEpochCache = pointer === undefined
+      ? { present: false }
+      : { epoch: metadata.epoch, pointer, present: true };
     return metadata.epoch;
+  }
+
+  async #readActiveEpochFromCache(): Promise<ArtifactEpoch | undefined | 'miss'> {
+    const probe = await this.#statActiveEpochPointer();
+    const cache = this.#activeEpochCache;
+    if (probe === undefined) {
+      this.#activeEpochCache = { present: false };
+      return undefined;
+    }
+    if (cache?.present === true && sameActiveEpochPointer(cache.pointer, probe)) return cache.epoch;
+    return 'miss';
+  }
+
+  async #statActiveEpochPointer(): Promise<ActiveEpochPointerStat | undefined> {
+    try {
+      const metadata = await lstat(this.#activeEpochPath);
+      return { ino: metadata.ino, mtimeMs: metadata.mtimeMs, size: metadata.size };
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) return undefined;
+      throw error;
+    }
+  }
+
+  async #isCachedActiveEpoch(epochId: string): Promise<boolean> {
+    const cache = this.#activeEpochCache;
+    if (cache?.present !== true) return false;
+    const probe = await this.#statActiveEpochPointer();
+    return probe !== undefined && sameActiveEpochPointer(cache.pointer, probe) && cache.epoch.id === epochId;
   }
 
   async #acquireEpochReference(epoch: ArtifactEpoch): Promise<EpochReference> {
@@ -465,11 +533,13 @@ export class EpochStore {
   }
 
   async #cleanup(): Promise<void> {
+    this.#cleanupDirty = true;
     await this.#leaseTransitions.run(async () => this.#cleanupUnderLease());
   }
 
   async #cleanupUnderLease(): Promise<void> {
-    const active = await this.#readActiveEpoch();
+    if (!this.#cleanupDirty) return;
+    const active = await this.#readActiveEpoch({ refresh: true });
     const metadata = await this.#readAllEpochMetadata();
     const protectedIds = new Set<string>(active === undefined ? [] : [active.id]);
     for (const entry of metadata) {
@@ -510,6 +580,7 @@ export class EpochStore {
       .sort((left, right) =>
         left.epochId.localeCompare(right.epochId) || left.resource.localeCompare(right.resource));
     if (failures.length > 0) throw new EpochCleanupError(failures);
+    this.#cleanupDirty = false;
   }
 
   async #closeStaging(token: symbol): Promise<void> {
@@ -565,6 +636,8 @@ export class EpochStore {
         await this.#syncPath(this.#epochsPath, true);
         await this.#writeEpochMetadata(record.epoch);
         await this.#writeActiveMetadata(record.epoch);
+        this.#activeEpochCache = undefined;
+        this.#cleanupDirty = true;
       } catch (error) {
         const cleanupResults = await Promise.allSettled([
           ...(moved ? [
@@ -600,7 +673,7 @@ export class EpochStore {
     try {
       await handle.sync();
     } catch (error) {
-      if (directory && process.platform === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      if (directory && isTolerableWin32SyncError(process.platform, error)) return;
       throw error;
     }
     finally { await handle.close(); }
@@ -619,9 +692,17 @@ export class EpochStore {
       throw new EpochStoreError('EPOCH_STAGING_INVALID', 'Staged epoch contents must be regular files or directories.');
     }
     const entries = await readdir(path, { withFileTypes: true });
+    const directories: string[] = [];
+    const files: string[] = [];
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      await this.#syncTree(join(path, entry.name));
+      const child = join(path, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) directories.push(child);
+      else files.push(child);
     }
+    await Promise.all([
+      mapBounded(directories, syncTreeConcurrency, (child) => this.#syncTree(child)),
+      mapBounded(files, syncTreeConcurrency, (child) => this.#syncTree(child)),
+    ]);
     await this.#syncPath(path, true);
   }
 
@@ -858,7 +939,7 @@ export class EpochStore {
   }
 
   #parseMetadata(value: unknown): EpochMetadata | undefined {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    if (!isRecord(value)) return undefined;
     if (!hasExactOwnKeys(value, ['epoch'])) return undefined;
     const metadata = value as Partial<EpochMetadata>;
     const epoch = normalizeEpoch(metadata.epoch);

@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, type Ref } from 'react';
 
+import { isRecord } from '../client-helpers.ts';
+import { mapStrictJsonReason, snapshotStrictJsonValue } from '../strict-json.ts';
 import {
   type McpAppHostContext,
   type McpAppJsonObject,
@@ -81,9 +83,6 @@ export interface McpAppPreviewFrameProps {
 const loadingState: McpAppPreviewState = Object.freeze({ phase: 'loading' });
 const completed = Promise.resolve();
 
-const isRecord = (value: McpAppJsonValue): value is Readonly<Record<string, McpAppJsonValue>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 class McpAppPreviewDataError extends Error {
   constructor(message: string) {
     super(`MCP App preview ${message}.`);
@@ -91,26 +90,19 @@ class McpAppPreviewDataError extends Error {
   }
 }
 
-const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
-  if (typeof value === 'number') {
-    if (Number.isFinite(value)) return value;
-    throw new McpAppPreviewDataError('input and result must contain finite JSON numbers');
-  }
-  if (typeof value !== 'object') throw new McpAppPreviewDataError('input and result must contain only JSON values');
-  if (ancestors.has(value)) throw new McpAppPreviewDataError('input and result must not be cyclic JSON');
-  ancestors.add(value);
+const mcpAppPreviewJsonMessages = {
+  'array-shape': 'input and result must contain only JSON values',
+  cyclic: 'input and result must not be cyclic JSON',
+  'exotic-prototype': 'input and result must use ordinary JSON objects',
+  nonfinite: 'input and result must contain finite JSON numbers',
+  'not-json': 'input and result must contain only JSON values',
+} as const;
+
+const detachedJson = (value: unknown): McpAppJsonValue => {
   try {
-    if (Array.isArray(value)) return Object.freeze(value.map((entry) => detachedJson(entry, ancestors)));
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new McpAppPreviewDataError('input and result must use ordinary JSON objects');
-    }
-    const copy = Object.create(null) as Record<string, McpAppJsonValue>;
-    for (const [key, entry] of Object.entries(value)) copy[key] = detachedJson(entry, ancestors);
-    return Object.freeze(copy);
-  } finally {
-    ancestors.delete(value);
+    return snapshotStrictJsonValue(value, { nullPrototype: true }) as McpAppJsonValue;
+  } catch (error) {
+    throw new McpAppPreviewDataError(mapStrictJsonReason(error, mcpAppPreviewJsonMessages));
   }
 };
 

@@ -6,9 +6,12 @@ import type {
   EvalRunSelection,
   EvalSuiteListing,
 } from '../../../agent-bundle/src/dev/eval-service.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
+import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
+import { CodedClientError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { readNdjsonByteFrames } from '../ndjson.ts';
+import { snapshotStrictJsonValue } from '../strict-json.ts';
 import {
   nonnegativeIntegerSchema,
   positiveIntegerSchema,
@@ -58,13 +61,9 @@ export interface EvalArtifact {
   readonly mediaType: string;
 }
 
-export class EvalClientError extends Error {
-  readonly code: string;
-
+export class EvalClientError extends CodedClientError {
   constructor(code: string, message: string) {
-    super(message);
-    this.name = 'EvalClientError';
-    this.code = code;
+    super('EvalClientError', code, message);
   }
 }
 
@@ -72,10 +71,6 @@ const maximumArtifactBytes = 8 * 1024 * 1024;
 const maximumEventFrameBytes = 256 * 1024;
 const safeArtifactSegment = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const evalHarnesses = new Set<EvalHarness>(['deterministic', 'claude', 'codex']);
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-const exactKeys = (value: unknown, keys: readonly string[]): value is Readonly<Record<string, unknown>> =>
-  isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isIsoTimestamp = (value: unknown): value is string =>
@@ -90,15 +85,6 @@ const digestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const evidenceLevelSchema = z.enum(['inferred', 'observed', 'unavailable']);
 const outcomeSchema = z.enum(['fail', 'inconclusive', 'pass']);
 const assertionKindSchema = z.enum(['exit-code', 'mcp-call', 'no-mcp-call', 'no-skill-activation', 'outcome', 'skill-activation']);
-const diagnosticSchema = z.strictObject({
-  code: textSchema,
-  generatedPath: textSchema.optional(),
-  message: textSchema,
-  recovery: textSchema.optional(),
-  severity: z.enum(['error', 'info', 'warning']),
-  sourcePath: textSchema.optional(),
-  target: textSchema.optional(),
-});
 const assertionSummarySchema = z.strictObject({ id: textSchema, kind: assertionKindSchema, skill: textSchema.optional() });
 const invocationSchema = z.strictObject({
   mode: z.enum(['automatic', 'explicit', 'none']),
@@ -467,45 +453,21 @@ export class EvalClient {
     const cancel = (): void => { void reader.cancel().catch(() => undefined); };
     signal.addEventListener('abort', cancel, { once: true });
     if (signal.aborted) cancel();
-    const parts: Uint8Array[] = [];
-    let partBytes = 0;
     let expected = options.afterSequence + 1;
-    const append = (part: Uint8Array): void => {
-      if (partBytes + part.byteLength > maximumEventFrameBytes) throw invalidResponse();
-      if (part.byteLength > 0) parts.push(part);
-      partBytes += part.byteLength;
-    };
-    const consume = (): void => {
-      const bytes = new Uint8Array(partBytes);
-      let offset = 0;
-      for (const part of parts) {
-        bytes.set(part, offset);
-        offset += part.byteLength;
-      }
-      parts.length = 0;
-      partBytes = 0;
-      if (bytes.byteLength === 0) return;
-      const event = eventFor(parseResponseJson(bytes));
-      if (event.sequence !== expected) throw invalidResponse();
-      expected += 1;
-      options.onEvent(event);
-    };
     try {
-      for (;;) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        if (signal.aborted) return;
-        let start = 0;
-        for (let index = 0; index < chunk.value.byteLength; index += 1) {
-          if (chunk.value[index] !== 0x0a) continue;
-          append(chunk.value.subarray(start, index));
-          consume();
-          if (signal.aborted) return;
-          start = index + 1;
-        }
-        append(chunk.value.subarray(start));
-      }
-      if (partBytes > 0) throw invalidResponse();
+      await readNdjsonByteFrames(reader, {
+        maxFrameBytes: maximumEventFrameBytes,
+        onFrame: (bytes) => {
+          if (bytes.byteLength === 0) return;
+          const event = eventFor(parseResponseJson(bytes));
+          if (event.sequence !== expected) throw invalidResponse();
+          expected += 1;
+          options.onEvent(event);
+        },
+        onIncomplete: () => { throw invalidResponse(); },
+        onLimitExceeded: () => { throw invalidResponse(); },
+        signal,
+      });
     } catch (error) {
       if (isAbort(error) || signal.aborted) return;
       if (error instanceof EvalClientError) throw error;

@@ -1,0 +1,97 @@
+import { z } from 'zod';
+
+import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
+
+/** Shared coded client error so each workbench client keeps its name and `instanceof` class. */
+export class CodedClientError<TCode extends string = string> extends Error {
+  readonly code: TCode;
+
+  constructor(name: string, code: TCode, message: string) {
+    super(message);
+    this.name = name;
+    this.code = code;
+  }
+}
+
+export const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Required keys present, every own key allowed, extras rejected. */
+export const hasAllowedKeys = (
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): value is Readonly<Record<string, unknown>> =>
+  isRecord(value) && required.every((key) => Object.hasOwn(value, key)) &&
+  Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
+
+/** `hasAllowedKeys` with the artifact-client name. */
+export const exactRecord = hasAllowedKeys;
+
+/** Exact own-key set; order-independent. */
+export const exactKeys = (
+  value: unknown,
+  keys: readonly string[],
+): value is Readonly<Record<string, unknown>> =>
+  isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+
+export const nonemptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0;
+
+export const requiredString = (
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  invalid: () => Error,
+): string => {
+  const candidate = value[key];
+  if (typeof candidate !== 'string') throw invalid();
+  return candidate;
+};
+
+export const optionalString = (
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  invalid: () => Error,
+): string | undefined => {
+  if (!Object.hasOwn(value, key)) return undefined;
+  return requiredString(value, key, invalid);
+};
+
+export const diagnosticSeveritySchema = z.enum(['error', 'info', 'warning']);
+
+const diagnosticFields = {
+  code: z.string(),
+  generatedPath: z.string().optional(),
+  message: z.string(),
+  recovery: z.string().optional(),
+  severity: diagnosticSeveritySchema,
+  sourcePath: z.string().optional(),
+  target: z.string().optional(),
+} as const;
+
+/** Exact Diagnostic wire object (no extra keys). */
+export const diagnosticSchema: z.ZodType<Diagnostic> = z.strictObject(diagnosticFields);
+
+/** Same fields, extra keys allowed — artifact failure payloads are not exact. */
+export const looseDiagnosticSchema = z.object(diagnosticFields);
+
+export const diagnosticErrorEnvelopeSchema = z.strictObject({
+  diagnostic: z.strictObject({
+    code: z.string(),
+    message: z.string(),
+  }),
+});
+
+export const decodeExactDiagnostic = (value: unknown): Diagnostic | undefined => {
+  const parsed = diagnosticSchema.safeParse(value);
+  return parsed.success ? Object.freeze(parsed.data) : undefined;
+};
+
+/** Loose diagnostic used when extra keys must survive (artifact AB8064 payloads). */
+export const isDiagnostic = (value: unknown): value is Diagnostic =>
+  looseDiagnosticSchema.safeParse(value).success;
+
+export const decodeDiagnosticError = (value: unknown): { readonly code: string; readonly message: string } | undefined => {
+  const parsed = diagnosticErrorEnvelopeSchema.safeParse(value);
+  return parsed.success ? parsed.data.diagnostic : undefined;
+};

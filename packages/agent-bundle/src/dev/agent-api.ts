@@ -17,7 +17,7 @@ import {
 import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol/node';
 
 import { stableJson } from '../core/digest.ts';
-import { snapshotStrictJsonValue } from '../core/strict-json.ts';
+import { isRecord, snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type { EvalService } from './eval-service.ts';
 import type { ProjectStatus } from './types.ts';
 
@@ -112,6 +112,15 @@ export class AgentApiCloseError extends Error {
   }
 }
 
+type AgentApiToolHandler = (
+  arguments_: unknown,
+  context: { readonly mcpReq: { readonly signal: AbortSignal } },
+) => Promise<unknown>;
+
+type AgentApiToolHandlers = Readonly<{
+  readonly [Name in AgentApiToolName]: AgentApiToolHandler;
+}>;
+
 const apiError = (code: string, message: string): Error & Readonly<{ readonly code: string }> =>
   Object.assign(new Error(message), { code });
 
@@ -169,7 +178,7 @@ const optionalStringArgument = (args: Record<string, unknown>, name: string): st
 
 const objectArgument = (args: Record<string, unknown>, name: string): Record<string, unknown> => {
   const value = args[name];
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
   }
   return value as Record<string, unknown>;
@@ -296,9 +305,7 @@ const snapshotValue = (value: unknown): unknown => {
 
 const snapshotRecord = (value: unknown): AgentApiJsonRecord | undefined => {
   const snapshot = snapshotValue(value);
-  return typeof snapshot === 'object' && snapshot !== null && !Array.isArray(snapshot)
-    ? snapshot as AgentApiJsonRecord
-    : undefined;
+  return isRecord(snapshot) ? snapshot as AgentApiJsonRecord : undefined;
 };
 
 const snapshotArray = (value: unknown): readonly unknown[] | undefined => {
@@ -510,9 +517,7 @@ const diagnosticsListWireDto = (value: unknown): readonly AgentApiDiagnostic[] =
 
 const safeToolResult = (value: unknown) => {
   const snapshot = snapshotStrictJsonValue(value === undefined ? null : value);
-  const structured = snapshot !== null && typeof snapshot === 'object' && !Array.isArray(snapshot)
-    ? snapshot
-    : Object.freeze({ value: snapshot });
+  const structured = isRecord(snapshot) ? snapshot : Object.freeze({ value: snapshot });
   return {
     content: [{ text: stableJson(structured), type: 'text' as const }],
     structuredContent: structured,
@@ -547,8 +552,11 @@ export const agentApiTokenFromEnvironment = (environment: NodeJS.ProcessEnv = pr
 };
 
 /**
- * Stateless MCP facade over the already-owned development services. Every request
- * receives a fresh MCP server; the API only leases epochs and never owns those services.
+ * Stateless MCP facade over the already-owned development services. The SDK
+ * factory must return a fresh McpServer per HTTP request (it connect()s that
+ * instance to a one-shot transport and close()s it after the exchange); tool
+ * closures are built once and re-registered. The API only leases epochs and
+ * never owns those services.
  */
 export class AgentApi {
   readonly #artifacts: AgentApiOptions['artifacts'];
@@ -567,6 +575,7 @@ export class AgentApi {
   readonly #mcpSessions: AgentApiMcpSessions;
   readonly #skills: AgentApiOptions['skills'];
   readonly #token: string;
+  readonly #tools: AgentApiToolHandlers;
   readonly #version: string;
 
   constructor(options: AgentApiOptions) {
@@ -587,6 +596,7 @@ export class AgentApi {
     this.#skills = options.skills;
     this.#token = token;
     this.#version = options.version ?? '0.1.0';
+    this.#tools = this.#createToolRegistrations();
     this.#handler = options.handlerFactory?.(() => this.#createServer()) ??
       createMcpHandler(() => this.#createServer(), { legacy: 'stateless' });
     this.#nodeHandler = toNodeHandler(this.#handler);
@@ -665,32 +675,54 @@ export class AgentApi {
   }
 
   #createServer(): McpServer {
+    // createMcpHandler({ legacy: 'stateless' }) connect()s a factory product to a
+    // fresh transport and close()s that product after the POST; a shared instance
+    // would be torn down on the first request.
     const server = new McpServer({ name: 'agent-bundle', version: this.#version });
-    server.registerTool('project_status', { inputSchema: noArguments }, async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, () => Promise.resolve({ status: projectStatusWireDto(this.#coordinator.status()) })));
-    server.registerTool('skills_list', { inputSchema: skillListSchema }, async (arguments_, context) =>
+    const tools = this.#tools;
+    server.registerTool('project_status', { inputSchema: noArguments }, tools.project_status as never);
+    server.registerTool('skills_list', { inputSchema: skillListSchema }, tools.skills_list as never);
+    server.registerTool('skill_inspect', { inputSchema: skillInspectSchema }, tools.skill_inspect as never);
+    server.registerTool('artifacts_list', { inputSchema: noArguments }, tools.artifacts_list as never);
+    server.registerTool('artifact_inspect', { inputSchema: artifactInspectSchema }, tools.artifact_inspect as never);
+    server.registerTool('mcp_servers_list', { inputSchema: mcpServersListSchema }, tools.mcp_servers_list as never);
+    server.registerTool('mcp_invoke', { inputSchema: mcpInvokeSchema }, tools.mcp_invoke as never);
+    server.registerTool('hooks_list', { inputSchema: hooksListSchema }, tools.hooks_list as never);
+    server.registerTool('hook_simulate', { inputSchema: hookSimulateSchema }, tools.hook_simulate as never);
+    server.registerTool('evals_list', { inputSchema: noArguments }, tools.evals_list as never);
+    server.registerTool('eval_run', { inputSchema: evalRunSchema }, tools.eval_run as never);
+    server.registerTool('eval_get', { inputSchema: evalGetSchema }, tools.eval_get as never);
+    server.registerTool('diagnostics_list', { inputSchema: noArguments }, tools.diagnostics_list as never);
+    return server;
+  }
+
+  #createToolRegistrations(): AgentApiToolHandlers {
+    return Object.freeze({
+    project_status: async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, () => Promise.resolve({ status: projectStatusWireDto(this.#coordinator.status()) })),
+    skills_list: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         skills: await this.#skills.generatedTree(epochId, stringArgument(asRecord(arguments_), 'target')),
-      }))));
-    server.registerTool('skill_inspect', { inputSchema: skillInspectSchema }, async (arguments_, context) =>
+      }))),
+    skill_inspect: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         skill: await this.#skills.generated(
           epochId,
           stringArgument(asRecord(arguments_), 'target'),
           stringArgument(asRecord(arguments_), 'skill_id'),
         ),
-      }))));
-    server.registerTool('artifacts_list', { inputSchema: noArguments }, async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ epochs: epochWireIdentities(await this.#epochs.listEpochs()) })));
-    server.registerTool('artifact_inspect', { inputSchema: artifactInspectSchema }, async (arguments_, context) =>
+      }))),
+    artifacts_list: async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ epochs: epochWireIdentities(await this.#epochs.listEpochs()) })),
+    artifact_inspect: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         artifact: await this.#artifacts.inspect(epochId),
-      }))));
-    server.registerTool('mcp_servers_list', { inputSchema: mcpServersListSchema }, async (arguments_, context) =>
+      }))),
+    mcp_servers_list: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         servers: await this.#mcpServers(epochId, stringArgument(asRecord(arguments_), 'target')),
-      }))));
-    server.registerTool('mcp_invoke', { inputSchema: mcpInvokeSchema }, async (arguments_, context) =>
+      }))),
+    mcp_invoke: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
         const args = asRecord(arguments_);
         const session = await this.#mcpSessions.open({
@@ -704,8 +736,8 @@ export class AgentApi {
         } finally {
           await session.close();
         }
-      })));
-    server.registerTool('hooks_list', { inputSchema: hooksListSchema }, async (arguments_, context) =>
+      })),
+    hooks_list: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
         const target = optionalStringArgument(asRecord(arguments_), 'target');
         return {
@@ -714,8 +746,8 @@ export class AgentApi {
             ...(target === undefined ? {} : { target }),
           }),
         };
-      })));
-    server.registerTool('hook_simulate', { inputSchema: hookSimulateSchema }, async (arguments_, context) =>
+      })),
+    hook_simulate: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
         const args = asRecord(arguments_);
         return {
@@ -727,10 +759,10 @@ export class AgentApi {
             target: stringArgument(args, 'target'),
           }),
         };
-      })));
-    server.registerTool('evals_list', { inputSchema: noArguments }, async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ runs: await this.#evals.list(), suites: await this.#evals.suites() })));
-    server.registerTool('eval_run', { inputSchema: evalRunSchema }, async (arguments_, context) =>
+      })),
+    evals_list: async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ runs: await this.#evals.list(), suites: await this.#evals.suites() })),
+    eval_run: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async (signal) => {
         const args = asRecord(arguments_);
         const caseIds = stringListArgument(args, 'case_ids');
@@ -801,12 +833,12 @@ export class AgentApi {
           }
           throw error;
         }
-      }));
-    server.registerTool('eval_get', { inputSchema: evalGetSchema }, async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(asRecord(arguments_), 'run_id')) })));
-    server.registerTool('diagnostics_list', { inputSchema: noArguments }, async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ diagnostics: diagnosticsListWireDto(await this.#diagnostics.list()) })));
-    return server;
+      }),
+    eval_get: async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(asRecord(arguments_), 'run_id')) })),
+    diagnostics_list: async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ diagnostics: diagnosticsListWireDto(await this.#diagnostics.list()) })),
+    });
   }
 
   async #mcpServers(epochId: string, target: string): Promise<unknown> {

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 
+import { wait } from '../foreground-session.ts';
 import type { EvalArtifact, EvalClient, EvalHarness, EvalRunAdmission, EvalRunStart } from './eval-client.ts';
 import type { EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/dev/eval-service.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
@@ -424,19 +425,8 @@ const reconnectDelayMilliseconds = 250;
 
 const maximumTerminalResultReads = 8;
 
-const waitForReconnect = (milliseconds: number, signal: AbortSignal): Promise<void> => new Promise((resolvePromise) => {
-  if (signal.aborted) {
-    resolvePromise();
-    return;
-  }
-  const timeout = setTimeout(finish, milliseconds);
-  function finish(): void {
-    clearTimeout(timeout);
-    signal.removeEventListener('abort', finish);
-    resolvePromise();
-  }
-  signal.addEventListener('abort', finish, { once: true });
-});
+const waitForReconnect = (milliseconds: number, signal: AbortSignal): Promise<void> =>
+  wait(milliseconds, { onAbort: 'resolve', signal });
 
 export interface EvalFinalizedRunReadOptions {
   readonly client: Pick<EvalClient, 'read'>;

@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
@@ -9,7 +8,9 @@ import { loadConfig } from '../config/load.ts';
 import { normalizeProject } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
 import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
-import { digest } from '../core/digest.ts';
+import { digest, sha256File } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
+import { isRecord } from '../core/strict-json.ts';
 import {
   createProjectContext,
   type ProjectContext,
@@ -42,6 +43,7 @@ export interface PreparedProject {
   readonly projectContext?: ProjectContext;
   readonly registry: TargetRegistry;
   readonly root: string;
+  readonly snapshotSource?: () => Promise<ProjectSourceSnapshot>;
   readonly source: SourceStatus;
 }
 
@@ -70,11 +72,77 @@ const log = (
 };
 
 const errorCode = (error: unknown): string =>
-  typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+  isRecord(error) && typeof error.code === 'string'
     ? error.code
     : error instanceof Error
       ? error.name
       : typeof error;
+
+interface SourceHashIdentity {
+  readonly ino: number;
+  readonly mtimeMs: number;
+  readonly sha256: string;
+  readonly size: number;
+}
+
+/** Per-service SHA-256 cache keyed by resolved path and git-index-style identity. */
+class ProjectSourceHashCache {
+  readonly #entries = new Map<string, SourceHashIdentity>();
+
+  async digest(resolvedPath: string): Promise<string> {
+    const metadata = await lstat(resolvedPath);
+    const cached = this.#entries.get(resolvedPath);
+    if (
+      cached !== undefined &&
+      cached.ino === metadata.ino &&
+      cached.mtimeMs === metadata.mtimeMs &&
+      cached.size === metadata.size
+    ) {
+      return cached.sha256;
+    }
+    const sha256 = await sha256File(resolvedPath);
+    let identity: SourceHashIdentity;
+    try {
+      const after = await lstat(resolvedPath);
+      identity = {
+        ino: after.ino,
+        mtimeMs: after.mtimeMs,
+        sha256,
+        size: after.size,
+      };
+    } catch {
+      identity = {
+        ino: metadata.ino,
+        mtimeMs: metadata.mtimeMs,
+        sha256,
+        size: metadata.size,
+      };
+    }
+    this.#entries.set(resolvedPath, identity);
+    return sha256;
+  }
+}
+
+const directoryWalkLimit = 32;
+
+const mapLimited = async <Value>(
+  items: readonly Value[],
+  limit: number,
+  mapper: (item: Value) => Promise<void>,
+): Promise<void> => {
+  if (items.length === 0) return;
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      const item = items[index];
+      if (item === undefined) return;
+      await mapper(item);
+    }
+  });
+  await Promise.all(workers);
+};
 
 export type ProjectPathApi = Pick<typeof import('node:path').win32, 'isAbsolute' | 'relative' | 'resolve' | 'sep'>;
 
@@ -105,12 +173,16 @@ const relativeSourcePath = (root: string, source: string): string => {
   return components.join('/');
 };
 
-const sourceInput = async (root: string, source: string): Promise<ProjectSourceSnapshotInput> => {
+const sourceInput = async (
+  root: string,
+  source: string,
+  cache?: ProjectSourceHashCache,
+): Promise<ProjectSourceSnapshotInput> => {
   try {
     const resolvedSource = await realpath(source);
     const path = relativeSourcePath(root, resolvedSource);
     return Object.freeze({
-      sha256: createHash('sha256').update(await readFile(resolvedSource)).digest('hex'),
+      sha256: cache === undefined ? await sha256File(resolvedSource) : await cache.digest(resolvedSource),
       path,
     });
   } catch (error) {
@@ -119,9 +191,6 @@ const sourceInput = async (root: string, source: string): Promise<ProjectSourceS
     return Object.freeze({ error: errorCode(error), path });
   }
 };
-
-const isNotFound = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 
 const physicalOutputRoot = async (
   root: string,
@@ -135,7 +204,7 @@ const physicalOutputRoot = async (
     try {
       entry = await lstat(candidate);
     } catch (error) {
-      if (!isNotFound(error)) throw error;
+      if (!isErrno(error, 'ENOENT')) throw error;
       return join(physical, ...parts.slice(index));
     }
     if (entry.isSymbolicLink()) {
@@ -194,16 +263,18 @@ const sourcePaths = async (root: string, outputRoots: readonly string[]): Promis
 
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });
+    const nested: string[] = [];
     for (const entry of entries) {
       const source = join(directory, entry.name);
       if (isProjectPathIgnored(rules, root, source)) continue;
       if (outputRoots.some((outputRoot) => containedPathComponents(outputRoot, source) !== undefined)) continue;
       if (entry.isDirectory()) {
-        await visit(source);
+        nested.push(source);
         continue;
       }
       if (entry.isFile()) paths.push(source);
     }
+    await mapLimited(nested, directoryWalkLimit, visit);
   };
 
   await visit(root);
@@ -214,6 +285,7 @@ export const snapshotProjectSource = async (
   root: string,
   configPath: string,
   outputRoots: readonly string[] = [],
+  cache?: ProjectSourceHashCache,
 ): Promise<ProjectSourceSnapshot> => {
   const requestedRoot = resolve(root);
   const resolvedRoot = await realpath(requestedRoot);
@@ -223,8 +295,9 @@ export const snapshotProjectSource = async (
   const resolvedConfigPath = await realpath(requestedConfigPath);
   relativeSourcePath(resolvedRoot, resolvedConfigPath);
   const sources = new Set<string>([resolvedConfigPath, ...(await sourcePaths(resolvedRoot, resolvedOutputRoots))]);
-  const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(resolvedRoot, source))))
-    .sort((left, right) => left.path.localeCompare(right.path)));
+  const inputs = Object.freeze((await Promise.all(
+    [...sources].map((source) => sourceInput(resolvedRoot, source, cache)),
+  )).sort((left, right) => left.path.localeCompare(right.path)));
   return Object.freeze({
     inputs,
     revision: digest({ inputs }),
@@ -240,9 +313,10 @@ const snapshotForLoadFailure = async (
   root: string,
   configPath: string,
   outputRoots: readonly string[],
+  cache?: ProjectSourceHashCache,
 ): Promise<ProjectSourceSnapshot> => {
   try {
-    return await snapshotProjectSource(root, configPath, outputRoots);
+    return await snapshotProjectSource(root, configPath, outputRoots, cache);
   } catch {
     return emptySnapshot();
   }
@@ -266,7 +340,8 @@ const preparedProject = (
   registry: TargetRegistry,
   root: string,
   source: SourceStatus,
-  model?: NormalizedPlugin,
+  model: NormalizedPlugin | undefined,
+  snapshotSource: (() => Promise<ProjectSourceSnapshot>) | undefined,
 ): PreparedProject => Object.freeze({
   configPath,
   diagnostics,
@@ -275,6 +350,7 @@ const preparedProject = (
   ...(projectContext === undefined ? {} : { projectContext }),
   registry,
   root,
+  ...(snapshotSource === undefined ? {} : { snapshotSource }),
   source,
 });
 
@@ -308,6 +384,7 @@ const invalidPreparedProject = (options: {
   readonly registry: TargetRegistry;
   readonly root: string;
   readonly snapshot?: ProjectSourceSnapshot;
+  readonly snapshotSource?: () => Promise<ProjectSourceSnapshot>;
 }): PreparedProject => {
   const snapshot = options.snapshot ?? emptySnapshot();
   return preparedProject(
@@ -319,6 +396,8 @@ const invalidPreparedProject = (options: {
     options.registry,
     options.root,
     sourceStatus(options.diagnostics, snapshot.revision),
+    undefined,
+    options.snapshotSource,
   );
 };
 
@@ -326,6 +405,7 @@ const invalidPreparedProject = (options: {
 export class ProjectService {
   readonly #options: ProjectServiceOptions;
   readonly #registry: TargetRegistry;
+  readonly #sourceHashCache = new ProjectSourceHashCache();
 
   constructor(options: ProjectServiceOptions) {
     this.#options = Object.freeze({ ...options });
@@ -338,6 +418,8 @@ export class ProjectService {
     const requestedConfigPath = resolve(requestedRoot, this.#options.configPath ?? 'agent-bundle.config.ts');
     let root = requestedRoot;
     let outputRoots: readonly string[] = Object.freeze([]);
+    const snapshotSourceFor = (configPath: string): (() => Promise<ProjectSourceSnapshot>) =>
+      () => snapshotProjectSource(root, configPath, outputRoots, this.#sourceHashCache);
     const failedPreparation = (
       code: ProjectDiagnosticCode,
       message: string,
@@ -358,6 +440,7 @@ export class ProjectService {
         registry,
         root,
         ...(snapshot === undefined ? {} : { snapshot }),
+        snapshotSource: snapshotSourceFor(configPath),
       });
     };
     try {
@@ -381,16 +464,17 @@ export class ProjectService {
       });
       discovered = await discoverProject(root, loaded.config);
     } catch {
-      const snapshot = await snapshotForLoadFailure(root, configPath, outputRoots);
+      const snapshot = await snapshotForLoadFailure(root, configPath, outputRoots, this.#sourceHashCache);
       return failedPreparation('AB7000', 'Unable to load project source.', configPath, 'project.invalid-source', snapshot);
     }
 
     let snapshot: ProjectSourceSnapshot;
     try {
-      snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots);
+      snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots, this.#sourceHashCache);
     } catch {
       return failedPreparation('AB7003', 'Unable to snapshot project source.', loaded.configPath, 'project.invalid-source');
     }
+    const snapshotSource = snapshotSourceFor(loaded.configPath);
     let sourceDiagnostics: readonly Diagnostic[];
     try {
       sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered, registry));
@@ -406,7 +490,18 @@ export class ProjectService {
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source);
+      return preparedProject(
+        loaded.configPath,
+        snapshot,
+        sourceDiagnostics,
+        outputRoots,
+        undefined,
+        registry,
+        root,
+        source,
+        undefined,
+        snapshotSource,
+      );
     }
 
     let model: NormalizedPlugin;
@@ -469,6 +564,17 @@ export class ProjectService {
       root,
       targets: model.targets.map((target) => target.name),
     });
-    return preparedProject(loaded.configPath, snapshot, frozenDiagnostics, outputRoots, projectContext, registry, root, source, model);
+    return preparedProject(
+      loaded.configPath,
+      snapshot,
+      frozenDiagnostics,
+      outputRoots,
+      projectContext,
+      registry,
+      root,
+      source,
+      model,
+      snapshotSource,
+    );
   }
 }

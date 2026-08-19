@@ -1,4 +1,6 @@
-import { ForegroundSessionAuthority, type ForegroundSessionSnapshot } from '../foreground-session.ts';
+import { CodedClientError, isRecord } from '../client-helpers.ts';
+import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { mapStrictJsonReason, snapshotStrictJsonValue } from '../strict-json.ts';
 
 export type McpRouteTarget = 'claude' | 'codex' | 'portable';
 
@@ -45,37 +47,22 @@ export interface McpRouteClientOptions {
   readonly fetch?: typeof fetch;
 }
 
-interface Diagnostic {
-  readonly code: string;
-  readonly message: string;
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const isTarget = (value: unknown): value is McpRouteTarget =>
   value === 'claude' || value === 'codex' || value === 'portable';
 
-const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
-  if (typeof value === 'number') {
-    if (Number.isFinite(value)) return value;
-    throw new McpRouteClientError('AB8016', 'Foreground MCP data must contain finite JSON numbers.');
-  }
-  if (typeof value !== 'object') throw new McpRouteClientError('AB8016', 'Foreground MCP data must contain only JSON values.');
-  if (ancestors.has(value)) throw new McpRouteClientError('AB8016', 'Foreground MCP data must not be cyclic.');
+const mcpRouteJsonMessages = {
+  'array-shape': 'Foreground MCP data must contain only JSON values.',
+  cyclic: 'Foreground MCP data must not be cyclic.',
+  'exotic-prototype': 'Foreground MCP data must use ordinary JSON objects.',
+  nonfinite: 'Foreground MCP data must contain finite JSON numbers.',
+  'not-json': 'Foreground MCP data must contain only JSON values.',
+} as const;
 
-  ancestors.add(value);
+const detachedJson = (value: unknown): unknown => {
   try {
-    if (Array.isArray(value)) return Object.freeze(value.map((entry) => detachedJson(entry, ancestors)));
-    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
-      throw new McpRouteClientError('AB8016', 'Foreground MCP data must use ordinary JSON objects.');
-    }
-    const copy: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) copy[key] = detachedJson(entry, ancestors);
-    return Object.freeze(copy);
-  } finally {
-    ancestors.delete(value);
+    return snapshotStrictJsonValue(value);
+  } catch (error) {
+    throw new McpRouteClientError('AB8016', mapStrictJsonReason(error, mcpRouteJsonMessages));
   }
 };
 
@@ -87,13 +74,6 @@ const asRecord = (value: unknown, code = 'AB8019'): Readonly<Record<string, unkn
 const asArray = (value: unknown): readonly unknown[] => {
   if (!Array.isArray(value)) throw new McpRouteClientError('AB8019', 'Foreground MCP route returned an invalid response.');
   return detachedJson(value) as readonly unknown[];
-};
-
-const diagnostic = (value: unknown, status: number): Diagnostic => {
-  if (isRecord(value) && isRecord(value.diagnostic) && typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
-    return { code: value.diagnostic.code, message: value.diagnostic.message };
-  }
-  return { code: 'AB8019', message: `Foreground MCP request failed with HTTP ${status}.` };
 };
 
 const routeConnection = (value: unknown): McpRouteConnection => {
@@ -143,12 +123,16 @@ const encode = (value: string): string => encodeURIComponent(value);
 
 /** A typed, credential-memory-only browser client for the foreground MCP routes. */
 export class McpRouteClient {
-  readonly #authority: ForegroundSessionAuthority;
-  readonly #fetch: typeof fetch;
+  readonly #transport: ForegroundTransport;
 
   constructor(options: McpRouteClientOptions = {}) {
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
-    this.#authority = options.authority ?? new ForegroundSessionAuthority({ fetch: this.#fetch });
+    this.#transport = new ForegroundTransport({
+      errorFor: (code, message) => new McpRouteClientError(code, message),
+      fallbackCode: 'AB8019',
+      ...(options.authority === undefined ? {} : { authority: options.authority }),
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      label: 'Foreground MCP',
+    });
   }
 
   async create(binding: McpRouteSessionBinding, timeoutMs?: number): Promise<McpRouteSession> {
@@ -202,7 +186,11 @@ export class McpRouteClient {
   }
 
   async stream(id: string, after: number, signal?: AbortSignal): Promise<Response> {
-    return this.#request(`${this.#sessionPath(id)}/stream?after=${this.#cursor(after)}`, { signal });
+    const response = await this.#transport.request(`${this.#sessionPath(id)}/stream?after=${this.#cursor(after)}`, { signal });
+    if (!response.ok) {
+      throw this.#transport.diagnosticError(await response.clone().json().catch(() => undefined), response.status);
+    }
+    return response;
   }
 
   async restart(id: string): Promise<McpRouteConnection> {
@@ -232,38 +220,7 @@ export class McpRouteClient {
   }
 
   async #json(path: string, init: RequestInit = {}): Promise<unknown> {
-    const response = await this.#request(path, init);
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) {
-      const detail = diagnostic(body, response.status);
-      throw new McpRouteClientError(detail.code, detail.message);
-    }
-    return detachedJson(body);
-  }
-
-  async #request(path: string, init: RequestInit = {}): Promise<Response> {
-    const authentication = await this.#snapshot();
-    const headers = new Headers(init.headers);
-    headers.set('x-agent-bundle-session', authentication.token);
-    const response = await this.#fetch(path, { ...init, headers });
-    if (!response.ok) {
-      const body: unknown = await response.clone().json().catch(() => undefined);
-      const detail = diagnostic(body, response.status);
-      throw new McpRouteClientError(detail.code, detail.message);
-    }
-    return response;
-  }
-
-  async #snapshot(): Promise<ForegroundSessionSnapshot> {
-    try {
-      return await this.#authority.snapshot();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Foreground session bootstrap returned an invalid response.';
-      throw new McpRouteClientError(
-        message === 'Foreground session bootstrap origin does not match this browser.' ? 'AB8003' : 'AB8019',
-        message,
-      );
-    }
+    return detachedJson(await this.#transport.json(path, init));
   }
 
   #cursor(value: number): string {
@@ -277,12 +234,8 @@ export class McpRouteClient {
   }
 }
 
-export class McpRouteClientError extends Error {
-  readonly code: string;
-
+export class McpRouteClientError extends CodedClientError {
   constructor(code: string, message: string) {
-    super(message);
-    this.name = 'McpRouteClientError';
-    this.code = code;
+    super('McpRouteClientError', code, message);
   }
 }

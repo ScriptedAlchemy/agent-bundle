@@ -3,7 +3,7 @@ import { link, lstat, mkdir, mkdtemp, open, realpath, rename, rm } from 'node:fs
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { digest, stableJson } from '../core/digest.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
+import { isJsonRecord as isRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { loadConfig } from '../config/load.ts';
 import { prepareEvalArtifact, type PreparedEvalArtifact } from '../eval/artifact.ts';
 import { runClaudeTrial } from '../eval/claude-harness.ts';
@@ -22,7 +22,7 @@ import { safeDevWireText } from './dev-log-service.ts';
 import type { ArtifactEpoch } from './types.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../eval/workspace-diff.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
-import { isErrno } from '../core/errors.ts';
+import { isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
 
 export type NativePlaygroundHost = 'claude' | 'codex';
 
@@ -450,9 +450,6 @@ const normalizedTrialEvents = (
 const selectionKey = (selection: NativePlaygroundCatalogSelection): string =>
   `${selection.caseId}\u0000${selection.fixtureId}\u0000${selection.host}\u0000${selection.modelPinId}`;
 
-const isRecord = (value: JsonValue): value is Readonly<Record<string, JsonValue>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const nonemptySnapshotText = (value: JsonValue | undefined): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= maximumSnapshotStringLength;
 
@@ -797,15 +794,10 @@ export class NativePlaygroundService {
     if (this.#closePromise !== undefined) {
       return this.#closePromise;
     }
-    let resolvePromise!: () => void;
-    let rejectPromise!: (reason: unknown) => void;
-    const closing = new Promise<void>((resolvePromiseInput, rejectPromiseInput) => {
-      resolvePromise = resolvePromiseInput;
-      rejectPromise = rejectPromiseInput;
-    });
-    this.#closePromise = closing;
-    void this.#close().then(resolvePromise, rejectPromise);
-    return closing;
+    const closing = Promise.withResolvers<void>();
+    this.#closePromise = closing.promise;
+    void this.#close().then(closing.resolve, closing.reject);
+    return closing.promise;
   }
 
   async #close(): Promise<void> {
@@ -1177,7 +1169,7 @@ export class NativePlaygroundService {
     try {
       await handle.sync();
     } catch (error) {
-      if (catalogDurabilityPlatform() === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      if (isTolerableWin32SyncError(catalogDurabilityPlatform(), error)) return;
       throw error;
     } finally {
       await handle.close();
@@ -1240,7 +1232,7 @@ export class NativePlaygroundService {
         plan: prepared.fixturePlan,
         workspace,
       });
-    } catch { return undefined; }
+    } catch { return undefined; } // Workspace diffs are optional evidence and must not fail a trial.
   }
 
   #suiteDirectory(sourcePath: string): string {

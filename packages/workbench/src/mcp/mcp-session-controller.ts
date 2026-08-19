@@ -6,6 +6,7 @@ import type {
   McpSessionTraceEntry,
   McpSessionTraceReplayGap,
 } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import { isRecord } from '../client-helpers.ts';
 import { AgentBundleRemoteTransport } from './agent-bundle-remote-transport.ts';
 import {
   invocationHistoryFor,
@@ -166,9 +167,6 @@ const constructionDrain = (): ConstructionDrain => {
   const settled = new Promise<void>((resolve) => { settle = resolve; });
   return { settled, settle };
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isDataDescriptor = (value: PropertyDescriptor | undefined): value is PropertyDescriptor & { readonly value: unknown } =>
   value !== undefined && Object.hasOwn(value, 'value') && !Object.hasOwn(value, 'get') && !Object.hasOwn(value, 'set');

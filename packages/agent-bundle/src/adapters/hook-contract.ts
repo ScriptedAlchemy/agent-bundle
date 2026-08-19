@@ -1,4 +1,5 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { isRecord } from '../core/strict-json.ts';
 import type {
   CanonicalHookEvent,
   CanonicalHookTool,
@@ -116,6 +117,7 @@ export const readTargetNativeHookCommands = (
     if (typeof reader !== 'function') return Object.freeze({ status: 'invalid' });
     return snapshotNativeHookCommandResult(reader(document)) ?? Object.freeze({ status: 'invalid' });
   } catch {
+    // Target command readers are untrusted; a throw is an invalid document.
     return Object.freeze({ status: 'invalid' });
   }
 };
@@ -220,9 +222,6 @@ export interface HookPlan {
   readonly document?: Record<string, unknown>;
   readonly hookEntries: readonly TargetHookEntry[];
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export const nativeHooksFor = (
   model: NormalizedPlugin,

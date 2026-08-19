@@ -1,9 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
-import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
-import type { NativePlaygroundCatalog } from './native-playground-service.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import {
   PlaygroundServiceError,
   type DraftEvalCase,
@@ -18,6 +16,23 @@ import {
   type PlaygroundSubscription,
   type PlaygroundTraceEvent,
 } from '../services/playground-service.ts';
+import {
+  decodedOpaqueSegment,
+  diagnostic,
+  hasOnly,
+  isJsonRequest,
+  isRequestDiagnostic,
+  nonemptyString,
+  rawPathname,
+  readBody,
+  requestError,
+  responseDiagnostic,
+  responseJson as writeJsonResponse,
+  type RequestDiagnostic,
+} from './http.ts';
+import type { NativePlaygroundCatalog } from './native-playground-service.ts';
+import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
+import { encodedNdjsonFrame, writeKeepAliveStreamHead } from './route-streams.ts';
 
 /**
  * Trace events legitimately carry raw protocol frames, so this exceeds the MCP
@@ -27,12 +42,6 @@ import {
 const bodyLimit = 1024 * 1024;
 const maxValueDepth = 32;
 const streamQueueByteLimit = 1024 * 1024;
-
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
 
 type SessionRouteKind =
   | 'draft-eval'
@@ -69,18 +78,8 @@ export interface PlaygroundRoutesOptions {
   readonly service?: PlaygroundRouteService;
 }
 
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
-  new Error(value.message),
-  value,
-);
-
-const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).status === 'number';
+const responseJson = (response: ServerResponse, body: unknown): void =>
+  writeJsonResponse(response, body, { destroyIfEnded: true });
 
 /**
  * Service failures stay actionable without republishing their messages, which
@@ -103,89 +102,12 @@ const serviceDiagnostics: Readonly<Record<PlaygroundServiceErrorCode, RequestDia
   PLAYGROUND_VALUE_INVALID: diagnostic('AB8050', 'Playground request has an invalid value.', 400),
 });
 
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
-};
-
-const responseJson = (response: ServerResponse, body: unknown): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
-
-const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
-  typeof value === 'string' ? value : undefined;
-
-const unquoteHeaderValue = (value: string): string | undefined => {
-  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
-  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
-  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
-};
-
-const isJsonRequest = (request: IncomingMessage): boolean => {
-  const contentType = singleHeader(request.headers['content-type']);
-  if (contentType === undefined) return false;
-  const parts = contentType.split(';').map((part) => part.trim());
-  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
-  if (parts.length === 0) return true;
-  if (parts.length !== 1) return false;
-  const parameter = parts[0]!;
-  const equals = parameter.indexOf('=');
-  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
-  return unquoteHeaderValue(parameter.slice(equals + 1).trim())?.toLowerCase() === 'utf-8';
-};
-
-const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  let size = 0;
-  let tooLarge = false;
-  const chunks: Buffer[] = [];
-  request.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > bodyLimit) {
-      tooLarge = true;
-      return;
-    }
-    if (!tooLarge) chunks.push(chunk);
-  });
-  request.once('end', () => {
-    if (tooLarge) {
-      rejectPromise(requestError(diagnostic('AB8085', 'Request body exceeds 1 MiB.', 413)));
-      return;
-    }
-    resolvePromise(Buffer.concat(chunks).toString('utf8'));
-  });
-  request.once('error', rejectPromise);
-});
-
-const rawPathname = (requestTarget: string | undefined): string => requestTarget?.split(/[?#]/u, 1)[0] ?? '';
-
 const pathError = (): never => {
   throw requestError(diagnostic('AB8040', 'Playground route path is not valid.', 400));
 };
 
-const decodedSegment = (segment: string): string => {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(segment);
-  } catch {
-    return pathError();
-  }
-  if (
-    decoded.length === 0 || decoded === '.' || decoded === '..' ||
-    decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
-  ) {
-    return pathError();
-  }
-  return decoded;
-};
+const decodedSegment = (segment: string): string =>
+  decodedOpaqueSegment(segment, { code: 'AB8040', message: 'Playground route path is not valid.' });
 
 const sessionRouteKinds: readonly SessionRouteKind[] = Object.freeze([
   'draft-eval',
@@ -214,15 +136,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return sessionRouteKinds.includes(kind) ? Object.freeze({ id, kind }) : undefined;
 };
 
-const isRecord = (value: unknown): value is JsonObject =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const hasOnly = (value: JsonObject, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
-
-const nonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');
-
 const invalidShape = (): never => {
   throw requestError(diagnostic('AB8042', 'Playground request has an invalid shape.', 400));
 };
@@ -249,7 +162,11 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
   }
   let parsed: unknown;
   try {
-    parsed = parseJsonWithoutDuplicateKeys(await readBody(request));
+    parsed = parseJsonWithoutDuplicateKeys(await readBody(request, {
+      code: 'AB8085',
+      limit: bodyLimit,
+      message: 'Request body exceeds 1 MiB.',
+    }));
   } catch (error) {
     if (isRequestDiagnostic(error)) throw error;
     throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
@@ -488,7 +405,7 @@ export class PlaygroundRoutes {
      */
     const deliver = async (event: PlaygroundTraceEvent): Promise<void> => {
       if (closed || response.writableEnded || response.destroyed) return;
-      const frame = `${JSON.stringify(event)}\n`;
+      const frame = encodedNdjsonFrame(event);
       if (!started) {
         backlogBytes += Buffer.byteLength(frame);
         if (backlogBytes > streamQueueByteLimit) {
@@ -516,12 +433,10 @@ export class PlaygroundRoutes {
       if (!response.writableEnded && !response.destroyed) response.end();
       return;
     }
-    response.writeHead(200, {
-      'cache-control': 'no-store',
-      connection: 'keep-alive',
-      'content-type': 'application/x-ndjson; charset=utf-8',
+    writeKeepAliveStreamHead(response, {
+      cacheControl: 'no-store',
+      contentType: 'application/x-ndjson; charset=utf-8',
     });
-    response.flushHeaders();
     this.#streamClosers.add(finishStream);
     request.once('close', cleanup);
     response.once('close', cleanup);

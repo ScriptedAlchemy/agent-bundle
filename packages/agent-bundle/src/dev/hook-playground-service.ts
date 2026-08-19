@@ -8,6 +8,8 @@ import type { ArtifactHook } from '../build/emit.ts';
 import { listArtifactFiles } from '../build/emit.ts';
 import type { CanonicalHookEvent } from '../core/types.ts';
 import { digest } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { HookService } from '../services/hook-service.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
 import type { DevLogKindFor, DevLogSink } from './dev-log-service.ts';
@@ -101,9 +103,6 @@ export interface HookPlaygroundServiceOptions {
 }
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const cloneAndFreeze = (value: unknown, seen = new WeakSet<object>()): unknown => {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
   if (typeof value !== 'object') throw new TypeError('Hook playground values must be JSON-compatible.');
@@ -168,9 +167,6 @@ const missingManifest = (target: string, event: string, manifestPath: string): H
   })]),
 });
 
-const isMissingFile = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
-
 const matcherFor = async (
   artifact: string,
   hook: ArtifactHook,
@@ -181,7 +177,7 @@ const matcherFor = async (
   try {
     document = JSON.parse(await readFile(join(artifact, hook.target, contract.manifestPath), 'utf8'));
   } catch (error) {
-    if (isMissingFile(error)) return missingManifest(hook.target, hook.event, contract.manifestPath);
+    if (isErrno(error, 'ENOENT')) return missingManifest(hook.target, hook.event, contract.manifestPath);
     return undefined;
   }
   if (!isRecord(document) || !isRecord(document.hooks)) return undefined;

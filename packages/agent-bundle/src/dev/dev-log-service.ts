@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import { resolve } from 'node:path';
 
 import { isCredentialKey, redactEvalCredentialText } from '../eval/credentials.ts';
-import { snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
+import { isJsonRecord as isRecord, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 
 export const devLogProducers = Object.freeze([
   'project',
@@ -161,7 +161,20 @@ const safeContextKeys = new Set([
 const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const maxSummaryLength = 2_048;
 
-const byteLength = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
+// Records and gap messages are deep-frozen, so their encoded size never goes
+// stale; caching it spares one full JSON.stringify per retain/evict/deliver.
+const encodedSizes = new WeakMap<object, number>();
+
+const byteLength = (value: unknown): number => {
+  if (typeof value !== 'object' || value === null) {
+    return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  }
+  const cached = encodedSizes.get(value);
+  if (cached !== undefined) return cached;
+  const size = Buffer.byteLength(JSON.stringify(value), 'utf8');
+  encodedSizes.set(value, size);
+  return size;
+};
 
 const positiveInteger = (value: number, label: string): number => {
   if (!Number.isSafeInteger(value) || value < 1) throw new RangeError(`${label} must be a positive safe integer.`);
@@ -193,13 +206,15 @@ export const devLogKinds = Object.freeze({
 const isKindFor = <TProducer extends DevLogProducer>(producer: TProducer, value: unknown): value is DevLogKindFor<TProducer> =>
   typeof value === 'string' && (devLogKinds[producer] as readonly string[]).includes(value);
 
-const isRecord = (value: JsonValue): value is Readonly<Record<string, JsonValue>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const truncate = (value: string, maximum: number): string => value.length <= maximum ? value : `${value.slice(0, maximum - 1)}…`;
 
-const hasControlOrSeparators = (value: string): boolean => [...value].some((character) =>
-  character === '/' || character === '\\' || character <= '\u001F' || character === '\u007F');
+const hasControlOrSeparators = (value: string): boolean => {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x2f || code === 0x5c || code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+};
 
 const escapeExpression = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
@@ -214,12 +229,24 @@ const rootFormsFor = (projectRoot: string): readonly string[] => {
 
 const rootExpression = (root: string): string => escapeExpression(root).replaceAll('/', '[\\\\/]');
 
+// Project roots have tiny cardinality per process, and `replace` resets a global
+// regex's lastIndex, so caching compiled per-root patterns is safe.
+const rootPatternCache = new Map<string, RegExp>();
+
+const rootPattern = (root: string): RegExp => {
+  let pattern = rootPatternCache.get(root);
+  if (pattern === undefined) {
+    const suffix = String.raw`(?:[\\/][^\s,;{}()[\]<>"'\x00-\x1F\x7F]*)*`;
+    pattern = new RegExp(String.raw`(?:file:\/\/)?${rootExpression(root)}${suffix}`, 'gu');
+    rootPatternCache.set(root, pattern);
+  }
+  return pattern;
+};
+
 const projectPath = (value: string, roots: readonly string[]): string => {
   let sanitized = redactEvalCredentialText(value);
   for (const root of roots) {
-    const expression = rootExpression(root);
-    const suffix = String.raw`(?:[\\/][^\s,;{}()[\]<>"'\x00-\x1F\x7F]*)*`;
-    sanitized = sanitized.replace(new RegExp(String.raw`(?:file:\/\/)?${expression}${suffix}`, 'gu'), (match) => {
+    sanitized = sanitized.replace(rootPattern(root), (match) => {
       const bare = match.replace(/^file:\/\//u, '').replaceAll('\\', '/');
       return `<project>${bare.slice(root.length)}`;
     });

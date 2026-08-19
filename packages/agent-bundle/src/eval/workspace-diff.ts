@@ -1,10 +1,9 @@
-import { createHash } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import fastGlob from 'fast-glob';
 
-import { digest } from '../core/digest.ts';
+import { digest, sha256File } from '../core/digest.ts';
 import type { EvalFixturePlan } from './fixtures.ts';
 
 export interface WorkspaceChange {
@@ -25,9 +24,6 @@ export interface WorkspaceDiffOptions {
 }
 
 const defaultLimit = 128;
-
-const sha256 = async (path: string): Promise<string> =>
-  createHash('sha256').update(await readFile(path)).digest('hex');
 
 /**
  * Compares a trial-owned workspace to its planned fixture without retaining a
@@ -67,7 +63,7 @@ export const workspaceDiff = async (options: WorkspaceDiffOptions): Promise<Work
     const absolute = join(options.workspace, path);
     const metadata = await lstat(absolute);
     if (!metadata.isFile() || metadata.isSymbolicLink()) continue;
-    const current = await sha256(absolute);
+    const current = await sha256File(absolute);
     seen.add(path);
     const expected = baseline.get(path);
     if (expected === undefined) add('added', path, current);

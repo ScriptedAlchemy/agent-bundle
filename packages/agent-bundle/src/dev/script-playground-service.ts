@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifactWithSnapshot } from '../build/validate-artifact.ts';
+import { CodedError, isErrno } from '../core/errors.ts';
 import { isInside } from '../core/paths.ts';
 import {
   taskkill,
@@ -64,9 +65,8 @@ export type ScriptPlaygroundFailureCode =
   | 'timeout';
 
 /** Stable script infrastructure failure with bounded captured output safe for durable evidence. */
-export class ScriptPlaygroundFailure extends Error {
+export class ScriptPlaygroundFailure extends CodedError<ScriptPlaygroundFailureCode> {
   readonly cleanupFailures: readonly ScriptPlaygroundCleanupFailure[];
-  readonly code: ScriptPlaygroundFailureCode;
   readonly stderr: string;
   readonly stdout: string;
 
@@ -76,10 +76,8 @@ export class ScriptPlaygroundFailure extends Error {
     output: Pick<ScriptPlaygroundResult, 'stderr' | 'stdout'>,
     cleanupFailures: readonly ScriptPlaygroundCleanupFailure[] = [],
   ) {
-    super(message);
-    this.name = 'ScriptPlaygroundFailure';
+    super('ScriptPlaygroundFailure', code, message);
     this.cleanupFailures = Object.freeze([...cleanupFailures]);
-    this.code = code;
     this.stderr = output.stderr;
     this.stdout = output.stdout;
   }
@@ -158,7 +156,7 @@ const environment = (cwd: string): Readonly<Record<string, string>> => Object.fr
 });
 
 const spawnFailure = (error: unknown, output: Pick<ScriptPlaygroundResult, 'stderr' | 'stdout'>): ScriptPlaygroundFailure => {
-  if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+  if (isErrno(error, 'ENOENT')) {
     return new ScriptPlaygroundFailure('interpreter-unavailable', 'Script interpreter is not available.', output);
   }
   return new ScriptPlaygroundFailure('spawn-failed', 'Script execution could not be spawned.', output);

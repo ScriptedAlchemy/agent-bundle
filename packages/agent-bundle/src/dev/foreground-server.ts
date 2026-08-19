@@ -5,6 +5,7 @@ import { basename } from 'node:path';
 
 import { validateOriginHeader } from '@modelcontextprotocol/server';
 
+import { CodedError } from '../core/errors.ts';
 import { ArtifactRoutes, type ArtifactRouteService } from './artifact-routes.ts';
 import type { AgentApi } from './agent-api.ts';
 import { DevLogRoutes } from './dev-log-routes.ts';
@@ -17,28 +18,31 @@ import { McpSessionRoutes } from './mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session-service.ts';
 import { PlaygroundRoutes, type PlaygroundRouteService } from './playground-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
+import {
+  decodedOpaqueSegment,
+  diagnostic,
+  isJsonRequest,
+  isRequestDiagnostic,
+  rawPathname,
+  readBody,
+  requestError,
+  responseJson,
+  singleHeader,
+  type RequestDiagnostic,
+} from './http.ts';
+import { createBackpressuredWriter, encodedFrame, writeKeepAliveStreamHead } from './route-streams.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
-const bodyLimit = 64 * 1024;
 const instanceIdLengthLimit = 128;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
 const sseQueueByteLimit = 256 * 1024;
 
-interface QueuedSseFrame {
-  readonly bytes: number;
-  readonly frame: string;
-}
-
 export type ForegroundServerErrorCode = 'AB8000';
 
 /** Configuration errors that prevent a foreground server from starting. */
-export class ForegroundServerError extends Error {
-  readonly code: ForegroundServerErrorCode;
-
+export class ForegroundServerError extends CodedError<ForegroundServerErrorCode> {
   constructor(code: ForegroundServerErrorCode, message: string) {
-    super(message);
-    this.name = 'ForegroundServerError';
-    this.code = code;
+    super('ForegroundServerError', code, message);
   }
 }
 
@@ -127,12 +131,6 @@ export interface ForegroundServerOptions {
   readonly sessionToken?: string;
 }
 
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
-
 type SkillRoute =
   | Readonly<{ readonly kind: 'source-tree' }>
   | Readonly<{ readonly kind: 'source-document'; readonly skillId: string }>
@@ -140,19 +138,6 @@ type SkillRoute =
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-tree'; readonly target: string }>
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-document'; readonly skillId: string; readonly target: string }>
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-resource'; readonly resource: readonly string[]; readonly skillId: string; readonly target: string }>;
-
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
-  new Error(value.message),
-  value,
-);
-
-const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).status === 'number';
 
 /** Route groups may attach structured diagnostics that are the answer, not an internal detail. */
 const attachedDiagnostics = (value: RequestDiagnostic): readonly unknown[] | undefined => {
@@ -173,59 +158,8 @@ const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic):
   }));
 };
 
-const responseJson = (response: ServerResponse, body: unknown): void => {
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
-
 const attachmentHeader = (relativePath: string): string =>
   `attachment; filename*=UTF-8''${encodeURIComponent(basename(relativePath)).replaceAll("'", '%27')}`;
-
-const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
-  typeof value === 'string' ? value : undefined;
-
-const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  let size = 0;
-  let tooLarge = false;
-  const chunks: Buffer[] = [];
-  request.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > bodyLimit) {
-      tooLarge = true;
-      return;
-    }
-    chunks.push(chunk);
-  });
-  request.once('end', () => {
-    if (tooLarge) {
-      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
-      return;
-    }
-    resolvePromise(Buffer.concat(chunks).toString('utf8'));
-  });
-  request.once('error', rejectPromise);
-});
-
-const isJsonRequest = (request: IncomingMessage): boolean => {
-  const contentType = singleHeader(request.headers['content-type']);
-  if (contentType === undefined) return false;
-  const parts = contentType.split(';').map((part) => part.trim());
-  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
-  if (parts.length === 0) return true;
-  if (parts.length !== 1) return false;
-  const parameter = parts[0]!;
-  const equals = parameter.indexOf('=');
-  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
-  const rawValue = parameter.slice(equals + 1).trim();
-  const value = unquoteHeaderValue(rawValue);
-  return value?.toLowerCase() === 'utf-8';
-};
-
-const unquoteHeaderValue = (value: string): string | undefined => {
-  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
-  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
-  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
-};
 
 const decodedAssetPath = (requestTarget: string | undefined): string => {
   const pathname = requestTarget?.split(/[?#]/u, 1)[0];
@@ -233,43 +167,13 @@ const decodedAssetPath = (requestTarget: string | undefined): string => {
     throw requestError(diagnostic('AB8005', 'Asset path is not valid.', 400));
   }
   if (pathname === '/') return 'index.html';
-
-  const parts = pathname.slice(1).split('/').map((part) => {
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(part);
-    } catch {
-      throw requestError(diagnostic('AB8005', 'Asset path is not valid.', 400));
-    }
-    if (
-      decoded.length === 0 || decoded === '.' || decoded === '..' ||
-      decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
-    ) {
-      throw requestError(diagnostic('AB8005', 'Asset path is not valid.', 400));
-    }
-    return decoded;
-  });
-  return parts.join('/');
+  return pathname.slice(1).split('/').map((part) =>
+    decodedOpaqueSegment(part, { code: 'AB8005', message: 'Asset path is not valid.' }),
+  ).join('/');
 };
 
-const rawPathname = (requestTarget: string | undefined): string =>
-  requestTarget?.split(/[?#]/u, 1)[0] ?? '';
-
-const decodedSkillSegment = (segment: string): string => {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(segment);
-  } catch {
-    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
-  }
-  if (
-    decoded.length === 0 || decoded === '.' || decoded === '..' ||
-    decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
-  ) {
-    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
-  }
-  return decoded;
-};
+const decodedSkillSegment = (segment: string): string =>
+  decodedOpaqueSegment(segment, { code: 'AB8012', message: 'Skill route path is not valid.' });
 
 const skillRoute = (requestTarget: string | undefined): SkillRoute | undefined => {
   const pathname = rawPathname(requestTarget);
@@ -335,10 +239,11 @@ const isProjectRelativePath = (value: unknown): value is string => {
   return value.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
 };
 
-const eventFrame = (event: ProjectEventMessage): string => {
-  const id = event.type === 'replay.gap' ? '' : `id: ${event.sequence}\n`;
-  return `${id}event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-};
+const eventFrame = (event: ProjectEventMessage): string =>
+  encodedFrame(event, () => {
+    const id = event.type === 'replay.gap' ? '' : `id: ${event.sequence}\n`;
+    return `${id}event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  });
 
 const afterSequence = (request: IncomingMessage, latestSequence: number): number => {
   const header = singleHeader(request.headers['last-event-id']);
@@ -745,71 +650,36 @@ export class ForegroundServer {
 
   #streamEvents(request: IncomingMessage, response: ServerResponse): void {
     const sequence = afterSequence(request, this.#eventHub.latestSequence);
-    response.writeHead(200, {
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-      'content-type': 'text/event-stream; charset=utf-8',
+    writeKeepAliveStreamHead(response, {
+      cacheControl: 'no-cache',
+      contentType: 'text/event-stream; charset=utf-8',
     });
-    response.flushHeaders();
-    let backpressured = false;
-    let closed = false;
-    let bufferedBytes = 0;
-    let queuedBytes = 0;
-    const queued: QueuedSseFrame[] = [];
     const stream = { subscription: undefined as ProjectEventSubscription | undefined };
+    const writer = createBackpressuredWriter(response, {
+      byteLimit: sseQueueByteLimit,
+      countInFlightBytes: true,
+    });
     const unsubscribe = () => {
       stream.subscription?.unsubscribe();
       if (stream.subscription !== undefined) this.#streamSubscriptions.delete(stream.subscription);
-      bufferedBytes = 0;
-      queued.length = 0;
-      queuedBytes = 0;
+      writer.markClosed();
     };
     const closeStream = () => {
-      closed = true;
+      writer.markClosed();
       unsubscribe();
     };
     const closeSlowStream = () => {
       closeStream();
       response.destroy();
     };
-    const drain = () => {
-      if (closed || response.writableEnded || response.destroyed) return;
-      backpressured = false;
-      bufferedBytes = 0;
-      while (queued.length > 0) {
-        const next = queued.shift()!;
-        queuedBytes -= next.bytes;
-        if (!response.write(next.frame)) {
-          backpressured = true;
-          bufferedBytes = next.bytes;
-          response.once('drain', drain);
-          return;
-        }
-      }
-    };
     const deliver = (frame: string) => {
-      if (closed || response.writableEnded || response.destroyed) return;
-      const bytes = Buffer.byteLength(frame);
-      if (!backpressured) {
-        if (!response.write(frame)) {
-          backpressured = true;
-          bufferedBytes = bytes;
-          response.once('drain', drain);
-        }
-        return;
-      }
-      if (bufferedBytes + queuedBytes + bytes > sseQueueByteLimit) {
-        closeSlowStream();
-        return;
-      }
-      queued.push({ bytes, frame });
-      queuedBytes += bytes;
+      if (writer.enqueue(frame) === 'overflow') closeSlowStream();
     };
     const subscription = this.#eventHub.subscribe({ afterSequence: sequence }, (event) => {
       deliver(eventFrame(event));
     });
     stream.subscription = subscription;
-    if (closed || request.destroyed || response.destroyed) {
+    if (writer.closed || request.destroyed || response.destroyed) {
       closeStream();
       return;
     }

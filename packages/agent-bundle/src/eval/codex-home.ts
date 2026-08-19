@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { copyOpaqueCodexAuthState, withoutProviderApiKeys } from '../host-contracts/native-codex-contract.ts';
+import { copyOpaqueCodexAuthState, digestFileTree, withoutProviderApiKeys } from '../host-contracts/native-codex-contract.ts';
 import { withoutEvalCredentialEnvironment } from './credentials.ts';
 import { CodexEvalHarnessError } from './codex-errors.ts';
 
@@ -30,43 +29,12 @@ interface SemanticVersion {
   readonly prerelease: boolean;
 }
 
-/**
- * Hashes file contents for the small credential and configuration files, and file identity
- * (size, mode, mtime) for the installed-plugin tree, which is far too large to read twice a trial.
- */
-const digestTree = async (path: string, contents: boolean): Promise<string> => {
-  let entry;
-  try {
-    entry = await lstat(path);
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return 'absent';
-    throw error;
-  }
-  const hash = createHash('sha256');
-  if (entry.isFile()) {
-    hash.update(`file\0${entry.mode}\0${entry.size}\0`);
-    if (contents) hash.update(await readFile(path));
-    else hash.update(`${entry.mtimeMs}\0`);
-    return hash.digest('hex');
-  }
-  if (entry.isDirectory()) {
-    hash.update('directory\0');
-    const children = await readdir(path, { withFileTypes: true });
-    for (const child of [...children].sort((left, right) => left.name.localeCompare(right.name))) {
-      hash.update(`${child.name}\0${await digestTree(join(path, child.name), contents)}\0`);
-    }
-    return hash.digest('hex');
-  }
-  hash.update(`other\0${entry.mode}\0`);
-  return hash.digest('hex');
-};
-
 /** Digests only the state a run could plausibly disturb: auth, config, and installed plugins. */
 export const digestCodexHome = async (codexHome: string): Promise<CodexHomeDigest> => {
   const [auth, config, plugins] = await Promise.all([
-    digestTree(join(codexHome, 'auth.json'), true),
-    digestTree(join(codexHome, 'config.toml'), true),
-    digestTree(join(codexHome, 'plugins'), false),
+    digestFileTree(join(codexHome, 'auth.json'), { hashContents: true, includeIdentity: true }),
+    digestFileTree(join(codexHome, 'config.toml'), { hashContents: true, includeIdentity: true }),
+    digestFileTree(join(codexHome, 'plugins'), { hashContents: false, includeIdentity: true }),
   ]);
   return Object.freeze({ auth, config, plugins });
 };

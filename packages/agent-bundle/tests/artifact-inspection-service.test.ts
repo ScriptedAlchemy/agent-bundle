@@ -580,12 +580,13 @@ it('releases references after successful and invalid artifact inspections', asyn
 
   try {
     await publish({ files: runtimeFiles(), id: 'epoch-reference', registry, root, store });
+    await publish({ files: runtimeFiles(), id: 'epoch-invalid', registry, root, store });
     const service = new ArtifactInspectionService(store, registry);
     await service.inspect('epoch-reference');
     expect(store).toMatchObject({ acquired: 1, closed: 1 });
 
-    await writeFile(join(root, '.agent-bundle', 'epochs', 'epoch-reference', 'agent-bundle.manifest.json'), '{\n');
-    await expect(service.inspect('epoch-reference')).rejects.toMatchObject({
+    await writeFile(join(root, '.agent-bundle', 'epochs', 'epoch-invalid', 'agent-bundle.manifest.json'), '{\n');
+    await expect(service.inspect('epoch-invalid')).rejects.toMatchObject({
       code: 'ARTIFACT_INSPECTION_INVALID',
       diagnostics: [expect.objectContaining({ code: 'AB6001' })],
     });

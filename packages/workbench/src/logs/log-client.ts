@@ -4,9 +4,12 @@ import type {
   DevLogReplay,
   DevLogReplayGap,
 } from '../../../agent-bundle/src/dev/dev-log-service.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
+import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
+import { CodedClientError, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { readNdjsonByteFrames } from '../ndjson.ts';
+import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface LogClientOptions {
   readonly authority?: ForegroundSessionAuthority;
@@ -25,13 +28,9 @@ export interface LogStreamOptions {
   readonly signal?: AbortSignal;
 }
 
-export class LogClientError extends Error {
-  readonly code: string;
-
+export class LogClientError extends CodedClientError {
   constructor(code: string, message: string) {
-    super(message);
-    this.name = 'LogClientError';
-    this.code = code;
+    super('LogClientError', code, message);
   }
 }
 
@@ -59,10 +58,7 @@ const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isDate = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-const hasExactKeys = (value: unknown, keys: readonly string[]): value is Readonly<Record<string, unknown>> =>
-  isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+const hasExactKeys = exactKeys;
 const hasControlOrSeparators = (value: string): boolean => [...value].some((character) =>
   character === '/' || character === '\\' || character <= '\u001F' || character === '\u007F');
 const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
@@ -228,53 +224,29 @@ export class LogClient {
     signal.addEventListener('abort', cancelReader, { once: true });
     if (signal.aborted) cancelReader();
     const decoder = new TextDecoder('utf-8', { fatal: true });
-    const frameParts: Uint8Array[] = [];
-    let frameBytes = 0;
     let expectedSequence = options.afterSequence + 1;
     let receivedMessage = false;
-    const append = (part: Uint8Array): void => {
-      if (frameBytes + part.byteLength > maximumLogFrameBytes) throw invalid();
-      if (part.byteLength > 0) frameParts.push(part);
-      frameBytes += part.byteLength;
-    };
-    const consumeFrame = (): void => {
-      const bytes = new Uint8Array(frameBytes);
-      let offset = 0;
-      for (const part of frameParts) {
-        bytes.set(part, offset);
-        offset += part.byteLength;
-      }
-      frameParts.length = 0;
-      frameBytes = 0;
-      const line = decoder.decode(bytes).trim();
-      if (line.length === 0) return;
-      const message = messageFor(line);
-      if ('sequence' in message) {
-        if (message.sequence !== expectedSequence) throw invalid();
-        expectedSequence += 1;
-      } else {
-        if (receivedMessage || message.requestedAfterSequence !== options.afterSequence) throw invalid();
-        expectedSequence = message.earliestAvailableSequence;
-      }
-      receivedMessage = true;
-      options.onMessage(message);
-    };
     try {
-      for (;;) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        if (signal.aborted) return;
-        let start = 0;
-        for (let index = 0; index < chunk.value.byteLength; index += 1) {
-          if (chunk.value[index] !== 0x0a) continue;
-          append(chunk.value.subarray(start, index));
-          consumeFrame();
-          if (signal.aborted) return;
-          start = index + 1;
-        }
-        append(chunk.value.subarray(start));
-      }
-      if (frameBytes > 0) throw invalid();
+      await readNdjsonByteFrames(reader, {
+        maxFrameBytes: maximumLogFrameBytes,
+        onFrame: (bytes) => {
+          const line = decoder.decode(bytes).trim();
+          if (line.length === 0) return;
+          const message = messageFor(line);
+          if ('sequence' in message) {
+            if (message.sequence !== expectedSequence) throw invalid();
+            expectedSequence += 1;
+          } else {
+            if (receivedMessage || message.requestedAfterSequence !== options.afterSequence) throw invalid();
+            expectedSequence = message.earliestAvailableSequence;
+          }
+          receivedMessage = true;
+          options.onMessage(message);
+        },
+        onIncomplete: () => { throw invalid(); },
+        onLimitExceeded: () => { throw invalid(); },
+        signal,
+      });
     } catch (error) {
       if (isAbort(error) || signal.aborted) return;
       if (error instanceof LogClientError) throw error;

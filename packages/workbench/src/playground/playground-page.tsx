@@ -14,6 +14,7 @@ import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-b
 import type { ArtifactInspectionScript } from '../../../agent-bundle/src/dev/types.ts';
 import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/dev/native-playground-service.ts';
 
+import { wait } from '../foreground-session.ts';
 import { parseRawJsonRecord, serializeJsonRecord } from '../mcp/mcp-json-input.tsx';
 import { PlaygroundClientError, type PlaygroundClient } from './playground-client.ts';
 import {
@@ -82,21 +83,8 @@ const terminal = (session: PlaygroundSession): boolean => session.state === 'clo
 
 const abortError = (): Error => Object.assign(new Error('Playground observation was aborted.'), { name: 'AbortError' });
 
-const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> => new Promise((resolvePromise, rejectPromise) => {
-  if (signal.aborted) {
-    rejectPromise(abortError());
-    return;
-  }
-  const timeout = setTimeout(() => {
-    signal.removeEventListener('abort', abort);
-    resolvePromise();
-  }, milliseconds);
-  const abort = (): void => {
-    clearTimeout(timeout);
-    rejectPromise(abortError());
-  };
-  signal.addEventListener('abort', abort, { once: true });
-});
+const delay = (milliseconds: number, signal: AbortSignal): Promise<void> =>
+  wait(milliseconds, { abortError, onAbort: 'reject', signal });
 
 const maxStreamReconnects = 3;
 const pollDelayMilliseconds = 250;

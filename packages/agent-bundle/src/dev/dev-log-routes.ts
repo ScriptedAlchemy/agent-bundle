@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
@@ -8,20 +7,18 @@ import {
   type DevLogService,
   type DevLogSubscription,
 } from './dev-log-service.ts';
+import {
+  diagnostic,
+  rawPathname,
+  requestError,
+  responseDiagnostic,
+  responseJson as writeJsonResponse,
+  type RequestDiagnostic,
+} from './http.ts';
+import { createBackpressuredWriter, encodedNdjsonFrame, writeKeepAliveStreamHead } from './route-streams.ts';
 
 const streamQueueByteLimit = 256 * 1024;
 const streamQueueRecordLimit = 128;
-
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
-
-interface QueuedFrame {
-  readonly bytes: number;
-  readonly frame: string;
-}
 
 type Route = 'replay' | 'stream';
 
@@ -30,29 +27,8 @@ export interface DevLogRoutesOptions {
   readonly service?: DevLogService;
 }
 
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(new Error(value.message), value);
-
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
-};
-
-const responseJson = (response: ServerResponse, body: unknown): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
-
-const rawPathname = (requestTarget: string | undefined): string => requestTarget?.split(/[?#]/u, 1)[0] ?? '';
+const responseJson = (response: ServerResponse, body: unknown): void =>
+  writeJsonResponse(response, body, { destroyIfEnded: true });
 
 const route = (requestTarget: string | undefined): Route | undefined => {
   const pathname = rawPathname(requestTarget);
@@ -140,18 +116,16 @@ export class DevLogRoutes {
     // This probes the cursor before headers. The immediately following
     // subscription is synchronous, so no producer can create an unobserved gap.
     service.replay({ afterSequence });
-    let backpressured = false;
-    let closed = false;
-    let queuedBytes = 0;
-    const queued: QueuedFrame[] = [];
+    const writer = createBackpressuredWriter(response, {
+      byteLimit: streamQueueByteLimit,
+      recordLimit: streamQueueRecordLimit,
+    });
     const stream = { subscription: undefined as DevLogSubscription | undefined };
     let closePromise: Promise<void> | undefined;
     const close = (): Promise<void> => {
       if (closePromise !== undefined) return closePromise;
-      closed = true;
+      writer.markClosed();
       stream.subscription?.close();
-      queued.length = 0;
-      queuedBytes = 0;
       this.#closeStreams.delete(close);
       response.off('close', closeFromPeer);
       closePromise = new Promise<void>((resolvePromise, rejectPromise) => {
@@ -186,46 +160,19 @@ export class DevLogRoutes {
       response.destroy();
       return false;
     };
-    const drain = (): void => {
-      if (closed || response.destroyed || response.writableEnded) return;
-      backpressured = false;
-      while (queued.length > 0) {
-        const next = queued.shift();
-        if (next === undefined) continue;
-        queuedBytes -= next.bytes;
-        if (!response.write(next.frame)) {
-          backpressured = true;
-          response.once('drain', drain);
-          return;
-        }
-      }
-    };
     const deliver = (message: DevLogMessage): boolean => {
-      if (closed || response.destroyed || response.writableEnded) return false;
-      const frame = `${JSON.stringify(message)}\n`;
-      const bytes = Buffer.byteLength(frame, 'utf8');
-      if (!backpressured) {
-        if (!response.write(frame)) {
-          backpressured = true;
-          response.once('drain', drain);
-        }
-        return true;
-      }
-      if (queued.length >= streamQueueRecordLimit || queuedBytes + bytes > streamQueueByteLimit) return closeSlow();
-      queued.push(Object.freeze({ bytes, frame }));
-      queuedBytes += bytes;
-      return true;
+      const result = writer.enqueue(encodedNdjsonFrame(message));
+      if (result === 'overflow') return closeSlow();
+      return result !== 'closed';
     };
     this.#closeStreams.add(close);
     response.once('close', closeFromPeer);
-    response.writeHead(200, {
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-      'content-type': 'application/x-ndjson; charset=utf-8',
+    writeKeepAliveStreamHead(response, {
+      cacheControl: 'no-cache',
+      contentType: 'application/x-ndjson; charset=utf-8',
     });
-    response.flushHeaders();
     stream.subscription = service.subscribe({ afterSequence }, deliver);
-    if (closed || stream.subscription.closed) void close();
+    if (writer.closed || stream.subscription.closed) void close();
   }
 }
 

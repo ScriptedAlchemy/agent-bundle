@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
 
+import { isRecord } from '../core/strict-json.ts';
 import { normalizeEvalConfig, type NormalizedEvalConfig } from './config.ts';
 import { EvalDiscoveryError } from './errors.ts';
 import { parseEvalSuite } from './suite.ts';
@@ -21,9 +22,6 @@ export interface DiscoveredEvalSuite {
   readonly sourcePath: string;
   readonly suite: EvalSuite;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Author suites are TypeScript modules, so they are loaded through the already vendored Jiti runtime. */
 const importSuiteModuleWithJiti = async (sourcePath: string): Promise<unknown> => {

@@ -1,5 +1,5 @@
 import { digest, stableJson } from '../core/digest.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated';
 export type ArtifactManifestValidationStatus = 'passed';
@@ -355,7 +355,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
 const freezeDeep = <Value>(value: Value): Value => {
   if (Array.isArray(value)) {
     value.forEach(freezeDeep);
-  } else if (typeof value === 'object' && value !== null) {
+  } else if (isRecord(value)) {
     Object.values(value).forEach(freezeDeep);
   }
   return Object.freeze(value);

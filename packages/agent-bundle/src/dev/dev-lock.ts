@@ -3,7 +3,7 @@ import { link, lstat, mkdir, open, readFile, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
+import { CodedError, isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
 
 export interface DevLockOwner {
   readonly createdAt: string;
@@ -30,14 +30,11 @@ export interface DevLockStorage {
 
 export type DevLockErrorCode = 'DEV_LOCK_HELD' | 'DEV_LOCK_INVALID';
 
-export class DevLockError extends Error {
-  readonly code: DevLockErrorCode;
+export class DevLockError extends CodedError<DevLockErrorCode> {
   readonly owner?: DevLockOwner;
 
   constructor(code: DevLockErrorCode, message: string, owner?: DevLockOwner) {
-    super(message);
-    this.name = 'DevLockError';
-    this.code = code;
+    super('DevLockError', code, message);
     this.owner = owner;
   }
 }
@@ -124,7 +121,7 @@ const syncDirectory = async (storage: DevLockStorage, path: string): Promise<voi
   try {
     await handle.sync();
   } catch (error) {
-    if (process.platform === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+    if (isTolerableWin32SyncError(process.platform, error)) return;
     throw error;
   } finally {
     await handle.close();

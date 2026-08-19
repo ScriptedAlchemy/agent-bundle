@@ -5,6 +5,7 @@ import {
   explicitInvocationProvenancePattern,
   semanticGraderIdentityPattern,
 } from '../../../agent-bundle/src/eval/provenance.ts';
+import { CodedClientError, isRecord } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import {
   nonnegativeIntegerSchema,
@@ -25,18 +26,11 @@ export interface ComparisonRequest {
   readonly candidate: string;
 }
 
-export class ComparisonClientError extends Error {
-  readonly code: string;
-
+export class ComparisonClientError extends CodedClientError {
   constructor(code: string, message: string) {
-    super(message);
-    this.name = 'ComparisonClientError';
-    this.code = code;
+    super('ComparisonClientError', code, message);
   }
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): ComparisonClientError =>
   new ComparisonClientError('AB8083', 'Eval comparison route returned an invalid response.');

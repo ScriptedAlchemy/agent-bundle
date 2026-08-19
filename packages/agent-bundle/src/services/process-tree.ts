@@ -22,7 +22,7 @@ export const terminateProcessTree = (
 ): Promise<boolean> => {
   if (child.pid === undefined) {
     try { return Promise.resolve(child.kill(signal)); }
-    catch { return Promise.resolve(false); }
+    catch { return Promise.resolve(false); } // kill() throws when the process is already gone.
   }
   if (options.platform === 'win32') {
     return new Promise((resolvePromise) => {
@@ -59,7 +59,7 @@ export const terminateProcessTree = (
           fallback();
         }, taskkillTimeoutMs);
       } catch {
-        fallback();
+        fallback(); // taskkill could not be spawned; try a direct kill.
       }
     });
   }
@@ -70,7 +70,7 @@ export const terminateProcessTree = (
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH') return Promise.resolve(true);
     options.onTreeTerminationFailure();
     try { return Promise.resolve(child.kill(signal)); }
-    catch { return Promise.resolve(false); }
+    catch { return Promise.resolve(false); } // kill() throws when the process is already gone.
   }
 };
 

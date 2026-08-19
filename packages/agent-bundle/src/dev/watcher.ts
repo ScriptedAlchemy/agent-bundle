@@ -78,27 +78,25 @@ export class ProjectWatcher {
     this.#now = options.now ?? (() => new Date());
     this.#onError = options.onError;
     this.#onInvalidation = options.onInvalidation;
-    const ignoredPaths = new Set([...(options.ignoredPaths ?? []), ...(options.outputPaths ?? ['dist'])]
+    const ignoredPaths = [...new Set([...(options.ignoredPaths ?? []), ...(options.outputPaths ?? ['dist'])]
       .map((path) => relativePath(this.#root, path))
-      .filter((path): path is string => path !== undefined));
+      .filter((path): path is string => path !== undefined))];
     this.#ignored = (path) => {
       const source = relativePath(this.#root, path);
       if (source === undefined) return true;
       const parts = source.split('/');
       return parts.some((part) => excludedDirectoryNames.has(part)) ||
-        [...ignoredPaths].some((ignored) => source === ignored || source.startsWith(`${ignored}/`)) ||
+        ignoredPaths.some((ignored) => source === ignored || source.startsWith(`${ignored}/`)) ||
         (source.length > 0 && options.isIgnored?.(resolve(this.#root, path)) === true);
     };
-    let resolveReady: (() => void) | undefined;
-    this.#ready = new Promise<void>((resolvePromise) => {
-      resolveReady = resolvePromise;
-    });
+    const ready = Promise.withResolvers<void>();
+    this.#ready = ready.promise;
     this.#watcher = (options.createWatcher ?? defaultWatcher)(this.#root, { ignored: this.#ignored });
     for (const event of sourceEvents) this.#watcher.on(event, (path) => this.#record(path));
     if (options.createWatcher === undefined) {
-      this.#watcher.on('ready', () => resolveReady?.());
+      this.#watcher.on('ready', () => ready.resolve());
     } else {
-      resolveReady?.();
+      ready.resolve();
     }
   }
 

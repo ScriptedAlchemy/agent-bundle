@@ -8,6 +8,7 @@ import type {
 } from '../../../agent-bundle/src/dev/hook-playground-service.ts';
 import { z } from 'zod';
 
+import { CodedClientError } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 
 export type HookSimulationResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation;
@@ -24,18 +25,11 @@ export interface HookSimulationOptions {
   readonly target: string;
 }
 
-export class HookClientError extends Error {
-  readonly code: string;
-
+export class HookClientError extends CodedClientError {
   constructor(code: string, message: string) {
-    super(message);
-    this.name = 'HookClientError';
-    this.code = code;
+    super('HookClientError', code, message);
   }
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): HookClientError =>
   new HookClientError('AB8033', 'Hook playground route returned an invalid response.');

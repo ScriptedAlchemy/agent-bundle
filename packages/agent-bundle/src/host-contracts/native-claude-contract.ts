@@ -1,8 +1,10 @@
-import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { lstat, readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { isErrno } from '../core/errors.ts';
+import { isRecord } from '../core/strict-json.ts';
+import { digestFileTree } from './native-codex-contract.ts';
+import { runBoundedChildProcess } from './process.ts';
 
 export interface NativeClaudeCommandOptions {
   readonly model?: string;
@@ -75,9 +77,6 @@ export interface NativeClaudeStreamNormalizationOptions {
   readonly allowedPluginNames?: readonly string[];
   readonly candidateSkillEventName?: string;
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isSafeLabel = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(value);
@@ -288,31 +287,8 @@ const evidenceFor = (
   version,
 });
 
-const digestClaudeFileTree = async (path: string, includeContents = true): Promise<string> => {
-  try {
-    const entry = await lstat(path);
-    const digest = createHash('sha256');
-    if (entry.isFile()) {
-      digest.update(`file\0${entry.mode}\0${entry.size}\0`);
-      if (includeContents) digest.update(await readFile(path));
-      else digest.update(`${entry.mtimeMs}\0`);
-      return digest.digest('hex');
-    }
-    if (entry.isDirectory()) {
-      digest.update('directory\0');
-      const children = await readdir(path, { withFileTypes: true });
-      for (const child of children.sort((left, right) => left.name.localeCompare(right.name))) {
-        digest.update(`${child.name}\0${await digestClaudeFileTree(join(path, child.name), includeContents)}\0`);
-      }
-      return digest.digest('hex');
-    }
-    digest.update(`other\0${entry.mode}\0`);
-    return digest.digest('hex');
-  } catch (error) {
-    if (isRecord(error) && error.code === 'ENOENT') return 'absent';
-    throw error;
-  }
-};
+const digestClaudeFileTree = (path: string, includeContents = true): Promise<string> =>
+  digestFileTree(path, Object.freeze({ hashContents: includeContents, includeIdentity: true }));
 
 interface ClaudeNormalHomePaths {
   readonly directory: string;
@@ -353,13 +329,12 @@ const normalHomeChangedDiagnostic = Object.freeze({
   message: 'Claude normal config/settings/plugins state changed; inspect local state without retaining its output.',
 });
 
-const isMissingExecutableError = (error: unknown): boolean =>
-  isRecord(error) && error.code === 'ENOENT';
+const isMissingExecutableError = (error: unknown): boolean => isErrno(error, 'ENOENT');
 
 const looksUnauthenticated = (output: string): boolean =>
   /(?:not\s+logged\s+in|authentication|authenticate|unauthorized|subscription)/iu.test(output);
 
-interface ClaudeVersion {
+export interface ClaudeVersion {
   readonly major: number;
   readonly minor: number;
   readonly patch: number;
@@ -368,7 +343,7 @@ interface ClaudeVersion {
 
 const minimumClaudeVersion = Object.freeze({ major: 2, minor: 1, patch: 232, prerelease: false });
 
-const parseClaudeVersion = (output: string): ClaudeVersion | undefined => {
+export const parseClaudeVersion = (output: string): ClaudeVersion | undefined => {
   const match = /(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?=$|[^0-9A-Za-z.-])/u.exec(output);
   if (match === null) return undefined;
   return Object.freeze({
@@ -379,9 +354,9 @@ const parseClaudeVersion = (output: string): ClaudeVersion | undefined => {
   });
 };
 
-const formatClaudeVersion = (version: ClaudeVersion): string => `${version.major}.${version.minor}.${version.patch}`;
+export const formatClaudeVersion = (version: ClaudeVersion): string => `${version.major}.${version.minor}.${version.patch}`;
 
-const isCompatibleClaudeVersion = (version: ClaudeVersion): boolean => {
+export const isCompatibleClaudeVersion = (version: ClaudeVersion): boolean => {
   for (const field of ['major', 'minor', 'patch'] as const) {
     if (version[field] !== minimumClaudeVersion[field]) return version[field] > minimumClaudeVersion[field];
   }
@@ -437,79 +412,36 @@ const processOptionsFor = (value: AbortSignal | NativeClaudeProcessOptions | und
   });
 };
 
-const appendBounded = (chunks: Buffer[], chunk: Buffer, maxBytes: number, currentBytes: number): number => {
-  const remaining = maxBytes - currentBytes;
-  if (remaining <= 0) return currentBytes;
-  const retained = chunk.byteLength <= remaining ? chunk : chunk.subarray(0, remaining);
-  chunks.push(retained);
-  return currentBytes + retained.byteLength;
-};
-
 export const nativeClaudeSmokeEnabled = (
   environment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): boolean => environment.AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE === '1';
 
-export const runNativeClaudeProcess = (
+export const runNativeClaudeProcess = async (
   request: NativeClaudeProcessRequest,
   signalOrOptions?: AbortSignal | NativeClaudeProcessOptions,
-): Promise<NativeClaudeProcessResult> => new Promise((resolve, reject) => {
+): Promise<NativeClaudeProcessResult> => {
   const options = processOptionsFor(signalOrOptions);
-  const child = spawn(request.executable, [...request.args], {
-    cwd: request.cwd,
-    env: request.environment,
-    stdio: ['ignore', 'pipe', 'pipe'],
+  const result = await runBoundedChildProcess(request, Object.freeze({
+    gracePeriodMs: options.gracePeriodMs,
+    labels: Object.freeze({
+      aborted: 'aborted',
+      outputLimit: 'output-limit',
+      timedOut: 'timed-out',
+    }),
+    maxOutputBytes: options.maxOutputBytes,
+    overflow: 'truncate',
+    outputBudget: 'separate',
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  }));
+  return Object.freeze({
+    exitCode: result.exitCode,
+    signal: result.signal,
+    stderr: result.stderr,
+    stdout: result.stdout,
+    ...(result.termination === undefined ? {} : { termination: result.termination }),
   });
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  let stdoutBytes = 0;
-  let stderrBytes = 0;
-  let settled = false;
-  let termination: NativeClaudeProcessResult['termination'];
-  let escalation: NodeJS.Timeout | undefined;
-  const cleanup = () => {
-    clearTimeout(timeout);
-    if (escalation !== undefined) clearTimeout(escalation);
-    options.signal?.removeEventListener('abort', abort);
-  };
-  const settle = (callback: () => void) => {
-    if (settled) return;
-    settled = true;
-    cleanup();
-    callback();
-  };
-  const terminate = (reason: NonNullable<NativeClaudeProcessResult['termination']>) => {
-    if (termination !== undefined || settled) return;
-    termination = reason;
-    child.kill('SIGTERM');
-    escalation = setTimeout(() => {
-      if (!settled) child.kill('SIGKILL');
-    }, options.gracePeriodMs);
-  };
-  const abort = () => { terminate('aborted'); };
-  const timeout = setTimeout(() => { terminate('timed-out'); }, options.timeoutMs);
-  child.stdout.on('data', (chunk: Buffer) => {
-    stdoutBytes = appendBounded(stdout, chunk, options.maxOutputBytes, stdoutBytes);
-    if (stdoutBytes >= options.maxOutputBytes && chunk.byteLength > 0) terminate('output-limit');
-  });
-  child.stderr.on('data', (chunk: Buffer) => {
-    stderrBytes = appendBounded(stderr, chunk, options.maxOutputBytes, stderrBytes);
-    if (stderrBytes >= options.maxOutputBytes && chunk.byteLength > 0) terminate('output-limit');
-  });
-  child.once('error', (error) => {
-    settle(() => { reject(error); });
-  });
-  child.once('close', (exitCode, closeSignal) => {
-    settle(() => { resolve(Object.freeze({
-      exitCode,
-      signal: closeSignal,
-      stderr: Buffer.concat(stderr).toString('utf8'),
-      stdout: Buffer.concat(stdout).toString('utf8'),
-      ...(termination === undefined ? {} : { termination }),
-    })); });
-  });
-  if (options.signal?.aborted) abort();
-  else options.signal?.addEventListener('abort', abort, { once: true });
-});
+};
 
 const runNativeClaudeSmokeUnchecked = async (options: NativeClaudeSmokeOptions): Promise<NativeClaudeSmokeReport> => {
   if (!options.enabled) {

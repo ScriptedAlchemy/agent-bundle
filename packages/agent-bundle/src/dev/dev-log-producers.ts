@@ -1,11 +1,9 @@
+import { isRecord } from '../core/strict-json.ts';
 import type { ProjectServiceLogger } from './project-service.ts';
 import type { ProjectEvent, ProjectEventMessage } from './types.ts';
 import type { ProjectEventHub } from './events.ts';
 import type { DevLogInput, DevLogInputFor, DevLogKindFor, DevLogSink } from './dev-log-service.ts';
 import type { McpSessionTraceSink } from './mcp-session-service.ts';
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const stringAt = (value: unknown, key: string): string | undefined =>
   isRecord(value) && typeof value[key] === 'string' ? value[key] : undefined;

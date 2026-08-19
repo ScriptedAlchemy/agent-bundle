@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { assertInside } from '../core/paths.ts';
 
 export type McpRuntimeValueField = 'args' | 'cwd' | 'env' | 'headers' | 'url';
@@ -63,9 +64,6 @@ interface CreateTargetMcpRuntimeOptions {
   readonly resolveStdioArgument?: TargetMcpRuntimeContract['resolveStdioArgument'];
   readonly resolveValue: TargetMcpRuntimeContract['resolveValue'];
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 interface OwnDataValue {
   readonly found: boolean;
@@ -314,6 +312,7 @@ export const readTargetMcpServers = (
   try {
     return snapshotModernServersResult(runtime.readModernServers(document)) ?? Object.freeze({ status: 'invalid' });
   } catch {
+    // Target manifest readers are untrusted; a throw is an invalid document.
     return Object.freeze({ status: 'invalid' });
   }
 };

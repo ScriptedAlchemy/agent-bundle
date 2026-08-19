@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   chmod,
   lstat,
@@ -12,7 +11,8 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
-import { stableJson } from '../core/digest.ts';
+import { sha256Hex, stableJson } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
 import { compareArtifactHooks } from '../services/hook-index.ts';
 import { assertInside } from '../core/paths.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
@@ -67,15 +67,12 @@ const normalizeRelativePath = (path: string): string => path.replaceAll('\\', '/
 const executableFileMode = (file: ArtifactFile): number | undefined =>
   (file.mode & 0o111) === 0 ? undefined : file.mode;
 
-const isMissing = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
-
 const exists = async (path: string): Promise<boolean> => {
   try {
     await lstat(path);
     return true;
   } catch (error) {
-    if (isMissing(error)) return false;
+    if (isErrno(error, 'ENOENT')) return false;
     throw error;
   }
 };
@@ -178,7 +175,7 @@ const inspectArtifactDirectory = async (
       bytes: contents.byteLength,
       mode: metadata.mode & 0o777,
       path: normalizedPath,
-      sha256: createHash('sha256').update(contents).digest('hex'),
+      sha256: sha256Hex(contents),
     });
   }
 

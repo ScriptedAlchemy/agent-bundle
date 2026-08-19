@@ -2,6 +2,7 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
   defaultGeneratedRuntime,
@@ -134,9 +135,6 @@ const validateHooks = (
   }
   return diagnostics;
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isPlainRecord = (value: object): value is Record<string, unknown> => {
   const prototype = Object.getPrototypeOf(value);

@@ -9,7 +9,9 @@ import type {
 } from '../../../agent-bundle/src/services/playground-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
 import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/dev/native-playground-service.ts';
+import { CodedClientError, exactKeys, isRecord, nonemptyString } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface PlaygroundClientOptions {
   readonly authority?: ForegroundSessionAuthority;
@@ -27,18 +29,11 @@ export interface PlaygroundStream {
   readonly done: Promise<void>;
 }
 
-export class PlaygroundClientError extends Error {
-  readonly code: string;
-
+export class PlaygroundClientError extends CodedClientError {
   constructor(code: string, message: string) {
-    super(message);
-    this.name = 'PlaygroundClientError';
-    this.code = code;
+    super('PlaygroundClientError', code, message);
   }
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): PlaygroundClientError =>
   new PlaygroundClientError('AB8043', 'Playground route returned an invalid response.');
@@ -46,57 +41,17 @@ const invalidResponse = (): PlaygroundClientError =>
 const invalidJson = Symbol('invalid playground JSON');
 
 /** Decodes only own data properties, so boundary values cannot retain getters, prototypes, or mutable references. */
-const detachedJson = (value: unknown, seen = new WeakSet<object>()): unknown | typeof invalidJson => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
-  if (typeof value === 'number') return Number.isFinite(value) ? value : invalidJson;
-  if (typeof value !== 'object') return invalidJson;
+const detachedJson = (value: unknown): unknown | typeof invalidJson => {
   try {
-    if (seen.has(value)) return invalidJson;
-    seen.add(value);
-    if (Array.isArray(value)) {
-      if (Object.getPrototypeOf(value) !== Array.prototype) return invalidJson;
-      const keys = Reflect.ownKeys(value);
-      const length = Object.getOwnPropertyDescriptor(value, 'length');
-      if (length === undefined || !('value' in length) || !Number.isSafeInteger(length.value) || length.value < 0 ||
-        keys.length !== length.value + 1 || keys.some((key) => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/u.test(key)))) return invalidJson;
-      const detached: unknown[] = [];
-      for (let index = 0; index < length.value; index += 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return invalidJson;
-        const entry = detachedJson(descriptor.value, seen);
-        if (entry === invalidJson) return invalidJson;
-        detached.push(entry);
-      }
-      return Object.freeze(detached);
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return invalidJson;
-    const detached = Object.create(null) as Record<string, unknown>;
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string') return invalidJson;
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return invalidJson;
-      const entry = detachedJson(descriptor.value, seen);
-      if (entry === invalidJson) return invalidJson;
-      Object.defineProperty(detached, key, { configurable: false, enumerable: true, value: entry, writable: false });
-    }
-    return Object.freeze(detached);
+    return snapshotStrictJsonValue(value, { nullPrototype: true });
   } catch {
     return invalidJson;
   }
 };
 
-const exactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-};
-
 const optionalKeys = (value: Readonly<Record<string, unknown>>, required: readonly string[], optional: readonly string[]): boolean =>
   optional.some((key) => exactKeys(value, [...required, key])) || exactKeys(value, required) ||
   (optional.length === 2 && exactKeys(value, [...required, ...optional]));
-
-const nonemptyString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 
 const jsonObject = (value: unknown): value is Readonly<Record<string, unknown>> => isRecord(value);
 

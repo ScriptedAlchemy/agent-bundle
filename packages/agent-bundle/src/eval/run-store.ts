@@ -5,9 +5,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'n
 
 import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
+import { CodedError, isErrno } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { defaultEvalRunsDir } from './config.ts';
 import { findCredentialConfiguration } from './credentials.ts';
 import { EvalRunStoreError } from './errors.ts';
@@ -131,26 +131,34 @@ export interface EvalRunEvent {
 }
 
 /** The full JSONL event line exists, but fsync or descriptor close could not confirm its durability. */
-export class EvalRunEventDurabilityError extends Error {
+export class EvalRunEventDurabilityError extends CodedError<'EVAL_RUN_EVENT_DURABILITY'> {
   readonly event: EvalRunEvent;
   readonly failures: readonly unknown[];
 
   constructor(event: EvalRunEvent, failures: readonly unknown[]) {
-    super(`Eval run event ${JSON.stringify(event.kind)} was written but could not be durably confirmed.`, { cause: failures[0] });
-    this.name = 'EvalRunEventDurabilityError';
+    super(
+      'EvalRunEventDurabilityError',
+      'EVAL_RUN_EVENT_DURABILITY',
+      `Eval run event ${JSON.stringify(event.kind)} was written but could not be durably confirmed.`,
+      { cause: failures[0] },
+    );
     this.event = event;
     this.failures = Object.freeze([...failures]);
   }
 }
 
 /** A failed append may have left bytes that could not be durably rolled back to the prior journal boundary. */
-export class EvalRunEventWriteUncertainError extends Error {
+export class EvalRunEventWriteUncertainError extends CodedError<'EVAL_RUN_EVENT_WRITE_UNCERTAIN'> {
   readonly event: EvalRunEvent;
   readonly failures: readonly unknown[];
 
   constructor(event: EvalRunEvent, failures: readonly unknown[]) {
-    super(`Eval run event ${JSON.stringify(event.kind)} could not be safely rolled back.`, { cause: failures[0] });
-    this.name = 'EvalRunEventWriteUncertainError';
+    super(
+      'EvalRunEventWriteUncertainError',
+      'EVAL_RUN_EVENT_WRITE_UNCERTAIN',
+      `Eval run event ${JSON.stringify(event.kind)} could not be safely rolled back.`,
+      { cause: failures[0] },
+    );
     this.event = event;
     this.failures = Object.freeze([...failures]);
   }
@@ -214,9 +222,6 @@ const runEvalRunStoreDurabilityTestHook = async (
 };
 
 const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isProcessRunning = (pid: number): boolean => {
   try {
@@ -336,11 +341,11 @@ const ensureWritablePath = async (root: string, path: string): Promise<void> => 
   }
 };
 
-const writeJsonAtomically = async (root: string, path: string, value: unknown): Promise<void> => {
+const writeJsonAtomically = async (root: string, path: string, value: unknown, serialized?: string): Promise<void> => {
   await ensureWritablePath(root, path);
   const temporaryPath = join(dirname(path), `.${basename(path) || 'record'}.stage-${process.pid}-${randomUUID()}`);
   try {
-    await writeFile(temporaryPath, `${stableJson(value)}\n`, 'utf8');
+    await writeFile(temporaryPath, serialized ?? `${stableJson(value)}\n`, 'utf8');
     await rename(temporaryPath, path);
   } finally {
     await rm(temporaryPath, { force: true });
@@ -923,6 +928,8 @@ export class EvalRunWriter implements EvalTrialWriter {
   #closed = false;
   #closeFailures: unknown[] = [];
   #closePromise: Promise<void> | undefined;
+  #journal: FileHandle | undefined;
+  #journalOffset = 0;
   #record: EvalRunRecord;
   #sequence = 0;
   readonly #queue = serialQueue();
@@ -961,43 +968,40 @@ export class EvalRunWriter implements EvalTrialWriter {
       const eventPath = join(this.#directory, eventsFileName);
       await ensureWritablePath(this.#directory, eventPath);
       await runEvalRunStoreDurabilityTestHook('before-event-open', record, eventPath, undefined);
-      const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
+      const journal = await this.#ensureJournal(eventPath);
       const failures: unknown[] = [];
-      let boundary: number | undefined;
+      const line = `${stableJson(record)}\n`;
+      const boundary = this.#journalOffset;
       let rollbackUncertain = false;
       let writeStarted = false;
       let written = false;
       try {
-        boundary = (await journal.stat()).size;
         writeStarted = true;
         await runEvalRunStoreDurabilityTestHook('before-event-write', record, eventPath, journal);
-        await journal.writeFile(`${stableJson(record)}\n`, 'utf8');
+        await journal.writeFile(line, 'utf8');
         written = true;
         this.#sequence = sequence;
         await runEvalRunStoreDurabilityTestHook('after-event-write', record, eventPath, journal);
         await journal.sync();
+        this.#journalOffset = boundary + Buffer.byteLength(line, 'utf8');
       } catch (error) {
         failures.push(error);
         if (writeStarted && !written) {
-          if (boundary === undefined) {
+          try {
+            await journal.truncate(boundary);
+            await journal.sync();
+          } catch (rollbackFailure) {
             rollbackUncertain = true;
-          } else {
-            try {
-              await journal.truncate(boundary);
-              await journal.sync();
-            } catch (rollbackFailure) {
-              rollbackUncertain = true;
-              failures.push(rollbackFailure);
-            }
+            failures.push(rollbackFailure);
           }
         }
       }
-      try { await journal.close(); }
-      catch (error) {
-        failures.push(error);
-        if (writeStarted && !written) rollbackUncertain = true;
-      }
       if (failures.length > 0) {
+        try { await this.#releaseJournal(); }
+        catch (error) {
+          failures.push(error);
+          if (writeStarted && !written) rollbackUncertain = true;
+        }
         if (written) throw new EvalRunEventDurabilityError(record, failures);
         if (rollbackUncertain) {
           this.#uncertainEventWrite = true;
@@ -1028,11 +1032,12 @@ export class EvalRunWriter implements EvalTrialWriter {
   async writeTrial(trial: EvalTrialRecordInput): Promise<EvalTrialRecord> {
     this.#assertOpen();
     const record = parseTrialInput(trial);
-    if (Buffer.byteLength(`${stableJson(record)}\n`, 'utf8') > maximumTrialRecordBytes) {
+    const serialized = `${stableJson(record)}\n`;
+    if (Buffer.byteLength(serialized, 'utf8') > maximumTrialRecordBytes) {
       throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval trial record exceeds the 1 MiB storage limit.');
     }
     return this.#serialize(async () => {
-      await writeJsonAtomically(this.#directory, join(this.#directory, 'cases', record.caseId, `${record.id}.json`), record);
+      await writeJsonAtomically(this.#directory, join(this.#directory, 'cases', record.caseId, `${record.id}.json`), record, serialized);
       return record;
     });
   }
@@ -1064,9 +1069,33 @@ export class EvalRunWriter implements EvalTrialWriter {
 
   async #drain(): Promise<void> {
     await this.#queue.run(async () => undefined);
+    try {
+      await this.#releaseJournal();
+    } catch (error) {
+      this.#closeFailures.push(error);
+    }
     if (this.#closeFailures.length > 0) {
       throw new AggregateError(this.#closeFailures, `Eval run ${JSON.stringify(this.#record.id)} closed with admitted write failures.`);
     }
+  }
+
+  async #ensureJournal(eventPath: string): Promise<FileHandle> {
+    if (this.#journal !== undefined) return this.#journal;
+    const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
+    try {
+      this.#journalOffset = (await journal.stat()).size;
+    } catch (error) {
+      await journal.close().catch(() => undefined);
+      throw error;
+    }
+    this.#journal = journal;
+    return journal;
+  }
+
+  async #releaseJournal(): Promise<void> {
+    const journal = this.#journal;
+    this.#journal = undefined;
+    if (journal !== undefined) await journal.close();
   }
 
   #assertOpen(): void {
@@ -1309,7 +1338,10 @@ export const readEvalTrials = async (
       let parsed: unknown;
       try {
         parsed = await readTrialRecordFile(sourcePath, [cases, caseIdentity]);
-      } catch {
+      } catch (error) {
+        // The reader's own store errors carry precise integrity evidence; only
+        // relabel the remaining JSON parse and I/O failures.
+        if (error instanceof EvalRunStoreError) throw error;
         throw storeError('EVAL_RUN_CORRUPT', `Eval trial record ${JSON.stringify(sourcePath)} cannot be parsed as JSON.`);
       }
       trials.push(parseTrialRecord(parsed, sourcePath));

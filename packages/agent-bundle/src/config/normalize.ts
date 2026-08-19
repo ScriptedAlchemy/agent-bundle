@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, extname, relative, resolve } from 'node:path';
 
-import { digest } from '../core/digest.ts';
+import { digest, sha256Hex } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
 import {
   defaultGeneratedRuntime,
   formatRuntimeVersion,
@@ -67,7 +67,7 @@ const slug = (value: string): string => {
 };
 
 const mcpEntryName = (name: string): string => {
-  const hash = createHash('sha256').update(name).digest('hex').slice(0, 8);
+  const hash = sha256Hex(name).slice(0, 8);
   return `mcp-${slug(name)}-${hash}.mjs`;
 };
 
@@ -192,7 +192,7 @@ const normalizeNativeHooks = async (
       });
     } catch (error) {
       nativeHooks.push({
-        issue: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'parse',
+        issue: isErrno(error, 'ENOENT') ? 'missing' : 'parse',
         provenance: { ...provenance },
         source,
         target,

@@ -130,14 +130,11 @@ const captureStderr = (stream: Stream | null, close: () => Promise<void>): Stder
   let bytes = 0;
   let overflow = false;
   let finished = false;
-  let resolveFinished: (() => void) | undefined;
-  const finishedPromise = new Promise<void>((resolve) => {
-    resolveFinished = resolve;
-  });
+  const finishedGate = Promise.withResolvers<void>();
   const onFinished = () => {
     if (finished) return;
     finished = true;
-    resolveFinished?.();
+    finishedGate.resolve();
   };
   const onData = (chunk: Buffer | string) => {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -164,7 +161,7 @@ const captureStderr = (stream: Stream | null, close: () => Promise<void>): Stder
       if (finished) return;
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        finishedPromise,
+        finishedGate.promise,
         new Promise<void>((resolve) => {
           timer = setTimeout(resolve, timeoutMs);
         }),

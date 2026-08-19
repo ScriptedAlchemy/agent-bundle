@@ -24,7 +24,7 @@ import { validateArtifact } from '../build/validate-artifact.ts';
 import { serialQueue } from '../core/async.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import {
   readTargetMcpServer,
@@ -329,6 +329,7 @@ const inspectorUrl = (url: URL): string => {
     try {
       return credentialShaped.test(decodeURIComponent(segment));
     } catch {
+      // Malformed percent-encoding is treated as credential-shaped and stripped.
       return true;
     }
   })) sanitized.pathname = '/';
@@ -386,9 +387,6 @@ const cloneJsonSnapshot = (value: unknown, ancestors = new WeakSet<object>()): u
 };
 
 const detachedJsonSnapshot = (value: unknown): unknown => freezeJsonValue(cloneJsonSnapshot(value));
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isMcpAppJsonValue = (value: unknown): value is McpAppJsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
@@ -475,21 +473,16 @@ const requestOptions = (
 };
 
 const openingSession = (): OpeningSession => {
-  let resolveDone: (() => void) | undefined;
-  let rejectDone: ((reason?: unknown) => void) | undefined;
-  const done = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolveDone = resolvePromise;
-    rejectDone = rejectPromise;
-  });
-  void done.catch(() => undefined);
+  const done = Promise.withResolvers<void>();
+  void done.promise.catch(() => undefined);
   return Object.freeze({
     abort: new AbortController(),
-    done,
+    done: done.promise,
     finish: (result: PromiseSettledResult<void>) => {
       if (result.status === 'rejected') {
-        rejectDone?.(result.reason);
+        done.reject(result.reason);
       } else {
-        resolveDone?.();
+        done.resolve();
       }
     },
   });
@@ -891,20 +884,15 @@ export class McpSession {
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    let resolveClose: () => void;
-    let rejectClose: (reason?: unknown) => void;
-    const closePromise = new Promise<void>((resolvePromise, rejectPromise) => {
-      resolveClose = resolvePromise;
-      rejectClose = rejectPromise;
-    });
-    this.#closePromise = closePromise;
+    const closing = Promise.withResolvers<void>();
+    this.#closePromise = closing.promise;
     try {
       this.#onClosing();
     } catch {
       // Lifecycle observers cannot prevent client, temporary-data, or epoch cleanup.
     }
-    void this.#operation('close', () => this.#lifecycle.run(() => this.#close())).then(resolveClose!, rejectClose!);
-    return closePromise;
+    void this.#operation('close', () => this.#lifecycle.run(() => this.#close())).then(closing.resolve, closing.reject);
+    return closing.promise;
   }
 
   async #close(): Promise<void> {

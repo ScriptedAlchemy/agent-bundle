@@ -1,6 +1,9 @@
 import { execFile as executeFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { isErrno } from '../core/errors.ts';
+import { isRecord } from '../core/strict-json.ts';
+
 // Pure parsing and opt-in probing contract for subscription-backed native host CLIs.
 export type NativeHost = 'claude' | 'codex';
 
@@ -84,9 +87,6 @@ interface SemanticVersion {
   readonly patch: number;
   readonly prerelease?: readonly string[];
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isNativeHost = (value: unknown): value is NativeHost => value === 'claude' || value === 'codex';
 
@@ -458,8 +458,7 @@ const helpCommandFor = (manifest: HostContractManifest, probe: HostContractHelpP
   kind: 'help',
 });
 
-const isMissingExecutableError = (error: unknown): boolean =>
-  isRecord(error) && error.code === 'ENOENT';
+const isMissingExecutableError = (error: unknown): boolean => isErrno(error, 'ENOENT');
 
 export const compareInstalledHostContract = async (
   manifestInput: unknown,

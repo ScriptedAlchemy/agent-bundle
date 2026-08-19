@@ -1,5 +1,6 @@
 import type { JSONRPCMessage, Transport, TransportSendOptions } from '@modelcontextprotocol/client';
 
+import { isRecord } from '../client-helpers.ts';
 import {
   McpRouteClient,
   type McpRouteConnection,
@@ -28,9 +29,6 @@ export class AgentBundleRemoteTransportError extends Error {
     this.name = 'AgentBundleRemoteTransportError';
   }
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const request = (value: unknown): JsonRpcRequest | undefined => {
   if (!isRecord(value) || value.jsonrpc !== '2.0' || typeof value.method !== 'string' || !Object.hasOwn(value, 'id')) return undefined;

@@ -1,19 +1,24 @@
-import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { McpAppJsonValue, McpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppBridgeCloseOptions, McpAppBridgeJsonRecord, McpAppBridgeLifecycle } from './mcp-app-bridge.ts';
 import type { McpAppPreviewCloseResult, McpAppPreviewHostContext } from './mcp-app-preview-service.ts';
 import type { McpAppSandboxConsent } from './mcp-app-sandbox.ts';
+import {
+  decodedOpaqueSegment,
+  diagnostic,
+  hasOnly,
+  isJsonRequest,
+  isRequestDiagnostic,
+  nonemptyString,
+  rawPathname,
+  readBody,
+  requestError,
+  responseDiagnostic,
+  responseJson,
+} from './http.ts';
 
-const bodyLimit = 64 * 1024;
 const gracefulCloseReceiptTimeoutMs = 5_000;
-
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
 
 interface CreateRoute {
   readonly kind: 'create';
@@ -62,94 +67,13 @@ export interface McpAppRoutesOptions {
   readonly service?: McpAppRoutePreviewService;
 }
 
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
-  new Error(value.message),
-  value,
-);
-
-const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).status === 'number';
-
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
-};
-
-const responseJson = (response: ServerResponse, body: unknown): void => {
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
-
-const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
-  typeof value === 'string' ? value : undefined;
-
-const unquoteHeaderValue = (value: string): string | undefined => {
-  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
-  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
-  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
-};
-
-const isJsonRequest = (request: IncomingMessage): boolean => {
-  const contentType = singleHeader(request.headers['content-type']);
-  if (contentType === undefined) return false;
-  const parts = contentType.split(';').map((part) => part.trim());
-  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
-  if (parts.length === 0) return true;
-  if (parts.length !== 1) return false;
-  const parameter = parts[0]!;
-  const equals = parameter.indexOf('=');
-  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
-  return unquoteHeaderValue(parameter.slice(equals + 1).trim())?.toLowerCase() === 'utf-8';
-};
-
-const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  let size = 0;
-  let tooLarge = false;
-  const chunks: Buffer[] = [];
-  request.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > bodyLimit) {
-      tooLarge = true;
-      return;
-    }
-    if (!tooLarge) chunks.push(chunk);
+const opaqueSegment = (value: string): string =>
+  decodedOpaqueSegment(value, {
+    code: 'AB8020',
+    maxLength: 4_096,
+    message: 'MCP App route path is not valid.',
+    rejectBlank: true,
   });
-  request.once('end', () => {
-    if (tooLarge) {
-      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
-      return;
-    }
-    resolvePromise(Buffer.concat(chunks).toString('utf8'));
-  });
-  request.once('error', rejectPromise);
-});
-
-const rawPathname = (requestTarget: string | undefined): string => requestTarget?.split(/[?#]/u, 1)[0] ?? '';
-
-const opaqueSegment = (value: string): string => {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(value);
-  } catch {
-    throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
-  }
-  if (
-    decoded.length === 0 || decoded.length > 4_096 || decoded.trim().length === 0 || decoded === '.' || decoded === '..' ||
-    decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
-  ) {
-    throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
-  }
-  return decoded;
-};
 
 const route = (requestTarget: string | undefined): Route | undefined => {
   const pathname = rawPathname(requestTarget);
@@ -171,12 +95,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
 
 const isRecord = (value: unknown): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-
-const hasOnly = (value: JsonObject, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
-
-const nonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');
 
 const isJsonValue = (value: unknown): value is McpAppJsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;

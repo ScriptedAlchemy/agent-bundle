@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { sha256Hex } from '../core/digest.ts';
+import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 
 export type McpAppJsonValue =
   | null
@@ -113,15 +114,16 @@ const isJsonValue = (value: unknown): value is McpAppJsonValue => {
   return isRecord(value) && Object.values(value).every(isJsonValue);
 };
 
-const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
-  if (Array.isArray(value)) return Object.freeze(value.map(cloneJson));
-  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneJson(child)])));
-};
+const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => snapshotStrictJsonValue(value);
 
 const cloneRecord = (value: unknown, label: string): { readonly [key: string]: McpAppJsonValue } => {
   if (!isRecord(value) || !isJsonValue(value)) throw new TypeError(`${label} must be a finite JSON object.`);
-  return cloneJson(value) as { readonly [key: string]: McpAppJsonValue };
+  try {
+    return snapshotStrictJsonValue(value) as { readonly [key: string]: McpAppJsonValue };
+  } catch (error) {
+    if (error instanceof TypeError) throw new TypeError(`${label} must be a finite JSON object.`, { cause: error });
+    throw error;
+  }
 };
 
 const cloneStringList = (value: readonly string[], label: string): readonly string[] => {
@@ -283,7 +285,7 @@ const claudeDomain = (publicMcpUrl: string): string | undefined => {
     ) {
       return undefined;
     }
-    return `${createHash('sha256').update(publicMcpUrl).digest('hex').slice(0, 32)}.claudemcpcontent.com`;
+    return `${sha256Hex(publicMcpUrl).slice(0, 32)}.claudemcpcontent.com`;
   } catch {
     return undefined;
   }

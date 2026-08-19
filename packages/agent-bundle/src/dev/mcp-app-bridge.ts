@@ -1,5 +1,7 @@
 import { Buffer } from 'node:buffer';
 
+import { CodedError } from '../core/errors.ts';
+import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import {
   selectMcpAppResourceUri,
   type McpAppBinding,
@@ -42,14 +44,15 @@ export interface McpAppBridgeRpcError {
   readonly message: string;
 }
 
-export class McpAppBridgeCloseError extends Error {
-  readonly code: 'binding-close-failed' | 'binding-close-rejected';
+export class McpAppBridgeCloseError extends CodedError<'binding-close-failed' | 'binding-close-rejected'> {
   readonly operation = 'closeBinding';
 
   constructor(code: McpAppBridgeCloseError['code']) {
-    super(`MCP App binding ${code === 'binding-close-rejected' ? 'was already closed' : 'could not be released'}.`);
-    this.code = code;
-    this.name = 'McpAppBridgeCloseError';
+    super(
+      'McpAppBridgeCloseError',
+      code,
+      `MCP App binding ${code === 'binding-close-rejected' ? 'was already closed' : 'could not be released'}.`,
+    );
   }
 }
 
@@ -211,15 +214,16 @@ const isJsonValue = (value: unknown): value is McpAppJsonValue => {
   return isRecord(value) && Object.values(value).every(isJsonValue);
 };
 
-const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
-  if (Array.isArray(value)) return Object.freeze(value.map(cloneJson));
-  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneJson(child)])));
-};
+const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => snapshotStrictJsonValue(value);
 
 const jsonRecord = (value: unknown): McpAppBridgeJsonRecord | undefined => {
   if (!isRecord(value) || !isJsonValue(value)) return undefined;
-  return cloneJson(value) as McpAppBridgeJsonRecord;
+  try {
+    return snapshotStrictJsonValue(value) as McpAppBridgeJsonRecord;
+  } catch (error) {
+    if (error instanceof TypeError) return undefined;
+    throw error;
+  }
 };
 
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
@@ -573,6 +577,7 @@ const htmlFromBlob = (blob: string): string | undefined => {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
+    // Invalid UTF-8 never becomes HTML for the iframe.
     return undefined;
   }
 };
@@ -712,6 +717,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         ...(message.result === undefined ? {} : { result: cloneJson(message.result) }),
       }));
     } catch {
+      // Host send() failures must not take down the bridge.
       return false;
     }
   };
@@ -917,18 +923,17 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       lifecycle = 'closing';
       hasTeardownId = true;
       teardownId = closeOptions.id;
-      const complete = (): void => finishTeardown?.();
-      const pending = rememberClose(new Promise<void>((resolve) => {
-        finishTeardown = resolve;
-        closeTimer = setTimeout(complete, timeoutMs);
-      }).then(releaseBinding));
+      const teardown = Promise.withResolvers<void>();
+      finishTeardown = teardown.resolve;
+      closeTimer = setTimeout(teardown.resolve, timeoutMs);
+      const pending = rememberClose(teardown.promise.then(releaseBinding));
       const sent = send({
         id: closeOptions.id,
         jsonrpc: '2.0',
         method: 'ui/resource-teardown',
         params: Object.freeze(closeOptions.reason === undefined ? {} : { reason: closeOptions.reason } as McpAppBridgeJsonRecord),
       });
-      if (!sent) complete();
+      if (!sent) teardown.resolve();
       return pending;
     },
     forceClose(): Promise<void> {

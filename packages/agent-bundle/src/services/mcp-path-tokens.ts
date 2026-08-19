@@ -1,4 +1,5 @@
-import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
+import { DiagnosticError, isDiagnostic, type Diagnostic } from '../core/diagnostics.ts';
+import { isRecord } from '../core/strict-json.ts';
 import type {
   McpRuntimeRoots,
   McpRuntimeValueField,
@@ -23,9 +24,6 @@ export interface McpPathTokenResolverOptions {
 
 const runtimeFields: readonly McpRuntimeValueField[] = ['args', 'cwd', 'env', 'headers', 'url'];
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value);
-
 const runtimeDiagnostic = (
   target: string,
   field: McpRuntimeValueField,
@@ -39,21 +37,11 @@ const runtimeDiagnostic = (
   target,
 });
 
-const validDiagnostic = (value: unknown): value is Diagnostic =>
-  isRecord(value) &&
-  typeof value.code === 'string' &&
-  typeof value.message === 'string' &&
-  (value.generatedPath === undefined || typeof value.generatedPath === 'string') &&
-  (value.recovery === undefined || typeof value.recovery === 'string') &&
-  (value.sourcePath === undefined || typeof value.sourcePath === 'string') &&
-  (value.target === undefined || typeof value.target === 'string') &&
-  (value.severity === 'error' || value.severity === 'info' || value.severity === 'warning');
-
 const validValueResolution = (value: unknown): value is { readonly diagnostics: readonly Diagnostic[]; readonly value: string } =>
   isRecord(value) &&
   typeof value.value === 'string' &&
   Array.isArray(value.diagnostics) &&
-  value.diagnostics.every(validDiagnostic);
+  value.diagnostics.every(isDiagnostic);
 
 export const standardMcpPathTokens = Object.freeze([
   '${PLUGIN_ROOT}',
@@ -114,6 +102,7 @@ export const resolveMcpPathTokens = ({
     try {
       resolved = runtime.resolveValue(field, roots, value);
     } catch {
+      // Target value resolvers are isolated behind a stable diagnostic.
       diagnostics.push(runtimeDiagnostic(target, field, 'resolve-value'));
       return value;
     }

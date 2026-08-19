@@ -1,4 +1,10 @@
-import { createNativeClaudeChildEnvironment } from '../host-contracts/native-claude-contract.ts';
+import { isRecord } from '../core/strict-json.ts';
+import {
+  createNativeClaudeChildEnvironment,
+  formatClaudeVersion,
+  isCompatibleClaudeVersion,
+  parseClaudeVersion,
+} from '../host-contracts/native-claude-contract.ts';
 import { withoutEvalCredentialEnvironment } from './credentials.ts';
 import {
   claudeProcessFailure,
@@ -26,43 +32,7 @@ export interface RunClaudePreflightOptions extends ClaudeProcessOptions {
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
 }
 
-interface ClaudeVersion {
-  readonly major: number;
-  readonly minor: number;
-  readonly patch: number;
-  readonly prerelease: boolean;
-}
-
 const claudeExecutable = 'claude';
-
-const minimumVersion: ClaudeVersion = Object.freeze({
-  major: 2,
-  minor: 1,
-  patch: 232,
-  prerelease: false,
-});
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const parseClaudeVersion = (output: string): ClaudeVersion | undefined => {
-  const match = /(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?=$|[^0-9A-Za-z.-])/u.exec(output);
-  if (match === null) return undefined;
-  return Object.freeze({
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-    prerelease: match[4] !== undefined,
-  });
-};
-
-/** Anything below the checked-in modern baseline is rejected; there is no compatibility branch. */
-const isCompatible = (version: ClaudeVersion): boolean => {
-  for (const field of ['major', 'minor', 'patch'] as const) {
-    if (version[field] !== minimumVersion[field]) return version[field] > minimumVersion[field];
-  }
-  return !version.prerelease;
-};
 
 const isSubscriptionSession = (output: string): boolean => {
   let value: unknown;
@@ -118,8 +88,8 @@ export const runClaudePreflight = async (options: RunClaudePreflightOptions): Pr
       `The Claude CLI did not report a semantic version for the ${minimumClaudeEvalVersion} eval contract.`,
     );
   }
-  const formatted = `${version.major}.${version.minor}.${version.patch}`;
-  if (!isCompatible(version)) {
+  const formatted = formatClaudeVersion(version);
+  if (!isCompatibleClaudeVersion(version)) {
     return failed(
       'incompatible',
       `Claude Code ${formatted} is older than the required ${minimumClaudeEvalVersion} eval contract; upgrade the CLI.`,

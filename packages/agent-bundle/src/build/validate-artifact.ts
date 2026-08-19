@@ -19,7 +19,7 @@ import type {
 } from '../adapters/types.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
 import { classifyMcpArtifactArgument } from '../services/mcp-artifact-reference.ts';
 import { parseArtifactHookIndex } from '../services/hook-index.ts';
@@ -65,6 +65,8 @@ export interface ValidatedArtifactMcpServerEvidence {
 
 /** Deeply frozen artifact evidence that passed one complete validation pass. */
 export interface ValidatedArtifactSnapshot {
+  readonly files: readonly ArtifactFile[];
+  readonly filesystem: ArtifactFilesystemSnapshot;
   readonly manifest: ArtifactManifest;
   readonly runtime: ValidatedArtifactRuntimeEvidence;
 }
@@ -337,12 +339,12 @@ const localMcpArgument = (value: unknown): string | undefined => {
 };
 
 const localMcpPaths = (document: unknown): readonly string[] => {
-  if (typeof document !== 'object' || document === null || Array.isArray(document)) return [];
-  const servers = (document as { readonly mcpServers?: unknown }).mcpServers;
-  if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) return [];
+  if (!isRecord(document)) return [];
+  const servers = document.mcpServers;
+  if (!isRecord(servers)) return [];
   return Object.values(servers).flatMap((server) => {
-    if (typeof server !== 'object' || server === null || Array.isArray(server)) return [];
-    const args = (server as { readonly args?: unknown }).args;
+    if (!isRecord(server)) return [];
+    const args = server.args;
     return Array.isArray(args) ? [localMcpArgument(args[0])].filter((path): path is string => path !== undefined) : [];
   });
 };
@@ -350,8 +352,7 @@ const localMcpPaths = (document: unknown): readonly string[] => {
 const isEpochStagingMarker = (value: string): boolean => {
   try {
     const marker: unknown = JSON.parse(value);
-    if (typeof marker !== 'object' || marker === null || Array.isArray(marker)) return false;
-    if (!('token' in marker)) return false;
+    if (!isRecord(marker) || !('token' in marker)) return false;
     const entries = Object.entries(marker);
     return entries.length === 1 &&
       typeof marker.token === 'string' &&
@@ -658,17 +659,6 @@ const validateTargetContracts = async (options: {
   return Object.freeze(diagnostics);
 };
 
-const mcpCoherenceRecovery = artifactDiagnosticRecoveries.AB6017;
-const hookCoherenceRecovery = artifactDiagnosticRecoveries.AB6018;
-
-const coherenceDiagnostic = (
-  code: 'AB6017' | 'AB6018',
-  message: string,
-  generatedPath: string,
-  target: string,
-  recovery: string,
-): Diagnostic => diagnostic(code, message, generatedPath, target, recovery);
-
 const mcpArtifactPathApi = process.platform === 'win32'
   ? Object.freeze({
     isAbsolute: win32.isAbsolute,
@@ -738,12 +728,11 @@ const validateMcpArtifactReference = (options: {
   });
   if (reference.status === 'external') return Object.freeze([]);
   if (reference.status === 'escaped') {
-    return Object.freeze([coherenceDiagnostic(
+    return Object.freeze([diagnostic(
       'AB6017',
       `MCP ${options.field} ${JSON.stringify(options.value)} escapes target ${JSON.stringify(options.target)}.`,
       options.manifestPath,
       options.target,
-      mcpCoherenceRecovery,
     )]);
   }
 
@@ -759,21 +748,19 @@ const validateMcpArtifactReference = (options: {
         options.manifestPath,
       ));
     } else {
-      diagnostics.push(coherenceDiagnostic(
+      diagnostics.push(diagnostic(
         'AB6017',
         `MCP ${options.field} ${JSON.stringify(options.value)} references missing or unmanifested artifact file ${JSON.stringify(path)}.`,
         options.manifestPath,
         options.target,
-        mcpCoherenceRecovery,
       ));
     }
   } else if (options.directExecutable && (manifestFile.mode === undefined || (manifestFile.mode & 0o111) === 0)) {
-    diagnostics.push(coherenceDiagnostic(
+    diagnostics.push(diagnostic(
       'AB6017',
       `MCP command ${JSON.stringify(options.value)} references non-executable artifact file ${JSON.stringify(path)}.`,
       options.manifestPath,
       options.target,
-      mcpCoherenceRecovery,
     ));
   }
 
@@ -809,24 +796,22 @@ const validateMcpCoherence = async (options: {
       try {
         document = parseJsonWithoutDuplicateKeys(await readFile(resolve(artifactRoot, manifestPath), 'utf8'));
       } catch {
-        diagnostics.push(coherenceDiagnostic(
+        diagnostics.push(diagnostic(
           'AB6017',
           `MCP manifest for target ${JSON.stringify(target.name)} is not valid strict JSON.`,
           manifestPath,
           target.name,
-          mcpCoherenceRecovery,
         ));
         document = undefined;
       }
       if (document !== undefined) {
         const servers = readTargetMcpServers(runtime, document);
         if (servers.status === 'invalid') {
-          diagnostics.push(coherenceDiagnostic(
+          diagnostics.push(diagnostic(
             'AB6017',
             `MCP manifest for target ${JSON.stringify(target.name)} does not contain only modern supported servers.`,
             manifestPath,
             target.name,
-            mcpCoherenceRecovery,
           ));
         } else {
           for (const entry of servers.servers) {
@@ -849,15 +834,14 @@ const validateMcpCoherence = async (options: {
                   entry.message,
                   manifestPath,
                   target.name,
-                  mcpCoherenceRecovery,
+                  artifactDiagnosticRecoveries.AB6017,
                 )));
               } else {
-                diagnostics.push(coherenceDiagnostic(
+                diagnostics.push(diagnostic(
                   'AB6017',
                   `MCP server ${JSON.stringify(entry.name)} could not resolve target runtime values.`,
                   manifestPath,
                   target.name,
-                  mcpCoherenceRecovery,
                 ));
               }
               continue;
@@ -876,12 +860,11 @@ const validateMcpCoherence = async (options: {
 
             if (server.cwd !== undefined) {
               if (!isTargetContainedCwd(artifactRoot, targetRoot, server.cwd)) {
-                diagnostics.push(coherenceDiagnostic(
+                diagnostics.push(diagnostic(
                   'AB6017',
                   `MCP cwd ${JSON.stringify(server.cwd)} escapes target ${JSON.stringify(target.name)}.`,
                   manifestPath,
                   target.name,
-                  mcpCoherenceRecovery,
                 ));
               }
             }
@@ -947,14 +930,13 @@ const validateMcpCoherence = async (options: {
 
     for (const [path, occurrences] of referenceCounts) {
       if (occurrences.length === 1) continue;
-      diagnostics.push(coherenceDiagnostic(
+      diagnostics.push(diagnostic(
         'AB6017',
         occurrences.length === 0
           ? `Compiler MCP entry ${JSON.stringify(path)} is not referenced by a server in target ${JSON.stringify(target.name)}.`
           : `Compiler MCP entry ${JSON.stringify(path)} is referenced ${occurrences.length} times in target ${JSON.stringify(target.name)}.`,
         path,
         target.name,
-        mcpCoherenceRecovery,
       ));
     }
   }
@@ -979,12 +961,11 @@ const validateHookCoherence = async (options: {
   const indexFile = options.files.find((file) => file.path === artifactHookIndexName);
   const index = indexFile === undefined ? undefined : await readArtifactHookIndex(options.artifactRoot);
   if (index === undefined) {
-    return Object.freeze([coherenceDiagnostic(
+    return Object.freeze([diagnostic(
       'AB6018',
       'Artifact hook metadata is not strict canonical hook index data.',
       artifactHookIndexName,
       'artifact',
-      hookCoherenceRecovery,
     )]);
   }
 
@@ -1002,12 +983,11 @@ const validateHookCoherence = async (options: {
 
   for (const hook of index.hooks) {
     if (!targets.has(hook.target) || (options.registry.has(hook.target) && !options.registry.supports(hook.target, 'hooks'))) {
-      diagnostics.push(coherenceDiagnostic(
+      diagnostics.push(diagnostic(
         'AB6018',
         `Hook index entry ${JSON.stringify(hook.id)} selects undeclared or hook-incompatible target ${JSON.stringify(hook.target)}.`,
         artifactHookIndexName,
         hook.target,
-        hookCoherenceRecovery,
       ));
       continue;
     }
@@ -1025,12 +1005,11 @@ const validateHookCoherence = async (options: {
       manifestFile === undefined ||
       !sameFile(file, manifestFile)
     ) {
-      diagnostics.push(coherenceDiagnostic(
+      diagnostics.push(diagnostic(
         'AB6018',
         `Hook index entry ${JSON.stringify(hook.id)} references missing or invalid target wrapper ${JSON.stringify(hook.path)}.`,
         hook.path,
         hook.target,
-        hookCoherenceRecovery,
       ));
     }
   }
@@ -1043,12 +1022,11 @@ const validateHookCoherence = async (options: {
     const manifestPath = targetArtifactPath(target, contract.manifestPath);
     if (!files.has(manifestPath)) {
       if (hooks.length === 0) continue;
-      diagnostics.push(coherenceDiagnostic(
+      diagnostics.push(diagnostic(
         'AB6018',
         `Hook index target ${JSON.stringify(target)} is missing native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
         manifestPath,
         target,
-        hookCoherenceRecovery,
       ));
       continue;
     }
@@ -1056,23 +1034,21 @@ const validateHookCoherence = async (options: {
     try {
       document = JSON.parse(await readFile(resolve(options.artifactRoot, manifestPath), 'utf8'));
     } catch {
-      diagnostics.push(coherenceDiagnostic(
+      diagnostics.push(diagnostic(
         'AB6018',
         `Hook index target ${JSON.stringify(target)} is missing native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
         manifestPath,
         target,
-        hookCoherenceRecovery,
       ));
       continue;
     }
     const commands = readTargetNativeHookCommands(contract, document);
     if (commands.status === 'invalid') {
-      diagnostics.push(coherenceDiagnostic(
+      diagnostics.push(diagnostic(
         'AB6018',
         `Native hook manifest ${JSON.stringify(contract.manifestPath)} for target ${JSON.stringify(target)} is invalid for command enumeration.`,
         manifestPath,
         target,
-        hookCoherenceRecovery,
       ));
       continue;
     }
@@ -1083,12 +1059,11 @@ const validateHookCoherence = async (options: {
       const command = generatedHookCommand(contract, relativePath);
       const occurrences = commands.commands.filter((candidate) => candidate.command === command).length;
       if (occurrences !== 1) {
-        diagnostics.push(coherenceDiagnostic(
+        diagnostics.push(diagnostic(
           'AB6018',
           `Hook index entry ${JSON.stringify(hook.id)} requires exactly one native command ${JSON.stringify(command)} but found ${occurrences}.`,
           manifestPath,
           target,
-          hookCoherenceRecovery,
         ));
       }
     }
@@ -1097,14 +1072,13 @@ const validateHookCoherence = async (options: {
       if (relativePath === undefined) continue;
       const entries = relativePaths.get(relativePath) ?? 0;
       if (entries === 1) continue;
-      diagnostics.push(coherenceDiagnostic(
+      diagnostics.push(diagnostic(
         'AB6018',
         entries === 0
           ? `Native hook command ${JSON.stringify(command.command)} is not indexed.`
           : `Native hook command ${JSON.stringify(command.command)} is indexed multiple times.`,
         manifestPath,
         target,
-        hookCoherenceRecovery,
       ));
     }
   }
@@ -1474,9 +1448,15 @@ const invalidArtifactSnapshot = (diagnostics: readonly Diagnostic[]): ValidateAr
 const validArtifactSnapshot = (
   manifest: ArtifactManifest,
   runtimeEvidence: RuntimeEvidenceBuilder,
+  inspection: ArtifactInspection,
 ): ValidateArtifactSnapshotResult => Object.freeze({
   diagnostics: Object.freeze([]),
   snapshot: Object.freeze({
+    files: Object.freeze([...inspection.files]),
+    filesystem: Object.freeze({
+      entries: Object.freeze([...inspection.filesystem.entries]),
+      files: Object.freeze([...inspection.filesystem.files]),
+    }),
     manifest,
     runtime: snapshotRuntimeEvidence(runtimeEvidence),
   }),
@@ -1601,8 +1581,45 @@ export const validateArtifactWithSnapshot = async (
     initialManifest: manifestSnapshot,
   }));
   return diagnostics.length === 0
-    ? validArtifactSnapshot(manifest, runtimeEvidence)
+    ? validArtifactSnapshot(manifest, runtimeEvidence, inspection)
     : invalidArtifactSnapshot(diagnostics);
+};
+
+/**
+ * Re-stats and re-digests a staged tree against a prior validated snapshot.
+ * Preserves the post-rename integrity gate without re-parsing generated files.
+ */
+export const recheckValidatedArtifactSnapshot = async (
+  snapshot: ValidatedArtifactSnapshot,
+  context: ValidateArtifactOptions,
+): Promise<readonly Diagnostic[]> => {
+  const registry = context.registry ?? createDefaultRegistry();
+  let inspection: ArtifactInspection;
+  try {
+    inspection = await inspectArtifact(context);
+  } catch {
+    return Object.freeze([diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)]);
+  }
+  const diagnostics = [...validateArtifactStructure({
+    changedFrom: snapshot.files,
+    inspection,
+    manifest: snapshot.manifest,
+    registry,
+  })];
+  const expectedManifest = snapshot.filesystem.files.find((file) => file.path === artifactManifestName);
+  const stagedManifest = inspection.filesystem.files.find((file) => file.path === artifactManifestName);
+  if (
+    expectedManifest === undefined ||
+    stagedManifest === undefined ||
+    !sameArtifactFile(expectedManifest, stagedManifest)
+  ) {
+    diagnostics.push(diagnostic(
+      'AB6004',
+      `Artifact file changed during validation: ${JSON.stringify(artifactManifestName)}.`,
+      artifactManifestName,
+    ));
+  }
+  return Object.freeze(diagnostics);
 };
 
 /** Preserves the established diagnostics-only validation API. */

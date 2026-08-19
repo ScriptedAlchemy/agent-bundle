@@ -110,7 +110,7 @@ const resultHasError = (value: unknown): boolean => {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, 'isError');
     return descriptor !== undefined && 'value' in descriptor && descriptor.value === true;
-  } catch { return true; }
+  } catch { return true; } // Hostile isError accessors are treated as an error result.
 };
 
 const scriptFailureEvidence = (operation: PlaygroundOperationRequest, error: unknown): Readonly<{
@@ -335,15 +335,10 @@ export class PlaygroundOrchestrationService {
       if (this.#abortDispatchDepth > 0) return this.#abortReentryCompletion;
       return this.#closePromise;
     }
-    let resolvePromise!: () => void;
-    let rejectPromise!: (reason: unknown) => void;
-    const closing = new Promise<void>((resolve, reject) => {
-      resolvePromise = resolve;
-      rejectPromise = reject;
-    });
-    this.#closePromise = closing;
-    void this.#close().then(resolvePromise, rejectPromise);
-    return closing;
+    const closing = Promise.withResolvers<void>();
+    this.#closePromise = closing.promise;
+    void this.#close().then(closing.resolve, closing.reject);
+    return closing.promise;
   }
 
   async #close(): Promise<void> {

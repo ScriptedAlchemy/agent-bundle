@@ -4,9 +4,9 @@ import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { serialQueue, type SerialQueue } from '../core/async.ts';
-import { isErrno } from '../core/errors.ts';
+import { CodedError, isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type { DevLogSink } from '../dev/dev-log-service.ts';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
@@ -167,13 +167,9 @@ export type PlaygroundServiceErrorCode =
   | 'PLAYGROUND_STORE_CORRUPT'
   | 'PLAYGROUND_VALUE_INVALID';
 
-export class PlaygroundServiceError extends Error {
-  readonly code: PlaygroundServiceErrorCode;
-
+export class PlaygroundServiceError extends CodedError<PlaygroundServiceErrorCode> {
   constructor(code: PlaygroundServiceErrorCode, message: string) {
-    super(message);
-    this.name = 'PlaygroundServiceError';
-    this.code = code;
+    super('PlaygroundServiceError', code, message);
   }
 }
 
@@ -334,9 +330,6 @@ const sensitiveKey = (key: string): boolean => {
     || /(?:apikey|apitoken|authtoken|accesstoken)$/u.test(compact);
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const hasExactOwnKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean => {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
@@ -400,15 +393,14 @@ const sameOwner = (left: OwnerLock, right: OwnerLock): boolean =>
 
 const serializeOwnerMutation = async <T>(path: string, operation: () => Promise<T>): Promise<T> => {
   const previous = ownerMutationTails.get(path) ?? Promise.resolve();
-  let release!: () => void;
-  const boundary = new Promise<void>((resolveBoundary) => { release = resolveBoundary; });
-  ownerMutationTails.set(path, boundary);
+  const boundary = Promise.withResolvers<void>();
+  ownerMutationTails.set(path, boundary.promise);
   await previous;
   try {
     return await operation();
   } finally {
-    release();
-    if (ownerMutationTails.get(path) === boundary) ownerMutationTails.delete(path);
+    boundary.resolve();
+    if (ownerMutationTails.get(path) === boundary.promise) ownerMutationTails.delete(path);
   }
 };
 
@@ -949,14 +941,13 @@ export class PlaygroundService {
 
   async #admit<T>(operation: () => Promise<T>): Promise<T> {
     this.#assertAvailable();
-    let resolveAdmission!: () => void;
-    const admission = new Promise<void>((resolveAdmissionPromise) => { resolveAdmission = resolveAdmissionPromise; });
-    this.#admissions.add(admission);
+    const admission = Promise.withResolvers<void>();
+    this.#admissions.add(admission.promise);
     try {
       return await operation();
     } finally {
-      this.#admissions.delete(admission);
-      resolveAdmission();
+      this.#admissions.delete(admission.promise);
+      admission.resolve();
     }
   }
 
@@ -1162,7 +1153,7 @@ export class PlaygroundService {
       // Windows has no public directory-fsync primitive. Only documented
       // directory FlushFileBuffers capability failures are tolerated here;
       // opening a directory and every retained regular-file sync still fail.
-      if (durabilityPlatform() === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      if (isTolerableWin32SyncError(durabilityPlatform(), error)) return;
       throw error;
     } finally {
       closeSync(descriptor);

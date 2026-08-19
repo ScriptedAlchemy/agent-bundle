@@ -1,11 +1,13 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { isErrno } from '../core/errors.ts';
 import { parseRedactedEventEnvelopes, type RedactedEventEnvelope } from './host-contract.ts';
+import { runBoundedChildProcess } from './process.ts';
 
 const codexExecutable = 'codex';
 const minimumCodexVersion = '0.147.0';
@@ -215,28 +217,45 @@ export const copyOpaqueCodexAuthState = async (source: string, destination: stri
   await chmod(destination, sourceStat.mode & 0o777);
 };
 
-const digestFileTree = async (path: string): Promise<string> => {
+export interface DigestFileTreeOptions {
+  /** When false, hash mtime instead of file bytes. Default true. */
+  readonly hashContents?: boolean;
+  /** When true, include mode and size in the file preimage. Default false. */
+  readonly includeIdentity?: boolean;
+}
+
+/**
+ * Sorted-children, NUL-delimited sha256 tree hash. Missing paths hash as `absent`.
+ * Callers that compare before/after snapshots must keep a stable preimage per site.
+ */
+export const digestFileTree = async (
+  path: string,
+  options: DigestFileTreeOptions = {},
+): Promise<string> => {
+  const hashContents = options.hashContents ?? true;
+  const includeIdentity = options.includeIdentity ?? false;
   try {
     const entry = await lstat(path);
     const digest = createHash('sha256');
-    const add = (value: string | Uint8Array): void => { digest.update(value); };
     if (entry.isFile()) {
-      add('file\0');
-      add(await readFile(path));
+      if (includeIdentity) digest.update(`file\0${entry.mode}\0${entry.size}\0`);
+      else digest.update('file\0');
+      if (hashContents) digest.update(await readFile(path));
+      else digest.update(`${entry.mtimeMs}\0`);
       return digest.digest('hex');
     }
     if (entry.isDirectory()) {
-      add('directory\0');
+      digest.update('directory\0');
       const children = await readdir(path, { withFileTypes: true });
-      for (const child of children.sort((left, right) => left.name.localeCompare(right.name))) {
-        add(`${child.name}\0${await digestFileTree(join(path, child.name))}\0`);
+      for (const child of [...children].sort((left, right) => left.name.localeCompare(right.name))) {
+        digest.update(`${child.name}\0${await digestFileTree(join(path, child.name), options)}\0`);
       }
       return digest.digest('hex');
     }
-    add(`other\0${entry.mode}\0`);
+    digest.update(`other\0${entry.mode}\0`);
     return digest.digest('hex');
   } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return 'absent';
+    if (isErrno(error, 'ENOENT')) return 'absent';
     throw error;
   }
 };
@@ -267,74 +286,30 @@ const resolveProcessLimits = (
   timeoutMs: boundedPositiveInteger(requested?.timeoutMs, defaultProcessLimits.timeoutMs),
 });
 
-const defaultCodexRunner: CodexNativeSmokeCommandRunner = (command) => new Promise((resolvePromise, reject) => {
-  const child = spawn(codexExecutable, command.args, {
+const defaultCodexRunner: CodexNativeSmokeCommandRunner = async (command) => {
+  const result = await runBoundedChildProcess(Object.freeze({
+    args: command.args,
     cwd: command.cwd,
-    env: command.environment,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    environment: command.environment,
+    executable: codexExecutable,
+  }), Object.freeze({
+    discardAfterTermination: true,
+    forceFinishMs: command.limits.killGraceMs * 2,
+    gracePeriodMs: command.limits.killGraceMs,
+    labels: Object.freeze({ outputLimit: 'output-limit', timedOut: 'timeout' }),
+    maxOutputBytes: command.limits.maxOutputBytes,
+    overflow: 'truncate',
+    outputBudget: 'separate',
+    timeoutMs: command.limits.timeoutMs,
     windowsHide: true,
+  }));
+  return Object.freeze({
+    exitCode: result.exitCode ?? 1,
+    failure: result.termination,
+    stderr: result.stderr,
+    stdout: result.stdout,
   });
-  const stdoutChunks: Buffer[] = [];
-  const stderrChunks: Buffer[] = [];
-  let stdoutBytes = 0;
-  let stderrBytes = 0;
-  let failure: CodexNativeSmokeCommandResult['failure'];
-  let finished = false;
-  let escalationTimer: NodeJS.Timeout | undefined;
-  let forcedFinishTimer: NodeJS.Timeout | undefined;
-
-  const clearTimers = (): void => {
-    clearTimeout(timeoutTimer);
-    if (escalationTimer !== undefined) clearTimeout(escalationTimer);
-    if (forcedFinishTimer !== undefined) clearTimeout(forcedFinishTimer);
-  };
-  const complete = (exitCode: number): void => {
-    if (finished) return;
-    finished = true;
-    clearTimers();
-    resolvePromise(Object.freeze({
-      exitCode,
-      failure,
-      stderr: Buffer.concat(stderrChunks).toString('utf8'),
-      stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-    }));
-  };
-  const terminate = (reason: NonNullable<CodexNativeSmokeCommandResult['failure']>): void => {
-    if (failure !== undefined || finished) return;
-    failure = reason;
-    child.kill('SIGTERM');
-    escalationTimer = setTimeout(() => {
-      if (!finished) child.kill('SIGKILL');
-    }, command.limits.killGraceMs);
-    forcedFinishTimer = setTimeout(() => complete(1), command.limits.killGraceMs * 2);
-  };
-  const append = (chunks: Buffer[], currentBytes: number, chunk: Buffer): number => {
-    if (failure !== undefined) return currentBytes;
-    const availableBytes = command.limits.maxOutputBytes - currentBytes;
-    if (availableBytes <= 0) {
-      terminate('output-limit');
-      return currentBytes;
-    }
-    if (chunk.byteLength <= availableBytes) {
-      chunks.push(chunk);
-      return currentBytes + chunk.byteLength;
-    }
-    chunks.push(chunk.subarray(0, availableBytes));
-    terminate('output-limit');
-    return command.limits.maxOutputBytes;
-  };
-  const timeoutTimer = setTimeout(() => terminate('timeout'), command.limits.timeoutMs);
-
-  child.stdout?.on('data', (chunk: Buffer) => { stdoutBytes = append(stdoutChunks, stdoutBytes, chunk); });
-  child.stderr?.on('data', (chunk: Buffer) => { stderrBytes = append(stderrChunks, stderrBytes, chunk); });
-  child.once('error', (error) => {
-    if (finished) return;
-    finished = true;
-    clearTimers();
-    reject(error);
-  });
-  child.once('close', (code) => complete(code ?? 1));
-});
+};
 
 const executeFileAsync = promisify(execFile);
 

@@ -1,6 +1,18 @@
+// Evaluated and rejected libraries for this primitive: lossless-json only
+// reports duplicate keys whose values differ (deep-equal duplicates parse
+// silently), and json-bigint's strict mode is unmaintained. The contract here
+// is stricter: any repeated key at any depth is an error.
+// JSON whitespace is exactly tab, line feed, carriage return, and space; the
+// trailing JSON.parse still rejects any other separator this scan passes over.
+const isJsonWhitespace = (code: number): boolean =>
+  code === 0x09 || code === 0x0a || code === 0x0d || code === 0x20;
+
+const isValueTerminator = (code: number): boolean =>
+  isJsonWhitespace(code) || code === 0x2c || code === 0x7d || code === 0x5d;
+
 const skipWhitespace = (bytes: string, index: number): number => {
   let cursor = index;
-  while (/\s/u.test(bytes[cursor] ?? '')) cursor += 1;
+  while (cursor < bytes.length && isJsonWhitespace(bytes.charCodeAt(cursor))) cursor += 1;
   return cursor;
 };
 
@@ -52,7 +64,7 @@ const scanJsonValue = (bytes: string, index: number): number => {
     }
   }
   if (character === '"') return scanJsonString(bytes, cursor)[1];
-  while (cursor < bytes.length && !/[\s,}\]]/u.test(bytes[cursor]!)) cursor += 1;
+  while (cursor < bytes.length && !isValueTerminator(bytes.charCodeAt(cursor))) cursor += 1;
   return cursor;
 };
 
@@ -61,6 +73,13 @@ interface JsonObject {
 }
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
+
+/** Non-null, non-array object guard shared across route, service, and client decoding. */
+export const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** `isRecord` narrowed for values already known to be JSON. */
+export const isJsonRecord = (value: JsonValue): value is Readonly<Record<string, JsonValue>> => isRecord(value);
 
 const snapshotJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;

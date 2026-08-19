@@ -1,7 +1,8 @@
 import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
-import { snapshotStrictJsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/dev/types.ts';
+import { CodedClientError, exactRecord, isDiagnostic, isRecord } from '../client-helpers.ts';
+import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface ArtifactClientOptions {
   readonly authority?: ForegroundSessionAuthority;
@@ -11,20 +12,14 @@ export interface ArtifactClientOptions {
 const noDiagnostics: readonly Diagnostic[] = Object.freeze([]);
 
 /** Carries the artifact validation diagnostics of a refused epoch, which are the point of AB8064. */
-export class ArtifactClientError extends Error {
-  readonly code: string;
+export class ArtifactClientError extends CodedClientError {
   readonly diagnostics: readonly Diagnostic[];
 
   constructor(code: string, message: string, diagnostics: readonly Diagnostic[] = noDiagnostics) {
-    super(message);
-    this.name = 'ArtifactClientError';
-    this.code = code;
+    super('ArtifactClientError', code, message);
     this.diagnostics = diagnostics;
   }
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): ArtifactClientError =>
   new ArtifactClientError('AB8063', 'Artifact route returned an invalid response.');
@@ -38,10 +33,6 @@ const detachedRecord = (value: unknown): Readonly<Record<string, unknown>> => {
     throw invalidResponse();
   }
 };
-
-const exactRecord = (value: unknown, required: readonly string[], optional: readonly string[] = []): value is Readonly<Record<string, unknown>> =>
-  isRecord(value) && required.every((key) => Object.hasOwn(value, key)) &&
-  Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
 
 const arrayOf = (value: unknown, predicate: (entry: unknown) => boolean): boolean =>
   Array.isArray(value) && value.every(predicate);
@@ -120,10 +111,6 @@ const isDiff = (value: unknown): value is ArtifactEpochDiff =>
   exactRecord(value, ['added', 'baseEpochId', 'candidateEpochId', 'changed', 'removed', 'unchanged']) &&
   arrayOf(value.added, isAddedFile) && typeof value.baseEpochId === 'string' && typeof value.candidateEpochId === 'string' &&
   arrayOf(value.changed, isChangedFile) && arrayOf(value.removed, isRemovedFile) && arrayOf(value.unchanged, isChangedFile);
-
-const isDiagnostic = (value: unknown): value is Diagnostic =>
-  isRecord(value) && typeof value.code === 'string' && typeof value.message === 'string' &&
-  (value.severity === 'error' || value.severity === 'info' || value.severity === 'warning');
 
 const failureDiagnostics = (value: unknown): readonly Diagnostic[] => {
   if (!isRecord(value) || !Array.isArray(value.diagnostics)) return noDiagnostics;

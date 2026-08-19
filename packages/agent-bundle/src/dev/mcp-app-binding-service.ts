@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { isRecord, snapshotStrictJsonValue } from '../core/strict-json.ts';
+
 export type McpAppJsonValue =
   | null
   | boolean
@@ -116,8 +118,6 @@ interface BindingEntry {
 const defaultTeardownTimeoutMs = 1_000;
 const maximumTeardownTimeoutMs = 30_000;
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const isJsonValue = (value: unknown): value is McpAppJsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
   if (typeof value === 'number') return Number.isFinite(value);
@@ -126,15 +126,14 @@ const isJsonValue = (value: unknown): value is McpAppJsonValue => {
   return Object.values(value).every(isJsonValue);
 };
 
-const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
-  if (Array.isArray(value)) return Object.freeze(value.map(cloneJson));
-  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneJson(child)])));
-};
-
 const requireJson = (value: unknown, label: string): McpAppJsonValue => {
   if (!isJsonValue(value)) throw new TypeError(`${label} must be a finite JSON value.`);
-  return cloneJson(value);
+  try {
+    return snapshotStrictJsonValue(value);
+  } catch (error) {
+    if (error instanceof TypeError) throw new TypeError(`${label} must be a finite JSON value.`, { cause: error });
+    throw error;
+  }
 };
 
 const requireNonempty = (value: string, label: string): string => {
@@ -306,20 +305,15 @@ export class McpAppBindingService {
     }
     if (entry.closeAttempt !== undefined) return entry.closeAttempt;
 
-    let resolveAttempt: (() => void) | undefined;
-    let rejectAttempt: ((error: Error) => void) | undefined;
-    const attempt = new Promise<void>((resolvePromise, rejectPromise) => {
-      resolveAttempt = resolvePromise;
-      rejectAttempt = rejectPromise;
-    });
-    entry.closeAttempt = attempt;
+    const attempt = Promise.withResolvers<void>();
+    entry.closeAttempt = attempt.promise;
     void this.#releaseEntry(entry).then(
-      () => resolveAttempt?.(),
-      (error: unknown) => rejectAttempt?.(this.#closeFailure(entry, error)),
+      () => attempt.resolve(),
+      (error: unknown) => attempt.reject(this.#closeFailure(entry, error)),
     ).finally(() => {
-      if (entry.closeAttempt === attempt) entry.closeAttempt = undefined;
+      if (entry.closeAttempt === attempt.promise) entry.closeAttempt = undefined;
     });
-    return attempt;
+    return attempt.promise;
   }
 
   async #releaseEntry(entry: BindingEntry): Promise<void> {

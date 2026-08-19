@@ -1,5 +1,20 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { isRecord } from '../core/strict-json.ts';
+import {
+  decodedOpaqueSegment,
+  diagnostic,
+  hasOnly,
+  isJsonRequest,
+  isRequestDiagnostic,
+  nonemptyString,
+  rawPathname,
+  readBody,
+  requestError,
+  responseDiagnostic,
+  responseJson,
+  type RequestDiagnostic,
+} from './http.ts';
 import type {
   McpSessionBinding,
   McpSessionConnectionState,
@@ -7,20 +22,9 @@ import type {
   McpSessionTraceReplay,
   McpSessionTraceSubscription,
 } from './mcp-session-service.ts';
+import { createBackpressuredWriter, encodedNdjsonFrame, writeKeepAliveStreamHead } from './route-streams.ts';
 
-const bodyLimit = 64 * 1024;
 const streamQueueByteLimit = 256 * 1024;
-
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
-
-interface QueuedFrame {
-  readonly bytes: number;
-  readonly frame: string;
-}
 
 interface CreateRoute {
   readonly kind: 'create';
@@ -70,94 +74,8 @@ export interface McpSessionRoutesOptions {
   readonly service?: McpSessionRouteService;
 }
 
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
-  new Error(value.message),
-  value,
-);
-
-const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).status === 'number';
-
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
-};
-
-const responseJson = (response: ServerResponse, body: unknown): void => {
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
-
-const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
-  typeof value === 'string' ? value : undefined;
-
-const unquoteHeaderValue = (value: string): string | undefined => {
-  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
-  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
-  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
-};
-
-const isJsonRequest = (request: IncomingMessage): boolean => {
-  const contentType = singleHeader(request.headers['content-type']);
-  if (contentType === undefined) return false;
-  const parts = contentType.split(';').map((part) => part.trim());
-  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
-  if (parts.length === 0) return true;
-  if (parts.length !== 1) return false;
-  const parameter = parts[0]!;
-  const equals = parameter.indexOf('=');
-  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
-  return unquoteHeaderValue(parameter.slice(equals + 1).trim())?.toLowerCase() === 'utf-8';
-};
-
-const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  let size = 0;
-  let tooLarge = false;
-  const chunks: Buffer[] = [];
-  request.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > bodyLimit) {
-      tooLarge = true;
-      return;
-    }
-    if (!tooLarge) chunks.push(chunk);
-  });
-  request.once('end', () => {
-    if (tooLarge) {
-      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
-      return;
-    }
-    resolvePromise(Buffer.concat(chunks).toString('utf8'));
-  });
-  request.once('error', rejectPromise);
-});
-
-const rawPathname = (requestTarget: string | undefined): string => requestTarget?.split(/[?#]/u, 1)[0] ?? '';
-
-const decodedSegment = (segment: string): string => {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(segment);
-  } catch {
-    throw requestError(diagnostic('AB8013', 'MCP session route path is not valid.', 400));
-  }
-  if (
-    decoded.length === 0 || decoded === '.' || decoded === '..' ||
-    decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
-  ) {
-    throw requestError(diagnostic('AB8013', 'MCP session route path is not valid.', 400));
-  }
-  return decoded;
-};
+const decodedSegment = (segment: string): string =>
+  decodedOpaqueSegment(segment, { code: 'AB8013', message: 'MCP session route path is not valid.' });
 
 const route = (requestTarget: string | undefined): Route | undefined => {
   const pathname = rawPathname(requestTarget);
@@ -183,14 +101,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   }
   return Object.freeze({ id, kind });
 };
-
-const isRecord = (value: unknown): value is JsonObject => typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const hasOnly = (value: JsonObject, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
-
-const nonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');
 
 const stringRecord = (value: unknown): value is Record<string, string> =>
   isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string');
@@ -469,79 +379,39 @@ export class McpSessionRoutes {
   ): void {
     // Validate before committing headers so an ahead cursor is a JSON diagnostic.
     session.trace(afterSequence);
-    response.writeHead(200, {
-      'cache-control': 'no-store',
-      connection: 'keep-alive',
-      'content-type': 'application/x-ndjson; charset=utf-8',
+    writeKeepAliveStreamHead(response, {
+      cacheControl: 'no-store',
+      contentType: 'application/x-ndjson; charset=utf-8',
     });
-    response.flushHeaders();
 
-    let backpressured = false;
-    let bufferedBytes = 0;
-    let closed = false;
-    let queuedBytes = 0;
     const stream = { subscription: undefined as McpSessionTraceSubscription | undefined };
-    const queued: QueuedFrame[] = [];
+    const writer = createBackpressuredWriter(response, {
+      byteLimit: streamQueueByteLimit,
+      countInFlightBytes: true,
+      rejectOversizedFrame: true,
+    });
     let cleanup = (): void => undefined;
     const finishStream = (): void => {
-      if (closed) return;
+      if (writer.closed) return;
       cleanup();
       if (!response.writableEnded && !response.destroyed) response.end();
     };
-    const drain = (): void => {
-      if (closed || response.writableEnded || response.destroyed) return;
-      backpressured = false;
-      bufferedBytes = 0;
-      while (queued.length > 0) {
-        const next = queued.shift()!;
-        queuedBytes -= next.bytes;
-        if (!response.write(next.frame)) {
-          backpressured = true;
-          bufferedBytes = next.bytes;
-          response.once('drain', drain);
-          return;
-        }
-      }
-    };
     const abortStream = (): void => {
-      if (closed) return;
+      if (writer.closed) return;
       cleanup();
       response.destroy();
     };
     const deliver = (entry: unknown): void => {
-      if (closed || response.writableEnded || response.destroyed) return;
-      const frame = `${JSON.stringify(entry)}\n`;
-      const bytes = Buffer.byteLength(frame);
-      if (bytes > streamQueueByteLimit) {
-        abortStream();
-        return;
-      }
-      if (!backpressured) {
-        if (!response.write(frame)) {
-          backpressured = true;
-          bufferedBytes = bytes;
-          response.once('drain', drain);
-        }
-        return;
-      }
-      if (bufferedBytes + queuedBytes + bytes > streamQueueByteLimit) {
-        abortStream();
-        return;
-      }
-      queued.push({ bytes, frame });
-      queuedBytes += bytes;
+      if (writer.enqueue(encodedNdjsonFrame(entry)) === 'overflow') abortStream();
     };
     cleanup = (): void => {
-      if (closed) return;
-      closed = true;
+      if (writer.closed) return;
+      writer.markClosed();
       stream.subscription?.unsubscribe();
-      queued.length = 0;
-      queuedBytes = 0;
-      bufferedBytes = 0;
       this.#removeStream(id, finishStream);
     };
     stream.subscription = session.subscribeTrace({ afterSequence }, deliver);
-    if (closed || request.destroyed || response.destroyed) {
+    if (writer.closed || request.destroyed || response.destroyed) {
       stream.subscription.unsubscribe();
       cleanup();
       return;

@@ -1,3 +1,4 @@
+import { CodedError } from '../core/errors.ts';
 import type { EvalHarnessFailure, EvalHarnessFailureCode, EvalHarnessFailureStage } from './types.ts';
 
 export type CodexEvalHarnessErrorCode =
@@ -13,13 +14,9 @@ export type CodexEvalHarnessErrorCode =
   | 'CODEX_TRIAL_CANCELLED';
 
 /** A defect in Agent Bundle or the installed Codex CLI, never evidence about the plugin. */
-export class CodexEvalHarnessError extends Error {
-  readonly code: CodexEvalHarnessErrorCode;
-
+export class CodexEvalHarnessError extends CodedError<CodexEvalHarnessErrorCode> {
   constructor(code: CodexEvalHarnessErrorCode, message: string) {
-    super(message);
-    this.name = 'CodexEvalHarnessError';
-    this.code = code;
+    super('CodexEvalHarnessError', code, message);
   }
 }
 

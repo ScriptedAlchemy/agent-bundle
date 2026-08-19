@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { lstat, open, realpath, rm } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -35,7 +34,8 @@ import {
 import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../eval/types.ts';
 import type { DevLogKindFor, DevLogSink } from './dev-log-service.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
-import { isErrno } from '../core/errors.ts';
+import { sha256Hex } from '../core/digest.ts';
+import { CodedError, isErrno } from '../core/errors.ts';
 
 export type EvalServiceErrorCode =
   | 'EVAL_ARTIFACT_NOT_FOUND'
@@ -50,13 +50,9 @@ export type EvalServiceErrorCode =
   | 'EVAL_TRIALS_INVALID';
 
 /** Every refusal a caller can act on without reading the eval internals. */
-export class EvalServiceError extends Error {
-  readonly code: EvalServiceErrorCode;
-
+export class EvalServiceError extends CodedError<EvalServiceErrorCode> {
   constructor(code: EvalServiceErrorCode, message: string) {
-    super(message);
-    this.name = 'EvalServiceError';
-    this.code = code;
+    super('EvalServiceError', code, message);
   }
 }
 
@@ -578,12 +574,11 @@ export class EvalService {
 
   start(request: EvalRunRequest): Promise<EvalRunAdmission> {
     if (this.#closePromise !== undefined) throw new Error('Eval service is closing.');
-    let finishStart!: () => void;
-    const pending = new Promise<void>((resolvePromise) => { finishStart = resolvePromise; });
-    this.#startingRuns.add(pending);
+    const pending = Promise.withResolvers<void>();
+    this.#startingRuns.add(pending.promise);
     return this.#admit(request).finally(() => {
-      this.#startingRuns.delete(pending);
-      finishStart();
+      this.#startingRuns.delete(pending.promise);
+      pending.resolve();
     });
   }
 
@@ -675,12 +670,8 @@ export class EvalService {
       uncertainty: undefined,
       writer,
     };
-    let resolveResult!: (result: EvalRunResult) => void;
-    let rejectResult!: (reason: unknown) => void;
-    active.result = new Promise<EvalRunResult>((resolvePromise, rejectPromise) => {
-      resolveResult = resolvePromise;
-      rejectResult = rejectPromise;
-    });
+    const result = Promise.withResolvers<EvalRunResult>();
+    active.result = result.promise;
     this.#activeRuns.set(runId, active);
     if (request.signal !== undefined) {
       active.requestAbort = () => { void this.#requestCancellation(active).catch(() => undefined); };
@@ -693,9 +684,9 @@ export class EvalService {
       directory,
       harness,
       planned,
-    }).then(resolveResult, (error: unknown) => {
+    }).then(result.resolve, (error: unknown) => {
       if (this.#backgroundFailures.size < maximumRetainedBackgroundFailures) this.#backgroundFailures.add(error);
-      rejectResult(error);
+      result.reject(error);
     });
     void active.result.catch(() => undefined);
     return Object.freeze({ run: writer.record });
@@ -903,7 +894,7 @@ export class EvalService {
     if (subscriptions !== undefined) {
       for (const subscription of [...subscriptions]) {
         try { subscription.publish(persisted); }
-        catch { subscription.close(); }
+        catch { subscription.close(); } // A throwing subscriber cannot stall durable append.
       }
     }
     return persisted;
@@ -1050,7 +1041,7 @@ export class EvalService {
         throw new Error('Raw evidence file changed while hashing.');
       }
       const snapshot = Buffer.from(bytes.subarray(0, bytesRead));
-      const digest = createHash('sha256').update(snapshot).digest('hex');
+      const digest = sha256Hex(snapshot);
       await file.close();
       const reader = new OpenedEvalArtifact({
         bytes: snapshot,

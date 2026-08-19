@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 
 import { digest } from '../core/digest.ts';
+import { isRecord } from '../core/strict-json.ts';
 import type { DraftEvalCase, PlaygroundSelectedAssertion } from '../services/playground-service.ts';
 import {
   expectExitCode,
@@ -38,9 +39,6 @@ const maximumTrials = 100;
 const parsedSuiteKeys = Object.freeze(['cases', 'digest', 'name']);
 const safeIdentifier = /^[a-z0-9][a-z0-9._-]*$/iu;
 const suiteKeys = Object.freeze(['cases', 'name']);
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const definitionError = (
   code: ConstructorParameters<typeof EvalDefinitionError>[0],

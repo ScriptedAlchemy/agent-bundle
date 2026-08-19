@@ -1,4 +1,5 @@
 import type { McpSessionTraceEntry } from '../../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import { isRecord } from '../../client-helpers.ts';
 import type { McpBrowserSessionModel, McpBrowserSessionTimelineEntry } from '../../mcp/mcp-session-model.ts';
 
 export type InspectorTab = 'tools' | 'resources' | 'prompts' | 'protocol' | 'logging';
@@ -36,9 +37,6 @@ export const inspectorSessionTabs: readonly Readonly<{ readonly id: InspectorTab
   { id: 'protocol', label: 'Protocol' },
   { id: 'logging', label: 'Logging' },
 ];
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isFrame = (entry: McpBrowserSessionTimelineEntry): entry is FrameTraceEntry =>
   'kind' in entry && entry.kind === 'frame';

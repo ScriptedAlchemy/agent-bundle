@@ -36,12 +36,14 @@ import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
 import './styles.css';
 
+const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
+  dateStyle: 'medium',
+  timeStyle: 'medium',
+});
+
 const dateTime = (value: string | undefined): string => value === undefined
   ? 'Not available'
-  : new Intl.DateTimeFormat(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'medium',
-    }).format(new Date(value));
+  : dateTimeFormat.format(new Date(value));
 
 const stateLabel = (state: string): string => state.replaceAll('-', ' ');
 

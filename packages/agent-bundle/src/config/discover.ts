@@ -50,6 +50,7 @@ const expandConfiguredAsset = async (projectRoot: string, entry: string): Promis
   try {
     stats = await stat(source);
   } catch {
+    // Missing configured assets are omitted rather than failing discovery.
     return [];
   }
   if (stats.isFile()) return [source];

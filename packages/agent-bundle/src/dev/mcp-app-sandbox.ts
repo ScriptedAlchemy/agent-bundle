@@ -1,6 +1,8 @@
 import { createServer, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 
+import { isRecord } from '../core/strict-json.ts';
+
 const JSON_RPC_VERSION = '2.0';
 const SANDBOX_NOTIFICATION_PREFIX = 'ui/notifications/sandbox-';
 const PROXY_READY_METHOD = 'ui/notifications/sandbox-proxy-ready';
@@ -41,13 +43,13 @@ const SHELL = `<!doctype html>
     const host = new URL(candidate.hostOrigin);
     if (host.origin !== candidate.hostOrigin || !Number.isSafeInteger(candidate.maxMessageBytes) || candidate.maxMessageBytes <= 0) throw new Error('invalid sandbox configuration');
     configuration = { hostOrigin: host.origin, maxMessageBytes: candidate.maxMessageBytes };
-  } catch {}
+  } catch {} // Invalid hash configuration leaves the iframe inert.
   if (configuration) {
     const maxMessageBytes = configuration.maxMessageBytes;
     let lifecycle = 'created';
     let initializeId;
     const byteLength = (value) => {
-      try { const serialized = JSON.stringify(value); return typeof serialized === 'string' ? new TextEncoder().encode(serialized).byteLength : Infinity; } catch { return Infinity; }
+      try { const serialized = JSON.stringify(value); return typeof serialized === 'string' ? new TextEncoder().encode(serialized).byteLength : Infinity; } catch { return Infinity; } // Non-JSON messages exceed the size budget.
     };
     const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
     const isRpc = (value) => isRecord(value) && value.jsonrpc === '${JSON_RPC_VERSION}' && byteLength(value) <= maxMessageBytes && (typeof value.method === 'string' || Object.hasOwn(value, 'id'));
@@ -60,7 +62,7 @@ const SHELL = `<!doctype html>
         try {
           const parsed = new URL(source);
           if (typeof source === 'string' && parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.search && !parsed.hash && parsed.pathname === '/') accepted.add(parsed.origin);
-        } catch {}
+        } catch {} // Reject undeclared or non-https CSP sources.
       }
       return [...accepted];
     };
@@ -240,8 +242,6 @@ export interface McpAppSandboxBridge {
   send(message: McpAppSandboxMessage): boolean;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
-
 const isCapability = (value: unknown): value is McpAppSandboxCapability => isRecord(value);
 
 const cspSources = (sources: readonly string[] | undefined): readonly string[] => {
@@ -337,6 +337,7 @@ const messageSize = (message: unknown): number | undefined => {
     const serialized = JSON.stringify(message);
     return typeof serialized === 'string' ? Buffer.byteLength(serialized) : undefined;
   } catch {
+    // Cyclic or non-JSON messages are oversized and cannot be relayed.
     return undefined;
   }
 };

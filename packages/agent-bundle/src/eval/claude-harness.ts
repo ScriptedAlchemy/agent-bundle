@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import {
   createNativeClaudeChildEnvironment,
   createNativeClaudeCommand,
@@ -105,9 +105,6 @@ const harnessFailure = (
   stage: EvalHarnessFailure['stage'],
   message: string,
 ): EvalHarnessFailure => Object.freeze({ code, message, stage });
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** The candidate Skill names a case talks about, used only for weaker-signal detection. */
 const candidateSkills = (evalCase: EvalCase): readonly string[] => {

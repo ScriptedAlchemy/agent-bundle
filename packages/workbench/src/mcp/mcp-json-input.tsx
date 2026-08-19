@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 
+import { isRecord } from '../client-helpers.ts';
+
 export type ImmutableJsonRecord = Readonly<Record<string, unknown>>;
 
 type FormFieldType = 'boolean' | 'integer' | 'number' | 'string';
@@ -56,8 +58,6 @@ const supportedFieldKeywords = new Set([
   'type',
 ]);
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const hasOnlyKeys = (value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean =>
   Object.keys(value).every((key) => allowed.has(key));

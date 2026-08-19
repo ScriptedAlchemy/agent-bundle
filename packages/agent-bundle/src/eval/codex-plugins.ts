@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { CodexEvalHarnessError } from './codex-errors.ts';
 
 export interface CodexCandidatePlugin {
@@ -18,9 +18,6 @@ export interface CodexInstallStep {
 }
 
 const marketplacePath = '.agents/plugins/marketplace.json';
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const artifactError = (message: string): CodexEvalHarnessError =>
   new CodexEvalHarnessError('CODEX_ARTIFACT_INVALID', message);

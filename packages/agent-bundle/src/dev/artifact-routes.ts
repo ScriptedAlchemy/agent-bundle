@@ -6,13 +6,18 @@ import {
   type ArtifactInspectionServiceErrorCode,
 } from './artifact-inspection-service.ts';
 import { EpochStoreError, type EpochStoreErrorCode } from './epoch-store.ts';
+import {
+  decodedOpaqueSegment,
+  diagnostic,
+  isRequestDiagnostic,
+  nonemptyString,
+  rawPathname,
+  requestError,
+  responseDiagnostic,
+  responseJson as writeJsonResponse,
+  type RequestDiagnostic,
+} from './http.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from './types.ts';
-
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
 
 type Route =
   | Readonly<{ readonly epochId: string; readonly kind: 'epoch' }>
@@ -30,22 +35,11 @@ export interface ArtifactRoutesOptions {
   readonly service?: ArtifactRouteService;
 }
 
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (
+const artifactRequestError = (
   value: RequestDiagnostic,
   diagnostics?: readonly Diagnostic[],
-): RequestDiagnostic & Error => Object.assign(
-  new Error(value.message),
-  value,
-  diagnostics === undefined ? {} : { diagnostics },
-);
-
-const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).status === 'number';
+): RequestDiagnostic & Error =>
+  requestError(value, diagnostics === undefined ? undefined : { diagnostics });
 
 /** Inspection messages name epoch paths, so each code keeps one fixed browser-facing sentence. */
 const inspectionDiagnostics: Readonly<Record<ArtifactInspectionServiceErrorCode, RequestDiagnostic>> = Object.freeze({
@@ -59,49 +53,16 @@ const epochDiagnostics: Readonly<Partial<Record<EpochStoreErrorCode, RequestDiag
   EPOCH_NOT_FOUND: diagnostic('AB8067', 'Artifact epoch was not found.', 404),
 });
 
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
-};
-
-const responseJson = (response: ServerResponse, body: unknown): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
-
-const rawPathname = (requestTarget: string | undefined): string => requestTarget?.split(/[?#]/u, 1)[0] ?? '';
-
 const pathError = (): never => {
-  throw requestError(diagnostic('AB8060', 'Artifact route path is not valid.', 400));
+  throw artifactRequestError(diagnostic('AB8060', 'Artifact route path is not valid.', 400));
 };
 
 const invalidShape = (): never => {
-  throw requestError(diagnostic('AB8062', 'Artifact request has an invalid shape.', 400));
+  throw artifactRequestError(diagnostic('AB8062', 'Artifact request has an invalid shape.', 400));
 };
 
-const decodedSegment = (segment: string): string => {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(segment);
-  } catch {
-    return pathError();
-  }
-  if (
-    decoded.length === 0 || decoded === '.' || decoded === '..' ||
-    decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
-  ) {
-    return pathError();
-  }
-  return decoded;
-};
+const decodedSegment = (segment: string): string =>
+  decodedOpaqueSegment(segment, { code: 'AB8060', message: 'Artifact route path is not valid.' });
 
 const route = (requestTarget: string | undefined): Route | undefined => {
   const pathname = rawPathname(requestTarget);
@@ -114,8 +75,8 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return Object.freeze({ epochId: segments[1]!, kind: 'epoch' });
 };
 
-const nonemptyString = (value: string | null): value is string =>
-  value !== null && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');
+const responseJson = (response: ServerResponse, body: unknown): void =>
+  writeJsonResponse(response, body, { destroyIfEnded: true });
 
 const diffQuery = (requestTarget: string | undefined): Readonly<{ readonly base: string; readonly candidate: string }> => {
   const query = new URL(requestTarget ?? '/', 'http://localhost').searchParams;
@@ -161,13 +122,13 @@ export class ArtifactRoutes {
     } catch (error) {
       if (isRequestDiagnostic(error)) throw error;
       if (error instanceof ArtifactInspectionServiceError) {
-        throw requestError(inspectionDiagnostics[error.code], error.diagnostics);
+        throw artifactRequestError(inspectionDiagnostics[error.code], error.diagnostics);
       }
       if (error instanceof EpochStoreError) {
         const mapped = epochDiagnostics[error.code];
-        if (mapped !== undefined) throw requestError(mapped);
+        if (mapped !== undefined) throw artifactRequestError(mapped);
       }
-      throw requestError(diagnostic('AB8063', 'Artifact inspection could not be completed.', 502));
+      throw artifactRequestError(diagnostic('AB8063', 'Artifact inspection could not be completed.', 502));
     }
     return true;
   }
@@ -190,6 +151,6 @@ export class ArtifactRoutes {
   }
 
   #unavailable(status: number): Error {
-    return requestError(diagnostic('AB8061', 'Artifact routes are not available.', status));
+    return artifactRequestError(diagnostic('AB8061', 'Artifact routes are not available.', status));
   }
 }

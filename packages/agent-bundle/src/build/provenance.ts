@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve, win32 } from 'node:path';
 
 import { assertInside } from '../core/paths.ts';
+import { isRecord } from '../core/strict-json.ts';
 
 export type ArtifactOutputKind = 'bundle' | 'copy' | 'generated';
 
@@ -49,9 +50,7 @@ const sourceInputsFor = (projectRoot: string, sourceInputs: readonly string[]): 
   sortedUnique(sourceInputs.map((source) => toPosixRelative(projectRoot, source)));
 
 const asRecord = (value: unknown): JsonRecord | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as JsonRecord
-    : undefined;
+  isRecord(value) ? value as JsonRecord : undefined;
 
 const recordsAt = (value: unknown): readonly JsonRecord[] =>
   Array.isArray(value)

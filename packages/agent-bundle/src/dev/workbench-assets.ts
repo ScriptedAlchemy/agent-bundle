@@ -1,6 +1,8 @@
 import { realpath, stat, readFile } from 'node:fs/promises';
 import { basename, extname, relative, resolve, sep } from 'node:path';
 
+import { isErrno } from '../core/errors.ts';
+
 import type { WorkbenchAssetSource } from './foreground-server.ts';
 
 export interface WorkbenchAssetSourceOptions {
@@ -48,19 +50,27 @@ export const createWorkbenchAssetSource = (
 ): WorkbenchAssetSource => {
   const root = resolve(options.root ?? defaultRoot());
   const resolvedRoot = realpath(root);
+  // The tree is fixed once built, so successful reads are cached forever.
+  // Misses are never cached: they carry no read cost worth saving, and a
+  // hostile stream of request paths must not grow the cache.
+  const served = new Map<string, Readonly<{ body: Buffer; contentType: string }>>();
   return Object.freeze({
     read: async (path: string) => {
       if (!path || path.includes('\0')) return undefined;
       const candidate = resolve(root, path);
       if (!contained(root, candidate)) return undefined;
+      const cached = served.get(candidate);
+      if (cached !== undefined) return cached;
       try {
         const [actualRoot, actualPath] = await Promise.all([resolvedRoot, realpath(candidate)]);
         if (!contained(actualRoot, actualPath)) return undefined;
         const metadata = await stat(actualPath);
         if (!metadata.isFile()) return undefined;
-        return Object.freeze({ body: await readFile(actualPath), contentType: contentTypeFor(actualPath) });
+        const asset = Object.freeze({ body: await readFile(actualPath), contentType: contentTypeFor(actualPath) });
+        served.set(candidate, asset);
+        return asset;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        if (isErrno(error, 'ENOENT')) return undefined;
         throw error;
       }
     },

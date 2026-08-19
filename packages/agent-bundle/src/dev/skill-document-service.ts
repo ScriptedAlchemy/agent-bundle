@@ -3,6 +3,7 @@ import { extname, join, resolve } from 'node:path';
 
 import { parseSkill, type SkillDocument, type SkillResource } from '../config/skill.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { CodedError, isErrno } from '../core/errors.ts';
 import type { NormalizedSkill, SourceProvenance } from '../core/types.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectService } from './project-service.ts';
@@ -15,13 +16,9 @@ export type SkillDocumentErrorCode =
   | 'SKILL_TARGET_UNAVAILABLE';
 
 /** Stable, route-safe failures from the explicit source/epoch Skill bases. */
-export class SkillDocumentError extends Error {
-  readonly code: SkillDocumentErrorCode;
-
+export class SkillDocumentError extends CodedError<SkillDocumentErrorCode> {
   constructor(code: SkillDocumentErrorCode, message: string) {
-    super(message);
-    this.name = 'SkillDocumentError';
-    this.code = code;
+    super('SkillDocumentError', code, message);
   }
 }
 
@@ -187,7 +184,7 @@ const resourceByPath = (
 
 const assertedDirectory = async (root: string): Promise<string> => {
   const metadata = await lstat(root).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    if (isErrno(error, 'ENOENT')) {
       throw new SkillDocumentError('SKILL_DOCUMENT_UNAVAILABLE', 'Skill document is not available from this base.');
     }
     throw error;
@@ -208,7 +205,7 @@ const readAllowedResource = async (
     throw new SkillDocumentError('SKILL_RESOURCE_UNAVAILABLE', 'Skill resource escapes its document base.');
   }
   const metadata = await lstat(candidate).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    if (isErrno(error, 'ENOENT')) {
       throw new SkillDocumentError('SKILL_RESOURCE_UNAVAILABLE', 'Skill resource is not available from this document base.');
     }
     throw error;

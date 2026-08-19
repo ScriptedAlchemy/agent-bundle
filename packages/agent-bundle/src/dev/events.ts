@@ -1,3 +1,4 @@
+import { CodedError } from '../core/errors.ts';
 import {
   freezeJsonValue,
   freezeProjectEvent,
@@ -54,13 +55,9 @@ export type ProjectEventHubErrorCode =
   | 'PROJECT_EVENT_PAYLOAD_INVALID'
   | 'PROJECT_EVENT_TYPE_INVALID';
 
-export class ProjectEventHubError extends Error {
-  readonly code: ProjectEventHubErrorCode;
-
+export class ProjectEventHubError extends CodedError<ProjectEventHubErrorCode> {
   constructor(code: ProjectEventHubErrorCode, message: string) {
-    super(message);
-    this.name = 'ProjectEventHubError';
-    this.code = code;
+    super('ProjectEventHubError', code, message);
   }
 }
 

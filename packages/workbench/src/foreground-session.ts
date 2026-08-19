@@ -1,3 +1,5 @@
+import { isRecord } from './client-helpers.ts';
+
 export interface ForegroundSession {
   readonly instanceId: string;
   readonly origin: string;
@@ -39,9 +41,6 @@ export interface ForegroundTransportOptions {
   readonly fetch?: typeof fetch;
   readonly label: string;
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export interface ForegroundSessionAuthorityOptions {
   /** Overrides the browser origin only when an embedding host provides the capability boundary. */
@@ -121,6 +120,59 @@ export class ForegroundSessionAuthority {
 
 const abortError = (): Error => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
 
+export type WaitOnAbort = 'ignore' | 'reject' | 'resolve';
+
+export interface WaitOptions {
+  /** Factory for the rejection value when `onAbort` is `reject`. Defaults to a generic AbortError. */
+  readonly abortError?: () => Error;
+  readonly onAbort?: WaitOnAbort;
+  readonly signal?: AbortSignal | null;
+}
+
+/** Promise-wrapped delay whose abort behavior is chosen per caller. */
+export const wait = (milliseconds: number, options: WaitOptions = {}): Promise<void> => {
+  const onAbort = options.onAbort ?? 'ignore';
+  const signal = options.signal;
+  switch (onAbort) {
+    case 'ignore':
+      return new Promise((resolve) => {
+        setTimeout(resolve, milliseconds);
+      });
+    case 'reject':
+    case 'resolve':
+      break;
+    default: {
+      const exhaustive: never = onAbort;
+      return exhaustive;
+    }
+  }
+  if (signal === undefined || signal === null) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, milliseconds);
+    });
+  }
+  const aborted = options.abortError ?? abortError;
+  return new Promise((resolve, reject) => {
+    const settleAbort = (): void => {
+      if (onAbort === 'resolve') resolve();
+      else reject(aborted());
+    };
+    if (signal.aborted) {
+      settleAbort();
+      return;
+    }
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, milliseconds);
+    const abort = (): void => {
+      clearTimeout(timeout);
+      settleAbort();
+    };
+    signal.addEventListener('abort', abort, { once: true });
+  });
+};
+
 /** Waits for an operation without allowing one caller's signal to cancel shared work. */
 export const awaitWithAbort = <T>(signal: AbortSignal | null | undefined, operation: () => Promise<T>): Promise<T> => {
   if (signal === undefined || signal === null) return operation();
@@ -182,6 +234,11 @@ export class ForegroundTransport {
     const headers = new Headers(init.headers);
     headers.set('x-agent-bundle-session', authentication.token);
     return awaitWithAbort(init.signal, () => this.#fetch(path, { ...init, headers }));
+  }
+
+  /** Foreground identity after the same bootstrap-error mapping as `json`/`request`. */
+  session(): Promise<ForegroundSessionSnapshot> {
+    return this.#snapshot();
   }
 
   diagnosticError(value: unknown, status: number): Error {

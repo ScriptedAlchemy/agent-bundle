@@ -4,7 +4,12 @@ import { join, resolve } from 'node:path';
 
 import { build, type BuildOptions, type BuildResult } from '../build/build.ts';
 import { listArtifactFiles } from '../build/emit.ts';
-import { validateArtifact, type ValidateArtifactOptions } from '../build/validate-artifact.ts';
+import {
+  recheckValidatedArtifactSnapshot,
+  validateArtifact,
+  validateArtifactWithSnapshot,
+  type ValidateArtifactOptions,
+} from '../build/validate-artifact.ts';
 import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../core/project-context.ts';
@@ -152,7 +157,7 @@ export class ArtifactService {
   readonly #publishNativeCatalog: (options: NativePlaygroundCatalogPublicationOptions) => Promise<NativePlaygroundCatalogPublicationReceipt>;
   readonly #now: () => Date;
   readonly #removeAttempt: (path: string) => Promise<void>;
-  readonly #validateArtifact: ArtifactValidator;
+  readonly #validateArtifact?: ArtifactValidator;
 
   constructor(options: ArtifactServiceOptions) {
     this.#compile = options.compile ?? build;
@@ -163,7 +168,7 @@ export class ArtifactService {
     this.#publishNativeCatalog = options.publishNativeCatalog ?? publishNativePlaygroundCatalogSnapshot;
     this.#now = options.now ?? (() => new Date());
     this.#removeAttempt = options.removeAttempt ?? ((path) => rm(path, { force: true, recursive: true }));
-    this.#validateArtifact = options.validateArtifact ?? validateArtifact;
+    this.#validateArtifact = options.validateArtifact;
   }
 
   async build(prepared: PreparedProject): Promise<ArtifactEpochResult> {
@@ -199,18 +204,27 @@ export class ArtifactService {
         projectRoot: prepared.root,
         registry: prepared.registry,
       });
-      const validationDiagnostics = freezeDiagnostics(await this.#validateArtifact({
-        artifactRoot,
-        registry: prepared.registry,
-      }));
+      const firstValidation = this.#validateArtifact === undefined
+        ? await validateArtifactWithSnapshot({
+          artifactRoot,
+          registry: prepared.registry,
+        })
+        : {
+          diagnostics: await this.#validateArtifact({
+            artifactRoot,
+            registry: prepared.registry,
+          }),
+          snapshot: undefined,
+        };
+      const validationDiagnostics = freezeDiagnostics(firstValidation.diagnostics);
       const diagnostics = freezeDiagnostics([...prepared.diagnostics, ...validationDiagnostics]);
       if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);
 
-      const currentSource = await snapshotProjectSource(
+      const currentSource = await (prepared.snapshotSource ?? (() => snapshotProjectSource(
         prepared.root,
         prepared.configPath,
         prepared.outputRoots,
-      );
+      )))();
       if (!sameInputs(projectContext.sourceInputs, currentSource.inputs)) {
         throw new DiagnosticError([projectSourceChangedDiagnostic(prepared.configPath)]);
       }
@@ -232,11 +246,19 @@ export class ArtifactService {
       });
       await moveArtifactContents(artifactRoot, staging.root, this.#move);
       const published = await staging.publish(async (stagingRoot) => {
-        const stagedDiagnostics = freezeDiagnostics(await this.#validateArtifact({
-          allowEpochStagingMarker: true,
-          artifactRoot: stagingRoot,
-          registry: prepared.registry,
-        }));
+        const stagedDiagnostics = freezeDiagnostics(
+          firstValidation.snapshot === undefined
+            ? await (this.#validateArtifact ?? validateArtifact)({
+              allowEpochStagingMarker: true,
+              artifactRoot: stagingRoot,
+              registry: prepared.registry,
+            })
+            : await recheckValidatedArtifactSnapshot(firstValidation.snapshot, {
+              allowEpochStagingMarker: true,
+              artifactRoot: stagingRoot,
+              registry: prepared.registry,
+            }),
+        );
         if (hasErrors(stagedDiagnostics)) throw new DiagnosticError(stagedDiagnostics);
       }, async (publishingEpoch) => {
         return this.#publishNativeCatalog(Object.freeze({ epoch: publishingEpoch, projectRoot: prepared.root }));

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import { isRecord } from '../client-helpers.ts';
 
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
 import {
@@ -180,9 +181,6 @@ export const mcpPageSessionControls = (
     restart: phase === 'ready' && !isPending('restart'),
   };
 };
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const text = (value: unknown): string | undefined => typeof value === 'string' && value.length > 0 ? value : undefined;
 

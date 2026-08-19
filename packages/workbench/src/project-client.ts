@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
 import type {
   ArtifactEpoch,
   ArtifactStatus,
@@ -14,7 +13,8 @@ import type {
   ProjectStatus,
   SourceStatus,
 } from '../../agent-bundle/src/dev/types.ts';
-import { ForegroundSessionAuthority, type ForegroundSessionSnapshot } from './foreground-session.ts';
+import { diagnosticSchema } from './client-helpers.ts';
+import { ForegroundSessionAuthority, type ForegroundSessionSnapshot, wait } from './foreground-session.ts';
 import { nonnegativeIntegerSchema, positiveIntegerSchema } from './schema-atoms.ts';
 
 export interface EventSourceMessage {
@@ -65,18 +65,8 @@ const projectEventTypes = [
 ] as const;
 
 const browserEvents: EventSourceFactory = (url) => new EventSource(url);
-const retryDelay = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const retryDelay = (milliseconds: number): Promise<void> => wait(milliseconds);
 const retryDelayMilliseconds = 250;
-
-const diagnosticSchema: z.ZodType<Diagnostic> = z.strictObject({
-  code: z.string(),
-  generatedPath: z.string().optional(),
-  message: z.string(),
-  recovery: z.string().optional(),
-  severity: z.enum(['error', 'info', 'warning']),
-  sourcePath: z.string().optional(),
-  target: z.string().optional(),
-});
 
 const diagnosticSummarySchema = z.strictObject({
   errors: nonnegativeIntegerSchema,

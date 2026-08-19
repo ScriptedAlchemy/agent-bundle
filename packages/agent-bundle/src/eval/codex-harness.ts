@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
 import { cp } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
+import { runBoundedChildProcess } from '../host-contracts/process.ts';
 import { redactEvalCredentialText } from './credentials.ts';
 import { resolveEvalAssertions } from './assertions.ts';
 import {
@@ -101,65 +101,34 @@ const defaultHost = 'codex';
 const defaultKillGraceMs = 1_000;
 const defaultMaxOutputBytes = 4 * 1024 * 1024;
 const defaultTimeoutMs = 300_000;
-const defaultCodexRunner: CodexCommandRunner = (command) => new Promise((resolvePromise, reject) => {
-  const child = spawn(codexExecutable, [...command.args], {
+const defaultCodexRunner: CodexCommandRunner = async (command) => {
+  const result = await runBoundedChildProcess(Object.freeze({
+    args: command.args,
     cwd: command.cwd,
-    env: command.environment,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    environment: command.environment,
+    executable: codexExecutable,
+  }), Object.freeze({
+    abortAlreadyAborted: false,
+    gracePeriodMs: defaultKillGraceMs,
+    labels: Object.freeze({
+      aborted: 'cancelled',
+      outputLimit: 'output-limit',
+      timedOut: 'timeout',
+    }),
+    maxOutputBytes: defaultMaxOutputBytes,
+    overflow: 'drop',
+    outputBudget: 'combined',
+    signal: command.signal,
+    timeoutMs: command.timeoutMs,
     windowsHide: true,
+  }));
+  return Object.freeze({
+    exitCode: result.exitCode ?? 1,
+    ...(result.termination === undefined ? {} : { failure: result.termination }),
+    stderr: result.stderr,
+    stdout: result.stdout,
   });
-  const stdoutChunks: Buffer[] = [];
-  const stderrChunks: Buffer[] = [];
-  let bytes = 0;
-  let failure: CodexCommandResult['failure'];
-  let finished = false;
-  let escalationTimer: NodeJS.Timeout | undefined;
-
-  const settle = (exitCode: number): void => {
-    if (finished) return;
-    finished = true;
-    clearTimeout(timeoutTimer);
-    if (escalationTimer !== undefined) clearTimeout(escalationTimer);
-    command.signal?.removeEventListener('abort', onAbort);
-    resolvePromise(Object.freeze({
-      exitCode,
-      ...(failure === undefined ? {} : { failure }),
-      stderr: Buffer.concat(stderrChunks).toString('utf8'),
-      stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-    }));
-  };
-  const terminate = (reason: NonNullable<CodexCommandResult['failure']>): void => {
-    if (failure !== undefined || finished) return;
-    failure = reason;
-    child.kill('SIGTERM');
-    escalationTimer = setTimeout(() => {
-      if (!finished) child.kill('SIGKILL');
-    }, defaultKillGraceMs);
-  };
-  const onAbort = (): void => terminate('cancelled');
-  const append = (chunks: Buffer[], chunk: Buffer): void => {
-    if (failure !== undefined) return;
-    if (bytes + chunk.byteLength > defaultMaxOutputBytes) {
-      terminate('output-limit');
-      return;
-    }
-    bytes += chunk.byteLength;
-    chunks.push(chunk);
-  };
-  const timeoutTimer = setTimeout(() => terminate('timeout'), command.timeoutMs);
-
-  command.signal?.addEventListener('abort', onAbort, { once: true });
-  child.stdout?.on('data', (chunk: Buffer) => append(stdoutChunks, chunk));
-  child.stderr?.on('data', (chunk: Buffer) => append(stderrChunks, chunk));
-  child.once('error', (error) => {
-    if (finished) return;
-    finished = true;
-    clearTimeout(timeoutTimer);
-    command.signal?.removeEventListener('abort', onAbort);
-    reject(error);
-  });
-  child.once('close', (code) => settle(code ?? 1));
-});
+};
 
 const activationSkills = (candidateSkills: readonly string[], evalCase: EvalCase): readonly string[] =>
   Object.freeze([...new Set([
