@@ -1,19 +1,39 @@
 import { expect, it } from '@rstest/core';
 
-import { ForegroundTransport } from '../src/foreground-session.ts';
+import { decodeForegroundSession, ForegroundTransport } from '../src/foreground-session.ts';
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json' },
   status,
 });
 
-const session = (): Response => json({ origin: 'http://foreground.test', token: 'test-session-token' });
+const session = (): Response => json({
+  instanceId: 'foreground-instance-a',
+  origin: 'http://foreground.test',
+  token: 'test-session-token',
+});
 
 const invalidSessionBodies: readonly [string, unknown][] = [
-  ['a versioned payload', { origin: 'http://foreground.test', schemaVersion: 1, token: 'test-session-token' }],
-  ['an unexpected payload field', { origin: 'http://foreground.test', scope: 'workbench', token: 'test-session-token' }],
-  ['a malformed payload', { origin: 'http://foreground.test' }],
+  ['a legacy two-field payload', { origin: 'http://foreground.test', token: 'test-session-token' }],
+  ['a versioned payload', { instanceId: 'foreground-instance-a', origin: 'http://foreground.test', schemaVersion: 1, token: 'test-session-token' }],
+  ['an unexpected payload field', { instanceId: 'foreground-instance-a', origin: 'http://foreground.test', scope: 'workbench', token: 'test-session-token' }],
+  ['a malformed payload', { instanceId: 'foreground-instance-a', origin: 'http://foreground.test' }],
 ];
+
+it('decodes the exact instance-aware foreground bootstrap envelope', () => {
+  const decoded = decodeForegroundSession({
+    instanceId: 'foreground-instance-a',
+    origin: 'http://foreground.test',
+    token: 'test-session-token',
+  });
+
+  expect(decoded).toEqual({
+    instanceId: 'foreground-instance-a',
+    origin: 'http://foreground.test',
+    token: 'test-session-token',
+  });
+  expect(Object.isFrozen(decoded)).toBe(true);
+});
 
 for (const [description, body] of invalidSessionBodies) {
   it(`rejects ${description} from the foreground session bootstrap`, async () => {

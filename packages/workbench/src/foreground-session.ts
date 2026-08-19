@@ -1,15 +1,19 @@
 export interface ForegroundSession {
+  readonly instanceId: string;
   readonly origin: string;
   readonly token: string;
 }
 
 /** Decodes the exact credential envelope returned by `/api/project/session`. */
 export const decodeForegroundSession = (value: unknown): ForegroundSession | undefined => {
-  if (!isRecord(value) || Object.keys(value).length !== 2 || !Object.hasOwn(value, 'origin') || !Object.hasOwn(value, 'token')) {
+  if (
+    !isRecord(value) || Object.keys(value).length !== 3 ||
+    !Object.hasOwn(value, 'instanceId') || !Object.hasOwn(value, 'origin') || !Object.hasOwn(value, 'token')
+  ) {
     return undefined;
   }
-  if (typeof value.origin !== 'string' || typeof value.token !== 'string') return undefined;
-  return Object.freeze({ origin: value.origin, token: value.token });
+  if (typeof value.instanceId !== 'string' || typeof value.origin !== 'string' || typeof value.token !== 'string') return undefined;
+  return Object.freeze({ instanceId: value.instanceId, origin: value.origin, token: value.token });
 };
 
 export interface ForegroundTransportOptions {
