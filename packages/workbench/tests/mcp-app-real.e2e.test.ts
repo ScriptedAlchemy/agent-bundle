@@ -146,7 +146,7 @@ const writeBundledAppProject = async (root: string): Promise<void> => {
       '',
       'export default defineConfig({',
       '  mcp: { servers: { fixture: {',
-      "    apps: { dashboard: { entry: './views/dashboard.ts', resourceUri: 'ui://packed-release/dashboard-v1.html', template: './views/shell.html' } },",
+      "    apps: { dashboard: { entry: './views/dashboard.ts', resourceUri: 'ui://packed-release/dashboard.html', template: './views/shell.html' } },",
       "    entry: './src/server.ts',",
       '  } } },',
       "  plugin: { name: 'bundled-app-e2e-fixture', version: '1.0.0' },",

@@ -107,7 +107,7 @@ export default defineConfig({
         apps: {
           dashboard: {
             entry: './views/dashboard.ts',
-            resourceUri: 'ui://review-tools/dashboard-v1.html',
+            resourceUri: 'ui://review-tools/dashboard.html',
             targets: ['portable'],
             _meta: { ui: { prefersBorder: true } },
           },

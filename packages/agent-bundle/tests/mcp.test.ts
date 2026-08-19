@@ -170,7 +170,7 @@ it('normalizes deeply frozen local MCP App declarations independently of the pro
             dashboard: {
               _meta: { ui: { prefersBorder: true }, 'x-fixture': { stable: true } },
               entry: './views/dashboard.ts',
-              resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+              resourceUri: 'ui://agent-bundle/dashboard.html',
               targets: ['claude'],
               template: './views/shell.html',
             },
@@ -201,7 +201,7 @@ it('normalizes deeply frozen local MCP App declarations independently of the pro
       _meta: { ui: { prefersBorder: true }, 'x-fixture': { stable: true } },
       id: 'mcp-app:fixture:dashboard',
       name: 'dashboard',
-      resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+      resourceUri: 'ui://agent-bundle/dashboard.html',
       serverId: 'mcp:fixture',
       serverName: 'fixture',
       source: join(firstRoot, 'views', 'dashboard.ts'),
@@ -368,7 +368,7 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
             apps: {
               dashboard: {
                 entry: './views/dashboard.ts',
-                resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                resourceUri: 'ui://agent-bundle/dashboard.html',
                 targets: ['portable'],
               },
               'not_stable': {
@@ -386,7 +386,7 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
             apps: {
               dashboard: {
                 entry: './views/dashboard.ts',
-                resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                resourceUri: 'ui://agent-bundle/dashboard.html',
               },
             },
             entry: './src/other.ts',
@@ -423,7 +423,7 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
               apps: {
                 dashboard: {
                   entry: './views/dashboard.ts',
-                  resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                  resourceUri: 'ui://agent-bundle/dashboard.html',
                 },
               },
               entry: './src/server.ts',
@@ -469,7 +469,7 @@ it('rejects non-JSON MCP App metadata before normalization', async () => {
                 dashboard: {
                   _meta: { value },
                   entry: './views/dashboard.ts',
-                  resourceUri: `ui://agent-bundle/${name}-v1.html`,
+                  resourceUri: `ui://agent-bundle/${name}.html`,
                 },
               },
               entry: './src/server.ts',
@@ -704,7 +704,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
                 dashboard: {
                   _meta: { ui: { prefersBorder: true } },
                   entry: './views/dashboard.ts',
-                  resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                  resourceUri: 'ui://agent-bundle/dashboard.html',
                   template: './views/shell.html',
                 },
               },
@@ -740,7 +740,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
       mimeType: 'text/html;profile=mcp-app',
       name: 'dashboard',
       output: join(outputRoot, target, 'mcp-apps', 'dashboard.html'),
-      resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+      resourceUri: 'ui://agent-bundle/dashboard.html',
       serverId: 'mcp:fixture',
       source: join(root, 'views', 'dashboard.ts'),
       target,
@@ -757,7 +757,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
       expect(await readdir(join(outputRoot, target, 'mcp-apps'))).toEqual(['dashboard.html']);
     }
     const serverBundle = await readFile(join(outputRoot, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
-    expect(serverBundle).toContain('ui://agent-bundle/dashboard-v1.html');
+    expect(serverBundle).toContain('ui://agent-bundle/dashboard.html');
     expect(serverBundle).toContain('text/html;profile=mcp-app');
     expect(serverBundle).toContain('prefersBorder');
     expect(result.outputProvenance).toContainEqual({
@@ -1005,7 +1005,7 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
                 dashboard: {
                   _meta: { ui: { prefersBorder: true }, 'x-fixture': { app: 'dashboard' } },
                   entry: './views/dashboard.ts',
-                  resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                  resourceUri: 'ui://agent-bundle/dashboard.html',
                   template: './views/shell.html',
                 },
               },
@@ -1038,7 +1038,7 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
       const tools = await client.listTools();
       expect(tools.tools).toMatchObject([
         {
-          _meta: { ui: { resourceUri: 'ui://agent-bundle/dashboard-v1.html' } },
+          _meta: { ui: { resourceUri: 'ui://agent-bundle/dashboard.html' } },
           name: 'show-dashboard',
         },
       ]);
@@ -1048,22 +1048,22 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
           _meta: { ui: { prefersBorder: true }, 'x-fixture': { app: 'dashboard' } },
           mimeType: 'text/html;profile=mcp-app',
           name: 'dashboard',
-          uri: 'ui://agent-bundle/dashboard-v1.html',
+          uri: 'ui://agent-bundle/dashboard.html',
         },
       ]);
-      const resource = await client.readResource({ uri: 'ui://agent-bundle/dashboard-v1.html' });
+      const resource = await client.readResource({ uri: 'ui://agent-bundle/dashboard.html' });
       expect(resource.contents).toEqual([
         {
           mimeType: 'text/html;profile=mcp-app',
           text: expectedHtml,
-          uri: 'ui://agent-bundle/dashboard-v1.html',
+          uri: 'ui://agent-bundle/dashboard.html',
         },
       ]);
       const result = await client.callTool({ arguments: {}, name: 'show-dashboard' });
       expect(result).toMatchObject({
-        _meta: { ui: { resourceUri: 'ui://agent-bundle/dashboard-v1.html' } },
+        _meta: { ui: { resourceUri: 'ui://agent-bundle/dashboard.html' } },
         content: [{ text: 'dashboard ready', type: 'text' }],
-        structuredContent: { resourceUri: 'ui://agent-bundle/dashboard-v1.html', view: 'dashboard' },
+        structuredContent: { resourceUri: 'ui://agent-bundle/dashboard.html', view: 'dashboard' },
       });
     } finally {
       await client.close();

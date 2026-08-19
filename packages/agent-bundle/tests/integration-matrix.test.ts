@@ -114,7 +114,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
     await expect(readFile(join(output, 'portable', localMcpPath), 'utf8')).resolves.toContain('ordinary local import');
     const localTools = await listMcp({ artifact: output, root, server: 'local', target: 'portable' });
     expect(localTools.tools).toMatchObject([{
-      _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+      _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard.html' } },
       name: 'show-dashboard',
     }]);
     const localInvocation = await invokeMcp({
@@ -126,9 +126,9 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
       tool: 'show-dashboard',
     });
     expect(localInvocation.result).toMatchObject({
-      _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+      _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard.html' } },
       content: [{ text: 'dashboard ready: ordinary local import', type: 'text' }],
-      structuredContent: { resourceUri: 'ui://integration-fixture/dashboard-v1.html', view: 'dashboard' },
+      structuredContent: { resourceUri: 'ui://integration-fixture/dashboard.html', view: 'dashboard' },
     });
 
     const client = new Client({ name: 'integration-matrix', version: '1.0.0' });
@@ -140,17 +140,17 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
     try {
       await expect(client.listResources()).resolves.toMatchObject({
         resources: [{
-          _meta: { ui: { prefersBorder: true, resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+          _meta: { ui: { prefersBorder: true, resourceUri: 'ui://integration-fixture/dashboard.html' } },
           mimeType: 'text/html;profile=mcp-app',
           name: 'dashboard',
-          uri: 'ui://integration-fixture/dashboard-v1.html',
+          uri: 'ui://integration-fixture/dashboard.html',
         }],
       });
-      await expect(client.readResource({ uri: 'ui://integration-fixture/dashboard-v1.html' })).resolves.toMatchObject({
+      await expect(client.readResource({ uri: 'ui://integration-fixture/dashboard.html' })).resolves.toMatchObject({
         contents: [{
           mimeType: 'text/html;profile=mcp-app',
           text: expect.stringContaining('integration dashboard'),
-          uri: 'ui://integration-fixture/dashboard-v1.html',
+          uri: 'ui://integration-fixture/dashboard.html',
         }],
       });
     } finally {

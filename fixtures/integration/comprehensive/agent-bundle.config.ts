@@ -12,7 +12,7 @@ export default {
           dashboard: {
             _meta: { ui: { prefersBorder: true } },
             entry: './views/dashboard.ts',
-            resourceUri: 'ui://integration-fixture/dashboard-v1.html',
+            resourceUri: 'ui://integration-fixture/dashboard.html',
             targets: ['portable'],
             template: './views/shell.html',
           },

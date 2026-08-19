@@ -620,7 +620,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect(page.getByText('epoch.bound')).toBeVisible({ timeout: browserTimeout });
 
       phase = 'invalid edit retains stale epoch B';
-      const invalidConfig = originalConfig.replace('ui://packed-release/dashboard-v1.html', 'ui://packed-release/dashboard.html');
+      const invalidConfig = originalConfig.replace('ui://packed-release/dashboard.html', 'https://packed-release.example/dashboard.html');
       if (invalidConfig === originalConfig) throw new Error('The packed fixture did not contain the resource URI used for the invalid rebuild.');
       await writeFile(configSource, invalidConfig);
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
