@@ -211,7 +211,7 @@ const maximumCatalogSelections = 256;
 const maximumFixtureEntries = 4_096;
 const maximumSnapshotStringLength = 16_384;
 const safeEpochSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
-const safeDigestText = /^[a-z0-9._:-]+$/iu;
+const fixtureSha256Text = /^[a-f0-9]{64}$/u;
 
 const catalogDurabilityPlatform = (): NodeJS.Platform => {
   if (process.env.NODE_ENV !== 'test') return process.platform;
@@ -537,7 +537,7 @@ const persistedFixturePlan = (value: JsonValue): PersistedFixturePlan | undefine
     !Array.isArray(value.entries) || value.entries.length > maximumFixtureEntries) return undefined;
   const entries = value.entries.map((entry) => {
     if (!isRecord(entry) || !exactKeys(entry, ['executable', 'path', 'sha256']) || typeof entry.executable !== 'boolean' ||
-      !isSafeRelativePath(entry.path) || !nonemptySnapshotText(entry.sha256) || !safeDigestText.test(entry.sha256)) return undefined;
+      !isSafeRelativePath(entry.path) || typeof entry.sha256 !== 'string' || !fixtureSha256Text.test(entry.sha256)) return undefined;
     return Object.freeze({ executable: entry.executable, path: entry.path, sha256: entry.sha256 });
   });
   if (entries.some((entry) => entry === undefined) || new Set(entries.map((entry) => entry?.path)).size !== entries.length) return undefined;

@@ -420,6 +420,42 @@ it('rejects catalog directories that escape epoch metadata through a symlinked d
   }
 });
 
+it('requires every persisted fixture sha256 to be exactly 64 lowercase hexadecimal characters', async () => {
+  for (const [label, sha256] of [
+    ['uppercase', 'A'.repeat(64)],
+    ['short', 'a'.repeat(63)],
+    ['non-hex', 'g'.repeat(64)],
+  ] as const) {
+    const root = await mkdtemp(join(tmpdir(), `agent-bundle-native-playground-${label}-sha-`));
+    try {
+      const suiteDir = join(root, 'evals');
+      const fixtureDir = join(suiteDir, 'fixture');
+      await mkdir(fixtureDir, { recursive: true });
+      await writeFile(join(fixtureDir, 'input.txt'), 'fixture bytes\n');
+      const entries = Object.freeze([Object.freeze({ executable: false, path: 'input.txt', sha256 })]);
+      const service = new NativePlaygroundService({
+        catalogDirectory: join(root, 'catalog'),
+        discover: async () => nativeSuite('claude', join(suiteDir, 'review.eval.ts')),
+        inspectArtifact: async (candidate) => Object.freeze({
+          binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+          root: candidate.root,
+        }),
+        planFixture: async () => Object.freeze({
+          digest: digest({ entries, git: false }),
+          entries,
+          git: false,
+          sourcePath: fixtureDir,
+        }),
+        projectRoot: root,
+      });
+      await expect(service.catalog(epoch(`epoch-${label}-sha`, join(root, 'artifact')))).rejects.toThrow('catalog snapshot is invalid');
+      await service.close();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }
+});
+
 it('fsyncs durable catalog publication, validates a no-replace winner, and retains every staging cleanup failure', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-durable-'));
   const catalogDirectory = join(root, 'catalog');
