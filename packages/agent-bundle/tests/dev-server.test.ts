@@ -513,7 +513,9 @@ it('reuses the foreground cookie name when the same loopback origin restarts', a
   const port = Number(new URL(first.url).port);
   let second: Awaited<ReturnType<typeof startForegroundServer>> | undefined;
   try {
-    const firstBootstrap = await fetch(`${first.url}/api/project/session`, { headers: { origin: first.url } });
+    const firstBootstrap = await fetch(`${first.url}/api/project/session`, {
+      headers: { connection: 'close', origin: first.url },
+    });
     const firstBody = await firstBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
     const firstCookie = firstBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
     await first.close();
@@ -521,7 +523,9 @@ it('reuses the foreground cookie name when the same loopback origin restarts', a
     second = await startForegroundServer({
       coordinator: new RecordingCoordinator(), eventHub: new ProjectEventHub(), port, sessionToken: 'second-token',
     });
-    const secondBootstrap = await fetch(`${second.url}/api/project/session`, { headers: { origin: second.url } });
+    const secondBootstrap = await fetch(`${second.url}/api/project/session`, {
+      headers: { connection: 'close', origin: second.url },
+    });
     const secondBody = await secondBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
     const secondCookie = secondBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
 

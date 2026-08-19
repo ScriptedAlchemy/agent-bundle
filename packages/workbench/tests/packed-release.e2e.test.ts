@@ -236,7 +236,12 @@ interface OutageLedger {
   readonly outageStartedAt: number;
   readonly postRecovery?: Readonly<{
     readonly freshMcpSession: Readonly<{ readonly closeCompletedAt: number; readonly closeStartedAt: number; readonly id: string; readonly openedAt: number }>;
-    readonly navigation: readonly Readonly<{ readonly leftAt: number; readonly openedAt: number; readonly url: string }>[];
+    readonly navigation: readonly Readonly<{
+      readonly leftAt: number;
+      readonly openedAt: number;
+      readonly respondedStream?: true;
+      readonly url: string;
+    }>[];
   }>;
   readonly recoveredAt: number;
   readonly requests: readonly NetworkLedgerEntry[];
@@ -279,18 +284,21 @@ const postRecoveryCancellationFixture = (): OutageLedger => {
   const freshMcpSessionId = 'fresh-browser-mcp-session';
   const freshMcpStreamPath = `/api/mcp/sessions/${encodeURIComponent(freshMcpSessionId)}/stream`;
   const hooksUrl = `${base.origin}/api/hooks?epochId=recovered-epoch`;
+  const logsStreamUrl = `${base.origin}/api/logs/stream?after=32`;
   return Object.freeze({
     ...base,
     postRecovery: Object.freeze({
       freshMcpSession: Object.freeze({ closeCompletedAt: 1_321, closeStartedAt: 1_320, id: freshMcpSessionId, openedAt: 1_310 }),
       navigation: Object.freeze([
         Object.freeze({ leftAt: 1_340, openedAt: 1_330, url: hooksUrl }),
+        Object.freeze({ leftAt: 1_350, openedAt: 1_340, respondedStream: true, url: logsStreamUrl }),
       ]),
     }),
     requests: Object.freeze([
       ...base.requests,
       ledgerRequest({ at: 1_310, completedAt: 1_321, error: 'net::ERR_ABORTED', method: 'GET', path: freshMcpStreamPath, respondedAt: 1_311, status: 200, url: `${base.origin}${freshMcpStreamPath}?after=0` }),
       ledgerRequest({ at: 1_330, completedAt: 1_341, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/hooks', url: hooksUrl }),
+      ledgerRequest({ at: 1_341, completedAt: 1_351, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/logs/stream', respondedAt: 1_342, status: 200, url: logsStreamUrl }),
     ]),
   });
 };
@@ -405,10 +413,19 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
       );
       assertLedger(failures.length <= 1, `multiple action-induced navigation cancellations: ${JSON.stringify({ failures, navigation })}`);
       for (const failure of failures) {
+        let validResponse = failure.respondedAt === undefined && failure.status === undefined;
+        if (navigation.respondedStream === true) {
+          let url: URL;
+          try { url = new URL(failure.url); }
+          catch { throw new Error(`Foreground outage ledger rejected: responded navigation stream URL is invalid: ${JSON.stringify(failure)}`); }
+          validResponse = failure.path === '/api/logs/stream' && url.origin === ledger.origin && url.pathname === '/api/logs/stream' &&
+            hasCanonicalAfterCursor(url) && failure.respondedAt !== undefined && failure.respondedAt >= failure.at &&
+            failure.respondedAt <= ledgerFailureAt(failure) && failure.status !== undefined && failure.status >= 200 && failure.status < 300;
+        }
         assertLedger(
           failure.origin === ledger.origin && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED' &&
-          failure.respondedAt === undefined && failure.status === undefined,
-          `navigation cancellation did not remain a pending exact request: ${JSON.stringify({ failure, navigation })}`,
+          validResponse,
+          `navigation cancellation did not match its exact pending-or-stream response contract: ${JSON.stringify({ failure, navigation })}`,
         );
       }
       navigationFailures.push(...failures);
@@ -1540,12 +1557,21 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         ['Evals', [`${origin}/api/evals/suites`, `${origin}/api/evals/runs`]],
         ['Comparisons', [`${origin}/api/evals/runs`]],
       ]);
-      const postRecoveryNavigation: Array<Readonly<{ leftAt: number; openedAt: number; url: string }>> = [];
+      const respondedNavigationStreams = new Set<string>();
+      const postRecoveryNavigation: Array<Readonly<{
+        leftAt: number;
+        openedAt: number;
+        respondedStream?: true;
+        url: string;
+      }>> = [];
       let activeMobileRoute: Readonly<{ openedAt: number; urls?: readonly string[] }> | undefined;
       const leaveActiveMobileRoute = (leftAt: number): void => {
         if (activeMobileRoute === undefined) return;
         for (const url of activeMobileRoute.urls ?? []) postRecoveryNavigation.push(Object.freeze({
-          leftAt, openedAt: activeMobileRoute.openedAt, url,
+          leftAt,
+          openedAt: activeMobileRoute.openedAt,
+          ...(respondedNavigationStreams.has(url) ? { respondedStream: true as const } : {}),
+          url,
         }));
         activeMobileRoute = undefined;
       };
@@ -1555,7 +1581,19 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         await page.getByRole('link', { name: route.label, exact: true }).click();
         await expect(page.getByRole('heading', { name: route.heading })).toBeVisible({ timeout: browserTimeout });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        activeMobileRoute = Object.freeze({ openedAt, urls: postRecoveryNavigationUrls.get(route.label) });
+        const routeUrls = [...(postRecoveryNavigationUrls.get(route.label) ?? [])];
+        if (route.label === 'Logs') {
+          const logsStreams = (): readonly NetworkLedgerEntry[] => browserRequests.slice(mobileNavigationRequestIndex).filter((request) => {
+            if (request.at < openedAt || request.method !== 'GET' || request.origin !== origin || request.path !== '/api/logs/stream') return false;
+            const url = new URL(request.url);
+            return url.origin === origin && url.pathname === '/api/logs/stream' && hasCanonicalAfterCursor(url);
+          });
+          await expect.poll(() => logsStreams().length, { timeout: browserTimeout }).toBe(1);
+          const streamUrl = logsStreams()[0]!.url;
+          respondedNavigationStreams.add(streamUrl);
+          routeUrls.push(streamUrl);
+        }
+        activeMobileRoute = Object.freeze({ openedAt, urls: Object.freeze(routeUrls) });
       }
       leaveActiveMobileRoute(Date.now());
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();
