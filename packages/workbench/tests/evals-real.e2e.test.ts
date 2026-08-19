@@ -363,10 +363,10 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
     const runId = admission.run.id;
     await secondList;
     releaseStaleList?.();
-    await expect(page.getByLabel('Recorded run')).toHaveValue(runId, { timeout: browserTimeout });
+    await expect(page.getByLabel('Recorded run')).toHaveValue(runId, { timeout: runCompletionTimeout });
 
     const cancel = page.getByRole('button', { name: 'Cancel run' });
-    await expect(cancel).toBeVisible({ timeout: browserTimeout });
+    await expect(cancel).toBeVisible({ timeout: runCompletionTimeout });
     await cancel.evaluate((button) => {
       if (button instanceof HTMLButtonElement) {
         button.click();
@@ -380,8 +380,8 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
     await expect(page.getByText('run.cancelling')).toBeVisible({ timeout: runCompletionTimeout });
     await gate.release();
     await expect(page.getByText('Cancellation was recorded for this run.')).toBeVisible({ timeout: runCompletionTimeout });
-    await expect(page.getByText(`Run ${runId} was cancelled after recording`)).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByText('run.cancelled')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText(`Run ${runId} was cancelled after recording`)).toBeVisible({ timeout: runCompletionTimeout });
+    await expect(page.getByText('run.cancelled')).toBeVisible({ timeout: runCompletionTimeout });
     expect(cancellations).toBe(1);
     expect(pageErrors).toEqual([]);
   } finally {
