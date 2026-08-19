@@ -21,8 +21,64 @@ const execFile = promisify(executeFile);
 const DEFAULT_REPOSITORY = 'https://github.com/modelcontextprotocol/inspector.git';
 const DEFAULT_OUTPUT = 'packages/workbench/src/inspector';
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.css', '.json'];
+const MANIFEST_KEYS = [
+  'aliases',
+  'commit',
+  'dependencies',
+  'files',
+  'license',
+  'mcpSdkVersion',
+  'patches',
+  'publicImports',
+  'repository',
+  'retainedTests',
+  'testDependencies',
+  'version',
+];
 
 const sha256 = (contents) => createHash('sha256').update(contents).digest('hex');
+
+const hasExactKeys = (value, keys) =>
+  typeof value === 'object'
+  && value !== null
+  && !Array.isArray(value)
+  && Object.keys(value).length === keys.length
+  && keys.every((key) => Object.hasOwn(value, key));
+
+const isNonEmptyString = (value) => typeof value === 'string' && value.length > 0;
+const isStringArray = (value) => Array.isArray(value) && value.every(isNonEmptyString);
+const isSha256 = (value) => typeof value === 'string' && /^[0-9a-f]{64}$/u.test(value);
+
+const isInspectorSyncManifest = (manifest) =>
+  hasExactKeys(manifest, MANIFEST_KEYS)
+  && Array.isArray(manifest.aliases)
+  && manifest.aliases.every((alias) =>
+    Array.isArray(alias)
+    && alias.length === 2
+    && alias.every(isNonEmptyString))
+  && typeof manifest.commit === 'string'
+  && /^[0-9a-f]{40}$/u.test(manifest.commit)
+  && isStringArray(manifest.dependencies)
+  && Array.isArray(manifest.files)
+  && manifest.files.every((file) =>
+    hasExactKeys(file, ['path', 'sha256', 'upstreamSha256'])
+    && isNonEmptyString(file.path)
+    && isSha256(file.sha256)
+    && isSha256(file.upstreamSha256))
+  && hasExactKeys(manifest.license, ['path', 'sha256'])
+  && isNonEmptyString(manifest.license.path)
+  && isSha256(manifest.license.sha256)
+  && isNonEmptyString(manifest.mcpSdkVersion)
+  && Array.isArray(manifest.patches)
+  && manifest.patches.every((patch) =>
+    hasExactKeys(patch, ['path', 'sha256'])
+    && isNonEmptyString(patch.path)
+    && isSha256(patch.sha256))
+  && isStringArray(manifest.publicImports)
+  && isNonEmptyString(manifest.repository)
+  && isStringArray(manifest.retainedTests)
+  && isStringArray(manifest.testDependencies)
+  && isNonEmptyString(manifest.version);
 
 const usage = () => `Usage: node scripts/sync-inspector.mjs [options]
 
@@ -370,7 +426,7 @@ const verifySnapshot = async (output) => {
   const manifestPath = join(output, 'UPSTREAM.json');
   if (!(await exists(manifestPath))) fail(`Missing Inspector provenance: ${manifestPath}`);
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.files)) {
+  if (!isInspectorSyncManifest(manifest)) {
     fail('UPSTREAM.json is not an Inspector sync manifest');
   }
   await validateManifestImports({ manifest, output });
@@ -474,7 +530,6 @@ const syncSnapshot = async (options) => {
       publicImports: [...patchedClosure.externalImports].filter((specifier) => specifier !== asPackageName(specifier)).sort(),
       repository: options.repository,
       retainedTests: [...new Set(options.tests.map((path) => normalizeRelativePath(path, '--test')))].sort(),
-      schemaVersion: 1,
       testDependencies: usedPackages.filter((dependency) => testDependencyNames.has(dependency)),
       version: upstreamMetadata.version,
     };
