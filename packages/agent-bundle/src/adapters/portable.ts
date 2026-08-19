@@ -282,6 +282,17 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
+  for (const asset of model.assets ?? []) {
+    if (!hasPortableTarget(asset.targets)) continue;
+    entries.push({
+      bytes: asset.bytes,
+      kind: 'copy',
+      relativePath: `assets/${asset.relativePath}`,
+      source: asset.source,
+      sourceInputs: sourceInputs(asset.source),
+    });
+  }
+
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<
     string,
     Record<string, unknown>

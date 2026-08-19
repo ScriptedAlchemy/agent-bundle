@@ -431,6 +431,17 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
+  for (const asset of model.assets ?? []) {
+    if (!selectedForCodex(asset.targets)) continue;
+    entries.push({
+      bytes: asset.bytes,
+      kind: 'copy',
+      relativePath: `assets/${asset.relativePath}`,
+      source: asset.source,
+      sourceInputs: sourceInputs(asset.source),
+    });
+  }
+
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     entries: sortedEntries(entries),

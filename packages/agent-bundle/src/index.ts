@@ -81,6 +81,7 @@ export type {
   McpTransport,
   NormalizationConfigExtension,
   NormalizationTargetRegistry,
+  NormalizedAsset,
   NormalizedConfigExtension,
   NormalizedPlugin,
   NormalizedRuntime,

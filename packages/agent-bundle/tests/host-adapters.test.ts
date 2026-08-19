@@ -174,6 +174,41 @@ it('pins host help, capabilities, and every schema snapshot to the supported CLI
   });
 });
 
+it.each(['codex', 'claude'] as const)('copies project assets selected for %s and skips other hosts', (target) => {
+  const assetProvenance = Object.freeze({ kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' });
+  const entries = planEntries({
+    ...plugin,
+    assets: [
+      {
+        bytes: 6,
+        id: 'asset:logo.svg',
+        name: 'logo.svg',
+        provenance: assetProvenance,
+        relativePath: 'logo.svg',
+        source: '/workspace/assets/logo.svg',
+        targets: ['codex', 'claude'],
+      },
+      {
+        bytes: 3,
+        id: 'asset:other.png',
+        name: 'other.png',
+        provenance: assetProvenance,
+        relativePath: 'other.png',
+        source: '/workspace/assets/other.png',
+        targets: ['portable'],
+      },
+    ],
+  }, target);
+
+  expect(entries.filter((entry) => entry.relativePath.startsWith('assets/'))).toEqual([{
+    bytes: 6,
+    kind: 'copy',
+    relativePath: 'assets/logo.svg',
+    source: '/workspace/assets/logo.svg',
+    sourceInputs: ['/workspace/assets/logo.svg'],
+  }]);
+});
+
 it('plans byte-stable native Codex and Claude plugin trees from the same frozen model', async () => {
   const registry = createDefaultRegistry();
   expect(registry.names()).toEqual(['portable', 'codex', 'claude']);

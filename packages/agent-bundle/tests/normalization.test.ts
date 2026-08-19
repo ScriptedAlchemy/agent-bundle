@@ -643,3 +643,96 @@ it('reports unknown targets, duplicate IDs, and portable output collisions', asy
     { generatedPath: 'future-host/skills/duplicate/SKILL.md' },
   ]);
 });
+
+it('normalizes discovered assets with stable IDs, provenance, and all selected targets', async () => {
+  const discovered = {
+    assets: [
+      { bytes: 6, relativePath: 'logo.svg', source: '/workspace/project/assets/logo.svg' },
+      { bytes: 3, relativePath: 'branding/logo.png', source: '/workspace/project/branding/logo.png' },
+    ],
+    skills: [],
+  };
+  const conventional = await normalizeProject(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' }, targets: ['portable', 'claude'] }),
+    discovered,
+    registry,
+  );
+
+  expect(conventional.assets).toEqual([
+    {
+      bytes: 6,
+      id: 'asset:logo.svg',
+      name: 'logo.svg',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/project/agent-bundle.config.ts' },
+      relativePath: 'logo.svg',
+      source: '/workspace/project/assets/logo.svg',
+      targets: ['portable', 'claude'],
+    },
+    {
+      bytes: 3,
+      id: 'asset:branding/logo.png',
+      name: 'branding/logo.png',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/project/agent-bundle.config.ts' },
+      relativePath: 'branding/logo.png',
+      source: '/workspace/project/branding/logo.png',
+      targets: ['portable', 'claude'],
+    },
+  ]);
+
+  const explicit = await normalizeProject(
+    loadedProject({ assets: ['assets/logo.svg'], plugin: { name: 'review-tools', version: '1.0.0' } }),
+    discovered,
+    registry,
+  );
+  expect(explicit.assets?.every((asset) => asset.provenance.kind === 'explicit')).toBe(true);
+
+  const withoutAssets = await normalizeProject(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { skills: [] },
+    registry,
+  );
+  expect(withoutAssets.assets).toBeUndefined();
+});
+
+it('reports duplicate asset destinations as duplicate IDs and output collisions', async () => {
+  const model = await normalizeProject(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' }, targets: ['portable'] }),
+    {
+      assets: [
+        { bytes: 6, relativePath: 'logo.svg', source: '/workspace/project/assets/logo.svg' },
+        { bytes: 4, relativePath: 'logo.svg', source: '/workspace/project/branding/logo.svg' },
+      ],
+      skills: [],
+    },
+    registry,
+  );
+
+  const diagnostics = validateModel(model, registry);
+
+  expect(diagnostics.map(({ code }) => code)).toEqual(['AB4101', 'AB4102']);
+  expect(diagnostics[1]).toMatchObject({
+    generatedPath: 'portable/assets/logo.svg',
+    sourcePath: '/workspace/project/branding/logo.svg',
+  });
+});
+
+it('validates the assets configuration shape, containment, and literal existence', () => {
+  const diagnosticsFor = (assets: unknown, root?: string): readonly string[] =>
+    validateSource(
+      loadedProject(
+        { assets, plugin: { name: 'review-tools', version: '1.0.0' } } as AgentBundleConfig,
+        root === undefined ? {} : { root },
+      ),
+      { skills: [] },
+      registry,
+    ).map(({ code }) => code);
+
+  expect(diagnosticsFor(undefined)).toEqual([]);
+  expect(diagnosticsFor('assets')).toEqual(['AB4600']);
+  expect(diagnosticsFor([''])).toEqual(['AB4600']);
+  expect(diagnosticsFor([42])).toEqual(['AB4600']);
+  expect(diagnosticsFor(['../outside'], process.cwd())).toEqual(['AB4601']);
+  expect(diagnosticsFor(['definitely-missing-asset-entry'], process.cwd())).toEqual(['AB4602']);
+  expect(diagnosticsFor(['definitely-missing/*.svg'], process.cwd())).toEqual([]);
+  expect(diagnosticsFor(['package.json'], process.cwd())).toEqual([]);
+});
