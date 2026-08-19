@@ -196,7 +196,7 @@ it('labels a host CLI version, invocation, semantic grader identity, or harness 
         semanticGrader: { contractRevision: 'v2', id: 'claude-semantic', model: 'claude-opus-4-5' },
       },
     })),
-  }).rows[0]).causes.map((cause) => cause.code)).toEqual(['grader-versions-mismatch']);
+  }).rows[0]).causes.map((cause) => cause.code)).toEqual(['semantic-grader-identity-mismatch']);
   expect(nonComparable(compareEvalRuns({
     baseline: side('run-base', baselineTrials),
     candidate: side('run-candidate', candidateTrials, { run: run('run-candidate', { harness: 'claude-native' }) }),

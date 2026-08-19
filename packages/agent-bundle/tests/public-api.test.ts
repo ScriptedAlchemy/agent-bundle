@@ -495,7 +495,7 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
     );
     await writeFixtureManifest({ artifactRoot: artifact, targets: ['portable'] });
     await expect(readFile(join(artifact, 'agent-bundle.hooks.json'), 'utf8')).resolves.toBe(
-      '{"hooks":[],"version":1}\n',
+      '{"hooks":[]}\n',
     );
 
     const { stdout: packedOutput } = await execFile(
