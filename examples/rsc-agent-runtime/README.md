@@ -123,10 +123,30 @@ Claude Code has a native compact manifest, `${CLAUDE_PLUGIN_ROOT}` paths, and a
 `Write|Edit` `PostToolUse` hook contract. Codex has a separate native manifest,
 marketplace entry, `cwd: "./"` MCP path, and `apply_patch` hook contract.
 
-**Current status:** Claude Code: unavailable/not run in this repository snapshot.
-Codex CLI: unavailable/not run in this repository snapshot. No attached tracked
+**Native evaluation policy:** Real Claude Code and Codex CLI runs are
+intentionally skip-gated out of ordinary CI and default test runs. They are
+explicit opt-ins: the manually dispatched trusted `Native host smoke` workflow
+or a local `eval:hosts` run after normal interactive sign-in. Ordinary CI
+instead proves this runtime path with the deterministic micro-eval spot-check
+below plus the evaluator, packaging, and browser contracts. No attached tracked
 schema-v2 native-evidence artifact exists in this repository snapshot, so this
 README makes no successful native-host observation claim.
+
+### CI micro-eval spot-check
+
+Ordinary CI runs a deterministic micro-eval against the built production
+artifacts on every push and pull request:
+
+```bash
+npm run eval:spot
+```
+
+It builds this example, replays one native-shaped Claude `PostToolUse` event
+through the built hook binary (RSC worker render, Flight lowering, durable
+JSONL kernel write), then connects a real stdio MCP client to the built server
+over the same state file and asserts the RSC-lowered `render_edit_timeline`
+result, the shared edit snapshot, and the linked MCP App resource. It contacts
+no real host and needs no credentials.
 
 To exercise the Claude package manually when an external host run is separately
 authorized, use its native shell contract:
@@ -138,8 +158,9 @@ claude -p "Create host-created.txt, then use recent_edits and render_edit_timeli
   --no-session-persistence --dangerously-skip-permissions
 ```
 
-For a future real-run evidence capture, first make the package artifacts, then
-run each selected terminal host explicitly:
+To capture real-run evidence in a separately authorized, signed-in
+environment, first make the package artifacts, then run each selected terminal
+host explicitly:
 
 ```bash
 npm run build -w @agent-bundle/rsc-agent-runtime-demo
@@ -169,7 +190,7 @@ evidence](https://github.com/openai/codex/issues/26729), not proof of the exact
 cause.
 
 Portable, ChatGPT/OpenAI, and Claude Workbench profiles are local compatibility simulations, and deterministic evaluator tests are not native certification.
-ChatGPT Developer Mode remains unavailable in this evidence matrix unless a user
+ChatGPT Developer Mode is not claimed in this evidence matrix unless a user
 separately captures a real public HTTPS-host result.
 
 ## ChatGPT Developer Mode and local browser evidence
@@ -195,8 +216,8 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | Portable MCP Apps simulation | `ui://` resource, MCP Apps bridge, Refresh through `tools/call`, local selected row | Local simulation only; no vendor browser global or host domain required |
 | ChatGPT/OpenAI simulation | `openai/outputTemplate` descriptor alias and feature-detected `window.openai.widgetState` / `setWidgetState` | Local simulation only; selection stays React-instance-local without both documented capabilities |
 | Claude MCP Apps simulation | Standard bridge, `useHostStyles`, standard dark/light variables, font CSS, safe-area insets, optional deterministic resource domain | Local simulation only; no `window.claude`, user-agent, or product-name branch |
-| Claude Code | Native package contract: `${CLAUDE_PLUGIN_ROOT}` MCP/hook paths and `Write|Edit` hook | Unavailable/not run in this repository snapshot; no attached native evidence; never an iframe renderer |
-| Codex CLI | Native package contract: marketplace, relative MCP path, `${PLUGIN_ROOT}` hook, and `apply_patch` matcher | Unavailable/not run in this repository snapshot; no attached native evidence; native PostToolUse/shared state remains unproven under `exec --ephemeral` |
+| Claude Code | Native package contract: `${CLAUDE_PLUGIN_ROOT}` MCP/hook paths and `Write|Edit` hook | Real host run is a skip-gated manual opt-in; no attached native evidence in this snapshot; never an iframe renderer |
+| Codex CLI | Native package contract: marketplace, relative MCP path, `${PLUGIN_ROOT}` hook, and `apply_patch` matcher | Real host run is a skip-gated manual opt-in; no attached native evidence in this snapshot; native PostToolUse/shared state remains unproven under `exec --ephemeral` |
 
 ## Extension-author guide
 
@@ -213,10 +234,10 @@ The demo kernel is append-only JSONL: it is appropriate for a small local exampl
 Existing Agent Bundle skills, static MCPs, evaluations, and normal hooks neither require nor activate this runtime. Nothing under `packages/agent-bundle` imports the example or React/RSC runtime packages.
 
 `PlaygroundService` is the landed, provider-neutral durable whole-plugin
-authoring timeline foundation. Current Runtime Playground history is
-provider-session-scoped and ephemeral; this example does not yet wire a provider
+authoring timeline foundation. Runtime Playground history is deliberately
+provider-session-scoped and ephemeral in this example; wiring a provider
 adapter, authenticated API, timeline UI, durable Runtime export, or evaluation
-promotion for that history.
+promotion onto that history is an explicit non-goal of this demo.
 
 ## Sources
 
