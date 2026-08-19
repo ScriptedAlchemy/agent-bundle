@@ -1,16 +1,21 @@
 import { expect, it } from '@rstest/core';
 
-import { decodeForegroundSession, ForegroundTransport } from '../src/foreground-session.ts';
+import {
+  decodeForegroundSession,
+  ForegroundSessionAuthority,
+  type ForegroundSessionSnapshot,
+  ForegroundTransport,
+} from '../src/foreground-session.ts';
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json' },
   status,
 });
 
-const session = (): Response => json({
-  instanceId: 'foreground-instance-a',
+const session = (instanceId = 'foreground-instance-a', token = 'test-session-token'): Response => json({
+  instanceId,
   origin: 'http://foreground.test',
-  token: 'test-session-token',
+  token,
 });
 
 const invalidSessionBodies: readonly [string, unknown][] = [
@@ -33,6 +38,106 @@ it('decodes the exact instance-aware foreground bootstrap envelope', () => {
     token: 'test-session-token',
   });
   expect(Object.isFrozen(decoded)).toBe(true);
+});
+
+it('shares one initial bootstrap and freezes its generation-zero snapshot', async () => {
+  let bootstrapCalls = 0;
+  let resolveBootstrap: ((response: Response) => void) | undefined;
+  const authority = new ForegroundSessionAuthority({
+    fetch: async () => {
+      bootstrapCalls++;
+      return await new Promise<Response>((resolve) => { resolveBootstrap = resolve; });
+    },
+  });
+
+  const first = authority.snapshot();
+  const second = authority.snapshot();
+  expect(bootstrapCalls).toBe(1);
+  expect(first).toBe(second);
+  if (resolveBootstrap === undefined) throw new Error('Expected foreground session bootstrap.');
+  resolveBootstrap(session());
+
+  const [firstSnapshot, secondSnapshot] = await Promise.all([first, second]);
+  expect(firstSnapshot).toBe(secondSnapshot);
+  expect(firstSnapshot).toEqual({
+    generation: 0,
+    instanceId: 'foreground-instance-a',
+    origin: 'http://foreground.test',
+    token: 'test-session-token',
+  });
+  expect(Object.isFrozen(firstSnapshot)).toBe(true);
+});
+
+const invalidAuthorityBootstraps: readonly [string, unknown, string | undefined][] = [
+  ['an empty instance identity', { instanceId: '', origin: 'http://foreground.test', token: 'test-session-token' }, undefined],
+  ['an origin with a path', { instanceId: 'foreground-instance-a', origin: 'http://foreground.test/not-an-origin', token: 'test-session-token' }, undefined],
+  ['an origin different from the browser', { instanceId: 'foreground-instance-a', origin: 'http://foreground.test', token: 'test-session-token' }, 'http://browser.test'],
+];
+
+for (const [description, body, browserOrigin] of invalidAuthorityBootstraps) {
+  it(`does not snapshot ${description}`, async () => {
+    const authority = new ForegroundSessionAuthority({
+      browserOrigin,
+      fetch: async () => json(body),
+    });
+
+    await expect(authority.snapshot()).rejects.toThrow();
+  });
+}
+
+it('refreshes credentials without advancing generation until the server instance changes', async () => {
+  const responses = [
+    session('foreground-instance-a', 'first-token'),
+    session('foreground-instance-a', 'rotated-token'),
+    session('foreground-instance-b', 'restart-token'),
+  ];
+  const authority = new ForegroundSessionAuthority({
+    fetch: async () => {
+      const response = responses.shift();
+      if (response === undefined) throw new Error('Unexpected foreground session bootstrap.');
+      return response;
+    },
+  });
+
+  const initial = await authority.snapshot();
+  const rotated = await authority.refresh();
+  const restarted = await authority.refresh();
+
+  expect(initial).toMatchObject({ generation: 0, instanceId: 'foreground-instance-a', token: 'first-token' });
+  expect(rotated).toMatchObject({ generation: 0, instanceId: 'foreground-instance-a', token: 'rotated-token' });
+  expect(restarted).toMatchObject({ generation: 1, instanceId: 'foreground-instance-b', token: 'restart-token' });
+  await expect(authority.snapshot()).resolves.toBe(restarted);
+});
+
+it('keeps a newer refreshed snapshot when an older bootstrap completes afterward', async () => {
+  let bootstrapCalls = 0;
+  let resolveOlder: ((response: Response) => void) | undefined;
+  let resolveNewer: ((response: Response) => void) | undefined;
+  const authority = new ForegroundSessionAuthority({
+    fetch: async () => {
+      bootstrapCalls++;
+      if (bootstrapCalls === 1) return session('foreground-instance-a', 'initial-token');
+      if (bootstrapCalls === 2) return await new Promise<Response>((resolve) => { resolveOlder = resolve; });
+      if (bootstrapCalls === 3) return await new Promise<Response>((resolve) => { resolveNewer = resolve; });
+      throw new Error('Unexpected foreground session bootstrap.');
+    },
+  });
+
+  await authority.snapshot();
+  const older = authority.refresh();
+  const newer = authority.refresh();
+  if (resolveOlder === undefined || resolveNewer === undefined) throw new Error('Expected concurrent foreground bootstraps.');
+  resolveNewer(session('foreground-instance-c', 'newer-token'));
+  const newerSnapshot = await newer;
+  resolveOlder(session('foreground-instance-b', 'older-token'));
+  await older;
+
+  await expect(authority.snapshot()).resolves.toBe(newerSnapshot);
+  await expect(authority.snapshot()).resolves.toMatchObject({
+    generation: 1,
+    instanceId: 'foreground-instance-c',
+    token: 'newer-token',
+  });
 });
 
 for (const [description, body] of invalidSessionBodies) {

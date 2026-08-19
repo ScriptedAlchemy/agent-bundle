@@ -4,6 +4,10 @@ export interface ForegroundSession {
   readonly token: string;
 }
 
+export interface ForegroundSessionSnapshot extends ForegroundSession {
+  readonly generation: number;
+}
+
 /** Decodes the exact credential envelope returned by `/api/project/session`. */
 export const decodeForegroundSession = (value: unknown): ForegroundSession | undefined => {
   if (
@@ -30,6 +34,72 @@ export interface ForegroundTransportOptions {
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+export interface ForegroundSessionAuthorityOptions {
+  /** Overrides the browser origin only when an embedding host provides the capability boundary. */
+  readonly browserOrigin?: string;
+  readonly fetch?: typeof fetch;
+}
+
+/** Shares one foreground bootstrap credential snapshot between workbench clients. */
+export class ForegroundSessionAuthority {
+  readonly #browserOrigin: string | undefined;
+  readonly #fetch: typeof fetch;
+  #initialBootstrap: Promise<ForegroundSessionSnapshot> | undefined;
+  #lastAppliedBootstrapRequest = 0;
+  #nextBootstrapRequest = 0;
+  #snapshot: ForegroundSessionSnapshot | undefined;
+
+  constructor(options: ForegroundSessionAuthorityOptions = {}) {
+    this.#browserOrigin = options.browserOrigin ?? globalThis.location?.origin;
+    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  snapshot(): Promise<ForegroundSessionSnapshot> {
+    if (this.#snapshot !== undefined) return Promise.resolve(this.#snapshot);
+    if (this.#initialBootstrap === undefined) {
+      const bootstrap = this.#bootstrap(++this.#nextBootstrapRequest);
+      this.#initialBootstrap = bootstrap;
+      void bootstrap.catch(() => {
+        if (this.#initialBootstrap === bootstrap) this.#initialBootstrap = undefined;
+      });
+    }
+    return this.#initialBootstrap;
+  }
+
+  refresh(): Promise<ForegroundSessionSnapshot> {
+    return this.#bootstrap(++this.#nextBootstrapRequest);
+  }
+
+  async #bootstrap(request: number): Promise<ForegroundSessionSnapshot> {
+    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
+    const body: unknown = await response.json().catch(() => undefined);
+    const session = decodeForegroundSession(body);
+    if (!response.ok || session === undefined || session.instanceId.length === 0 || session.token.length === 0) {
+      throw new Error('Foreground session bootstrap returned an invalid response.');
+    }
+    let origin: URL;
+    try {
+      origin = new URL(session.origin);
+    } catch {
+      throw new Error('Foreground session bootstrap returned an invalid origin.');
+    }
+    if (origin.origin !== session.origin) throw new Error('Foreground session bootstrap returned an invalid origin.');
+    if (this.#browserOrigin !== undefined && this.#browserOrigin !== 'null' && this.#browserOrigin !== session.origin) {
+      throw new Error('Foreground session bootstrap origin does not match this browser.');
+    }
+    if (request < this.#lastAppliedBootstrapRequest && this.#snapshot !== undefined) return this.#snapshot;
+    const generation = this.#snapshot === undefined
+      ? 0
+      : this.#snapshot.instanceId === session.instanceId
+        ? this.#snapshot.generation
+        : this.#snapshot.generation + 1;
+    const snapshot = Object.freeze({ ...session, generation });
+    this.#lastAppliedBootstrapRequest = request;
+    this.#snapshot = snapshot;
+    return snapshot;
+  }
+}
 
 const abortError = (): Error => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
 
@@ -132,7 +202,7 @@ export class ForegroundTransport {
     if (session === undefined || session.token.length === 0) {
       throw this.#errorFor(this.#fallbackCode, 'Foreground session bootstrap returned an invalid response.');
     }
-    const { origin: declared, token } = session;
+    const { instanceId, origin: declared, token } = session;
     let origin: URL;
     try {
       origin = new URL(declared);
@@ -146,6 +216,6 @@ export class ForegroundTransport {
     if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== declared) {
       throw this.#errorFor('AB8003', 'Foreground session bootstrap origin does not match this browser.');
     }
-    return Object.freeze({ origin: declared, token });
+    return Object.freeze({ instanceId, origin: declared, token });
   }
 }
