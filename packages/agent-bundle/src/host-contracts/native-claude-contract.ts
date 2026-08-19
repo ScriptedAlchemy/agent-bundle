@@ -311,8 +311,10 @@ const resolveClaudeNormalHome = (environment: Readonly<NodeJS.ProcessEnv>): Clau
 
 // Claude Code rewrites these bookkeeping keys on every headless run — observed
 // with 2.1.234 even under --no-session-persistence — so they cannot witness a
-// meaningful normal-home mutation. Everything else in the state file still can.
-const volatileClaudeStateKeys = Object.freeze(['cachedGrowthBookFeaturesAt', 'pluginUsage'] as const);
+// meaningful normal-home mutation. skillUsage is written by the very Skill
+// activation this smoke asserts, so keeping it would make success impossible.
+// Everything else in the state file still can witness a mutation.
+const volatileClaudeStateKeys = Object.freeze(['cachedGrowthBookFeaturesAt', 'pluginUsage', 'skillUsage'] as const);
 
 const digestClaudeStateFile = async (path: string): Promise<string> => {
   // Concurrent Claude sessions rewrite the state file every few seconds, so a
