@@ -53,12 +53,11 @@ import type {
   McpSessionReplayOverflow,
   McpSessionTraceEntry,
   McpSessionTraceListener,
-  McpSessionTraceMessage,
   McpSessionTraceReplay,
-  McpSessionTraceReplayGap,
   McpSessionTraceSubscription,
   McpSessionTraceSubscriptionOptions,
 } from './mcp-session-protocol.ts';
+import { McpSessionTraceLog, type McpSessionTraceSink } from './mcp-session-trace.ts';
 
 export type {
   McpSessionBinding,
@@ -88,7 +87,6 @@ const defaultTimeoutMs = 5_000;
 const maxStderrBytes = 1_000_000;
 const maxRetainedEvents = 512;
 const maxRetainedFrames = 512;
-const maxRetainedTraceEntries = 512;
 const inspectorEnvironmentAllowlist = new Set(['FORCE_COLOR', 'LANG', 'LC_ALL', 'NO_COLOR', 'TZ']);
 
 type RawMcpFrame = Parameters<Transport['send']>[0];
@@ -202,7 +200,7 @@ export interface McpSessionServiceOptions {
   readonly traceSink?: McpSessionTraceSink;
 }
 
-export type McpSessionTraceSink = (binding: McpSessionBinding, entry: McpSessionTraceEntry) => void;
+export type { McpSessionTraceSink } from './mcp-session-trace.ts';
 
 export interface McpSessionServiceCloseFailure {
   readonly error: unknown;
@@ -255,14 +253,6 @@ interface OpeningSession {
   readonly abort: AbortController;
   readonly done: Promise<void>;
   readonly finish: (result: PromiseSettledResult<void>) => void;
-}
-
-interface TraceSubscription {
-  closed: boolean;
-  lastDeliveredSequence: number;
-  listener: McpSessionTraceListener;
-  pending: McpSessionTraceEntry[];
-  replaying: boolean;
 }
 
 type McpAppSessionCloseListener = Parameters<McpAppSessionLease['watchSessionClosed']>[0];
@@ -555,14 +545,11 @@ export class McpSession {
   readonly #resolved: ResolvedSessionServer;
   readonly #launch: ResolvedLaunch;
   readonly #timeoutMs: number;
-  readonly #traceSink: McpSessionTraceSink | undefined;
+  readonly #traceLog: McpSessionTraceLog;
   readonly #workspaceRoot: string;
   readonly #frames: McpSessionFrame[] = [];
   readonly #events: McpSessionEvent[] = [];
   readonly #requests = new Map<string, AbortController>();
-  readonly #trace: McpSessionTraceEntry[] = [];
-  readonly #traceSubscriptions = new Set<TraceSubscription>();
-  readonly #undeliveredTraceEntries: McpSessionTraceEntry[] = [];
   #capture: StderrCapture | undefined;
   #client: McpClient | undefined;
   #closePromise: Promise<void> | undefined;
@@ -573,9 +560,6 @@ export class McpSession {
   #sequence = 0;
   #stderrOutput = '';
   #stderrOverflow = false;
-  #traceDispatching = false;
-  #traceDroppedThroughSequence = 0;
-  #traceSequence = 0;
 
   constructor(options: {
     readonly binding: McpSessionBinding;
@@ -603,7 +587,7 @@ export class McpSession {
     this.#pluginData = options.pluginData;
     this.#resolved = options.resolved;
     this.#timeoutMs = resolveTimeoutMs(options.timeoutMs ?? defaultTimeoutMs);
-    this.#traceSink = options.traceSink;
+    this.#traceLog = new McpSessionTraceLog(this.#binding, options.traceSink);
     this.#workspaceRoot = options.workspaceRoot;
     this.#launch = this.#resolveLaunch();
   }
@@ -648,53 +632,14 @@ export class McpSession {
   }
 
   trace(afterSequence = 0): McpSessionTraceReplay {
-    this.#assertTraceCursor(afterSequence);
-    const overflow = afterSequence < this.#traceDroppedThroughSequence
-      ? Object.freeze({ afterSequence, droppedThroughSequence: this.#traceDroppedThroughSequence })
-      : undefined;
-    return Object.freeze({
-      entries: Object.freeze(this.#trace.filter((entry) => entry.sequence > afterSequence)),
-      ...(overflow === undefined ? {} : { overflow }),
-    });
+    return this.#traceLog.replay(afterSequence);
   }
 
   subscribeTrace(
     options: McpSessionTraceSubscriptionOptions,
     listener: McpSessionTraceListener,
   ): McpSessionTraceSubscription {
-    if (typeof listener !== 'function') throw new TypeError('An MCP session trace listener is required.');
-    const afterSequence = options.afterSequence ?? 0;
-    this.#assertTraceCursor(afterSequence);
-    const boundary = this.#traceSequence;
-    const subscription: TraceSubscription = {
-      closed: false,
-      lastDeliveredSequence: afterSequence,
-      listener,
-      pending: [],
-      replaying: true,
-    };
-    this.#traceSubscriptions.add(subscription);
-
-    const firstRetained = this.#trace[0]?.sequence;
-    const replayEntries = this.#trace.filter((entry) => entry.sequence > afterSequence && entry.sequence <= boundary);
-    if (firstRetained !== undefined && afterSequence < firstRetained - 1) {
-      this.#deliverTraceGap(subscription, Object.freeze({
-        earliestAvailableSequence: firstRetained,
-        latestDroppedSequence: firstRetained - 1,
-        requestedAfterSequence: afterSequence,
-        type: 'replay.gap',
-      }));
-    }
-    for (const entry of replayEntries) this.#deliverTraceEntry(subscription, entry);
-    while (!subscription.closed && subscription.pending.length > 0) {
-      const entry = subscription.pending.shift();
-      if (entry !== undefined) this.#deliverTraceEntry(subscription, entry);
-    }
-    subscription.replaying = false;
-
-    return Object.freeze({
-      unsubscribe: () => this.#removeTraceSubscription(subscription),
-    });
+    return this.#traceLog.subscribe(options, listener);
   }
 
   inspectorConfig(): McpSessionInspectorConfig {
@@ -981,67 +926,7 @@ export class McpSession {
   }
 
   #recordTrace(entry: McpSessionTraceEntry): void {
-    this.#trace.push(entry);
-    if (this.#trace.length > maxRetainedTraceEntries) {
-      const dropped = this.#trace.shift();
-      if (dropped !== undefined) this.#traceDroppedThroughSequence = dropped.sequence;
-    }
-    for (const subscription of this.#traceSubscriptions) {
-      if (subscription.replaying) subscription.pending.push(entry);
-    }
-    this.#undeliveredTraceEntries.push(entry);
-    this.#drainLiveTraceEntries();
-    try { this.#traceSink?.(this.#binding, entry); }
-    catch { /* Diagnostics must never alter an MCP session or expose raw frames. */ }
-  }
-
-  #assertTraceCursor(afterSequence: number): void {
-    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
-      throw new RangeError('MCP session trace cursor must be a nonnegative safe integer.');
-    }
-    if (afterSequence > this.#traceSequence) {
-      throw new RangeError('MCP session trace cursor cannot be ahead of the current trace.');
-    }
-  }
-
-  #removeTraceSubscription(subscription: TraceSubscription): void {
-    subscription.closed = true;
-    this.#traceSubscriptions.delete(subscription);
-  }
-
-  #notifyTrace(subscription: TraceSubscription, message: McpSessionTraceMessage): void {
-    try {
-      subscription.listener(message);
-    } catch {
-      // Observers that throw cannot interfere with lifecycle or later subscribers.
-      this.#removeTraceSubscription(subscription);
-    }
-  }
-
-  #deliverTraceGap(subscription: TraceSubscription, gap: McpSessionTraceReplayGap): void {
-    if (!subscription.closed) this.#notifyTrace(subscription, gap);
-  }
-
-  #deliverTraceEntry(subscription: TraceSubscription, entry: McpSessionTraceEntry): void {
-    if (subscription.closed || entry.sequence <= subscription.lastDeliveredSequence) return;
-    subscription.lastDeliveredSequence = entry.sequence;
-    this.#notifyTrace(subscription, entry);
-  }
-
-  #drainLiveTraceEntries(): void {
-    if (this.#traceDispatching) return;
-    this.#traceDispatching = true;
-    try {
-      while (this.#undeliveredTraceEntries.length > 0) {
-        const entry = this.#undeliveredTraceEntries.shift();
-        if (entry === undefined) continue;
-        for (const subscription of this.#traceSubscriptions) {
-          if (!subscription.replaying) this.#deliverTraceEntry(subscription, entry);
-        }
-      }
-    } finally {
-      this.#traceDispatching = false;
-    }
+    this.#traceLog.record(entry);
   }
 
   #retain<Entry extends { readonly sequence: number }>(entries: Entry[], entry: Entry, maximum: number): void {
@@ -1057,8 +942,7 @@ export class McpSession {
   }
 
   #nextTraceSequence(): number {
-    this.#traceSequence += 1;
-    return this.#traceSequence;
+    return this.#traceLog.nextSequence();
   }
 
   #throwIfStderrExceeded(capture = this.#capture): void {
