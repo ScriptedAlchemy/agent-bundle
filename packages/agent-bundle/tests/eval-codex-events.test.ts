@@ -126,3 +126,21 @@ it('does not match a Skill name that only appears inside a longer identifier', (
     level: 'inferred',
   });
 });
+
+it('ignores the speculative item_type alias', () => {
+  const run = normalizeCodexEventStream(
+    `${JSON.stringify({ type: 'thread.started' })}\n`
+    + `${JSON.stringify({
+      item: { id: 'item_0', item_type: 'agent_message', text: 'Alias-only message.' },
+      type: 'item.completed',
+    })}\n`
+    + `${JSON.stringify({ type: 'turn.completed' })}\n`,
+  );
+
+  expect(run.envelopes).toEqual([
+    { fields: ['type'], type: 'thread.started' },
+    { fields: ['item', 'type'], type: 'item.completed' },
+    { fields: ['type'], type: 'turn.completed' },
+  ]);
+  expect(run.messages).toEqual([]);
+});
