@@ -10,7 +10,6 @@ export interface DevLockOwner {
   readonly nonce: string;
   readonly pid: number;
   readonly projectRoot: string;
-  readonly version: 1;
 }
 
 export interface DevLockOptions {
@@ -38,7 +37,6 @@ const recoverySuffix = '.recovery';
 
 interface RecoveryRecord {
   readonly owner: DevLockOwner;
-  readonly version: 1;
 }
 
 const isProcessRunning = (pid: number): boolean => {
@@ -52,10 +50,15 @@ const isProcessRunning = (pid: number): boolean => {
 
 const parseOwnerValue = (value: unknown): DevLockOwner | undefined => {
   try {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
     const parsed = value as Partial<DevLockOwner>;
     const pid = parsed.pid;
     if (
-      parsed.version !== 1 ||
+      Object.keys(parsed).length !== 4 ||
+      !Object.hasOwn(parsed, 'createdAt') ||
+      !Object.hasOwn(parsed, 'nonce') ||
+      !Object.hasOwn(parsed, 'pid') ||
+      !Object.hasOwn(parsed, 'projectRoot') ||
       typeof parsed.createdAt !== 'string' ||
       typeof parsed.nonce !== 'string' ||
       parsed.nonce.length === 0 ||
@@ -71,7 +74,6 @@ const parseOwnerValue = (value: unknown): DevLockOwner | undefined => {
       nonce: parsed.nonce,
       pid,
       projectRoot: parsed.projectRoot,
-      version: 1,
     });
   } catch {
     return undefined;
@@ -88,9 +90,12 @@ const parseOwner = (value: string): DevLockOwner | undefined => {
 
 const parseRecoveryRecord = (value: string): RecoveryRecord | undefined => {
   try {
-    const parsed = JSON.parse(value) as Partial<RecoveryRecord>;
+    const parsedValue: unknown = JSON.parse(value);
+    if (typeof parsedValue !== 'object' || parsedValue === null || Array.isArray(parsedValue)) return undefined;
+    const parsed = parsedValue as Partial<RecoveryRecord>;
+    if (Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'owner')) return undefined;
     const owner = parseOwnerValue(parsed.owner);
-    return parsed.version === 1 && owner !== undefined ? Object.freeze({ owner, version: 1 }) : undefined;
+    return owner === undefined ? undefined : Object.freeze({ owner });
   } catch {
     return undefined;
   }
@@ -126,7 +131,7 @@ const yieldToFilesystem = async (): Promise<void> => {
   await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
 };
 
-const recoveryContentsFor = (owner: DevLockOwner): string => `${stableJson({ owner, version: 1 })}\n`;
+const recoveryContentsFor = (owner: DevLockOwner): string => `${stableJson({ owner })}\n`;
 
 const acquireRecoveryGate = async (
   recoveryPath: string,
@@ -203,7 +208,6 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
     nonce: randomUUID(),
     pid: process.pid,
     projectRoot,
-    version: 1,
   });
   const contents = `${stableJson(owner)}\n`;
   const probeProcess = options.probeProcess ?? isProcessRunning;

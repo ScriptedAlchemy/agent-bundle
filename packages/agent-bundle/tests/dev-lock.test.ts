@@ -24,22 +24,21 @@ it('rejects a second writer with stable metadata for the live owning process', a
         createdAt: '2026-08-14T12:00:00.000Z',
         pid: process.pid,
         projectRoot: root,
-        version: 1,
       },
     });
+    expect(first.owner).not.toHaveProperty('version');
     const published = JSON.parse(await readFile(lockPathFor(root), 'utf8')) as {
       readonly createdAt: string;
       readonly nonce: unknown;
       readonly pid: number;
       readonly projectRoot: string;
-      readonly version: number;
     };
     expect(published).toMatchObject({
       createdAt: '2026-08-14T12:00:00.000Z',
       pid: process.pid,
       projectRoot: root,
-      version: 1,
     });
+    expect(published).not.toHaveProperty('version');
     expect(typeof published.nonce).toBe('string');
     expect(published.nonce).not.toBe('');
 
@@ -60,7 +59,7 @@ it('recovers a dead lock only after probing its recorded pid', async () => {
     await mkdir(join(root, '.agent-bundle'), { recursive: true });
     await writeFile(
       lockPathFor(root),
-      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":${stalePid},"projectRoot":${JSON.stringify(root)},"version":1}\n`,
+      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":${stalePid},"projectRoot":${JSON.stringify(root)}}\n`,
     );
 
     const recovered = await acquireDevLock({
@@ -95,11 +94,11 @@ it('recovers an abandoned recovery gate and serializes eight stale-lock contende
     await mkdir(join(root, '.agent-bundle'), { recursive: true });
     await writeFile(
       lockPathFor(root),
-      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":${staleLockPid},"projectRoot":${JSON.stringify(root)},"version":1}\n`,
+      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":${staleLockPid},"projectRoot":${JSON.stringify(root)}}\n`,
     );
     await writeFile(
       recoveryPathFor(root),
-      `{"owner":{"createdAt":"2026-08-14T11:59:30.000Z","nonce":"stale-recovery","pid":${staleRecoveryPid},"projectRoot":${JSON.stringify(root)},"version":1},"version":1}\n`,
+      `{"owner":{"createdAt":"2026-08-14T11:59:30.000Z","nonce":"stale-recovery","pid":${staleRecoveryPid},"projectRoot":${JSON.stringify(root)}}}\n`,
     );
 
     const attempts = await Promise.all(Array.from({ length: 8 }, async () => {
@@ -137,6 +136,48 @@ it('recovers an abandoned recovery gate and serializes eight stale-lock contende
     await expect(readFile(recoveryPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
     await acquired[0]!.lock.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a versioned current lock instead of accepting an obsolete record shape', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle versioned dev lock '));
+
+  try {
+    await mkdir(join(root, '.agent-bundle'), { recursive: true });
+    await writeFile(
+      lockPathFor(root),
+      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"obsolete-owner","pid":2147483647,"projectRoot":${JSON.stringify(root)},"version":1}\n`,
+    );
+
+    await expect(acquireDevLock({
+      probeProcess: () => false,
+      projectRoot: root,
+    })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a versioned recovery gate instead of accepting an obsolete record shape', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle versioned dev lock recovery '));
+
+  try {
+    await mkdir(join(root, '.agent-bundle'), { recursive: true });
+    await writeFile(
+      lockPathFor(root),
+      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":2147483647,"projectRoot":${JSON.stringify(root)}}\n`,
+    );
+    await writeFile(
+      recoveryPathFor(root),
+      `{"owner":{"createdAt":"2026-08-14T11:59:30.000Z","nonce":"obsolete-recovery","pid":2147483646,"projectRoot":${JSON.stringify(root)}},"version":1}\n`,
+    );
+
+    await expect(acquireDevLock({
+      probeProcess: () => false,
+      projectRoot: root,
+    })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
