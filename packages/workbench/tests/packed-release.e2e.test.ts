@@ -776,6 +776,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       method: string;
       origin: string;
       path: string;
+      phase: string;
       respondedAt?: number;
       status?: number;
       url: string;
@@ -794,7 +795,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const tracked = browserRequestByPlaywrightRequest.get(response.request());
       if (tracked !== undefined) {
         tracked.respondedAt = Date.now();
-        tracked.completedAt = tracked.respondedAt;
         tracked.status = response.status();
       }
       if (url.pathname === '/api/logs/replay') logsReplayResponses += 1;
@@ -830,10 +830,14 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         url: request.url(),
       }));
     });
+    page.on('requestfinished', (request) => {
+      const tracked = browserRequestByPlaywrightRequest.get(request);
+      if (tracked !== undefined) tracked.completedAt = Date.now();
+    });
     page.on('request', (request) => {
       const url = new URL(request.url());
       const tracked = {
-        at: Date.now(), method: request.method(), origin: url.origin, path: url.pathname, url: request.url(),
+        at: Date.now(), method: request.method(), origin: url.origin, path: url.pathname, phase, url: request.url(),
       };
       browserRequests.push(tracked);
       browserRequestByPlaywrightRequest.set(request, tracked);
@@ -850,6 +854,11 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         // The test only records well-formed native Playground requests.
       }
     });
+    const waitForBrowserRequestsAfter = async (startIndex: number): Promise<void> => {
+      await expect.poll(() => browserRequests.slice(startIndex).filter((request) =>
+        request.completedAt === undefined,
+      ).map((request) => `${request.method} ${request.url}`), { timeout: browserTimeout }).toEqual([]);
+    };
     await page.goto(`${origin}#overview`);
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
@@ -1012,14 +1021,18 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.goto(`${origin}#logs`);
       phase = 'Logs page heading';
       await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
+      const initialEvalsRequestIndex = browserRequests.length;
       await page.goto(`${origin}#evals`);
       phase = 'Evals page heading';
       await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
       phase = 'Evals suite catalog';
       await expect(page.getByLabel('Suite')).toContainText('packed-deterministic', { timeout: browserTimeout });
+      await waitForBrowserRequestsAfter(initialEvalsRequestIndex);
+      const initialComparisonsRequestIndex = browserRequests.length;
       await page.goto(`${origin}#comparisons`);
       phase = 'Comparisons page heading';
       await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
+      await waitForBrowserRequestsAfter(initialComparisonsRequestIndex);
 
       phase = 'Playground direct skill';
       await page.goto(`${origin}#playground`);
@@ -1380,6 +1393,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       called.add('eval_get');
 
       phase = 'Evals live evidence and comparisons';
+      const evalsBrowserRequestIndex = browserRequests.length;
       await page.getByRole('link', { name: 'Evals', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
       await page.getByLabel('Suite').selectOption('packed-deterministic');
@@ -1413,6 +1427,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect(page.locator('.eval-trial-provenance').first()).toContainText('automatic');
       await page.getByRole('button', { name: 'Preview safe text' }).first().click();
       await expect(page.locator('.eval-raw-result')).toContainText('The deterministic packed fixture passed.', { timeout: browserTimeout });
+      await waitForBrowserRequestsAfter(evalsBrowserRequestIndex);
       phase = 'Evals comparison run availability';
       await page.getByRole('link', { name: 'Comparisons', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
@@ -1512,44 +1527,57 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
 
       phase = 'mobile overflow floor';
       await page.setViewportSize({ height: 844, width: 390 });
+      const mobileNavigationRequestIndex = browserRequests.length;
       const mobileRoutes: readonly Readonly<{ heading: string; label: string }>[] = [
         { heading: 'Project overview', label: 'Overview' }, { heading: 'Skills', label: 'Skills' }, { heading: 'Hooks', label: 'Hooks' },
         { heading: 'MCP playground', label: 'MCP playground' }, { heading: 'Artifacts', label: 'Artifacts' }, { heading: 'Playground', label: 'Playground' },
         { heading: 'Logs', label: 'Logs' }, { heading: 'Evals', label: 'Evals' }, { heading: 'Comparisons', label: 'Comparisons' },
       ];
-      const postRecoveryNavigationUrls = new Map<string, string>([
-        ['Hooks', `${origin}/api/hooks?epochId=${encodeURIComponent(recoveredEpochId)}`],
-        ['Playground', `${origin}/api/playground/catalog?epochId=${encodeURIComponent(recoveredEpochId)}`],
-        ['Logs', `${origin}/api/logs/replay?after=0`],
+      const postRecoveryNavigationUrls = new Map<string, readonly string[]>([
+        ['Hooks', [`${origin}/api/hooks?epochId=${encodeURIComponent(recoveredEpochId)}`]],
+        ['Playground', [`${origin}/api/playground/catalog?epochId=${encodeURIComponent(recoveredEpochId)}`]],
+        ['Logs', [`${origin}/api/logs/replay?after=0`]],
+        ['Evals', [`${origin}/api/evals/suites`, `${origin}/api/evals/runs`]],
+        ['Comparisons', [`${origin}/api/evals/runs`]],
       ]);
       const postRecoveryNavigation: Array<Readonly<{ leftAt: number; openedAt: number; url: string }>> = [];
-      let activeMobileRoute: Readonly<{ openedAt: number; url?: string }> | undefined;
+      let activeMobileRoute: Readonly<{ openedAt: number; urls?: readonly string[] }> | undefined;
+      const leaveActiveMobileRoute = (leftAt: number): void => {
+        if (activeMobileRoute === undefined) return;
+        for (const url of activeMobileRoute.urls ?? []) postRecoveryNavigation.push(Object.freeze({
+          leftAt, openedAt: activeMobileRoute.openedAt, url,
+        }));
+        activeMobileRoute = undefined;
+      };
       for (const route of mobileRoutes) {
         const openedAt = Date.now();
-        if (activeMobileRoute?.url !== undefined) postRecoveryNavigation.push(Object.freeze({
-          leftAt: openedAt, openedAt: activeMobileRoute.openedAt, url: activeMobileRoute.url,
-        }));
+        leaveActiveMobileRoute(openedAt);
         await page.getByRole('link', { name: route.label, exact: true }).click();
         await expect(page.getByRole('heading', { name: route.heading })).toBeVisible({ timeout: browserTimeout });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        activeMobileRoute = Object.freeze({ openedAt, url: postRecoveryNavigationUrls.get(route.label) });
+        activeMobileRoute = Object.freeze({ openedAt, urls: postRecoveryNavigationUrls.get(route.label) });
       }
+      leaveActiveMobileRoute(Date.now());
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+      await waitForBrowserRequestsAfter(mobileNavigationRequestIndex);
 
       phase = 'foreground outage ledger quiet fence';
+      const requestFailuresBeforeQuietFence = browserRequests.filter((request) => request.error !== undefined);
       const quietFenceBaseline = Object.freeze({
         consoleErrors: consoleErrorRecords.length,
         pageErrors: pageErrors.length,
-        requestFailures: browserRequests.filter((request) => request.error !== undefined).length,
+        requestFailures: requestFailuresBeforeQuietFence.length,
       });
       await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 1_000); });
+      const requestFailuresAfterQuietFence = browserRequests.filter((request) => request.error !== undefined);
       assertLedger(consoleErrorRecords.length === quietFenceBaseline.consoleErrors && pageErrors.length === quietFenceBaseline.pageErrors &&
-        browserRequests.filter((request) => request.error !== undefined).length === quietFenceBaseline.requestFailures,
+        requestFailuresAfterQuietFence.length === quietFenceBaseline.requestFailures,
       `quiet fence observed new console, page, or requestfailed events: ${JSON.stringify({
-        after: { consoleErrors: consoleErrorRecords.length, pageErrors: pageErrors.length, requestFailures: browserRequests.filter((request) => request.error !== undefined).length },
+        after: { consoleErrors: consoleErrorRecords.length, pageErrors: pageErrors.length, requestFailures: requestFailuresAfterQuietFence.length },
         before: quietFenceBaseline,
+        newRequestFailures: requestFailuresAfterQuietFence.slice(requestFailuresBeforeQuietFence.length),
       })}`);
       validateOutageLedger({
         consoleErrors: consoleErrorRecords,
