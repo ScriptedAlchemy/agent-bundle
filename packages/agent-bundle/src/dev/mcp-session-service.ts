@@ -4,11 +4,9 @@ import {
   type CallToolResult,
   type ClientCapabilities,
   type GetPromptResult,
-  type Implementation,
   type Prompt,
   type Resource,
   type ResourceTemplateType,
-  type ServerCapabilities,
   type Tool,
   type Transport,
 } from '@modelcontextprotocol/client';
@@ -49,7 +47,6 @@ import type {
   McpSessionId,
   McpSessionInspectorConfig,
   McpSessionOperation,
-  McpSessionReplayOverflow,
   McpSessionTraceEntry,
   McpSessionTraceListener,
   McpSessionTraceReplay,
@@ -63,6 +60,31 @@ import {
   type ResolvedMcpSessionServer,
 } from './mcp-session-launch.ts';
 import { McpSessionTraceLog, type McpSessionTraceSink } from './mcp-session-trace.ts';
+import { RecordingTransport } from './mcp-recording-transport.ts';
+
+import {
+  McpSessionServiceCloseError,
+  type McpClient,
+  type McpRequestOptions as RequestOptions,
+  type McpSessionConnectionState,
+  type McpSessionEvent,
+  type McpSessionFrame,
+  type McpSessionPromptOptions,
+  type McpSessionReplay,
+  type McpSessionRequestOptions,
+  type McpSessionResourceOptions,
+  type McpSessionServiceCloseFailure,
+  type McpSessionServiceOptions,
+  type McpSessionToolCallOptions,
+  type OpenMcpSessionOptions,
+  type RemoteTransportOptions,
+  type StdioOptions,
+  type StdioTransport,
+} from './mcp-session-types.ts';
+
+export type * from './mcp-session-types.ts';
+export { McpSessionServiceCloseError };
+export type { McpSessionTraceSink } from './mcp-session-trace.ts';
 
 export type {
   McpSessionBinding,
@@ -95,133 +117,7 @@ const maxRetainedFrames = 512;
 
 type RawMcpFrame = Parameters<Transport['send']>[0];
 
-interface RequestOptions {
-  readonly signal?: AbortSignal;
-  readonly timeout: number;
-}
 
-interface McpClient {
-  callTool(
-    params: { readonly arguments: Record<string, unknown>; readonly name: string },
-    options?: RequestOptions,
-  ): Promise<CallToolResult>;
-  close(): Promise<void>;
-  connect(transport: Transport, options?: RequestOptions): Promise<void>;
-  getPrompt(
-    params: { readonly arguments?: Record<string, string>; readonly name: string },
-    options?: RequestOptions,
-  ): Promise<GetPromptResult>;
-  getServerCapabilities(): ServerCapabilities | undefined;
-  getServerVersion(): Implementation | undefined;
-  getNegotiatedProtocolVersion?(): string | undefined;
-  getProtocolEra?(): 'legacy' | 'modern' | undefined;
-  listPrompts(params?: undefined, options?: RequestOptions): Promise<{ readonly prompts: readonly Prompt[] }>;
-  listResources(params?: undefined, options?: RequestOptions): Promise<{ readonly resources: readonly Resource[] }>;
-  listResourceTemplates(
-    params?: undefined,
-    options?: RequestOptions,
-  ): Promise<{ readonly resourceTemplates: readonly ResourceTemplateType[] }>;
-  listTools(params?: undefined, options?: RequestOptions): Promise<{ readonly tools: readonly Tool[] }>;
-  readResource(params: { readonly uri: string }, options?: RequestOptions): Promise<{ readonly contents: readonly unknown[] }>;
-}
-
-interface StdioTransport extends Transport {
-  readonly stderr: Stream | null;
-}
-
-interface StdioOptions {
-  readonly args: string[];
-  readonly command: string;
-  readonly cwd?: string;
-  readonly env: Record<string, string>;
-  readonly stderr: 'pipe';
-}
-
-interface RemoteTransportOptions {
-  readonly headers?: Record<string, string>;
-}
-
-export interface OpenMcpSessionOptions extends McpSessionBinding {
-  readonly signal?: AbortSignal;
-  readonly timeoutMs?: number;
-  readonly workspaceRoot?: string;
-}
-
-export interface McpSessionRequestOptions {
-  readonly signal?: AbortSignal;
-  readonly timeoutMs?: number;
-}
-
-export interface McpSessionToolCallOptions extends McpSessionRequestOptions {
-  readonly arguments: Record<string, unknown>;
-  readonly name: string;
-  /** A caller-chosen identifier used to cancel an in-flight tool call. */
-  readonly requestId?: string;
-}
-
-export interface McpSessionPromptOptions extends McpSessionRequestOptions {
-  readonly arguments?: Record<string, string>;
-  readonly name: string;
-}
-
-export interface McpSessionResourceOptions extends McpSessionRequestOptions {
-  readonly uri: string;
-}
-
-export interface McpSessionConnectionState {
-  readonly capabilities: ServerCapabilities | undefined;
-  readonly protocolEra: 'legacy' | 'modern' | undefined;
-  readonly protocolVersion: string | undefined;
-  readonly server: Implementation | undefined;
-}
-
-export interface McpSessionFrame {
-  readonly direction: 'client' | 'server';
-  /** A deep-frozen snapshot of the JSON-RPC object received from or sent to the SDK transport. */
-  readonly message: unknown;
-  readonly sequence: number;
-}
-
-export type McpSessionEvent =
-  | Readonly<{ readonly sequence: number; readonly text: string; readonly type: 'stderr' }>
-  | Readonly<{ readonly payload: unknown; readonly sequence: number; readonly type: 'progress' }>
-  | Readonly<{ readonly payload: unknown; readonly sequence: number; readonly type: 'logging' }>;
-
-export interface McpSessionReplay {
-  readonly events: readonly McpSessionEvent[];
-  readonly frames: readonly McpSessionFrame[];
-  readonly overflow?: McpSessionReplayOverflow;
-}
-
-export interface McpSessionServiceOptions {
-  readonly createClient?: () => McpClient;
-  readonly createStdioTransport?: (options: StdioOptions) => StdioTransport;
-  readonly createStreamableHttpTransport?: (url: URL, options: RemoteTransportOptions) => Transport;
-  readonly epochStore: EpochStore;
-  readonly projectRoot: string;
-  readonly registry?: TargetRegistry;
-  /** Optional observability sink. It receives safe trace categories, never changes session behavior. */
-  readonly traceSink?: McpSessionTraceSink;
-}
-
-export type { McpSessionTraceSink } from './mcp-session-trace.ts';
-
-export interface McpSessionServiceCloseFailure {
-  readonly error: unknown;
-  readonly resource: 'opening' | 'session';
-  readonly sessionId?: McpSessionId;
-}
-
-/** Reports every session-service lifecycle failure after all tracked work settles. */
-export class McpSessionServiceCloseError extends Error {
-  readonly failures: readonly McpSessionServiceCloseFailure[];
-
-  constructor(failures: readonly McpSessionServiceCloseFailure[]) {
-    super('MCP session service could not close every lifecycle resource.');
-    this.name = 'McpSessionServiceCloseError';
-    this.failures = Object.freeze(failures.map((failure) => Object.freeze({ ...failure })));
-  }
-}
 
 interface StderrCapture {
   readonly exceeded: () => boolean;
@@ -377,77 +273,6 @@ const joinArtifact = (root: string, relativePath: string): string => {
   return assertInside(root, resolve(root, relativePath));
 };
 
-class RecordingTransport implements Transport {
-  readonly #inner: Transport;
-  readonly #record: (direction: McpSessionFrame['direction'], message: RawMcpFrame) => void;
-  #onclose: Transport['onclose'];
-  #onerror: Transport['onerror'];
-  #onmessage: Transport['onmessage'];
-
-  constructor(inner: Transport, record: (direction: McpSessionFrame['direction'], message: RawMcpFrame) => void) {
-    this.#inner = inner;
-    this.#record = record;
-    this.#inner.onclose = () => this.#onclose?.();
-    this.#inner.onerror = (error) => this.#onerror?.(error);
-    this.#inner.onmessage = ((message, extra) => {
-      this.#record('server', message);
-      this.#onmessage?.(message, extra);
-    }) as Transport['onmessage'];
-  }
-
-  get hasPerRequestStream(): boolean | undefined {
-    return this.#inner.hasPerRequestStream;
-  }
-
-  get onclose(): Transport['onclose'] {
-    return this.#onclose;
-  }
-
-  set onclose(next: Transport['onclose']) {
-    this.#onclose = next;
-  }
-
-  get onerror(): Transport['onerror'] {
-    return this.#onerror;
-  }
-
-  set onerror(next: Transport['onerror']) {
-    this.#onerror = next;
-  }
-
-  get onmessage(): Transport['onmessage'] {
-    return this.#onmessage;
-  }
-
-  set onmessage(next: Transport['onmessage']) {
-    this.#onmessage = next;
-  }
-
-  get sessionId(): string | undefined {
-    return this.#inner.sessionId;
-  }
-
-  setProtocolVersion(version: string): void {
-    this.#inner.setProtocolVersion?.(version);
-  }
-
-  setSupportedProtocolVersions(versions: string[]): void {
-    this.#inner.setSupportedProtocolVersions?.(versions);
-  }
-
-  async close(): Promise<void> {
-    await this.#inner.close();
-  }
-
-  async send(message: RawMcpFrame, options?: Parameters<Transport['send']>[1]): Promise<void> {
-    this.#record('client', message);
-    await this.#inner.send(message, options);
-  }
-
-  async start(): Promise<void> {
-    await this.#inner.start();
-  }
-}
 
 /**
  * One MCP connection whose generated command, environment, data directory, and
