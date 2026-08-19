@@ -1593,13 +1593,21 @@ export class McpAppClient implements McpAppRuntimeClient {
       if (closeAttempt.serverRestarted && !closeAttempt.dispatched) {
         throw new McpAppClientError('AB8022', 'Runtime MCP App preview was revoked.');
       }
-      closeAttempt.dispatched = true;
     }
     try {
       return await this.#foreground.protectedRequest(
         path,
         init,
-        admission === undefined ? undefined : () => this.#assertRuntimeAdmission(admission),
+        admission === undefined && closeAttempt === undefined ? undefined : () => {
+          if (admission !== undefined) this.#assertRuntimeAdmission(admission);
+          if (closeAttempt !== undefined) {
+            this.#assertRuntimeCloseAdmission(closeAttempt);
+            if (closeAttempt.serverRestarted && !closeAttempt.dispatched) {
+              throw new McpAppClientError('AB8022', 'Runtime MCP App preview was revoked.');
+            }
+            closeAttempt.dispatched = true;
+          }
+        },
       );
     } catch (error) {
       throw this.#foregroundError(error);

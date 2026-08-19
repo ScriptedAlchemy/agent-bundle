@@ -608,6 +608,51 @@ describe('MCP App browser client', () => {
     project.close();
   });
 
+  it('does not dispatch a held runtime close after its session restarts before authentication completes', async () => {
+    const stream = new RuntimeEventSource();
+    const bootstrap = deferred<Response>();
+    const protectedPaths: string[] = [];
+    let holdBootstrap = false;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const path = String(input);
+      if (path === '/api/project/session') {
+        return holdBootstrap
+          ? bootstrap.promise
+          : json({ cookieName: foregroundCookieName, origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      }
+      if (path === '/api/project/status') return json(missingProjectStatusResponse);
+      protectedPaths.push(path);
+      if (path === '/api/runtime/apps' && init?.method === 'POST') return json({ preview: runtimePreview });
+      if (path === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') {
+        return json({ diagnostic: { code: 'AB8022', message: 'Runtime MCP App preview was revoked.' } }, 410);
+      }
+      throw new Error(`Unexpected request ${path}.`);
+    };
+    const foreground = new ForegroundRouteClient({ fetch: fetch as typeof globalThis.fetch });
+    const project = new ProjectClient({ events: () => stream, foreground });
+    await project.connect(() => undefined);
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, foreground, projectClient: project });
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    protectedPaths.length = 0;
+    runtime.forgetAuthentication();
+    holdBootstrap = true;
+
+    const closing = runtime.closeRuntime('runtime-binding');
+    await Promise.resolve();
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:00.000Z',
+      payload: runtimeAppUpdated({ bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' }),
+      sequence: 1,
+      type: 'runtime.event',
+    }, 1);
+    await flushEvents();
+    bootstrap.resolve(json({ cookieName: foregroundCookieName, origin: 'http://127.0.0.1:43123', token: 'foreground-secret' }));
+
+    await expect(closing).resolves.toBeUndefined();
+    expect(protectedPaths).toEqual([]);
+    project.close();
+  });
+
   it('retains a restarted dispatched runtime close for an ordinary 500 retry', async () => {
     const stream = new RuntimeEventSource();
     const firstClose = deferred<Response>();
@@ -1220,12 +1265,7 @@ describe('MCP App browser client', () => {
       runtime.forgetAuthentication();
       return runtime;
     };
-    const fence = async (
-      runtime: McpAppClient,
-      work: () => Promise<unknown>,
-      invalidate: () => void | Promise<void>,
-      expectedPaths: readonly string[] = [],
-    ): Promise<void> => {
+    const fence = async (runtime: McpAppClient, work: () => Promise<unknown>, invalidate: () => void | Promise<void>): Promise<void> => {
       protectedPaths.length = 0;
       bootstrap = deferred<Response>();
       const pending = work();
@@ -1234,7 +1274,7 @@ describe('MCP App browser client', () => {
       await invalidate();
       bootstrap.resolve(json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' }));
       await expect(pending).rejects.toMatchObject({ code: 'AB8015' });
-      expect(protectedPaths).toEqual(expectedPaths);
+      expect(protectedPaths).toEqual([]);
       bootstrap = undefined;
     };
 
@@ -1249,12 +1289,7 @@ describe('MCP App browser client', () => {
     const deciding = await seed(true);
     await fence(deciding, () => deciding.decideRuntimeConsent('runtime-binding', 'consent-a', 'deny'), () => gap());
     const closing = await seed();
-    await fence(
-      closing,
-      () => closing.closeRuntime('runtime-binding'),
-      () => closing.disposeRuntime(),
-      ['/api/runtime/apps/runtime-binding'],
-    );
+    await fence(closing, () => closing.closeRuntime('runtime-binding'), () => closing.disposeRuntime());
     project.close();
   });
 
