@@ -36,7 +36,7 @@ npx rstest run packages/workbench/tests/mcp-page.test.ts packages/workbench/test
 # 62 passed
 
 npx rstest run packages/workbench/tests/inspector-shell.e2e.test.ts
-# 3 passed: production legacy/real-session and development artifact coverage
+# 3 passed: unsupported-hash, shared real-session, and development artifact coverage
 
 npm run typecheck --workspace agent-bundle-workbench
 npx rslint packages/workbench/src/mcp/mcp-protocol-trace.ts packages/workbench/src/mcp/mcp-page.tsx packages/workbench/src/main.tsx packages/workbench/tests/mcp-page.test.ts packages/workbench/tests/inspector-session-adapter.test.ts packages/workbench/tests/inspector-shell.e2e.test.ts
