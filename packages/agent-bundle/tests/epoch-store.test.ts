@@ -115,7 +115,7 @@ it('persists one canonical versionless staging and epoch metadata shape', async 
   }
 });
 
-it.each(['active', 'epoch'] as const)(
+it.each(['active', 'per-epoch'] as const)(
   'rejects a version property added to the canonical %s metadata shape',
   async (metadataKind) => {
     const root = await mkdtemp(join(tmpdir(), 'agent bundle version metadata extra '));
@@ -133,6 +133,58 @@ it.each(['active', 'epoch'] as const)(
         ? store.readActiveEpoch()
         : store.acquireEpochReference(epoch.id);
       await expect(readMetadata).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  },
+);
+
+it.each(['active', 'per-epoch'] as const)(
+  'rejects duplicate keys in %s metadata',
+  async (metadataKind) => {
+    const root = await mkdtemp(join(tmpdir(), 'agent bundle duplicate epoch metadata '));
+    const epoch = epochFor(root, 'epoch-duplicate-key');
+
+    try {
+      const store = new EpochStore({ projectRoot: root });
+      await publishEpoch(store, epoch);
+      const metadataPath = metadataKind === 'active'
+        ? activeMetadataPathFor(root)
+        : epochMetadataPathFor(root, epoch.id);
+      const encodedEpoch = JSON.stringify(epoch);
+      await writeFile(metadataPath, `{"epoch":${encodedEpoch},"epoch":${encodedEpoch}}\n`);
+
+      const readMetadata = metadataKind === 'active'
+        ? store.readActiveEpoch()
+        : store.acquireEpochReference(epoch.id);
+      await expect(readMetadata).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  },
+);
+
+it.each([
+  ['epoch', (epoch: ArtifactEpoch) => ({ ...epoch, unexpected: true })],
+  ['diagnostics', (epoch: ArtifactEpoch) => ({
+    ...epoch,
+    diagnostics: { ...epoch.diagnostics, unexpected: true },
+  })],
+] as const)(
+  'rejects unexpected keys on persisted %s metadata',
+  async (_location, withUnexpectedKey) => {
+    const root = await mkdtemp(join(tmpdir(), 'agent bundle nested metadata extra '));
+    const epoch = epochFor(root, 'epoch-nested-extra');
+
+    try {
+      const store = new EpochStore({ projectRoot: root });
+      await publishEpoch(store, epoch);
+      await writeFile(
+        activeMetadataPathFor(root),
+        `${JSON.stringify({ epoch: withUnexpectedKey(epoch) })}\n`,
+      );
+
+      await expect(store.readActiveEpoch()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     } finally {
       await rm(root, { force: true, recursive: true });
     }

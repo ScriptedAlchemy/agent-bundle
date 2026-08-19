@@ -6,6 +6,7 @@ import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInside } from '../core/paths.ts';
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 
 export interface EpochStoreOptions {
@@ -100,6 +101,22 @@ const metadataDirectoryName = '.metadata';
 const nativePlaygroundCatalogDirectoryName = 'native-playground';
 const stagingMarkerFileName = '.agent-bundle-epoch-stage.json';
 const stagingPrefix = '.stage-';
+const artifactEpochKeys = [
+  'configDigest',
+  'createdAt',
+  'diagnostics',
+  'id',
+  'manifestPath',
+  'modelDigest',
+  'projectRevision',
+  'targetDigests',
+] as const;
+const epochDiagnosticsKeys = ['errors', 'infos', 'warnings'] as const;
+
+const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+};
 
 const pathExists = async (path: string): Promise<boolean> => {
   try {
@@ -133,7 +150,12 @@ const assertSafeTarget = (value: string): void => {
 };
 
 const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    !hasExactOwnKeys(value, artifactEpochKeys)
+  ) return undefined;
   const epoch = value as Partial<ArtifactEpoch>;
   const diagnostics = epoch.diagnostics;
   const targetDigests = epoch.targetDigests;
@@ -146,6 +168,7 @@ const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
     typeof epoch.projectRevision !== 'string' ||
     typeof diagnostics !== 'object' ||
     diagnostics === null ||
+    !hasExactOwnKeys(diagnostics, epochDiagnosticsKeys) ||
     typeof diagnostics.errors !== 'number' ||
     typeof diagnostics.infos !== 'number' ||
     typeof diagnostics.warnings !== 'number' ||
@@ -377,7 +400,7 @@ export class EpochStore {
   async #readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
     let value: unknown;
     try {
-      value = JSON.parse(await readFile(this.#activeEpochPath, 'utf8'));
+      value = parseJsonWithoutDuplicateKeys(await readFile(this.#activeEpochPath, 'utf8'));
     } catch (error) {
       if (isErrno(error, 'ENOENT')) return undefined;
       throw new EpochStoreError(
@@ -766,8 +789,7 @@ export class EpochStore {
 
   #parseMetadata(value: unknown): EpochMetadata | undefined {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-    const keys = Object.keys(value);
-    if (keys.length !== 1 || keys[0] !== 'epoch') return undefined;
+    if (!hasExactOwnKeys(value, ['epoch'])) return undefined;
     const metadata = value as Partial<EpochMetadata>;
     const epoch = normalizeEpoch(metadata.epoch);
     return epoch === undefined ? undefined : Object.freeze({ epoch });
@@ -776,7 +798,9 @@ export class EpochStore {
   async #readEpochMetadata(epochId: string): Promise<EpochMetadata> {
     let metadata: EpochMetadata | undefined;
     try {
-      metadata = this.#parseMetadata(JSON.parse(await readFile(this.#metadataPathFor(epochId), 'utf8')));
+      metadata = this.#parseMetadata(
+        parseJsonWithoutDuplicateKeys(await readFile(this.#metadataPathFor(epochId), 'utf8')),
+      );
     } catch {
       throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Epoch metadata cannot be parsed as JSON.');
     }
