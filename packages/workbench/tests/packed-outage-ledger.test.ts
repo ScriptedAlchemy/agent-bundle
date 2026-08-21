@@ -29,6 +29,10 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
     requests: Object.freeze([...valid.requests, request]),
   });
   const validOldStreamReset = withOldStreamReset(resetRequest, resetConsole);
+  const validOldStreamSocketNotConnected = withOldStreamReset(
+    ledgerRequest({ ...resetRequest, error: 'net::ERR_SOCKET_NOT_CONNECTED' }),
+    Object.freeze({ ...resetConsole, text: 'Failed to load resource: net::ERR_SOCKET_NOT_CONNECTED' }),
+  );
   const resetWithAlteredQuery = withOldStreamReset(
     ledgerRequest({ ...resetRequest, url: `${valid.origin}${oldStreamPath}?after=01` }),
     Object.freeze({ ...resetConsole, url: `${valid.origin}${oldStreamPath}?after=01` }),
@@ -174,6 +178,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(malformedLedgers.map(legacyOutageLedgerPasses)).toEqual([true, true, true]);
   expect(() => validateOutageLedger(valid)).not.toThrow();
   expect(() => validateOutageLedger(validOldStreamReset)).not.toThrow();
+  expect(() => validateOutageLedger(validOldStreamSocketNotConnected)).not.toThrow();
   expect(() => validateOutageLedger(preStartedOutageStreamTermination)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageCatalogCancellation)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageSessionReplayCancellation)).not.toThrow();

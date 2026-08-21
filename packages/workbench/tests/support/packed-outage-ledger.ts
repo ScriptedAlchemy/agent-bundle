@@ -147,10 +147,13 @@ const hasCanonicalAfterCursor = (url: URL): boolean => {
   return Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === after && url.search === `?after=${after}`;
 };
 
-const isExactOldMcpStreamReset = (request: NetworkLedgerEntry, ledger: OutageLedger, oldSessionPath: string): boolean => {
+/** Chromium reports a severed old-stream socket as RESET or, when the reconnect never attached, SOCKET_NOT_CONNECTED. */
+const oldStreamSeveranceCodes: ReadonlySet<string> = new Set(['net::ERR_CONNECTION_RESET', 'net::ERR_SOCKET_NOT_CONNECTED']);
+
+const isExactOldMcpStreamSeverance = (request: NetworkLedgerEntry, ledger: OutageLedger, oldSessionPath: string): boolean => {
   const oldStreamPath = `${oldSessionPath}/stream`;
   if (
-    request.error !== 'net::ERR_CONNECTION_RESET' || request.method !== 'GET' || request.origin !== ledger.origin ||
+    request.error === undefined || !oldStreamSeveranceCodes.has(request.error) || request.method !== 'GET' || request.origin !== ledger.origin ||
     request.path !== oldStreamPath || request.completedAt === undefined || request.at > request.completedAt ||
     request.completedAt < ledger.outageStartedAt || request.completedAt >= ledger.recoveredAt ||
     request.respondedAt !== undefined || request.status !== undefined
@@ -241,12 +244,12 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
     `old MCP stream has duplicate refused failures: ${JSON.stringify(oldStreams)}`);
   assertOutageLedger(oldStreams.filter((request) => request.method === 'GET' && request.error === 'net::ERR_ABORTED').length <= 2,
     `old MCP stream has too many abort failures: ${JSON.stringify(oldStreams)}`);
-  const oldStreamResets = oldStreams.filter((request) => request.error === 'net::ERR_CONNECTION_RESET');
-  assertOutageLedger(oldStreamResets.length <= 1 && oldStreamResets.every((request) => isExactOldMcpStreamReset(request, ledger, oldSessionPath)),
-    `old MCP stream has an invalid reset termination: ${JSON.stringify(oldStreamResets)}`);
+  const oldStreamSeverances = oldStreams.filter((request) => request.error !== undefined && oldStreamSeveranceCodes.has(request.error));
+  assertOutageLedger(oldStreamSeverances.length <= 1 && oldStreamSeverances.every((request) => isExactOldMcpStreamSeverance(request, ledger, oldSessionPath)),
+    `old MCP stream has an invalid severance termination: ${JSON.stringify(oldStreamSeverances)}`);
   assertOutageLedger(oldStreams.every((request) => request.method === 'GET' && (
     request.error === 'net::ERR_CONNECTION_REFUSED' || request.error === 'net::ERR_ABORTED' ||
-    isExactOldMcpStreamReset(request, ledger, oldSessionPath)
+    isExactOldMcpStreamSeverance(request, ledger, oldSessionPath)
   )),
     `old MCP stream has an unrecognized failure: ${JSON.stringify(oldStreams)}`);
 
@@ -316,7 +319,7 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
       (pathClass === 'project-session' && failure.method === 'GET' && failure.error === 'net::ERR_CONNECTION_REFUSED') ||
       (pathClass === 'old-mcp-stream' && failure.method === 'GET' && (
         failure.error === 'net::ERR_CONNECTION_REFUSED' || failure.error === 'net::ERR_ABORTED' ||
-        isExactOldMcpStreamReset(failure, ledger, oldSessionPath)
+        isExactOldMcpStreamSeverance(failure, ledger, oldSessionPath)
       )) ||
       (pathClass === 'old-mcp-session' && failure.method === 'DELETE' && failure.error === 'net::ERR_CONNECTION_REFUSED') ||
       (knownStreamClass(failure.path) !== undefined && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED');
