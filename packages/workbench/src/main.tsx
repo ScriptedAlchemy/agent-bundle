@@ -37,6 +37,14 @@ import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
 import './styles.css';
 
+const Topbar = ({ connectionError }: { readonly connectionError?: string }) => <header className="topbar">
+  <span className="menu-glyph" aria-hidden="true">☰</span>
+  <span className="topbar-title">Project workbench</span>
+  <span className={`connection${connectionError === undefined ? '' : ' connection--error'}`} role="status">
+    <span aria-hidden="true" />{connectionError === undefined ? 'Foreground server connected' : `Foreground server unavailable: ${connectionError}`}
+  </span>
+</header>;
+
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
   timeStyle: 'medium',
@@ -119,7 +127,7 @@ const pageForHash = (): WorkbenchPage => {
 const Navigation = ({ onNavigate, page }: {
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
-}) => <aside className="rail" aria-label="Workbench navigation">
+}) => <nav className="rail" aria-label="Workbench navigation">
   <div className="brand">Agent Bundle</div>
   {navigationItems.map((item) => (
     <a
@@ -133,7 +141,7 @@ const Navigation = ({ onNavigate, page }: {
       {item.label}
     </a>
   ))}
-</aside>;
+</nav>;
 
 const Overview = ({ changedFiles, client, connectionError, onNavigate, status, onStatus }: {
   readonly changedFiles: readonly string[];
@@ -163,13 +171,7 @@ const Overview = ({ changedFiles, client, connectionError, onNavigate, status, o
     <div className="workbench-shell">
       <Navigation onNavigate={onNavigate} page="overview" />
       <main className="canvas" id="overview">
-        <header className="topbar">
-          <span className="menu-glyph" aria-hidden="true">☰</span>
-          <span className="topbar-title">Project workbench</span>
-          <span className={`connection${connectionError === undefined ? '' : ' connection--error'}`} role="status">
-            <span aria-hidden="true" />{connectionError === undefined ? 'Foreground server connected' : `Foreground server unavailable: ${connectionError}`}
-          </span>
-        </header>
+        <Topbar connectionError={connectionError} />
         <div className="page-content">
           <div className="page-heading">
             <h1>Project overview</h1>
@@ -254,13 +256,7 @@ const SkillsScreen = ({ connectionError, evalClient, onNavigate, skillClient, st
 }) => <div className="workbench-shell">
   <Navigation onNavigate={onNavigate} page="skills" />
   <main className="canvas" id="skills">
-    <header className="topbar">
-      <span className="menu-glyph" aria-hidden="true">☰</span>
-      <span className="topbar-title">Project workbench</span>
-      <span className={`connection${connectionError === undefined ? '' : ' connection--error'}`} role="status">
-        <span aria-hidden="true" />{connectionError === undefined ? 'Foreground server connected' : `Foreground server unavailable: ${connectionError}`}
-      </span>
-    </header>
+    <Topbar connectionError={connectionError} />
     <SkillsPage client={skillClient} evalClient={evalClient} status={status} />
   </main>
 </div>;
@@ -272,16 +268,10 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page }: {
   readonly page: WorkbenchPage;
 }) => <div className="workbench-shell">
   <Navigation onNavigate={onNavigate} page={page} />
-  <div className="canvas" id={page}>
-    <header className="topbar">
-      <span className="menu-glyph" aria-hidden="true">☰</span>
-      <span className="topbar-title">Project workbench</span>
-      <span className={`connection${connectionError === undefined ? '' : ' connection--error'}`} role="status">
-        <span aria-hidden="true" />{connectionError === undefined ? 'Foreground server connected' : `Foreground server unavailable: ${connectionError}`}
-      </span>
-    </header>
+  <main className="canvas" id={page}>
+    <Topbar connectionError={connectionError} />
     {children}
-  </div>
+  </main>
 </div>;
 
 const EvalsScreen = ({ connectionError, evalClient, onNavigate }: {

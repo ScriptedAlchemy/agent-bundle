@@ -525,7 +525,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     selectTraceTab(next);
   };
 
-  return <main className="mcp-page" aria-label="MCP playground">
+  return <div className="mcp-page" aria-label="MCP playground">
     <header className="mcp-page-heading">
       <div>
         <p className="mcp-page-eyebrow">Artifact-bound protocol workbench</p>
@@ -758,5 +758,5 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
       {actionError === undefined ? undefined : <p>{actionError}</p>}
       {model.diagnostics.map((diagnostic, index) => <p key={`${diagnostic.code}-${index}`}><strong>{diagnostic.code}</strong> {diagnostic.message}</p>)}
     </section>}
-  </main>;
+  </div>;
 };

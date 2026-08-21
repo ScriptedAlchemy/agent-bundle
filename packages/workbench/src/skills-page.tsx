@@ -173,7 +173,7 @@ export const SkillDocumentPanel = ({
       <div className="skill-detail-heading">
         <div>
           <p className="skill-eyebrow">Skill document</p>
-          <h1>{selected.name}</h1>
+          <h2>{selected.name}</h2>
           {selected.description === undefined ? undefined : <p className="skill-description">{selected.description}</p>}
         </div>
         <span className="skill-provenance">{provenanceLabel(selected)}</span>

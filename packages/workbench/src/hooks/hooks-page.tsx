@@ -223,7 +223,7 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
     await run((signal) => runHookReplay(client, saved, signal));
   };
 
-  return <main className="hooks-content">
+  return <div className="hooks-content">
     <div className="page-heading hooks-page-heading">
       <div>
         <h1>Hooks</h1>
@@ -275,5 +275,5 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
         </section>
         <HookSimulationView view={view} />
       </>}
-  </main>;
+  </div>;
 };
