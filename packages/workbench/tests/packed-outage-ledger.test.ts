@@ -106,6 +106,19 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       ...valid.requests,
     ]),
   });
+  const resetSessionProbe = Object.freeze({
+    ...valid,
+    consoleErrors: Object.freeze(valid.consoleErrors.map((consoleError) =>
+      consoleError.url === `${valid.origin}/api/project/session`
+        ? Object.freeze({ ...consoleError, text: 'Failed to load resource: net::ERR_CONNECTION_RESET' })
+        : consoleError,
+    )),
+    requests: Object.freeze(valid.requests.map((request) =>
+      request.path === '/api/project/session' && request.error !== undefined
+        ? ledgerRequest({ ...request, error: 'net::ERR_CONNECTION_RESET' })
+        : request,
+    )),
+  });
   const knownPreOutageCatalogCancellation = Object.freeze({
     ...valid,
     requests: Object.freeze([
@@ -179,6 +192,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(valid)).not.toThrow();
   expect(() => validateOutageLedger(validOldStreamReset)).not.toThrow();
   expect(() => validateOutageLedger(validOldStreamSocketNotConnected)).not.toThrow();
+  expect(() => validateOutageLedger(resetSessionProbe)).not.toThrow();
   expect(() => validateOutageLedger(preStartedOutageStreamTermination)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageCatalogCancellation)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageSessionReplayCancellation)).not.toThrow();

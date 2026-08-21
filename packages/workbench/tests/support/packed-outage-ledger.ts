@@ -147,6 +147,9 @@ const hasCanonicalAfterCursor = (url: URL): boolean => {
   return Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === after && url.search === `?after=${after}`;
 };
 
+/** A probe against a dying server can hit its half-open socket (RESET) instead of a closed port (REFUSED). */
+const downServerProbeCodes: ReadonlySet<string> = new Set(['net::ERR_CONNECTION_REFUSED', 'net::ERR_CONNECTION_RESET']);
+
 /** Chromium reports a severed old-stream socket as RESET or, when the reconnect never attached, SOCKET_NOT_CONNECTED. */
 const oldStreamSeveranceCodes: ReadonlySet<string> = new Set(['net::ERR_CONNECTION_RESET', 'net::ERR_SOCKET_NOT_CONNECTED']);
 
@@ -289,8 +292,8 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
   assertOutageLedger(retryAttempts.length >= 1, 'the outage did not issue a project/session retry');
   assertOutageLedger(retryAttempts.every((request) => request.completedAt !== undefined && (request.error === undefined) !== (request.status === undefined)),
     `project/session retry is missing or has multiple terminal states: ${JSON.stringify(retryAttempts)}`);
-  assertOutageLedger(retryAttempts.slice(0, -1).every((request) => request.error === 'net::ERR_CONNECTION_REFUSED'),
-    `project/session retry had a non-refused failure: ${JSON.stringify(retryAttempts)}`);
+  assertOutageLedger(retryAttempts.slice(0, -1).every((request) => request.error !== undefined && downServerProbeCodes.has(request.error)),
+    `project/session retry had a non-connection failure: ${JSON.stringify(retryAttempts)}`);
   assertOutageLedger(retryAttempts.at(-1) === firstSuccessfulBSession && firstSuccessfulBSession.status === 200,
     `project/session recovery did not finish with the first successful B session: ${JSON.stringify(retryAttempts)}`);
   for (const [index, attempt] of retryAttempts.entries()) {
@@ -316,7 +319,7 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
     const pathClass = outagePathClass(failure.path, oldSessionPath);
     const recognized =
       (pathClass === 'project-events' && failure.method === 'GET' && failure.error === 'net::ERR_INCOMPLETE_CHUNKED_ENCODING') ||
-      (pathClass === 'project-session' && failure.method === 'GET' && failure.error === 'net::ERR_CONNECTION_REFUSED') ||
+      (pathClass === 'project-session' && failure.method === 'GET' && failure.error !== undefined && downServerProbeCodes.has(failure.error)) ||
       (pathClass === 'old-mcp-stream' && failure.method === 'GET' && (
         failure.error === 'net::ERR_CONNECTION_REFUSED' || failure.error === 'net::ERR_ABORTED' ||
         isExactOldMcpStreamSeverance(failure, ledger, oldSessionPath)
