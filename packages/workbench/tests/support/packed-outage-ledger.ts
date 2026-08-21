@@ -120,11 +120,22 @@ const knownStreamClass = (path: string): KnownStreamClass | undefined => {
   return segments[1] === 'evals' && segments[2] === 'runs' ? 'evals' : undefined;
 };
 
-/** The playground page retires a superseded in-flight catalog request via its generation lease (createPlaygroundCatalogLifecycle). */
+const isPlaygroundSessionReplayPath = (path: string): boolean => {
+  const segments = path.split('/').filter((segment) => segment.length > 0);
+  return segments.length === 5 && segments[0] === 'api' && segments[1] === 'playground' &&
+    segments[2] === 'sessions' && segments[3]!.length > 0 && segments[4] === 'replay';
+};
+
+/**
+ * The playground page retires a superseded in-flight catalog request via its
+ * generation lease (createPlaygroundCatalogLifecycle), and route changes abort
+ * pending session replay reads the same way they abort live streams.
+ */
 const isKnownPreOutageClientCancellation = (request: NetworkLedgerEntry): boolean =>
   request.error === 'net::ERR_ABORTED' && request.method === 'GET' && (
     knownStreamClass(request.path) !== undefined ||
     request.path === '/api/playground/catalog' ||
+    isPlaygroundSessionReplayPath(request.path) ||
     (request.path === '/api/logs/replay' && request.status !== undefined && request.status >= 200 && request.status < 300)
   );
 

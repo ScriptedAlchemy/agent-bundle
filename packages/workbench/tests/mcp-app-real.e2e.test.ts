@@ -267,8 +267,10 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     expect(appSnapshot.hostContext).toMatchObject({ availableDisplayModes: ['inline'], displayMode: 'inline' });
     expect(appSnapshot.originalInput).toEqual(originalInput.arguments);
     expect(appSnapshot.originalResult).toEqual(originalResult);
-    expect(appSnapshot.toolReply).toEqual({ content: [{ text: 'Inner echo: from-real-sandbox', type: 'text' }] });
-    expect(appSnapshot.resourceReply).toMatchObject({ contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://fixture/app.html' }] });
+    await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').toolReply, { timeout: browserTimeout })
+      .toEqual({ content: [{ text: 'Inner echo: from-real-sandbox', type: 'text' }] });
+    await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').resourceReply, { timeout: browserTimeout })
+      .toMatchObject({ contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://fixture/app.html' }] });
     await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').displayReply, { timeout: browserTimeout }).toMatchObject({
       error: { code: -32601 },
     });

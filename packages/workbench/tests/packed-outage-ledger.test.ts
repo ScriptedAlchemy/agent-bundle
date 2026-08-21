@@ -112,6 +112,17 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       ...valid.requests,
     ]),
   });
+  const knownPreOutageSessionReplayCancellation = Object.freeze({
+    ...valid,
+    requests: Object.freeze([
+      ledgerRequest({
+        at: 900, completedAt: 901, error: 'net::ERR_ABORTED', method: 'GET',
+        path: '/api/playground/sessions/departing-session/replay',
+        url: `${valid.origin}/api/playground/sessions/departing-session/replay?after=11`,
+      }),
+      ...valid.requests,
+    ]),
+  });
   const knownPreOutageLogsReplayCancellation = Object.freeze({
     ...valid,
     requests: Object.freeze([
@@ -165,6 +176,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(validOldStreamReset)).not.toThrow();
   expect(() => validateOutageLedger(preStartedOutageStreamTermination)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageCatalogCancellation)).not.toThrow();
+  expect(() => validateOutageLedger(knownPreOutageSessionReplayCancellation)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageLogsReplayCancellation)).not.toThrow();
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
   expect(() => validateOutageLedger(navigationLiveStreamCancellation)).not.toThrow();

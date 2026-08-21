@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +24,41 @@ const asString = (value, message) => {
   return value;
 };
 
-const validateSbom = (sbom, productManifest) => {
+/** Every name -> Set(version) reachable under the consumer's own node_modules tree. */
+const collectInstalledPackages = async (nodeModulesRoot) => {
+  const installed = new Map();
+  const walk = async (directory) => {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === '.bin' || entry.name === '.cache') continue;
+      const child = join(directory, entry.name);
+      if (entry.name.startsWith('@')) {
+        await walk(child);
+        continue;
+      }
+      try {
+        const manifest = JSON.parse(await readFile(join(child, 'package.json'), 'utf8'));
+        if (typeof manifest.name === 'string' && typeof manifest.version === 'string') {
+          const versions = installed.get(manifest.name) ?? new Set();
+          versions.add(manifest.version);
+          installed.set(manifest.name, versions);
+        }
+      } catch {
+        // A directory without a readable manifest is not an installed package.
+      }
+      await walk(join(child, 'node_modules'));
+    }
+  };
+  await walk(nodeModulesRoot);
+  return installed;
+};
+
+const validateSbom = (sbom, productManifest, installedPackages) => {
   const document = asRecord(sbom, 'document must be an object');
   if (document.bomFormat !== 'CycloneDX') fail('bomFormat must be CycloneDX');
   asString(document.specVersion, 'specVersion is required');
@@ -53,9 +87,19 @@ const validateSbom = (sbom, productManifest) => {
     const packagePath = component.properties.find((property) => (
       asRecord(property, `component ${index} property must be an object`).name === 'cdx:npm:package:path'
     ))?.value;
-    const path = asString(packagePath, `component ${index} is missing an npm package path`);
-    if (!path.startsWith('node_modules/') || path.includes('node_modules/.pnpm/') || path.includes('/packages/')) {
-      fail(`component ${index} is not installed from the external production consumer`);
+    if (packagePath !== undefined) {
+      const path = asString(packagePath, `component ${index} has an invalid npm package path`);
+      if (!path.startsWith('node_modules/') || path.includes('node_modules/.pnpm/') || path.includes('/packages/')) {
+        fail(`component ${index} is not installed from the external production consumer`);
+      }
+      continue;
+    }
+    // npm >= 11 omits cdx:npm:package:path, so the same guarantee is checked
+    // against the packages physically installed in the consumer's node_modules.
+    const name = asString(component.name, `component ${index} name is required`);
+    const version = asString(component.version, `component ${index} version is required`);
+    if (installedPackages.get(name)?.has(version) !== true) {
+      fail(`component ${index} (${name}@${version}) is not installed in the external production consumer`);
     }
   }
 
@@ -124,7 +168,8 @@ const auditPackedSbom = async () => {
       '--omit=dev',
       '--sbom-format', 'cyclonedx',
     ], { cwd: consumer, env: productionEnvironment })).stdout);
-    validateSbom(sbom, productManifest);
+    const installedPackages = await collectInstalledPackages(join(consumer, 'node_modules'));
+    validateSbom(sbom, productManifest, installedPackages);
     process.stdout.write(`${JSON.stringify(sbom)}\n`);
   } finally {
     await rm(auditRoot, { force: true, recursive: true });
