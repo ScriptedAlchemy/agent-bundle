@@ -1,3 +1,4 @@
+import { isRecord } from '../core/strict-json.ts';
 import type { EvalActivationEvidence, EvalMcpCallRecord, EvalMcpEvidence } from './types.ts';
 
 /** One `codex exec --json` event reduced to its shape: no payload text is retained here. */
@@ -34,9 +35,6 @@ interface MutableRun {
   completed: boolean;
   malformedLines: number;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const stringField = (value: Record<string, unknown>, key: string): string | undefined =>
   typeof value[key] === 'string' ? value[key] : undefined;

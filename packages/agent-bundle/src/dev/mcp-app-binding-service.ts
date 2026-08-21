@@ -5,7 +5,12 @@ import { requireMcpAppJson, type McpAppJsonValue } from './mcp-app-json.ts';
 
 export type { McpAppJsonValue } from './mcp-app-json.ts';
 
-export type McpAppPreviewProfile = 'chatgpt' | 'claude' | 'portable';
+export const mcpAppPreviewProfiles = Object.freeze(['chatgpt', 'claude', 'portable'] as const);
+
+export type McpAppPreviewProfile = (typeof mcpAppPreviewProfiles)[number];
+
+export const isMcpAppPreviewProfile = (value: unknown): value is McpAppPreviewProfile =>
+  (mcpAppPreviewProfiles as readonly unknown[]).includes(value);
 
 export interface McpAppToolDefinition {
   readonly _meta?: { readonly [key: string]: McpAppJsonValue };
@@ -123,7 +128,7 @@ const requireNonempty = (value: string, label: string): string => {
 };
 
 const requireProfile = (profile: McpAppPreviewProfile): McpAppPreviewProfile => {
-  if (profile === 'chatgpt' || profile === 'claude' || profile === 'portable') return profile;
+  if (isMcpAppPreviewProfile(profile)) return profile;
   throw new Error(`Unsupported MCP App preview profile ${JSON.stringify(profile)}.`);
 };
 

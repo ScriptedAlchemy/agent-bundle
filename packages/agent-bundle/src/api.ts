@@ -30,7 +30,7 @@ export {
   serializeArtifactManifest,
 } from './build/manifest.ts';
 import { validateArtifact } from './build/validate-artifact.ts';
-import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
+import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 export type { Diagnostic, DiagnosticSeverity } from './core/diagnostics.ts';
 import type { ProjectContext } from './core/project-context.ts';
 import type { NormalizedPlugin } from './core/types.ts';
@@ -255,12 +255,6 @@ export interface SimulateHookOptions extends ListHooksOptions {
   readonly input: Record<string, unknown>;
   readonly target: string;
 }
-
-const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
-  Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
-
-const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
-  diagnostics.some((diagnostic) => diagnostic.severity === 'error');
 
 const log = (
   logger: StructuredLogger | undefined,

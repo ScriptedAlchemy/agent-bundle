@@ -10,7 +10,7 @@ import {
   validateArtifactWithSnapshot,
   type ValidateArtifactOptions,
 } from '../build/validate-artifact.ts';
-import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
+import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../core/project-context.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
@@ -53,12 +53,6 @@ export interface ArtifactServiceOptions {
 }
 
 const stagingMarkerFileName = '.agent-bundle-epoch-stage.json';
-
-const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
-  diagnostics.some((diagnostic) => diagnostic.severity === 'error');
-
-const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
-  Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
 
 const summarizeDiagnostics = (diagnostics: readonly Diagnostic[]): DiagnosticSummary => Object.freeze({
   errors: diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length,

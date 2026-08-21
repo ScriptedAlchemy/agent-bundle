@@ -1,3 +1,4 @@
+import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
 import type {
@@ -74,8 +75,7 @@ type PlaygroundOperation = PlaygroundOperationRequest['operation'];
 
 const jsonDraftError = 'This field must contain a JSON object.';
 
-const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The playground request could not be completed.';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'The playground request could not be completed.');
 
 const asJsonObject = (value: Readonly<Record<string, unknown>>): PlaygroundJsonObject => value as PlaygroundJsonObject;
 

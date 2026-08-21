@@ -9,7 +9,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
+import { canonicalHookEvents, canonicalHookTools, parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
@@ -40,20 +40,9 @@ const unique = (values: readonly string[]): string[] => [...new Set(values)];
 const sortedUnique = (values: readonly string[]): string[] =>
   unique(values).sort((left, right) => left.localeCompare(right));
 
-const hookEvents: readonly CanonicalHookEvent[] = [
-  'sessionStart',
-  'beforeTool',
-  'afterTool',
-  'stop',
-];
+const hookEvents: readonly CanonicalHookEvent[] = canonicalHookEvents;
 
-const knownHookTools = new Set<CanonicalHookTool>([
-  'shell',
-  'file.read',
-  'file.write',
-  'mcp',
-  'agent',
-]);
+const knownHookTools: ReadonlySet<CanonicalHookTool> = new Set(canonicalHookTools);
 
 const eventSlug = (event: CanonicalHookEvent): string =>
   event.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);

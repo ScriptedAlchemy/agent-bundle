@@ -1,10 +1,10 @@
-import { constants, type Stats } from 'node:fs';
+import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 
 import { sha256Hex } from '../core/digest.ts';
-import { isInsideOrEqual } from '../core/paths.ts';
+import { sameFile, isInsideOrEqual } from '../core/paths.ts';
 import type { EvalArtifactReader } from './eval-service-types.ts';
 
 const maximumArtifactBytes = 8 * 1024 * 1024;
@@ -21,8 +21,6 @@ export const artifactSegments = (value: unknown): readonly string[] | undefined 
   ) return undefined;
   return Object.freeze(segments);
 };
-
-const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
 
 export const assertNoSymlinkedArtifactPath = async (projectRoot: string, target: string): Promise<void> => {
   const root = resolve(projectRoot);

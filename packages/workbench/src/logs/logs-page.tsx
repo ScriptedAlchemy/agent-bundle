@@ -1,3 +1,4 @@
+import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useMemo, useState } from 'react';
 
 import type { DevLogRecord, DevLogReplayGap } from '../../../agent-bundle/src/dev/dev-log-service.ts';
@@ -13,10 +14,7 @@ export interface LogsPageProps {
 
 const all = '';
 const filter = (value: string): string | undefined => value === all ? undefined : value;
-const errorMessage = (reason: unknown): string => {
-  try { return reason instanceof Error && typeof reason.message === 'string' ? reason.message : 'Production logs could not be read.'; }
-  catch { return 'Production logs could not be read.'; }
-};
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'Production logs could not be read.');
 const isCursorAhead = (reason: unknown): boolean => {
   try { return reason instanceof LogClientError && reason.code === 'AB8092'; }
   catch { return false; }

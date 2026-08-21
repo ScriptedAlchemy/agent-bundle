@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+
 export interface RequestDiagnostic {
   readonly code: string;
   readonly message: string;
@@ -116,6 +118,28 @@ export const readBody = async (
   });
   request.once('error', rejectPromise);
 });
+
+export interface JsonBodyOptions {
+  readonly invalidShape: () => never;
+  readonly read?: ReadBodyOptions;
+}
+
+export const readJsonBody = async (
+  request: IncomingMessage,
+  options: JsonBodyOptions,
+): Promise<Record<string, unknown>> => {
+  if (!isJsonRequest(request)) {
+    throw requestError(diagnostic('AB8009', 'Request body must use application/json.', 415));
+  }
+  let parsed: unknown;
+  try {
+    parsed = parseJsonWithoutDuplicateKeys(await readBody(request, options.read));
+  } catch (error) {
+    if (isRequestDiagnostic(error)) throw error;
+    throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
+  }
+  return isRecord(parsed) ? parsed : options.invalidShape();
+};
 
 export const rawPathname = (requestTarget: string | undefined): string =>
   requestTarget?.split(/[?#]/u, 1)[0] ?? '';

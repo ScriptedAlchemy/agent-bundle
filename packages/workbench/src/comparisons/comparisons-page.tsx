@@ -1,3 +1,4 @@
+import { isAbortError, errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
 import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
@@ -29,8 +30,7 @@ export interface ComparisonsPageProps {
   readonly evalClient: EvalClient;
 }
 
-const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The eval comparison request could not be completed.';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'The eval comparison request could not be completed.');
 
 export const loadComparisonRuns = async (
   client: EvalClient,
@@ -80,7 +80,6 @@ export class ComparisonRequestLifecycle {
   }
 }
 
-const isAbortError = (reason: unknown): boolean => reason instanceof Error && reason.name === 'AbortError';
 
 const MetricCell = ({ cell }: { readonly cell: ComparisonMetricCell | undefined }) => cell === undefined
   ? <td className="comparison-cell"><p className="empty-row">Not recorded in this run.</p></td>

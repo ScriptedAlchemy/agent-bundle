@@ -16,6 +16,15 @@ export class CodedClientError<TCode extends string = string> extends Error {
 export const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** Tolerates hostile error objects whose message accessor throws. */
+export const errorMessage = (reason: unknown, fallback: string): string => {
+  try { return reason instanceof Error && typeof reason.message === 'string' ? reason.message : fallback; }
+  catch { return fallback; }
+};
+
+export const isAbortError = (reason: unknown): boolean =>
+  reason instanceof Error && reason.name === 'AbortError';
+
 /** Required keys present, every own key allowed, extras rejected. */
 export const hasAllowedKeys = (
   value: unknown,

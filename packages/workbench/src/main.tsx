@@ -1,3 +1,4 @@
+import { errorMessage as messageFrom } from './client-helpers.ts';
 import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -50,8 +51,7 @@ const stateLabel = (state: string): string => state.replaceAll('-', ' ');
 const sourceFor = (diagnostic: Diagnostic): string =>
   diagnostic.sourcePath ?? diagnostic.generatedPath ?? diagnostic.target ?? 'Project';
 
-const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'Foreground project state could not be refreshed.';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'Foreground project state could not be refreshed.');
 
 const activeEpochFor = (status: ProjectStatus) =>
   status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
-import { isRecord } from '../client-helpers.ts';
+import { errorMessage as messageFrom, isRecord } from '../client-helpers.ts';
 
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
 import {
@@ -242,7 +242,7 @@ const display = (value: unknown): string => {
   }
 };
 
-const errorMessage = (reason: unknown): string => reason instanceof Error ? reason.message : 'The MCP session action failed.';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'The MCP session action failed.');
 
 const connectionSummary = (connection: McpBrowserSessionModel['connection']): string => {
   if (connection === undefined) return 'No negotiated connection.';

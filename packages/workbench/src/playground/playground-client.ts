@@ -9,7 +9,7 @@ import type {
 } from '../../../agent-bundle/src/services/playground-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
 import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/dev/native-playground-service.ts';
-import { CodedClientError, exactKeys, isRecord, nonemptyString } from '../client-helpers.ts';
+import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord, nonemptyString } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
 
@@ -262,7 +262,6 @@ const traceEventLine = (line: string): PlaygroundTraceEvent => {
   return detached;
 };
 
-const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
 
 /** A typed, credential-memory-only browser client for the durable playground trace routes. */
 export class PlaygroundClient {

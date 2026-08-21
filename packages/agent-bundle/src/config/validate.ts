@@ -9,7 +9,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { parseNativeHookToolSelector } from '../core/types.ts';
+import { canonicalHookEvents, canonicalHookTools, parseNativeHookToolSelector } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
@@ -32,14 +32,9 @@ const sourceDiagnostic = (
   sourcePath: string,
 ): Diagnostic => ({ code, message, severity: 'error', sourcePath });
 
-const hookEvents: readonly CanonicalHookEvent[] = [
-  'sessionStart',
-  'beforeTool',
-  'afterTool',
-  'stop',
-];
+const hookEvents: readonly CanonicalHookEvent[] = canonicalHookEvents;
 
-const hookTools = new Set(['shell', 'file.read', 'file.write', 'mcp', 'agent']);
+const hookTools: ReadonlySet<string> = new Set(canonicalHookTools);
 
 const isHookEntryList = (
   input: AgentBundleHookInput,

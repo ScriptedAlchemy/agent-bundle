@@ -6,7 +6,7 @@ import type {
 } from '../../../agent-bundle/src/dev/dev-log-service.ts';
 import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
-import { CodedClientError, exactKeys, isRecord } from '../client-helpers.ts';
+import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { readNdjsonByteFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
@@ -143,7 +143,6 @@ const messageFor = (line: string): DevLogMessage => {
   if (isDevRecord(parsed) || isGap(parsed)) return parsed;
   throw invalid();
 };
-const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
 const diagnosticMessages = new Map<string, string>([
   ['AB8090', 'Dev Log route path is not valid.'],
   ['AB8091', 'Dev Log cursor is not valid.'],

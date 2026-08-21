@@ -1,3 +1,4 @@
+import { errorMessage as messageFrom } from './client-helpers.ts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
@@ -101,8 +102,7 @@ const EvalCoverage = ({ coverage }: { readonly coverage: SkillEvalCoverageState 
   </section>
 );
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : 'Skill documents could not be loaded.';
+const errorMessage = (error: unknown): string => messageFrom(error, 'Skill documents could not be loaded.');
 
 const artifactEpoch = (status: ProjectStatus) =>
   status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;

@@ -13,14 +13,14 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { isAbsolute, posix, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import type { Stream } from 'node:stream';
 
 import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { serialQueue } from '../core/async.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
-import { assertInside } from '../core/paths.ts';
+import { joinArtifact } from '../core/paths.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue } from '../core/strict-json.ts';
 import {
   readTargetMcpServer,
@@ -161,13 +161,6 @@ const mcpAppLeaseIdentity = (session: McpSession): McpAppLeaseIdentity => {
   return Object.freeze(identity) as McpAppLeaseIdentity;
 };
 
-const safeArtifactPath = (path: string): boolean =>
-  path.length > 0 &&
-  !isAbsolute(path) &&
-  path === posix.normalize(path) &&
-  path !== '..' &&
-  !path.startsWith('../');
-
 const resolveTimeoutMs = (timeout: number): number => {
   if (!Number.isFinite(timeout) || timeout <= 0) {
     throw new RangeError('MCP session timeoutMs must be a positive finite number.');
@@ -229,13 +222,6 @@ const captureStderr = (
     output: () => Buffer.concat(chunks).toString(),
     stop: () => stream.off('data', onData),
   };
-};
-
-const joinArtifact = (root: string, relativePath: string): string => {
-  if (!safeArtifactPath(relativePath)) {
-    throw new Error(`Unsafe artifact path ${JSON.stringify(relativePath)}.`);
-  }
-  return assertInside(root, resolve(root, relativePath));
 };
 
 

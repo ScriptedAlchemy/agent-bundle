@@ -6,7 +6,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
-import { isInsideOrEqual } from '../core/paths.ts';
+import { sameFile, isInsideOrEqual } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { defaultEvalRunsDir } from './config.ts';
 import { EvalRunStoreError } from './errors.ts';
@@ -105,8 +105,6 @@ const runEvalRunStoreDurabilityTestHook = async (
   const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
   await hooks[evalRunStoreDurabilityTestHookKey]?.(phase, event, path, journal);
 };
-
-const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
 
 const isProcessRunning = (pid: number): boolean => {
   try {

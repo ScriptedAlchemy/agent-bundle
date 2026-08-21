@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { isRecord } from '../core/strict-json.ts';
+import { isMcpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppJsonValue, McpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppBridgeCloseOptions, McpAppBridgeJsonRecord, McpAppBridgeLifecycle } from './mcp-app-bridge.ts';
 import { snapshotMcpAppJson, snapshotMcpAppJsonRecord } from './mcp-app-json.ts';
@@ -10,11 +11,10 @@ import {
   decodedOpaqueSegment,
   diagnostic,
   hasOnly,
-  isJsonRequest,
   isRequestDiagnostic,
   nonemptyString,
   rawPathname,
-  readBody,
+  readJsonBody,
   requestError,
   responseDiagnostic,
   responseJson,
@@ -102,20 +102,7 @@ const invalidShape = (): never => {
   throw requestError(diagnostic('AB8021', 'MCP App request has an invalid shape.', 400));
 };
 
-const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
-  if (!isJsonRequest(request)) {
-    throw requestError(diagnostic('AB8009', 'Request body must use application/json.', 415));
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readBody(request));
-  } catch (error) {
-    if (isRequestDiagnostic(error)) throw error;
-    throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
-  }
-  if (!isRecord(parsed)) return invalidShape();
-  return parsed;
-};
+const jsonBody = (request: IncomingMessage): Promise<JsonObject> => readJsonBody(request, { invalidShape });
 
 const exactRecord = (value: unknown, fields: readonly string[]): JsonObject | undefined =>
   isRecord(value) && hasOnly(value, fields) ? value : undefined;
@@ -184,7 +171,7 @@ const createRequest = (value: JsonObject, sessionId: string): Parameters<McpAppR
   const input = snapshotMcpAppJson(value.input);
   const result = snapshotMcpAppJson(value.result);
   if (!hasOnly(value, ['consent', 'host', 'input', 'previewProfile', 'result', 'toolName']) || !nonemptyString(value.toolName)
-    || input === undefined || result === undefined || (value.previewProfile !== 'portable' && value.previewProfile !== 'chatgpt' && value.previewProfile !== 'claude')) {
+    || input === undefined || result === undefined || !isMcpAppPreviewProfile(value.previewProfile)) {
     return invalidShape();
   }
   return Object.freeze({

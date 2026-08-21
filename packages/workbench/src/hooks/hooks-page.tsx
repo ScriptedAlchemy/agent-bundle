@@ -1,3 +1,4 @@
+import { isAbortError, errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
 import type {
@@ -31,11 +32,8 @@ export interface HooksPageProps {
 
 const draftError = 'Canonical hook input must be a JSON object.';
 
-const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The hook playground request could not be completed.';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'The hook playground request could not be completed.');
 
-const isAbortError = (reason: unknown): boolean =>
-  reason instanceof Error && reason.name === 'AbortError';
 
 export type HookInputMode = 'fixture' | 'inline';
 

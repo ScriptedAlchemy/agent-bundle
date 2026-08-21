@@ -8,7 +8,7 @@ import { loadConfig } from '../config/load.ts';
 import { normalizeProject } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
 import { mapConcurrent } from '../core/async.ts';
-import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
+import { hasErrors, deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
 import { digest, sha256File } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
@@ -60,9 +60,6 @@ const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnos
   deduplicateDiagnostics(diagnostics.map(withDiagnosticRecovery))
     .map((diagnostic) => Object.freeze({ ...diagnostic })),
 );
-
-const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
-  diagnostics.some((diagnostic) => diagnostic.severity === 'error');
 
 const log = (
   logger: ProjectServiceLogger | undefined,

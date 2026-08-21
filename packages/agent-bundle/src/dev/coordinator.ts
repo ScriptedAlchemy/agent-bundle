@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 
+import { freezeDiagnostics, hasErrors } from '../core/diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { ArtifactService, type ArtifactEpochResult, type FailedArtifactEpochResult } from './artifact-service.ts';
 import { DiagnosticService, type DiagnosticReport } from './diagnostic-service.ts';
@@ -86,9 +87,6 @@ interface QueuedBuild {
   readonly resolvers: readonly ((result: ArtifactEpochResult) => void)[];
 }
 
-const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
-  Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
-
 const emptySource = (): SourceStatus => Object.freeze({
   diagnostics: Object.freeze([]),
   state: 'unknown',
@@ -136,9 +134,6 @@ const phaseDiagnostic = (phase: 'artifact' | 'lint' | 'prepare', error: unknown)
   }`,
   severity: 'error',
 });
-
-const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
-  diagnostics.some((diagnostic) => diagnostic.severity === 'error');
 
 const withDiagnostics = (
   source: SourceStatus,

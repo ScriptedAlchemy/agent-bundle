@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { meetsMinimumVersion, parseSemanticVersion } from '../core/semver.ts';
 import { copyOpaqueCodexAuthState, digestFileTree, withoutProviderApiKeys } from '../host-contracts/native-codex-contract.ts';
 import { withoutEvalCredentialEnvironment } from './credentials.ts';
 import { CodexEvalHarnessError } from './codex-errors.ts';
@@ -20,13 +21,6 @@ export interface TemporaryCodexTrialHome {
   readonly home: string;
   readonly root: string;
   readonly workspace: string;
-}
-
-interface SemanticVersion {
-  readonly major: number;
-  readonly minor: number;
-  readonly patch: number;
-  readonly prerelease: boolean;
 }
 
 /** Digests only the state a run could plausibly disturb: auth, config, and installed plugins. */
@@ -93,25 +87,11 @@ export const adoptCodexAuthState = async (
   }
 };
 
-const parseSemanticVersion = (value: string): SemanticVersion | undefined => {
-  const match = /(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?(?:$|[^0-9])/u.exec(value);
-  if (match === null) return undefined;
-  return Object.freeze({
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-    prerelease: match[4] !== undefined,
-  });
-};
-
 export const codexVersionCompatible = (raw: string): boolean => {
   const observed = parseSemanticVersion(raw);
   const minimum = parseSemanticVersion(minimumCodexEvalVersion);
   if (observed === undefined || minimum === undefined) return false;
-  for (const key of ['major', 'minor', 'patch'] as const) {
-    if (observed[key] !== minimum[key]) return observed[key] > minimum[key];
-  }
-  return !observed.prerelease;
+  return meetsMinimumVersion(observed, minimum);
 };
 
 export const codexUnauthenticatedOutput = (output: string): boolean =>

@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord } from '../core/strict-json.ts';
 import {
   PlaygroundServiceError,
   type DraftEvalCase,
@@ -20,11 +20,10 @@ import {
   decodedOpaqueSegment,
   diagnostic,
   hasOnly,
-  isJsonRequest,
   isRequestDiagnostic,
   nonemptyString,
   rawPathname,
-  readBody,
+  readJsonBody,
   requestError,
   responseDiagnostic,
   responseJson as writeJsonResponse,
@@ -156,23 +155,10 @@ const jsonObject = (value: unknown, depth = 0): PlaygroundJsonObject => {
   return jsonValue(value, depth) as PlaygroundJsonObject;
 };
 
-const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
-  if (!isJsonRequest(request)) {
-    throw requestError(diagnostic('AB8009', 'Request body must use application/json.', 415));
-  }
-  let parsed: unknown;
-  try {
-    parsed = parseJsonWithoutDuplicateKeys(await readBody(request, {
-      code: 'AB8085',
-      limit: bodyLimit,
-      message: 'Request body exceeds 1 MiB.',
-    }));
-  } catch (error) {
-    if (isRequestDiagnostic(error)) throw error;
-    throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
-  }
-  return isRecord(parsed) ? parsed : invalidShape();
-};
+const jsonBody = (request: IncomingMessage): Promise<JsonObject> => readJsonBody(request, {
+  invalidShape,
+  read: { code: 'AB8085', limit: bodyLimit, message: 'Request body exceeds 1 MiB.' },
+});
 
 const operationInput = (value: JsonObject): PlaygroundOperationRequest => {
   const operation = value.operation;

@@ -31,7 +31,6 @@ export {
   type SourceWatchEvent,
 } from './watcher.ts';
 export {
-  createProjectEventHub,
   ProjectEventHub,
   ProjectEventHubError,
   type ProjectEventHubErrorCode,

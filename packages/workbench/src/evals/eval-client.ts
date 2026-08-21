@@ -8,7 +8,7 @@ import type {
 } from '../../../agent-bundle/src/dev/eval-service.ts';
 import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
-import { CodedClientError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
+import { isAbortError as isAbort, CodedClientError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { readNdjsonByteFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
@@ -77,7 +77,6 @@ const isIsoTimestamp = (value: unknown): value is string =>
   typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
 const invalidResponse = (): EvalClientError =>
   new EvalClientError('AB8073', 'Eval route returned an invalid response.');
-const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
 
 const textSchema = z.string();
 const timestampSchema = z.string().refine(isIsoTimestamp);

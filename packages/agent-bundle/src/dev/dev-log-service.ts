@@ -20,35 +20,8 @@ export type DevLogProducer = (typeof devLogProducers)[number];
 export type DevLogLevel = (typeof devLogLevels)[number];
 export type DevLogDetails = JsonValue | '[UNAVAILABLE]';
 
-/** Closed, producer-owned wire kinds. A producer cannot smuggle arbitrary text into `kind`. */
-export interface DevLogKindMap {
-  readonly build: 'artifact.available' | 'build.failed' | 'build.started';
-  readonly diagnostic:
-    | 'artifact.available.diagnostic'
-    | 'artifact.status.diagnostic'
-    | 'build.failed.diagnostic'
-    | 'build.started.diagnostic'
-    | 'invalidation.diagnostic'
-    | 'runtime.event.diagnostic'
-    | 'source.changed.diagnostic'
-    | 'source.status.diagnostic';
-  readonly eval: 'eval.run.completed' | 'eval.run.failed' | 'eval.run.started';
-  readonly hook: 'hook.simulate.completed' | 'hook.simulate.failed' | 'hook.simulate.started';
-  readonly mcp: 'mcp.logging' | 'mcp.stderr' | `mcp.operation.${'failed' | 'started' | 'succeeded'}`;
-  readonly playground: 'playground.event.appended';
-  readonly project:
-    | 'artifact.status'
-    | 'dev.shutdown.completed'
-    | 'dev.shutdown.started'
-    | 'invalidation'
-    | 'project.events.replay-gap'
-    | 'project.invalid-source'
-    | 'project.load'
-    | 'project.prepared'
-    | 'runtime.event'
-    | 'source.changed'
-    | 'source.status';
-}
+/** Closed, producer-owned wire kinds derived from devLogKinds. A producer cannot smuggle arbitrary text into `kind`. */
+export type DevLogKindMap = { readonly [TProducer in DevLogProducer]: (typeof devLogKinds)[TProducer][number] };
 
 export type DevLogKindFor<TProducer extends DevLogProducer> = DevLogKindMap[TProducer];
 
@@ -201,7 +174,7 @@ export const devLogKinds = Object.freeze({
     'artifact.status', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation', 'project.events.replay-gap',
     'project.invalid-source', 'project.load', 'project.prepared', 'runtime.event', 'source.changed', 'source.status',
   ] as const),
-} satisfies { readonly [TProducer in DevLogProducer]: readonly DevLogKindFor<TProducer>[] });
+} satisfies { readonly [TProducer in DevLogProducer]: readonly string[] });
 
 const isKindFor = <TProducer extends DevLogProducer>(producer: TProducer, value: unknown): value is DevLogKindFor<TProducer> =>
   typeof value === 'string' && (devLogKinds[producer] as readonly string[]).includes(value);

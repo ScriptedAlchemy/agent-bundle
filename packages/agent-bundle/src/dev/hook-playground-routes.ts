@@ -7,11 +7,10 @@ import {
   decodedOpaqueSegment,
   diagnostic,
   hasOnly,
-  isJsonRequest,
   isRequestDiagnostic,
   nonemptyString,
   rawPathname,
-  readBody,
+  readJsonBody,
   requestError,
   responseDiagnostic,
   responseJson as writeJsonResponse,
@@ -99,19 +98,7 @@ const invalidShape = (): never => {
   throw requestError(diagnostic('AB8032', 'Hook playground request has an invalid shape.', 400));
 };
 
-const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
-  if (!isJsonRequest(request)) {
-    throw requestError(diagnostic('AB8009', 'Request body must use application/json.', 415));
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readBody(request));
-  } catch (error) {
-    if (isRequestDiagnostic(error)) throw error;
-    throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
-  }
-  return isRecord(parsed) ? parsed : invalidShape();
-};
+const jsonBody = (request: IncomingMessage): Promise<JsonObject> => readJsonBody(request, { invalidShape });
 
 const listQuery = (requestTarget: string | undefined): HookPlaygroundListOptions => {
   const query = new URL(requestTarget ?? '/', 'http://localhost').searchParams;

@@ -158,3 +158,9 @@ export class DiagnosticBag {
     }
   }
 }
+
+export const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
+  Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
+
+export const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
+  diagnostics.some((diagnostic) => diagnostic.severity === 'error');

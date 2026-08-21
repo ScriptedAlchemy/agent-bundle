@@ -5,11 +5,10 @@ import {
   decodedOpaqueSegment,
   diagnostic,
   hasOnly,
-  isJsonRequest,
   isRequestDiagnostic,
   nonemptyString,
   rawPathname,
-  readBody,
+  readJsonBody,
   requestError,
   responseDiagnostic,
   responseJson,
@@ -111,19 +110,7 @@ const invalidShape = (): never => {
   throw requestError(diagnostic('AB8016', 'MCP session request has an invalid shape.', 400));
 };
 
-const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
-  if (!isJsonRequest(request)) {
-    throw requestError(diagnostic('AB8009', 'Request body must use application/json.', 415));
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readBody(request));
-  } catch (error) {
-    if (isRequestDiagnostic(error)) throw error;
-    throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
-  }
-  return isRecord(parsed) ? parsed : invalidShape();
-};
+const jsonBody = (request: IncomingMessage): Promise<JsonObject> => readJsonBody(request, { invalidShape });
 
 const createRequest = (value: JsonObject): { readonly epochId: string; readonly serverName: string; readonly target: string; readonly timeoutMs?: number } => {
   if (!hasOnly(value, ['epochId', 'serverName', 'target', 'timeoutMs'])) return invalidShape();

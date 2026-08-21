@@ -2,7 +2,6 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 
-import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import {
   EvalConfigError,
   EvalDefinitionError,
@@ -27,11 +26,10 @@ import {
   decodedOpaqueSegment,
   diagnostic,
   hasOnly,
-  isJsonRequest,
   isRequestDiagnostic,
   nonemptyString,
   rawPathname,
-  readBody,
+  readJsonBody,
   requestError,
   responseDiagnostic,
   responseJson as writeJsonResponse,
@@ -174,19 +172,7 @@ const trials = (value: unknown): number => {
   return value;
 };
 
-const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
-  if (!isJsonRequest(request)) {
-    throw requestError(diagnostic('AB8009', 'Request body must use application/json.', 415));
-  }
-  let parsed: unknown;
-  try {
-    parsed = parseJsonWithoutDuplicateKeys(await readBody(request));
-  } catch (error) {
-    if (isRequestDiagnostic(error)) throw error;
-    throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
-  }
-  return isRecord(parsed) ? parsed : invalidShape();
-};
+const jsonBody = (request: IncomingMessage): Promise<JsonObject> => readJsonBody(request, { invalidShape });
 
 /**
  * A browser selects authored suites, authored cases, and a trial count. Artifact

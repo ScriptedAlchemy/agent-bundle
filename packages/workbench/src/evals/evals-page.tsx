@@ -1,3 +1,4 @@
+import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
 import { wait } from '../foreground-session.ts';
@@ -65,8 +66,7 @@ const evalClientScopeKeyFor = (client: EvalClient): number => {
   return key;
 };
 
-const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The eval request could not be completed.';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'The eval request could not be completed.');
 
 /** Starts one authored run over the selection the browser is allowed to make. */
 export const startEvalRun = async (

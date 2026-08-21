@@ -2,6 +2,7 @@ import { rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { mapConcurrent } from '../core/async.ts';
 import { loadConfig } from '../config/load.ts';
 import { aggregateEvalTrials, summarizeEvalRun } from '../eval/aggregate.ts';
 import { compareEvalRuns, type EvalComparison } from '../eval/compare.ts';
@@ -228,7 +229,9 @@ export class EvalService {
     const config = await this.#config();
     const ids = await listEvalRuns({ projectRoot: this.#projectRoot, runsDir: config.runsDir });
     const records: EvalRunRecord[] = [];
-    for (const id of ids) records.push(await readEvalRun(this.#runDirectory(config, id)));
+    await mapConcurrent(ids.map((id, index) => ({ id, index })), 16, async ({ id, index }) => {
+      records[index] = await readEvalRun(this.#runDirectory(config, id));
+    });
     return Object.freeze(records);
   }
 

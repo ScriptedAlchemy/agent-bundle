@@ -324,7 +324,3 @@ export class ProjectEventHub {
     }
   }
 }
-
-export const createProjectEventHub = (
-  options?: ProjectEventHubOptions,
-): ProjectEventHub => new ProjectEventHub(options);

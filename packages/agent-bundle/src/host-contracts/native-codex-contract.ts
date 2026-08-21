@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { meetsMinimumVersion, parseSemanticVersion } from '../core/semver.ts';
 import { isErrno } from '../core/errors.ts';
 import { parseRedactedEventEnvelopes, type RedactedEventEnvelope } from './host-contract.ts';
 import { runBoundedChildProcess } from './process.ts';
@@ -99,13 +100,6 @@ interface CodexStateSnapshot {
   readonly plugins: string;
 }
 
-interface SemanticVersion {
-  readonly major: number;
-  readonly minor: number;
-  readonly patch: number;
-  readonly prerelease: boolean;
-}
-
 class SmokeStepError extends Error {
   readonly code?: string;
   readonly failure?: 'output-limit' | 'timeout';
@@ -166,25 +160,11 @@ export const createCodexNativeSmokePlan = (
 export const normalizeCodexNativeSmokeEvents = (raw: string): readonly RedactedEventEnvelope[] =>
   parseRedactedEventEnvelopes(raw);
 
-const parseSemanticVersion = (value: string): SemanticVersion | undefined => {
-  const match = /(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?(?:$|[^0-9])/u.exec(value);
-  if (match === null) return undefined;
-  return Object.freeze({
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-    prerelease: match[4] !== undefined,
-  });
-};
-
 const isCompatibleVersion = (value: string): boolean => {
   const observed = parseSemanticVersion(value);
   const minimum = parseSemanticVersion(minimumCodexVersion)!;
   if (observed === undefined) return false;
-  for (const key of ['major', 'minor', 'patch'] as const) {
-    if (observed[key] !== minimum[key]) return observed[key] > minimum[key];
-  }
-  return !observed.prerelease;
+  return meetsMinimumVersion(observed, minimum);
 };
 
 const authenticationFailure = (output: string | undefined): boolean =>

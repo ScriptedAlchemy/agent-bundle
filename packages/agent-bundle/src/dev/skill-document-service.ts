@@ -2,6 +2,7 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 
 import { parseSkill, type SkillDocument, type SkillResource } from '../config/skill.ts';
+import { freezeDiagnostics } from '../core/diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
 import type { NormalizedSkill, SourceProvenance } from '../core/types.ts';
@@ -107,9 +108,6 @@ const sourceResource = (resource: SkillResource): SkillDocumentResource => Objec
   bytes: resource.bytes,
   relativePath: resource.relativePath,
 });
-
-const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
-  Object.freeze(diagnostics.map((entry) => Object.freeze({ ...entry })));
 
 const documentResources = (resources: readonly SkillResource[]): readonly SkillDocumentResource[] =>
   Object.freeze(resources.map(sourceResource));
