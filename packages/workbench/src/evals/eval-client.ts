@@ -8,7 +8,7 @@ import type {
 } from '../../../agent-bundle/src/dev/eval-service.ts';
 import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
-import { isAbortError as isAbort, CodedClientError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
+import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { readNdjsonByteFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
@@ -235,15 +235,9 @@ const runResultSchema = z.strictObject({
 });
 const conforms = (schema: z.ZodType, value: unknown): boolean => schema.safeParse(value).success;
 
-const snapshot = (value: unknown): JsonValue => {
-  try { return snapshotStrictJsonValue(value); }
-  catch { throw invalidResponse(); }
-};
+const snapshot = (value: unknown): JsonValue => strictJsonSnapshot(value, invalidResponse);
 
-const parseResponseJson = (bytes: Uint8Array): JsonValue => {
-  try { return snapshot(parseJsonWithoutDuplicateKeys(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); }
-  catch { throw invalidResponse(); }
-};
+const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalidResponse);
 
 const eventFor = (value: unknown): EvalRunEvent => {
   if (!exactKeys(value, ['kind', 'payload', 'sequence', 'timestamp']) ||

@@ -1,6 +1,7 @@
-import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 
+import { createTargetDiagnostics } from './diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
@@ -115,25 +116,7 @@ const mcpRuntime = createTargetMcpRuntime({
   }),
 });
 
-const errorDiagnostic = (code: string, message: string): Diagnostic => ({
-  code,
-  message,
-  severity: 'error',
-  target: claudeName,
-});
-
-const schemaDiagnostics = (
-  document: 'plugin' | 'mcp' | 'marketplace' | 'hooks',
-  valid: boolean,
-  errors: readonly ErrorObject[] | null | undefined,
-): Diagnostic[] => valid
-  ? []
-  : [errorDiagnostic(
-      `claude.schema.${document}`,
-      `Claude ${document}.json is invalid: ${(errors ?? [])
-        .map((error) => `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`)
-        .join('; ') || 'schema validation failed'}.`,
-    )];
+const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(claudeName, 'Claude');
 
 const selectedForClaude = (targets: readonly string[]): boolean => targets.includes(claudeName);
 

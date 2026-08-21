@@ -50,13 +50,20 @@ export const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic 
   typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
   typeof (value as Partial<RequestDiagnostic>).status === 'number';
 
-export const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
+export const responseDiagnostic = (
+  response: ServerResponse,
+  value: RequestDiagnostic,
+  diagnostics?: readonly unknown[],
+): void => {
   if (response.headersSent || response.writableEnded) {
     response.destroy();
     return;
   }
   response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
+  response.end(JSON.stringify({
+    diagnostic: { code: value.code, message: value.message },
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+  }));
 };
 
 export const responseJson = (

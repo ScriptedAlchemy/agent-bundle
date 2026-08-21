@@ -6,7 +6,7 @@ import type {
 } from '../../../agent-bundle/src/dev/dev-log-service.ts';
 import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
-import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord } from '../client-helpers.ts';
+import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { readNdjsonByteFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
@@ -92,14 +92,8 @@ const isGap = (value: unknown): value is DevLogReplayGap => hasExactKeys(value, 
   safeInteger(value.latestDroppedSequence) && value.earliestAvailableSequence === value.latestDroppedSequence + 1 &&
   value.requestedAfterSequence < value.earliestAvailableSequence;
 const invalid = (): LogClientError => new LogClientError('AB8093', 'Dev Log route returned an invalid response.');
-const snapshot = (value: unknown): JsonValue => {
-  try { return snapshotStrictJsonValue(value); }
-  catch { throw invalid(); }
-};
-const parseResponseJson = (bytes: Uint8Array): JsonValue => {
-  try { return snapshot(parseJsonWithoutDuplicateKeys(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); }
-  catch { throw invalid(); }
-};
+const snapshot = (value: unknown): JsonValue => strictJsonSnapshot(value, invalid);
+const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalid);
 const parseMessage = (line: string): JsonValue => {
   try { return snapshot(parseJsonWithoutDuplicateKeys(line)); }
   catch { throw invalid(); }

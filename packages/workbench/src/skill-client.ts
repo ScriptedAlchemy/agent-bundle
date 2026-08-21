@@ -15,6 +15,7 @@ import {
   hasAllowedKeys,
   isRecord,
   optionalString,
+  parseStrictResponseJson,
   requiredString,
 } from './client-helpers.ts';
 import { snapshotStrictJsonValue } from './strict-json.ts';
@@ -134,14 +135,7 @@ const documentResponse = (value: unknown, kind: SkillDocumentBase['kind']): Serv
   return document;
 };
 
-const parseResponseJson = (bytes: Uint8Array): JsonValue => {
-  try {
-    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    return snapshotStrictJsonValue(parseJsonWithoutDuplicateKeys(decoded));
-  } catch {
-    throw invalidResponse();
-  }
-};
+const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalidResponse);
 
 const diagnosticError = (value: unknown, status: number): SkillClientError => {
   const detail = decodeDiagnosticError(value);

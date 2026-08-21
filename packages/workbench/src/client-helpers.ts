@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
+import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../agent-bundle/src/core/strict-json.ts';
+import { snapshotStrictJsonValue } from './strict-json.ts';
 
 /** Shared coded client error so each workbench client keeps its name and `instanceof` class. */
 export class CodedClientError<TCode extends string = string> extends Error {
@@ -24,6 +26,18 @@ export const errorMessage = (reason: unknown, fallback: string): string => {
 
 export const isAbortError = (reason: unknown): boolean =>
   reason instanceof Error && reason.name === 'AbortError';
+
+/** Detaches a strict JSON snapshot, converting any hostile-value failure into the caller's error. */
+export const strictJsonSnapshot = (value: unknown, invalid: () => Error): JsonValue => {
+  try { return snapshotStrictJsonValue(value); }
+  catch { throw invalid(); }
+};
+
+/** Fatal UTF-8 decode, duplicate-key-rejecting parse, and detached snapshot for a response body. */
+export const parseStrictResponseJson = (bytes: Uint8Array, invalid: () => Error): JsonValue => {
+  try { return strictJsonSnapshot(parseJsonWithoutDuplicateKeys(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), invalid); }
+  catch { throw invalid(); }
+};
 
 /** Required keys present, every own key allowed, extras rejected. */
 export const hasAllowedKeys = (

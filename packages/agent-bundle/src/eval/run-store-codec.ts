@@ -355,7 +355,7 @@ const parseSummary = (value: unknown, code: RunStoreValidationCode): EvalRunSumm
 export const parseRunSummaryInput = (value: unknown): EvalRunSummary =>
   parseSummary(value, 'EVAL_RUN_RECORD_INVALID');
 
-export const parseRunRecordValue = (value: unknown, code: RunStoreValidationCode): EvalRunRecord => {
+const parseRunRecordValue = (value: unknown, code: RunStoreValidationCode): EvalRunRecord => {
   const record = strictRecord(value, code, 'Eval run document');
   requireOptionalKeys(record,
     ['agentBundleVersion', 'artifact', 'createdAt', 'harness', 'id', 'projectRevision'],
@@ -391,7 +391,7 @@ export const parseRunRecord = (value: unknown): EvalRunRecord | undefined => {
   }
 };
 
-export const parseEventRecordValue = (value: unknown, code: RunStoreValidationCode): EvalRunEvent => {
+const parseEventRecordValue = (value: unknown, code: RunStoreValidationCode): EvalRunEvent => {
   const record = strictRecord(value, code, 'Eval run event');
   requireKeys(record, ['kind', 'payload', 'sequence', 'timestamp'], code, 'Eval run event');
   return Object.freeze({
@@ -577,7 +577,7 @@ const parseTrialUsage = (value: JsonValue, code: RunStoreValidationCode): EvalTr
 
 const trialInputKeys = ['assertions', 'caseDigest', 'caseId', 'completedAt', 'durationMs', 'evidence', 'fixtureDigest', 'host', 'id', 'model', 'outcome', 'prompt', 'provenance', 'rawArtifacts', 'startedAt', 'targetDigest', 'trialIndex'];
 
-export const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode): EvalTrialRecord => {
+const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode): EvalTrialRecord => {
   const record = strictRecord(value, code, 'Eval trial record');
   requireOptionalKeys(record,
     trialInputKeys,
@@ -632,4 +632,3 @@ export const parseTrialRecord = (value: unknown, sourcePath: string): EvalTrialR
   }
 };
 
-/** One writer owns one run directory; every other process creates its own run. */

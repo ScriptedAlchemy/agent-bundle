@@ -1,5 +1,6 @@
-import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 
+import { createTargetDiagnostics } from './diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
@@ -84,13 +85,6 @@ const mcpRuntime = createTargetMcpRuntime({
   }),
 });
 
-const errorDiagnostic = (code: string, message: string): Diagnostic => ({
-  code,
-  message,
-  severity: 'error',
-  target: portableName,
-});
-
 const containsToken = (value: string): boolean =>
   Object.values(pathTokens).some((token) => value.includes(token));
 
@@ -120,24 +114,7 @@ const unsupportedTokenDiagnostic = (
   );
 };
 
-const schemaDiagnostics = (
-  name: 'plugin' | 'mcp',
-  valid: boolean,
-  errors: readonly ErrorObject[] | null | undefined,
-): Diagnostic[] =>
-  valid
-    ? []
-    : [
-        errorDiagnostic(
-          `portable.schema.${name}`,
-          `Portable ${name}.json is invalid: ${(errors ?? [])
-            .map(
-              (error) =>
-                `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`,
-            )
-            .join('; ') || 'schema validation failed'}.`,
-        ),
-      ];
+const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(portableName, 'Portable');
 
 const hasPortableTarget = (targets: readonly string[]): boolean =>
   targets.includes(portableName);

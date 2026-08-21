@@ -26,6 +26,7 @@ import {
   rawPathname,
   readBody,
   requestError,
+  responseDiagnostic as writeResponseDiagnostic,
   responseJson,
   singleHeader,
   type RequestDiagnostic,
@@ -145,18 +146,8 @@ const attachedDiagnostics = (value: RequestDiagnostic): readonly unknown[] | und
   return Array.isArray(diagnostics) ? diagnostics : undefined;
 };
 
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  const diagnostics = attachedDiagnostics(value);
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({
-    diagnostic: { code: value.code, message: value.message },
-    ...(diagnostics === undefined ? {} : { diagnostics }),
-  }));
-};
+const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void =>
+  writeResponseDiagnostic(response, value, attachedDiagnostics(value));
 
 const attachmentHeader = (relativePath: string): string =>
   `attachment; filename*=UTF-8''${encodeURIComponent(basename(relativePath)).replaceAll("'", '%27')}`;
