@@ -13,10 +13,8 @@ const workbenchRoot = join(workspaceRoot, 'packages', 'workbench');
 
 const resolveConfig = (command: 'build' | 'dev') => {
   if (typeof config === 'function') {
-    return config({
-      command,
-      envMode: command === 'dev' ? 'development' : 'production',
-    });
+    const env = command === 'dev' ? 'development' : 'production';
+    return config({ env, command, envMode: env });
   }
   return config;
 };

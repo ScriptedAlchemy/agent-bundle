@@ -120,9 +120,11 @@ const knownStreamClass = (path: string): KnownStreamClass | undefined => {
   return segments[1] === 'evals' && segments[2] === 'runs' ? 'evals' : undefined;
 };
 
-const isKnownPreOutageStreamCancellation = (request: NetworkLedgerEntry): boolean =>
+/** The playground page retires a superseded in-flight catalog request via its generation lease (createPlaygroundCatalogLifecycle). */
+const isKnownPreOutageClientCancellation = (request: NetworkLedgerEntry): boolean =>
   request.error === 'net::ERR_ABORTED' && request.method === 'GET' && (
     knownStreamClass(request.path) !== undefined ||
+    request.path === '/api/playground/catalog' ||
     (request.path === '/api/logs/replay' && request.status !== undefined && request.status >= 200 && request.status < 300)
   );
 
@@ -161,7 +163,7 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
   const foreignFailures = requestFailed.filter((request) => request.origin !== ledger.origin);
   assertOutageLedger(foreignFailures.length === 0, `cross-origin request failures: ${JSON.stringify(foreignFailures)}`);
   const preOutageFailures = requestFailed.filter((request) =>
-    ledgerFailureAt(request) < ledger.outageStartedAt && !isKnownPreOutageStreamCancellation(request),
+    ledgerFailureAt(request) < ledger.outageStartedAt && !isKnownPreOutageClientCancellation(request),
   );
   assertOutageLedger(preOutageFailures.length === 0, `unexpected pre-outage failures: ${JSON.stringify(preOutageFailures)}`);
   const postRecoveryFailures = ledger.requests.filter((request) => request.error !== undefined && ledgerFailureAt(request) >= ledger.recoveredAt);
