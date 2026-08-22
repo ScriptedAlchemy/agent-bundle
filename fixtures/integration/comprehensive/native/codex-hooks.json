@@ -1,0 +1,6 @@
+{
+  "description": "Codex native integration hook",
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "command": "echo codex-native", "type": "command" }] }]
+  }
+}

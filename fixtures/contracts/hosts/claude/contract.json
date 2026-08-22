@@ -1,0 +1,37 @@
+{
+  "host": "claude",
+  "executable": "claude",
+  "minimumVersion": "2.1.232",
+  "probes": {
+    "version": { "args": ["--version"] },
+    "help": [
+      {
+        "id": "root",
+        "args": ["--help"],
+        "output": "help.txt",
+        "requiredOptions": ["--plugin-dir", "--output-format", "--no-session-persistence"],
+        "requiredLiterals": ["stream-json"]
+      },
+      {
+        "id": "plugin",
+        "args": ["plugin", "--help"],
+        "output": "plugin-help.txt",
+        "requiredCommands": ["install", "marketplace", "validate"]
+      }
+    ],
+    "status": { "args": ["plugin", "--help"] }
+  },
+  "commandShapes": {
+    "nativeExecution": [
+      "-p",
+      "--plugin-dir",
+      "<plugin-root>",
+      "--output-format",
+      "stream-json",
+      "--no-session-persistence",
+      "<task-input>"
+    ],
+    "hookEvent": ["hook_event_name", "PreToolUse"]
+  },
+  "eventEnvelopeFiles": ["stream-events.jsonl", "hook-event.json"]
+}

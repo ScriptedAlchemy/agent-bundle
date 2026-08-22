@@ -1,0 +1,16 @@
+{
+  "provenance": "synthetic-redacted-contract",
+  "stream": {
+    "activationEvidence": "observed",
+    "authSource": "unavailable",
+    "envelopes": [
+      { "fields": ["mcp_servers", "plugins", "session_id", "subtype", "type"], "subtype": "init", "type": "system" },
+      { "fields": ["message", "type"], "type": "assistant" },
+      { "fields": ["duration_ms", "subtype", "type", "usage"], "subtype": "success", "type": "result" }
+    ],
+    "errorEnvelopes": [],
+    "hookEnvelopes": [],
+    "mcp": { "configuredServers": 0, "toolCalls": 0 },
+    "plugins": ["agent-bundle-native-smoke"]
+  }
+}

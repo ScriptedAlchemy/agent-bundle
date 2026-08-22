@@ -1,0 +1,316 @@
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type JsonSchemaConst = {
+  const: JsonValue;
+  title?: string;
+  description?: string;
+};
+
+export type InspectorFormSchema = {
+  type?:
+    | "string"
+    | "number"
+    | "integer"
+    | "boolean"
+    | "array"
+    | "object"
+    | "null"
+    | (
+        | "string"
+        | "number"
+        | "integer"
+        | "boolean"
+        | "array"
+        | "object"
+        | "null"
+      )[];
+  title?: string;
+  description?: string;
+  required?: string[];
+  default?: JsonValue;
+  properties?: Record<string, InspectorFormSchema>;
+  items?: InspectorFormSchema;
+  // Array validation constraints
+  minItems?: number;
+  maxItems?: number;
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  nullable?: boolean;
+  pattern?: string;
+  format?: string;
+  enum?: string[];
+  // Non-standard legacy support: titles for enum values
+  enumNames?: string[];
+  const?: JsonValue;
+  oneOf?: (InspectorFormSchema | JsonSchemaConst)[];
+  anyOf?: (InspectorFormSchema | JsonSchemaConst)[];
+  $ref?: string;
+};
+
+export type JsonObject = { [key: string]: JsonValue };
+
+/**
+ * Narrow an MCP protocol schema (SDK `JsonSchemaType` — e.g. `Tool["inputSchema"]`
+ * / `outputSchema`, an elicitation `requestedSchema`) to the {@link
+ * InspectorFormSchema} subset the {@link SchemaForm} renderer understands.
+ *
+ * Under SDK v2 the protocol schema type (from `json-schema-typed`, exported as
+ * `JsonSchemaType` from `@modelcontextprotocol/client`) is structurally distinct
+ * from Inspector's form schema — same JSON on the wire, incompatible TS types.
+ * Rather than cast at every call site, callers pass the SDK schema through here.
+ * Returns `null` when there is no renderable object shape (missing schema, or a
+ * non-object schema the form can't build fields from); callers handle `null`.
+ */
+export function toFormSchema(schema: unknown): InspectorFormSchema | null {
+  if (schema == null || typeof schema !== "object" || Array.isArray(schema)) {
+    return null;
+  }
+  // Structural narrow: the SDK schema's fields are a superset of what the form
+  // reads (`type`, `properties`, `required`, `items`, …); the values the form
+  // never dereferences don't affect rendering.
+  return schema as InspectorFormSchema;
+}
+
+export type DataType =
+  | "string"
+  | "number"
+  | "bigint"
+  | "boolean"
+  | "symbol"
+  | "undefined"
+  | "object"
+  | "function"
+  | "array"
+  | "null";
+
+/**
+ * Determines the specific data type of a JSON value
+ * @param value The JSON value to analyze
+ * @returns The specific data type including "array" and "null" as distinct types
+ */
+export function getDataType(value: JsonValue): DataType {
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "null";
+  return typeof value;
+}
+
+/**
+ * Collect a schema's default field values into a values object. A schema form
+ * displays defaults but only writes a field into its `values` once the user
+ * edits it, so an untouched default would otherwise be absent from a
+ * submission. Seeding form state with this keeps default-only fields in the
+ * submitted result (parity with v1). Recurses into nested object schemas and
+ * omits fields that have no default.
+ */
+export function collectSchemaDefaults(
+  schema: InspectorFormSchema,
+): Record<string, unknown> {
+  const properties = schema.properties ?? {};
+  const result: Record<string, unknown> = {};
+  for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+    if (fieldSchema.default !== undefined) {
+      result[fieldName] = fieldSchema.default;
+    } else if (fieldSchema.type === "object" && fieldSchema.properties) {
+      const nested = collectSchemaDefaults(fieldSchema);
+      if (Object.keys(nested).length > 0) {
+        result[fieldName] = nested;
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Whether any of the schema's required top-level fields is missing a value in
+ * `values` (absent, null, or empty string). Used to gate a form's submit
+ * action until required fields are supplied.
+ */
+export function hasMissingRequiredFields(
+  schema: InspectorFormSchema,
+  values: Record<string, unknown>,
+): boolean {
+  const required = schema.required ?? [];
+  return required.some((field) => {
+    const value = values[field];
+    return value === undefined || value === null || value === "";
+  });
+}
+
+/**
+ * Attempts to parse a string as JSON, only for objects and arrays
+ * @param str The string to parse
+ * @returns Object with success boolean and either parsed data or original string
+ */
+export function tryParseJson(str: string): {
+  success: boolean;
+  data: JsonValue;
+} {
+  const trimmed = str?.trim();
+  if (
+    trimmed &&
+    !(trimmed.startsWith("{") && trimmed.endsWith("}")) &&
+    !(trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
+    return { success: false, data: str };
+  }
+  try {
+    return { success: true, data: JSON.parse(str) };
+  } catch {
+    return { success: false, data: str };
+  }
+}
+
+/**
+ * Updates a value at a specific path in a nested JSON structure
+ * @param obj The original JSON value
+ * @param path Array of keys/indices representing the path to the value
+ * @param value The new value to set
+ * @returns A new JSON value with the updated path
+ */
+export function updateValueAtPath(
+  obj: JsonValue,
+  path: string[],
+  value: JsonValue,
+): JsonValue {
+  if (path.length === 0) return value;
+
+  if (obj === null || obj === undefined) {
+    obj = !isNaN(Number(path[0])) ? [] : {};
+  }
+
+  if (Array.isArray(obj)) {
+    return updateArray(obj, path, value);
+  } else if (typeof obj === "object" && obj !== null) {
+    return updateObject(obj as JsonObject, path, value);
+  } else {
+    console.error(
+      `Cannot update path ${path.join(".")} in non-object/array value:`,
+      obj,
+    );
+    return obj;
+  }
+}
+
+/**
+ * Updates an array at a specific path
+ */
+function updateArray(
+  array: JsonValue[],
+  path: string[],
+  value: JsonValue,
+): JsonValue[] {
+  const [index, ...restPath] = path;
+  const arrayIndex = Number(index);
+
+  if (isNaN(arrayIndex)) {
+    console.error(`Invalid array index: ${index}`);
+    return array;
+  }
+
+  if (arrayIndex < 0) {
+    console.error(`Array index out of bounds: ${arrayIndex} < 0`);
+    return array;
+  }
+
+  let newArray: JsonValue[] = [];
+  for (let i = 0; i < array.length; i++) {
+    newArray[i] = i in array ? array[i] : null;
+  }
+
+  if (arrayIndex >= newArray.length) {
+    const extendedArray: JsonValue[] = new Array(arrayIndex).fill(null);
+    // Copy over the existing elements (now guaranteed to be dense)
+    for (let i = 0; i < newArray.length; i++) {
+      extendedArray[i] = newArray[i];
+    }
+    newArray = extendedArray;
+  }
+
+  if (restPath.length === 0) {
+    newArray[arrayIndex] = value;
+  } else {
+    newArray[arrayIndex] = updateValueAtPath(
+      newArray[arrayIndex],
+      restPath,
+      value,
+    );
+  }
+  return newArray;
+}
+
+/**
+ * Updates an object at a specific path
+ */
+function updateObject(
+  obj: JsonObject,
+  path: string[],
+  value: JsonValue,
+): JsonObject {
+  const [key, ...restPath] = path;
+
+  // Validate object key
+  if (typeof key !== "string") {
+    console.error(`Invalid object key: ${key}`);
+    return obj;
+  }
+
+  const newObj = { ...obj };
+
+  if (restPath.length === 0) {
+    newObj[key] = value;
+  } else {
+    // Ensure key exists
+    if (!(key in newObj)) {
+      newObj[key] = {};
+    }
+    newObj[key] = updateValueAtPath(newObj[key], restPath, value);
+  }
+  return newObj;
+}
+
+/**
+ * Gets a value at a specific path in a nested JSON structure
+ * @param obj The JSON value to traverse
+ * @param path Array of keys/indices representing the path to the value
+ * @param defaultValue Value to return if path doesn't exist
+ * @returns The value at the path, or defaultValue if not found
+ */
+export function getValueAtPath(
+  obj: JsonValue,
+  path: string[],
+  defaultValue: JsonValue = null,
+): JsonValue {
+  if (path.length === 0) return obj;
+
+  const [first, ...rest] = path;
+
+  if (obj === null || obj === undefined) {
+    return defaultValue;
+  }
+
+  if (Array.isArray(obj)) {
+    const index = Number(first);
+    if (isNaN(index) || index < 0 || index >= obj.length) {
+      return defaultValue;
+    }
+    return getValueAtPath(obj[index], rest, defaultValue);
+  }
+
+  if (typeof obj === "object" && obj !== null) {
+    if (!(first in obj)) {
+      return defaultValue;
+    }
+    return getValueAtPath((obj as JsonObject)[first], rest, defaultValue);
+  }
+
+  return defaultValue;
+}

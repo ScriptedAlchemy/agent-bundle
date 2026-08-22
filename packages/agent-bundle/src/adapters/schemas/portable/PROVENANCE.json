@@ -1,0 +1,18 @@
+{
+  "normativeTextWinsOnConflict": true,
+  "retrievedAt": "2026-08-14",
+  "schemas": {
+    "mcp.schema.json": {
+      "bytes": 3408,
+      "sha256": "6539175bfcdf43085855183e86da40ea94b166547a72b47ae9a0a390516d3acb",
+      "url": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+    },
+    "plugin.schema.json": {
+      "bytes": 1805,
+      "sha256": "0a4aad95ce337878ad38802ebf0daa3fde76abe3f65400c86bcbb1ec0b3ab883",
+      "url": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+    }
+  },
+  "specification": "https://agent-plugins.org/specification",
+  "version": "1.0.0"
+}

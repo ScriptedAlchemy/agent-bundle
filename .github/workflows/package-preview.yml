@@ -1,0 +1,24 @@
+name: Package preview
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: package-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish pkg.pr.new preview
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          cache: npm
+          node-version: '22.19.0'
+      - run: npm ci
+      - run: npm run build
+      - run: npm run preview:publish

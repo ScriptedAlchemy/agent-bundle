@@ -1,0 +1,28 @@
+{
+  "observedCliVersion": "0.147.0",
+  "retrievedAt": "2026-08-14",
+  "schemaSource": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md",
+  "schemas": {
+    "hooks.schema.json": {
+      "bytes": 1107,
+      "sha256": "e42eef736997b9abb8f28b2ee9262f5c7b1f7f11d8289e9c25da8cc94a504eff",
+      "url": "https://learn.chatgpt.com/docs/hooks"
+    },
+    "marketplace.schema.json": {
+      "bytes": 1671,
+      "sha256": "1d43c5ed19de401fb7455c5912e4c21113f6e387aef4c28d2eca121f7554c4e8",
+      "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
+    },
+    "mcp.schema.json": {
+      "bytes": 1267,
+      "sha256": "75bd50f9fcb85c2e8d43bc132d61c172a02f28ea8bb77389816ae77b14a4257e",
+      "url": "https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json"
+    },
+    "plugin.schema.json": {
+      "bytes": 1728,
+      "sha256": "f6e8e7d2ecb48c50ffa850d1a8190ad85ceffec705b8f0f39bb44a1d10aca0d9",
+      "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
+    }
+  },
+  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Package builds do not download schemas or invoke host-side validators."
+}

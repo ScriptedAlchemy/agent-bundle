@@ -1,0 +1,7 @@
+{
+  "session_id": "<redacted>",
+  "cwd": "<redacted>",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {}
+}

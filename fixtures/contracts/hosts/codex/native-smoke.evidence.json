@@ -1,0 +1,20 @@
+{
+  "host": "codex",
+  "eventEnvelopes": [
+    { "type": "thread.started", "fields": ["thread_id", "type"] },
+    { "type": "turn.started", "fields": ["type"] },
+    { "type": "item.completed", "fields": ["item", "type"] },
+    { "type": "item.completed", "fields": ["item", "type"] },
+    { "type": "item.started", "fields": ["item", "type"] },
+    { "type": "item.completed", "fields": ["item", "type"] },
+    { "type": "item.started", "fields": ["item", "type"] },
+    { "type": "item.completed", "fields": ["item", "type"] },
+    { "type": "item.completed", "fields": ["item", "type"] },
+    { "type": "turn.completed", "fields": ["type", "usage"] }
+  ],
+  "activation": {
+    "pluginAvailability": "observed",
+    "automatic": "unavailable",
+    "basis": "candidate-skill-sentinel-not-observed"
+  }
+}

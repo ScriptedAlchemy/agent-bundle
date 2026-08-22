@@ -1,0 +1,52 @@
+name: Native host smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: Signed-in host CLI to exercise
+        required: true
+        default: both
+        type: choice
+        options: [both, claude, codex]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-host-smoke-${{ github.workflow }}-${{ inputs.host }}
+  cancel-in-progress: true
+
+jobs:
+  native-host-smoke:
+    # This runs only on a trusted runner with existing CLI login state; no workflow secrets are passed.
+    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: claude
+            source_tests: packages/agent-bundle/tests/native-claude-contract.test.ts packages/agent-bundle/tests/eval-claude-harness.test.ts
+            packed_command: npm run test:packed:native:claude
+          - host: codex
+            source_tests: packages/agent-bundle/tests/native-codex-contract.test.ts packages/agent-bundle/tests/eval-codex-home.test.ts
+            packed_command: npm run test:packed:native:codex
+    steps:
+      - uses: actions/checkout@v7
+        if: inputs.host == 'both' || inputs.host == matrix.host
+      - uses: actions/setup-node@v7
+        if: inputs.host == 'both' || inputs.host == matrix.host
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+        if: inputs.host == 'both' || inputs.host == matrix.host
+      - name: ${{ matrix.host }} source signed-in smoke
+        if: inputs.host == 'both' || inputs.host == matrix.host
+        env:
+          AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: ${{ matrix.host == 'claude' && '1' || '' }}
+          AGENT_BUNDLE_NATIVE_CODEX_SMOKE: ${{ matrix.host == 'codex' && '1' || '' }}
+        run: npm run test -- ${{ matrix.source_tests }}
+      - name: ${{ matrix.host }} installed-tarball native smoke
+        if: inputs.host == 'both' || inputs.host == matrix.host
+        run: ${{ matrix.packed_command }}

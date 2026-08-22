@@ -1,0 +1,8 @@
+{
+  "name": "agent-bundle-integration-fixture",
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.0.0"
+  },
+  "private": true,
+  "type": "module"
+}

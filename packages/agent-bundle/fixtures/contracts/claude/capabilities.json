@@ -1,0 +1,21 @@
+{
+  "evidence": {
+    "cliHelp": "cli-help.txt",
+    "source": "https://docs.anthropic.com/en/docs/claude-code/plugins"
+  },
+  "mcp": {
+    "stdio": true,
+    "streamableHttp": true
+  },
+  "nativePaths": {
+    "manifest": ".claude-plugin/plugin.json",
+    "marketplace": ".claude-plugin/marketplace.json",
+    "mcp": ".mcp.json"
+  },
+  "observedCliVersion": "2.1.232",
+  "pathTokens": {
+    "pluginData": "${CLAUDE_PLUGIN_DATA}",
+    "pluginRoot": "${CLAUDE_PLUGIN_ROOT}",
+    "workspaceRoot": "${CLAUDE_PROJECT_DIR}"
+  }
+}

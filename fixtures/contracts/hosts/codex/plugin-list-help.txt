@@ -1,0 +1,4 @@
+Usage: codex plugin list [OPTIONS]
+
+Options:
+  --json  Emit installed plugin state as JSON.

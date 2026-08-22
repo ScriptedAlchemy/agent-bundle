@@ -1,6 +1,6 @@
 # Agent Bundle developer workbench design
 
-**Status:** Proposed extension to the approved Agent Bundle architecture
+**Status:** Implemented extension to the approved Agent Bundle architecture; delivery is verified by the repository CI gates
 
 **Date:** 2026-08-14
 
@@ -97,14 +97,21 @@ trial belongs to its lifecycle and closes on Ctrl-C or programmatic `close()`.
 ## Rsbuild workbench build and foreground server
 
 Rsbuild builds the React workbench. While contributing to Agent Bundle, its built-in dev server
-provides React/CSS HMR and proxies the typed Agent Bundle APIs to a coordinator process. This is
-the fast frontend-development loop.
+provides React/CSS HMR and proxies typed Agent Bundle APIs to a running foreground coordinator. The
+only supported contributor entry point is
+`AGENT_BUNDLE_WORKBENCH_API_PROXY=<foreground-url> npm run dev --workspace agent-bundle-workbench`;
+`packages/workbench/scripts/dev.mjs` refuses to start without that proxy. This is the fast
+frontend-development loop.
 
 The published CLI does not recompile the workbench for every plugin author. The package ships
 prebuilt Rsbuild assets, and `agent-bundle dev` starts one lightweight foreground HTTP server
 that serves those assets, typed APIs, and a project-event stream. Plugin-source changes are data
 events that update the normalized model, diagnostics, artifact epochs, MCP sessions, hooks, and
 eval runs; they are not workbench HMR.
+
+The production workbench build disables filename hashing. Its prebuilt assets keep stable names;
+versioning and integrity come from package/compiler manifests rather than content hashes embedded
+in chunk filenames.
 
 Both modes use the same browser application and service contracts:
 
@@ -140,7 +147,7 @@ Internally it delegates to focused services:
 - `McpService`: starts generated MCP commands and exposes protocol operations;
 - `HookService`: resolves native mappings and runs generated handlers with fixture events;
 - `EvalService`: creates trials, launches harnesses, grades results, and compares runs;
-- `RunStore`: persists schema-versioned JSON and JSONL artifacts.
+- `RunStore`: persists canonical JSON and JSONL artifacts and rejects non-contract shapes.
 
 Services are usable from the UI, CLI, and programmatic API. HTTP handlers contain no product
 logic beyond input decoding and result encoding.
@@ -267,8 +274,10 @@ It shows a compact target matrix and the latest changed files. Raw logs remain o
 ### Plugin playground
 
 The Plugin Playground is the primary whole-product surface. The author selects an artifact epoch,
-target host, fixture, and invocation, then either enters a natural-language prompt or directly
-invokes a Skill, MCP operation, hook, or script.
+target host, fixture, and invocation, then either enters a native-host prompt through a
+server-owned catalog selection or directly invokes a Skill, MCP operation, hook, or
+manifest-owned script. Native selections pin the eligible case, fixture, host, and model for the
+chosen epoch; browser input cannot name a command or model.
 
 One ordered timeline shows:
 
@@ -283,6 +292,11 @@ One ordered timeline shows:
 Every summarized row links to its raw event. A completed playground session can be replayed,
 exported, or promoted to a draft eval case. Promotion captures the task, fixture, target, durable
 outcome, and selected assertions; it does not bake incidental tool order into the eval.
+
+`script.run` is available in the production-mounted Playground for trusted local use. It runs the
+selected emitted script from the selected target in a managed workspace and captures bounded output,
+exit, cancellation, and raw evidence. Hook and MCP page operations remain independent of an open
+Playground session; only operations started from Playground become part of its ordered trace.
 
 ### Skills
 
@@ -314,6 +328,25 @@ The workbench provides:
   and logging messages;
 - invocation history, replay, config export, raw protocol frames, and promotion to a draft eval.
 
+MCP Apps use the same selected session and artifact binding. Only standard
+`_meta.ui.resourceUri` selects the View. Other host metadata, including
+`_meta["openai/outputTemplate"]`, remains visible in raw protocol data but is not synthesized or
+used as a fallback selector. The service calls `resources/read` for the referenced `ui://` URI and requires
+`text/html;profile=mcp-app`; it does not reinterpret an arbitrary web URL or artifact file as a
+widget. The browser renders the returned HTML inside a different-origin sandbox proxy and uses the
+official MCP Apps app-bridge package for the `ui/initialize` lifecycle, tool input/results,
+`tools/call`, resource reads, model-context updates, display-mode requests, logging, and teardown.
+The bridge forwards app tool calls only through the already bound MCP session.
+
+The workbench advertises the pinned `io.modelcontextprotocol/ui` extension and supported MIME type.
+It preserves structured content, resource links, embedded resources, result metadata, CSP, widget
+hints, visibility, and host context without translating them into an Agent Bundle format. CSP is
+enforced in the sandbox proxy, with restrictive defaults when metadata is absent. Theme, container
+dimensions, display modes, and safe-area insets come from host context so the same fixture can be
+tested in desktop iframe and mobile-WebView-sized layouts. OpenAI-only `window.openai` extensions
+are outside the portable workbench bridge; fixtures may feature-detect them and must retain a
+standard fallback.
+
 The initial client advertises tools, resources, prompts, progress, and logging. Unsupported client
 features are shown as unsupported and return a defined error instead of hanging. Protocol versions
 and schemas come from pinned public MCP SDK packages rather than being copied into Agent Bundle.
@@ -335,7 +368,11 @@ Creating a session binds `{ epochId, target, serverName }`, resolves its generat
 host environment once, creates a per-session plugin-data directory, and returns the negotiated
 connection state. The bidirectional stream forwards JSON-RPC frames and separate stderr/log
 events, supports request cancellation and session shutdown, and records each frame in the shared
-plugin timeline before delivery. The browser never supplies an arbitrary executable path.
+plugin timeline before delivery. The browser never supplies an arbitrary executable path. A session
+never switches epoch implicitly: **Restart MCP session** respawns the same generated-server binding,
+while a newly opened session is needed for a newly published epoch. A host can require an explicit
+MCP reload after a generated server changes its catalog; `notifications/tools/list_changed` is not
+used as workbench HMR.
 
 The official MCP Inspector is MIT licensed, and its current v2 architecture separates MCP client
 state and React hooks from presentational web components. Because those modules are deliberately
@@ -596,8 +633,8 @@ assertions declare their minimum accepted level.
 One or two trials are smoke checks. Reliability comparisons require at least three trials per
 aligned condition. The UI displays the actual `k/n` beside pass@k and pass^k. Baseline and
 candidate trials are comparable only when case, host, pinned model, host CLI version, fixture
-digest, invocation, and grader versions align; mismatches are labeled non-comparable instead of
-being folded into a delta.
+digest, invocation, and semantic grader identities align; mismatches are labeled non-comparable
+instead of being folded into a delta.
 
 ## Skill activation evidence
 
@@ -684,7 +721,7 @@ failures are harness failures rather than plugin failures.
 
 ## Run storage
 
-No database is required. State is schema-versioned and inspectable:
+No database is required. State has one canonical, strictly decoded, inspectable shape:
 
 ```text
 .agent-bundle/
@@ -692,7 +729,6 @@ No database is required. State is schema-versioned and inspectable:
     └── <run-id>/
         ├── run.json
         ├── events.jsonl
-        ├── comparison.json
         ├── cases/
         │   └── <case-id>/
         │       └── <trial-id>.json
@@ -700,16 +736,19 @@ No database is required. State is schema-versioned and inspectable:
             └── ...
 ```
 
+Comparisons are derived, frozen views over selected persisted runs; they are not a canonical file in
+either run tree. Their conclusions retain the selected run identities and each run's recorded
+provenance and usage without introducing mutable comparison state.
+
 Run provenance includes:
 
-- Agent Bundle version and schema version;
-- project revision and dirty-state digest;
+- project content revision;
+- Agent Bundle version, host CLI version, and target identity;
 - artifact epoch and target digests;
 - fixture digest;
-- host CLI and plugin versions;
 - selected harness and pinned model;
 - timing, exit state, usage when reported, and raw log references;
-- grader versions and assertion evidence.
+- semantic grader identity and assertion evidence.
 
 One process owns a run directory through an explicit lock and is its only writer. A second
 process creates a new run rather than appending to an active run. Readers may tail completed JSONL
@@ -794,6 +833,13 @@ an ambient output directory from modification time.
 - generated stdio MCP initialization and catalog operations;
 - input forms and raw JSON produce identical calls;
 - process restart binds the selected epoch;
+- a generated MCP App is built as one stable, self-contained HTML resource and is returned by the
+  owning generated server through `resources/read` with `text/html;profile=mcp-app`;
+- the sandbox proxy completes `ui/initialize`, delivers the original input/result, permits one
+  allowed same-server `tools/call`, applies CSP, and tears down without leaking a session;
+- the same MCP App fixture renders through the standard bridge under ChatGPT-compatible and
+  Claude-compatible host contexts, while its ordinary text/structured fallback remains usable
+  without a renderer;
 - the vendored Inspector subset retains its selected upstream fixtures and license metadata;
 - Inspector-derived controls execute through Agent Bundle's epoch-bound MCP session service;
 - exported standalone-Inspector config contains the same resolved command and non-secret env;
@@ -850,7 +896,7 @@ Inspector source.
 2. Rsbuild React build, contributor HMR path, and published foreground server.
 3. Skill browser and Markdown renderer.
 4. Native MCP session service, integrated Inspector-derived components, and generated-hook
-   simulator.
+   simulator, including the standard MCP Apps sandbox bridge.
 5. Whole-plugin playground, ordered trace, replay, and promotion to a draft eval.
 6. Deterministic eval definitions, run store, graders, and CLI.
 7. Claude native harness.
@@ -884,6 +930,8 @@ native model trials do not precede deterministic artifact checks.
 12. JSON and JSONL files are the first run store; there is no database.
 13. The optional agent-facing MCP shares application services and lives only for the foreground
     dev session.
+14. MCP Apps use the official standard bridge and a different-origin sandbox; host-specific UI
+    APIs are optional capability-detected extensions, not compiler forks.
 
 ## Research basis
 
@@ -903,6 +951,12 @@ native model trials do not precede deterministic artifact checks.
 - [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector)
 - [MCP Inspector source and architecture](https://github.com/modelcontextprotocol/inspector)
 - [MCP debugging guide](https://modelcontextprotocol.io/docs/tools/debugging)
+- [MCP Apps specification and SDK](https://github.com/modelcontextprotocol/ext-apps)
+- [OpenAI: Add UI to an MCP server](https://developers.openai.com/plugins/build/chatgpt-ui)
+- [Claude: Building cross-platform MCP Apps](https://claude.com/docs/connectors/building/mcp-apps/cross-compatibility)
+- [Claude MCP Apps design guidelines](https://claude.com/docs/connectors/building/mcp-apps/design-guidelines)
+- [Rsbuild inline static assets](https://rsbuild.rs/guide/optimization/inline-assets)
+- [Rsbuild filename hashing](https://rsbuild.rs/config/output/filename-hash)
 - [Anthropic: Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
 - [Inspect AI](https://inspect.aisi.org.uk/)
 - [Promptfoo](https://www.promptfoo.dev/docs/intro/)

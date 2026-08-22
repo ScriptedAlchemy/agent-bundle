@@ -1,0 +1,12 @@
+Agent Bundle workbench includes an allowlisted source snapshot from the MCP
+Inspector project:
+
+  MCP Inspector 2.2.0
+  https://github.com/modelcontextprotocol/inspector
+  commit 672f9f41c548487a468b9e7007d2f9de14da5a69
+  MIT License
+
+The copied path list, source and post-patch SHA-256 digests, declared package
+imports, and retained upstream test provenance are in
+src/inspector/UPSTREAM.json. The MIT license text is in
+src/inspector/LICENSE.inspector.

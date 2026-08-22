@@ -1,0 +1,74 @@
+{
+  "name": "agent-bundle",
+  "version": "0.1.0",
+  "description": "Compile a typed Agent Bundle configuration into portable, Codex, and Claude Code artifacts.",
+  "keywords": [
+    "agent",
+    "claude-code",
+    "codex",
+    "mcp"
+  ],
+  "homepage": "https://github.com/ScriptedAlchemy/agent-bundle#readme",
+  "bugs": {
+    "url": "https://github.com/ScriptedAlchemy/agent-bundle/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ScriptedAlchemy/agent-bundle.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "dist",
+    "!dist/workbench/**/*.map",
+    "README.md"
+  ],
+  "bin": {
+    "agent-bundle": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config.js"
+    },
+    "./eval": {
+      "types": "./dist/eval/index.d.ts",
+      "import": "./dist/eval.js"
+    },
+    "./mcp-apps": {
+      "types": "./dist/mcp-apps.d.ts",
+      "import": "./dist/mcp-apps.js"
+    }
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@rsbuild/core": "2.1.13",
+    "@rsbuild/plugin-react": "2.1.0",
+    "@rslib/core": "0.23.2",
+    "@rslint/core": "0.8.0",
+    "@rstackjs/load-config": "0.1.2",
+    "acorn": "8.18.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "chokidar": "5.0.0",
+    "commander": "15.0.0",
+    "es-module-lexer": "2.3.2",
+    "fast-glob": "3.3.3",
+    "ignore": "7.0.6",
+    "jiti": "2.7.0",
+    "open": "11.0.1",
+    "yaml": "2.9.0"
+  }
+}
