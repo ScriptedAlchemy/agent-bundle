@@ -48,9 +48,6 @@ export const hasAllowedKeys = (
   isRecord(value) && required.every((key) => Object.hasOwn(value, key)) &&
   Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
 
-/** `hasAllowedKeys` with the artifact-client name. */
-export const exactRecord = hasAllowedKeys;
-
 /** Exact own-key set; order-independent. */
 export const exactKeys = (
   value: unknown,

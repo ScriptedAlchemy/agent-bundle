@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 
+import { serialQueue, type SerialQueue } from '../core/async.ts';
 import {
   selectMcpAppResourceUri,
   type McpAppBinding,
@@ -90,6 +91,7 @@ interface PreviewEntry {
   readonly bridge: McpAppBridge;
   preview?: McpAppPreview;
   readonly outbound: McpAppBridgeMessage[];
+  readonly queue: SerialQueue;
   pendingTeardown?: McpAppBridgeMessage;
   teardownAckAccepted: boolean;
   actionCount: number;
@@ -98,7 +100,6 @@ interface PreviewEntry {
   closing: boolean;
   closed: boolean;
   outboundBytes: number;
-  tail: Promise<void>;
 }
 
 interface CreateControl {
@@ -276,7 +277,7 @@ export class McpAppPreviewService {
         closed: false,
         outbound,
         outboundBytes: 0,
-        tail: Promise.resolve(),
+        queue: serialQueue(),
         teardownAckAccepted: false,
       };
       entryRef.current = entry;
@@ -324,7 +325,7 @@ export class McpAppPreviewService {
       return false;
     }
     entry.actionCount += 1;
-    return this.#serialize(entry, async () => {
+    return entry.queue.run(async () => {
       if (entry.closed || this.#entries.get(bindingId) !== entry || entry.teardownAckAccepted) return false;
       const accepted = await entry.bridge.receive(action);
       const acknowledged = accepted && entry.closing;
@@ -340,7 +341,7 @@ export class McpAppPreviewService {
   async takeOutbound(bindingId: string): Promise<readonly McpAppBridgeMessage[]> {
     const entry = this.#entries.get(bindingId);
     if (entry === undefined || entry.closed) return Object.freeze([]);
-    return this.#serialize(entry, () => {
+    return entry.queue.run(async () => {
       const outbound = Object.freeze(entry.outbound.splice(0));
       entry.outboundBytes = 0;
       entry.bridge.flushHostTraffic();
@@ -389,12 +390,6 @@ export class McpAppPreviewService {
     if (resourceUri === undefined || resourceUri !== binding.resourceUri) {
       throw new Error('MCP App preview binding must retain one canonical standard _meta.ui.resourceUri.');
     }
-  }
-
-  #serialize<T>(entry: PreviewEntry, operation: () => Promise<T> | T): Promise<T> {
-    const result = entry.tail.then(operation, operation);
-    entry.tail = result.then(() => undefined, () => undefined);
-    return result;
   }
 
   #closeEntry(entry: PreviewEntry, operation: () => Promise<void>, discardOutbound: boolean, replace = false): Promise<void> {
