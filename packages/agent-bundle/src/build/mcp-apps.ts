@@ -26,24 +26,33 @@ const usesReactSyntax = (source: string): boolean => /\.[jt]sx$/iu.test(extname(
 
 const assertResolvedViewConfig = (
   inspection: Awaited<ReturnType<Awaited<ReturnType<typeof createRsbuild>>['inspectConfig']>>,
+  appNames: readonly string[],
   outputRoot: string,
 ): void => {
-  const environments = Object.values(inspection.origin.environmentConfigs);
-  if (environments.length !== 1) {
-    throw new Error('Rsbuild did not resolve one browser environment for an MCP App.');
-  }
-  const [environment] = environments;
-  const [bundler] = inspection.origin.bundlerConfigs;
+  const environments = inspection.origin.environmentConfigs;
+  const bundlers = inspection.origin.bundlerConfigs;
   if (
-    environment?.output.filenameHash !== false ||
-    environment.output.inlineScripts !== true ||
-    environment.output.inlineStyles !== true ||
-    environment.output.dataUriLimit !== Number.MAX_SAFE_INTEGER ||
-    environment.splitChunks !== false ||
-    bundler?.output?.asyncChunks !== false ||
-    bundler.output.path !== outputRoot
+    Object.keys(environments).length !== appNames.length ||
+    bundlers.length !== appNames.length ||
+    appNames.some((name) => environments[name] === undefined)
   ) {
-    throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
+    throw new Error('Rsbuild did not resolve one browser environment for every MCP App.');
+  }
+  for (const environment of Object.values(environments)) {
+    if (
+      environment.output.filenameHash !== false ||
+      environment.output.inlineScripts !== true ||
+      environment.output.inlineStyles !== true ||
+      environment.output.dataUriLimit !== Number.MAX_SAFE_INTEGER ||
+      environment.splitChunks !== false
+    ) {
+      throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
+    }
+  }
+  for (const bundler of bundlers) {
+    if (bundler.output?.asyncChunks !== false || bundler.output.path !== outputRoot) {
+      throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
+    }
   }
 };
 
@@ -105,65 +114,71 @@ export const compileMcpApps = async (
     return compiled;
   }
 
-  const evidenceByPath = new Map<string, readonly string[]>();
-  for (const app of compiled) {
+  const sources = compiled.map((app) => {
     const source = apps.find((candidate) => candidate.id === app.id);
     if (source === undefined) {
       throw new Error(`MCP App ${JSON.stringify(app.id)} disappeared during compilation planning.`);
     }
-    const rsbuild = await createRsbuild({
-      cwd: options.cwd,
-      rsbuildConfig: {
+    return source;
+  });
+
+  // One Rsbuild instance with one environment per app compiles every view in
+  // a single parallel run instead of a sequential per-app build loop.
+  const rsbuild = await createRsbuild({
+    cwd: options.cwd,
+    config: {
+      environments: Object.fromEntries(sources.map((source) => [source.name, {
         ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
         html: {
-          inject: 'body',
+          inject: 'body' as const,
           ...(source.template === undefined ? {} : { template: source.template }),
         },
-        logLevel: 'silent',
-        mode: 'production',
-        output: {
-          cleanDistPath: false,
-          dataUriLimit: Number.MAX_SAFE_INTEGER,
-          distPath: { html: 'mcp-apps', root: options.outDir },
-          filename: { css: '[name].css', html: '[name].html', js: '[name].js' },
-          filenameHash: false,
-          inlineScripts: true,
-          inlineStyles: true,
-          sourceMap: false,
-          target: 'web',
-        },
-        server: { publicDir: false },
-        source: { entry: { [app.name]: app.source } },
-        splitChunks: false,
-        tools: {
-          rspack: (config) => {
-            config.output.asyncChunks = false;
-          },
+        source: { entry: { [source.name]: source.source } },
+      }])),
+      logLevel: 'silent',
+      mode: 'production',
+      output: {
+        cleanDistPath: false,
+        dataUriLimit: Number.MAX_SAFE_INTEGER,
+        distPath: { html: 'mcp-apps', root: options.outDir },
+        filename: { css: '[name].css', html: '[name].html', js: '[name].js' },
+        filenameHash: false,
+        inlineScripts: true,
+        inlineStyles: true,
+        sourceMap: false,
+        target: 'web',
+      },
+      server: { publicDir: false },
+      splitChunks: false,
+      tools: {
+        rspack: (config) => {
+          config.output.asyncChunks = false;
         },
       },
+    },
+  });
+  const inspection = await rsbuild.inspectConfig({ mode: 'production' });
+  assertResolvedViewConfig(inspection, compiled.map((app) => app.name), options.outDir);
+  const evidenceByPath = new Map<string, readonly string[]>();
+  let result: Awaited<ReturnType<typeof rsbuild.build>> | undefined;
+  try {
+    result = await rsbuild.build();
+    const evidence = collectBundledOutputEvidence({
+      expectedAssets: compiled.map((app) => ({
+        path: `mcp-apps/${app.name}.html`,
+        sourceInputs: app.sourceInputs,
+      })),
+      projectRoot: options.cwd,
+      stats: result.stats,
     });
-    const inspection = await rsbuild.inspectConfig({ mode: 'production' });
-    assertResolvedViewConfig(inspection, options.outDir);
-    let result: Awaited<ReturnType<typeof rsbuild.build>> | undefined;
-    try {
-      result = await rsbuild.build();
-      const evidence = collectBundledOutputEvidence({
-        expectedAssets: [{
-          path: `mcp-apps/${app.name}.html`,
-          sourceInputs: app.sourceInputs,
-        }],
-        projectRoot: options.cwd,
-        stats: result.stats,
-      });
-      evidenceByPath.set(app.output, evidence[0]!.sourceInputs);
-    } finally {
-      await result?.close();
-    }
+    for (const entry of evidence) evidenceByPath.set(entry.path, entry.sourceInputs);
+  } finally {
+    await result?.close();
   }
 
   await assertSelfContainedViews(compiled, options.outDir);
   return Object.freeze(compiled.map((app) => Object.freeze({
     ...app,
-    sourceInputs: evidenceByPath.get(app.output) ?? (() => { throw new Error(`Missing bundled MCP App evidence for ${JSON.stringify(app.name)}.`); })(),
+    sourceInputs: evidenceByPath.get(`mcp-apps/${app.name}.html`) ?? (() => { throw new Error(`Missing bundled MCP App evidence for ${JSON.stringify(app.name)}.`); })(),
   })));
 };

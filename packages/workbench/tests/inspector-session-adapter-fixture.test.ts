@@ -46,7 +46,7 @@ describe('Inspector session adapter production fixture', () => {
       entry: { 'inspector-session-adapter-fixture': join(process.cwd(), 'packages/workbench/src/inspector/adapter/inspector-session-adapter-fixture.tsx') },
     };
     config.output = { ...config.output, distPath: { root: output } };
-    const rsbuild = await createRsbuild({ rsbuildConfig: config });
+    const rsbuild = await createRsbuild({ config });
     await rsbuild.build();
     const { server, url } = await startStaticServer(output);
     const browser = await chromium.launch({ channel: 'chrome' });
