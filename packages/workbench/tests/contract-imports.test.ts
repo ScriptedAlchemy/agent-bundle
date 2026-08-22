@@ -13,7 +13,9 @@ const excludedDirectories: ReadonlySet<string> = new Set([
 ]);
 
 const sourceFilePattern = /\.(?:ts|tsx)$/u;
-const moduleSpecifierPattern = /(?:from\s+|import\s*\()\s*['"]([^'"]+)['"]/gu;
+// Matches static `from '...'` clauses, dynamic `import('...')` calls, and
+// bare side-effect imports (`import '...'`).
+const moduleSpecifierPattern = /(?:from\s+|import\s*\(\s*|import\s+)['"]([^'"]+)['"]/gu;
 const contractPath = 'agent-bundle/src/contracts/';
 
 const listSourceFiles = async (directory: string): Promise<readonly string[]> => {

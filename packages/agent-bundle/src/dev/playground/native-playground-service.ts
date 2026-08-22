@@ -16,7 +16,8 @@ import { normalizeEvalCase } from '../../eval/suite.ts';
 import type { PlaygroundEventInput } from './playground-store.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../../eval/workspace-diff.ts';
 import { isInsideOrEqual, isSafePathSegment } from '../../core/paths.ts';
-import { isErrno, isTolerableWin32SyncError } from '../../core/errors.ts';
+import { publishFileByLink, syncPath } from '../../core/durable-fs.ts';
+import { isErrno } from '../../core/errors.ts';
 import {
   DiscardingTrialWriter,
   hardcodedProgress,
@@ -539,47 +540,17 @@ export class NativePlaygroundService {
     const directory = dirname(path);
     await this.#catalogStorage.mkdir(directory, { recursive: true });
     await this.#assertCatalogDirectory(reference, directory, false);
-    const temporary = join(directory, `.${reference.epoch.id}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`);
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    let created = false;
-    let primary: unknown;
-    const cleanupFailures: unknown[] = [];
-    try {
-      handle = await this.#catalogStorage.open(temporary, 'wx', 0o600);
-      await handle.writeFile(`${stableJson(snapshot)}\n`, 'utf8');
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      try {
-        await this.#catalogStorage.link(temporary, path);
-        created = true;
-      }
-      catch (error) {
-        if (!isErrno(error, 'EEXIST')) throw error;
-      }
-      await this.#syncCatalogDirectory(directory);
-    } catch (error) {
-      primary = error;
-    } finally {
-      if (handle !== undefined) {
-        try { await handle.close(); }
-        catch (error) { cleanupFailures.push(error); }
-      }
-      try { await this.#catalogStorage.remove(temporary, { force: true }); }
-      catch (error) { cleanupFailures.push(error); }
-      if (primary !== undefined && created) {
-        try {
-          await (await this.#snapshotReceipt(reference, true)).rollback();
-        } catch (error) { cleanupFailures.push(error); }
-      }
-    }
-    if (primary !== undefined) {
-      if (cleanupFailures.length > 0) {
-        throw new AggregateError([primary, ...cleanupFailures], 'Native Playground catalog publication and cleanup both failed.', { cause: primary });
-      }
-      throw primary;
-    }
-    if (cleanupFailures.length > 0) throw new AggregateError(cleanupFailures, 'Native Playground catalog staging cleanup failed.', { cause: cleanupFailures[0] });
+    const created = await publishFileByLink(path, `${stableJson(snapshot)}\n`, {
+      link: async (existingPath, newPath) => { await this.#catalogStorage.link(existingPath, newPath); },
+      open: this.#catalogStorage.open,
+      openExclusive: this.#catalogStorage.open,
+      platform: catalogDurabilityPlatform(),
+      publicationCleanupFailed: 'Native Playground catalog publication and cleanup both failed.',
+      remove: async (stagingPath, removeOptions) => { await this.#catalogStorage.remove(stagingPath, removeOptions); },
+      rollback: async () => { await (await this.#snapshotReceipt(reference, true)).rollback(); },
+      stagingCleanupFailed: 'Native Playground catalog staging cleanup failed.',
+      stagingPath: join(directory, `.${reference.epoch.id}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`),
+    });
     const receipt = await this.#snapshotReceipt(reference, created);
     try {
       const persisted = await this.#readSnapshot(reference);
@@ -642,15 +613,11 @@ export class NativePlaygroundService {
   }
 
   async #syncCatalogDirectory(directory: string): Promise<void> {
-    const handle = await this.#catalogStorage.open(directory, 'r');
-    try {
-      await handle.sync();
-    } catch (error) {
-      if (isTolerableWin32SyncError(catalogDurabilityPlatform(), error)) return;
-      throw error;
-    } finally {
-      await handle.close();
-    }
+    await syncPath(directory, {
+      directory: true,
+      open: this.#catalogStorage.open,
+      platform: catalogDurabilityPlatform(),
+    });
   }
 
   async #rollbackPublicationAndThrow(

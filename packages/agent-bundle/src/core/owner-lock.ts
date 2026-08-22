@@ -3,13 +3,15 @@ import { isErrno } from './errors.ts';
 /**
  * Shared single-writer owner-lock machinery.
  *
- * Two on-disk protocols use it and their wire formats intentionally differ
+ * Three on-disk protocols use it and their wire formats intentionally differ
  * (they must stay compatible with existing persisted state):
  *
  * - the playground store's `.owner.lock` (`{pid, token}` with a canonical v4
- *   UUID token, released and recovered in place), and
+ *   UUID token, released and recovered in place),
  * - the eval run store's `owner.json` (`{createdAt, nonce, pid}`, written once
- *   for an immutable run and never released).
+ *   for an immutable run and never released), and
+ * - the dev epoch store's `dev.lock` (link-published owner document whose
+ *   stale holders are cleared through a separate recovery gate).
  *
  * The shared algorithm is the exclusive-create acquisition: attempt an
  * exclusive create of the serialized owner document, and on EEXIST judge the

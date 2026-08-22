@@ -458,6 +458,19 @@ export class PlaygroundStore {
     }
   }
 
+  /**
+   * Index publication deliberately stays synchronous while the rest of the
+   * store uses the async durable-fs primitives. The pending descriptor must
+   * remain open across linkSync so the post-link fstat proves the final index
+   * is the exact pinned document written above — the durability tests
+   * substitute the pending pathname at `before-final-index-link` and require
+   * the store to fail closed — and writeNewPinnedFile closes its handle
+   * before returning, so converging on it would forfeit that proof. The
+   * await-free window additionally keeps #assertAvailable, the link, and the
+   * #sessions registration atomic on the event loop, and dispatches the
+   * pending-index and final-index hook phases through the synchronous hook
+   * runner the durability test seam contracts.
+   */
   #publishSession(record: SessionRecord): void {
     const objectId = record.storageObjectId;
     const document: PersistedSessionIndex = Object.freeze({

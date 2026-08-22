@@ -1,10 +1,10 @@
 import type {
-  McpSessionBinding,
   McpSessionInspectorConfig,
   McpSessionOperation,
   McpSessionTraceEntry,
   McpSessionTraceReplayGap,
 } from '../../../agent-bundle/src/contracts/mcp-session.ts';
+import type { McpRouteSessionBinding } from './mcp-route-client.ts';
 
 export type McpBrowserSessionPhase =
   | 'idle'
@@ -40,23 +40,26 @@ export interface McpBrowserSessionTiming {
   readonly startedAt: number;
 }
 
+/** Requests the controller can record; session-lifecycle operations never enter the history. */
+export type McpBrowserSessionRequestOperation = Exclude<McpSessionOperation, 'cancel' | 'close' | 'restart'>;
+
 export interface McpBrowserSessionInvocation {
-  readonly binding?: McpSessionBinding;
+  readonly binding?: McpRouteSessionBinding;
   readonly error?: unknown;
   readonly id: string;
-  readonly operation: McpSessionOperation;
+  readonly operation: McpBrowserSessionRequestOperation;
   readonly replayOf?: string;
-  readonly request: unknown;
+  readonly request: Readonly<Record<string, unknown>>;
   readonly result?: unknown;
   readonly timing: McpBrowserSessionTiming;
 }
 
 export interface McpBrowserSessionActiveRequest {
-  readonly binding?: McpSessionBinding;
+  readonly binding?: McpRouteSessionBinding;
   readonly id: string;
-  readonly operation: McpSessionOperation;
+  readonly operation: McpBrowserSessionRequestOperation;
   readonly replayOf?: string;
-  readonly request: unknown;
+  readonly request: Readonly<Record<string, unknown>>;
   readonly startedAt: number;
 }
 
@@ -78,7 +81,7 @@ export interface McpBrowserSessionTimeline {
 
 export interface McpBrowserSessionModel {
   readonly activeRequests: Readonly<Record<string, McpBrowserSessionActiveRequest>>;
-  readonly binding?: McpSessionBinding;
+  readonly binding?: McpRouteSessionBinding;
   readonly catalogs: McpBrowserSessionCatalogs;
   readonly conciseTrace: readonly McpBrowserSessionTimelineEntry[];
   readonly config?: McpSessionInspectorConfig;
@@ -92,7 +95,7 @@ export interface McpBrowserSessionModel {
 }
 
 export type McpBrowserSessionEvent =
-  | Readonly<{ readonly binding: McpSessionBinding; readonly type: 'open' }>
+  | Readonly<{ readonly binding: McpRouteSessionBinding; readonly type: 'open' }>
   | Readonly<{ readonly connection: McpBrowserSessionConnection; readonly type: 'connection' }>
   | Readonly<{ readonly catalogs: McpBrowserSessionCatalogs; readonly type: 'catalogs' }>
   | Readonly<{ readonly config: McpSessionInspectorConfig; readonly type: 'config' }>
