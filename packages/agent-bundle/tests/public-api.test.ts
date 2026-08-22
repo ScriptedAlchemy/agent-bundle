@@ -244,6 +244,13 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       join(consumerRoot, 'node_modules', '@types'),
       'dir',
     );
+    // The adapter validator factory types its ajv engine, so the emitted
+    // declaration graph resolves ajv exactly as installed consumers do.
+    await symlink(
+      join(workspaceRoot, 'node_modules', 'ajv'),
+      join(consumerRoot, 'node_modules', 'ajv'),
+      'dir',
+    );
     await writeFile(join(emittedPackageRoot, 'package.json'), JSON.stringify({
       exports: { '.': { types: './dist/index.d.ts' } },
       name: 'agent-bundle',
