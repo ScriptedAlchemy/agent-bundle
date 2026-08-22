@@ -60,13 +60,8 @@ const e2e = test.extend({
     contextOptions: { viewport: { height: 900, width: 1440 } },
   } satisfies PlaywrightOptions,
 });
-
-
 const isAppRoute = (url: URL): boolean =>
   url.pathname.startsWith('/api/mcp/apps/') || /^\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(url.pathname);
-
-
-
 e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }, async ({ page }) => {
   await buildPackage();
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-release-'));

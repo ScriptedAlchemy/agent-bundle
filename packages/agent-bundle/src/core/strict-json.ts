@@ -74,12 +74,44 @@ interface JsonObject {
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
 
+export interface OwnDataValue {
+  readonly found: boolean;
+  readonly value: unknown;
+}
+
 /** Non-null, non-array object guard shared across route, service, and client decoding. */
 export const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** `isRecord` narrowed for values already known to be JSON. */
 export const isJsonRecord = (value: JsonValue): value is Readonly<Record<string, JsonValue>> => isRecord(value);
+
+/** Reads an own data property without invoking an accessor. */
+export const ownDataValue = (value: object, key: string): OwnDataValue | undefined => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined) return { found: false, value: undefined };
+  return 'value' in descriptor ? { found: true, value: descriptor.value } : undefined;
+};
+
+/** Copies a canonical array's own data elements without invoking accessors. */
+export const dataArrayValues = (value: unknown): readonly unknown[] | undefined => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+  const length = Object.getOwnPropertyDescriptor(value, 'length');
+  if (
+    length === undefined || !('value' in length) ||
+    typeof length.value !== 'number' || !Number.isSafeInteger(length.value) || length.value < 0 ||
+    Reflect.ownKeys(value).length !== length.value + 1
+  ) {
+    return undefined;
+  }
+  const copy: unknown[] = [];
+  for (let index = 0; index < length.value; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !('value' in descriptor)) return undefined;
+    copy.push(descriptor.value);
+  }
+  return Object.freeze(copy);
+};
 
 const snapshotJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;

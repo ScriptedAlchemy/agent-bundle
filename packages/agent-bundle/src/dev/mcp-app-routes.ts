@@ -302,13 +302,13 @@ export class McpAppRoutes {
     }
     if (parsed.kind === 'messages') {
       const result = await this.#serialize(parsed.bindingId, async () => {
-      const preview = this.#preview(service, parsed.bindingId);
-      const accepted = await service.receive(parsed.bindingId, messageRequest(await jsonBody(request)));
-      const messages = await service.takeOutbound(parsed.bindingId);
-      if (preview.bridge.lifecycle === 'closed') {
-        this.#clearTeardown(parsed.bindingId);
-      }
-      return Object.freeze({ accepted, actions: Object.freeze([]), lifecycle: preview.bridge.lifecycle, messages });
+        const preview = this.#preview(service, parsed.bindingId);
+        const accepted = await service.receive(parsed.bindingId, messageRequest(await jsonBody(request)));
+        const messages = await service.takeOutbound(parsed.bindingId);
+        if (preview.bridge.lifecycle === 'closed') {
+          this.#clearTeardown(parsed.bindingId);
+        }
+        return Object.freeze({ accepted, actions: Object.freeze([]), lifecycle: preview.bridge.lifecycle, messages });
       });
       return responseJson(response, result);
     }

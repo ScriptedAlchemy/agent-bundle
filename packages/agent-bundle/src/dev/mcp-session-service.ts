@@ -146,8 +146,6 @@ type McpAppLeaseIdentity = McpAppBridgeSession['identity'] & Readonly<{
   readonly sessionId: McpSessionId;
 }>;
 
-const detachedJsonSnapshot = snapshotStrictJsonValue;
-
 const mcpAppLeaseIdentity = (session: McpSession): McpAppLeaseIdentity => {
   const identity: { readonly binding: McpSessionBinding; readonly sessionId: McpSessionId } = {
     binding: session.binding,
@@ -554,7 +552,7 @@ export class McpSession {
   }
 
   #recordFrame(direction: McpSessionFrame['direction'], message: RawMcpFrame): void {
-    const snapshot = detachedJsonSnapshot(message);
+    const snapshot = snapshotStrictJsonValue(message);
     const sequence = this.#nextSequence();
     this.#retain(this.#frames, Object.freeze({ direction, message: snapshot, sequence }), maxRetainedFrames);
     this.#recordTrace(Object.freeze({

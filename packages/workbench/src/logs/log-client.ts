@@ -6,7 +6,7 @@ import type {
 } from '../../../agent-bundle/src/dev/dev-log-service.ts';
 import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
-import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys, isRecord } from '../client-helpers.ts';
+import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys as hasExactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { readNdjsonByteFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
@@ -58,7 +58,6 @@ const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isDate = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
-const hasExactKeys = exactKeys;
 const hasControlOrSeparators = (value: string): boolean => [...value].some((character) =>
   character === '/' || character === '\\' || character <= '\u001F' || character === '\u007F');
 const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;

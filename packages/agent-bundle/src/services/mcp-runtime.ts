@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { isRecord } from '../core/strict-json.ts';
+import { dataArrayValues, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { assertInside } from '../core/paths.ts';
 
 export type McpRuntimeValueField = 'args' | 'cwd' | 'env' | 'headers' | 'url';
@@ -65,11 +65,6 @@ interface CreateTargetMcpRuntimeOptions {
   readonly resolveValue: TargetMcpRuntimeContract['resolveValue'];
 }
 
-interface OwnDataValue {
-  readonly found: boolean;
-  readonly value: unknown;
-}
-
 const plainDataRecord = (value: unknown): value is Record<string, unknown> => {
   if (!isRecord(value)) return false;
   const prototype = Object.getPrototypeOf(value);
@@ -93,33 +88,8 @@ const hasDataKeys = (
     required.every((key) => Object.hasOwn(value, key));
 };
 
-const ownDataValue = (value: object, key: string): OwnDataValue | undefined => {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  if (descriptor === undefined) return { found: false, value: undefined };
-  return 'value' in descriptor ? { found: true, value: descriptor.value } : undefined;
-};
-
-const canonicalArrayValues = (value: unknown): readonly unknown[] | undefined => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
-  const length = Object.getOwnPropertyDescriptor(value, 'length');
-  if (
-    length === undefined || !('value' in length) ||
-    typeof length.value !== 'number' || !Number.isSafeInteger(length.value) || length.value < 0 ||
-    Reflect.ownKeys(value).length !== length.value + 1
-  ) {
-    return undefined;
-  }
-  const copy: unknown[] = [];
-  for (let index = 0; index < length.value; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (descriptor === undefined || !('value' in descriptor)) return undefined;
-    copy.push(descriptor.value);
-  }
-  return Object.freeze(copy);
-};
-
 const stringArray = (value: unknown): readonly string[] | undefined => {
-  const values = canonicalArrayValues(value);
+  const values = dataArrayValues(value);
   if (values === undefined) return undefined;
   const strings: string[] = [];
   for (const entry of values) {
@@ -268,7 +238,7 @@ const snapshotModernServer = (value: unknown): ModernMcpServer | undefined => {
 };
 
 const snapshotModernServers = (value: unknown): readonly ModernMcpServerEntry[] | undefined => {
-  const entries = canonicalArrayValues(value);
+  const entries = dataArrayValues(value);
   if (entries === undefined) return undefined;
   const names = new Set<string>();
   const servers: ModernMcpServerEntry[] = [];

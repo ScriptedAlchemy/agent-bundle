@@ -91,28 +91,27 @@ const recordEvent = (sink: DevLogSink, message: ProjectEventMessage): void => {
     });
     return;
   }
-  const event = message;
   const shared = {
-    context: contextFor(event),
-    details: detailsFor(event),
-    level: levelFor(event),
-    summary: summaryFor(event),
+    context: contextFor(message),
+    details: detailsFor(message),
+    level: levelFor(message),
+    summary: summaryFor(message),
   } as const;
-  if (producerFor(event) === 'build') {
-    write(sink, { ...shared, kind: event.type as DevLogKindFor<'build'>, producer: 'build' });
+  if (producerFor(message) === 'build') {
+    write(sink, { ...shared, kind: message.type as DevLogKindFor<'build'>, producer: 'build' });
   } else {
-    write(sink, { ...shared, kind: event.type as DevLogKindFor<'project'>, producer: 'project' });
+    write(sink, { ...shared, kind: message.type as DevLogKindFor<'project'>, producer: 'project' });
   }
-  for (const diagnostic of diagnosticsFor(event)) {
+  for (const diagnostic of diagnosticsFor(message)) {
     const code = stringAt(diagnostic, 'code');
-    const buildId = stringAt(event.payload, 'id');
+    const buildId = stringAt(message.payload, 'id');
     write(sink, {
       context: Object.freeze({
         ...(buildId === undefined ? {} : { buildId }),
         ...(code === undefined ? {} : { diagnosticCode: code }),
       }),
       details: diagnostic,
-      kind: diagnosticKindFor(event),
+      kind: diagnosticKindFor(message),
       level: diagnosticLevel(diagnostic),
       producer: 'diagnostic',
       summary: 'Project diagnostic was recorded.',

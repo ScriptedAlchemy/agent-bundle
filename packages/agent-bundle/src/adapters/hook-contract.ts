@@ -1,5 +1,5 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { isRecord } from '../core/strict-json.ts';
+import { dataArrayValues, isRecord, ownDataValue } from '../core/strict-json.ts';
 import type {
   CanonicalHookEvent,
   CanonicalHookTool,
@@ -68,34 +68,8 @@ const hasDataKeys = (
     required.every((key) => Object.hasOwn(value, key));
 };
 
-const ownDataValue = (value: object, key: string): { readonly found: boolean; readonly value: unknown } | undefined => {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  if (descriptor === undefined) return { found: false, value: undefined };
-  return 'value' in descriptor ? { found: true, value: descriptor.value } : undefined;
-};
-
-const dataArray = (value: unknown): readonly unknown[] | undefined => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
-  const length = Object.getOwnPropertyDescriptor(value, 'length');
-  if (
-    length === undefined ||
-    !('value' in length) ||
-    typeof length.value !== 'number' || !Number.isSafeInteger(length.value) || length.value < 0 ||
-    Reflect.ownKeys(value).length !== length.value + 1
-  ) {
-    return undefined;
-  }
-  const entries: unknown[] = [];
-  for (let index = 0; index < length.value; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (descriptor === undefined || !('value' in descriptor)) return undefined;
-    entries.push(descriptor.value);
-  }
-  return Object.freeze(entries);
-};
-
 const snapshotNativeHookCommands = (value: unknown): readonly TargetNativeHookCommand[] | undefined => {
-  const candidates = dataArray(value);
+  const candidates = dataArrayValues(value);
   if (candidates === undefined) return undefined;
   const commands: TargetNativeHookCommand[] = [];
   for (const candidate of candidates) {
@@ -142,13 +116,13 @@ export const readStandardNativeHookCommands = (document: unknown): TargetNativeH
   if (hooks === undefined || !hooks.found || !isPlainDataRecord(hooks.value)) return Object.freeze({ status: 'invalid' });
   const commands: TargetNativeHookCommand[] = [];
   for (const groups of Object.values(hooks.value)) {
-    const entries = dataArray(groups);
+    const entries = dataArrayValues(groups);
     if (entries === undefined) return Object.freeze({ status: 'invalid' });
     for (const group of entries) {
       if (!isPlainDataRecord(group)) return Object.freeze({ status: 'invalid' });
       const nativeHooks = ownDataValue(group, 'hooks');
       if (nativeHooks === undefined || !nativeHooks.found) return Object.freeze({ status: 'invalid' });
-      const hooksInGroup = dataArray(nativeHooks.value);
+      const hooksInGroup = dataArrayValues(nativeHooks.value);
       if (hooksInGroup === undefined) return Object.freeze({ status: 'invalid' });
       for (const hook of hooksInGroup) {
         if (!isPlainDataRecord(hook)) return Object.freeze({ status: 'invalid' });
