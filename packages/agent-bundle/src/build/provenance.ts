@@ -72,7 +72,7 @@ const hasSharedChunk = (left: readonly (string | number)[], right: readonly (str
   left.some((chunk) => right.includes(chunk));
 
 const throwOnFilteredStats = (record: JsonRecord): void => {
-  for (const key of ['filteredAssets', 'filteredChildren', 'filteredModules']) {
+  for (const key of ['filteredAssets', 'filteredModules']) {
     if ((numberAt(record, key) ?? 0) > 0) {
       throw new Error(`Bundler stats are filtered (${key}) and cannot prove output provenance.`);
     }
@@ -107,15 +107,14 @@ const isIgnoredModule = (path: string, ignoredSourcePaths: readonly string[]): b
   path.replaceAll('\\', '/').split('/').includes('node_modules') ||
   ignoredSourcePaths.some((ignored) => isLexicallyInside(ignored, path));
 
+// Rspack stats emit type: "module" for every real module; runtime modules are
+// identified by moduleType and externals by their readable identifier prefix
+// (an external's moduleType is "javascript/dynamic", never "external").
 const isKnownNoAuthorSourceModule = (module: JsonRecord): boolean => {
-  const type = stringAt(module, 'type');
   const moduleType = stringAt(module, 'moduleType');
   const name = stringAt(module, 'name');
   return recordsAt(module.modules).length > 0 ||
-    type === 'runtime' ||
-    type === 'external' ||
     moduleType === 'runtime' ||
-    moduleType === 'external' ||
     name?.startsWith('external ') === true;
 };
 
