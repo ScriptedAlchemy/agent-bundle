@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
+
+import open from 'open';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { loadConfig } from '../config/load.ts';
@@ -291,19 +292,9 @@ const agentApiEnabledFromConfig = async (root: string): Promise<boolean> => {
   return agentApi === true;
 };
 
-const openInBrowser: OpenBrowser = (url) => new Promise((resolvePromise, rejectPromise) => {
-  const [command, args] = process.platform === 'darwin'
-    ? ['open', [url]]
-    : process.platform === 'win32'
-      ? ['cmd', ['/c', 'start', '', url]]
-      : ['xdg-open', [url]];
-  const child = spawn(command, args, { detached: true, stdio: 'ignore' });
-  child.once('error', rejectPromise);
-  child.once('spawn', () => {
-    child.unref();
-    resolvePromise();
-  });
-});
+const openInBrowser: OpenBrowser = async (url) => {
+  await open(url);
+};
 
 /** Starts one loopback foreground session over the current project services. */
 export const startDevServer = async (options: StartDevServerOptions): Promise<DevServerSession> => {
