@@ -39,10 +39,11 @@ it('builds workbench assets with stable unhashed names', () => {
 it('proxies every typed foreground API route only when a contributor supplies its live foreground target', () => {
   const configured = createWorkbenchConfig('http://127.0.0.1:3100');
 
+  // Rsbuild 2.x enables changeOrigin for every proxy rule by default.
   expect(configured).toMatchObject({
     server: {
       proxy: {
-        '/api': { changeOrigin: true, target: 'http://127.0.0.1:3100' },
+        '/api': { target: 'http://127.0.0.1:3100' },
       },
     },
   });

@@ -21,7 +21,6 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
       root: 'dist',
     },
     filenameHash: false,
-    legalComments: 'linked' as const,
     filename: {
       assets: '[name][ext]',
       css: '[name].css',
@@ -46,20 +45,10 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
   ...(apiProxyTarget === undefined ? {} : {
     server: {
       proxy: {
-        '/api': { changeOrigin: true, target: apiProxyTarget },
+        '/api': { target: apiProxyTarget },
       },
     },
   }),
-  tools: {
-    rspack: {
-      resolve: {
-        extensionAlias: {
-          '.js': ['.js', '.ts', '.tsx'],
-          '.jsx': ['.jsx', '.tsx'],
-        },
-      },
-    },
-  },
 });
 
 // Without an explicit mode, rsbuild falls back to mode 'none' whenever the
