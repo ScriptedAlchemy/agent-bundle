@@ -30,13 +30,17 @@ export const isProcessAlive = (pid: number): boolean => {
   }
 };
 
+/** Returned by `create` to route a lost publication race to the contention judge without a synthetic EEXIST. */
+export const ownerLockRaceLost: unique symbol = Symbol('agent-bundle.owner-lock.race-lost');
+
 export interface AcquireOwnerLockOptions<Result> {
   /**
    * Exclusively creates the owner document and returns the acquisition result.
-   * Must fail with EEXIST when another owner document already occupies the
-   * path; any other failure aborts the acquisition unchanged.
+   * A lost race routes to the contention judge, signalled either by an EEXIST
+   * failure or by returning `ownerLockRaceLost`; any other failure aborts the
+   * acquisition unchanged.
    */
-  readonly create: () => Promise<Result>;
+  readonly create: () => Promise<Result | typeof ownerLockRaceLost>;
   /**
    * Judges the owner that won the exclusive create. Throws the store's
    * ownership error when the owner is live, returns a result to adopt it, or
@@ -49,12 +53,13 @@ export interface AcquireOwnerLockOptions<Result> {
   readonly exhausted: () => Error;
 }
 
-/** Exclusive-create owner acquisition shared by the playground and eval run stores. */
+/** Exclusive-create owner acquisition shared by the playground store, eval run store, and dev lock. */
 export const acquireOwnerLockFile = async <Result>(options: AcquireOwnerLockOptions<Result>): Promise<Result> => {
   const attempts = options.attempts ?? 1;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await options.create();
+      const created = await options.create();
+      if (created !== ownerLockRaceLost) return created;
     } catch (error) {
       if (!isErrno(error, 'EEXIST')) throw error;
     }

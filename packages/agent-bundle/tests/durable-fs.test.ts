@@ -18,9 +18,7 @@ import {
   type DurableStagingOpen,
 } from '../src/core/durable-fs.ts';
 import { acquireOwnerLockFile, isProcessAlive, OwnerMutationSerializer } from '../src/core/owner-lock.ts';
-
-const errnoFailure = (code: string, message: string): NodeJS.ErrnoException =>
-  Object.assign(new Error(message), { code });
+import { errnoFailure } from './support/errors.ts';
 
 const tornOptions = Object.freeze({
   decode: (value: unknown): { readonly sequence: number; readonly value: string } => {

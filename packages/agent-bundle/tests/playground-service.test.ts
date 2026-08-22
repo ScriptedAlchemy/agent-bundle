@@ -14,6 +14,7 @@ import {
   type PlaygroundServiceOptions,
 } from '../src/dev/playground/playground-store.ts';
 import { withGlobalDurabilityValue } from './support/durability.ts';
+import { errnoFailure } from './support/errors.ts';
 import { eventuallyPasses } from './support/eventually.ts';
 
 interface SessionIndex {
@@ -64,7 +65,6 @@ const withDurabilityTestHook = <T>(hook: PlaygroundDurabilityTestHook, operation
   withGlobalDurabilityValue(playgroundDurabilityTestHookKey, hook, operation);
 
 const injectedIoFailure = (message: string): NodeJS.ErrnoException => Object.assign(new Error(message), { code: 'EIO' });
-const injectedErrnoFailure = (code: string, message: string): NodeJS.ErrnoException => Object.assign(new Error(message), { code });
 
 const withDurabilityTestPlatform = <T>(platform: NodeJS.Platform, operation: () => Promise<T>): Promise<T> =>
   withGlobalDurabilityValue(playgroundDurabilityTestPlatformKey, platform, operation);
@@ -171,7 +171,7 @@ it('tolerates only unsupported Windows directory fsync errors', async () => {
         await withDurabilityTestHook((phase) => {
           if (phase === 'before-directory-fsync:object-created') {
             observed = true;
-            throw injectedErrnoFailure(code, `Windows directory fsync ${code}`);
+            throw errnoFailure(code, `Windows directory fsync ${code}`);
           }
         }, async () => {
           await expect(fixture.service.openSession({ ...sessionInput(), sessionId: `windows-directory-${code}` })).resolves.toMatchObject({ state: 'open' });
@@ -195,7 +195,7 @@ it('tolerates only unsupported Windows directory fsync errors', async () => {
         await withDurabilityTestHook((candidate) => {
           if (candidate === phase) {
             observed = true;
-            throw injectedErrnoFailure(code, `unexpected durability error ${code}`);
+            throw errnoFailure(code, `unexpected durability error ${code}`);
           }
         }, async () => {
           await expect(fixture.service.openSession({ ...sessionInput(), sessionId: `windows-propagated-${phase.replaceAll(':', '-')}` }))

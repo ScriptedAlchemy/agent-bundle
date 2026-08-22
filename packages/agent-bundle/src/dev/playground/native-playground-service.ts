@@ -541,12 +541,12 @@ export class NativePlaygroundService {
     await this.#catalogStorage.mkdir(directory, { recursive: true });
     await this.#assertCatalogDirectory(reference, directory, false);
     const created = await publishFileByLink(path, `${stableJson(snapshot)}\n`, {
-      link: async (existingPath, newPath) => { await this.#catalogStorage.link(existingPath, newPath); },
+      link: this.#catalogStorage.link,
       open: this.#catalogStorage.open,
       openExclusive: this.#catalogStorage.open,
       platform: catalogDurabilityPlatform(),
       publicationCleanupFailed: 'Native Playground catalog publication and cleanup both failed.',
-      remove: async (stagingPath, removeOptions) => { await this.#catalogStorage.remove(stagingPath, removeOptions); },
+      remove: this.#catalogStorage.remove,
       rollback: async () => { await (await this.#snapshotReceipt(reference, true)).rollback(); },
       stagingCleanupFailed: 'Native Playground catalog staging cleanup failed.',
       stagingPath: join(directory, `.${reference.epoch.id}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`),

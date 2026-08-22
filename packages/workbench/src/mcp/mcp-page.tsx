@@ -429,9 +429,6 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   }), [controller]);
   useEffect(() => () => { void appPreviewController.current?.close(); }, []);
 
-  // Derived at render instead of pruned in state: ids whose requests already settled are simply invisible.
-  const cancelledActiveRequests = cancelledRequests.filter((id) => Object.hasOwn(model.activeRequests, id));
-
   const setActiveAppPreviewController = useCallback((next: McpAppPreviewController | undefined): void => {
     appPreviewController.current = next;
   }, []);
@@ -609,7 +606,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
       <McpLaunchConfiguration config={config} />
       {active.length === 0 ? undefined : <section aria-label="Active MCP operations" className="mcp-page-active">
         <h3>Active operations</h3>
-        <ul>{active.map((request) => <li key={request.id}><span>{request.operation} · {request.id}</span><button disabled={cancelledActiveRequests.includes(request.id)} onClick={() => {
+        <ul>{active.map((request) => <li key={request.id}><span>{request.operation} · {request.id}</span><button disabled={cancelledRequests.includes(request.id)} onClick={() => {
           if (!controller.cancel(request.id)) {
             setActionError(`MCP operation ${request.id} is no longer active.`);
             return;

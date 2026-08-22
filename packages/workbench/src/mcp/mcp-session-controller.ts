@@ -27,11 +27,9 @@ import {
 
 export type McpSessionControllerBinding = McpRouteSessionBinding;
 
-export type McpSessionControllerOperation = McpBrowserSessionRequestOperation;
-
 export interface McpSessionControllerRequest {
   readonly id: string;
-  readonly operation: McpSessionControllerOperation;
+  readonly operation: McpBrowserSessionRequestOperation;
   readonly request: Readonly<Record<string, unknown>>;
   readonly signal?: AbortSignal;
 }
@@ -234,10 +232,10 @@ const requestPlans = {
   listResourceTemplates: { method: 'resources/templates/list', params: false },
   listTools: { method: 'tools/list', params: false },
   readResource: { method: 'resources/read', params: true },
-} as const satisfies Record<McpSessionControllerOperation, Readonly<{ method: string; params: boolean }>>;
+} as const satisfies Record<McpBrowserSessionRequestOperation, Readonly<{ method: string; params: boolean }>>;
 
 const requestFor = (
-  operation: McpSessionControllerOperation,
+  operation: McpBrowserSessionRequestOperation,
   params: Readonly<Record<string, unknown>>,
 ): Readonly<{ readonly method: string; readonly params?: Readonly<Record<string, unknown>> }> => {
   // The operation may be an arbitrary string at runtime; hasOwn keeps prototype

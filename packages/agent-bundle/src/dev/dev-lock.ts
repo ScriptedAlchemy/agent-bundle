@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { stableJson } from '../core/digest.ts';
 import { syncPath } from '../core/durable-fs.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
-import { acquireOwnerLockFile, isProcessAlive } from '../core/owner-lock.ts';
+import { acquireOwnerLockFile, isProcessAlive, ownerLockRaceLost } from '../core/owner-lock.ts';
 
 export interface DevLockOwner {
   readonly createdAt: string;
@@ -323,17 +323,11 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
     // Acquisition never concedes: it retries until the exclusive create wins
     // or the contention judge throws, so the exhausted error is unreachable.
     attempts: Number.POSITIVE_INFINITY,
-    create: async () => {
-      if (await writeCompleteExclusive(storage, path, contents, owner.nonce)) {
-        return new DevLock(path, recoveryPath, contents, owner, probeProcess, storage);
-      }
-      // writeCompleteExclusive translates the losing link's EEXIST into a
-      // boolean; re-raise it so acquireOwnerLockFile routes to the judge.
-      throw Object.assign(
-        new Error('Another candidate already published the development lock.'),
-        { code: 'EEXIST' },
-      );
-    },
+    // A lost link race routes to the contention judge via the sentinel.
+    create: async () =>
+      await writeCompleteExclusive(storage, path, contents, owner.nonce)
+        ? new DevLock(path, recoveryPath, contents, owner, probeProcess, storage)
+        : ownerLockRaceLost,
     exhausted: () =>
       new DevLockError('DEV_LOCK_HELD', 'The development lock could not be acquired.'),
     onContention: async () => {
