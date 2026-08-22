@@ -99,9 +99,9 @@ const requireKeys = (
   code: RunStoreValidationCode,
   label: string,
 ): void => {
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right));
-  const expected = [...keys].sort((left, right) => left.localeCompare(right));
-  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+  const allowed = new Set(keys);
+  const actual = Object.keys(value);
+  if (actual.length !== allowed.size || actual.some((key) => !allowed.has(key))) {
     validationError(code, `${label} has an invalid schema.`);
   }
 };

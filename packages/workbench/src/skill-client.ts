@@ -1,5 +1,5 @@
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../agent-bundle/src/core/strict-json.ts';
+import type { JsonValue } from '../../agent-bundle/src/core/strict-json.ts';
 import type { SourceProvenance } from '../../agent-bundle/src/core/types.ts';
 import type {
   ServedSkillDocument,
@@ -18,7 +18,6 @@ import {
   parseStrictResponseJson,
   requiredString,
 } from './client-helpers.ts';
-import { snapshotStrictJsonValue } from './strict-json.ts';
 import { generatedSkillPath, sourceSkillPath } from './skills-model.ts';
 
 export interface SkillClientOptions {

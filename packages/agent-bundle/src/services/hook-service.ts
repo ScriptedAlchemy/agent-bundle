@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
-import { assertInside } from '../core/paths.ts';
+import { joinArtifact } from '../core/paths.ts';
 import {
   artifactHookIndexName,
   type ArtifactHook,
@@ -261,6 +261,3 @@ export class HookService {
     });
   }
 }
-
-const joinArtifact = (root: string, relativePath: string): string =>
-  assertInside(root, resolve(root, relativePath));

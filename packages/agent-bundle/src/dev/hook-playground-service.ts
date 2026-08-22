@@ -296,7 +296,6 @@ export class HookPlaygroundService {
     });
   }
 
-  async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult>;
   async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
     this.#log('hook.simulate.started', 'info', 'Hook playground simulation started.', options, {});
     try {
@@ -409,6 +408,7 @@ export class HookPlaygroundService {
     await assertTargetDigest(reference.root, target, targetDigest);
     const artifact = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-'));
     try {
+      // Copies stay sequential: a failed copy must settle before the artifact directory is released.
       for (const entry of await readdir(reference.root)) {
         if (entry === epochStagingMarkerName) continue;
         await this.#copy(join(reference.root, entry), join(artifact, entry), { recursive: true });

@@ -1,5 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 
+import { isErrno } from '../core/errors.ts';
+
 export type ProcessTreeTaskkill = (arguments_: readonly string[]) => ChildProcess;
 export type ProcessGroupProbe = (processGroupId: number) => boolean;
 
@@ -67,7 +69,7 @@ export const terminateProcessTree = (
     process.kill(-child.pid, signal);
     return Promise.resolve(true);
   } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH') return Promise.resolve(true);
+    if (isErrno(error, 'ESRCH')) return Promise.resolve(true);
     options.onTreeTerminationFailure();
     try { return Promise.resolve(child.kill(signal)); }
     catch { return Promise.resolve(false); } // kill() throws when the process is already gone.
@@ -79,7 +81,7 @@ const processGroupExists: ProcessGroupProbe = (processGroupId) => {
     process.kill(-processGroupId, 0);
     return true;
   } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH') return false;
+    if (isErrno(error, 'ESRCH')) return false;
     return true;
   }
 };

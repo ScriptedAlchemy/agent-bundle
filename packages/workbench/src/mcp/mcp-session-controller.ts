@@ -212,6 +212,11 @@ const invalidTrace = (): McpSessionControllerError =>
 const validCursor = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
+const traceOperations: ReadonlySet<string> = new Set([
+  'callTool', 'cancel', 'close', 'getPrompt', 'initialize', 'listPrompts', 'listResources', 'listResourceTemplates', 'listTools', 'readResource', 'restart',
+]);
+const tracePhases: ReadonlySet<string> = new Set(['started', 'succeeded', 'failed']);
+
 const traceEntry = (value: unknown): McpSessionTraceEntry | McpSessionTraceReplayGap => {
   if (!isRecord(value)) throw invalidTrace();
   if (value.type === 'replay.gap') {
@@ -239,8 +244,7 @@ const traceEntry = (value: unknown): McpSessionTraceEntry | McpSessionTraceRepla
   }
   if (
     value.kind === 'operation' && typeof value.operation === 'string' && typeof value.phase === 'string' &&
-    ['callTool', 'cancel', 'close', 'getPrompt', 'initialize', 'listPrompts', 'listResources', 'listResourceTemplates', 'listTools', 'readResource', 'restart'].includes(value.operation) &&
-    ['started', 'succeeded', 'failed'].includes(value.phase)
+    traceOperations.has(value.operation) && tracePhases.has(value.phase)
   ) return {
     kind: 'operation',
     occurredAt: value.occurredAt,

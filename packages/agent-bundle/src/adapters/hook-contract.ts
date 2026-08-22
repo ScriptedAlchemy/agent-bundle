@@ -1,5 +1,5 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { dataArrayValues, isRecord, ownDataValue } from '../core/strict-json.ts';
+import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import type {
   CanonicalHookEvent,
   CanonicalHookTool,
@@ -48,25 +48,6 @@ export interface TargetHookContract {
   readonly wrapperPath: (hook: NormalizedHook) => string;
   readonly wrapperSource: (entry: TargetHookWrapper) => string;
 }
-
-const isPlainDataRecord = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  return Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => 'value' in descriptor);
-};
-
-const hasDataKeys = (
-  value: unknown,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): value is Record<string, unknown> => {
-  if (!isPlainDataRecord(value)) return false;
-  const allowed = new Set([...required, ...optional]);
-  return Reflect.ownKeys(value).length >= required.length &&
-    Reflect.ownKeys(value).every((key) => typeof key === 'string' && allowed.has(key)) &&
-    required.every((key) => Object.hasOwn(value, key));
-};
 
 const snapshotNativeHookCommands = (value: unknown): readonly TargetNativeHookCommand[] | undefined => {
   const candidates = dataArrayValues(value);

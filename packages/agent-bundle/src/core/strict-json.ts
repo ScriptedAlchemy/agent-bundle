@@ -113,6 +113,31 @@ export const dataArrayValues = (value: unknown): readonly unknown[] | undefined 
   return Object.freeze(copy);
 };
 
+/** Plain object whose own properties are all string-keyed data properties (no accessors, no symbols). */
+export const isPlainDataRecord = (value: unknown): value is Record<string, unknown> => {
+  if (!isRecord(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  return Reflect.ownKeys(value).every((key) => {
+    if (typeof key !== 'string') return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && 'value' in descriptor;
+  });
+};
+
+/** `isPlainDataRecord` with an exact required/optional key contract for hostile-document decoding. */
+export const hasDataKeys = (
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): value is Record<string, unknown> => {
+  if (!isPlainDataRecord(value)) return false;
+  const allowed = new Set([...required, ...optional]);
+  return Reflect.ownKeys(value).length >= required.length &&
+    Reflect.ownKeys(value).every((key) => typeof key === 'string' && allowed.has(key)) &&
+    required.every((key) => Object.hasOwn(value, key));
+};
+
 const snapshotJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
   if (typeof value === 'number') {
@@ -137,12 +162,8 @@ const snapshotJsonValue = (value: unknown, ancestors: Set<object>): JsonValue =>
         }
         values.push(snapshotJsonValue(descriptor.value, ancestors));
       }
-      if (Reflect.ownKeys(descriptors).some((key) =>
-        key !== 'length' && (
-          typeof key !== 'string' ||
-          !/^(?:0|[1-9]\d*)$/u.test(key) ||
-          Number(key) >= length.value
-        ))) {
+      // Indices 0..length-1 and `length` are all verified own keys, so any extra key inflates the count.
+      if (Reflect.ownKeys(descriptors).length !== length.value + 1) {
         throw new TypeError('JSON arrays must not have extra properties.');
       }
       return Object.freeze(values);

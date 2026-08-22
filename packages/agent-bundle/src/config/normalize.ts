@@ -40,7 +40,6 @@ const unique = (values: readonly string[]): string[] => [...new Set(values)];
 const sortedUnique = (values: readonly string[]): string[] =>
   unique(values).sort((left, right) => left.localeCompare(right));
 
-const hookEvents: readonly CanonicalHookEvent[] = canonicalHookEvents;
 
 const knownHookTools: ReadonlySet<CanonicalHookTool> = new Set(canonicalHookTools);
 
@@ -138,7 +137,7 @@ const normalizeHooks = (
   if (config === undefined) return hooks;
   const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
 
-  for (const event of hookEvents) {
+  for (const event of canonicalHookEvents) {
     const input = config[event];
     if (input === undefined) continue;
     for (const entry of asEntries(input)) {

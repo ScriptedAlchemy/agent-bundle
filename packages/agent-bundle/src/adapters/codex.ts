@@ -32,6 +32,8 @@ import marketplaceSchema from './schemas/codex/marketplace.schema.json' with { t
 import mcpSchema from './schemas/codex/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/codex/plugin.schema.json' with { type: 'json' };
 import {
+  sortedEntries,
+  sourceInputs,
   validateJsonSchemaDocument,
   type TargetAdapter,
   type TargetArtifactEntry,
@@ -112,13 +114,6 @@ const mcpRuntime = createTargetMcpRuntime({
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(codexName, 'Codex');
 
 const selectedForCodex = (targets: readonly string[]): boolean => targets.includes(codexName);
-
-const sourceInputs = (...sources: readonly (string | undefined)[]): readonly string[] =>
-  Object.freeze([...new Set(sources.filter((source): source is string => source !== undefined))]);
-
-const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetArtifactEntry[] => Object.freeze(
-  entries.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0),
-);
 
 const hasLeadingPluginRoot = (value: string): boolean =>
   value === pathTokens.pluginRoot || value.startsWith(`${pathTokens.pluginRoot}/`);

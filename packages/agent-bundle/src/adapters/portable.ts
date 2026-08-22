@@ -21,6 +21,7 @@ import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: '
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'json' };
 import {
+  sourceInputs,
   validateJsonSchemaDocument,
   validateModernMcpDocument,
   type TargetAdapter,
@@ -118,9 +119,6 @@ const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(portableN
 
 const hasPortableTarget = (targets: readonly string[]): boolean =>
   targets.includes(portableName);
-
-const sourceInputs = (...sources: readonly (string | undefined)[]): readonly string[] =>
-  Object.freeze([...new Set(sources.filter((source): source is string => source !== undefined))]);
 
 const planMcpServer = (
   server: NormalizedMcpServer,

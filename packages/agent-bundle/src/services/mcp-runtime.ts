@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { dataArrayValues, isRecord, ownDataValue } from '../core/strict-json.ts';
+import { dataArrayValues, hasDataKeys, isPlainDataRecord, ownDataValue } from '../core/strict-json.ts';
 import { assertInside } from '../core/paths.ts';
 
 export type McpRuntimeValueField = 'args' | 'cwd' | 'env' | 'headers' | 'url';
@@ -65,29 +65,6 @@ interface CreateTargetMcpRuntimeOptions {
   readonly resolveValue: TargetMcpRuntimeContract['resolveValue'];
 }
 
-const plainDataRecord = (value: unknown): value is Record<string, unknown> => {
-  if (!isRecord(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  return Reflect.ownKeys(value).every((key) => {
-    if (typeof key !== 'string') return false;
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return descriptor !== undefined && 'value' in descriptor;
-  });
-};
-
-const hasDataKeys = (
-  value: unknown,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): value is Record<string, unknown> => {
-  if (!plainDataRecord(value)) return false;
-  const allowed = new Set([...required, ...optional]);
-  return Reflect.ownKeys(value).length >= required.length &&
-    Reflect.ownKeys(value).every((key) => typeof key === 'string' && allowed.has(key)) &&
-    required.every((key) => Object.hasOwn(value, key));
-};
-
 const stringArray = (value: unknown): readonly string[] | undefined => {
   const values = dataArrayValues(value);
   if (values === undefined) return undefined;
@@ -100,7 +77,7 @@ const stringArray = (value: unknown): readonly string[] | undefined => {
 };
 
 const stringRecord = (value: unknown): Readonly<Record<string, string>> | undefined => {
-  if (!plainDataRecord(value)) return undefined;
+  if (!isPlainDataRecord(value)) return undefined;
   const copy: Record<string, string> = Object.create(null);
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== 'string') return undefined;
@@ -114,7 +91,7 @@ const stringRecord = (value: unknown): Readonly<Record<string, string>> | undefi
 const noRelativeArgumentResolution: TargetMcpRuntimeContract['resolveStdioArgument'] = (value) => value;
 
 const stdioServer = (value: unknown): ModernMcpStdioServer | undefined => {
-  if (!plainDataRecord(value)) return undefined;
+  if (!isPlainDataRecord(value)) return undefined;
   const args = ownDataValue(value, 'args');
   const command = ownDataValue(value, 'command');
   const cwd = ownDataValue(value, 'cwd');
@@ -144,7 +121,7 @@ const streamableHttpServer = (
   value: unknown,
   remoteTypes: ReadonlySet<string>,
 ): ModernMcpStreamableHttpServer | undefined => {
-  if (!plainDataRecord(value)) return undefined;
+  if (!isPlainDataRecord(value)) return undefined;
   const type = ownDataValue(value, 'type');
   const headers = ownDataValue(value, 'headers');
   const url = ownDataValue(value, 'url');
@@ -168,13 +145,13 @@ const readModernMcpServers = (
   document: unknown,
   remoteTypes: ReadonlySet<string>,
 ): ModernMcpServersReadResult => {
-  if (!plainDataRecord(document)) return { status: 'invalid' };
+  if (!isPlainDataRecord(document)) return { status: 'invalid' };
   const servers = ownDataValue(document, 'mcpServers');
-  if (servers === undefined || !servers.found || !plainDataRecord(servers.value)) return { status: 'invalid' };
+  if (servers === undefined || !servers.found || !isPlainDataRecord(servers.value)) return { status: 'invalid' };
   const entries: ModernMcpServerEntry[] = [];
   for (const name of Object.keys(servers.value).sort((left, right) => left.localeCompare(right))) {
     const value = servers.value[name];
-    if (!plainDataRecord(value)) return { status: 'invalid' };
+    if (!isPlainDataRecord(value)) return { status: 'invalid' };
     const type = ownDataValue(value, 'type');
     if (type === undefined || !type.found || typeof type.value !== 'string') return { status: 'invalid' };
     const server = type.value === 'stdio'
@@ -187,7 +164,7 @@ const readModernMcpServers = (
 };
 
 const snapshotModernServer = (value: unknown): ModernMcpServer | undefined => {
-  if (!plainDataRecord(value)) return undefined;
+  if (!isPlainDataRecord(value)) return undefined;
   const kind = ownDataValue(value, 'kind');
   if (kind === undefined || !kind.found || typeof kind.value !== 'string') return undefined;
 
@@ -204,18 +181,16 @@ const snapshotModernServer = (value: unknown): ModernMcpServer | undefined => {
       env === undefined
     ) return undefined;
     const copiedArgs = stringArray(args.value);
-    const commandValue = command.value;
     const cwdValue = cwd.found && cwd.value !== undefined ? cwd.value : undefined;
     const copiedEnv = env.found && env.value !== undefined ? stringRecord(env.value) : undefined;
     if (
       copiedArgs === undefined ||
-      typeof commandValue !== 'string' ||
       (cwdValue !== undefined && typeof cwdValue !== 'string') ||
       (env.found && env.value !== undefined && copiedEnv === undefined)
     ) return undefined;
     return Object.freeze({
       args: copiedArgs,
-      command: commandValue,
+      command: command.value,
       ...(cwdValue === undefined ? {} : { cwd: cwdValue }),
       ...(copiedEnv === undefined ? {} : { env: copiedEnv }),
       kind: 'stdio',
@@ -227,13 +202,12 @@ const snapshotModernServer = (value: unknown): ModernMcpServer | undefined => {
   const headers = ownDataValue(value, 'headers');
   const url = ownDataValue(value, 'url');
   if (headers === undefined || url === undefined || !url.found || typeof url.value !== 'string') return undefined;
-  const urlValue = url.value;
   const copiedHeaders = headers.found && headers.value !== undefined ? stringRecord(headers.value) : undefined;
-  if (typeof urlValue !== 'string' || (headers.found && headers.value !== undefined && copiedHeaders === undefined)) return undefined;
+  if (headers.found && headers.value !== undefined && copiedHeaders === undefined) return undefined;
   return Object.freeze({
     ...(copiedHeaders === undefined ? {} : { headers: copiedHeaders }),
     kind: 'streamable-http',
-    url: urlValue,
+    url: url.value,
   });
 };
 
@@ -260,7 +234,7 @@ const snapshotModernServers = (value: unknown): readonly ModernMcpServerEntry[] 
 };
 
 const snapshotModernServersResult = (value: unknown): ModernMcpServersReadResult | undefined => {
-  if (!plainDataRecord(value)) return undefined;
+  if (!isPlainDataRecord(value)) return undefined;
   const status = ownDataValue(value, 'status');
   if (status === undefined || !status.found || typeof status.value !== 'string') return undefined;
   if (status.value === 'invalid') {

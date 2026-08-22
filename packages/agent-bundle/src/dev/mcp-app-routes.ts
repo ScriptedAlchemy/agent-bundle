@@ -91,12 +91,8 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   const bindingId = opaqueSegment(parts[4]!);
   const kind = parts[5];
   if (kind === 'messages' || kind === 'host-context' || kind === 'close') return Object.freeze({ bindingId, kind });
-  if (kind === undefined || kind.length === 0) throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
   throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
 };
-
-const jsonRecord = (value: unknown): McpAppBridgeJsonRecord | undefined =>
-  snapshotMcpAppJsonRecord(value);
 
 const invalidShape = (): never => {
   throw requestError(diagnostic('AB8021', 'MCP App request has an invalid shape.', 400));
@@ -124,8 +120,8 @@ const hostContext = (value: unknown): McpAppPreviewHostContext => {
   const availableDisplayModes = stringList(record.availableDisplayModes);
   const containerDimensions = exactRecord(record.containerDimensions, ['height', 'width']);
   const safeAreaInsets = exactRecord(record.safeAreaInsets, ['bottom', 'left', 'right', 'top']);
-  const deviceCapabilities = jsonRecord(record.deviceCapabilities);
-  const styles = jsonRecord(record.styles);
+  const deviceCapabilities = snapshotMcpAppJsonRecord(record.deviceCapabilities);
+  const styles = snapshotMcpAppJsonRecord(record.styles);
   if (
     availableDisplayModes === undefined || !availableDisplayModes.includes(record.displayMode) || containerDimensions === undefined || safeAreaInsets === undefined ||
     !finiteNonnegative(containerDimensions.height) || !finiteNonnegative(containerDimensions.width) ||

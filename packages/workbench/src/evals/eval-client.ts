@@ -6,12 +6,11 @@ import type {
   EvalRunSelection,
   EvalSuiteListing,
 } from '../../../agent-bundle/src/dev/eval-service.ts';
-import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
+import type { JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
-import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
+import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { readNdjsonByteFrames } from '../ndjson.ts';
-import { snapshotStrictJsonValue } from '../strict-json.ts';
 import {
   nonnegativeIntegerSchema,
   positiveIntegerSchema,
@@ -234,8 +233,6 @@ const runResultSchema = z.strictObject({
   trials: z.array(trialRecordSchema),
 });
 const conforms = (schema: z.ZodType, value: unknown): boolean => schema.safeParse(value).success;
-
-const snapshot = (value: unknown): JsonValue => strictJsonSnapshot(value, invalidResponse);
 
 const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalidResponse);
 

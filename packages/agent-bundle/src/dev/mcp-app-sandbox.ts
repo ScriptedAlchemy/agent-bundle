@@ -242,8 +242,6 @@ export interface McpAppSandboxBridge {
   send(message: McpAppSandboxMessage): boolean;
 }
 
-const isCapability = (value: unknown): value is McpAppSandboxCapability => isRecord(value);
-
 const cspSources = (sources: readonly string[] | undefined): readonly string[] => {
   const accepted = new Set<string>();
   for (const source of sources ?? []) {
@@ -273,7 +271,7 @@ const permitted = (
   declaration: McpAppSandboxPermissions | undefined,
   consent: McpAppSandboxPermissions | undefined,
   key: keyof McpAppSandboxPermissions,
-): boolean => isCapability(declaration?.[key]) && isCapability(consent?.[key]);
+): boolean => isRecord(declaration?.[key]) && isRecord(consent?.[key]);
 
 const permissionPolicy = (declaration: McpAppSandboxPermissions | undefined, consent: McpAppSandboxPermissions | undefined): string => (
   permissionEntries.map(([key, directive]) => `${directive}=(${permitted(declaration, consent, key) ? 'self' : ''})`).join(', ')

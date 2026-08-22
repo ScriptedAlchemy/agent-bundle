@@ -35,6 +35,8 @@ import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { 
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
 import {
+  sortedEntries,
+  sourceInputs,
   validateJsonSchemaDocument,
   validateModernMcpDocument,
   type TargetAdapter,
@@ -119,13 +121,6 @@ const mcpRuntime = createTargetMcpRuntime({
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(claudeName, 'Claude');
 
 const selectedForClaude = (targets: readonly string[]): boolean => targets.includes(claudeName);
-
-const sourceInputs = (...sources: readonly (string | undefined)[]): readonly string[] =>
-  Object.freeze([...new Set(sources.filter((source): source is string => source !== undefined))]);
-
-const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetArtifactEntry[] => Object.freeze(
-  entries.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0),
-);
 
 const expandClaudeToken = (value: string): string => value
   .replaceAll(pathTokens.pluginRoot, '${CLAUDE_PLUGIN_ROOT}')

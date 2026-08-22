@@ -466,8 +466,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const exportedScriptSection = page.getByRole('heading', { name: 'Exported trace' }).locator('..');
       await expect(exportedScriptSection).toContainText(scriptSessionId);
       await expect(exportedScriptSection).toContainText(scriptCompletedReference);
-      const scriptSelectedCheckbox = scriptCompletedCheckbox;
-      await scriptSelectedCheckbox.check();
+      await scriptCompletedCheckbox.check();
       await expect(page.getByRole('button', { name: 'Promote to draft eval case' })).toBeEnabled({ timeout: browserTimeout });
       const promotedScriptResponse = page.waitForResponse((response) =>
         response.url() === `${origin}/api/playground/sessions/${encodeURIComponent(scriptSessionId)}/draft-eval` &&

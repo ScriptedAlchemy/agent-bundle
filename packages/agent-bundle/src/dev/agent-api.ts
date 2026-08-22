@@ -160,37 +160,40 @@ const evalRunSchema = objectSchema({
 });
 const evalGetSchema = objectSchema({ run_id: identifierArgument }, ['run_id']);
 
-const asRecord = (value: unknown): Record<string, unknown> => value as Record<string, unknown>;
+const argumentAt = (args: unknown, name: string): unknown => {
+  if (!isRecord(args)) throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
+  return args[name];
+};
 
-const stringArgument = (args: Record<string, unknown>, name: string): string => {
-  const value = args[name];
+const stringArgument = (args: unknown, name: string): string => {
+  const value = argumentAt(args, name);
   if (typeof value !== 'string') throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
   return value;
 };
 
-const optionalStringArgument = (args: Record<string, unknown>, name: string): string | undefined => {
-  const value = args[name];
+const optionalStringArgument = (args: unknown, name: string): string | undefined => {
+  const value = argumentAt(args, name);
   if (value === undefined) return undefined;
   return typeof value === 'string'
     ? value
     : (() => { throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.'); })();
 };
 
-const objectArgument = (args: Record<string, unknown>, name: string): Record<string, unknown> => {
-  const value = args[name];
+const objectArgument = (args: unknown, name: string): Record<string, unknown> => {
+  const value = argumentAt(args, name);
   if (!isRecord(value)) {
     throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
   }
   return value as Record<string, unknown>;
 };
 
-const optionalObjectArgument = (args: Record<string, unknown>, name: string): Record<string, unknown> => {
-  if (args[name] === undefined) return {};
+const optionalObjectArgument = (args: unknown, name: string): Record<string, unknown> => {
+  if (argumentAt(args, name) === undefined) return {};
   return objectArgument(args, name);
 };
 
-const stringListArgument = (args: Record<string, unknown>, name: string): readonly string[] | undefined => {
-  const value = args[name];
+const stringListArgument = (args: unknown, name: string): readonly string[] | undefined => {
+  const value = argumentAt(args, name);
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
@@ -198,8 +201,8 @@ const stringListArgument = (args: Record<string, unknown>, name: string): readon
   return Object.freeze([...value]);
 };
 
-const optionalIntegerArgument = (args: Record<string, unknown>, name: string): number | undefined => {
-  const value = args[name];
+const optionalIntegerArgument = (args: unknown, name: string): number | undefined => {
+  const value = argumentAt(args, name);
   if (value === undefined) return undefined;
   if (!Number.isSafeInteger(value)) throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
   return value as number;
@@ -701,45 +704,44 @@ export class AgentApi {
     project_status: async (_arguments, context) =>
       this.#tool(context.mcpReq.signal, () => Promise.resolve({ status: projectStatusWireDto(this.#coordinator.status()) })),
     skills_list: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
-        skills: await this.#skills.generatedTree(epochId, stringArgument(asRecord(arguments_), 'target')),
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => ({
+        skills: await this.#skills.generatedTree(epochId, stringArgument(arguments_, 'target')),
       }))),
     skill_inspect: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => ({
         skill: await this.#skills.generated(
           epochId,
-          stringArgument(asRecord(arguments_), 'target'),
-          stringArgument(asRecord(arguments_), 'skill_id'),
+          stringArgument(arguments_, 'target'),
+          stringArgument(arguments_, 'skill_id'),
         ),
       }))),
     artifacts_list: async (_arguments, context) =>
       this.#tool(context.mcpReq.signal, async () => ({ epochs: epochWireIdentities(await this.#epochs.listEpochs()) })),
     artifact_inspect: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => ({
         artifact: await this.#artifacts.inspect(epochId),
       }))),
     mcp_servers_list: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
-        servers: await this.#mcpServers(epochId, stringArgument(asRecord(arguments_), 'target')),
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => ({
+        servers: await this.#mcpServers(epochId, stringArgument(arguments_, 'target')),
       }))),
     mcp_invoke: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
-        const args = asRecord(arguments_);
+      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => {
         const session = await this.#mcpSessions.open({
           epochId,
-          serverName: stringArgument(args, 'server'),
-          target: stringArgument(args, 'target'),
+          serverName: stringArgument(arguments_, 'server'),
+          target: stringArgument(arguments_, 'target'),
         });
         try {
           await session.initialize({ signal });
-          return { result: await session.callTool({ arguments: optionalObjectArgument(args, 'arguments'), name: stringArgument(args, 'tool'), signal }) };
+          return { result: await session.callTool({ arguments: optionalObjectArgument(arguments_, 'arguments'), name: stringArgument(arguments_, 'tool'), signal }) };
         } finally {
           await session.close();
         }
       })),
     hooks_list: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
-        const target = optionalStringArgument(asRecord(arguments_), 'target');
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => {
+        const target = optionalStringArgument(arguments_, 'target');
         return {
           hooks: await this.#hooks.list({
             epochId,
@@ -748,15 +750,14 @@ export class AgentApi {
         };
       })),
     hook_simulate: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
-        const args = asRecord(arguments_);
+      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => {
         return {
           simulation: await this.#hooks.simulate({
             epochId,
-            hook: stringArgument(args, 'hook'),
-            input: { inline: objectArgument(args, 'input') },
+            hook: stringArgument(arguments_, 'hook'),
+            input: { inline: objectArgument(arguments_, 'input') },
             signal,
-            target: stringArgument(args, 'target'),
+            target: stringArgument(arguments_, 'target'),
           }),
         };
       })),
@@ -764,11 +765,10 @@ export class AgentApi {
       this.#tool(context.mcpReq.signal, async () => ({ runs: await this.#evals.list(), suites: await this.#evals.suites() })),
     eval_run: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async (signal) => {
-        const args = asRecord(arguments_);
-        const caseIds = stringListArgument(args, 'case_ids');
-        const suites = stringListArgument(args, 'suites');
-        const trials = optionalIntegerArgument(args, 'trials');
-        const requestedEpochId = optionalStringArgument(args, 'epoch');
+        const caseIds = stringListArgument(arguments_, 'case_ids');
+        const suites = stringListArgument(arguments_, 'suites');
+        const trials = optionalIntegerArgument(arguments_, 'trials');
+        const requestedEpochId = optionalStringArgument(arguments_, 'epoch');
         const reference = requestedEpochId === undefined
           ? await this.#epochs.acquireActiveEpochReference()
           : await this.#epochs.acquireEpochReference(requestedEpochId);
@@ -835,7 +835,7 @@ export class AgentApi {
         }
       }),
     eval_get: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(asRecord(arguments_), 'run_id')) })),
+      this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(arguments_, 'run_id')) })),
     diagnostics_list: async (_arguments, context) =>
       this.#tool(context.mcpReq.signal, async () => ({ diagnostics: diagnosticsListWireDto(await this.#diagnostics.list()) })),
     });

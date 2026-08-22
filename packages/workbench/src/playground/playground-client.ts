@@ -53,8 +53,6 @@ const optionalKeys = (value: Readonly<Record<string, unknown>>, required: readon
   optional.some((key) => exactKeys(value, [...required, key])) || exactKeys(value, required) ||
   (optional.length === 2 && exactKeys(value, [...required, ...optional]));
 
-const jsonObject = (value: unknown): value is Readonly<Record<string, unknown>> => isRecord(value);
-
 const textSchema = z.string().min(1);
 const nativeHostSchema = z.enum(['claude', 'codex']);
 const nativeCatalogItemSchema = z.strictObject({ id: textSchema, label: textSchema });
@@ -111,7 +109,7 @@ const isIdentity = (value: unknown): boolean => {
   const { epoch, fixture, invocation, target, task } = value;
   return isRecord(epoch) && exactKeys(epoch, ['digest', 'id']) && nonemptyString(epoch.digest) && nonemptyString(epoch.id) &&
     isRecord(fixture) && exactKeys(fixture, ['digest', 'id']) && nonemptyString(fixture.digest) && nonemptyString(fixture.id) &&
-    isRecord(invocation) && exactKeys(invocation, ['intent', 'kind']) && jsonObject(invocation.intent) && nonemptyString(invocation.kind) &&
+    isRecord(invocation) && exactKeys(invocation, ['intent', 'kind']) && isRecord(invocation.intent) && nonemptyString(invocation.kind) &&
     isRecord(target) && optionalKeys(target, ['name'], ['digest']) && nonemptyString(target.name) &&
       (target.digest === undefined || nonemptyString(target.digest)) &&
     isRecord(task) && exactKeys(task, ['id', 'text']) && nonemptyString(task.id) && nonemptyString(task.text);
@@ -119,7 +117,7 @@ const isIdentity = (value: unknown): boolean => {
 
 const isOutcome = (value: unknown): boolean => {
   if (!isRecord(value) || !optionalKeys(value, ['status'], ['response', 'workspace']) || !nonemptyString(value.status)) return false;
-  return (value.response === undefined || nonemptyString(value.response)) && (value.workspace === undefined || jsonObject(value.workspace));
+  return (value.response === undefined || nonemptyString(value.response)) && (value.workspace === undefined || isRecord(value.workspace));
 };
 
 const traceSources = new Set([
@@ -137,14 +135,6 @@ const isTraceEvent = (value: unknown): value is PlaygroundTraceEvent => {
 const isCleanupFailure = (value: unknown): boolean =>
   isRecord(value) && exactKeys(value, ['message', 'operation']) && nonemptyString(value.message) &&
   (value.operation === 'admission' || value.operation === 'subscriber');
-
-const diagnosticError = (value: unknown, status: number): PlaygroundClientError => {
-  if (isRecord(value) && isRecord(value.diagnostic) &&
-    typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
-    return new PlaygroundClientError(value.diagnostic.code, value.diagnostic.message);
-  }
-  return new PlaygroundClientError('AB8043', `Playground request failed with HTTP ${status}.`);
-};
 
 const isSession = (value: unknown): boolean =>
   isRecord(value) && optionalKeys(value, ['cleanupFailures', 'createdAt', 'id', 'identity', 'state'], ['outcome']) &&
@@ -239,7 +229,7 @@ const draftEvalBody = (value: unknown): DraftEvalCase => {
     !Array.isArray(body.assertions) || !isRecord(body.epoch) || !exactKeys(body.epoch, ['digest', 'id']) ||
     !nonemptyString(body.epoch.digest) || !nonemptyString(body.epoch.id) || !isRecord(body.fixture) || !exactKeys(body.fixture, ['digest', 'id']) ||
     !nonemptyString(body.fixture.digest) || !nonemptyString(body.fixture.id) || !isRecord(body.invocation) ||
-    !exactKeys(body.invocation, ['intent', 'kind']) || !jsonObject(body.invocation.intent) || !nonemptyString(body.invocation.kind) ||
+    !exactKeys(body.invocation, ['intent', 'kind']) || !isRecord(body.invocation.intent) || !nonemptyString(body.invocation.kind) ||
     !isRecord(body.target) || !optionalKeys(body.target, ['name'], ['digest']) || !nonemptyString(body.target.name) ||
     (body.target.digest !== undefined && !nonemptyString(body.target.digest)) || !isRecord(body.task) ||
     !exactKeys(body.task, ['id', 'text']) || !nonemptyString(body.task.id) || !nonemptyString(body.task.text) || !isOutcome(body.outcome) ||
@@ -376,7 +366,7 @@ export class PlaygroundClient {
       throw error;
     }
     if (!response.ok) {
-      throw diagnosticError(await response.json().catch(() => undefined), response.status);
+      throw this.#transport.diagnosticError(await response.json().catch(() => undefined), response.status);
     }
     const body = response.body;
     if (body === null) throw invalidResponse();

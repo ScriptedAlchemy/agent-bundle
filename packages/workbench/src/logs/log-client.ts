@@ -111,9 +111,8 @@ const replayFor = (value: unknown, afterSequence: number): DevLogReplay => {
     (Object.hasOwn(rawReplay, 'gap') && !isGap(rawReplay.gap))
   ) throw invalid();
   const records = rawReplay.records;
-  const gap: DevLogReplayGap | undefined = Object.hasOwn(rawReplay, 'gap') && isGap(rawReplay.gap)
-    ? rawReplay.gap as unknown as DevLogReplayGap
-    : undefined;
+  const rawGap: unknown = Object.hasOwn(rawReplay, 'gap') ? rawReplay.gap : undefined;
+  const gap = isGap(rawGap) ? rawGap : undefined;
   if (
     !contiguous(records, gap === undefined ? afterSequence : gap.earliestAvailableSequence - 1) ||
     (gap !== undefined && gap.requestedAfterSequence !== afterSequence) ||
@@ -126,7 +125,6 @@ const replayFor = (value: unknown, afterSequence: number): DevLogReplay => {
     records: Object.freeze(records.map((record) => Object.freeze({
       ...record,
       context: Object.freeze({ ...record.context }),
-      details: record.details,
     }))),
   });
 };

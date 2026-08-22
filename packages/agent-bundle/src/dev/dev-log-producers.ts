@@ -2,7 +2,7 @@ import { isRecord } from '../core/strict-json.ts';
 import type { ProjectServiceLogger } from './project-service.ts';
 import type { ProjectEvent, ProjectEventMessage } from './types.ts';
 import type { ProjectEventHub } from './events.ts';
-import type { DevLogInput, DevLogInputFor, DevLogKindFor, DevLogSink } from './dev-log-service.ts';
+import { devLogKinds, type DevLogInput, type DevLogInputFor, type DevLogKindFor, type DevLogSink } from './dev-log-service.ts';
 import type { McpSessionTraceSink } from './mcp-session-service.ts';
 
 const stringAt = (value: unknown, key: string): string | undefined =>
@@ -10,8 +10,6 @@ const stringAt = (value: unknown, key: string): string | undefined =>
 
 const diagnosticLevel = (value: unknown): 'error' | 'info' | 'warning' =>
   stringAt(value, 'severity') === 'error' ? 'error' : stringAt(value, 'severity') === 'warning' ? 'warning' : 'info';
-
-const detailsFor = (event: ProjectEvent): unknown => event.payload;
 
 const contextFor = (event: ProjectEvent): Readonly<Record<string, string>> => {
   const payload = event.payload;
@@ -24,11 +22,6 @@ const contextFor = (event: ProjectEvent): Readonly<Record<string, string>> => {
   }
   return Object.freeze({});
 };
-
-const producerFor = (event: ProjectEvent): 'build' | 'project' =>
-  event.type === 'build.started' || event.type === 'build.failed' || event.type === 'artifact.available'
-    ? 'build'
-    : 'project';
 
 const levelFor = (event: ProjectEvent): DevLogInput['level'] =>
   event.type === 'build.failed' ? 'error' : event.type === 'source.status' && stringAt(event.payload, 'state') === 'invalid' ? 'warning' : 'info';
@@ -45,10 +38,9 @@ const summaryFor = (event: ProjectEvent): string => {
 };
 
 const diagnosticsFor = (event: ProjectEvent): readonly unknown[] => {
-  const payload = event.payload;
-  const record = payload as unknown as Readonly<Record<string, unknown>>;
-  if (!isRecord(payload) || !Array.isArray(record.diagnostics)) return Object.freeze([]);
-  return Object.freeze([...record.diagnostics]);
+  const payload: unknown = event.payload;
+  if (!isRecord(payload) || !Array.isArray(payload.diagnostics)) return Object.freeze([]);
+  return Object.freeze([...payload.diagnostics]);
 };
 
 const write = (sink: DevLogSink, input: DevLogInput): void => {
@@ -56,13 +48,11 @@ const write = (sink: DevLogSink, input: DevLogInput): void => {
   catch { /* Dev Logs must never alter the producer's result. */ }
 };
 
-const isProjectKind = (value: string): value is DevLogKindFor<'project'> => new Set<DevLogKindFor<'project'>>([
-  'artifact.status', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation', 'project.events.replay-gap',
-  'project.invalid-source', 'project.load', 'project.prepared', 'runtime.event', 'source.changed', 'source.status',
-]).has(value as DevLogKindFor<'project'>);
+const projectKinds: ReadonlySet<string> = new Set(devLogKinds.project);
 
-const diagnosticKindFor = (event: ProjectEvent): DevLogKindFor<'diagnostic'> =>
-  `${event.type}.diagnostic` as DevLogKindFor<'diagnostic'>;
+const isProjectKind = (value: string): value is DevLogKindFor<'project'> => projectKinds.has(value);
+
+const diagnosticKindFor = (event: ProjectEvent): DevLogKindFor<'diagnostic'> => `${event.type}.diagnostic`;
 
 /** Converts the existing ProjectService observation seam into producer-wide records. */
 export const createProjectDevLogger = (sink: DevLogSink): ProjectServiceLogger => Object.freeze({
@@ -93,18 +83,29 @@ const recordEvent = (sink: DevLogSink, message: ProjectEventMessage): void => {
   }
   const shared = {
     context: contextFor(message),
-    details: detailsFor(message),
+    details: message.payload,
     level: levelFor(message),
     summary: summaryFor(message),
   } as const;
-  if (producerFor(message) === 'build') {
-    write(sink, { ...shared, kind: message.type as DevLogKindFor<'build'>, producer: 'build' });
-  } else {
-    write(sink, { ...shared, kind: message.type as DevLogKindFor<'project'>, producer: 'project' });
+  switch (message.type) {
+    case 'artifact.available':
+    case 'build.failed':
+    case 'build.started':
+      write(sink, { ...shared, kind: message.type, producer: 'build' });
+      break;
+    case 'artifact.status':
+    case 'invalidation':
+    case 'runtime.event':
+    case 'source.changed':
+    case 'source.status':
+      write(sink, { ...shared, kind: message.type, producer: 'project' });
+      break;
+    default:
+      message satisfies never;
   }
+  const buildId = stringAt(message.payload, 'id');
   for (const diagnostic of diagnosticsFor(message)) {
     const code = stringAt(diagnostic, 'code');
-    const buildId = stringAt(message.payload, 'id');
     write(sink, {
       context: Object.freeze({
         ...(buildId === undefined ? {} : { buildId }),

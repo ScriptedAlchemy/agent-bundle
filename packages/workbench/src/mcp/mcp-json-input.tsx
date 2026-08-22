@@ -46,6 +46,8 @@ const supportedRootKeywords = new Set([
   'type',
 ]);
 
+const supportedFieldTypes: ReadonlySet<string> = new Set(['string', 'number', 'integer', 'boolean']);
+
 const supportedFieldKeywords = new Set([
   'default',
   'description',
@@ -85,7 +87,7 @@ const isSupportedDefault = (type: string, value: unknown): boolean => {
 
 const isSupportedFieldSchema = (value: unknown): value is FormFieldSchema => {
   if (!isRecord(value) || !hasOnlyKeys(value, supportedFieldKeywords)) return false;
-  if (!['string', 'number', 'integer', 'boolean'].includes(value.type as string)) return false;
+  if (typeof value.type !== 'string' || !supportedFieldTypes.has(value.type)) return false;
   if (value.title !== undefined && typeof value.title !== 'string') return false;
   if (value.description !== undefined && typeof value.description !== 'string') return false;
   if (value.default !== undefined && !isSupportedDefault(value.type as string, value.default)) return false;

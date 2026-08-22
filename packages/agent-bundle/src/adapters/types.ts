@@ -28,6 +28,15 @@ export interface TargetArtifactCopy {
 
 export type TargetArtifactEntry = TargetArtifactWrite | TargetArtifactCopy;
 
+/** Deduplicated, defined authored inputs for a generated artifact entry. */
+export const sourceInputs = (...sources: readonly (string | undefined)[]): readonly string[] =>
+  Object.freeze([...new Set(sources.filter((source): source is string => source !== undefined))]);
+
+/** Deterministic artifact ordering shared by every target plan. */
+export const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetArtifactEntry[] => Object.freeze(
+  entries.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0),
+);
+
 export interface TargetArtifactPlan {
   readonly diagnostics: readonly Diagnostic[];
   readonly entries: readonly TargetArtifactEntry[];

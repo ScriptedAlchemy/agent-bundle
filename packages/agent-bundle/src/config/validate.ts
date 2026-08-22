@@ -16,7 +16,6 @@ import type {
   AgentBundleMcpApp,
   AgentBundleMcpServer,
   AgentBundleScriptInput,
-  CanonicalHookEvent,
   NormalizationTargetRegistry,
   NormalizedPlugin,
 } from '../core/types.ts';
@@ -32,7 +31,6 @@ const sourceDiagnostic = (
   sourcePath: string,
 ): Diagnostic => ({ code, message, severity: 'error', sourcePath });
 
-const hookEvents: readonly CanonicalHookEvent[] = canonicalHookEvents;
 
 const hookTools: ReadonlySet<string> = new Set(canonicalHookTools);
 
@@ -51,7 +49,7 @@ const validateHooks = (
   if (hooks === undefined) return [];
 
   const diagnostics: Diagnostic[] = [];
-  for (const event of hookEvents) {
+  for (const event of canonicalHookEvents) {
     const input = hooks[event];
     if (input === undefined) continue;
     for (const rawEntry of asHookEntries(input)) {
