@@ -305,7 +305,8 @@ export class McpAppFrameRelay {
 
   #post(message: RpcMessage): boolean {
     const proxy = this.#iframe.contentWindow;
-    if (proxy === null || byteLength(message) === undefined || byteLength(message)! > this.#frame.relay.maxMessageBytes) return false;
+    const size = byteLength(message);
+    if (proxy === null || size === undefined || size > this.#frame.relay.maxMessageBytes) return false;
     try {
       proxy.postMessage(message, this.#frame.targetOrigin);
       return true;

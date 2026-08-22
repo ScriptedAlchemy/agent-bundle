@@ -60,7 +60,6 @@ const supportedFieldKeywords = new Set([
   'type',
 ]);
 
-
 const hasOnlyKeys = (value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean =>
   Object.keys(value).every((key) => allowed.has(key));
 
@@ -90,7 +89,7 @@ const isSupportedFieldSchema = (value: unknown): value is FormFieldSchema => {
   if (typeof value.type !== 'string' || !supportedFieldTypes.has(value.type)) return false;
   if (value.title !== undefined && typeof value.title !== 'string') return false;
   if (value.description !== undefined && typeof value.description !== 'string') return false;
-  if (value.default !== undefined && !isSupportedDefault(value.type as string, value.default)) return false;
+  if (value.default !== undefined && !isSupportedDefault(value.type, value.default)) return false;
 
   if (value.enum !== undefined) {
     if (value.type !== 'string' || !Array.isArray(value.enum) || !value.enum.every((item) => typeof item === 'string')) return false;

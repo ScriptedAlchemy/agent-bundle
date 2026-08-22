@@ -80,7 +80,6 @@ export class ComparisonRequestLifecycle {
   }
 }
 
-
 const MetricCell = ({ cell }: { readonly cell: ComparisonMetricCell | undefined }) => cell === undefined
   ? <td className="comparison-cell"><p className="empty-row">Not recorded in this run.</p></td>
   : <td className="comparison-cell">

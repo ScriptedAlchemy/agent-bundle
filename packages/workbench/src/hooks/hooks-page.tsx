@@ -34,7 +34,6 @@ const draftError = 'Canonical hook input must be a JSON object.';
 
 const errorMessage = (reason: unknown): string => messageFrom(reason, 'The hook playground request could not be completed.');
 
-
 export type HookInputMode = 'fixture' | 'inline';
 
 type HookRequestKind = 'list' | 'run';

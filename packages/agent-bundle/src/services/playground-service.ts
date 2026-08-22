@@ -257,7 +257,6 @@ const durabilityPlatform = (): NodeJS.Platform => {
   return platforms[durabilityTestPlatformKey] ?? process.platform;
 };
 
-
 const snapshotCleanupFailures = (value: readonly PlaygroundCleanupFailure[]): readonly PlaygroundCleanupFailure[] =>
   Object.freeze(value.map((failure) => Object.freeze({ message: failure.message, operation: failure.operation })));
 
@@ -1313,5 +1312,4 @@ export class PlaygroundService {
       });
     } catch { /* Durable playground behavior is independent of Dev Logs. */ }
   }
-
 }

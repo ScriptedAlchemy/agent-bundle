@@ -114,7 +114,7 @@ export const readBody = async (
       tooLarge = true;
       return;
     }
-    if (!tooLarge) chunks.push(chunk);
+    chunks.push(chunk);
   });
   request.once('end', () => {
     if (tooLarge) {

@@ -709,11 +709,11 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         {controller.history.length === 0 ? <p className="mcp-page-empty">No completed invocations yet.</p> : <ol>{controller.history.map((invocation) => {
           const previewSource = mcpAppPreviewSourceFor(model, invocation);
           return <li key={invocation.id}>
-          <div><strong>{invocation.operation}</strong><span>{invocation.id}</span>{invocation.replayOf === undefined ? undefined : <span>Replay of {invocation.replayOf}</span>}</div>
-          <pre><code>{display({ error: invocation.error, request: invocation.request, result: invocation.result, timing: invocation.timing })}</code></pre>
-          <button disabled={model.phase !== 'ready' || isPending('replay')} onClick={() => run('replay', () => controller.replay({ id: nextRequestId(), invocationId: invocation.id }))} type="button">Replay {invocation.id}</button>
-          {appPreviewClient === undefined || previewSource === undefined ? undefined : <button disabled={appPreviewBusy} onClick={() => openAppPreview(previewSource)} type="button">Open App preview for {invocation.id}</button>}
-        </li>;
+            <div><strong>{invocation.operation}</strong><span>{invocation.id}</span>{invocation.replayOf === undefined ? undefined : <span>Replay of {invocation.replayOf}</span>}</div>
+            <pre><code>{display({ error: invocation.error, request: invocation.request, result: invocation.result, timing: invocation.timing })}</code></pre>
+            <button disabled={model.phase !== 'ready' || isPending('replay')} onClick={() => run('replay', () => controller.replay({ id: nextRequestId(), invocationId: invocation.id }))} type="button">Replay {invocation.id}</button>
+            {appPreviewClient === undefined || previewSource === undefined ? undefined : <button disabled={appPreviewBusy} onClick={() => openAppPreview(previewSource)} type="button">Open App preview for {invocation.id}</button>}
+          </li>;
         })}</ol>}
       </section>
     </section>

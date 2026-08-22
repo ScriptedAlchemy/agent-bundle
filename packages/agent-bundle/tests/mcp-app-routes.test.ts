@@ -138,7 +138,7 @@ it('leaves unrelated MCP paths for the session route handler', async () => {
   const started = await startRoutes();
   try {
     const response = await fetch(`${started.url}/api/mcp/sessions`, {
-      headers: { origin: 'http://127.0.0.1:4567', 'x-agent-bundle-session': 'test-session-token' },
+      headers: headers(),
       method: 'POST',
     });
 

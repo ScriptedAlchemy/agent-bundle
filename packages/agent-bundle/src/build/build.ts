@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
-import type { TargetArtifactEntry } from '../adapters/types.ts';
+import type { TargetArtifactEntry, TargetHookEntry } from '../adapters/types.ts';
 import { deduplicateDiagnostics, DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
@@ -61,7 +61,7 @@ export interface BuildOptions {
 
 interface PlannedTarget {
   readonly entries: readonly TargetArtifactEntry[];
-  readonly hookEntries: readonly import('../adapters/types.ts').TargetHookEntry[];
+  readonly hookEntries: readonly TargetHookEntry[];
   readonly name: string;
 }
 

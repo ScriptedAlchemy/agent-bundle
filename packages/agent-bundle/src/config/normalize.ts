@@ -41,7 +41,6 @@ const unique = (values: readonly string[]): string[] => [...new Set(values)];
 const sortedUnique = (values: readonly string[]): string[] =>
   unique(values).sort((left, right) => left.localeCompare(right));
 
-
 const knownHookTools: ReadonlySet<CanonicalHookTool> = new Set(canonicalHookTools);
 
 const eventSlug = (event: CanonicalHookEvent): string =>

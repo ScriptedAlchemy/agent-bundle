@@ -256,7 +256,6 @@ const traceEventLine = (line: string): PlaygroundTraceEvent => {
   return detached;
 };
 
-
 /** A typed, credential-memory-only browser client for the durable playground trace routes. */
 export class PlaygroundClient {
   readonly #transport: ForegroundTransport;

@@ -105,14 +105,14 @@ export const buildWithRslib = async (options: {
             rspack: (config) => {
               config.output.asyncChunks = false;
               if (hasVirtualModules) {
-                    config.resolve.alias = {
-                      ...config.resolve.alias,
-                      ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
-                    };
-                    config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
-                      ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
-                      ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
-                    }));
+                config.resolve.alias = {
+                  ...config.resolve.alias,
+                  ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
+                };
+                config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
+                  ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
+                  ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
+                }));
               }
             },
           },

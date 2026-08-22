@@ -8,16 +8,11 @@ import {
   type EventSourceLike,
 } from '../src/project-client.ts';
 import { ForegroundSessionAuthority } from '../src/foreground-session.ts';
+import { deferred } from './support/async.ts';
 
 interface Listener {
   readonly listener: (event: { readonly data: string; readonly lastEventId: string }) => void;
   readonly type: string;
-}
-
-interface Deferred<Value> {
-  readonly promise: Promise<Value>;
-  reject(reason: unknown): void;
-  resolve(value: Value): void;
 }
 
 class RecordingEventSource implements EventSourceLike {
@@ -57,16 +52,6 @@ const status = (state: 'active' | 'missing' | 'stale' = 'active') => ({
   build: { state: 'idle' },
   source: { diagnostics: [], revision: 'revision-1', state: 'ready' },
 });
-
-const deferred = <Value>(): Deferred<Value> => {
-  let reject!: (reason: unknown) => void;
-  let resolve!: (value: Value) => void;
-  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-};
 
 const foregroundAuthority = (): ForegroundSessionAuthority => new ForegroundSessionAuthority({
   fetch: async () => Response.json({

@@ -113,9 +113,9 @@ export const hookPlaygroundViewFor = (options: HookPlaygroundViewOptions): HookP
     : listState === 'loading' ? 'loading'
       : listState === 'error' ? 'list-error'
         : hooks.length === 0 ? 'empty'
-      : simulation !== undefined ? 'simulated'
-        : diagnostics.length > 0 ? 'diagnostics'
-          : 'ready';
+          : simulation !== undefined ? 'simulated'
+            : diagnostics.length > 0 ? 'diagnostics'
+              : 'ready';
   return Object.freeze({
     canonicalInput: simulation?.canonicalIntent.input,
     canonicalResult: simulation?.canonicalResult,

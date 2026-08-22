@@ -3,7 +3,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/client';
 
 import { AgentBundleRemoteTransport } from '../src/mcp/agent-bundle-remote-transport.ts';
 import { McpRouteClient } from '../src/mcp/mcp-route-client.ts';
-import { eventually } from './support/async.ts';
+import { deferred, eventually } from './support/async.ts';
 
 interface RecordedRequest {
   readonly body: string | undefined;
@@ -15,11 +15,6 @@ interface HeldStream {
   readonly response: Response;
   close(): void;
   send(value: unknown): void;
-}
-
-interface Deferred<Value> {
-  readonly promise: Promise<Value>;
-  resolve(value: Value): void;
 }
 
 const json = (value: unknown, status = 200): Response => Response.json(value, { status });
@@ -44,14 +39,6 @@ const closedStream = (...entries: readonly unknown[]): Response => new Response(
     controller.close();
   },
 }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
-
-const deferred = <Value>(): Deferred<Value> => {
-  let resolve!: (value: Value) => void;
-  const promise = new Promise<Value>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-};
 
 const cancellableStream = (): Readonly<{ readonly cancelled: () => boolean; readonly response: Response }> => {
   let wasCancelled = false;

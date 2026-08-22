@@ -33,7 +33,6 @@ const sourceDiagnostic = (
   sourcePath: string,
 ): Diagnostic => ({ code, message, severity: 'error', sourcePath });
 
-
 const hookTools: ReadonlySet<string> = new Set(canonicalHookTools);
 
 const isHookEntryList = (
