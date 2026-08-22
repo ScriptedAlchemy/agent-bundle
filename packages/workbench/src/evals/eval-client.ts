@@ -8,7 +8,7 @@ import type {
 } from '../../../agent-bundle/src/dev/eval-service.ts';
 import type { JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
-import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
+import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, decodeDiagnosticError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { abortableNdjsonStream, readNdjsonByteFrames } from '../ndjson.ts';
 import {
@@ -414,10 +414,8 @@ export class EvalClient {
       if (response.ok && (expectedStatus === undefined || response.status === expectedStatus)) return response;
       if (response.ok) throw invalidResponse();
       const body = parseResponseJson(new Uint8Array(await awaitWithAbort(init.signal, () => response.arrayBuffer())));
-      if (exactKeys(body, ['diagnostic']) && exactKeys(body.diagnostic, ['code', 'message']) &&
-        typeof body.diagnostic.code === 'string' && typeof body.diagnostic.message === 'string') {
-        throw new EvalClientError(body.diagnostic.code, body.diagnostic.message);
-      }
+      const decoded = decodeDiagnosticError(body);
+      if (decoded !== undefined) throw new EvalClientError(decoded.code, decoded.message);
       throw new EvalClientError('AB8073', `Eval request failed with HTTP ${response.status}.`);
     } catch (error) {
       if (error instanceof EvalClientError || isAbort(error) || init.signal?.aborted) throw error;

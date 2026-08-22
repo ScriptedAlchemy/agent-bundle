@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { meetsMinimumVersion, parseSemanticVersion } from '../core/semver.ts';
+import { isCredentialKey, isProviderEndpointKey } from '../core/credentials.ts';
 import { isErrno } from '../core/errors.ts';
 import { parseRedactedEventEnvelopes, type RedactedEventEnvelope } from './host-contract.ts';
 import { runBoundedChildProcess } from './process.ts';
@@ -117,10 +118,10 @@ class SmokeStepError extends Error {
   }
 }
 
+// Shared union credential classifier plus provider endpoint routing, so the
+// hermetic child cannot see credential material or an env-configured endpoint.
 const providerApiKeyName = (name: string): boolean =>
-  /(?:^|_)(?:API_KEY|API_TOKEN|ACCESS_TOKEN)$/iu.test(name)
-  || /^(?:ANTHROPIC|AZURE_OPENAI|CODEX|COHERE|DEEPSEEK|FIREWORKS|GEMINI|GOOGLE|GROQ|HUGGINGFACE|MISTRAL|OPENAI|PERPLEXITY|TOGETHER|XAI)_(?:API_KEY|TOKEN)$/iu.test(name)
-  || /^(?:CODEX|OPENAI)_(?:API_BASE|BASE_URL|URL)$/iu.test(name);
+  isCredentialKey(name) || isProviderEndpointKey(name);
 
 export const withoutProviderApiKeys = (environment: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv =>
   Object.fromEntries(Object.entries(environment).filter(([name]) => !providerApiKeyName(name)));

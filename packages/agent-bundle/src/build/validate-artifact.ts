@@ -7,10 +7,9 @@ import type {
   TargetArtifactDocumentValidator,
 } from '../adapters/types.ts';
 import { mcpEntryAliasPattern } from '../config/normalize.ts';
-import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { isRecord } from '../core/strict-json.ts';
-import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
+import { dataArrayValues, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
+import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
   artifactDiagnostic as diagnostic,
   artifactDiagnosticRecoveries,
@@ -39,6 +38,7 @@ import type {
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 import { validateHookCoherence } from './validate-artifact-hooks.ts';
 import { validateMcpCoherence } from './validate-artifact-mcp.ts';
+import { pathTarget, targetNamespaces, validateEmittedSkills } from './validate-artifact-skills.ts';
 
 export { artifactDiagnosticRecoveries, type ArtifactDiagnosticCode } from './artifact-diagnostics.ts';
 export type * from './artifact-validation-types.ts';
@@ -282,22 +282,17 @@ const schemaValidationFailure = (): readonly TargetArtifactDocumentIssue[] => Ob
   Object.freeze({ instancePath: '/', message: 'schema validation failed' }),
 ]);
 
+// Extra data keys stay tolerated (adapters may return richer issue objects),
+// but `then` is rejected so a thenable issue cannot poison awaited pipelines.
 const snapshotSchemaIssue = (value: unknown): TargetArtifactDocumentIssue | undefined => {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Object.values(descriptors).some((descriptor) => !('value' in descriptor))) return undefined;
-  const instancePath = descriptors.instancePath;
-  const message = descriptors.message;
+  if (!isPlainDataRecord(value) || Object.hasOwn(value, 'then')) return undefined;
+  const instancePath = ownDataValue(value, 'instancePath');
+  const message = ownDataValue(value, 'message');
   if (
     instancePath === undefined ||
     message === undefined ||
-    !('value' in instancePath) ||
-    !('value' in message) ||
     typeof instancePath.value !== 'string' ||
-    typeof message.value !== 'string' ||
-    Object.hasOwn(descriptors, 'then')
+    typeof message.value !== 'string'
   ) {
     return undefined;
   }
@@ -305,23 +300,11 @@ const snapshotSchemaIssue = (value: unknown): TargetArtifactDocumentIssue | unde
 };
 
 const snapshotSchemaIssues = (value: unknown): readonly TargetArtifactDocumentIssue[] => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
-    return schemaValidationFailure();
-  }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
-  if (
-    lengthDescriptor === undefined ||
-    !('value' in lengthDescriptor) ||
-    typeof lengthDescriptor.value !== 'number'
-  ) {
-    return schemaValidationFailure();
-  }
+  const entries = dataArrayValues(value);
+  if (entries === undefined) return schemaValidationFailure();
   const issues: TargetArtifactDocumentIssue[] = [];
-  for (let index = 0; index < lengthDescriptor.value; index += 1) {
-    const entry = descriptors[index];
-    if (entry === undefined || !('value' in entry)) return schemaValidationFailure();
-    const issue = snapshotSchemaIssue(entry.value);
+  for (const entry of entries) {
+    const issue = snapshotSchemaIssue(entry);
     if (issue === undefined) return schemaValidationFailure();
     issues.push(issue);
   }
@@ -407,14 +390,6 @@ const validateTargetContracts = async (options: {
 };
 
 const ownershipRecovery = artifactDiagnosticRecoveries.AB6014;
-
-const targetNamespaces = (manifest: ArtifactManifest): ReadonlySet<string> =>
-  new Set(manifest.targets.map((target) => target.name));
-
-const pathTarget = (path: string, targets: ReadonlySet<string>): string | undefined => {
-  const [target] = path.split('/');
-  return target !== undefined && targets.has(target) ? target : undefined;
-};
 
 const isSkillArtifactPath = (relativePath: string, skills: string | undefined): boolean => {
   if (skills === undefined) return false;
@@ -529,175 +504,6 @@ const validateArtifactStructure = (options: {
     manifest: options.manifest,
     registry: options.registry,
   }));
-  return Object.freeze(diagnostics);
-};
-
-interface EmittedSkill {
-  readonly name: string;
-  readonly path: string;
-  readonly root: string;
-  readonly target: string;
-}
-
-const emittedSkillFor = (
-  file: ArtifactFile,
-  targets: ReadonlySet<string>,
-  registry: TargetRegistry,
-): EmittedSkill | undefined => {
-  const segments = file.path.split('/');
-  const [target, layout, name, document] = segments;
-  if (target === undefined || !targets.has(target) || !registry.has(target)) return undefined;
-  const skillLayout = registry.artifactLayout(target).skills;
-  if (
-    layout !== skillLayout ||
-    name === undefined ||
-    document !== 'SKILL.md' ||
-    segments.length !== 4
-  ) {
-    return undefined;
-  }
-  if (skillLayout === undefined) return undefined;
-  return {
-    name,
-    path: file.path,
-    root: `${target}/${skillLayout}/${name}`,
-    target,
-  };
-};
-
-const isSkillRootEscape = (reference: string): boolean =>
-  reference === '..' || reference.startsWith('../') || reference.startsWith('/');
-
-const skillRecovery = artifactDiagnosticRecoveries.AB6015;
-
-const validateEmittedSkills = async (options: {
-  readonly artifactRoot: string;
-  readonly files: readonly ArtifactFile[];
-  readonly manifest: ArtifactManifest;
-  readonly registry: TargetRegistry;
-}): Promise<readonly Diagnostic[]> => {
-  const diagnostics: Diagnostic[] = [];
-  const targets = targetNamespaces(options.manifest);
-  const skills = options.files
-    .map((file) => emittedSkillFor(file, targets, options.registry))
-    .filter((skill): skill is EmittedSkill => skill !== undefined);
-  const skillsByRoot = new Map(skills.map((skill) => [skill.root, skill]));
-
-  for (const file of options.files) {
-    if (!file.path.endsWith('/SKILL.md') || emittedSkillFor(file, targets, options.registry) !== undefined) continue;
-    const target = pathTarget(file.path, targets);
-    diagnostics.push(diagnostic(
-      'AB6015',
-      `Emitted Skill document ${JSON.stringify(file.path)} does not use the canonical skills/<name>/SKILL.md layout.`,
-      file.path,
-      target,
-      skillRecovery,
-    ));
-  }
-
-  const resourceFilesBySkill = new Map<string, readonly ArtifactFile[]>();
-  for (const file of options.files) {
-    const [target, layout, name] = file.path.split('/');
-    if (target === undefined || name === undefined || !targets.has(target) || !options.registry.has(target)) continue;
-    if (layout !== options.registry.artifactLayout(target).skills) continue;
-    const root = `${target}/${layout}/${name}`;
-    const existing = resourceFilesBySkill.get(root) ?? [];
-    resourceFilesBySkill.set(root, [...existing, file]);
-  }
-
-  for (const [root, files] of resourceFilesBySkill) {
-    if (skillsByRoot.has(root)) continue;
-    const [target] = root.split('/');
-    diagnostics.push(diagnostic(
-      'AB6015',
-      `Emitted Skill resource directory ${JSON.stringify(root)} is missing its SKILL.md document.`,
-      files[0]?.path,
-      target,
-      skillRecovery,
-    ));
-  }
-
-  for (const skill of skills) {
-    let markdown: string;
-    try {
-      markdown = await readFile(resolve(options.artifactRoot, skill.path), 'utf8');
-    } catch {
-      diagnostics.push(diagnostic(
-        'AB6015',
-        'Emitted Skill Markdown cannot be read.',
-        skill.path,
-        skill.target,
-        skillRecovery,
-      ));
-      continue;
-    }
-
-    const parsed = parseSkillMarkdown(markdown);
-    if (parsed.status === 'missing-frontmatter') {
-      diagnostics.push(diagnostic(
-        'AB6015',
-        'Emitted Skill Markdown must start with YAML frontmatter.',
-        skill.path,
-        skill.target,
-        skillRecovery,
-      ));
-      continue;
-    }
-    if (parsed.status === 'malformed-frontmatter') {
-      diagnostics.push(diagnostic(
-        'AB6015',
-        `Emitted Skill YAML frontmatter is invalid: ${parsed.message}`,
-        skill.path,
-        skill.target,
-        skillRecovery,
-      ));
-      continue;
-    }
-
-    for (const issue of validateAgentSkillsFrontmatter(parsed.frontmatter)) {
-      const location = issue.field ?? (issue.instancePath === '' ? 'root' : issue.instancePath);
-      diagnostics.push(diagnostic(
-        'AB6015',
-        `Emitted Skill frontmatter ${location} ${issue.message}.`,
-        skill.path,
-        skill.target,
-        skillRecovery,
-      ));
-    }
-    if (typeof parsed.frontmatter.name === 'string' && parsed.frontmatter.name !== skill.name) {
-      diagnostics.push(diagnostic(
-        'AB6015',
-        `Emitted Skill name ${JSON.stringify(parsed.frontmatter.name)} must match directory ${JSON.stringify(skill.name)}.`,
-        skill.path,
-        skill.target,
-        skillRecovery,
-      ));
-    }
-
-    const resources = new Set(
-      (resourceFilesBySkill.get(skill.root) ?? []).map((file) => file.path.slice(skill.root.length + 1)),
-    );
-    for (const reference of referencedResources(parsed.body)) {
-      if (isSkillRootEscape(reference)) {
-        diagnostics.push(diagnostic(
-          'AB6016',
-          `Emitted Skill reference ${JSON.stringify(reference)} escapes its Skill root.`,
-          skill.path,
-          skill.target,
-          artifactDiagnosticRecoveries.AB6016,
-        ));
-      } else if (!resources.has(reference)) {
-        diagnostics.push(diagnostic(
-          'AB6016',
-          `Emitted Skill references missing regular resource ${JSON.stringify(reference)}.`,
-          skill.path,
-          skill.target,
-          artifactDiagnosticRecoveries.AB6016,
-        ));
-      }
-    }
-  }
-
   return Object.freeze(diagnostics);
 };
 
@@ -841,37 +647,54 @@ export const validateArtifactWithSnapshot = async (
       artifactDiagnosticRecoveries.AB6008,
     ));
   }
-  diagnostics.push(...await validateTargetContracts({
-    artifactRoot,
-    files: inspection.files,
-    manifest,
-    registry,
-  }));
-  diagnostics.push(...await validateMcpCoherence({
-    artifactRoot,
-    files: inspection.files,
-    manifest,
-    registry,
-    mcpServers: runtimeEvidence.mcpServers,
-  }));
-  diagnostics.push(...await validateHookCoherence({
-    artifactRoot,
-    files: inspection.files,
-    manifest,
-    registry,
-    hooks: runtimeEvidence.hooks,
-  }));
-  diagnostics.push(...await validateEmittedSkills({
-    artifactRoot,
-    files: inspection.files,
-    manifest,
-    registry,
-  }));
-  diagnostics.push(...await validateGeneratedFiles({
-    artifactRoot,
-    files: inspection.files,
-    manifestFiles: manifest.files,
-  }));
+  // Read-only validators over the same immutable inspection run concurrently;
+  // collecting in this fixed order keeps the diagnostics sequence deterministic.
+  const [
+    targetContractDiagnostics,
+    mcpCoherenceDiagnostics,
+    hookCoherenceDiagnostics,
+    emittedSkillDiagnostics,
+    generatedFileDiagnostics,
+  ] = await Promise.all([
+    validateTargetContracts({
+      artifactRoot,
+      files: inspection.files,
+      manifest,
+      registry,
+    }),
+    validateMcpCoherence({
+      artifactRoot,
+      files: inspection.files,
+      manifest,
+      registry,
+      mcpServers: runtimeEvidence.mcpServers,
+    }),
+    validateHookCoherence({
+      artifactRoot,
+      files: inspection.files,
+      manifest,
+      registry,
+      hooks: runtimeEvidence.hooks,
+    }),
+    validateEmittedSkills({
+      artifactRoot,
+      files: inspection.files,
+      manifest,
+      registry,
+    }),
+    validateGeneratedFiles({
+      artifactRoot,
+      files: inspection.files,
+      manifestFiles: manifest.files,
+    }),
+  ]);
+  diagnostics.push(
+    ...targetContractDiagnostics,
+    ...mcpCoherenceDiagnostics,
+    ...hookCoherenceDiagnostics,
+    ...emittedSkillDiagnostics,
+    ...generatedFileDiagnostics,
+  );
 
   let finalInspection: ArtifactInspection | undefined;
   try {

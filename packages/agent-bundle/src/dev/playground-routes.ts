@@ -31,7 +31,7 @@ import {
 } from './http.ts';
 import type { NativePlaygroundCatalog } from './native-playground-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
-import { encodedNdjsonFrame, writeKeepAliveStreamHead } from './route-streams.ts';
+import { createBackpressuredWriter, encodedNdjsonFrame, writeKeepAliveStreamHead } from './route-streams.ts';
 
 /**
  * Trace events legitimately carry raw protocol frames, so this exceeds the MCP
@@ -352,7 +352,6 @@ export class PlaygroundRoutes {
     response: ServerResponse,
   ): Promise<void> {
     let closed = false;
-    let pendingBytes = 0;
     let started = false;
     let backlogBytes = 0;
     const backlog: string[] = [];
@@ -362,34 +361,23 @@ export class PlaygroundRoutes {
       cleanup();
       if (!response.writableEnded && !response.destroyed) response.end();
     };
-    const write = async (frame: string): Promise<void> => {
-      const bytes = Buffer.byteLength(frame);
-      if (pendingBytes + bytes > streamQueueByteLimit) {
+    const writer = createBackpressuredWriter(response, {
+      byteLimit: streamQueueByteLimit,
+      countInFlightBytes: true,
+      rejectOversizedFrame: true,
+    });
+    const write = (frame: string): void => {
+      if (writer.enqueue(frame) === 'overflow') {
         cleanup();
         response.destroy();
-        return;
       }
-      if (response.write(frame)) return;
-      pendingBytes += bytes;
-      await new Promise<void>((resolvePromise) => {
-        // Exactly one of these fires; leaving the other registered would retain
-        // this closure for the life of the connection, one per backpressured frame.
-        const settle = (): void => {
-          response.off('drain', settle);
-          response.off('close', settle);
-          pendingBytes -= bytes;
-          resolvePromise();
-        };
-        response.once('drain', settle);
-        response.once('close', settle);
-      });
     };
     /**
      * The service delivers any backlog from inside subscribe(), before the cursor
      * has been accepted and headers committed. Those frames are held rather than
      * written, because an implicit header write here would lose the diagnostic.
      */
-    const deliver = async (event: PlaygroundTraceEvent): Promise<void> => {
+    const deliver = (event: PlaygroundTraceEvent): void => {
       if (closed || response.writableEnded || response.destroyed) return;
       const frame = encodedNdjsonFrame(event);
       if (!started) {
@@ -402,11 +390,12 @@ export class PlaygroundRoutes {
         backlog.push(frame);
         return;
       }
-      await write(frame);
+      write(frame);
     };
     cleanup = (): void => {
       if (closed) return;
       closed = true;
+      writer.markClosed();
       this.#streamClosers.delete(finishStream);
       void stream.subscription?.close().catch(() => undefined);
     };
@@ -429,7 +418,7 @@ export class PlaygroundRoutes {
     started = true;
     for (const frame of backlog.splice(0)) {
       if (closed || response.writableEnded || response.destroyed) return;
-      await write(frame);
+      write(frame);
     }
   }
 }

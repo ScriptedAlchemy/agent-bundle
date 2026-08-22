@@ -127,8 +127,8 @@ const isPlaygroundSessionReplayPath = (path: string): boolean => {
 };
 
 /**
- * The playground page retires a superseded in-flight catalog request via its
- * generation lease (createPlaygroundCatalogLifecycle), and route changes abort
+ * The playground screen retires a superseded in-flight catalog request when
+ * its effect re-runs (one AbortController per effect), and route changes abort
  * pending session replay reads the same way they abort live streams.
  */
 const isKnownPreOutageClientCancellation = (request: NetworkLedgerEntry): boolean =>

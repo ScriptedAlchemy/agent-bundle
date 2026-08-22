@@ -9,9 +9,6 @@ import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contra
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
 import { playgroundViewFor } from '../src/playground/playground-model.ts';
 import {
-  createPlaygroundCancelFlight,
-  createPlaygroundCatalogLifecycle,
-  createPlaygroundObservationLifecycle,
   observePlaygroundRun,
   PlaygroundNativePromptControls,
   PlaygroundPage,
@@ -150,60 +147,6 @@ it('renders ordered durable evidence as bounded disclosure cards instead of a wi
   expect(markup).toContain('playground-event-card');
   expect(markup).not.toContain('playground-table');
   expect(markup).toContain('events.jsonl#2');
-});
-
-it('starts exactly one synchronous cancel flight until server drain and replay settle', async () => {
-  const lifecycle = createPlaygroundCancelFlight();
-  const blocked = deferred<void>();
-  let calls = 0;
-  const first = lifecycle.start(async () => {
-    calls += 1;
-    await blocked.promise;
-  });
-  const duplicate = lifecycle.start(async () => { calls += 1; });
-
-  expect(first.started).toBe(true);
-  expect(duplicate.started).toBe(false);
-  expect(duplicate.done).toBe(first.done);
-  blocked.resolve();
-  await first.done;
-  expect(lifecycle.start(async () => { calls += 1; }).started).toBe(true);
-  expect(calls).toBe(2);
-});
-
-it('aborts and rejects a stale catalog completion before accepting a replacement client or epoch', () => {
-  const lifecycle = createPlaygroundCatalogLifecycle();
-  const clientA = {} as PlaygroundClient;
-  const clientB = {} as PlaygroundClient;
-  const a = lifecycle.begin({ client: clientA, epochId: 'epoch-A' });
-  const b = lifecycle.begin({ client: clientB, epochId: 'epoch-B' });
-  const accepted: string[] = [];
-
-  if (a.current()) accepted.push('A');
-  if (b.current()) accepted.push('B');
-
-  expect(a.signal.aborted).toBe(true);
-  expect(a.current()).toBe(false);
-  expect(b.current()).toBe(true);
-  expect(b.key).toEqual({ client: clientB, epochId: 'epoch-B', generation: 2 });
-  expect(accepted).toEqual(['B']);
-});
-
-it('keeps a reentrant catalog replacement distinct from the outer lease that triggered it', () => {
-  const lifecycle = createPlaygroundCatalogLifecycle();
-  const client = {} as PlaygroundClient;
-  const first = lifecycle.begin({ client, epochId: 'epoch-A' });
-  let nested: ReturnType<typeof lifecycle.begin> | undefined;
-  first.signal.addEventListener('abort', () => {
-    nested = lifecycle.begin({ client, epochId: 'epoch-B' });
-  }, { once: true });
-
-  const outer = lifecycle.begin({ client, epochId: 'epoch-C' });
-
-  expect(nested).toBeDefined();
-  expect(nested?.key.generation).not.toBe(outer.key.generation);
-  expect(nested?.current()).toBe(false);
-  expect(outer.current()).toBe(true);
 });
 
 it('renders the pinned server epoch and persisted event references, not a rebuilt current epoch', () => {
@@ -361,20 +304,4 @@ it('closes and drains the stream when final replay rejects before the run can co
   await expect(observer).rejects.toThrow('final replay failed');
   expect(closeCount).toBe(1);
   expect(readerDrained).toBe(true);
-});
-
-it('invalidates a queued old trace callback before replacement clears the page-owned trace', () => {
-  const lifecycle = createPlaygroundObservationLifecycle();
-  const old = lifecycle.begin();
-  let pageTrace: readonly PlaygroundTraceEvent[];
-  const queuedOldEvent = (): void => {
-    if (old.current()) pageTrace = [event(1)];
-  };
-
-  lifecycle.invalidate();
-  pageTrace = [];
-  queuedOldEvent();
-
-  expect(old.signal.aborted).toBe(true);
-  expect(pageTrace).toEqual([]);
 });

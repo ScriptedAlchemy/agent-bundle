@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
-import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile, type FileHandle } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, realpath, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
+import { readPinnedFile, readTornTailJsonl, writeJsonFileAtomically } from '../core/durable-fs.ts';
+import { testModeGlobalValue } from '../core/durability-test-hook.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
+import { acquireOwnerLockFile, isProcessAlive } from '../core/owner-lock.ts';
 import { sameFile, isInsideOrEqual } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { defaultEvalRunsDir } from './config.ts';
@@ -103,18 +106,7 @@ const runEvalRunStoreDurabilityTestHook = async (
   path: string,
   journal: FileHandle | undefined,
 ): Promise<void> => {
-  if (process.env.NODE_ENV !== 'test') return;
-  const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
-  await hooks[evalRunStoreDurabilityTestHookKey]?.(phase, event, path, journal);
-};
-
-const isProcessRunning = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return !isErrno(error, 'ESRCH');
-  }
+  await testModeGlobalValue<EvalRunStoreDurabilityTestHook>(evalRunStoreDurabilityTestHookKey)?.(phase, event, path, journal);
 };
 
 const assertNoSymlinkedStorageAncestor = async (projectRoot: string, storageRoot: string): Promise<void> => {
@@ -193,15 +185,17 @@ const ensureWritablePath = async (root: string, path: string): Promise<void> => 
   }
 };
 
+/**
+ * Deliberate durability upgrade (audit §1.1): the run store previously
+ * renamed staged JSON documents without any fsync. It now shares the
+ * fsync-everywhere publication its sibling stores use — fsync the staged
+ * file, rename, then fsync the containing directory.
+ */
 const writeJsonAtomically = async (root: string, path: string, value: unknown, serialized?: string): Promise<void> => {
   await ensureWritablePath(root, path);
-  const temporaryPath = join(dirname(path), `.${basename(path) || 'record'}.stage-${process.pid}-${randomUUID()}`);
-  try {
-    await writeFile(temporaryPath, serialized ?? `${stableJson(value)}\n`, 'utf8');
-    await rename(temporaryPath, path);
-  } finally {
-    await rm(temporaryPath, { force: true });
-  }
+  await writeJsonFileAtomically(path, serialized ?? `${stableJson(value)}\n`, {
+    temporaryPath: join(dirname(path), `.${basename(path) || 'record'}.stage-${process.pid}-${randomUUID()}`),
+  });
 };
 
 const runsRoot = (options: ListEvalRunsOptions): string => {
@@ -422,7 +416,7 @@ export const createEvalRun = async (options: CreateEvalRunOptions): Promise<Eval
     ? mintRunId(createdAt)
     : requireRequestedRunId(input.runId);
   const directory = join(root, id);
-  const probeProcess = input.probeProcess ?? isProcessRunning;
+  const probeProcess = input.probeProcess ?? isProcessAlive;
 
   await ensureStorageRoot(resolve(input.projectRoot), root);
   try {
@@ -439,23 +433,31 @@ export const createEvalRun = async (options: CreateEvalRunOptions): Promise<Eval
     nonce: randomUUID(),
     pid: process.pid,
   });
-  try {
-    await ensureWritablePath(directory, join(directory, ownerFileName));
-    await writeFile(join(directory, ownerFileName), `${stableJson(owner)}\n`, { encoding: 'utf8', flag: 'wx' });
-  } catch (error) {
-    if (!isErrno(error, 'EEXIST')) throw error;
-    const current = await readOwner(directory);
-    if (current !== undefined && probeProcess(current.pid)) {
-      throw storeError(
-        'EVAL_RUN_OWNED',
-        `Eval run ${JSON.stringify(id)} is owned by a running process (pid ${current.pid}). Create a new run instead of appending to it.`,
-      );
-    }
-    throw storeError(
+  await acquireOwnerLockFile<void>({
+    create: async () => {
+      await ensureWritablePath(directory, join(directory, ownerFileName));
+      await writeFile(join(directory, ownerFileName), `${stableJson(owner)}\n`, { encoding: 'utf8', flag: 'wx' });
+    },
+    // Runs are immutable: contention always resolves to an ownership error,
+    // never a retry, so acquisition can never exhaust its single attempt.
+    exhausted: () => storeError(
       'EVAL_RUN_EXISTS',
       `Eval run ${JSON.stringify(id)} already exists. Runs are immutable once created; create a new run.`,
-    );
-  }
+    ),
+    onContention: async () => {
+      const current = await readOwner(directory);
+      if (current !== undefined && probeProcess(current.pid)) {
+        throw storeError(
+          'EVAL_RUN_OWNED',
+          `Eval run ${JSON.stringify(id)} is owned by a running process (pid ${current.pid}). Create a new run instead of appending to it.`,
+        );
+      }
+      throw storeError(
+        'EVAL_RUN_EXISTS',
+        `Eval run ${JSON.stringify(id)} already exists. Runs are immutable once created; create a new run.`,
+      );
+    },
+  });
 
   const record: EvalRunRecord = Object.freeze({
     agentBundleVersion: input.provenance.agentBundleVersion,
@@ -510,32 +512,21 @@ export const readEvalRunEvents = async (directory: string): Promise<EvalRunEvent
     }
     throw error;
   }
-  const lines = contents.split('\n');
-  const trailing = lines.pop() ?? '';
-  const events = lines.map((line) => {
-    if (line.length === 0) {
-      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains an empty complete record.');
-    }
-    let parsed: unknown;
-    try {
-      parsed = parseJsonWithoutDuplicateKeys(line);
-    } catch {
-      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a complete but malformed record.');
-    }
-    const event = parseEventRecord(parsed);
-    if (event === undefined) {
-      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a record that does not match the event schema.');
-    }
-    return event;
+  const read = readTornTailJsonl<EvalRunEvent>(contents, {
+    decode: (parsed) => {
+      const event = parseEventRecord(parsed);
+      if (event === undefined) {
+        throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a record that does not match the event schema.');
+      }
+      return event;
+    },
+    emptyRecord: () => storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains an empty complete record.'),
+    malformedRecord: () => storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a complete but malformed record.'),
+    sequenceViolation: () => storeError('EVAL_RUN_CORRUPT', 'Eval run event log sequences must be exactly 1 through N.'),
   });
-  for (const [index, event] of events.entries()) {
-    if (event.sequence !== index + 1) {
-      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log sequences must be exactly 1 through N.');
-    }
-  }
   return Object.freeze({
-    events: Object.freeze(events),
-    ...(trailing.length === 0 ? {} : { incompleteTrailingRecord: trailing }),
+    events: read.records,
+    ...(read.incompleteTrailingRecord === undefined ? {} : { incompleteTrailingRecord: read.incompleteTrailingRecord }),
   });
 };
 
@@ -566,28 +557,14 @@ const readTrialRecordFile = async (
   sourcePath: string,
   directories: readonly TrialDirectoryIdentity[],
 ): Promise<unknown> => {
-  await assertTrialDirectories(directories);
-  const before = await lstat(sourcePath);
-  if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1 || before.size > maximumTrialRecordBytes) {
-    throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record is not a safe regular file.');
-  }
-  const file = await open(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const descriptor = await file.stat();
-    if (!descriptor.isFile() || descriptor.nlink !== 1 || descriptor.size > maximumTrialRecordBytes || !sameFile(before, descriptor)) {
-      throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while opening.');
-    }
-    const bytes = await file.readFile({ encoding: 'utf8' });
-    const [after, final] = await Promise.all([lstat(sourcePath), file.stat()]);
-    await assertTrialDirectories(directories);
-    if (after.isSymbolicLink() || !after.isFile() || after.nlink !== 1 || !sameFile(before, after) || !sameFile(descriptor, final) ||
-      final.size !== descriptor.size || Buffer.byteLength(bytes, 'utf8') !== descriptor.size) {
-      throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while reading.');
-    }
-    return parseJsonWithoutDuplicateKeys(bytes);
-  } finally {
-    await file.close();
-  }
+  const bytes = await readPinnedFile(sourcePath, {
+    changedWhileOpening: () => storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while opening.'),
+    changedWhileReading: () => storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while reading.'),
+    maximumBytes: maximumTrialRecordBytes,
+    unsafe: () => storeError('EVAL_RUN_CORRUPT', 'Eval trial record is not a safe regular file.'),
+    verifyAncestry: async () => { await assertTrialDirectories(directories); },
+  });
+  return parseJsonWithoutDuplicateKeys(bytes);
 };
 
 interface ReadEvalTrialsOptions {

@@ -3,7 +3,7 @@ import { basename, extname, posix, resolve } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
-import { isPlainRecord, isRecord } from '../core/strict-json.ts';
+import { isPlainRecord, isRecord, isStrictJsonValue } from '../core/strict-json.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
   defaultGeneratedRuntime,
@@ -128,45 +128,6 @@ const validateHooks = (
     }
   }
   return diagnostics;
-};
-
-const isProtocolJsonValue = (value: unknown, ancestors = new Set<object>()): boolean => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (typeof value !== 'object' || ancestors.has(value)) return false;
-
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      for (let index = 0; index < value.length; index += 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor) || !isProtocolJsonValue(descriptor.value, ancestors)) {
-          return false;
-        }
-      }
-      for (const key of Reflect.ownKeys(value)) {
-        if (key === 'length') continue;
-        if (typeof key !== 'string' || !/^(?:0|[1-9]\d*)$/u.test(key)) return false;
-        const index = Number(key);
-        if (index >= value.length) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (!isPlainRecord(value)) return false;
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string') return false;
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor === undefined || !('value' in descriptor) || !isProtocolJsonValue(descriptor.value, ancestors)) {
-        return false;
-      }
-    }
-    return true;
-  } finally {
-    ancestors.delete(value);
-  }
 };
 
 const nonemptyString = (value: unknown): value is string =>
@@ -464,7 +425,7 @@ const validateMcpApps = (
         `MCP App ${JSON.stringify(appName)} _meta must be an object.`,
         loaded.configPath,
       ));
-    } else if (app._meta !== undefined && !isProtocolJsonValue(app._meta)) {
+    } else if (app._meta !== undefined && !isStrictJsonValue(app._meta)) {
       diagnostics.push(sourceDiagnostic(
         'AB4338',
         `MCP App ${JSON.stringify(appName)} _meta must contain only JSON data.`,
@@ -472,6 +433,20 @@ const validateMcpApps = (
       ));
     }
   }
+  return diagnostics;
+};
+
+const validateStdioOptions = (
+  name: string,
+  server: AgentBundleMcpServer,
+  loaded: LoadedConfig,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  if (server.headers !== undefined) {
+    diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
+  }
+  diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
+  diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
   return diagnostics;
 };
 
@@ -515,11 +490,7 @@ const validateMcpServer = (
     if (server.cwd !== undefined) {
       diagnostics.push(sourceDiagnostic('AB4309', `MCP server ${JSON.stringify(name)} local entry cannot set cwd.`, loaded.configPath));
     }
-    if (server.headers !== undefined) {
-      diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
-    }
-    diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
-    diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
+    diagnostics.push(...validateStdioOptions(name, server, loaded));
     return diagnostics;
   }
 
@@ -533,11 +504,7 @@ const validateMcpServer = (
     if (server.cwd !== undefined && !nonemptyString(server.cwd)) {
       diagnostics.push(sourceDiagnostic('AB4315', `MCP server ${JSON.stringify(name)} cwd must be a nonempty path.`, loaded.configPath));
     }
-    if (server.headers !== undefined) {
-      diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
-    }
-    diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
-    diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
+    diagnostics.push(...validateStdioOptions(name, server, loaded));
     return diagnostics;
   }
 

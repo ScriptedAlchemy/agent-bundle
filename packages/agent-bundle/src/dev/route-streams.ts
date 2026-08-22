@@ -15,6 +15,8 @@ export interface BackpressuredWriteOptions {
   readonly byteLimit: number;
   /** When true, a frame already handed to `write()` but not yet drained counts toward `byteLimit`. */
   readonly countInFlightBytes?: boolean;
+  /** Called after a drain flushes every queued frame, i.e. the writer became `idle` again. */
+  readonly onIdle?: () => void;
   readonly recordLimit?: number;
   /** When true, a single frame larger than `byteLimit` overflows instead of being written. */
   readonly rejectOversizedFrame?: boolean;
@@ -22,6 +24,8 @@ export interface BackpressuredWriteOptions {
 
 export interface BackpressuredWriter {
   readonly closed: boolean;
+  /** True while no frame is queued or awaiting a drain, so ending the response loses nothing. */
+  readonly idle: boolean;
   enqueue(frame: string): BackpressuredWriteResult;
   markClosed(): void;
 }
@@ -88,11 +92,15 @@ export const createBackpressuredWriter = (
         return;
       }
     }
+    options.onIdle?.();
   };
 
   return {
     get closed(): boolean {
       return closed;
+    },
+    get idle(): boolean {
+      return !backpressured && queued.length === 0;
     },
     markClosed(): void {
       closed = true;

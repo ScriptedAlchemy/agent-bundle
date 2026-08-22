@@ -154,7 +154,30 @@ interface CleanupTask {
   run(): unknown;
 }
 
-type ControllerState = 'closed' | 'closing' | 'failed' | 'idle' | 'opening' | 'ready' | 'restarting';
+/**
+ * Single lifecycle authority for the controller. Constructing and closing are
+ * phases of this union rather than boolean side-channels, and the promise each
+ * phase must expose travels on its variant:
+ * - `constructing` carries the drain an intervening close must settle behind.
+ * - `closing`, `closed`, and `failed` carry the shared close outcome, so every
+ *   subsequent close() returns the same promise.
+ * - `draining` exists only for the synchronous window of one cleanup task: a
+ *   cleanup that synchronously reacquires its owner through close() receives
+ *   the variant's already-settled promise instead of deadlocking on its own
+ *   completion. A call after a yield is indistinguishable from an external
+ *   close that must await cleanup, so the previous variant is resumed before
+ *   the task's result is awaited.
+ */
+type ControllerLifecycle =
+  | Readonly<{ done: Promise<void>; phase: 'closed' }>
+  | Readonly<{ done: Promise<void>; phase: 'closing' }>
+  | Readonly<{ done: Promise<void>; phase: 'failed' }>
+  | Readonly<{ done: Promise<void>; phase: 'draining'; resume: ControllerLifecycle }>
+  | Readonly<{ drain: ConstructionDrain; phase: 'constructing' }>
+  | Readonly<{ phase: 'idle' }>
+  | Readonly<{ phase: 'opening' }>
+  | Readonly<{ phase: 'ready' }>
+  | Readonly<{ phase: 'restarting' }>;
 
 type TraceMessage = McpSessionTraceEntry | McpSessionTraceReplayGap;
 
@@ -289,19 +312,26 @@ const activeRequest = (): ActiveRequest => {
   return { abort: new AbortController(), settle, settled };
 };
 
+const requestPlans = {
+  callTool: { method: 'tools/call', params: true },
+  getPrompt: { method: 'prompts/get', params: true },
+  initialize: { method: 'initialize', params: false },
+  listPrompts: { method: 'prompts/list', params: false },
+  listResources: { method: 'resources/list', params: false },
+  listResourceTemplates: { method: 'resources/templates/list', params: false },
+  listTools: { method: 'tools/list', params: false },
+  readResource: { method: 'resources/read', params: true },
+} as const satisfies Record<McpSessionControllerOperation, Readonly<{ method: string; params: boolean }>>;
+
 const requestFor = (
   operation: McpSessionControllerOperation,
   params: Readonly<Record<string, unknown>>,
 ): Readonly<{ readonly method: string; readonly params?: Readonly<Record<string, unknown>> }> => {
-  if (operation === 'initialize') return { method: 'initialize' };
-  if (operation === 'listTools') return { method: 'tools/list' };
-  if (operation === 'listResources') return { method: 'resources/list' };
-  if (operation === 'listResourceTemplates') return { method: 'resources/templates/list' };
-  if (operation === 'listPrompts') return { method: 'prompts/list' };
-  if (operation === 'getPrompt') return { method: 'prompts/get', params };
-  if (operation === 'readResource') return { method: 'resources/read', params };
-  if (operation === 'callTool') return { method: 'tools/call', params };
-  throw new McpSessionControllerError(`MCP operation ${JSON.stringify(operation)} is not supported by the session controller.`);
+  // The operation may be an arbitrary string at runtime; hasOwn keeps prototype
+  // members such as toString from resolving to a plan.
+  const plan = Object.hasOwn(requestPlans, operation) ? requestPlans[operation] : undefined;
+  if (plan === undefined) throw new McpSessionControllerError(`MCP operation ${JSON.stringify(operation)} is not supported by the session controller.`);
+  return plan.params ? { method: plan.method, params } : { method: plan.method };
 };
 
 const diagnosticFor = (code: string, reason: unknown): McpBrowserSessionDiagnostic => ({
@@ -339,17 +369,13 @@ export class McpSessionController {
   }>) => McpSessionControllerTransport;
   #binding: McpSessionControllerBinding | undefined;
   #client: McpSessionControllerClient | undefined;
-  #closePromise: Promise<void> | undefined;
-  #closing = false;
-  #cleanupCloseReentry: Promise<void> | undefined;
-  #constructing = false;
-  #constructionDrain: ConstructionDrain | undefined;
+  /** Session identity: bumped whenever the admitted session changes, so stale async work can recognize itself. */
   #generation = 0;
+  #lifecycle: ControllerLifecycle = { phase: 'idle' };
   #model = createMcpBrowserSessionModel('mcp-session-controller');
   #requests = new Map<string, ActiveRequest>();
   #traceRefresh: TraceRefresh | undefined;
   #session: McpRouteSession | undefined;
-  #state: ControllerState = 'idle';
   #traceAbort: AbortController | undefined;
   #traceTask: Promise<void> | undefined;
   #transport: McpSessionControllerTransport | undefined;
@@ -384,37 +410,35 @@ export class McpSessionController {
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       throw new McpSessionControllerError('MCP session timeout must be a positive finite number.');
     }
-    if (this.#state === 'closing') throw new McpSessionControllerError('MCP session controller is closing.');
-    if (this.#state !== 'idle' || this.#constructing) throw new McpSessionControllerError('MCP session controller is already open.');
+    if (this.#lifecycle.phase === 'closing') throw new McpSessionControllerError('MCP session controller is closing.');
+    if (this.#lifecycle.phase !== 'idle') throw new McpSessionControllerError('MCP session controller is already open.');
     let transport: McpSessionControllerTransport | undefined;
     let client: McpSessionControllerClient | undefined;
     let constructionFailed = false;
     let constructionReason: unknown;
     let generation: number;
     const drain = constructionDrain();
-    this.#constructionDrain = drain;
-    this.#constructing = true;
+    this.#lifecycle = { drain, phase: 'constructing' };
     try {
       transport = this.#transportFactory({
         binding: requested,
         routes: this.#routes,
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
       });
-      if (this.#state === 'idle' && !this.#closing) client = this.#clientFactory();
+      // A factory may close the controller synchronously; construct nothing more once closing owns the lifecycle.
+      if (this.#lifecycle.phase === 'constructing') client = this.#clientFactory();
     } catch (reason) {
       constructionFailed = true;
       constructionReason = reason;
-    } finally {
-      this.#constructing = false;
     }
     try {
       if (constructionFailed) throw await this.#failConstruction(client, transport, constructionReason);
-      if (this.#state !== 'idle' || this.#closing || client === undefined || transport === undefined) throw await this.#failConstruction(
+      if (this.#lifecycle.phase !== 'constructing' || client === undefined || transport === undefined) throw await this.#failConstruction(
         client,
         transport,
         new McpSessionControllerError('MCP session controller was closed while opening'),
       );
-      this.#state = 'opening';
+      this.#lifecycle = { phase: 'opening' };
       generation = ++this.#generation;
       this.#binding = requested;
       this.#transport = transport;
@@ -454,7 +478,7 @@ export class McpSessionController {
     this.#assertReady('restart');
     const session = this.#requireSession();
     const generation = this.#generation;
-    this.#state = 'restarting';
+    this.#lifecycle = { phase: 'restarting' };
     this.#publish({ type: 'restart' });
     try {
       const connection = await this.#routes.restart(session.id);
@@ -501,29 +525,47 @@ export class McpSessionController {
   }
 
   close(): Promise<void> {
-    if (this.#cleanupCloseReentry !== undefined) return this.#cleanupCloseReentry;
-    if (this.#closePromise !== undefined) return this.#closePromise;
-    this.#state = 'closing';
-    this.#closing = true;
+    const lifecycle = this.#lifecycle;
+    switch (lifecycle.phase) {
+      case 'closed':
+      case 'closing':
+      case 'draining':
+      case 'failed':
+        return lifecycle.done;
+      case 'constructing':
+        return this.#beginClose(lifecycle.drain.settled);
+      case 'idle':
+      case 'opening':
+      case 'ready':
+      case 'restarting':
+        return this.#beginClose(undefined);
+      default: {
+        const unhandled: never = lifecycle;
+        return unhandled;
+      }
+    }
+  }
+
+  #beginClose(construction: Promise<void> | undefined): Promise<void> {
     this.#generation += 1;
     const client = this.#client;
     const transport = this.#transport;
-    const drain = this.#constructionDrain;
-    const resources = drain === undefined
+    const drained = construction === undefined
       ? this.#drainResources(client, transport)
-      : drain.settled.then(() => this.#drainResources(client, transport));
-    this.#closePromise = resources.then((failures) => {
+      : construction.then(() => this.#drainResources(client, transport));
+    const done: Promise<void> = drained.then((failures) => {
       this.#clearResources(client, transport);
       if (failures.length > 0) {
-        this.#state = 'failed';
+        this.#lifecycle = { done, phase: 'failed' };
         const error = new McpSessionControllerCloseError(failures);
         this.#publishTerminalFailure('mcp.close.failed', error);
         throw error;
       }
-      this.#state = 'closed';
+      this.#lifecycle = { done, phase: 'closed' };
       this.#publish({ type: 'close' }, { type: 'closed' });
     });
-    return this.#closePromise;
+    this.#lifecycle = { done, phase: 'closing' };
+    return done;
   }
 
   async #refresh(connection: McpRouteConnection, generation: number): Promise<void> {
@@ -555,7 +597,7 @@ export class McpSessionController {
         { config: config as McpSessionInspectorConfig, type: 'config' },
       );
       if (!this.#current(generation)) return;
-      this.#state = 'ready';
+      this.#lifecycle = { phase: 'ready' };
       this.#publish({ type: 'ready' });
       if (this.#traceAbort === undefined) {
         const task = this.#subscribeTrace(session.id, generation);
@@ -616,14 +658,22 @@ export class McpSessionController {
   }
 
   #current(generation: number): boolean {
-    return !this.#closing && this.#generation === generation;
+    return generation === this.#generation && !this.#closeRequested();
+  }
+
+  /** Whether a close() call owns the remaining lifecycle, as opposed to a session failure awaiting close. */
+  #closeRequested(): boolean {
+    const lifecycle = this.#lifecycle;
+    const phase = lifecycle.phase === 'draining' ? lifecycle.resume.phase : lifecycle.phase;
+    return phase === 'closed' || phase === 'closing';
   }
 
   #assertReady(action: 'invoke' | 'restart'): void {
-    if (this.#state === 'closing') throw new McpSessionControllerError('MCP session controller is closing.');
-    if (this.#state === 'restarting') throw new McpSessionControllerError('MCP session controller is restarting.');
-    if (this.#state === 'opening') throw new McpSessionControllerError('MCP session controller is opening.');
-    if (this.#state !== 'ready') throw new McpSessionControllerError(`MCP session controller cannot ${action} while ${this.#state}.`);
+    const phase = this.#lifecycle.phase;
+    if (phase === 'closing') throw new McpSessionControllerError('MCP session controller is closing.');
+    if (phase === 'restarting') throw new McpSessionControllerError('MCP session controller is restarting.');
+    if (phase === 'opening') throw new McpSessionControllerError('MCP session controller is opening.');
+    if (phase !== 'ready') throw new McpSessionControllerError(`MCP session controller cannot ${action} while ${phase}.`);
   }
 
   #publishTrace(entries: readonly TraceMessage[]): void {
@@ -664,12 +714,11 @@ export class McpSessionController {
     reason: unknown,
   ): Promise<McpSessionControllerFailureError> {
     if (!this.#current(generation)) return new McpSessionControllerFailureError(reason, []);
-    this.#state = 'failed';
-    this.#generation += 1;
     let rejectClose: (reason: unknown) => void = () => undefined;
-    const closing = new Promise<void>((_resolve, reject) => { rejectClose = reject; });
-    this.#closePromise = closing;
-    void closing.catch(() => undefined);
+    const done = new Promise<void>((_resolve, reject) => { rejectClose = reject; });
+    this.#lifecycle = { done, phase: 'failed' };
+    this.#generation += 1;
+    void done.catch(() => undefined);
     const failures = await this.#drainResources(client, transport);
     this.#clearResources(client, transport);
     const error = new McpSessionControllerFailureError(reason, failures);
@@ -691,7 +740,8 @@ export class McpSessionController {
   }
 
   #finishConstruction(drain: ConstructionDrain): void {
-    if (this.#constructionDrain === drain) this.#constructionDrain = undefined;
+    const lifecycle = this.#lifecycle;
+    if (lifecycle.phase === 'constructing' && lifecycle.drain === drain) this.#lifecycle = { phase: 'idle' };
     drain.settle();
   }
 
@@ -716,16 +766,16 @@ export class McpSessionController {
 
   async #settleCleanup(tasks: readonly CleanupTask[]): Promise<readonly McpSessionControllerCloseFailure[]> {
     const pending = tasks.map(({ run }) => {
+      // The draining variant only spans the synchronous portion of one task; see ControllerLifecycle.
+      const draining: ControllerLifecycle = { done: Promise.resolve(), phase: 'draining', resume: this.#lifecycle };
+      this.#lifecycle = draining;
       let work: unknown;
-      this.#cleanupCloseReentry = Promise.resolve();
       try {
         work = run();
       } catch (reason) {
         return Promise.reject(reason);
       } finally {
-        // Cleanup may synchronously reacquire its owner, but must not do so after yielding;
-        // a delayed call is indistinguishable from an external close that must await cleanup.
-        this.#cleanupCloseReentry = undefined;
+        if (this.#lifecycle === draining) this.#lifecycle = draining.resume;
       }
       return Promise.resolve(work);
     });
@@ -824,10 +874,10 @@ export class McpSessionController {
     });
     try {
       const result = await client.request(operation, { signal: active.abort.signal });
-      if (!this.#closing) this.#publish({ completedAt: Date.now(), id: input.id, result, type: 'request.settled' });
+      if (!this.#closeRequested()) this.#publish({ completedAt: Date.now(), id: input.id, result, type: 'request.settled' });
       return result;
     } catch (reason) {
-      if (!this.#closing) this.#publish({ completedAt: Date.now(), error: invocationError(reason), id: input.id, type: 'request.settled' });
+      if (!this.#closeRequested()) this.#publish({ completedAt: Date.now(), error: invocationError(reason), id: input.id, type: 'request.settled' });
       throw reason;
     } finally {
       input.signal?.removeEventListener('abort', onAbort);

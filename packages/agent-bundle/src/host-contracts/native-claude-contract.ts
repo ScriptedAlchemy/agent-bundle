@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 
 import { digest } from '../core/digest.ts';
+import { isCredentialKey } from '../core/credentials.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { digestFileTree } from './native-codex-contract.ts';
@@ -36,8 +37,6 @@ export const createNativeClaudeCommand = (options: NativeClaudeCommandOptions): 
   executable: 'claude',
 });
 
-const isProviderApiKey = (name: string): boolean => /(?:^|_)API_KEY$/iu.test(name);
-
 const subscriptionBypassVariables = new Set([
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_BASE_URL',
@@ -48,10 +47,14 @@ const subscriptionBypassVariables = new Set([
 
 const removesSubscriptionBypass = (name: string): boolean => subscriptionBypassVariables.has(name.toUpperCase());
 
+// The smoke asserts subscription-session auth, so the child sees no
+// credential-shaped variables (shared union classifier — previously only
+// *_API_KEY, which missed *_TOKEN and *_ACCESS_TOKEN) and no alternate-provider
+// routing.
 export const createNativeClaudeChildEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): NodeJS.ProcessEnv => Object.fromEntries(
-  Object.entries(environment).filter(([name]) => !isProviderApiKey(name) && !removesSubscriptionBypass(name)),
+  Object.entries(environment).filter(([name]) => !isCredentialKey(name) && !removesSubscriptionBypass(name)),
 );
 
 export type ClaudeActivationEvidence = 'observed' | 'unavailable';

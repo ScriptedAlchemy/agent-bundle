@@ -4,7 +4,8 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { mapConcurrent, serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
-import { CodedError, isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
+import { syncPath, writeJsonFileAtomically } from '../core/durable-fs.ts';
+import { CodedError, isErrno } from '../core/errors.ts';
 import { isInside, isSafePathSegment } from '../core/paths.ts';
 import { hasExactOwnKeys, isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
@@ -130,20 +131,71 @@ const artifactEpochKeys = [
   'targetDigests',
 ] as const;
 const epochDiagnosticsKeys = ['errors', 'infos', 'warnings'] as const;
-const epochReferenceCounts = new Map<string, number>();
-const epochLeaseQueues = new Map<string, ReturnType<typeof serialQueue>>();
 const syncTreeConcurrency = 16;
+
+interface LeaseQueueEntry {
+  pending: number;
+  readonly queue: ReturnType<typeof serialQueue>;
+}
+
+/**
+ * Process-wide lease registry for epoch stores.
+ *
+ * Cross-instance sharing is intentional: every EpochStore over the same
+ * project must serialize lease transitions through one queue and observe one
+ * set of reference counts, so leases survive across store instances over one
+ * path (a test asserts this). Lease queues are keyed by the store's resolved
+ * `.agent-bundle` path and reference counts by the absolute epoch directory.
+ *
+ * Entries clean themselves up only where that is provably safe: a
+ * reference-count entry is deleted when its count returns to zero, and a
+ * lease-queue entry is deleted once its last pending transition settles — a
+ * later transition recreates the queue, and nothing can interleave because an
+ * entry only leaves the map while no transition is queued against it.
+ */
+class EpochLeaseRegistry {
+  readonly #queues = new Map<string, LeaseQueueEntry>();
+  readonly #references = new Map<string, number>();
+
+  /** Current lease count for one absolute epoch directory path. */
+  referenceCount(epochPath: string): number {
+    return this.#references.get(epochPath) ?? 0;
+  }
+
+  /** Releases one lease; the entry is removed when the count reaches zero. */
+  release(epochPath: string): void {
+    const count = this.#references.get(epochPath) ?? 0;
+    if (count <= 1) {
+      this.#references.delete(epochPath);
+      return;
+    }
+    this.#references.set(epochPath, count - 1);
+  }
+
+  retain(epochPath: string): void {
+    this.#references.set(epochPath, (this.#references.get(epochPath) ?? 0) + 1);
+  }
+
+  async runLeaseTransition<T>(agentBundlePath: string, operation: () => Promise<T>): Promise<T> {
+    const entry = this.#queues.get(agentBundlePath) ?? { pending: 0, queue: serialQueue() };
+    this.#queues.set(agentBundlePath, entry);
+    entry.pending += 1;
+    try {
+      return await entry.queue.run(operation);
+    } finally {
+      entry.pending -= 1;
+      if (entry.pending === 0 && this.#queues.get(agentBundlePath) === entry) {
+        this.#queues.delete(agentBundlePath);
+      }
+    }
+  }
+}
+
+/** The one process-wide lease registry every EpochStore instance shares. */
+const sharedEpochLeaseRegistry = new EpochLeaseRegistry();
 
 const sameActiveEpochPointer = (left: ActiveEpochPointerStat, right: ActiveEpochPointerStat): boolean =>
   left.ctimeMs === right.ctimeMs && left.ino === right.ino && left.mtimeMs === right.mtimeMs && left.size === right.size;
-
-const leaseQueueFor = (agentBundlePath: string): ReturnType<typeof serialQueue> => {
-  const existing = epochLeaseQueues.get(agentBundlePath);
-  if (existing !== undefined) return existing;
-  const created = serialQueue();
-  epochLeaseQueues.set(agentBundlePath, created);
-  return created;
-};
 
 const pathExists = async (path: string): Promise<boolean> => {
   try {
@@ -306,23 +358,23 @@ export class EpochReference {
 export class EpochStore {
   readonly #activeEpochPath: string;
   #activeEpochCache: ActiveEpochCache | undefined;
+  readonly #agentBundlePath: string;
   #cleanupDirty = false;
   readonly #cleanupRemove: typeof rm;
   readonly #durabilityStorage: EpochDurabilityStorage;
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
-  readonly #leaseTransitions: ReturnType<typeof serialQueue>;
   readonly #staging = new Map<symbol, StagingRecord>();
   readonly #transitions = serialQueue();
 
   constructor(options: EpochStoreOptions) {
     const agentBundlePath = join(resolve(options.projectRoot), '.agent-bundle');
     this.#activeEpochPath = join(agentBundlePath, activeEpochFileName);
+    this.#agentBundlePath = agentBundlePath;
     this.#cleanupRemove = options.cleanupRemove ?? rm;
     this.#durabilityStorage = options.durabilityStorage ?? Object.freeze({ open, remove: rm });
     this.#epochsPath = join(agentBundlePath, 'epochs');
     this.#epochMetadataPath = join(this.#epochsPath, metadataDirectoryName);
-    this.#leaseTransitions = leaseQueueFor(agentBundlePath);
   }
 
   async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {
@@ -354,7 +406,7 @@ export class EpochStore {
   }
 
   async acquireEpochReference(epochId: string): Promise<EpochReference> {
-    return this.#transitions.run(async () => this.#leaseTransitions.run(async () => {
+    return this.#transitions.run(async () => this.#runLeaseTransition(async () => {
       assertSafeEpochId(epochId);
       await this.#assertEpochDirectory(epochId);
       return this.#acquireEpochReference(await this.#readEpochMetadata(epochId).then((metadata) => metadata.epoch));
@@ -363,7 +415,7 @@ export class EpochStore {
 
   /** Resolves and leases the current epoch without allowing a publish between those operations. */
   async acquireActiveEpochReference(): Promise<EpochReference> {
-    return this.#transitions.run(async () => this.#leaseTransitions.run(async () => {
+    return this.#transitions.run(async () => this.#runLeaseTransition(async () => {
       const epoch = await this.#readActiveEpoch();
       if (epoch === undefined) {
         throw new EpochStoreError('EPOCH_NOT_FOUND', 'No active artifact epoch is available.');
@@ -380,16 +432,16 @@ export class EpochStore {
   }
 
   async releaseEpochReference(epochId: string): Promise<void> {
-    await this.#transitions.run(async () => this.#leaseTransitions.run(async () => {
+    await this.#transitions.run(async () => this.#runLeaseTransition(async () => {
       const referenceKey = join(this.#epochsPath, epochId);
-      const count = epochReferenceCounts.get(referenceKey) ?? 0;
+      const count = sharedEpochLeaseRegistry.referenceCount(referenceKey);
       if (count === 1) {
-        epochReferenceCounts.delete(referenceKey);
+        sharedEpochLeaseRegistry.release(referenceKey);
         if (!await this.#isCachedActiveEpoch(epochId)) this.#cleanupDirty = true;
         await this.#cleanupUnderLease();
         return;
       }
-      if (count > 1) epochReferenceCounts.set(referenceKey, count - 1);
+      if (count > 1) sharedEpochLeaseRegistry.release(referenceKey);
     }));
   }
 
@@ -494,8 +546,12 @@ export class EpochStore {
 
   async #acquireEpochReference(epoch: ArtifactEpoch): Promise<EpochReference> {
     const epochPath = await this.#assertEpochDirectory(epoch.id);
-    epochReferenceCounts.set(epochPath, (epochReferenceCounts.get(epochPath) ?? 0) + 1);
+    sharedEpochLeaseRegistry.retain(epochPath);
     return new EpochReference(this, freezeArtifactEpoch(epoch), epochPath);
+  }
+
+  async #runLeaseTransition<T>(operation: () => Promise<T>): Promise<T> {
+    return sharedEpochLeaseRegistry.runLeaseTransition(this.#agentBundlePath, operation);
   }
 
   async #assertEpochDirectory(epochId: string): Promise<string> {
@@ -516,7 +572,7 @@ export class EpochStore {
 
   async #cleanup(): Promise<void> {
     this.#cleanupDirty = true;
-    await this.#leaseTransitions.run(async () => this.#cleanupUnderLease());
+    await this.#runLeaseTransition(async () => this.#cleanupUnderLease());
   }
 
   async #cleanupUnderLease(): Promise<void> {
@@ -525,7 +581,7 @@ export class EpochStore {
     const metadata = await this.#readAllEpochMetadata();
     const protectedIds = new Set<string>(active === undefined ? [] : [active.id]);
     for (const entry of metadata) {
-      if ((epochReferenceCounts.get(join(this.#epochsPath, entry.epoch.id)) ?? 0) > 0) {
+      if (sharedEpochLeaseRegistry.referenceCount(join(this.#epochsPath, entry.epoch.id)) > 0) {
         protectedIds.add(entry.epoch.id);
       }
     }
@@ -605,7 +661,7 @@ export class EpochStore {
     if (beforeActivate !== undefined) {
       publication = (await beforeActivate(record.epoch)) ?? undefined;
     }
-    return this.#leaseTransitions.run(async () => {
+    return this.#runLeaseTransition(async () => {
       let moved = false;
       try {
         if (await pathExists(epochRoot)) {
@@ -651,14 +707,7 @@ export class EpochStore {
   }
 
   async #syncPath(path: string, directory = false): Promise<void> {
-    const handle = await this.#durabilityStorage.open(path, 'r');
-    try {
-      await handle.sync();
-    } catch (error) {
-      if (directory && isTolerableWin32SyncError(process.platform, error)) return;
-      throw error;
-    }
-    finally { await handle.close(); }
+    await syncPath(path, { directory, open: this.#durabilityStorage.open });
   }
 
   async #syncTree(path: string): Promise<void> {
@@ -915,18 +964,10 @@ export class EpochStore {
     const directory = dirname(path);
     await mkdir(directory, { recursive: true });
     await this.#syncPath(dirname(directory), true);
-    const temporaryPath = join(
-      directory,
-      `.${basename(path)}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`,
-    );
-    try {
-      await writeFile(temporaryPath, `${stableJson(value)}\n`, 'utf8');
-      await this.#syncPath(temporaryPath);
-      await rename(temporaryPath, path);
-      await this.#syncPath(directory, true);
-    } finally {
-      await rm(temporaryPath, { force: true });
-    }
+    await writeJsonFileAtomically(path, `${stableJson(value)}\n`, {
+      open: this.#durabilityStorage.open,
+      temporaryPath: join(directory, `.${basename(path)}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`),
+    });
   }
 
   #parseMetadata(value: unknown): EpochMetadata | undefined {

@@ -35,7 +35,7 @@ import {
   responseJson as writeJsonResponse,
   type RequestDiagnostic,
 } from './http.ts';
-import { encodedNdjsonFrame } from './route-streams.ts';
+import { createBackpressuredWriter, encodedNdjsonFrame } from './route-streams.ts';
 
 const maximumTrials = 100;
 const streamByteLimit = 256 * 1024;
@@ -417,30 +417,28 @@ export class EvalRoutes {
         subscription.close();
         throw this.#unavailable(503);
       }
-      let buffered = 0;
-      let blocked = false;
-      let blockedBytes = 0;
       let closed = false;
       let closePromise: Promise<void> | undefined;
-      let flushing = false;
       let terminalQueued = false;
-      const frames: Array<Readonly<{ readonly frame: string; readonly size: number }>> = [];
-      const onDrain = (): void => {
-        if (closed || !blocked) return;
-        blocked = false;
-        buffered -= blockedBytes;
-        blockedBytes = 0;
-        flush();
+      // The terminal frame ends the response only once the writer is idle, so
+      // no queued frame is dropped and the peer receives every drained byte.
+      const endAfterTerminal = (): void => {
+        if (!terminalQueued || closed || response.destroyed || response.writableEnded) return;
+        response.end();
+        void close().catch(() => undefined);
       };
+      const writer = createBackpressuredWriter(response, {
+        byteLimit: streamByteLimit,
+        countInFlightBytes: true,
+        onIdle: endAfterTerminal,
+        rejectOversizedFrame: true,
+      });
       const close = (abortResponse = false): Promise<void> => {
         if (closePromise !== undefined) return closePromise;
         closed = true;
-        frames.length = 0;
-        buffered = 0;
-        blockedBytes = 0;
+        writer.markClosed();
         this.#closeReaders.delete(closeFromShutdown);
         response.off('close', closeFromPeer);
-        response.off('drain', onDrain);
         subscription.close();
         if (abortResponse && !response.destroyed && !response.writableEnded) response.destroy();
         closePromise = Promise.resolve();
@@ -448,40 +446,16 @@ export class EvalRoutes {
       };
       const closeFromPeer = (): void => { void close().catch(() => undefined); };
       const closeFromShutdown = (): Promise<void> => close(true);
-      const flush = (): void => {
-        if (flushing || blocked || closed || response.destroyed || response.writableEnded) return;
-        flushing = true;
-        try {
-          while (!blocked && frames.length > 0) {
-            const next = frames.shift()!;
-            if (response.write(next.frame)) {
-              buffered -= next.size;
-              continue;
-            }
-            blocked = true;
-            blockedBytes = next.size;
-            response.once('drain', onDrain);
-          }
-          if (!blocked && terminalQueued && frames.length === 0) {
-            response.end();
-            void close().catch(() => undefined);
-          }
-        } finally {
-          flushing = false;
-        }
-      };
       const enqueue = (event: EvalRunEventsReplay['events'][number]): void => {
         if (closed || terminalQueued) return;
-        const frame = encodedNdjsonFrame(event);
-        const size = Buffer.byteLength(frame, 'utf8');
-        if (buffered + size > streamByteLimit) {
+        const result = writer.enqueue(encodedNdjsonFrame(event));
+        if (result === 'overflow') {
           void close(true).catch(() => undefined);
           return;
         }
-        frames.push(Object.freeze({ frame, size }));
-        buffered += size;
+        if (result === 'closed') return;
         terminalQueued = terminalEvent(event);
-        flush();
+        if (writer.idle) endAfterTerminal();
       };
       const replayBytes = subscription.replay.events.reduce((total, event) =>
         total + Buffer.byteLength(encodedNdjsonFrame(event), 'utf8'), 0);
@@ -498,7 +472,6 @@ export class EvalRoutes {
       response.once('close', closeFromPeer);
       for (const event of subscription.replay.events) enqueue(event);
       if (!closed && !terminalQueued) subscription.activate(enqueue);
-      flush();
     } finally {
       response.off('close', markResponseClosed);
       finishAdmission();

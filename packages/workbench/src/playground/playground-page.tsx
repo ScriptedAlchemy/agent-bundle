@@ -114,171 +114,6 @@ export interface PlaygroundRunObserverOptions {
   readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
 
-export interface PlaygroundObservationLease {
-  abort(): void;
-  current(): boolean;
-  readonly signal: AbortSignal;
-}
-
-export interface PlaygroundObservationLifecycle {
-  begin(): PlaygroundObservationLease;
-  invalidate(): void;
-}
-
-export interface PlaygroundCancelFlight {
-  readonly done: Promise<void>;
-  readonly started: boolean;
-}
-
-export interface PlaygroundCancelFlightLifecycle {
-  start(operation: () => Promise<void>): PlaygroundCancelFlight;
-}
-
-/** Guards the server-draining cancel/replay sequence before React re-renders the button disabled. */
-export const createPlaygroundCancelFlight = (): PlaygroundCancelFlightLifecycle => {
-  let active: Promise<void> | undefined;
-  return Object.freeze({
-    start: (operation: () => Promise<void>): PlaygroundCancelFlight => {
-      if (active !== undefined) return Object.freeze({ done: active, started: false });
-      let done: Promise<void>;
-      try { done = Promise.resolve(operation()); }
-      catch (reason) { done = Promise.reject(reason); }
-      active = done;
-      void done.finally(() => {
-        if (active === done) active = undefined;
-      }).catch(() => undefined);
-      return Object.freeze({ done, started: true });
-    },
-  });
-};
-
-export interface PlaygroundActionLease {
-  abort(): void;
-  current(): boolean;
-  release(): void;
-  readonly key: Readonly<{ readonly client: PlaygroundClient; readonly generation: number }>;
-  readonly signal: AbortSignal;
-}
-
-export interface PlaygroundActionLifecycle {
-  begin(client: PlaygroundClient): PlaygroundActionLease;
-  invalidate(): void;
-  replace(client: PlaygroundClient): void;
-}
-
-/** Client changes retire every action synchronously, before a late response can write page or shell state. */
-export const createPlaygroundActionLifecycle = (initialClient: PlaygroundClient): PlaygroundActionLifecycle => {
-  let client = initialClient;
-  let generation = 0;
-  const controllers = new Set<AbortController>();
-  const invalidate = (): void => {
-    generation += 1;
-    for (const controller of controllers) controller.abort();
-    controllers.clear();
-  };
-  const replace = (nextClient: PlaygroundClient): void => {
-    if (client === nextClient) return;
-    client = nextClient;
-    invalidate();
-  };
-  return Object.freeze({
-    begin: (actionClient: PlaygroundClient): PlaygroundActionLease => {
-      replace(actionClient);
-      const controller = new AbortController();
-      const key = Object.freeze({ client: actionClient, generation });
-      controllers.add(controller);
-      return Object.freeze({
-        abort: () => controller.abort(),
-        current: () => client === key.client && generation === key.generation && !controller.signal.aborted,
-        key,
-        release: () => controllers.delete(controller),
-        signal: controller.signal,
-      });
-    },
-    invalidate,
-    replace,
-  });
-};
-
-export interface PlaygroundCatalogKey {
-  readonly client: PlaygroundClient;
-  readonly epochId: string;
-  readonly generation: number;
-}
-
-export interface PlaygroundCatalogLease {
-  abort(): void;
-  current(): boolean;
-  readonly key: PlaygroundCatalogKey;
-  readonly signal: AbortSignal;
-}
-
-export interface PlaygroundCatalogLifecycle {
-  begin(key: Omit<PlaygroundCatalogKey, 'generation'>): PlaygroundCatalogLease;
-  invalidate(): void;
-}
-
-interface GenerationLease {
-  abort(): void;
-  current(): boolean;
-  readonly generation: number;
-  readonly signal: AbortSignal;
-}
-
-/** One live request at a time: beginning a lease synchronously retires and aborts the previous one. */
-const createGenerationLifecycle = (): { begin(): GenerationLease; invalidate(): void } => {
-  let active: { readonly controller: AbortController; readonly generation: number } | undefined;
-  let generation = 0;
-  const invalidate = (): void => {
-    const previous = active;
-    active = undefined;
-    generation += 1;
-    previous?.controller.abort();
-  };
-  return Object.freeze({
-    begin: (): GenerationLease => {
-      const previous = active;
-      active = undefined;
-      previous?.controller.abort();
-      generation += 1;
-      const controller = new AbortController();
-      const ownGeneration = generation;
-      active = { controller, generation: ownGeneration };
-      return Object.freeze({
-        abort: () => {
-          if (active?.controller === controller) invalidate();
-          else controller.abort();
-        },
-        current: () => active?.generation === ownGeneration && !controller.signal.aborted,
-        generation: ownGeneration,
-        signal: controller.signal,
-      });
-    },
-    invalidate,
-  });
-};
-
-/** Every request owns a key, so a late catalog cannot repopulate a replacement client or artifact epoch. */
-export const createPlaygroundCatalogLifecycle = (): PlaygroundCatalogLifecycle => {
-  const lifecycle = createGenerationLifecycle();
-  return Object.freeze({
-    begin: (next: Omit<PlaygroundCatalogKey, 'generation'>): PlaygroundCatalogLease => {
-      const lease = lifecycle.begin();
-      return Object.freeze({
-        abort: lease.abort,
-        current: lease.current,
-        key: Object.freeze({ ...next, generation: lease.generation }),
-        signal: lease.signal,
-      });
-    },
-    invalidate: lifecycle.invalidate,
-  });
-};
-
-/** The page can retire a prior run synchronously before React commits its replacement state. */
-export const createPlaygroundObservationLifecycle = (): PlaygroundObservationLifecycle =>
-  createGenerationLifecycle();
-
 /** Observes one immutable run identity; callers abort it before replacing the run or unmounting the page. */
 export const observePlaygroundRun = async ({ client, onEvents, onSession, run, signal, wait = delay }: PlaygroundRunObserverOptions): Promise<void> => {
   const sessionId = run.session.id;
@@ -536,103 +371,65 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const [nativePrompt, setNativePrompt] = useState('');
   const [nativeSelection, setNativeSelection] = useState<NativePlaygroundSelection>(emptyNativeSelection);
   const [targetName, setTargetName] = useState('');
-  const cancelFlight = useRef(createPlaygroundCancelFlight());
-  const clientOwner = useRef(client);
-  const clientResetPending = useRef(false);
-  const actionLifecycle = useRef(createPlaygroundActionLifecycle(client));
-  const observationLifecycle = useRef(createPlaygroundObservationLifecycle());
-  const clientReplaced = clientOwner.current !== client;
-  if (clientReplaced) {
-    clientOwner.current = client;
-    clientResetPending.current = true;
-    actionLifecycle.current.replace(client);
-    cancelFlight.current = createPlaygroundCancelFlight();
-    observationLifecycle.current.invalidate();
-  }
-  const activeRun = clientReplaced ? undefined : run;
-  const session = activeRun?.session;
+  const actionControllers = useRef(new Set<AbortController>());
+  const observationController = useRef<AbortController | undefined>(undefined);
+  const session = run?.session;
   const sessionId = session?.id;
-  const runId = activeRun?.id;
+  const runId = run?.id;
   const hookInputObject = parseRawJsonRecord(hookInput);
   const mcpArgumentsObject = parseRawJsonRecord(mcpArguments);
-  const view = playgroundViewFor({
-    epoch,
-    events: clientReplaced ? [] : events,
-    exported: clientReplaced ? undefined : exported,
-    selectedRefs: clientReplaced ? [] : selectedRefs,
-    session,
-  });
+  const view = playgroundViewFor({ epoch, events, exported, selectedRefs, session });
   const selectedTargetName = targets.some((target) => target.name === targetName) ? targetName : '';
   const currentNativeSelection = nativeSelectionFor(catalog, nativeSelection);
   const targetScripts = playgroundScriptsForTarget(scripts, selectedTargetName);
   const selectedScriptId = playgroundSelectedScriptId(scriptId, scripts, selectedTargetName);
 
   useEffect(() => {
-    if (selectedScriptId !== scriptId) setScriptId(selectedScriptId);
-  }, [scriptId, selectedScriptId]);
+    const controllers = actionControllers.current;
+    return () => {
+      for (const controller of controllers) controller.abort();
+      controllers.clear();
+    };
+  }, []);
 
   useEffect(() => {
-    if (!clientResetPending.current) return;
-    clientResetPending.current = false;
-    setDraftEvalCase(undefined);
-    setError(undefined);
-    setEvents([]);
-    setExported(undefined);
-    setSelectedRefs([]);
-    setBusy(false);
-    setCancelling(false);
-    onRunChange(undefined);
-  }, [client, onRunChange]);
-
-  useEffect(() => () => actionLifecycle.current.invalidate(), []);
-
-  useEffect(() => {
-    if (selectedTargetName !== targetName) setTargetName(selectedTargetName);
-  }, [selectedTargetName, targetName]);
-
-  useEffect(() => {
-    if (currentNativeSelection.caseId !== nativeSelection.caseId || currentNativeSelection.epochId !== nativeSelection.epochId ||
-      currentNativeSelection.fixtureId !== nativeSelection.fixtureId || currentNativeSelection.host !== nativeSelection.host ||
-      currentNativeSelection.modelPinId !== nativeSelection.modelPinId) setNativeSelection(currentNativeSelection);
-  }, [currentNativeSelection, nativeSelection]);
-
-  useEffect(() => {
-    if (activeRun === undefined || runId === undefined || sessionId === undefined) return;
-    const observedRun = activeRun;
-    const observation = observationLifecycle.current.begin();
+    if (run === undefined || runId === undefined || sessionId === undefined) return;
+    const observedRun = run;
+    const controller = new AbortController();
+    observationController.current = controller;
+    const live = (): boolean => !controller.signal.aborted;
     void observePlaygroundRun({
       client,
       onEvents: (next) => {
-        if (observation.current()) setEvents(next);
+        if (live()) setEvents(next);
       },
       onSession: (next) => {
-        if (observation.current()) onRunChange({ id: runId, session: next });
+        if (live()) onRunChange({ id: runId, session: next });
       },
       run: observedRun,
-      signal: observation.signal,
+      signal: controller.signal,
     }).catch((reason: unknown) => {
-      if (observation.current()) setError(errorMessage(reason));
+      if (live()) setError(errorMessage(reason));
     });
     return () => {
-      observation.abort();
+      controller.abort();
+      if (observationController.current === controller) observationController.current = undefined;
     };
   }, [client, onRunChange, runId, sessionId]);
 
-  const runAction = async (action: (lease: PlaygroundActionLease) => Promise<void>): Promise<void> => {
-    const lease = actionLifecycle.current.begin(client);
-    if (!lease.current()) {
-      lease.release();
-      return;
-    }
+  const runAction = async (action: (signal: AbortSignal) => Promise<void>): Promise<void> => {
+    const controller = new AbortController();
+    actionControllers.current.add(controller);
+    const live = (): boolean => !controller.signal.aborted;
     setBusy(true);
     setError(undefined);
     try {
-      await action(lease);
+      await action(controller.signal);
     } catch (reason) {
-      if (lease.current()) setError(errorMessage(reason));
+      if (live()) setError(errorMessage(reason));
     } finally {
-      if (lease.current()) setBusy(false);
-      lease.release();
+      if (live()) setBusy(false);
+      actionControllers.current.delete(controller);
     }
   };
 
@@ -669,10 +466,10 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const start = async (): Promise<void> => {
     const input = operationInput();
     if (input === undefined) return;
-    await runAction(async (lease) => {
-      const started = await client.run(input, lease.signal);
-      if (!lease.current()) return;
-      observationLifecycle.current.invalidate();
+    await runAction(async (signal) => {
+      const started = await client.run(input, signal);
+      if (signal.aborted) return;
+      observationController.current?.abort();
       setDraftEvalCase(undefined);
       setEvents([]);
       setExported(undefined);
@@ -681,51 +478,41 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     });
   };
 
-  const cancel = (): Promise<void> => {
-    if (runId === undefined || sessionId === undefined) return Promise.resolve();
-    let lease: PlaygroundActionLease | undefined;
-    const flight = cancelFlight.current.start(async () => {
-      lease = actionLifecycle.current.begin(client);
-      if (!lease.current()) {
-        lease.release();
-        return;
-      }
-      try {
-        setError(undefined);
-        await client.cancel(runId, lease.signal);
-        if (!lease.current()) return;
-        const replay = await client.replay(sessionId, 0, lease.signal);
-        if (!lease.current()) return;
-        setEvents(replay.events);
-        onRunChange({ id: runId, session: replay.session });
-      } catch (reason) {
-        if (lease.current()) setError(errorMessage(reason));
-      } finally {
-        lease.release();
-      }
-    });
-    if (flight.started) {
-      setCancelling(true);
-      void flight.done.finally(() => {
-        if (lease?.current()) setCancelling(false);
-      }).catch(() => undefined);
+  const cancel = async (): Promise<void> => {
+    if (runId === undefined || sessionId === undefined) return;
+    const controller = new AbortController();
+    actionControllers.current.add(controller);
+    const live = (): boolean => !controller.signal.aborted;
+    setCancelling(true);
+    setError(undefined);
+    try {
+      await client.cancel(runId, controller.signal);
+      if (!live()) return;
+      const replay = await client.replay(sessionId, 0, controller.signal);
+      if (!live()) return;
+      setEvents(replay.events);
+      onRunChange({ id: runId, session: replay.session });
+    } catch (reason) {
+      if (live()) setError(errorMessage(reason));
+    } finally {
+      if (live()) setCancelling(false);
+      actionControllers.current.delete(controller);
     }
-    return flight.done;
   };
 
   const exportTrace = async (): Promise<void> => {
     if (sessionId === undefined) return;
-    await runAction(async (lease) => {
-      const next = await client.export(sessionId, lease.signal);
-      if (lease.current()) setExported(next);
+    await runAction(async (signal) => {
+      const next = await client.export(sessionId, signal);
+      if (!signal.aborted) setExported(next);
     });
   };
 
   const promote = async (): Promise<void> => {
     if (sessionId === undefined || !view.canPromote) return;
-    await runAction(async (lease) => {
-      const next = await client.promoteToDraftEval(sessionId, view.rawEventRefs, lease.signal);
-      if (lease.current()) setDraftEvalCase(next);
+    await runAction(async (signal) => {
+      const next = await client.promoteToDraftEval(sessionId, view.rawEventRefs, signal);
+      if (!signal.aborted) setDraftEvalCase(next);
     });
   };
 
@@ -735,9 +522,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
       : [...previous, rawEventRef]);
   };
 
-  const actionBusy = clientReplaced ? false : busy;
-  const actionCancelling = clientReplaced ? false : cancelling;
-  const controlsDisabled = actionBusy || actionCancelling || (session !== undefined && !terminal(session));
+  const controlsDisabled = busy || cancelling || (session !== undefined && !terminal(session));
   const startDisabled = controlsDisabled || epoch === undefined || operationInput() === undefined;
 
   return <div className="playground-content">
@@ -747,7 +532,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
         <p>Run a typed operation against the current artifact epoch; the server owns identity, evidence, outcome, and durable trace.</p>
       </div>
     </div>
-    {clientReplaced || error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
+    {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
     {epoch === undefined && session === undefined
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
@@ -838,9 +623,9 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
         </section>
         {session === undefined ? undefined : <section aria-label="Server-owned run controls" className="playground-controls">
           <div className="playground-actions">
-            <button disabled={actionBusy || actionCancelling || terminal(session)} onClick={() => void cancel()} type="button">{actionCancelling ? 'Cancelling…' : 'Cancel run'}</button>
-            <button disabled={actionBusy || actionCancelling} onClick={() => void exportTrace()} type="button">Export trace</button>
-            <button disabled={actionBusy || actionCancelling || !view.canPromote} onClick={() => void promote()} type="button">Promote to draft eval case</button>
+            <button disabled={busy || cancelling || terminal(session)} onClick={() => void cancel()} type="button">{cancelling ? 'Cancelling…' : 'Cancel run'}</button>
+            <button disabled={busy || cancelling} onClick={() => void exportTrace()} type="button">Export trace</button>
+            <button disabled={busy || cancelling || !view.canPromote} onClick={() => void promote()} type="button">Promote to draft eval case</button>
           </div>
         </section>}
         <PlaygroundTraceView onToggle={toggle} view={view} />
