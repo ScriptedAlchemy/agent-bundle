@@ -1,7 +1,7 @@
 import { expect, it } from '@rstest/core';
 
-import { DevLogRoutes } from '../src/dev/dev-log-routes.ts';
-import { DevLogService } from '../src/dev/dev-log-service.ts';
+import { DevLogRoutes } from '../src/dev/logs/dev-log-routes.ts';
+import { DevLogService } from '../src/dev/logs/dev-log-service.ts';
 import {
   authorizeSession as authorize,
   sessionHeaders as headers,

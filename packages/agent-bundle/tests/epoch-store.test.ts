@@ -5,7 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { EpochStore, type EpochStaging } from '../src/dev/epoch-store.ts';
-import { publishNativePlaygroundCatalogSnapshot } from '../src/dev/native-playground-service.ts';
+import { publishNativePlaygroundCatalogSnapshot } from '../src/dev/playground/native-playground-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 
 const epochFor = (

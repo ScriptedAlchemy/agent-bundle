@@ -13,4 +13,4 @@ export type {
   HookPlaygroundListOptions,
   HookPlaygroundReplay,
   HookPlaygroundSimulation,
-} from '../dev/hook-playground-service.ts';
+} from '../dev/playground/hook-playground-service.ts';

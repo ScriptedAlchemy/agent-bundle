@@ -26,7 +26,7 @@ import {
   type AgentApiEpochSummary,
   type AgentApiEvalRunAdmission,
 } from './agent-api-wire.ts';
-import type { EvalService } from './eval-service.ts';
+import type { EvalService } from './eval/eval-service.ts';
 import type { ProjectStatus } from './types.ts';
 
 export type { AgentApiEpochSummary } from './agent-api-wire.ts';

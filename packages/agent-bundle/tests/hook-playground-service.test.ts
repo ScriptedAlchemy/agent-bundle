@@ -20,7 +20,7 @@ import {
   HookPlaygroundService,
   type HookPlaygroundDiagnosticResult,
   type HookPlaygroundSimulation,
-} from '../src/dev/hook-playground-service.ts';
+} from '../src/dev/playground/hook-playground-service.ts';
 import { HookService } from '../src/services/hook-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 

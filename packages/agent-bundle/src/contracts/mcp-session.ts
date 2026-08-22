@@ -8,4 +8,4 @@ export type {
   McpSessionOperation,
   McpSessionTraceEntry,
   McpSessionTraceReplayGap,
-} from '../dev/mcp-session-protocol.ts';
+} from '../dev/mcp-session/mcp-session-protocol.ts';

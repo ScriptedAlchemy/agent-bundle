@@ -4,14 +4,14 @@ import { EventEmitter } from 'node:events';
 
 import { expect, it } from '@rstest/core';
 
-import { EvalRoutes, type EvalRouteService } from '../src/dev/eval-routes.ts';
+import { EvalRoutes, type EvalRouteService } from '../src/dev/eval/eval-routes.ts';
 import {
   EvalServiceError,
   type EvalArtifactReader,
   type EvalRunRequest,
   type EvalRunResult,
   type EvalSuiteListing,
-} from '../src/dev/eval-service.ts';
+} from '../src/dev/eval/eval-service.ts';
 import type { EvalComparison } from '../src/eval/compare.ts';
 import type { EvalRunEvent, EvalRunRecord, EvalTrialRecord } from '../src/eval/run-store.ts';
 import { authorize, originHeaders, startRoutes as startRouteServer, type StartedRoutes } from './support/route-harness.ts';

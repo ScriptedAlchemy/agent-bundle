@@ -5,7 +5,7 @@ import {
   type PlaygroundOperationRequest,
   type PlaygroundRun,
   type PlaygroundRouteService,
-} from '../src/dev/playground-routes.ts';
+} from '../src/dev/playground/playground-routes.ts';
 import type {
   DraftEvalCase,
   PlaygroundExport,
@@ -15,7 +15,7 @@ import type {
   PlaygroundSubscribeOptions,
   PlaygroundSubscription,
   PlaygroundTraceEvent,
-} from '../src/services/playground-service.ts';
+} from '../src/dev/playground/playground-store.ts';
 import {
   authorizeSession as authorize,
   sessionHeaders as headers,

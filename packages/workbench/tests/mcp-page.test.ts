@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
-import type { McpSessionInspectorConfig } from '../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import type { McpSessionInspectorConfig } from '../../agent-bundle/src/dev/mcp-session/mcp-session-protocol.ts';
 import {
   createMcpBrowserSessionModel,
   reduceMcpBrowserSession,

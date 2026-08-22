@@ -4,8 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
-import type { PlaygroundReplay, PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
-import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
+import type { PlaygroundReplay, PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/dev/playground/playground-store.ts';
+import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground/playground-contract.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
 import { playgroundViewFor } from '../src/playground/playground-model.ts';
 import {

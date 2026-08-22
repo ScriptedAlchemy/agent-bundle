@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import type { PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
+import type { PlaygroundTraceEvent } from '../../agent-bundle/src/dev/playground/playground-store.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
 import { recordingFetch, type RecordedRequest } from './support/recording-fetch.ts';
 

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { expect, it } from '@rstest/core';
 
-import type { DevLogRecord } from '../../agent-bundle/src/dev/dev-log-service.ts';
+import type { DevLogRecord } from '../../agent-bundle/src/dev/logs/dev-log-service.ts';
 import { LogsPage, LogsView } from '../src/logs/logs-page.tsx';
 import { logsViewFor, maximumLogViewRecords, mergeDevLogRecords } from '../src/logs/logs-model.ts';
 

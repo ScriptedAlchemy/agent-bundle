@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import { resolveMcpAppHostProfile } from '../src/dev/mcp-app-host-profiles.ts';
+import { resolveMcpAppHostProfile } from '../src/dev/mcp-apps/mcp-app-host-profiles.ts';
 
 const standardContext = Object.freeze({
   availableDisplayModes: ['inline', 'fullscreen'] as const,

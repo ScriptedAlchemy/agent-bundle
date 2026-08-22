@@ -8,11 +8,11 @@ import {
   PlaygroundOrchestrationService,
   type PlaygroundDurableTraceStore,
   type PlaygroundEpochAuthority,
-} from '../src/dev/playground-orchestration-service.ts';
+} from '../src/dev/playground/playground-orchestration-service.ts';
 import {
   ScriptPlaygroundAbortError,
   ScriptPlaygroundFailure,
-} from '../src/dev/script-playground-service.ts';
+} from '../src/dev/playground/script-playground-service.ts';
 import type {
   DraftEvalCase,
   PlaygroundDurableOutcome,
@@ -26,8 +26,8 @@ import type {
   PlaygroundSubscribeOptions,
   PlaygroundSubscription,
   PlaygroundTraceEvent,
-} from '../src/services/playground-service.ts';
-import { PlaygroundService } from '../src/services/playground-service.ts';
+} from '../src/dev/playground/playground-store.ts';
+import { PlaygroundStore } from '../src/dev/playground/playground-store.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
 import { eventuallyPasses } from './support/eventually.ts';
 
@@ -402,7 +402,7 @@ it('exports and promotes the real durable response event reference from a native
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-durable-'));
   const projectRoot = join(root, 'project');
   await mkdir(projectRoot, { recursive: true });
-  const trace = new PlaygroundService({
+  const trace = new PlaygroundStore({
     projectId: 'native-durable-project',
     projectRoot,
     storageRoot: join(projectRoot, '.agent-bundle', 'playground'),

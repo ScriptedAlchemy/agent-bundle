@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 
 import { expect, it } from '@rstest/core';
 
-import { DevLogService, type DevLogInput } from '../src/dev/dev-log-service.ts';
+import { DevLogService, type DevLogInput } from '../src/dev/logs/dev-log-service.ts';
 
 it('records detached redacted details and replaces its own project root', () => {
   const service = new DevLogService({

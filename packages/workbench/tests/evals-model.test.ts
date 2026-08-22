@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import type { EvalRunResult, EvalSuiteListing } from '../../agent-bundle/src/dev/eval-service.ts';
+import type { EvalRunResult, EvalSuiteListing } from '../../agent-bundle/src/dev/eval/eval-service.ts';
 import type { EvalRunRecord, EvalTrialRecord } from '../../agent-bundle/src/eval/run-store.ts';
 import {
   admitEvalRunLifecycle,

@@ -8,8 +8,8 @@ import {
   type McpAppBridgeHost,
   type McpAppBridgeMessage,
   type McpAppBridgeRequestId,
-} from '../src/dev/mcp-app-bridge.ts';
-import type { McpAppBinding, McpAppJsonValue } from '../src/dev/mcp-app-binding-service.ts';
+} from '../src/dev/mcp-apps/mcp-app-bridge.ts';
+import type { McpAppBinding, McpAppJsonValue } from '../src/dev/mcp-apps/mcp-app-binding-service.ts';
 
 interface BridgeFixture {
   readonly binding: McpAppBinding;

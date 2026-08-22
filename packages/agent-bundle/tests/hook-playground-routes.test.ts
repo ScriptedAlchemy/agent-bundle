@@ -5,7 +5,7 @@ import { expect, it } from '@rstest/core';
 import {
   HookPlaygroundRoutes,
   type HookPlaygroundRouteService,
-} from '../src/dev/hook-playground-routes.ts';
+} from '../src/dev/playground/hook-playground-routes.ts';
 import type {
   HookPlaygroundDiagnosticResult,
   HookPlaygroundHook,
@@ -13,7 +13,7 @@ import type {
   HookPlaygroundReplay,
   HookPlaygroundSimulation,
   HookPlaygroundSimulationOptions,
-} from '../src/dev/hook-playground-service.ts';
+} from '../src/dev/playground/hook-playground-service.ts';
 import {
   authorize,
   originHeaders as headers,

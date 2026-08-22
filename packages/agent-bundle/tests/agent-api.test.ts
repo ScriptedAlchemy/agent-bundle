@@ -16,7 +16,7 @@ import {
   type AgentApiEpochReference,
   type AgentApiOptions,
 } from '../src/dev/agent-api.ts';
-import { EvalService } from '../src/dev/eval-service.ts';
+import { EvalService } from '../src/dev/eval/eval-service.ts';
 import { ForegroundServerCloseError, ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';

@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { runCli } from '../src/cli.ts';
-import type { EvalRunResult } from '../src/dev/eval-service.ts';
+import type { EvalRunResult } from '../src/dev/eval/eval-service.ts';
 
 const fixtureRoot = join(process.cwd(), 'fixtures', 'integration', 'micro-eval');
 const evalEntryPoint = resolve(process.cwd(), 'packages/agent-bundle/src/eval/index.ts');

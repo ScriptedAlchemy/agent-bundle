@@ -16,7 +16,7 @@ export type {
   EvalRunSelection,
   EvalSuiteListing,
   EvalSuiteSummary,
-} from '../dev/eval-service.ts';
+} from '../dev/eval/eval-service.ts';
 export type {
   EvalRunEvent,
   EvalRunRecord,

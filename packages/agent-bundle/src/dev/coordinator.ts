@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 
 import { freezeDiagnostics, hasErrors } from '../core/diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { ArtifactService, type ArtifactEpochResult, type FailedArtifactEpochResult } from './artifact-service.ts';
+import { ArtifactService, type ArtifactEpochResult, type FailedArtifactEpochResult } from './artifacts/artifact-service.ts';
 import { DiagnosticService, type DiagnosticReport } from './diagnostic-service.ts';
 import { acquireDevLock, type DevLockOptions } from './dev-lock.ts';
 import { EpochStore } from './epoch-store.ts';

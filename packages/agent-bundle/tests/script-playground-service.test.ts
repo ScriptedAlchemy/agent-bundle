@@ -9,7 +9,7 @@ import { expect, it } from '@rstest/core';
 import {
   ScriptPlaygroundService,
   type ResolvedPlaygroundScript,
-} from '../src/dev/script-playground-service.ts';
+} from '../src/dev/playground/script-playground-service.ts';
 import { eventuallyPasses } from './support/eventually.ts';
 
 const script: ResolvedPlaygroundScript = Object.freeze({

@@ -6,12 +6,12 @@ import {
   type McpAppJsonValue,
   type McpAppSessionAuthority,
   type McpAppToolDefinition,
-} from '../src/dev/mcp-app-binding-service.ts';
+} from '../src/dev/mcp-apps/mcp-app-binding-service.ts';
 import {
   McpAppPreviewService,
   type McpAppPreviewBindingAuthority,
   type McpAppPreviewToolAuthority,
-} from '../src/dev/mcp-app-preview-service.ts';
+} from '../src/dev/mcp-apps/mcp-app-preview-service.ts';
 
 const originalInput: McpAppJsonValue = { city: 'Paris' };
 const originalResult: McpAppJsonValue = { content: [{ text: 'Sunny', type: 'text' }] };

@@ -6,17 +6,17 @@ import { basename } from 'node:path';
 import { validateOriginHeader } from '@modelcontextprotocol/server';
 
 import { CodedError } from '../core/errors.ts';
-import { ArtifactRoutes, type ArtifactRouteService } from './artifact-routes.ts';
+import { ArtifactRoutes, type ArtifactRouteService } from './artifacts/artifact-routes.ts';
 import type { AgentApi } from './agent-api.ts';
-import { DevLogRoutes } from './dev-log-routes.ts';
-import type { DevLogService } from './dev-log-service.ts';
-import { EvalRoutes, type EvalRouteService } from './eval-routes.ts';
+import { DevLogRoutes } from './logs/dev-log-routes.ts';
+import type { DevLogService } from './logs/dev-log-service.ts';
+import { EvalRoutes, type EvalRouteService } from './eval/eval-routes.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
-import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './hook-playground-routes.ts';
-import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-app-routes.ts';
-import { McpSessionRoutes } from './mcp-session-routes.ts';
-import type { McpSessionService } from './mcp-session-service.ts';
-import { PlaygroundRoutes, type PlaygroundRouteService } from './playground-routes.ts';
+import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playground/hook-playground-routes.ts';
+import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
+import { McpSessionRoutes } from './mcp-session/mcp-session-routes.ts';
+import type { McpSessionService } from './mcp-session/mcp-session-service.ts';
+import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/playground-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import {
   decodedOpaqueSegment,

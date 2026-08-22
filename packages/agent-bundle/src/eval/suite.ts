@@ -1,7 +1,7 @@
 import { digest } from '../core/digest.ts';
 import { isContainedRelativePath } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
-import type { DraftEvalCase, PlaygroundSelectedAssertion } from '../services/playground-service.ts';
+import type { DraftEvalCase, PlaygroundSelectedAssertion } from '../dev/playground/playground-store.ts';
 import {
   expectExitCode,
   expectMcpCall,

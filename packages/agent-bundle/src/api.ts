@@ -42,8 +42,8 @@ import {
   type EvalRunResult,
   type EvalRunSelection,
   type EvalServiceErrorCode,
-} from './dev/eval-service.ts';
-export { EvalService, EvalServiceError } from './dev/eval-service.ts';
+} from './dev/eval/eval-service.ts';
+export { EvalService, EvalServiceError } from './dev/eval/eval-service.ts';
 export type { EvalComparison } from './eval/compare.ts';
 export type {
   EvalAssertionSummary,
@@ -56,7 +56,7 @@ export type {
   EvalServiceOptions,
   EvalSuiteListing,
   EvalSuiteSummary,
-} from './dev/eval-service.ts';
+} from './dev/eval/eval-service.ts';
 import {
   ProjectService,
   projectDiagnostic,

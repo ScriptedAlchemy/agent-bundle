@@ -10,7 +10,7 @@ import {
   publishNativePlaygroundCatalogSnapshot,
   type NativePlaygroundCatalogStorage,
   type NativePlaygroundEpochReference,
-} from '../src/dev/native-playground-service.ts';
+} from '../src/dev/playground/native-playground-service.ts';
 import { expectExitCode } from '../src/eval/assertions.ts';
 import type { DiscoveredEvalSuite } from '../src/eval/discovery.ts';
 import type { EvalFixturePlan } from '../src/eval/fixtures.ts';

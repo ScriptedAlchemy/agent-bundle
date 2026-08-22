@@ -5,8 +5,8 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { EvalRoutes } from '../src/dev/eval-routes.ts';
-import { EvalService, type EvalServiceOptions } from '../src/dev/eval-service.ts';
+import { EvalRoutes } from '../src/dev/eval/eval-routes.ts';
+import { EvalService, type EvalServiceOptions } from '../src/dev/eval/eval-service.ts';
 import type { CodexCommandInput, CodexCommandResult } from '../src/eval/codex-harness.ts';
 import type {
   NativeClaudeProcessRequest,

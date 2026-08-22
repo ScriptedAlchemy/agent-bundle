@@ -6,7 +6,7 @@ import {
   McpSessionRoutes,
   type McpSessionRouteService,
   type McpSessionRouteSession,
-} from '../src/dev/mcp-session-routes.ts';
+} from '../src/dev/mcp-session/mcp-session-routes.ts';
 import type {
   McpSessionConnectionState,
   McpSessionInspectorConfig,
@@ -15,7 +15,7 @@ import type {
   McpSessionTraceReplay,
   McpSessionReplayOverflow,
   McpSessionTraceSubscription,
-} from '../src/dev/mcp-session-service.ts';
+} from '../src/dev/mcp-session/mcp-session-service.ts';
 import { eventually } from './support/eventually.ts';
 import {
   authorize,

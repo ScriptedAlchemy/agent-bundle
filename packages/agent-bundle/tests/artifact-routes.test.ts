@@ -3,8 +3,8 @@ import { expect, it } from '@rstest/core';
 import {
   ArtifactRoutes,
   type ArtifactRouteService,
-} from '../src/dev/artifact-routes.ts';
-import { ArtifactInspectionServiceError } from '../src/dev/artifact-inspection-service.ts';
+} from '../src/dev/artifacts/artifact-routes.ts';
+import { ArtifactInspectionServiceError } from '../src/dev/artifacts/artifact-inspection-service.ts';
 import { EpochStoreError } from '../src/dev/epoch-store.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from '../src/dev/types.ts';
 import {

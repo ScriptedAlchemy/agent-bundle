@@ -3,8 +3,8 @@ import { expect, it } from '@rstest/core';
 import {
   McpAppRoutes,
   type McpAppRoutePreviewService,
-} from '../src/dev/mcp-app-routes.ts';
-import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-app-bridge.ts';
+} from '../src/dev/mcp-apps/mcp-app-routes.ts';
+import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-apps/mcp-app-bridge.ts';
 import { eventually } from './support/eventually.ts';
 import { authorize, originHeaders as headers, startRoutes as startRouteServer, type StartedRoutes as StartedRouteServer } from './support/route-harness.ts';
 

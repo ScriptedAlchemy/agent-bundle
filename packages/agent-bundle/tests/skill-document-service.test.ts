@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { ArtifactService } from '../src/dev/artifact-service.ts';
+import { ArtifactService } from '../src/dev/artifacts/artifact-service.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import { ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import { ProjectService } from '../src/dev/project-service.ts';

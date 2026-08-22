@@ -6,7 +6,7 @@ import { expect, it } from '@rstest/core';
 import { build, compareEvals, runEvals } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
 import { createEvalRun, type EvalTrialRecordInput } from '../src/eval/index.ts';
-import type { EvalRunResult } from '../src/dev/eval-service.ts';
+import type { EvalRunResult } from '../src/dev/eval/eval-service.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject } from './support/eval-project.ts';
 

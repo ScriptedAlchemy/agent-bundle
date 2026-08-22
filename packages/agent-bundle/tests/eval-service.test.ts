@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
-import { EvalService, EvalServiceError } from '../src/dev/eval-service.ts';
+import { EvalService, EvalServiceError } from '../src/dev/eval/eval-service.ts';
 import { evalCaseFromDraft } from '../src/eval/index.ts';
 import { EvalRunWriter } from '../src/eval/run-store.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';

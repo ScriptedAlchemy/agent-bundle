@@ -1,4 +1,4 @@
-import type { PlaygroundEpochIdentity, PlaygroundTarget } from '../services/playground-service.ts';
+import type { PlaygroundEpochIdentity, PlaygroundTarget } from '../dev/playground/playground-store.ts';
 
 /** The evidence strength a harness can honestly claim for one observation channel. */
 export type ActivationEvidence = 'inferred' | 'observed' | 'unavailable';

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect } from '@rstest/playwright';
 import type { Page } from 'playwright';
 
-import { ArtifactService } from '../../agent-bundle/src/dev/artifact-service.ts';
+import { ArtifactService } from '../../agent-bundle/src/dev/artifacts/artifact-service.ts';
 import { EpochStore } from '../../agent-bundle/src/dev/epoch-store.ts';
 import { ProjectEventHub, startForegroundServer } from '../../agent-bundle/src/dev/index.ts';
 import { ProjectService } from '../../agent-bundle/src/dev/project-service.ts';

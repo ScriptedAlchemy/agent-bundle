@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import { DevLogService } from '../src/dev/dev-log-service.ts';
+import { DevLogService } from '../src/dev/logs/dev-log-service.ts';
 import { ProjectEventHub } from '../src/dev/events.ts';
 import { startForegroundServer, type ForegroundCoordinator } from '../src/dev/foreground-server.ts';
 import type { Invalidation, ProjectStatus } from '../src/dev/types.ts';

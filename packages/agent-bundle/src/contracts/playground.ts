@@ -3,8 +3,8 @@
  * requests, and native host catalogs. Type-only: the playground services
  * behind these shapes touch Node builtins.
  */
-export type { PlaygroundOperationRequest, PlaygroundRun } from '../dev/playground-contract.ts';
-export type { NativePlaygroundCatalog, NativePlaygroundHost } from '../dev/native-playground-service.ts';
+export type { PlaygroundOperationRequest, PlaygroundRun } from '../dev/playground/playground-contract.ts';
+export type { NativePlaygroundCatalog, NativePlaygroundHost } from '../dev/playground/native-playground-service.ts';
 export type {
   DraftEvalCase,
   PlaygroundEpochIdentity,
@@ -16,4 +16,4 @@ export type {
   PlaygroundTarget,
   PlaygroundTraceEvent,
   PlaygroundTraceSource,
-} from '../services/playground-service.ts';
+} from '../dev/playground/playground-store.ts';
