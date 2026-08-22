@@ -31,7 +31,7 @@ import {
   playgroundScriptsForEpoch,
   type PlaygroundScriptCatalog,
 } from './playground/playground-page.tsx';
-import { overviewFor } from './overview-model.ts';
+import { activeEpochFor, overviewFor } from './overview-model.ts';
 import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
@@ -60,9 +60,6 @@ const sourceFor = (diagnostic: Diagnostic): string =>
   diagnostic.sourcePath ?? diagnostic.generatedPath ?? diagnostic.target ?? 'Project';
 
 const errorMessage = (reason: unknown): string => messageFrom(reason, 'Foreground project state could not be refreshed.');
-
-const activeEpochFor = (status: ProjectStatus) =>
-  status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
 
 const activeEpochId = (status: ProjectStatus): string | undefined => activeEpochFor(status)?.id;
 
@@ -274,32 +271,6 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page }: {
   </main>
 </div>;
 
-const EvalsScreen = ({ connectionError, evalClient, onNavigate }: {
-  readonly connectionError?: string;
-  readonly evalClient: EvalClient;
-  readonly onNavigate: (page: WorkbenchPage) => void;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="evals">
-  <EvalsPage client={evalClient} />
-</WorkbenchScreen>;
-
-const ComparisonsScreen = ({ comparisonClient, connectionError, evalClient, onNavigate }: {
-  readonly comparisonClient: ComparisonClient;
-  readonly connectionError?: string;
-  readonly evalClient: EvalClient;
-  readonly onNavigate: (page: WorkbenchPage) => void;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="comparisons">
-  <ComparisonsPage comparisonClient={comparisonClient} evalClient={evalClient} />
-</WorkbenchScreen>;
-
-const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }: {
-  readonly artifactClient: ArtifactClient;
-  readonly connectionError?: string;
-  readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly status: ProjectStatus;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="artifacts">
-  <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
-</WorkbenchScreen>;
-
 const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, playgroundClient, run, status }: {
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
@@ -375,23 +346,6 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
   </WorkbenchScreen>;
 };
 
-const LogsScreen = ({ connectionError, logClient, onNavigate }: {
-  readonly connectionError?: string;
-  readonly logClient: LogClient;
-  readonly onNavigate: (page: WorkbenchPage) => void;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="logs">
-  <LogsPage client={logClient} />
-</WorkbenchScreen>;
-
-const HooksScreen = ({ connectionError, hookClient, onNavigate, status }: {
-  readonly connectionError?: string;
-  readonly hookClient: HookClient;
-  readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly status: ProjectStatus;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks">
-  <HooksPage client={hookClient} epochId={activeEpochId(status)} />
-</WorkbenchScreen>;
-
 const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, presentation, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
@@ -404,7 +358,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
   readonly status: ProjectStatus;
 }) => {
   const presentationTabs = useRef<Record<McpPresentation, HTMLButtonElement | null>>({ inspector: null, playground: null });
-  const activeEpoch = status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
+  const activeEpoch = activeEpochFor(status);
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
   const selectPresentation = (next: McpPresentation): void => {
     setPresentation(next);
@@ -600,62 +554,69 @@ const Workbench = () => {
     </main>;
   }
   if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
-    if (page === 'mcp') {
-      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><McpScreen
-        appPreviewClient={mcpAppClient.current}
-        connectionError={connectionError}
-        controller={mcpController}
-        model={mcpModel}
-        onNavigate={navigate}
-        onResetSession={resetMcpSession}
-        presentation={mcpPresentation}
-        setPresentation={setMcpPresentation}
-        status={status}
-      /></Fragment>;
+    let screen: ReactNode;
+    switch (page) {
+      case 'mcp':
+        screen = <McpScreen
+          appPreviewClient={mcpAppClient.current}
+          connectionError={connectionError}
+          controller={mcpController}
+          model={mcpModel}
+          onNavigate={navigate}
+          onResetSession={resetMcpSession}
+          presentation={mcpPresentation}
+          setPresentation={setMcpPresentation}
+          status={status}
+        />;
+        break;
+      case 'playground':
+        screen = <PlaygroundScreen
+          artifactClient={artifactClient.current}
+          connectionError={connectionError}
+          onNavigate={navigate}
+          onRunChange={setPlaygroundRun}
+          playgroundClient={playgroundClient.current}
+          run={playgroundRun}
+          status={status}
+        />;
+        break;
+      case 'logs':
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="logs">
+          <LogsPage client={logClient.current} />
+        </WorkbenchScreen>;
+        break;
+      case 'evals':
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="evals">
+          <EvalsPage client={evalClient.current} />
+        </WorkbenchScreen>;
+        break;
+      case 'comparisons':
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="comparisons">
+          <ComparisonsPage comparisonClient={comparisonClient.current} evalClient={evalClient.current} />
+        </WorkbenchScreen>;
+        break;
+      case 'artifacts':
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="artifacts">
+          <ArtifactsPage client={artifactClient.current} epochId={activeEpochId(status)} />
+        </WorkbenchScreen>;
+        break;
+      case 'hooks':
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="hooks">
+          <HooksPage client={hookClient.current} epochId={activeEpochId(status)} />
+        </WorkbenchScreen>;
+        break;
+      case 'skills':
+        screen = <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} skillClient={skillClient.current} status={status} />;
+        break;
+      case 'overview':
+        screen = <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} status={status} />;
+        break;
+      default: {
+        const unhandled: never = page;
+        screen = unhandled;
+      }
     }
-    if (page === 'playground') {
-      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><PlaygroundScreen
-        artifactClient={artifactClient.current}
-        connectionError={connectionError}
-        onNavigate={navigate}
-        onRunChange={setPlaygroundRun}
-        playgroundClient={playgroundClient.current}
-        run={playgroundRun}
-        status={status}
-      /></Fragment>;
-    }
-    if (page === 'logs') {
-      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><LogsScreen
-        connectionError={connectionError}
-        logClient={logClient.current}
-        onNavigate={navigate}
-      /></Fragment>;
-    }
-    if (page === 'evals') {
-      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} /></Fragment>;
-    }
-    if (page === 'comparisons') {
-      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><ComparisonsScreen
-        comparisonClient={comparisonClient.current}
-        connectionError={connectionError}
-        evalClient={evalClient.current}
-        onNavigate={navigate}
-      /></Fragment>;
-    }
-    if (page === 'artifacts') {
-      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} /></Fragment>;
-    }
-    if (page === 'hooks') {
-      return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}><HooksScreen
-        connectionError={connectionError}
-        hookClient={hookClient.current}
-        onNavigate={navigate}
-        status={status}
-      /></Fragment>;
-    }
-    return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}>{page === 'skills'
-      ? <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} skillClient={skillClient.current} status={status} />
-      : <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} status={status} />}</Fragment>;
+    return <Fragment key={`foreground-${connection.generation ?? 'unknown'}`}>{screen}</Fragment>;
   }
   return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}</main>;
 };

@@ -1,5 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -18,35 +17,28 @@ import {
   type Invalidation,
   type PreparedProject,
 } from '../src/dev/index.ts';
+import { createProjectFixture } from './helpers/project-fixture.ts';
 
-const createProject = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-coordinator-'));
-  await mkdir(join(root, 'skills', 'review'), { recursive: true });
-  await Promise.all([
-    writeFile(
-      join(root, 'agent-bundle.config.ts'),
-      [
-        'export default {',
-        "  plugin: { name: 'dev-coordinator-fixture', version: '1.0.0' },",
-        "  targets: ['portable'],",
-        '};',
-        '',
-      ].join('\n'),
-    ),
-    writeFile(
-      join(root, 'skills', 'review', 'SKILL.md'),
-      [
-        '---',
-        'name: review',
-        'description: Reviews changes',
-        '---',
-        'Review the changed files.',
-        '',
-      ].join('\n'),
-    ),
-  ]);
-  return root;
-};
+const createProject = async (): Promise<string> => (await createProjectFixture({
+  config: [
+    'export default {',
+    "  plugin: { name: 'dev-coordinator-fixture', version: '1.0.0' },",
+    "  targets: ['portable'],",
+    '};',
+    '',
+  ].join('\n'),
+  files: {
+    'skills/review/SKILL.md': [
+      '---',
+      'name: review',
+      'description: Reviews changes',
+      '---',
+      'Review the changed files.',
+      '',
+    ].join('\n'),
+  },
+  prefix: 'agent-bundle-dev-coordinator-',
+})).root;
 
 const epochFor = (root: string, id: string, projectRevision: string): ArtifactEpoch => ({
   configDigest: `${id}-config`,

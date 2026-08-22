@@ -17,6 +17,7 @@ import {
 } from '../src/dev/index.ts';
 import { ArtifactInspectionServiceError } from '../src/dev/artifact-inspection-service.ts';
 import type { McpSessionService } from '../src/dev/mcp-session-service.ts';
+import { eventually } from './support/eventually.ts';
 
 const status = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -109,14 +110,6 @@ const readRaw = (
     });
     request.once('error', rejectPromise);
   });
-};
-
-const eventually = async (predicate: () => boolean, milliseconds: number): Promise<void> => {
-  const deadline = Date.now() + milliseconds;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out after ${milliseconds}ms.`);
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
-  }
 };
 
 const openLiveStream = (url: string): Readonly<{

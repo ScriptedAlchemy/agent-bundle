@@ -101,8 +101,30 @@ export const closeChild = async (child: ChildProcess): Promise<void> => {
   throw new AggregateError(closeFailures, 'The packed dev server could not be stopped.');
 };
 
-export const writeFakeClaude = async (root: string): Promise<string> => {
-  const directory = join(root, '.packed-release-fake-claude');
+export interface FakeClaudeBehavior {
+  readonly directoryName: string;
+  /** Emits the prompt-driven script lines that run after the shared argument handling. */
+  readonly promptScript: () => readonly string[];
+}
+
+const packedReleaseClaudeBehavior: FakeClaudeBehavior = {
+  directoryName: '.packed-release-fake-claude',
+  promptScript: () => [
+    "if (prompt.includes('Wait for packed native cancellation.')) setInterval(() => undefined, 1_000);",
+    "writeFileSync('result.json', '{\"risk\":\"packed-native\"}\\n');",
+    'process.stdout.write([',
+    "  '{\"type\":\"system\",\"subtype\":\"init\",\"plugins\":[{\"name\":\"packed-release-fixture\"}],\"mcp_servers\":[{\"name\":\"fixture\"}]}',",
+    "  '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"packed-release-fixture:review\"}}]}}',",
+    "  '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"mcp__fixture__show-dashboard\",\"input\":{}}]}}',",
+    "  '{\"type\":\"system\",\"hook_event_name\":\"SessionStart\"}',",
+    "  '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":7,\"num_turns\":2,\"result\":\"Packed native fixture completed.\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}',",
+    "  '',",
+    "].join('\\n'));",
+  ],
+};
+
+export const writeFakeClaude = async (root: string, behavior: FakeClaudeBehavior = packedReleaseClaudeBehavior): Promise<string> => {
+  const directory = join(root, behavior.directoryName);
   const executable = join(directory, 'claude');
   await mkdir(directory, { recursive: true });
   await Promise.all([
@@ -116,16 +138,7 @@ export const writeFakeClaude = async (root: string): Promise<string> => {
       "if (args[0] === '--version') { process.stdout.write('2.1.240 (Claude Code)\\n'); process.exit(0); }",
       "if (args[0] === 'auth' && args[1] === 'status') { process.stdout.write('{\"authMethod\":\"claude.ai\",\"loggedIn\":true,\"subscriptionType\":\"max\"}\\n'); process.exit(0); }",
       "const prompt = args.at(-1) ?? '';",
-      "if (prompt.includes('Wait for packed native cancellation.')) setInterval(() => undefined, 1_000);",
-      "writeFileSync('result.json', '{\"risk\":\"packed-native\"}\\n');",
-      'process.stdout.write([',
-      "  '{\"type\":\"system\",\"subtype\":\"init\",\"plugins\":[{\"name\":\"packed-release-fixture\"}],\"mcp_servers\":[{\"name\":\"fixture\"}]}',",
-      "  '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"packed-release-fixture:review\"}}]}}',",
-      "  '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"mcp__fixture__show-dashboard\",\"input\":{}}]}}',",
-      "  '{\"type\":\"system\",\"hook_event_name\":\"SessionStart\"}',",
-      "  '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":7,\"num_turns\":2,\"result\":\"Packed native fixture completed.\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}',",
-      "  '',",
-      "].join('\\n'));",
+      ...behavior.promptScript(),
       '',
     ].join('\n')),
   ]);

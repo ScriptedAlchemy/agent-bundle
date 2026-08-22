@@ -1,7 +1,7 @@
 import { posix } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export interface ArtifactHook {
   readonly event: string;
@@ -27,14 +27,8 @@ export const compareArtifactHooks = (
   ? left.id.localeCompare(right.id)
   : left.target.localeCompare(right.target);
 
-const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
-
 const hasExactKeys = (
-  value: Record<string, unknown>,
+  value: Readonly<Record<string, unknown>>,
   required: readonly string[],
   optional: readonly string[] = [],
 ): boolean => {

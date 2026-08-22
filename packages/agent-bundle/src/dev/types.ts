@@ -358,7 +358,14 @@ const freezeJson = (value: unknown, seen: WeakSet<object>): JsonValue => {
   return Object.freeze(value) as JsonObject;
 };
 
-/** Validates a strict JSON tree and freezes every reachable array and object. */
+/**
+ * Validates a strict JSON tree and freezes every reachable array and object.
+ *
+ * Deliberately separate from core `snapshotStrictJsonValue`: this variant
+ * freezes the caller's value IN PLACE (identity-preserving, observable to
+ * ProjectEventHub.publish callers that keep a reference) instead of returning
+ * a detached copy, and it rejects repeated references, not just cycles.
+ */
 export const freezeJsonValue = (value: unknown): JsonValue =>
   freezeJson(value, new WeakSet<object>());
 

@@ -3,7 +3,7 @@ import { isAbsolute, win32 } from 'node:path';
 
 import { isRecord, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { findCredentialConfiguration } from './credentials.ts';
-import { EvalRunStoreError } from './errors.ts';
+import { storeError } from './errors.ts';
 import { provenanceIdentifierPattern } from './provenance.ts';
 import type {
   EvalAssertionOutcome,
@@ -31,11 +31,6 @@ import type {
 export const safeSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 export const maximumTrialRecordBytes = 1024 * 1024;
 const maximumProvenanceTextLength = 256;
-
-const storeError = (
-  code: ConstructorParameters<typeof EvalRunStoreError>[0],
-  message: string,
-): EvalRunStoreError => new EvalRunStoreError(code, message);
 
 export const requireSafeSegment = (value: unknown, label: string): string => {
   if (typeof value !== 'string' || !safeSegment.test(value)) {

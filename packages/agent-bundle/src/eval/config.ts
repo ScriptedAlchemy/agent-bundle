@@ -1,6 +1,5 @@
-import { isAbsolute } from 'node:path';
-
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { isContainedRelativePath } from '../core/paths.ts';
 import { isRecord, snapshotStrictJsonValue } from '../core/strict-json.ts';
 import { findCredentialConfiguration } from './credentials.ts';
 import { EvalConfigError } from './errors.ts';
@@ -47,14 +46,8 @@ const requireContainedRelativePath = (
   code: ConstructorParameters<typeof EvalConfigError>[0],
   label: string,
 ): string => {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw configError(code, `${label} must be a non-empty string.`);
-  }
-  if (isAbsolute(value) || /^[a-z]:/iu.test(value)) {
-    throw configError(code, `${label} must be relative to the project root.`);
-  }
-  if (value.split(/[/\\]/u).includes('..')) {
-    throw configError(code, `${label} must not escape the project root.`);
+  if (typeof value !== 'string' || !isContainedRelativePath(value)) {
+    throw configError(code, `${label} must be a non-empty relative path that never escapes the project root.`);
   }
   return value;
 };

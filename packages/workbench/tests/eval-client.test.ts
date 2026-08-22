@@ -1,69 +1,17 @@
 import { expect, it } from '@rstest/core';
 
 import { EvalClient } from '../src/evals/eval-client.ts';
-
-interface RecordedRequest {
-  readonly body: unknown;
-  readonly method: string;
-  readonly token: string | null;
-  readonly url: string;
-}
+import { makeRunRecord, makeTrialRecord } from './support/eval-records.ts';
+import { recordingFetch, type RecordedRequest } from './support/recording-fetch.ts';
 
 const response = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json' },
   status,
 });
 
-const runRecord = {
-  agentBundleVersion: '0.1.0',
-  artifact: {
-    manifestPath: 'agent-bundle.manifest.json',
-    source: 'run-owned',
-    targetDigests: { portable: 'c'.repeat(64) },
-  },
-  completedAt: '2026-08-17T00:00:02.000Z',
-  createdAt: '2026-08-17T00:00:00.000Z',
-  harness: 'deterministic',
-  id: '20260817t000000000z-abcdef01',
-  projectRevision: 'd'.repeat(64),
-  summary: { cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 },
-};
+const runRecord = makeRunRecord({ summary: { cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 } });
 
-const trialRecord = {
-  assertions: [{
-    assertionId: 'outcome:0123456789abcdef',
-    detail: 'The grader passed.',
-    evidence: 'observed',
-    kind: 'outcome',
-    outcome: 'pass',
-  }],
-  caseDigest: 'a'.repeat(64),
-  caseId: 'reads-result',
-  completedAt: '2026-08-17T00:00:01.000Z',
-  durationMs: 12,
-  evidence: {
-    mcp: { calls: [], level: 'unavailable' },
-    process: { level: 'unavailable', timedOut: false },
-    scripts: { level: 'observed', results: {} },
-    skillActivation: { activated: [], level: 'unavailable' },
-  },
-  fixtureDigest: 'b'.repeat(64),
-  host: 'portable',
-  id: 'portable-1',
-  model: 'deterministic',
-  outcome: 'pass',
-  prompt: 'Report the highest-risk regression.',
-  provenance: {
-    hostCliVersion: 'agent-bundle@0.1.0',
-    invocation: { mode: 'automatic' },
-    semanticGrader: null,
-  },
-  rawArtifacts: ['artifacts/portable-1/evidence.json'],
-  startedAt: '2026-08-17T00:00:00.500Z',
-  targetDigest: 'c'.repeat(64),
-  trialIndex: 0,
-  usage: { inputTokens: 9, outputTokens: 3 },
-};
+const trialRecord = makeTrialRecord({ usage: { inputTokens: 9, outputTokens: 3 } });
 
 const runResult = { aggregates: [], diagnostics: [], run: runRecord, trials: [trialRecord] };
 
@@ -87,19 +35,6 @@ const listing = {
     sourcePath: 'evals/review.eval.ts',
   }],
 };
-
-const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
-  async (input, init) => {
-    const url = String(input);
-    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
-    calls.push({
-      body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
-      method: init?.method ?? 'GET',
-      token: new Headers(init?.headers).get('x-agent-bundle-session'),
-      url,
-    });
-    return reply();
-  };
 
 it('lists discovered suites over the same foreground session', async () => {
   const calls: RecordedRequest[] = [];

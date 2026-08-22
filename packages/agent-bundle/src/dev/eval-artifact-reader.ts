@@ -4,11 +4,10 @@ import { basename, join, relative, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 
 import { sha256Hex } from '../core/digest.ts';
-import { sameFile, isInsideOrEqual } from '../core/paths.ts';
+import { isInsideOrEqual, isSafePathSegment, sameFile } from '../core/paths.ts';
 import type { EvalArtifactReader } from './eval-service-types.ts';
 
 const maximumArtifactBytes = 8 * 1024 * 1024;
-const safeArtifactSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 
 export const artifactSegments = (value: unknown): readonly string[] | undefined => {
   if (typeof value !== 'string' || /%(?:2f|5c)/iu.test(value) || value.includes('\\') || value.includes('\0')) {
@@ -17,7 +16,7 @@ export const artifactSegments = (value: unknown): readonly string[] | undefined 
   const segments = value.split('/');
   if (
     segments.length < 2 || segments[0] !== 'artifacts' ||
-    segments.some((segment) => !safeArtifactSegment.test(segment))
+    segments.some((segment) => !isSafePathSegment(segment))
   ) return undefined;
   return Object.freeze(segments);
 };

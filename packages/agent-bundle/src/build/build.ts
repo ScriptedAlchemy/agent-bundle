@@ -256,6 +256,8 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
   const stageParent = dirname(outputRoot);
   await mkdir(stageParent, { recursive: true });
   const stageRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.stage-`));
+  const publishedOutput = (entry: { readonly output: string }): string =>
+    assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output)));
 
   try {
     const stagedTargets = planStagedTargets({
@@ -295,7 +297,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     const publishedCompiledEntries = Object.freeze(compiledEntries.map((entry) =>
       Object.freeze({
         ...entry,
-        output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
+        output: publishedOutput(entry),
       }),
     ));
     await writeHookIndex({
@@ -350,15 +352,15 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       compiledEntries: publishedCompiledEntries,
       compiledHooks: Object.freeze(compiledHooks.map((entry) => Object.freeze({
         ...entry,
-        output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
+        output: publishedOutput(entry),
       }))),
       compiledMcpApps: Object.freeze(compiledMcpApps.map((entry) => Object.freeze({
         ...entry,
-        output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
+        output: publishedOutput(entry),
       }))),
       compiledMcpEntries: Object.freeze(compiledMcpEntries.map((entry) => Object.freeze({
         ...entry,
-        output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
+        output: publishedOutput(entry),
       }))),
       manifest,
       outputProvenance,

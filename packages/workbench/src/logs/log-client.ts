@@ -4,11 +4,12 @@ import type {
   DevLogReplay,
   DevLogReplayGap,
 } from '../../../agent-bundle/src/dev/dev-log-service.ts';
+import { devLogKinds, devLogLevels, devLogProducers, hasControlOrSeparators } from '../../../agent-bundle/src/dev/dev-log-kinds.ts';
 import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
 import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys as hasExactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
-import { readNdjsonByteFrames } from '../ndjson.ts';
+import { abortableNdjsonStream, readNdjsonByteFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface LogClientOptions {
@@ -37,29 +38,10 @@ export class LogClientError extends CodedClientError {
 const maximumLogFrameBytes = 64 * 1024;
 const maximumSummaryLength = 2_048;
 const safeContextKeys = new Set(['buildId', 'diagnosticCode', 'epochId', 'hookId', 'projectId', 'runId', 'sessionId', 'target']);
-const devLogProducers = Object.freeze(['project', 'build', 'diagnostic', 'mcp', 'hook', 'eval', 'playground'] as const);
-const devLogLevels = Object.freeze(['debug', 'info', 'warning', 'error'] as const);
-const devLogKinds = Object.freeze({
-  build: Object.freeze(['artifact.available', 'build.failed', 'build.started']),
-  diagnostic: Object.freeze([
-    'artifact.available.diagnostic', 'artifact.status.diagnostic', 'build.failed.diagnostic', 'build.started.diagnostic',
-    'invalidation.diagnostic', 'runtime.event.diagnostic', 'source.changed.diagnostic', 'source.status.diagnostic',
-  ]),
-  eval: Object.freeze(['eval.run.completed', 'eval.run.failed', 'eval.run.started']),
-  hook: Object.freeze(['hook.simulate.completed', 'hook.simulate.failed', 'hook.simulate.started']),
-  mcp: Object.freeze(['mcp.logging', 'mcp.stderr', 'mcp.operation.failed', 'mcp.operation.started', 'mcp.operation.succeeded']),
-  playground: Object.freeze(['playground.event.appended']),
-  project: Object.freeze([
-    'artifact.status', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation', 'project.events.replay-gap',
-    'project.invalid-source', 'project.load', 'project.prepared', 'runtime.event', 'source.changed', 'source.status',
-  ]),
-});
 const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isDate = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
-const hasControlOrSeparators = (value: string): boolean => [...value].some((character) =>
-  character === '/' || character === '\\' || character <= '\u001F' || character === '\u007F');
 const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
 const isSafeWireText = (value: unknown, maximum = maximumLogFrameBytes): value is string => {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || redactEvalCredentialText(value) !== value) return false;
@@ -168,14 +150,7 @@ export class LogClient {
   }
 
   stream(options: LogStreamOptions): LogStream {
-    const controller = new AbortController();
-    const forwardAbort = (): void => controller.abort();
-    options.signal?.addEventListener('abort', forwardAbort, { once: true });
-    if (options.signal?.aborted) controller.abort();
-    return Object.freeze({
-      close: () => controller.abort(),
-      done: this.#stream(options, controller.signal).finally(() => options.signal?.removeEventListener('abort', forwardAbort)),
-    });
+    return abortableNdjsonStream(options.signal, (signal) => this.#stream(options, signal));
   }
 
   async #json(path: string, init: RequestInit): Promise<JsonValue> {

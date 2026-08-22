@@ -1,3 +1,4 @@
+import { dataArrayValues } from '../core/strict-json.ts';
 import type {
   AgentBundleConfig,
   NormalizationConfigExtension,
@@ -116,37 +117,24 @@ const isSafeArtifactDirectory = (value: string): boolean =>
 const artifactSuffixPattern = /^\.[a-z\d]+$/u;
 
 const snapshotArtifactSuffixes = (value: unknown, field: string): readonly string[] => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
+  const candidates = dataArrayValues(value);
+  if (candidates === undefined) {
     throw new Error(`Target adapter artifact layout ${field} allowed suffixes must be a plain array.`);
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
-  if (
-    lengthDescriptor === undefined ||
-    !('value' in lengthDescriptor) ||
-    typeof lengthDescriptor.value !== 'number' ||
-    lengthDescriptor.value === 0 ||
-    Object.keys(descriptors).length !== lengthDescriptor.value + 1
-  ) {
+  if (candidates.length === 0) {
     throw new Error(`Target adapter artifact layout ${field} allowed suffixes must be a nonempty plain array.`);
   }
 
   const suffixes: string[] = [];
-  for (let index = 0; index < lengthDescriptor.value; index += 1) {
-    const descriptor = descriptors[index];
-    if (
-      descriptor === undefined ||
-      !('value' in descriptor) ||
-      typeof descriptor.value !== 'string' ||
-      !artifactSuffixPattern.test(descriptor.value)
-    ) {
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || !artifactSuffixPattern.test(candidate)) {
       throw new Error(`Target adapter artifact layout ${field} allowed suffixes must contain canonical suffixes.`);
     }
     const previous = suffixes.at(-1);
-    if (previous !== undefined && previous.localeCompare(descriptor.value) >= 0) {
+    if (previous !== undefined && previous.localeCompare(candidate) >= 0) {
       throw new Error(`Target adapter artifact layout ${field} allowed suffixes must be unique and sorted.`);
     }
-    suffixes.push(descriptor.value);
+    suffixes.push(candidate);
   }
   return Object.freeze(suffixes);
 };

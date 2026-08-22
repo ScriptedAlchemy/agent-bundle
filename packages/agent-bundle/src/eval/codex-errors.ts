@@ -3,7 +3,6 @@ import type { EvalHarnessFailure, EvalHarnessFailureCode, EvalHarnessFailureStag
 
 export type CodexEvalHarnessErrorCode =
   | 'CODEX_ARTIFACT_INVALID'
-  | 'CODEX_AUTH_UNAVAILABLE'
   | 'CODEX_CLI_INCOMPATIBLE'
   | 'CODEX_CLI_MISSING'
   | 'CODEX_CLI_UNAUTHENTICATED'
@@ -28,11 +27,6 @@ const failureShapes: Readonly<Record<
     code: 'EVAL_ARTIFACT_UNAVAILABLE',
     message: 'The Codex candidate artifact is unavailable.',
     stage: 'artifact',
-  }),
-  CODEX_AUTH_UNAVAILABLE: Object.freeze({
-    code: 'EVAL_PROCESS_UNAVAILABLE',
-    message: 'The Codex CLI has no signed-in session.',
-    stage: 'preflight',
   }),
   CODEX_CLI_INCOMPATIBLE: Object.freeze({
     code: 'EVAL_PROCESS_UNAVAILABLE',

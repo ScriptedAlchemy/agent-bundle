@@ -1,65 +1,31 @@
-import { execFile as executeFile } from 'node:child_process';
-import { chmod, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
-import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import { expect } from '@rstest/playwright';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { writeFakeClaude, type FakeClaudeBehavior } from './support/packed-release-harness.ts';
+import { buildWorkbench, e2e, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
 
-const execFile = promisify(executeFile);
-const workspaceRoot = process.cwd();
-const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 8_000;
 const nativePathFallback = '/usr/bin:/bin';
 
-const e2e = test.extend({
-  playwright: {
-    launchOptions: { channel: 'chrome' },
-    contextOptions: { viewport: { height: 900, width: 1440 } },
-  } satisfies PlaywrightOptions,
-});
-
-let workbenchBuild: Promise<void> | undefined;
-
-const buildWorkbench = (): Promise<void> => workbenchBuild ??= (async (): Promise<void> => {
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('npm', ['run', 'build', '--workspace', 'agent-bundle-workbench'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
-  });
-})();
-
-const writeFakeClaude = async (directory: string): Promise<void> => {
-  const executable = join(directory, 'claude');
-  const implementation = join(directory, 'claude.mjs');
-  await Promise.all([
-    // The dev server spawns the host on a clamped PATH, so resolve the exact running
-    // Node binary instead of relying on a `node` living in /usr/bin or /bin.
-    writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/claude.mjs" "$@"\n`),
-    writeFile(implementation, [
-      "import { writeFileSync } from 'node:fs';",
-      '',
-      'const args = process.argv.slice(2);',
-      "if (args[0] === '--version') { process.stdout.write('2.1.240 (Claude Code)\\n'); process.exit(0); }",
-      "if (args[0] === 'auth' && args[1] === 'status') { process.stdout.write('{\"authMethod\":\"claude.ai\",\"loggedIn\":true,\"subscriptionType\":\"max\"}\\n'); process.exit(0); }",
-      `const prompt = args.at(-1) ?? '';`,
-      "if (prompt.includes('Gate native Playground run')) { setInterval(() => undefined, 1_000); }",
-      "writeFileSync('result.json', '{\"risk\":\"native-completed\"}\\n');",
-      'process.stdout.write([',
-      "  '{\"type\":\"system\",\"subtype\":\"init\",\"plugins\":[{\"name\":\"playground-real-fixture\"}],\"mcp_servers\":[{\"name\":\"project\"}]}',",
-      "  '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"playground-real-fixture:review\"}}]}}',",
-      "  '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"mcp__project__status_report\",\"input\":{}}]}}',",
-      "  '{\"type\":\"system\",\"hook_event_name\":\"SessionStart\"}',",
-      "  '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":42,\"num_turns\":2,\"result\":\"Native fixture completed.\",\"usage\":{\"input_tokens\":9,\"output_tokens\":3}}',",
-      "  '',",
-      "].join('\\n'));",
-      '',
-    ].join('\n')),
-  ]);
-  await chmod(executable, 0o755);
+const playgroundClaudeBehavior: FakeClaudeBehavior = {
+  directoryName: '.test-native-host',
+  promptScript: () => [
+    "if (prompt.includes('Gate native Playground run')) { setInterval(() => undefined, 1_000); }",
+    "writeFileSync('result.json', '{\"risk\":\"native-completed\"}\\n');",
+    'process.stdout.write([',
+    "  '{\"type\":\"system\",\"subtype\":\"init\",\"plugins\":[{\"name\":\"playground-real-fixture\"}],\"mcp_servers\":[{\"name\":\"project\"}]}',",
+    "  '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Skill\",\"input\":{\"skill\":\"playground-real-fixture:review\"}}]}}',",
+    "  '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"mcp__project__status_report\",\"input\":{}}]}}',",
+    "  '{\"type\":\"system\",\"hook_event_name\":\"SessionStart\"}',",
+    "  '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":42,\"num_turns\":2,\"result\":\"Native fixture completed.\",\"usage\":{\"input_tokens\":9,\"output_tokens\":3}}',",
+    "  '',",
+    "].join('\\n'));",
+  ],
 };
 
 const writePlaygroundProject = async (root: string): Promise<void> => {
@@ -315,9 +281,7 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
   try {
     project = await createProjectFixture();
     await writePlaygroundProject(project.root);
-    const fakeHostDirectory = join(project.root, '.test-native-host');
-    await mkdir(fakeHostDirectory, { recursive: true });
-    await writeFakeClaude(fakeHostDirectory);
+    const fakeHostDirectory = await writeFakeClaude(project.root, playgroundClaudeBehavior);
     process.env.PATH = `${fakeHostDirectory}:${nativePathFallback}`;
     server = await startDevServer({
       assets: createWorkbenchAssetSource({ root: workbenchAssets }),

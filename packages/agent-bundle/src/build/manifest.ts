@@ -1,5 +1,6 @@
 import { digest, stableJson } from '../core/digest.ts';
-import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { deepFreeze } from '../core/freeze.ts';
+import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated';
 export type ArtifactManifestValidationStatus = 'passed';
@@ -86,7 +87,7 @@ export interface AssembledArtifactManifest {
   readonly manifest: ArtifactManifest;
 }
 
-type JsonRecord = Record<string, unknown>;
+type JsonRecord = Readonly<Record<string, unknown>>;
 
 const manifestFileName = 'agent-bundle.manifest.json';
 const sha256Pattern = /^[a-f0-9]{64}$/u;
@@ -96,14 +97,8 @@ const fail = (message: string): never => {
   throw new TypeError(`Artifact manifest ${message}`);
 };
 
-const isPlainObject = (value: unknown): value is JsonRecord => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
-
 const requireRecord = (value: unknown, location: string): JsonRecord =>
-  isPlainObject(value) ? value : fail(`${location} must be a plain object.`);
+  isPlainRecord(value) ? value : fail(`${location} must be a plain object.`);
 
 const requireArray = (value: unknown, location: string): readonly unknown[] =>
   Array.isArray(value) ? value : fail(`${location} must be an array.`);
@@ -352,15 +347,6 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   };
 };
 
-const freezeDeep = <Value>(value: Value): Value => {
-  if (Array.isArray(value)) {
-    value.forEach(freezeDeep);
-  } else if (isRecord(value)) {
-    Object.values(value).forEach(freezeDeep);
-  }
-  return Object.freeze(value);
-};
-
 export const parseArtifactManifest = (bytes: string): ArtifactManifest => {
   let value: unknown;
   try {
@@ -375,7 +361,7 @@ export const parseArtifactManifest = (bytes: string): ArtifactManifest => {
   if (bytes !== `${stableJson(manifest)}\n`) {
     fail('bytes are not canonical.');
   }
-  return freezeDeep(manifest);
+  return deepFreeze(manifest);
 };
 
 /**

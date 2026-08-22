@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 export interface ProjectFixture {
   configPath: string;
@@ -12,6 +12,16 @@ export interface ProjectFixture {
 }
 
 export interface ProjectFixtureOptions {
+  /**
+   * Raw agent-bundle.config.ts source. When set (or when files is set), the fixture
+   * writes only this config plus the given files instead of the default defineConfig
+   * project layout with its agent-bundle module shim.
+   */
+  config?: string;
+  /** Files written relative to the fixture root, replacing the default skill tree. */
+  files?: Readonly<Record<string, string | Uint8Array>>;
+  /** Temp-directory prefix. Defaults to 'agent-bundle-config-'. */
+  prefix?: string;
   skills?: string[];
 }
 
@@ -23,11 +33,31 @@ const sourceEntryPoint = resolve(
 export const createProjectFixture = async (
   options: ProjectFixtureOptions = {},
 ): Promise<ProjectFixture> => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-config-'));
+  const root = await mkdtemp(join(tmpdir(), options.prefix ?? 'agent-bundle-config-'));
   const skillDir = join(root, 'skills/review');
   const skillSource = join(skillDir, 'SKILL.md');
   const imagePath = join(skillDir, 'assets/diagram.png');
   const configPath = join(root, 'agent-bundle.config.ts');
+
+  if (options.config !== undefined || options.files !== undefined) {
+    const files = options.files ?? {};
+    await Promise.all([configPath, ...Object.keys(files).map((relativePath) => join(root, relativePath))]
+      .map((path) => mkdir(dirname(path), { recursive: true })));
+    await Promise.all([
+      ...(options.config === undefined ? [] : [writeFile(configPath, options.config)]),
+      ...Object.entries(files).map(([relativePath, contents]) => writeFile(join(root, relativePath), contents)),
+    ]);
+    const skillMarkdown = files['skills/review/SKILL.md'];
+    return {
+      configPath,
+      imagePath,
+      root,
+      skillDir,
+      skillMarkdown: typeof skillMarkdown === 'string' ? skillMarkdown : '',
+      skillSource,
+    };
+  }
+
   const skills = options.skills === undefined ? 'undefined' : JSON.stringify(options.skills);
   const skillMarkdown = [
     '---',

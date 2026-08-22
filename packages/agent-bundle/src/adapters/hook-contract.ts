@@ -1,5 +1,6 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
+import { escapeRegExp } from '../core/strings.ts';
 import type {
   CanonicalHookEvent,
   CanonicalHookTool,
@@ -196,6 +197,47 @@ export const nativeHooksFor = (
   target: 'codex' | 'claude',
 ): NormalizedNativeHook | undefined => model.nativeHooks?.find((nativeHooks) => nativeHooks.target === target);
 
+interface NativeHookSchemaValidator {
+  (document: unknown): boolean;
+  readonly errors?: readonly { readonly instancePath: string; readonly message?: string }[] | null;
+}
+
+export interface NativeHookDocumentValidation {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Record<string, unknown>;
+}
+
+/** Validates a target's authored native-hook document; a diagnostic never yields a document. */
+export const validatedNativeHookDocument = (
+  model: NormalizedPlugin,
+  target: 'codex' | 'claude',
+  label: string,
+  validate: NativeHookSchemaValidator,
+  errorDiagnostic: (code: string, message: string) => Diagnostic,
+): NativeHookDocumentValidation => {
+  const nativeHooks = nativeHooksFor(model, target);
+  if (nativeHooks?.issue === 'missing' || nativeHooks?.issue === 'parse') {
+    return {
+      diagnostics: [errorDiagnostic(
+        `${target}.native-hooks.${nativeHooks.issue}`,
+        `${label} native hooks file ${JSON.stringify(nativeHooks.source)} could not be ${nativeHooks.issue === 'missing' ? 'found' : 'parsed'}.`,
+      )],
+    };
+  }
+  if (nativeHooks?.document === undefined) return { diagnostics: [] };
+  if (!validate(nativeHooks.document)) {
+    return {
+      diagnostics: [errorDiagnostic(
+        `${target}.native-hooks.schema`,
+        `${label} native hooks file ${JSON.stringify(nativeHooks.source)} is invalid: ${(validate.errors ?? [])
+          .map((error) => `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`)
+          .join('; ') || 'schema validation failed'}.`,
+      )],
+    };
+  }
+  return { diagnostics: [], document: nativeHooks.document as Record<string, unknown> };
+};
+
 export const mergeHookDocuments = (
   generated: Record<string, unknown> | undefined,
   native: Record<string, unknown> | undefined,
@@ -238,8 +280,6 @@ const error = (target: string, code: string, message: string): Diagnostic => ({
   severity: 'error',
   target,
 });
-
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 
 const matcherFor = (
   target: string,

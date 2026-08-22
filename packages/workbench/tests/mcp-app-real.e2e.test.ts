@@ -1,33 +1,14 @@
-import { execFile as executeFile } from 'node:child_process';
 import { access, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
-import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import { expect } from '@rstest/playwright';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { buildWorkbench, e2e, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
 
-const workspaceRoot = process.cwd();
-const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 8_000;
-const execFile = promisify(executeFile);
-
-const e2e = test.extend({
-  playwright: {
-    launchOptions: { channel: 'chrome' },
-    contextOptions: { viewport: { height: 900, width: 1440 } },
-  } satisfies PlaywrightOptions,
-});
-
-const buildWorkbench = async (): Promise<void> => {
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('npm', ['run', 'build', '--workspace', 'agent-bundle-workbench'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
-  });
-};
 
 const appFixtureHtml = [
   '<!doctype html><html><body><main data-testid="app-state">waiting</main>',

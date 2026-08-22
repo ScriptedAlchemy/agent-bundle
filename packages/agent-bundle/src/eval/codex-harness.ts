@@ -34,7 +34,7 @@ import {
   trialOutcome,
   unavailableEvidence,
 } from './harness.ts';
-import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
+import { graderFailureFor, outcomeGraderSpecs, runEvalGraders, type EvalGraderSpec } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
 import { isErrno } from '../core/errors.ts';
 import type { EvalTrialRecord, EvalTrialWriter } from './run-store.ts';
@@ -282,12 +282,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
     }
 
     const graderSpecs: readonly EvalGraderSpec[] = harnessFailure === undefined
-      ? [
-        ...(options.graders ?? []),
-        ...options.evalCase.assertions
-          .filter((assertion) => assertion.kind === 'outcome')
-          .map((assertion) => evalScriptGraderSpec(assertion.script, options.suiteDir)),
-      ]
+      ? [...(options.graders ?? []), ...outcomeGraderSpecs(options.evalCase.assertions, options.suiteDir)]
       : [];
     const graded = await runEvalGraders(graderSpecs, {
       artifactRoot: options.artifact.root,
@@ -312,13 +307,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       });
 
     const assertions = resolveEvalAssertions(options.evalCase.assertions, evidence);
-    const graderFailure: EvalHarnessFailure | undefined = graded.failures.length === 0
-      ? undefined
-      : Object.freeze({
-        code: 'EVAL_GRADER_FAILED',
-        message: `Grading is incomplete: ${graded.failures.map((failure) => `${failure.id}: ${failure.message}`).join('; ')}`,
-        stage: 'grader',
-      });
+    const graderFailure = graderFailureFor(graded.failures);
 
     const rawArtifacts = [
       await options.writer.writeArtifactFile(`${trialId}/${evidenceArtifactName}`, `${stableJson(evidence)}\n`),

@@ -8,37 +8,10 @@ import { EvalService, EvalServiceError } from '../src/dev/eval-service.ts';
 import { evalCaseFromDraft } from '../src/eval/index.ts';
 import { EvalRunWriter } from '../src/eval/run-store.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
+import { withEvalRunStoreDurabilityTestHook } from './support/durability.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 
 const service = (root: string): EvalService => new EvalService({ projectRoot: root, targets: ['portable'] });
-
-type EvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write' | 'before-event-open' | 'before-event-write',
-  event: Readonly<{ readonly kind: string }>,
-  path: string,
-  journal: Readonly<{ close(): Promise<void>; writeFile(contents: string, options?: string): Promise<void> }> | undefined,
-) => void | Promise<void>;
-
-const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
-
-const withEvalRunStoreDurabilityTestHook = async <T>(
-  hook: EvalRunStoreDurabilityTestHook,
-  operation: () => Promise<T>,
-): Promise<T> => {
-  const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
-  const previous = hooks[evalRunStoreDurabilityTestHookKey];
-  const previousNodeEnvironment = process.env.NODE_ENV;
-  hooks[evalRunStoreDurabilityTestHookKey] = hook;
-  process.env.NODE_ENV = 'test';
-  try {
-    return await operation();
-  } finally {
-    if (previous === undefined) delete hooks[evalRunStoreDurabilityTestHookKey];
-    else hooks[evalRunStoreDurabilityTestHookKey] = previous;
-    if (previousNodeEnvironment === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = previousNodeEnvironment;
-  }
-};
 
 it('lists authored suites and their cases without exposing absolute filesystem paths', async () => {
   const project = await createProjectFixture();

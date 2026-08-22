@@ -5,8 +5,9 @@ import {
   explicitInvocationProvenancePattern,
   semanticGraderIdentityPattern,
 } from '../../../agent-bundle/src/eval/provenance.ts';
-import { CodedClientError, isRecord } from '../client-helpers.ts';
+import { CodedClientError } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { snapshotStrictJsonValue } from '../strict-json.ts';
 import {
   nonnegativeIntegerSchema,
   nonnegativeNumberSchema,
@@ -138,18 +139,13 @@ const comparisonSchema = z.strictObject({
 });
 const comparisonEnvelopeSchema = z.strictObject({ comparison: comparisonSchema });
 
-const frozenJson = (value: unknown): unknown => {
-  if (Array.isArray(value)) return Object.freeze(value.map(frozenJson));
-  if (isRecord(value)) {
-    return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, frozenJson(entry)])));
-  }
-  return value;
-};
-
 const comparisonResult = (value: unknown): EvalComparison => {
   const parsed = comparisonEnvelopeSchema.safeParse(value);
   if (!parsed.success) throw invalidResponse();
-  return frozenJson(parsed.data.comparison) as EvalComparison;
+  // The snapshot is a deep-frozen clone of the zod-validated comparison, so the
+  // widening below restates what safeParse already proved about its shape.
+  const frozen: unknown = snapshotStrictJsonValue(parsed.data.comparison);
+  return frozen as EvalComparison;
 };
 
 /** A typed, credential-memory-only browser client for the eval comparison route. */

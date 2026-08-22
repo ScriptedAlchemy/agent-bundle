@@ -105,7 +105,14 @@ const dataValue = (descriptor: PropertyDescriptor): unknown => {
   return descriptor.value;
 };
 
-/** Clones JSON-shaped values without reading untrusted property accessors or sharing mutable response data. */
+/**
+ * Clones JSON-shaped values without reading untrusted property accessors or sharing mutable response data.
+ *
+ * Deliberately not snapshotStrictJsonValue: hook simulation payloads may carry
+ * `undefined` members (zod `.optional()` output), and this clone must preserve
+ * each property's enumerability and the source object's null-or-standard
+ * prototype, all of which the strict JSON snapshot rejects or normalizes.
+ */
 export const deeplyFrozenHookValue = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
   if (value === undefined || value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
     return value;

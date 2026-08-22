@@ -29,6 +29,7 @@ import type {
 } from '../src/services/playground-service.ts';
 import { PlaygroundService } from '../src/services/playground-service.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
+import { eventuallyPasses } from './support/eventually.ts';
 
 const activeEpoch = Object.freeze({
   configDigest: 'config-sha256',
@@ -47,14 +48,8 @@ const currentStatus = (): ProjectStatus => Object.freeze({
   source: Object.freeze({ diagnostics: Object.freeze([]), state: 'ready' as const }),
 });
 
-const eventually = async (assertion: () => void): Promise<void> => {
-  let failure: unknown;
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    try { assertion(); return; } catch (error) { failure = error; }
-    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 2); });
-  }
-  throw failure;
-};
+const eventually = (assertion: () => void): Promise<void> =>
+  eventuallyPasses(assertion, { attempts: 25, delayMs: 2 });
 
 class RecordingTraceStore implements PlaygroundDurableTraceStore {
   readonly appended: PlaygroundEventInput[] = [];

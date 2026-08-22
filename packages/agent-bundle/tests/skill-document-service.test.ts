@@ -1,7 +1,5 @@
 import { mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtemp } from 'node:fs/promises';
 
 import { expect, it } from '@rstest/core';
 
@@ -10,6 +8,7 @@ import { EpochStore } from '../src/dev/epoch-store.ts';
 import { ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
 import { SkillDocumentService } from '../src/dev/skill-document-service.ts';
+import { createProjectFixture } from './helpers/project-fixture.ts';
 
 class TrackingEpochStore extends EpochStore {
   acquisitions = 0;
@@ -27,19 +26,16 @@ class TrackingEpochStore extends EpochStore {
   }
 }
 
-const createProject = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-skill-document-'));
-  const skill = join(root, 'skills', 'review');
-  await mkdir(join(skill, 'assets'), { recursive: true });
-  await Promise.all([
-    writeFile(join(root, 'agent-bundle.config.ts'), [
-      'export default {',
-      "  plugin: { name: 'skill-document-fixture', version: '1.0.0' },",
-      "  targets: ['portable'],",
-      '};',
-      '',
-    ].join('\n')),
-    writeFile(join(skill, 'SKILL.md'), [
+const createProject = async (): Promise<string> => (await createProjectFixture({
+  config: [
+    'export default {',
+    "  plugin: { name: 'skill-document-fixture', version: '1.0.0' },",
+    "  targets: ['portable'],",
+    '};',
+    '',
+  ].join('\n'),
+  files: {
+    'skills/review/SKILL.md': [
       '---',
       'name: review',
       'description: Reviews changed files',
@@ -48,13 +44,13 @@ const createProject = async (): Promise<string> => {
       '',
       'Read [the guide](guide.md) and ![the image](assets/pixel.bin).',
       '',
-    ].join('\n')),
-    writeFile(join(skill, 'guide.md'), '# Guide\n'),
-    writeFile(join(skill, 'assets', 'pixel.bin'), new Uint8Array([0, 255, 17, 9])),
-    writeFile(join(skill, 'assets', 'probe.html'), '<script>window.__skillResourceExecuted = true</script>\n'),
-  ]);
-  return root;
-};
+    ].join('\n'),
+    'skills/review/guide.md': '# Guide\n',
+    'skills/review/assets/pixel.bin': new Uint8Array([0, 255, 17, 9]),
+    'skills/review/assets/probe.html': '<script>window.__skillResourceExecuted = true</script>\n',
+  },
+  prefix: 'agent-bundle-skill-document-',
+})).root;
 
 it('serves parsed source documents and exact source resources by a model-owned Skill ID', async () => {
   const root = await createProject();

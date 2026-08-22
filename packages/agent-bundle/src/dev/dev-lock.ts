@@ -208,8 +208,11 @@ const removeIfOwned = async (storage: DevLockStorage, path: string, contents: st
   }
 };
 
-const yieldToFilesystem = async (): Promise<void> => {
-  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+const initialRecoveryRetryDelayMs = 25;
+const maximumRecoveryRetryDelayMs = 250;
+
+const sleep = async (delayMs: number): Promise<void> => {
+  await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, delayMs));
 };
 
 const recoveryContentsFor = (owner: DevLockOwner): string => `${stableJson({ owner })}\n`;
@@ -221,6 +224,7 @@ const acquireRecoveryGate = async (
   probeProcess: (pid: number) => boolean,
 ): Promise<string> => {
   const contents = recoveryContentsFor(owner);
+  let retryDelayMs = initialRecoveryRetryDelayMs;
   for (;;) {
     if (await writeCompleteExclusive(storage, recoveryPath, contents, owner.nonce)) return contents;
 
@@ -239,7 +243,9 @@ const acquireRecoveryGate = async (
       );
     }
     if (probeProcess(recovery.owner.pid)) {
-      await yieldToFilesystem();
+      // A live holder releases the gate on its own schedule; back off instead of busy-waiting.
+      await sleep(retryDelayMs);
+      retryDelayMs = Math.min(retryDelayMs * 2, maximumRecoveryRetryDelayMs);
       continue;
     }
     await removeIfOwned(storage, recoveryPath, currentContents);

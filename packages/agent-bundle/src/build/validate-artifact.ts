@@ -6,6 +6,7 @@ import type {
   TargetArtifactDocumentIssue,
   TargetArtifactDocumentValidator,
 } from '../adapters/types.ts';
+import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { isRecord } from '../core/strict-json.ts';
@@ -81,7 +82,7 @@ const changedArtifactPaths = (
 const localMcpArgument = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   const relative = value.replace(/^\.\//, '');
-  return /^mcp\/mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs$/u.test(relative) ? relative : undefined;
+  return mcpEntryAliasPattern.test(relative) ? relative : undefined;
 };
 
 const localMcpPaths = (document: unknown): readonly string[] => {

@@ -261,7 +261,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
         },
         root: leftRoot,
         sourceInputs: left.projectContext?.sourceInputs ?? [],
-      })).toThrow(/(?:JSON values|cyclic values|plain JSON objects)/i);
+      })).toThrow(/JSON (?:values|objects)/i);
     }
   } finally {
     await Promise.all([

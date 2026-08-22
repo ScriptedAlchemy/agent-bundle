@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
+import { escapeRegExp } from '../core/strings.ts';
 
 // Pure parsing and opt-in probing contract for subscription-backed native host CLIs.
 export type NativeHost = 'claude' | 'codex';
@@ -143,8 +144,6 @@ const compareSemanticVersions = (left: SemanticVersion, right: SemanticVersion):
   return comparePrereleases(left.prerelease, right.prerelease);
 };
 
-const escapeRegularExpression = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-
 const sameStringArrays = (left: readonly string[], right: readonly string[]): boolean =>
   left.length === right.length && left.every((entry, index) => entry === right[index]);
 
@@ -177,7 +176,7 @@ const declaredCommands = (helpOutput: string): ReadonlySet<string> => Object.fre
 ));
 
 const hasExactToken = (value: string, token: string): boolean =>
-  new RegExp(`(?:^|[^A-Za-z0-9_-])${escapeRegularExpression(token)}(?![A-Za-z0-9_-])`, 'u').test(value);
+  new RegExp(`(?:^|[^A-Za-z0-9_-])${escapeRegExp(token)}(?![A-Za-z0-9_-])`, 'u').test(value);
 
 const missingHelpRequirement = (probe: HostContractHelpProbe, output: string): { readonly label: string; readonly values: readonly string[] } | undefined => {
   const options = (probe.requiredOptions ?? []).filter((option) => !declaredOptions(output).has(option));

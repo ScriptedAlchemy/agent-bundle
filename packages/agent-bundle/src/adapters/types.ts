@@ -1,8 +1,12 @@
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
+
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { snapshotStrictJsonValue } from '../core/strict-json.ts';
-import type {
-  AgentBundleConfig,
-  NormalizedPlugin,
+import {
+  pathTokens,
+  type AgentBundleConfig,
+  type NormalizedPlugin,
 } from '../core/types.ts';
 import type { TargetHookContract, TargetHookEntry } from './hook-contract.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
@@ -52,6 +56,34 @@ export interface TargetSchemaDescriptor {
   readonly revision: string;
   readonly sha256: string;
 }
+
+/** ajv-formats ships CJS-flavored typings; this single cast localizes the mismatch. */
+const installFormats = addFormats as unknown as (target: Ajv2020) => void;
+
+/** The one AJV configuration every adapter's pinned schema validators share. */
+export const createAdapterValidator = (): Ajv2020 => {
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  return validator;
+};
+
+/** Sorted metadata schema descriptors derived from a target's pinned provenance document. */
+export const schemaDescriptorsFrom = (
+  provenance: Readonly<{ readonly schemas: Readonly<Record<string, { readonly sha256: string }>> }>,
+  revision: string,
+): readonly TargetSchemaDescriptor[] => Object.freeze(
+  Object.entries(provenance.schemas)
+    .map(([fileName, schema]) => Object.freeze({
+      name: fileName.replace(/\.schema\.json$/, ''),
+      revision,
+      sha256: schema.sha256,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name)),
+);
+
+/** True when a value embeds any canonical Agent Bundle path token. */
+export const hasPathToken = (value: string): boolean =>
+  value.includes(pathTokens.pluginRoot) || value.includes(pathTokens.pluginData) || value.includes(pathTokens.workspaceRoot);
 
 export interface TargetAdapterMetadata {
   readonly adapterRevision: string;

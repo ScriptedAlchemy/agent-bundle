@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,38 +13,28 @@ import { ProjectService } from '../src/dev/project-service.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
+import { sha256 } from './support/sha256.ts';
 
-const sha256 = (value: string | Uint8Array): string =>
-  createHash('sha256').update(value).digest('hex');
-
-const createProject = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-service-'));
-  await mkdir(join(root, 'skills', 'review'), { recursive: true });
-  await Promise.all([
-    writeFile(
-      join(root, 'agent-bundle.config.ts'),
-      [
-        'export default {',
-        "  plugin: { name: 'artifact-service-fixture', version: '1.0.0' },",
-        "  targets: ['portable'],",
-        '};',
-        '',
-      ].join('\n'),
-    ),
-    writeFile(
-      join(root, 'skills', 'review', 'SKILL.md'),
-      [
-        '---',
-        'name: review',
-        'description: Reviews changes',
-        '---',
-        'Review the changed files.',
-        '',
-      ].join('\n'),
-    ),
-  ]);
-  return root;
-};
+const createProject = async (): Promise<string> => (await createProjectFixture({
+  config: [
+    'export default {',
+    "  plugin: { name: 'artifact-service-fixture', version: '1.0.0' },",
+    "  targets: ['portable'],",
+    '};',
+    '',
+  ].join('\n'),
+  files: {
+    'skills/review/SKILL.md': [
+      '---',
+      'name: review',
+      'description: Reviews changes',
+      '---',
+      'Review the changed files.',
+      '',
+    ].join('\n'),
+  },
+  prefix: 'agent-bundle-artifact-service-',
+})).root;
 
 class RejectingStagingCloseStore extends EpochStore {
   override async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {

@@ -5,8 +5,8 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { mapConcurrent, serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { CodedError, isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
-import { isInside } from '../core/paths.ts';
-import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isInside, isSafePathSegment } from '../core/paths.ts';
+import { hasExactOwnKeys, isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 
 export interface EpochStoreOptions {
@@ -134,11 +134,6 @@ const epochReferenceCounts = new Map<string, number>();
 const epochLeaseQueues = new Map<string, ReturnType<typeof serialQueue>>();
 const syncTreeConcurrency = 16;
 
-const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-};
-
 const sameActiveEpochPointer = (left: ActiveEpochPointerStat, right: ActiveEpochPointerStat): boolean =>
   left.ctimeMs === right.ctimeMs && left.ino === right.ino && left.mtimeMs === right.mtimeMs && left.size === right.size;
 
@@ -159,9 +154,6 @@ const pathExists = async (path: string): Promise<boolean> => {
     throw error;
   }
 };
-
-const isSafePathSegment = (value: string): boolean =>
-  /^[a-z0-9][a-z0-9._-]*$/iu.test(value) && value !== '.' && value !== '..';
 
 const assertSafeEpochId = (value: string): void => {
   if (!isSafePathSegment(value)) {
@@ -782,7 +774,16 @@ export class EpochStore {
   }
 
   async #validateActiveEpoch(epoch: ArtifactEpoch): Promise<void> {
-    const activeMetadata = await this.#readEpochMetadata(epoch.id);
+    let activeMetadata: EpochMetadata;
+    try {
+      activeMetadata = await this.#readEpochMetadata(epoch.id);
+    } catch (error) {
+      if (error instanceof EpochStoreError && error.code === 'EPOCH_NOT_FOUND') {
+        // An active pointer at an epoch without persisted metadata is corrupt active metadata.
+        throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Active epoch metadata references an epoch without persisted metadata.');
+      }
+      throw error;
+    }
     if (stableJson(activeMetadata.epoch) !== stableJson(epoch)) {
       throw new EpochStoreError(
         'EPOCH_METADATA_INVALID',
@@ -937,11 +938,18 @@ export class EpochStore {
   }
 
   async #readEpochMetadata(epochId: string): Promise<EpochMetadata> {
+    let bytes: string;
+    try {
+      bytes = await readFile(this.#metadataPathFor(epochId), 'utf8');
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        throw new EpochStoreError('EPOCH_NOT_FOUND', `Epoch ${JSON.stringify(epochId)} metadata does not exist.`);
+      }
+      throw error;
+    }
     let metadata: EpochMetadata | undefined;
     try {
-      metadata = this.#parseMetadata(
-        parseJsonWithoutDuplicateKeys(await readFile(this.#metadataPathFor(epochId), 'utf8')),
-      );
+      metadata = this.#parseMetadata(parseJsonWithoutDuplicateKeys(bytes));
     } catch {
       throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Epoch metadata cannot be parsed as JSON.');
     }

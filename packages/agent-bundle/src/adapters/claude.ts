@@ -1,6 +1,3 @@
-import { Ajv2020 } from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
-
 import { createTargetDiagnostics } from './diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -24,9 +21,9 @@ import {
   encodeNativeHookPlaygroundInput,
   encodeNativeHookPlaygroundOutput,
   nativeHookWrapperSource,
-  nativeHooksFor,
   planHooks,
   readStandardNativeHookCommands,
+  validatedNativeHookDocument,
   type TargetHookContract,
 } from './hook-contract.ts';
 import schemaProvenance from './schemas/claude/PROVENANCE.json' with { type: 'json' };
@@ -35,6 +32,9 @@ import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { 
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
 import {
+  createAdapterValidator,
+  hasPathToken,
+  schemaDescriptorsFrom,
   sortedEntries,
   sourceInputs,
   validateJsonSchemaDocument,
@@ -55,9 +55,7 @@ declare module '../core/types.ts' {
 }
 
 const claudeName = 'claude';
-const installFormats = addFormats as unknown as (target: Ajv2020) => void;
-const validator = new Ajv2020({ allErrors: true, strict: false });
-installFormats(validator);
+const validator = createAdapterValidator();
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
@@ -78,15 +76,7 @@ const metadata = Object.freeze({
   capabilityRevision: capabilityTable.observedCliVersion,
   capabilitySha256: 'ebab02950c9b5b82f9eed7210b8b12b0ba11dc6271d1e93155bd25a2b42377c3',
   observedVersion: capabilityTable.observedCliVersion,
-  schemas: Object.freeze(
-    Object.entries(schemaProvenance.schemas)
-      .map(([fileName, schema]) => Object.freeze({
-        name: fileName.replace(/\.schema\.json$/, ''),
-        revision: schemaProvenance.observedCliVersion,
-        sha256: schema.sha256,
-      }))
-      .sort((left, right) => left.name.localeCompare(right.name)),
-  ),
+  schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
 
 const artifactValidation = Object.freeze({
@@ -126,14 +116,6 @@ const expandClaudeToken = (value: string): string => value
   .replaceAll(pathTokens.pluginRoot, '${CLAUDE_PLUGIN_ROOT}')
   .replaceAll(pathTokens.pluginData, '${CLAUDE_PLUGIN_DATA}')
   .replaceAll(pathTokens.workspaceRoot, '${CLAUDE_PROJECT_DIR}');
-
-const hasPathToken = (value: string): boolean =>
-  value.includes(pathTokens.pluginRoot) || value.includes(pathTokens.pluginData) || value.includes(pathTokens.workspaceRoot);
-
-const headerKeyDiagnostic = (key: string): Diagnostic | undefined =>
-  hasPathToken(key)
-    ? errorDiagnostic('claude.mcp.token.headers.key', `Claude MCP header key "${key}" cannot use a path token.`)
-    : undefined;
 
 const planMcpServer = (
   server: NormalizedMcpServer,
@@ -178,8 +160,12 @@ const planMcpServer = (
   const headers = server.headers === undefined
     ? undefined
     : Object.fromEntries(Object.entries(server.headers).map(([key, value]) => {
-        const diagnostic = headerKeyDiagnostic(key);
-        if (diagnostic !== undefined) diagnostics.push(diagnostic);
+        if (hasPathToken(key)) {
+          diagnostics.push(errorDiagnostic(
+            'claude.mcp.token.headers.key',
+            `Claude MCP header key "${key}" cannot use a path token.`,
+          ));
+        }
         return [key, expandClaudeToken(value)];
       }));
   if (diagnostics.length > 0) return { diagnostics };
@@ -203,32 +189,17 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     if (serverPlan.value !== undefined) servers[server.name] = serverPlan.value;
   }
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
-  if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
+  const mcpValid = mcp !== undefined && validateMcp(mcp);
+  if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
   const generatedHooks = planHooks(model, claudeName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
   }
-  const nativeHooks = nativeHooksFor(model, claudeName);
-  let nativeHookDocument: Record<string, unknown> | undefined;
-  if (nativeHooks?.issue === 'missing' || nativeHooks?.issue === 'parse') {
-    diagnostics.push(errorDiagnostic(
-      `claude.native-hooks.${nativeHooks.issue}`,
-      `Claude native hooks file ${JSON.stringify(nativeHooks.source)} could not be ${nativeHooks.issue === 'missing' ? 'found' : 'parsed'}.`,
-    ));
-  } else if (nativeHooks?.document !== undefined) {
-    if (!validateHooks(nativeHooks.document)) {
-      diagnostics.push(errorDiagnostic(
-        'claude.native-hooks.schema',
-        `Claude native hooks file ${JSON.stringify(nativeHooks.source)} is invalid: ${(validateHooks.errors ?? [])
-          .map((error) => `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`)
-          .join('; ') || 'schema validation failed'}.`,
-      ));
-    } else {
-      nativeHookDocument = nativeHooks.document as Record<string, unknown>;
-    }
-  }
-  const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHookDocument);
+  const nativeHooks = validatedNativeHookDocument(model, claudeName, 'Claude', validateHooks, errorDiagnostic);
+  diagnostics.push(...nativeHooks.diagnostics);
+  const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHooks.document);
+  const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
 
   const plugin = {
     author: { name: model.metadata.name },
@@ -250,8 +221,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       version: model.metadata.version,
     }],
   };
+  const marketplaceValid = marketplace !== undefined && validateMarketplace(marketplace);
   if (marketplace !== undefined) {
-    diagnostics.push(...schemaDiagnostics('marketplace', validateMarketplace(marketplace), validateMarketplace.errors));
+    diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
   }
 
   const targetSourceInputs = model.targets
@@ -283,7 +255,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       ...skillSourceInputs,
     ),
   }];
-  if (mcp !== undefined && validateMcp(mcp)) {
+  if (mcp !== undefined && mcpValid) {
     entries.push({
       content: `${stableJson(mcp)}\n`,
       kind: 'write',
@@ -291,7 +263,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       sourceInputs: sourceInputs(...targetSourceInputs, ...mcpSourceInputs),
     });
   }
-  if (hookDocument !== undefined && validateHooks(hookDocument)) {
+  if (hookDocument !== undefined && hookDocumentValid) {
     entries.push({
       content: `${stableJson(hookDocument)}\n`,
       kind: 'write',
@@ -303,7 +275,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       ),
     });
   }
-  if (marketplace !== undefined && validateMarketplace(marketplace)) {
+  if (marketplace !== undefined && marketplaceValid) {
     entries.push({
       content: `${stableJson(marketplace)}\n`,
       kind: 'write',
@@ -338,9 +310,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     entries: sortedEntries(entries),
-    hookEntries: hookDocument !== undefined && validateHooks(hookDocument)
-      ? generatedHooks.hookEntries
-      : Object.freeze([]),
+    hookEntries: hookDocumentValid ? generatedHooks.hookEntries : Object.freeze([]),
   });
 };
 

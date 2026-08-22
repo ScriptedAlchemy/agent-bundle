@@ -115,9 +115,7 @@ export const emitPlanEntries = async (options: {
   }));
   assertUniqueArtifactDestinations(planned.map(({ destination }) => destination));
 
-  for (const { destination, entry } of planned) {
-    await writeEntry(destination, entry);
-  }
+  await Promise.all(planned.map(({ destination, entry }) => writeEntry(destination, entry)));
 };
 
 const filesystemEntryKind = (metadata: Awaited<ReturnType<typeof lstat>>): ArtifactFilesystemEntryKind => {
@@ -143,37 +141,38 @@ const inspectArtifactDirectory = async (
   }
 
   const directory = await readdir(directoryPath);
-  const files: ArtifactFile[] = [];
-  const entries: ArtifactFilesystemEntry[] = [];
+  // Entries are inspected concurrently; collection order stays the sorted-name order.
+  const inspections = await Promise.all(directory
+    .sort((left, right) => left.localeCompare(right))
+    .map(async (name): Promise<ArtifactFilesystemSnapshot> => {
+      const path = join(prefix, name);
+      const normalizedPath = normalizeRelativePath(path);
+      const absolutePath = join(root, path);
+      const metadata = await lstat(absolutePath);
+      const kind = filesystemEntryKind(metadata);
+      const entry: ArtifactFilesystemEntry = { kind, path: normalizedPath };
 
-  for (const name of directory.sort((left, right) => left.localeCompare(right))) {
-    const path = join(prefix, name);
-    const normalizedPath = normalizeRelativePath(path);
-    const absolutePath = join(root, path);
-    const metadata = await lstat(absolutePath);
-    const kind = filesystemEntryKind(metadata);
-    entries.push({ kind, path: normalizedPath });
+      if (kind === 'directory') {
+        const nested = await inspectArtifactDirectory(root, path);
+        return { entries: [entry, ...nested.entries], files: nested.files };
+      }
+      if (kind !== 'file') return { entries: [entry], files: [] };
 
-    if (kind === 'directory') {
-      const nested = await inspectArtifactDirectory(root, path);
-      entries.push(...nested.entries);
-      files.push(...nested.files);
-      continue;
-    }
-    if (kind !== 'file') continue;
-
-    const contents = await readFile(absolutePath);
-    files.push({
-      bytes: contents.byteLength,
-      mode: metadata.mode & 0o777,
-      path: normalizedPath,
-      sha256: sha256Hex(contents),
-    });
-  }
+      const contents = await readFile(absolutePath);
+      return {
+        entries: [entry],
+        files: [{
+          bytes: contents.byteLength,
+          mode: metadata.mode & 0o777,
+          path: normalizedPath,
+          sha256: sha256Hex(contents),
+        }],
+      };
+    }));
 
   return {
-    entries: Object.freeze(entries),
-    files: Object.freeze(files),
+    entries: Object.freeze(inspections.flatMap((inspection) => inspection.entries)),
+    files: Object.freeze(inspections.flatMap((inspection) => inspection.files)),
   };
 };
 

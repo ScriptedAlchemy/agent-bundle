@@ -8,6 +8,8 @@ import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
+import { closeServer } from './support/http.ts';
+
 const workspaceRoot = process.cwd();
 const playgroundPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'playground', 'playground-page.tsx');
 const browserTimeout = 8_000;
@@ -25,12 +27,6 @@ const listen = async (server: Server): Promise<string> => {
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('Playground client-scope fixture did not receive a TCP address.');
   return `http://127.0.0.1:${address.port}`;
-};
-
-const closeServer = async (server: Server): Promise<void> => {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => error === undefined ? resolve() : reject(error));
-  });
 };
 
 const mountedPlaygroundClientScopeFixture = async (): Promise<{ readonly close: () => Promise<void>; readonly url: string }> => {

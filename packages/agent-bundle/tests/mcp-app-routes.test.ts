@@ -1,6 +1,3 @@
-import { createServer, type IncomingMessage } from 'node:http';
-import type { AddressInfo } from 'node:net';
-
 import { expect, it } from '@rstest/core';
 
 import {
@@ -8,28 +5,12 @@ import {
   type McpAppRoutePreviewService,
 } from '../src/dev/mcp-app-routes.ts';
 import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-app-bridge.ts';
+import { eventually } from './support/eventually.ts';
+import { authorize, originHeaders as headers, startRoutes as startRouteServer, type StartedRoutes as StartedRouteServer } from './support/route-harness.ts';
 
-interface StartedRoutes {
-  readonly close: () => Promise<void>;
-  readonly routes: McpAppRoutes;
+interface StartedRoutes extends StartedRouteServer<McpAppRoutes> {
   readonly service: RecordingPreviewService;
-  readonly url: string;
 }
-
-const routeError = (code: string, message: string, status: number): Error & {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-} => Object.assign(new Error(message), { code, message, status });
-
-const authorize = (request: IncomingMessage): void => {
-  if (request.headers.origin !== 'http://127.0.0.1:4567') {
-    throw routeError('AB8003', 'Request origin is not this foreground server.', 403);
-  }
-  if (request.headers['x-agent-bundle-session'] !== 'test-session-token') {
-    throw routeError('AB8004', 'A valid same-session token is required.', 403);
-  }
-};
 
 class RecordingPreviewService implements McpAppRoutePreviewService {
   readonly calls: unknown[] = [];
@@ -126,36 +107,9 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
 
 const startRoutes = async (): Promise<StartedRoutes> => {
   const service = new RecordingPreviewService();
-  const routes = new McpAppRoutes({ authorize, service });
-  const server = createServer((request, response) => {
-    void routes.handle(request, response).then((handled) => {
-      if (!handled) response.writeHead(404).end();
-    }).catch((error: unknown) => {
-      const diagnostic = error as Partial<{ code: string; message: string; status: number }>;
-      response.writeHead(diagnostic.status ?? 500, { 'content-type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ diagnostic: {
-        code: diagnostic.code ?? 'AB8007',
-        message: diagnostic.message ?? 'Request could not be completed.',
-      } }));
-    });
-  });
-  await new Promise<void>((resolvePromise) => server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
-  const address = server.address() as AddressInfo;
-  return Object.freeze({
-    close: async () => new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
-      if (error === undefined) resolvePromise();
-      else rejectPromise(error);
-    })),
-    routes,
-    service,
-    url: `http://127.0.0.1:${address.port}`,
-  });
+  const started = await startRouteServer(new McpAppRoutes({ authorize, service }), { closeMode: 'server-only' });
+  return Object.freeze({ ...started, service });
 };
-
-const headers = (): Readonly<Record<string, string>> => ({
-  origin: 'http://127.0.0.1:4567',
-  'x-agent-bundle-session': 'test-session-token',
-});
 
 const host = Object.freeze({
   availableDisplayModes: ['inline'],
@@ -179,14 +133,6 @@ const createBody = () => ({
   result: { content: [{ text: 'Sunny', type: 'text' }] },
   toolName: 'show-weather',
 });
-
-const eventually = async (predicate: () => boolean, milliseconds = 250): Promise<void> => {
-  const deadline = Date.now() + milliseconds;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out after ${milliseconds}ms.`);
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
-  }
-};
 
 it('leaves unrelated MCP paths for the session route handler', async () => {
   const started = await startRoutes();

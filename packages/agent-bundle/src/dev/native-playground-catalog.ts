@@ -2,7 +2,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 
 import { digest } from '../core/digest.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
-import { isJsonRecord as isRecord, type JsonValue } from '../core/strict-json.ts';
+import { hasExactOwnKeys, isJsonRecord as isRecord, type JsonValue } from '../core/strict-json.ts';
 import type { EvalFixturePlan } from '../eval/fixtures.ts';
 import { normalizeEvalCase } from '../eval/suite.ts';
 import type { EvalCase } from '../eval/types.ts';
@@ -135,11 +135,8 @@ export const selectionKey = (selection: NativePlaygroundCatalogSelection): strin
 const nonemptySnapshotText = (value: JsonValue | undefined): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= maximumSnapshotStringLength;
 
-export const hasExactKeys = (value: Readonly<Record<string, JsonValue>>, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-};
+export const hasExactKeys = (value: Readonly<Record<string, JsonValue>>, keys: readonly string[]): boolean =>
+  hasExactOwnKeys(value, keys);
 
 export const withinCatalogSnapshotNodeBudget = (root: unknown): boolean => {
   let remaining = maximumCatalogSnapshotNodes;

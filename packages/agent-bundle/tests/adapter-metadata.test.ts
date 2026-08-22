@@ -1,11 +1,8 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { expect, it } from '@rstest/core';
 
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
-
-const sha256 = (contents: Uint8Array): string =>
-  createHash('sha256').update(contents).digest('hex');
+import { sha256 } from './support/sha256.ts';
 
 const validMetadata = () => ({
   adapterRevision: '1.0.0',

@@ -18,6 +18,7 @@ import {
   prepareEvalArtifactDisplay,
   startEvalRun,
 } from '../src/evals/evals-page.tsx';
+import { makeRunRecord, makeTrialRecord } from './support/eval-records.ts';
 
 const targetDigest = 'c'.repeat(64);
 
@@ -50,18 +51,9 @@ const listing: EvalSuiteListing = {
   }],
 };
 
-const runRecord: EvalRunRecord = {
-  agentBundleVersion: '0.1.0',
-  artifact: { manifestPath: 'agent-bundle.manifest.json', source: 'run-owned', targetDigests: { portable: targetDigest } },
-  completedAt: '2026-08-17T00:00:02.000Z',
-  createdAt: '2026-08-17T00:00:00.000Z',
-  harness: 'deterministic',
-  id: '20260817t000000000z-abcdef01',
-  projectRevision: 'd'.repeat(64),
-  summary: { cases: 2, fail: 1, inconclusive: 1, pass: 1, trials: 3 },
-};
+const runRecord: EvalRunRecord = makeRunRecord();
 
-const trial = (overrides: Partial<EvalTrialRecord>): EvalTrialRecord => ({
+const trial = (overrides: Partial<EvalTrialRecord>): EvalTrialRecord => makeTrialRecord({
   assertions: [{
     assertionId: 'outcome:0123456789abcdef',
     detail: 'The fixture recorded risk high.',
@@ -69,31 +61,11 @@ const trial = (overrides: Partial<EvalTrialRecord>): EvalTrialRecord => ({
     kind: 'outcome',
     outcome: 'pass',
   }],
-  caseDigest: 'a'.repeat(64),
-  caseId: 'reads-result',
-  completedAt: '2026-08-17T00:00:01.000Z',
-  durationMs: 12,
-  evidence: {
-    mcp: { calls: [], level: 'unavailable' },
-    process: { level: 'unavailable', timedOut: false },
-    scripts: { level: 'observed', results: {} },
-    skillActivation: { activated: [], level: 'unavailable' },
-  },
-  fixtureDigest: 'b'.repeat(64),
-  host: 'portable',
-  id: 'portable-1',
-  model: 'deterministic',
-  outcome: 'pass',
-  prompt: 'Report the highest-risk regression.',
   provenance: {
     hostCliVersion: '2.1.232',
     invocation: { mode: 'automatic' },
     semanticGrader: null,
   },
-  rawArtifacts: ['artifacts/portable-1/evidence.json'],
-  startedAt: '2026-08-17T00:00:00.500Z',
-  targetDigest,
-  trialIndex: 0,
   usage: { inputTokens: 9, outputTokens: 3 },
   ...overrides,
 });

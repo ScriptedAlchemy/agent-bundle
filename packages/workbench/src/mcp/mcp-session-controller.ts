@@ -7,6 +7,7 @@ import type {
   McpSessionTraceReplayGap,
 } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
 import { isRecord } from '../client-helpers.ts';
+import { readNdjsonByteFrames } from '../ndjson.ts';
 import { AgentBundleRemoteTransport } from './agent-bundle-remote-transport.ts';
 import {
   invocationHistoryFor,
@@ -208,6 +209,9 @@ const connectionFor = (connection: McpRouteConnection): McpBrowserSessionConnect
 
 const invalidTrace = (): McpSessionControllerError =>
   new McpSessionControllerError('Foreground MCP trace stream contained an invalid entry.');
+
+// Matches the foreground MCP session route's per-subscriber stream byte budget.
+const maximumTraceFrameBytes = 256 * 1024;
 
 const validCursor = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
@@ -573,18 +577,18 @@ export class McpSessionController {
       if (response.body === null) throw new McpSessionControllerError('Foreground MCP trace stream did not include a body.');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffered = '';
+      const receiveLine = (bytes: Uint8Array): void => {
+        const line = decoder.decode(bytes);
+        if (line.length > 0) this.#receiveTrace(traceEntry(JSON.parse(line)), generation);
+      };
       try {
-        while (!abort.signal.aborted) {
-          const next = await reader.read();
-          if (next.done) break;
-          buffered += decoder.decode(next.value, { stream: true });
-          const lines = buffered.split('\n');
-          buffered = lines.pop() ?? '';
-          for (const line of lines) if (line.length > 0) this.#receiveTrace(traceEntry(JSON.parse(line)), generation);
-        }
-        buffered += decoder.decode();
-        if (buffered.length > 0) this.#receiveTrace(traceEntry(JSON.parse(buffered)), generation);
+        await readNdjsonByteFrames(reader, {
+          maxFrameBytes: maximumTraceFrameBytes,
+          onFrame: receiveLine,
+          onIncomplete: receiveLine,
+          onLimitExceeded: () => { throw invalidTrace(); },
+          signal: abort.signal,
+        });
       } finally {
         reader.releaseLock();
       }

@@ -5,6 +5,7 @@ import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import type { ServedSkillDocument, SkillDocumentTree } from '../../agent-bundle/src/dev/skill-document-service.ts';
 
 import type { EvalClient } from './evals/eval-client.ts';
+import { activeEpochFor } from './overview-model.ts';
 import { SkillClient, SkillClientError } from './skill-client.ts';
 import { SkillMarkdown } from './skill-markdown.tsx';
 import { skillEvalCoverageFor, type SkillEvalCoverageState } from './skills-eval-coverage.ts';
@@ -103,9 +104,6 @@ const EvalCoverage = ({ coverage }: { readonly coverage: SkillEvalCoverageState 
 );
 
 const errorMessage = (error: unknown): string => messageFrom(error, 'Skill documents could not be loaded.');
-
-const artifactEpoch = (status: ProjectStatus) =>
-  status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
 
 const nextTab = <Tab extends string>(tabs: readonly Tab[], current: Tab, event: React.KeyboardEvent<HTMLButtonElement>): Tab | undefined => {
   const index = tabs.indexOf(current);
@@ -306,7 +304,7 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
   const [selectedIds, setSelectedIds] = useState<Partial<Record<SkillDocumentKind, string>>>({});
   const [suitesState, setSuitesState] = useState<SuitesState>({ state: 'loading' });
   const [view, setView] = useState<SkillView>('rendered');
-  const epoch = artifactEpoch(status);
+  const epoch = activeEpochFor(status);
   const targetNames = useMemo(() => Object.keys(epoch?.targetDigests ?? {}).sort((left, right) => left.localeCompare(right)), [epoch]);
   const [target, setTarget] = useState<string>();
   const [generatedTree, setGeneratedTree] = useState<GeneratedTreeState>(() => unavailableTree('No artifact epoch is active.'));

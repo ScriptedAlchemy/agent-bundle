@@ -9,7 +9,7 @@ import { CodedError, isErrno } from '../core/errors.ts';
 import { sameFile, isInsideOrEqual } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { defaultEvalRunsDir } from './config.ts';
-import { EvalRunStoreError } from './errors.ts';
+import { EvalRunStoreError, storeError } from './errors.ts';
 import {
   maximumTrialRecordBytes,
   mintRunId,
@@ -24,7 +24,6 @@ import {
   parseTrialRecord,
   requireRunsDir,
   requireSafeRelativePath,
-  requireSafeSegment,
   safeSegment,
 } from './run-store-codec.ts';
 import type {
@@ -89,10 +88,13 @@ type EvalRunStoreDurabilityTestHook = (
 ) => void | Promise<void>;
 const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
 
-const storeError = (
-  code: ConstructorParameters<typeof EvalRunStoreError>[0],
-  message: string,
-): EvalRunStoreError => new EvalRunStoreError(code, message);
+/** A caller-requested run id fails as invalid input, distinct from a corrupt or unwritable record. */
+const requireRequestedRunId = (value: string): string => {
+  if (!safeSegment.test(value)) {
+    throw storeError('EVAL_RUN_ID_INVALID', 'Eval run id must be a path-safe identifier.');
+  }
+  return value;
+};
 
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
 const runEvalRunStoreDurabilityTestHook = async (
@@ -418,7 +420,7 @@ export const createEvalRun = async (options: CreateEvalRunOptions): Promise<Eval
   const root = runsRoot(input);
   const id = input.runId === undefined
     ? mintRunId(createdAt)
-    : requireSafeSegment(input.runId, 'Eval run id');
+    : requireRequestedRunId(input.runId);
   const directory = join(root, id);
   const probeProcess = input.probeProcess ?? isProcessRunning;
 

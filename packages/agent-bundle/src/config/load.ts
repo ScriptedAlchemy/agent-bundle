@@ -1,8 +1,9 @@
 import { realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 
 import { loadConfig as loadRstackConfig } from '@rstackjs/load-config';
 
+import { isInsideOrEqual } from '../core/paths.ts';
 import type {
   AgentBundleConfig,
   ConfigFactoryContext,
@@ -30,12 +31,7 @@ const isConfig = (value: unknown): value is AgentBundleConfig =>
 const assertInsideProjectRoot = (root: string, candidate: string): string => {
   const projectRoot = resolve(root);
   const resolvedCandidate = resolve(candidate);
-  const projectRelative = relative(projectRoot, resolvedCandidate);
-  if (
-    projectRelative === '..' ||
-    projectRelative.startsWith(`..${sep}`) ||
-    isAbsolute(projectRelative)
-  ) {
+  if (!isInsideOrEqual(projectRoot, resolvedCandidate)) {
     throw new RangeError(
       `Configuration path ${JSON.stringify(resolvedCandidate)} is outside project root ${JSON.stringify(projectRoot)}.`,
     );

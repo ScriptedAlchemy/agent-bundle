@@ -3,6 +3,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/client';
 
 import { AgentBundleRemoteTransport } from '../src/mcp/agent-bundle-remote-transport.ts';
 import { McpRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { eventually } from './support/async.ts';
 
 interface RecordedRequest {
   readonly body: string | undefined;
@@ -62,14 +63,6 @@ const cancellableStream = (): Readonly<{ readonly cancelled: () => boolean; read
       },
     }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } }),
   });
-};
-
-const eventually = async (predicate: () => boolean, timeout = 300): Promise<void> => {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeout}ms.`);
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 1));
-  }
 };
 
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' });

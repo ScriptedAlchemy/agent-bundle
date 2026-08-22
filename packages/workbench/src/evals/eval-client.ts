@@ -10,7 +10,7 @@ import type { JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
 import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
-import { readNdjsonByteFrames } from '../ndjson.ts';
+import { abortableNdjsonStream, readNdjsonByteFrames } from '../ndjson.ts';
 import {
   nonnegativeIntegerSchema,
   positiveIntegerSchema,
@@ -103,7 +103,7 @@ const suiteSchema = z.strictObject({
   name: textSchema,
   sourcePath: textSchema,
 });
-const suiteListingSchema = z.strictObject({
+const suiteListingSchema: z.ZodType<EvalSuiteListing> = z.strictObject({
   diagnostics: z.array(diagnosticSchema),
   suites: z.array(suiteSchema),
 });
@@ -119,7 +119,7 @@ const runSummarySchema = z.strictObject({
   pass: nonnegativeIntegerSchema,
   trials: nonnegativeIntegerSchema,
 });
-const runRecordSchema = z.strictObject({
+const runRecordSchema: z.ZodType<EvalRunRecord> = z.strictObject({
   agentBundleVersion: textSchema,
   artifact: artifactBindingSchema,
   completedAt: timestampSchema.optional(),
@@ -226,23 +226,33 @@ const caseAggregateSchema = z.strictObject({
   targetDigest: digestSchema,
   trials: nonnegativeIntegerSchema,
 });
-const runResultSchema = z.strictObject({
+const runResultSchema: z.ZodType<EvalRunResult> = z.strictObject({
   aggregates: z.array(caseAggregateSchema),
   diagnostics: z.array(diagnosticSchema),
   run: runRecordSchema,
   trials: z.array(trialRecordSchema),
 });
-const conforms = (schema: z.ZodType, value: unknown): boolean => schema.safeParse(value).success;
+const runEventSchema: z.ZodType<EvalRunEvent> = z.strictObject({
+  kind: textSchema.min(1).max(512),
+  payload: z.json(),
+  sequence: positiveIntegerSchema,
+  timestamp: timestampSchema,
+});
+const runRecordListSchema = z.array(runRecordSchema);
 
 const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalidResponse);
 
+const parseOrInvalid = <Result>(schema: z.ZodType<Result>, value: unknown): Result => {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw invalidResponse();
+  return parsed.data;
+};
+
+// Returns the caller's already-deep-frozen snapshot (not zod's unfrozen clone)
+// so replayed events keep their immutability; safeParse proves the shape.
 const eventFor = (value: unknown): EvalRunEvent => {
-  if (!exactKeys(value, ['kind', 'payload', 'sequence', 'timestamp']) ||
-    typeof value.kind !== 'string' || value.kind.length === 0 || value.kind.length > 512 ||
-    !safeInteger(value.sequence, 1) || !isIsoTimestamp(value.timestamp)) {
-    throw invalidResponse();
-  }
-  return value as unknown as EvalRunEvent;
+  if (!runEventSchema.safeParse(value).success) throw invalidResponse();
+  return value as EvalRunEvent;
 };
 
 const replayFor = (value: unknown, afterSequence: number): EvalRunEventsReplay => {
@@ -250,37 +260,32 @@ const replayFor = (value: unknown, afterSequence: number): EvalRunEventsReplay =
   const replay = value.replay;
   if (!(exactKeys(replay, ['cursor', 'events']) || exactKeys(replay, ['cursor', 'events', 'incompleteTrailingRecord'])) ||
     !exactKeys(replay.cursor, ['afterSequence']) || !safeInteger(replay.cursor.afterSequence, afterSequence) ||
-    !Array.isArray(replay.events) || !replay.events.every((event) => {
-      try { eventFor(event); return true; } catch { return false; }
-    }) ||
+    !Array.isArray(replay.events) ||
     (Object.hasOwn(replay, 'incompleteTrailingRecord') && replay.incompleteTrailingRecord !== true)) {
     throw invalidResponse();
   }
-  const events = replay.events as readonly EvalRunEvent[];
+  const events = replay.events.map((event) => eventFor(event));
   if (!events.every((event, index) => event.sequence === afterSequence + index + 1) ||
     replay.cursor.afterSequence !== (events.at(-1)?.sequence ?? afterSequence)) {
     throw invalidResponse();
   }
   return Object.freeze({
     cursor: Object.freeze({ afterSequence: replay.cursor.afterSequence }),
-    events: Object.freeze([...events]),
+    events: Object.freeze(events),
     ...(replay.incompleteTrailingRecord === true ? { incompleteTrailingRecord: true as const } : {}),
   });
 };
 
-const suiteListing = (value: unknown): EvalSuiteListing => {
-  if (!conforms(suiteListingSchema, value)) throw invalidResponse();
-  return value as unknown as EvalSuiteListing;
-};
+const suiteListing = (value: unknown): EvalSuiteListing => parseOrInvalid(suiteListingSchema, value);
 
 const runResult = (value: unknown): EvalRunResult => {
-  if (!exactKeys(value, ['run']) || !conforms(runResultSchema, value.run)) throw invalidResponse();
-  return value.run as unknown as EvalRunResult;
+  if (!exactKeys(value, ['run'])) throw invalidResponse();
+  return parseOrInvalid(runResultSchema, value.run);
 };
 
 const runAdmission = (value: unknown): EvalRunAdmission => {
-  if (!exactKeys(value, ['run']) || !conforms(runRecordSchema, value.run)) throw invalidResponse();
-  return Object.freeze({ run: value.run as unknown as EvalRunRecord });
+  if (!exactKeys(value, ['run'])) throw invalidResponse();
+  return Object.freeze({ run: parseOrInvalid(runRecordSchema, value.run) });
 };
 
 const runCancellation = (value: unknown, runId: string): EvalRunCancellation => {
@@ -291,8 +296,8 @@ const runCancellation = (value: unknown, runId: string): EvalRunCancellation => 
 };
 
 const runRecords = (value: unknown): readonly EvalRunRecord[] => {
-  if (!exactKeys(value, ['runs']) || !Array.isArray(value.runs) || !value.runs.every((entry) => conforms(runRecordSchema, entry))) throw invalidResponse();
-  return Object.freeze([...value.runs]) as readonly EvalRunRecord[];
+  if (!exactKeys(value, ['runs'])) throw invalidResponse();
+  return Object.freeze(parseOrInvalid(runRecordListSchema, value.runs));
 };
 
 const opaqueArtifactRef = (reference: string): string => {
@@ -369,14 +374,7 @@ export class EvalClient {
 
   stream(options: EvalEventStreamOptions): EvalEventStream {
     if (!safeInteger(options.afterSequence)) throw invalidResponse();
-    const controller = new AbortController();
-    const forwardAbort = (): void => controller.abort();
-    options.signal?.addEventListener('abort', forwardAbort, { once: true });
-    if (options.signal?.aborted) controller.abort();
-    return Object.freeze({
-      close: () => controller.abort(),
-      done: this.#stream(options, controller.signal).finally(() => options.signal?.removeEventListener('abort', forwardAbort)),
-    });
+    return abortableNdjsonStream(options.signal, (signal) => this.#stream(options, signal));
   }
 
   async artifact(runId: string, reference: string, signal?: AbortSignal): Promise<EvalArtifact> {

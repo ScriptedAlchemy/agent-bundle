@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -15,6 +14,7 @@ import { EpochStore } from '../src/dev/epoch-store.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { createTargetMcpRuntime, type TargetMcpRuntimeContract } from '../src/services/mcp-runtime.ts';
+import { sha256 } from './support/sha256.ts';
 
 interface FixtureFile {
   readonly contents: string;
@@ -39,8 +39,6 @@ const fixtureMetadata: TargetAdapterMetadata = Object.freeze({
   observedVersion: 'synthetic-observed-v1',
   schemas: Object.freeze([]),
 });
-
-const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 const scriptRegistry = (): TargetRegistry => new TargetRegistry().register({
   artifactLayout: { scripts: { allowedSuffixes: ['.mjs'], directory: 'scripts' } },

@@ -17,6 +17,7 @@ import {
   PlaygroundPage,
   PlaygroundTraceView,
 } from '../src/playground/playground-page.tsx';
+import { deferred } from './support/async.ts';
 
 const epoch = { digest: 'sha256-current', id: 'epoch-current' };
 const identity = {
@@ -39,12 +40,6 @@ const nativeCatalog = {
   modelPins: [{ host: 'claude' as const, id: 'pin:sonnet', label: 'Sonnet — authored pin' }],
   selections: [{ caseId: 'case:review', fixtureId: 'fixture:empty', host: 'claude' as const, modelPinId: 'pin:sonnet' }],
 } as const;
-
-const deferred = <Value,>() => {
-  let resolvePromise: (value: Value) => void = () => undefined;
-  const promise = new Promise<Value>((resolve) => { resolvePromise = resolve; });
-  return { promise, resolve: resolvePromise };
-};
 
 const replay = (nextSession: PlaygroundSession, events: readonly PlaygroundTraceEvent[] = []): PlaygroundReplay => ({
   cursor: { afterSequence: events.at(-1)?.sequence ?? 0 }, events, session: nextSession,

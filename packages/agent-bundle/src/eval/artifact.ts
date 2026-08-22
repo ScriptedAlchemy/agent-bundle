@@ -6,7 +6,7 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import { parseArtifactManifest, type ArtifactManifest } from '../build/manifest.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { digest } from '../core/digest.ts';
-import { EvalHarnessError } from './errors.ts';
+import { harnessError } from './errors.ts';
 import type { EvalArtifactBinding } from './run-store.ts';
 import { isErrno } from '../core/errors.ts';
 
@@ -28,11 +28,6 @@ export interface PreparedEvalArtifact {
 
 const manifestName = 'agent-bundle.manifest.json';
 const runOwnedArtifactSegments = Object.freeze(['artifacts', 'target']);
-
-const harnessError = (
-  code: ConstructorParameters<typeof EvalHarnessError>[0],
-  message: string,
-): EvalHarnessError => new EvalHarnessError(code, message);
 
 /** One digest per generated target, derived from the manifest's own recorded file hashes. */
 export const evalTargetDigests = (manifest: ArtifactManifest): Readonly<Record<string, string>> => {

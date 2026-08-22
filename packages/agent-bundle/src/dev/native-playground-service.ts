@@ -15,7 +15,7 @@ import type { EvalTrialRecord } from '../eval/run-store.ts';
 import { normalizeEvalCase } from '../eval/suite.ts';
 import type { PlaygroundEventInput } from '../services/playground-service.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../eval/workspace-diff.ts';
-import { isInsideOrEqual } from '../core/paths.ts';
+import { isInsideOrEqual, isSafePathSegment } from '../core/paths.ts';
 import { isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
 import {
   DiscardingTrialWriter,
@@ -77,7 +77,6 @@ interface PersistedCatalogPublication {
 
 
 const catalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
-const safeEpochSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 
 const catalogDurabilityPlatform = (): NodeJS.Platform => {
   if (process.env.NODE_ENV !== 'test') return process.platform;
@@ -666,7 +665,7 @@ export class NativePlaygroundService {
   }
 
   #snapshotPath(reference: NativePlaygroundEpochReference): string {
-    if (!safeEpochSegment.test(reference.epoch.id)) throw new Error('Native Playground epoch id is not safe for catalog storage.');
+    if (!isSafePathSegment(reference.epoch.id)) throw new Error('Native Playground epoch id is not safe for catalog storage.');
     const directory = this.#catalogDirectory ?? join(dirname(reference.root), '.metadata', 'native-playground');
     return join(directory, `${reference.epoch.id}.json`);
   }

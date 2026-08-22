@@ -9,7 +9,6 @@ import type {
   JsonObject,
   JsonValue,
   ProjectEventMessage,
-  ProjectEventOf,
   ProjectStatus,
   SourceStatus,
 } from '../../agent-bundle/src/dev/types.ts';
@@ -256,9 +255,6 @@ const normalizePaths = (paths: readonly string[]): readonly string[] => Object.f
   [...new Set(paths)].sort((left, right) => left.localeCompare(right)),
 );
 
-const parseSourceChangedEvent = (data: ProjectEventMessage): ProjectEventOf<'source.changed'> | undefined =>
-  data.type === 'source.changed' ? data : undefined;
-
 const activityFor = (paths: readonly string[]): ProjectActivitySnapshot => Object.freeze({
   changedFiles: normalizePaths(paths),
 });
@@ -274,8 +270,11 @@ export interface ProjectConnectionState {
 
 export type ProjectConnectionListener = (connection: ProjectConnectionState) => void;
 
-const connectionFor = (state: ProjectConnectionPhase, snapshot?: ForegroundSessionSnapshot): ProjectConnectionState => Object.freeze({
-  ...(snapshot === undefined ? {} : { generation: snapshot.generation, instanceId: snapshot.instanceId }),
+const connectionFor = (
+  state: ProjectConnectionPhase,
+  identity?: Readonly<{ readonly generation: number; readonly instanceId: string }>,
+): ProjectConnectionState => Object.freeze({
+  ...(identity === undefined ? {} : { generation: identity.generation, instanceId: identity.instanceId }),
   state,
 });
 
@@ -354,7 +353,7 @@ export class ProjectClient {
       this.#startEventSource(snapshot, version);
       return status;
     } catch (error) {
-      this.#setConnection(connectionFor('unavailable', this.#connectionSnapshot()));
+      this.#setConnection(connectionFor('unavailable', this.#connectionIdentity()));
       throw error;
     }
   }
@@ -418,7 +417,7 @@ export class ProjectClient {
     const data = parseEventData(event);
     if (data === undefined) return;
     const sequence = parseSequence(event, data);
-    const sourceChanged = parseSourceChangedEvent(data);
+    const sourceChanged = data.type === 'source.changed' ? data : undefined;
     if (sequence !== undefined && sourceChanged !== undefined && sourceChanged.sequence === sequence && sourceChanged.sequence > this.#lastSourceChangeSequence) {
       this.#lastSourceChangeSequence = sourceChanged.sequence;
       this.#activity = activityFor(sourceChanged.payload.paths);
@@ -498,7 +497,7 @@ export class ProjectClient {
     this.#eventRefreshQueued = false;
     this.#eventRefreshPromise = undefined;
     this.#discardEventSource();
-    this.#setConnection(connectionFor('unavailable', this.#connectionSnapshot()));
+    this.#setConnection(connectionFor('unavailable', this.#connectionIdentity()));
     this.#reportError(new ProjectClientError('Foreground project event stream disconnected.'));
     this.#startRecovery(version);
   }
@@ -535,10 +534,10 @@ export class ProjectClient {
     this.#setConnection(connectionFor(state, snapshot));
   }
 
-  #connectionSnapshot(): ForegroundSessionSnapshot | undefined {
+  #connectionIdentity(): Readonly<{ readonly generation: number; readonly instanceId: string }> | undefined {
     const { generation, instanceId } = this.#connection;
     if (generation === undefined || instanceId === undefined) return undefined;
-    return { generation, instanceId, origin: '', token: '' };
+    return { generation, instanceId };
   }
 
   #discardEventSource(): void {

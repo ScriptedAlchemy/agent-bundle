@@ -5,6 +5,7 @@ import fastGlob from 'fast-glob';
 import { isRecord } from '../core/strict-json.ts';
 import { normalizeEvalConfig, type NormalizedEvalConfig } from './config.ts';
 import { EvalDiscoveryError } from './errors.ts';
+import { loadJiti } from './jiti.ts';
 import { parseEvalSuite } from './suite.ts';
 import type { EvalSuite } from './types.ts';
 
@@ -24,11 +25,8 @@ export interface DiscoveredEvalSuite {
 }
 
 /** Author suites are TypeScript modules, so they are loaded through the already vendored Jiti runtime. */
-const importSuiteModuleWithJiti = async (sourcePath: string): Promise<unknown> => {
-  const { createJiti } = await import('jiti');
-  const jiti = createJiti(import.meta.url, { moduleCache: false });
-  return jiti.import(sourcePath);
-};
+const importSuiteModuleWithJiti = async (sourcePath: string): Promise<unknown> =>
+  (await loadJiti()).import(sourcePath);
 
 export const findEvalSuiteFiles = async (
   options: FindEvalSuiteFilesOptions,

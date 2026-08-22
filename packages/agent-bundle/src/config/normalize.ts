@@ -3,6 +3,7 @@ import { basename, extname, relative, resolve } from 'node:path';
 
 import { digest, sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
+import { deepFreeze } from '../core/freeze.ts';
 import {
   defaultGeneratedRuntime,
   formatRuntimeVersion,
@@ -58,6 +59,12 @@ const mcpEntryName = (name: string): string => {
   const hash = sha256Hex(name).slice(0, 8);
   return `mcp-${slug(name)}-${hash}.mjs`;
 };
+
+/**
+ * Anchored `mcp/<file>` alias contract for local server entries emitted by
+ * {@link mcpEntryName}; capture group 1 is the bare filename.
+ */
+export const mcpEntryAliasPattern = /^mcp\/(mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs)$/u;
 
 const isHookEntryList = (
   input: AgentBundleHookInput,
@@ -284,7 +291,8 @@ const normalizeMcpApps = (
   return apps;
 };
 
-const bundleExtensions = new Set([
+/** Source extensions compiled to `.mjs` bundles; anything else is copied verbatim. */
+export const bundleExtensions = new Set([
   '.js',
   '.jsx',
   '.mjs',
@@ -321,18 +329,6 @@ const normalizeScripts = (
         targets: sortedUnique(typeof declaration === 'string' ? targetNames : (declaration.targets ?? targetNames)),
       };
     });
-};
-
-const deepFreeze = <Value>(value: Value): Value => {
-  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-
-  for (const child of Object.values(value)) {
-    deepFreeze(child);
-  }
-
-  return Object.freeze(value);
 };
 
 const invalidExtensionValue = (key: string): never => {

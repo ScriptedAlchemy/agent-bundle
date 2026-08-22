@@ -1,6 +1,5 @@
-import { isAbsolute } from 'node:path';
-
 import { digest } from '../core/digest.ts';
+import { isContainedRelativePath } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { DraftEvalCase, PlaygroundSelectedAssertion } from '../services/playground-service.ts';
 import {
@@ -82,14 +81,8 @@ const requireProjectRelativePath = (
   code: ConstructorParameters<typeof EvalDefinitionError>[0],
   label: string,
 ): string => {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw definitionError(code, `${label} must be a non-empty string.`);
-  }
-  if (isAbsolute(value) || /^[a-z]:/iu.test(value)) {
-    throw definitionError(code, `${label} must be relative to the suite file.`);
-  }
-  if (value.split(/[/\\]/u).includes('..')) {
-    throw definitionError(code, `${label} must not escape the suite directory.`);
+  if (typeof value !== 'string' || !isContainedRelativePath(value)) {
+    throw definitionError(code, `${label} must be a non-empty relative path that never escapes the suite directory.`);
   }
   return value;
 };

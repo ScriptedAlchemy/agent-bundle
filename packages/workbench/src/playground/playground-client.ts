@@ -11,6 +11,7 @@ import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-b
 import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/dev/native-playground-service.ts';
 import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord, nonemptyString } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { readNdjsonByteFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface PlaygroundClientOptions {
@@ -37,6 +38,9 @@ export class PlaygroundClientError extends CodedClientError {
 
 const invalidResponse = (): PlaygroundClientError =>
   new PlaygroundClientError('AB8043', 'Playground route returned an invalid response.');
+
+// Matches the foreground playground route's per-subscriber stream byte budget.
+const maximumTraceFrameBytes = 1024 * 1024;
 
 const invalidJson = Symbol('invalid playground JSON');
 
@@ -372,22 +376,18 @@ export class PlaygroundClient {
     if (body === null) throw invalidResponse();
     const reader = body.getReader();
     const decoder = new TextDecoder();
-    let buffered = '';
+    const emitLine = (bytes: Uint8Array): void => {
+      const line = decoder.decode(bytes).trim();
+      if (line.length > 0) options.onEvent(traceEventLine(line));
+    };
     try {
-      for (;;) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        buffered += decoder.decode(chunk.value, { stream: true });
-        let newline = buffered.indexOf('\n');
-        while (newline >= 0) {
-          const line = buffered.slice(0, newline).trim();
-          buffered = buffered.slice(newline + 1);
-          if (line.length > 0) options.onEvent(traceEventLine(line));
-          newline = buffered.indexOf('\n');
-        }
-      }
-      const tail = buffered.trim();
-      if (tail.length > 0) options.onEvent(traceEventLine(tail));
+      await readNdjsonByteFrames(reader, {
+        maxFrameBytes: maximumTraceFrameBytes,
+        onFrame: emitLine,
+        onIncomplete: emitLine,
+        onLimitExceeded: () => { throw invalidResponse(); },
+        signal,
+      });
     } catch (error) {
       if (!isAbort(error) && !signal.aborted) throw error;
     } finally {

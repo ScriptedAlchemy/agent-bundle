@@ -33,8 +33,7 @@ export class EvalConfigError extends CodedError<EvalConfigErrorCode> {
 export type EvalDiscoveryErrorCode =
   | 'EVAL_SUITE_DUPLICATE'
   | 'EVAL_SUITE_EXPORT_INVALID'
-  | 'EVAL_SUITE_LOAD_FAILED'
-  | 'EVAL_SUITE_PATH_INVALID';
+  | 'EVAL_SUITE_LOAD_FAILED';
 
 export class EvalDiscoveryError extends CodedError<EvalDiscoveryErrorCode> {
   readonly sourcePath?: string;
@@ -72,6 +71,9 @@ export class EvalRunStoreError extends CodedError<EvalRunStoreErrorCode> {
   }
 }
 
+export const storeError = (code: EvalRunStoreErrorCode, message: string): EvalRunStoreError =>
+  new EvalRunStoreError(code, message);
+
 export type EvalHarnessErrorCode =
   | 'EVAL_ARTIFACT_INVALID'
   | 'EVAL_ARTIFACT_MISSING'
@@ -84,3 +86,6 @@ export class EvalHarnessError extends CodedError<EvalHarnessErrorCode> {
     super('EvalHarnessError', code, message);
   }
 }
+
+export const harnessError = (code: EvalHarnessErrorCode, message: string): EvalHarnessError =>
+  new EvalHarnessError(code, message);

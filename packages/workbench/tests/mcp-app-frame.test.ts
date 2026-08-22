@@ -10,6 +10,7 @@ import {
   type McpAppFrameWindow,
 } from '../src/mcp/mcp-app-frame.tsx';
 import type { McpAppJsonValue, McpAppRelayFrame, McpAppRouteClose, McpAppRouteMessages } from '../src/mcp/mcp-app-client.ts';
+import { deferred, eventually } from './support/async.ts';
 
 const frame: McpAppRelayFrame = Object.freeze({
   allow: '',
@@ -31,20 +32,6 @@ const resource = Object.freeze({
   kind: 'resource' as const,
   permissions: Object.freeze({ clipboardWrite: Object.freeze({}) }),
 });
-
-const eventually = async (predicate: () => boolean, timeout = 300): Promise<void> => {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeout}ms.`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 1));
-  }
-};
-
-const deferred = <Value>() => {
-  let resolve: (value: Value) => void = () => undefined;
-  const promise = new Promise<Value>((nextResolve) => { resolve = nextResolve; });
-  return { promise, resolve };
-};
 
 const messageResult = (messages: readonly McpAppJsonValue[] = [], lifecycle: McpAppRouteMessages['lifecycle'] = 'initialized'): McpAppRouteMessages =>
   Object.freeze({ accepted: true, lifecycle, messages });

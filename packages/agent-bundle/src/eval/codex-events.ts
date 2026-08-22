@@ -1,4 +1,5 @@
 import { isRecord } from '../core/strict-json.ts';
+import { escapeRegExp } from '../core/strings.ts';
 import type { EvalActivationEvidence, EvalMcpCallRecord, EvalMcpEvidence } from './types.ts';
 
 /** One `codex exec --json` event reduced to its shape: no payload text is retained here. */
@@ -169,8 +170,7 @@ export const codexMcpEvidence = (run: CodexNormalizedRun): EvalMcpEvidence => {
 };
 
 const mentions = (haystack: readonly string[], skill: string): boolean => {
-  const escaped = skill.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-  const pattern = new RegExp(`(?:^|[^\\p{L}\\p{N}_-])${escaped}(?:$|[^\\p{L}\\p{N}_-])`, 'iu');
+  const pattern = new RegExp(`(?:^|[^\\p{L}\\p{N}_-])${escapeRegExp(skill)}(?:$|[^\\p{L}\\p{N}_-])`, 'iu');
   return haystack.some((entry) => pattern.test(entry));
 };
 

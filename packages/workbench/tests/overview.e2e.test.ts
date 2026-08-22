@@ -1,9 +1,7 @@
-import { execFile as executeFile } from 'node:child_process';
 import { mkdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
-import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import { expect } from '@rstest/playwright';
 import type { Page } from 'playwright';
 
 import { ArtifactService } from '../../agent-bundle/src/dev/artifact-service.ts';
@@ -15,26 +13,9 @@ import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { buildWorkbench, e2e, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
 
-const execFile = promisify(executeFile);
-const workspaceRoot = process.cwd();
-const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 5_000;
-
-const e2e = test.extend({
-  playwright: {
-    launchOptions: { channel: 'chrome' },
-    contextOptions: { viewport: { height: 900, width: 1440 } },
-  } satisfies PlaywrightOptions,
-});
-
-const buildWorkbench = async (): Promise<void> => {
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('npm', ['run', 'build', '--workspace', 'agent-bundle-workbench'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
-  });
-};
 
 const startFrozenEpochServer = async (root: string) => {
   const epochStore = new EpochStore({ projectRoot: root });

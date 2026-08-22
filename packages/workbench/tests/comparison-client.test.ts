@@ -1,12 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import { ComparisonClient } from '../src/comparisons/comparison-client.ts';
-
-interface RecordedRequest {
-  readonly method: string;
-  readonly token: string | null;
-  readonly url: string;
-}
+import { recordingFetch, type RecordedRequest } from './support/recording-fetch.ts';
 
 const response = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json' },
@@ -59,18 +54,6 @@ const comparison = {
   sampleSize: 3,
   summary: { comparable: 1, nonComparable: 0, reliability: 1, smoke: 0 },
 };
-
-const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
-  async (input, init) => {
-    const url = String(input);
-    if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
-    calls.push({
-      method: init?.method ?? 'GET',
-      token: new Headers(init?.headers).get('x-agent-bundle-session'),
-      url,
-    });
-    return reply();
-  };
 
 it('requests an aligned comparison for a baseline and a candidate run', async () => {
   const calls: RecordedRequest[] = [];

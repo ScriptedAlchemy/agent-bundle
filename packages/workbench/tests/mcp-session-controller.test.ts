@@ -7,6 +7,7 @@ import {
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
 import { McpRouteClientError, type McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
+import { deferred, eventually } from './support/async.ts';
 
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' as const });
 const connection = Object.freeze({
@@ -15,24 +16,6 @@ const connection = Object.freeze({
   protocolVersion: '2025-11-25',
   server: { name: 'weather-fixture', version: '1.0.0' },
 });
-
-const deferred = <Value>() => {
-  let reject: (reason?: unknown) => void = () => undefined;
-  let resolve: (value: Value) => void = () => undefined;
-  const promise = new Promise<Value>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, reject, resolve };
-};
-
-const eventually = async (predicate: () => boolean, timeout = 300): Promise<void> => {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeout}ms.`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 1));
-  }
-};
 
 const settledWithin = async <Value>(
   promise: Promise<Value>,

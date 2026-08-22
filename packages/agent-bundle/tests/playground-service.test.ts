@@ -13,6 +13,8 @@ import {
   type PlaygroundJsonObject,
   type PlaygroundServiceOptions,
 } from '../src/services/playground-service.ts';
+import { withGlobalDurabilityValue } from './support/durability.ts';
+import { eventuallyPasses } from './support/eventually.ts';
 
 interface SessionIndex {
   readonly kind: 'agent-bundle-playground-session-index';
@@ -57,55 +59,18 @@ type PlaygroundDurabilityTestHook = (phase: PlaygroundDurabilityTestPhase, path:
 
 const playgroundDurabilityTestHookKey = Symbol.for('agent-bundle.playground-service.durability-test-hook');
 const playgroundDurabilityTestPlatformKey = Symbol.for('agent-bundle.playground-service.durability-test-platform');
-const durabilityTestHooks = globalThis as typeof globalThis & Record<symbol, PlaygroundDurabilityTestHook | undefined>;
-const durabilityTestPlatforms = globalThis as typeof globalThis & Record<symbol, NodeJS.Platform | undefined>;
 
-const withDurabilityTestHook = async <T>(hook: PlaygroundDurabilityTestHook, operation: () => Promise<T>): Promise<T> => {
-  const previous = durabilityTestHooks[playgroundDurabilityTestHookKey];
-  const previousNodeEnvironment = process.env.NODE_ENV;
-  durabilityTestHooks[playgroundDurabilityTestHookKey] = hook;
-  process.env.NODE_ENV = 'test';
-  try {
-    return await operation();
-  } finally {
-    if (previous === undefined) delete durabilityTestHooks[playgroundDurabilityTestHookKey];
-    else durabilityTestHooks[playgroundDurabilityTestHookKey] = previous;
-    if (previousNodeEnvironment === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = previousNodeEnvironment;
-  }
-};
+const withDurabilityTestHook = <T>(hook: PlaygroundDurabilityTestHook, operation: () => Promise<T>): Promise<T> =>
+  withGlobalDurabilityValue(playgroundDurabilityTestHookKey, hook, operation);
 
 const injectedIoFailure = (message: string): NodeJS.ErrnoException => Object.assign(new Error(message), { code: 'EIO' });
 const injectedErrnoFailure = (code: string, message: string): NodeJS.ErrnoException => Object.assign(new Error(message), { code });
 
-const withDurabilityTestPlatform = async <T>(platform: NodeJS.Platform, operation: () => Promise<T>): Promise<T> => {
-  const previous = durabilityTestPlatforms[playgroundDurabilityTestPlatformKey];
-  const previousNodeEnvironment = process.env.NODE_ENV;
-  durabilityTestPlatforms[playgroundDurabilityTestPlatformKey] = platform;
-  process.env.NODE_ENV = 'test';
-  try {
-    return await operation();
-  } finally {
-    if (previous === undefined) delete durabilityTestPlatforms[playgroundDurabilityTestPlatformKey];
-    else durabilityTestPlatforms[playgroundDurabilityTestPlatformKey] = previous;
-    if (previousNodeEnvironment === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = previousNodeEnvironment;
-  }
-};
+const withDurabilityTestPlatform = <T>(platform: NodeJS.Platform, operation: () => Promise<T>): Promise<T> =>
+  withGlobalDurabilityValue(playgroundDurabilityTestPlatformKey, platform, operation);
 
-const eventually = async (assertion: () => void, attempts = 100): Promise<void> => {
-  let failure: unknown;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      failure = error;
-      await new Promise<void>((resolve) => setTimeout(resolve, 1));
-    }
-  }
-  throw failure;
-};
+const eventually = (assertion: () => void, attempts = 100): Promise<void> =>
+  eventuallyPasses(assertion, { attempts, delayMs: 1 });
 
 const deferred = <T = void>(): Readonly<{
   readonly promise: Promise<T>;

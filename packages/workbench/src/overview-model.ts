@@ -1,5 +1,9 @@
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import type { ArtifactState, ProjectStatus, SourceState } from '../../agent-bundle/src/dev/types.ts';
+import type { ArtifactEpoch, ArtifactState, ProjectStatus, SourceState } from '../../agent-bundle/src/dev/types.ts';
+
+/** The active (or last-good) artifact epoch, or undefined when none was published. */
+export const activeEpochFor = (status: ProjectStatus): ArtifactEpoch | undefined =>
+  status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
 
 export interface OverviewNormalization {
   readonly label: string;

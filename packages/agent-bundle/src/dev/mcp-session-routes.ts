@@ -43,7 +43,7 @@ export interface McpSessionRouteSession {
   readonly connection: McpSessionConnectionState;
   readonly id: string;
   readonly timeoutMs: number;
-  callTool(options: { readonly arguments: Record<string, unknown>; readonly name: string; readonly requestId?: string }): Promise<unknown>;
+  callTool(options: { readonly arguments: Readonly<Record<string, unknown>>; readonly name: string; readonly requestId?: string }): Promise<unknown>;
   cancel(requestId: string): boolean;
   getPrompt(options: { readonly arguments?: Record<string, string>; readonly name: string }): Promise<unknown>;
   inspectorConfig(): McpSessionInspectorConfig;
@@ -104,8 +104,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
 const stringRecord = (value: unknown): value is Record<string, string> =>
   isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string');
 
-const jsonRecord = (value: unknown): value is Record<string, unknown> => isRecord(value);
-
 const invalidShape = (): never => {
   throw requestError(diagnostic('AB8016', 'MCP session request has an invalid shape.', 400));
 };
@@ -131,7 +129,7 @@ type Operation =
   | Readonly<{ readonly operation: 'tools/list' | 'resources/list' | 'resources/templates/list' | 'prompts/list' }>
   | Readonly<{ readonly arguments?: Record<string, string>; readonly name: string; readonly operation: 'prompts/get' }>
   | Readonly<{ readonly operation: 'resources/read'; readonly uri: string }>
-  | Readonly<{ readonly arguments: Record<string, unknown>; readonly name: string; readonly operation: 'tools/call'; readonly requestId?: string }>;
+  | Readonly<{ readonly arguments: Readonly<Record<string, unknown>>; readonly name: string; readonly operation: 'tools/call'; readonly requestId?: string }>;
 
 const operationRequest = (value: JsonObject): Operation => {
   const operation = value.operation;
@@ -166,7 +164,7 @@ const operationRequest = (value: JsonObject): Operation => {
     const argumentsValue = value.arguments;
     const name = value.name;
     const requestId = value.requestId;
-    if (!nonemptyString(name) || !jsonRecord(argumentsValue)) return invalidShape();
+    if (!nonemptyString(name) || !isRecord(argumentsValue)) return invalidShape();
     if (requestId !== undefined && !nonemptyString(requestId)) return invalidShape();
     return Object.freeze({
       arguments: argumentsValue,

@@ -1,8 +1,9 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
-import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
+import { basename, extname, posix, resolve } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { isRecord } from '../core/strict-json.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
+import { isPlainRecord, isRecord } from '../core/strict-json.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
   defaultGeneratedRuntime,
@@ -21,6 +22,7 @@ import type {
 } from '../core/types.ts';
 import type { DiscoveredProject } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
+import { bundleExtensions, mcpEntryAliasPattern } from './normalize.ts';
 import type { SkillDocument } from './skill.ts';
 import { referencedResources } from './skill-references.ts';
 import { validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
@@ -129,11 +131,6 @@ const validateHooks = (
   return diagnostics;
 };
 
-const isPlainRecord = (value: object): value is Record<string, unknown> => {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
-
 const isProtocolJsonValue = (value: unknown, ancestors = new Set<object>()): boolean => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
   if (typeof value === 'number') return Number.isFinite(value);
@@ -220,11 +217,6 @@ const localEntryExists = (root: string, entry: string): boolean => {
   }
 };
 
-const isInside = (root: string, candidate: string): boolean => {
-  const path = relative(resolve(root), resolve(candidate));
-  return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
-};
-
 const scriptExtensions = new Set([
   '.js',
   '.jsx',
@@ -237,10 +229,6 @@ const scriptExtensions = new Set([
   '.sh',
   '.bash',
   '.py',
-]);
-
-const bundleScriptExtensions = new Set([
-  '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
 ]);
 
 const isSafeScriptName = (name: string): boolean =>
@@ -285,7 +273,7 @@ const validateScripts = (
       continue;
     }
     const source = resolve(loaded.context.projectRoot, entry);
-    if (!isInside(loaded.context.projectRoot, source)) {
+    if (!isInsideOrEqual(loaded.context.projectRoot, source)) {
       diagnostics.push(sourceDiagnostic(
         'AB4405',
         `Script ${JSON.stringify(name)} entry must resolve inside the project root.`,
@@ -302,7 +290,7 @@ const validateScripts = (
     } else {
       const extension = extname(source).toLowerCase();
       const output = posix.normalize(
-        `scripts/${name}${bundleScriptExtensions.has(extension) ? '.mjs' : extension}`,
+        `scripts/${name}${bundleExtensions.has(extension) ? '.mjs' : extension}`,
       );
       const firstSource = outputSources.get(output);
       if (firstSource === undefined) {
@@ -318,7 +306,7 @@ const validateScripts = (
     try {
       const canonicalRoot = realpathSync(loaded.context.projectRoot);
       const canonicalSource = realpathSync(source);
-      if (!isInside(canonicalRoot, canonicalSource)) {
+      if (!isInsideOrEqual(canonicalRoot, canonicalSource)) {
         diagnostics.push(sourceDiagnostic(
           'AB4405',
           `Script ${JSON.stringify(name)} entry must resolve inside the project root.`,
@@ -576,7 +564,7 @@ const validateAssets = (loaded: LoadedConfig): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   for (const entry of assets) {
     const source = resolve(loaded.context.projectRoot, entry);
-    if (!isInside(loaded.context.projectRoot, source)) {
+    if (!isInsideOrEqual(loaded.context.projectRoot, source)) {
       diagnostics.push(sourceDiagnostic(
         'AB4601',
         `Asset entry ${JSON.stringify(entry)} must resolve inside the project root.`,
@@ -598,7 +586,7 @@ const validateAssets = (loaded: LoadedConfig): Diagnostic[] => {
 const validateRuntime = (loaded: LoadedConfig): Diagnostic[] => {
   const runtime = loaded.config.runtime;
   if (runtime === undefined) return [];
-  if (!isRecord(runtime) || !isPlainRecord(runtime)) {
+  if (!isPlainRecord(runtime)) {
     return [sourceDiagnostic('AB4500', 'Runtime configuration must be an object.', loaded.configPath)];
   }
   const keys = Object.keys(runtime);
@@ -880,7 +868,7 @@ export const validateModel = (
     }
     if (server.source !== undefined) {
       const output = server.args?.[0];
-      if (typeof output !== 'string' || !/^mcp\/mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs$/u.test(output)) {
+      if (typeof output !== 'string' || !mcpEntryAliasPattern.test(output)) {
         diagnostics.push({
           code: 'AB4321',
           message: `MCP server ${JSON.stringify(server.name)} has an unsafe local output alias.`,

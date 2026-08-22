@@ -34,6 +34,16 @@ export const assertInside = (root: string, candidate: string): string => {
   return resolvedCandidate;
 };
 
+/** One case-insensitive alphanumeric-leading path segment; structurally unable to be `.` or `..`. */
+export const isSafePathSegment = (value: string): boolean => /^[a-z0-9][a-z0-9._-]*$/iu.test(value);
+
+/** A non-empty relative path (POSIX or Windows form) whose segments never traverse upward. */
+export const isContainedRelativePath = (value: string): boolean =>
+  value.length > 0 &&
+  !isAbsolute(value) &&
+  !/^[a-z]:/iu.test(value) &&
+  !value.split(/[/\\]/u).includes('..');
+
 /** A normalized relative path that cannot traverse out of an artifact root. */
 export const safeArtifactPath = (path: string): boolean =>
   path.length > 0 &&

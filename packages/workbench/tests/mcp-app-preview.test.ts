@@ -19,6 +19,7 @@ import type {
   McpAppRouteMessages,
 } from '../src/mcp/mcp-app-client.ts';
 import type { McpAppFrameIframe, McpAppFrameRelayOptions, McpAppFrameWindow } from '../src/mcp/mcp-app-frame.tsx';
+import { deferred } from './support/async.ts';
 
 const host: McpAppHostContext = Object.freeze({
   availableDisplayModes: Object.freeze(['inline']),
@@ -92,16 +93,6 @@ const browserWindow: McpAppFrameWindow = Object.freeze({
   addEventListener: () => undefined,
   removeEventListener: () => undefined,
 });
-
-const deferred = <Value>() => {
-  let reject: (reason?: unknown) => void = () => undefined;
-  let resolve: (value: Value) => void = () => undefined;
-  const promise = new Promise<Value>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, reject, resolve };
-};
 
 describe('MCP App preview', () => {
   it('creates a preview from immutable tool data and starts a relay bound to the exact sandbox frame', async () => {

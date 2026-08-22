@@ -18,7 +18,7 @@ import { normalizeClaudeStream, type ClaudeTraceEvent, type NormalizedClaudeStre
 import type { NormalizedEvalSemanticGrader } from './config.ts';
 import { runClaudePreflight, type ClaudePreflight } from './claude-preflight.ts';
 import { runClaudeStreamProcess, type ClaudeProcessOptions, type ClaudeProcessOutcome } from './claude-process.ts';
-import { EvalHarnessError } from './errors.ts';
+import { harnessError } from './errors.ts';
 import { materializeEvalFixture, type EvalFixturePlan } from './fixtures.ts';
 import {
   evalTrialId,
@@ -29,8 +29,9 @@ import {
 } from './harness.ts';
 import {
   evalGraderFailureMessage,
-  evalScriptGraderSpec,
+  graderFailureFor,
   isEvalScriptOutcome,
+  outcomeGraderSpecs,
   runEvalGraders,
   type EvalGraderSpec,
 } from './graders.ts';
@@ -95,10 +96,6 @@ interface TrialGrading {
 
 const claudeHost = 'claude';
 const pluginManifestSegments = Object.freeze(['.claude-plugin', 'plugin.json']);
-const harnessError = (
-  code: ConstructorParameters<typeof EvalHarnessError>[0],
-  message: string,
-): EvalHarnessError => new EvalHarnessError(code, message);
 
 const harnessFailure = (
   code: EvalHarnessFailure['code'],
@@ -139,10 +136,7 @@ const gradeTrial = async (
     : undefined;
   const specs: readonly EvalGraderSpec[] = Object.freeze([
     ...(options.graders ?? []).filter((spec) => spec.id !== manualSemanticId),
-    ...options.evalCase.assertions.flatMap((assertion) =>
-      assertion.kind === 'outcome' && assertion.script !== manualSemanticId
-        ? [evalScriptGraderSpec(assertion.script, options.suiteDir)]
-        : []),
+    ...outcomeGraderSpecs(options.evalCase.assertions, options.suiteDir, manualSemanticId),
   ]);
   const graded = await runEvalGraders(specs, {
     artifactRoot: options.artifact.root,
@@ -384,12 +378,8 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
         'trace',
         'The trial was cancelled before Claude completed semantic grading.',
       );
-    } else if (grading.failures.length > 0) {
-      failure = harnessFailure(
-        'EVAL_GRADER_FAILED',
-        'grader',
-        `Grading is incomplete: ${grading.failures.join('; ')}`,
-      );
+    } else {
+      failure = graderFailureFor(grading.failures);
     }
   }
 

@@ -6,9 +6,9 @@ import { stableJson } from '../core/digest.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveEvalAssertions } from './assertions.ts';
 import { redactEvalCredentialText, withoutEvalCredentialEnvironment } from './credentials.ts';
-import { EvalHarnessError } from './errors.ts';
+import { harnessError } from './errors.ts';
 import { materializeEvalFixture, type EvalFixturePlan } from './fixtures.ts';
-import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
+import { graderFailureFor, outcomeGraderSpecs, runEvalGraders, type EvalGraderSpec } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
 import type { EvalRunWriter, EvalTrialRecord } from './run-store.ts';
 import type {
@@ -86,11 +86,6 @@ export const unavailableEvidence: EvalTrialEvidence = Object.freeze({
   scripts: Object.freeze({ level: 'unavailable', results: Object.freeze({}) }),
   skillActivation: Object.freeze({ activated: Object.freeze([]), level: 'unavailable' }),
 });
-
-const harnessError = (
-  code: ConstructorParameters<typeof EvalHarnessError>[0],
-  message: string,
-): EvalHarnessError => new EvalHarnessError(code, message);
 
 const harnessKinds: Readonly<Record<string, EvalHarness['kind']>> = Object.freeze({
   claude: 'native-claude',
@@ -246,12 +241,7 @@ export const runDeterministicTrial = async (
     });
 
   const graderSpecs: readonly EvalGraderSpec[] = harnessFailure === undefined
-    ? [
-      ...(options.graders ?? []),
-      ...options.evalCase.assertions
-        .filter((assertion) => assertion.kind === 'outcome')
-        .map((assertion) => evalScriptGraderSpec(assertion.script, options.suiteDir)),
-    ]
+    ? [...(options.graders ?? []), ...outcomeGraderSpecs(options.evalCase.assertions, options.suiteDir)]
     : [];
   const graded = await runEvalGraders(graderSpecs, {
     artifactRoot: options.artifact.root,
@@ -280,13 +270,7 @@ export const runDeterministicTrial = async (
   });
 
   const assertions = resolveEvalAssertions(options.evalCase.assertions, evidence);
-  const graderFailure: EvalHarnessFailure | undefined = graded.failures.length === 0
-    ? undefined
-    : Object.freeze({
-      code: 'EVAL_GRADER_FAILED',
-      message: `Grading is incomplete: ${graded.failures.map((failure) => `${failure.id}: ${failure.message}`).join('; ')}`,
-      stage: 'grader',
-    });
+  const graderFailure = graderFailureFor(graded.failures);
   const failure = harnessFailure ?? graderFailure;
   const pluginFailure = failure === undefined ? pluginFailureFor(evidence, assertions) : undefined;
 

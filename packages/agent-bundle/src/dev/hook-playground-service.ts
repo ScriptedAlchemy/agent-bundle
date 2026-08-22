@@ -1,6 +1,6 @@
 import { cp, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import { canonicalHookEventFor, type TargetHookContract } from '../adapters/hook-contract.ts';
 import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
@@ -9,7 +9,7 @@ import { listArtifactFiles } from '../build/emit.ts';
 import type { CanonicalHookEvent } from '../core/types.ts';
 import { digest } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { isRecord } from '../core/strict-json.ts';
+import { isRecord, snapshotStrictJsonValue } from '../core/strict-json.ts';
 import { HookService } from '../services/hook-service.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
 import type { DevLogKindFor, DevLogSink } from './dev-log-service.ts';
@@ -103,29 +103,9 @@ export interface HookPlaygroundServiceOptions {
 }
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 
-const cloneAndFreeze = (value: unknown, seen = new WeakSet<object>()): unknown => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
-  if (typeof value !== 'object') throw new TypeError('Hook playground values must be JSON-compatible.');
-  if (seen.has(value)) throw new TypeError('Hook playground values must not contain cycles.');
-  seen.add(value);
-  if (Array.isArray(value)) {
-    const cloned = Object.freeze(value.map((item) => cloneAndFreeze(item, seen)));
-    seen.delete(value);
-    return cloned;
-  }
-  if (!isRecord(value)) {
-    seen.delete(value);
-    throw new TypeError('Hook playground values must be plain JSON objects.');
-  }
-  const cloned = Object.freeze(Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, cloneAndFreeze(item, seen)]),
-  ));
-  seen.delete(value);
-  return cloned;
-};
-
+/** Detaches and freezes a strict-JSON tree; hostile accessors and exotic values are rejected. */
 const cloneRecord = <T extends object>(value: T): Readonly<T> =>
-  cloneAndFreeze(value) as Readonly<T>;
+  snapshotStrictJsonValue(value) as Readonly<T>;
 
 const inputFor = (input: HookPlaygroundInput): CanonicalHookInput => {
   const candidates = [input.fixture, input.inline].filter((value): value is CanonicalHookInput => value !== undefined);
@@ -226,23 +206,11 @@ const canonicalResultFor = (value: unknown): CanonicalHookResult | undefined => 
   return cloneRecord(value);
 };
 
-const storedTargetDigestFor = async (
-  reference: EpochReference,
-  target: string,
-): Promise<string> => {
-  const epochId = basename(reference.root);
-  let document: unknown;
-  try {
-    document = JSON.parse(await readFile(join(dirname(reference.root), '.metadata', `${epochId}.json`), 'utf8'));
-  } catch {
-    throw new Error(`Referenced epoch ${JSON.stringify(epochId)} has unreadable persisted metadata.`);
-  }
-  if (!isRecord(document) || !isRecord(document.epoch) || document.epoch.id !== epochId || !isRecord(document.epoch.targetDigests)) {
-    throw new Error(`Referenced epoch ${JSON.stringify(epochId)} has invalid persisted metadata.`);
-  }
-  const targetDigest = document.epoch.targetDigests[target];
+/** The lease's `epoch` already carries the store-validated metadata for the pinned epoch. */
+const storedTargetDigestFor = (reference: EpochReference, target: string): string => {
+  const targetDigest = reference.epoch.targetDigests[target];
   if (typeof targetDigest !== 'string') {
-    throw new Error(`Referenced epoch ${JSON.stringify(epochId)} has no stored digest for target ${JSON.stringify(target)}.`);
+    throw new Error(`Referenced epoch ${JSON.stringify(reference.epoch.id)} has no stored digest for target ${JSON.stringify(target)}.`);
   }
   return targetDigest;
 };
@@ -404,7 +372,7 @@ export class HookPlaygroundService {
     target: string,
     action: (artifact: string) => Promise<T>,
   ): Promise<T> {
-    const targetDigest = await storedTargetDigestFor(reference, target);
+    const targetDigest = storedTargetDigestFor(reference, target);
     await assertTargetDigest(reference.root, target, targetDigest);
     const artifact = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-'));
     try {
