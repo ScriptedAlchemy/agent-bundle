@@ -1,14 +1,20 @@
 import { execFile } from 'node:child_process';
-import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { meetsMinimumVersion, parseSemanticVersion } from '../core/semver.ts';
 import { isCredentialKey, isProviderEndpointKey } from '../core/credentials.ts';
-import { isErrno } from '../core/errors.ts';
 import { parseRedactedEventEnvelopes, type RedactedEventEnvelope } from './host-contract.ts';
+import {
+  digestFileTree,
+  nativeSmokeOptIn,
+  sameDigestSnapshot,
+  snapshotDigestSites,
+  withoutEnvironmentKeysMatching,
+  type DigestSnapshot,
+} from './native-host-spine.ts';
 import { runBoundedChildProcess } from './process.ts';
 
 const codexExecutable = 'codex';
@@ -95,11 +101,8 @@ export interface CodexNativeSmokeResult {
   readonly status: 'harness-failure' | 'passed' | 'skipped';
 }
 
-interface CodexStateSnapshot {
-  readonly auth: string;
-  readonly config: string;
-  readonly plugins: string;
-}
+type CodexStateSite = 'auth' | 'config' | 'plugins';
+type CodexStateSnapshot = DigestSnapshot<CodexStateSite>;
 
 class SmokeStepError extends Error {
   readonly code?: string;
@@ -124,11 +127,11 @@ const providerApiKeyName = (name: string): boolean =>
   isCredentialKey(name) || isProviderEndpointKey(name);
 
 export const withoutProviderApiKeys = (environment: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv =>
-  Object.fromEntries(Object.entries(environment).filter(([name]) => !providerApiKeyName(name)));
+  withoutEnvironmentKeysMatching(environment, providerApiKeyName);
 
 export const nativeCodexSmokeEnabled = (
   environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): boolean => environment.AGENT_BUNDLE_NATIVE_CODEX_SMOKE === '1';
+): boolean => nativeSmokeOptIn(environment, 'AGENT_BUNDLE_NATIVE_CODEX_SMOKE');
 
 export const createCodexNativeSmokePlan = (
   paths: Readonly<{ readonly candidateDirectory: string; readonly fixtureDirectory: string }>,
@@ -198,60 +201,12 @@ export const copyOpaqueCodexAuthState = async (source: string, destination: stri
   await chmod(destination, sourceStat.mode & 0o777);
 };
 
-export interface DigestFileTreeOptions {
-  /** Directory entries whose name matches are left out of the preimage. */
-  readonly exclude?: (name: string) => boolean;
-  /** When false, hash mtime instead of file bytes. Default true. */
-  readonly hashContents?: boolean;
-  /** When true, include mode and size in the file preimage. Default false. */
-  readonly includeIdentity?: boolean;
-}
-
-/**
- * Sorted-children, NUL-delimited sha256 tree hash. Missing paths hash as `absent`.
- * Callers that compare before/after snapshots must keep a stable preimage per site.
- */
-export const digestFileTree = async (
-  path: string,
-  options: DigestFileTreeOptions = {},
-): Promise<string> => {
-  const hashContents = options.hashContents ?? true;
-  const includeIdentity = options.includeIdentity ?? false;
-  try {
-    const entry = await lstat(path);
-    const digest = createHash('sha256');
-    if (entry.isFile()) {
-      if (includeIdentity) digest.update(`file\0${entry.mode}\0${entry.size}\0`);
-      else digest.update('file\0');
-      if (hashContents) digest.update(await readFile(path));
-      else digest.update(`${entry.mtimeMs}\0`);
-      return digest.digest('hex');
-    }
-    if (entry.isDirectory()) {
-      digest.update('directory\0');
-      const children = await readdir(path, { withFileTypes: true });
-      for (const child of [...children].sort((left, right) => left.name.localeCompare(right.name))) {
-        if (options.exclude?.(child.name) === true) continue;
-        digest.update(`${child.name}\0${await digestFileTree(join(path, child.name), options)}\0`);
-      }
-      return digest.digest('hex');
-    }
-    digest.update(`other\0${entry.mode}\0`);
-    return digest.digest('hex');
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return 'absent';
-    throw error;
-  }
-};
-
-const snapshotCodexState = async (codexHome: string): Promise<CodexStateSnapshot> => Object.freeze({
-  auth: await digestFileTree(join(codexHome, 'auth.json')),
-  config: await digestFileTree(join(codexHome, 'config.toml')),
-  plugins: await digestFileTree(join(codexHome, 'plugins')),
-});
-
-const sameSnapshot = (left: CodexStateSnapshot, right: CodexStateSnapshot): boolean =>
-  left.auth === right.auth && left.config === right.config && left.plugins === right.plugins;
+const snapshotCodexState = (codexHome: string): Promise<CodexStateSnapshot> =>
+  snapshotDigestSites<CodexStateSite>(Object.freeze({
+    auth: () => digestFileTree(join(codexHome, 'auth.json')),
+    config: () => digestFileTree(join(codexHome, 'config.toml')),
+    plugins: () => digestFileTree(join(codexHome, 'plugins')),
+  }));
 
 const normalHomeResult = (before: CodexStateSnapshot | undefined, after: CodexStateSnapshot | undefined) => Object.freeze({
   auth: before !== undefined && after !== undefined && before.auth === after.auth ? 'unchanged' as const : 'unknown' as const,
@@ -332,37 +287,28 @@ const failedResult = (
   status: 'harness-failure',
 });
 
-export const runCodexNativeSmoke = async (options: CodexNativeSmokeOptions): Promise<CodexNativeSmokeResult> => {
-  const environment = options.environment ?? process.env;
-  if (!nativeCodexSmokeEnabled(environment)) {
-    return Object.freeze({
-      activation: Object.freeze({ automatic: 'unavailable', pluginAvailability: 'unavailable' }),
-      eventEnvelopes: Object.freeze([]),
-      normalHome: Object.freeze({ auth: 'unknown', config: 'unknown', plugins: 'unknown' }),
-      status: 'skipped',
-    });
-  }
+const skippedCodexNativeSmokeResult: CodexNativeSmokeResult = Object.freeze({
+  activation: Object.freeze({ automatic: 'unavailable', pluginAvailability: 'unavailable' }),
+  eventEnvelopes: Object.freeze([]),
+  normalHome: Object.freeze({ auth: 'unknown', config: 'unknown', plugins: 'unknown' }),
+  status: 'skipped',
+});
 
-  const normalCodexHome = options.normalCodexHome ?? environment.CODEX_HOME ?? join(homedir(), '.codex');
-  const temporaryDirectoryParent = options.temporaryDirectoryParent ?? tmpdir();
-  const runner = options.run ?? defaultCodexRunner;
-  const limits = resolveProcessLimits(options.processLimits);
-  let before: CodexStateSnapshot | undefined;
-  let after: CodexStateSnapshot | undefined;
-  let events: readonly RedactedEventEnvelope[] = Object.freeze([]);
-  let root: string | undefined;
-  let result: CodexNativeSmokeResult;
+const errorCode = (error: unknown): string | undefined =>
+  typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : undefined;
 
-  const errorCode = (error: unknown): string | undefined =>
-    typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
-      ? error.code
-      : undefined;
-  const failedStep = (stage: CodexNativeSmokeStage, error: unknown): SmokeStepError =>
-    error instanceof SmokeStepError ? error : new SmokeStepError({ code: errorCode(error), stage });
-  const execute = async (
-    stage: CodexNativeSmokeStage,
-    command: CodexNativeSmokeProcessCommand,
-  ): Promise<CodexNativeSmokeCommandResult> => {
+const failedStep = (stage: CodexNativeSmokeStage, error: unknown): SmokeStepError =>
+  error instanceof SmokeStepError ? error : new SmokeStepError({ code: errorCode(error), stage });
+
+type CodexSmokeExecutor = (
+  stage: CodexNativeSmokeStage,
+  command: CodexNativeSmokeProcessCommand,
+) => Promise<CodexNativeSmokeCommandResult>;
+
+const createCodexSmokeExecutor = (runner: CodexNativeSmokeCommandRunner): CodexSmokeExecutor =>
+  async (stage, command) => {
     try {
       const commandResult = await runner(command);
       if (commandResult.failure !== undefined) {
@@ -374,99 +320,180 @@ export const runCodexNativeSmoke = async (options: CodexNativeSmokeOptions): Pro
     }
   };
 
+interface CodexSmokeStaging {
+  readonly candidate: string;
+  readonly fixture: string;
+  readonly home: string;
+  readonly root: string;
+}
+
+/** Events parsed so far; kept outside the phases so a failing phase still reports them. */
+interface CodexSmokeEvidence {
+  events: readonly RedactedEventEnvelope[];
+}
+
+const createCodexSmokeRoot = async (temporaryDirectoryParent: string): Promise<string> => {
+  try {
+    await mkdir(temporaryDirectoryParent, { recursive: true });
+    return await mkdtemp(join(temporaryDirectoryParent, 'agent-bundle-codex-smoke-'));
+  } catch (error) {
+    throw failedStep('temp-home', error);
+  }
+};
+
+const codexSmokeStagingFor = (root: string): CodexSmokeStaging => Object.freeze({
+  candidate: join(root, 'candidate'),
+  fixture: join(root, 'fixture'),
+  home: join(root, 'home'),
+  root,
+});
+
+const stageCodexSmokeInputs = async (
+  options: CodexNativeSmokeOptions,
+  staging: CodexSmokeStaging,
+): Promise<void> => {
+  try {
+    await mkdir(staging.home, { recursive: true });
+  } catch (error) {
+    throw failedStep('temp-home', error);
+  }
+  try {
+    await lstat(options.candidateDirectory);
+    await cp(options.candidateDirectory, staging.candidate, { recursive: true });
+  } catch (error) {
+    throw failedStep('candidate', error);
+  }
+  try {
+    await cp(options.fixtureDirectory, staging.fixture, { recursive: true });
+    await (options.initializeFixture ?? initializeCodexSmokeFixture)(staging.fixture);
+  } catch (error) {
+    throw failedStep('fixture', error);
+  }
+};
+
+const runCodexVersionPreflight = async (
+  execute: CodexSmokeExecutor,
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+  limits: CodexNativeSmokeProcessLimits,
+): Promise<void> => {
+  const version = await execute('version', { args: ['--version'], cwd, environment, limits });
+  if (version.exitCode !== 0) throw new SmokeStepError({ output: `${version.stdout}\n${version.stderr}`, stage: 'version' });
+  if (!isCompatibleVersion(version.stdout)) throw new SmokeStepError({ stage: 'version', version: version.stdout });
+};
+
+const adoptCodexSmokeAuth = async (normalCodexHome: string, temporaryHome: string): Promise<void> => {
+  try {
+    await copyOpaqueCodexAuthState(join(normalCodexHome, 'auth.json'), join(temporaryHome, 'auth.json'));
+  } catch (error) {
+    throw failedStep('auth', error);
+  }
+};
+
+const executeCodexSmokePlan = async (
+  execute: CodexSmokeExecutor,
+  staging: CodexSmokeStaging,
+  environment: NodeJS.ProcessEnv,
+  limits: CodexNativeSmokeProcessLimits,
+  evidence: CodexSmokeEvidence,
+): Promise<CodexNativeSmokeResult['activation']> => {
+  const commands = createCodexNativeSmokePlan({
+    candidateDirectory: staging.candidate,
+    fixtureDirectory: staging.fixture,
+  });
+  let pluginAvailability: CodexNativeSmokeResult['activation']['pluginAvailability'] = 'unavailable';
+  let automatic: CodexNativeSmokeResult['activation']['automatic'] = 'unavailable';
+  for (const command of commands) {
+    const commandResult = await execute(command.id, {
+      args: command.args,
+      cwd: staging.fixture,
+      environment,
+      limits,
+    });
+    if (command.id === 'plugin.list' && !outputContainsPlugin(commandResult.stdout)) {
+      throw new SmokeStepError({ stage: command.id });
+    }
+    if (command.id === 'plugin.list') pluginAvailability = 'observed';
+    if (command.id === 'exec') {
+      try {
+        evidence.events = normalizeCodexNativeSmokeEvents(commandResult.stdout);
+      } catch {
+        throw new SmokeStepError({ stage: command.id });
+      }
+      if (commandResult.stdout.includes(smokeSkillSentinel)) automatic = 'inferred';
+    }
+    if (commandResult.exitCode !== 0) {
+      throw new SmokeStepError({ output: `${commandResult.stdout}\n${commandResult.stderr}`, stage: command.id });
+    }
+  }
+  return Object.freeze({ automatic, pluginAvailability });
+};
+
+const removeCodexSmokeRoot = async (
+  options: CodexNativeSmokeOptions,
+  root: string,
+  result: CodexNativeSmokeResult,
+): Promise<CodexNativeSmokeResult> => {
+  try {
+    await (options.cleanupTemporaryRoot ?? (async (temporaryRoot: string) => {
+      await rm(temporaryRoot, { force: true, recursive: true });
+    }))(root);
+    return result;
+  } catch {
+    if (result.status === 'passed') {
+      return Object.freeze({
+        ...result,
+        cleanup: Object.freeze({ status: 'failed' as const }),
+        diagnostic: Object.freeze({ code: 'native-codex.cleanup.failed', kind: 'harness-failure' as const }),
+        status: 'harness-failure',
+      });
+    }
+    return Object.freeze({ ...result, cleanup: Object.freeze({ status: 'failed' as const }) });
+  }
+};
+
+export const runCodexNativeSmoke = async (options: CodexNativeSmokeOptions): Promise<CodexNativeSmokeResult> => {
+  const environment = options.environment ?? process.env;
+  if (!nativeCodexSmokeEnabled(environment)) return skippedCodexNativeSmokeResult;
+
+  const normalCodexHome = options.normalCodexHome ?? environment.CODEX_HOME ?? join(homedir(), '.codex');
+  const temporaryDirectoryParent = options.temporaryDirectoryParent ?? tmpdir();
+  const execute = createCodexSmokeExecutor(options.run ?? defaultCodexRunner);
+  const limits = resolveProcessLimits(options.processLimits);
+  const evidence: CodexSmokeEvidence = { events: Object.freeze([]) };
+  let before: CodexStateSnapshot | undefined;
+  let after: CodexStateSnapshot | undefined;
+  let root: string | undefined;
+  let result: CodexNativeSmokeResult;
+
   try {
     try {
       before = await snapshotCodexState(normalCodexHome);
     } catch (error) {
       throw failedStep('normal-home', error);
     }
-    try {
-      await mkdir(temporaryDirectoryParent, { recursive: true });
-      root = await mkdtemp(join(temporaryDirectoryParent, 'agent-bundle-codex-smoke-'));
-    } catch (error) {
-      throw failedStep('temp-home', error);
-    }
-    const temporaryHome = join(root, 'home');
-    const temporaryCandidate = join(root, 'candidate');
-    const temporaryFixture = join(root, 'fixture');
-    try {
-      await mkdir(temporaryHome, { recursive: true });
-    } catch (error) {
-      throw failedStep('temp-home', error);
-    }
-    try {
-      await lstat(options.candidateDirectory);
-      await cp(options.candidateDirectory, temporaryCandidate, { recursive: true });
-    } catch (error) {
-      throw failedStep('candidate', error);
-    }
-    try {
-      await cp(options.fixtureDirectory, temporaryFixture, { recursive: true });
-      await (options.initializeFixture ?? initializeCodexSmokeFixture)(temporaryFixture);
-    } catch (error) {
-      throw failedStep('fixture', error);
-    }
+    root = await createCodexSmokeRoot(temporaryDirectoryParent);
+    const staging = codexSmokeStagingFor(root);
+    await stageCodexSmokeInputs(options, staging);
     const childEnvironment = Object.freeze({
       ...withoutProviderApiKeys(environment),
-      CODEX_HOME: temporaryHome,
+      CODEX_HOME: staging.home,
     });
-
-    const version = await execute('version', {
-      args: ['--version'],
-      cwd: temporaryFixture,
-      environment: childEnvironment,
-      limits,
-    });
-    if (version.exitCode !== 0) throw new SmokeStepError({ output: `${version.stdout}\n${version.stderr}`, stage: 'version' });
-    if (!isCompatibleVersion(version.stdout)) throw new SmokeStepError({ stage: 'version', version: version.stdout });
-
-    try {
-      await copyOpaqueCodexAuthState(join(normalCodexHome, 'auth.json'), join(temporaryHome, 'auth.json'));
-    } catch (error) {
-      throw failedStep('auth', error);
-    }
-
-    const commands = createCodexNativeSmokePlan({
-      candidateDirectory: temporaryCandidate,
-      fixtureDirectory: temporaryFixture,
-    });
-    let pluginAvailability: CodexNativeSmokeResult['activation']['pluginAvailability'] = 'unavailable';
-    let automatic: CodexNativeSmokeResult['activation']['automatic'] = 'unavailable';
-    for (const command of commands) {
-      const commandResult = await execute(command.id, {
-        args: command.args,
-        cwd: temporaryFixture,
-        environment: childEnvironment,
-        limits,
-      });
-      if (command.id === 'plugin.list' && !outputContainsPlugin(commandResult.stdout)) {
-        throw new SmokeStepError({ stage: command.id });
-      }
-      if (command.id === 'plugin.list') pluginAvailability = 'observed';
-      if (command.id === 'exec') {
-        try {
-          events = normalizeCodexNativeSmokeEvents(commandResult.stdout);
-        } catch {
-          throw new SmokeStepError({ stage: command.id });
-        }
-        if (commandResult.stdout.includes(smokeSkillSentinel)) automatic = 'inferred';
-      }
-      if (commandResult.exitCode !== 0) {
-        throw new SmokeStepError({ output: `${commandResult.stdout}\n${commandResult.stderr}`, stage: command.id });
-      }
-    }
+    await runCodexVersionPreflight(execute, staging.fixture, childEnvironment, limits);
+    await adoptCodexSmokeAuth(normalCodexHome, staging.home);
+    const activation = await executeCodexSmokePlan(execute, staging, childEnvironment, limits, evidence);
 
     try {
       after = await snapshotCodexState(normalCodexHome);
     } catch (error) {
       throw failedStep('normal-home', error);
     }
-    if (!sameSnapshot(before, after)) {
-      result = failedResult(Object.freeze({ code: 'native-codex.normal-home.changed', kind: 'harness-failure' }), before, after, events);
+    if (!sameDigestSnapshot(before, after)) {
+      result = failedResult(Object.freeze({ code: 'native-codex.normal-home.changed', kind: 'harness-failure' }), before, after, evidence.events);
     } else {
       result = Object.freeze({
-        activation: Object.freeze({ automatic, pluginAvailability }),
-        eventEnvelopes: events,
+        activation,
+        eventEnvelopes: evidence.events,
         normalHome: normalHomeResult(before, after),
         status: 'passed',
       });
@@ -480,28 +507,10 @@ export const runCodexNativeSmoke = async (options: CodexNativeSmokeOptions): Pro
       }
     }
     const input = error instanceof SmokeStepError ? error : new SmokeStepError({ stage: 'exec' });
-    result = failedResult(classifyCodexNativeSmokeFailure(input), before, after, events);
+    result = failedResult(classifyCodexNativeSmokeFailure(input), before, after, evidence.events);
   }
 
-  if (root !== undefined) {
-    try {
-      await (options.cleanupTemporaryRoot ?? (async (temporaryRoot: string) => {
-        await rm(temporaryRoot, { force: true, recursive: true });
-      }))(root);
-    } catch {
-      if (result.status === 'passed') {
-        result = Object.freeze({
-          ...result,
-          cleanup: Object.freeze({ status: 'failed' as const }),
-          diagnostic: Object.freeze({ code: 'native-codex.cleanup.failed', kind: 'harness-failure' as const }),
-          status: 'harness-failure',
-        });
-      } else {
-        result = Object.freeze({ ...result, cleanup: Object.freeze({ status: 'failed' as const }) });
-      }
-    }
-  }
-  return result;
+  return root === undefined ? result : removeCodexSmokeRoot(options, root, result);
 };
 
 export const codexNativeSmokeReportPath = (repositoryRoot: string): string =>

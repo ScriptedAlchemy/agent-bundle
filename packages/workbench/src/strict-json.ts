@@ -6,4 +6,4 @@ export {
   type JsonValue,
   type SnapshotStrictJsonOptions,
   type StrictJsonReason,
-} from '../../agent-bundle/src/core/strict-json.ts';
+} from '../../agent-bundle/src/contracts/strict-json.ts';

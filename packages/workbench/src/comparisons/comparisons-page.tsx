@@ -1,8 +1,8 @@
 import { isAbortError, errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
-import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
-import type { EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
+import type { EvalComparison } from '../../../agent-bundle/src/contracts/eval.ts';
+import type { EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
 import type { ComparisonClient } from './comparison-client.ts';
 import {
   comparisonsViewFor,

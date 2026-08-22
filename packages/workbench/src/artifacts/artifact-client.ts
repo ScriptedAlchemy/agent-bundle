@@ -1,5 +1,5 @@
-import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
-import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/dev/types.ts';
+import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
+import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import { CodedClientError, hasAllowedKeys, isDiagnostic, isRecord } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../agent-bundle/src/core/strict-json.ts';
+import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
+import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../agent-bundle/src/contracts/strict-json.ts';
 import { snapshotStrictJsonValue } from './strict-json.ts';
 
 /** Shared coded client error so each workbench client keeps its name and `instanceof` class. */

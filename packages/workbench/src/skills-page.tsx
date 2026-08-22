@@ -1,8 +1,8 @@
 import { errorMessage as messageFrom } from './client-helpers.ts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
-import type { ServedSkillDocument, SkillDocumentTree } from '../../agent-bundle/src/dev/skill-document-service.ts';
+import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
+import type { ServedSkillDocument, SkillDocumentTree } from '../../agent-bundle/src/contracts/skills.ts';
 
 import type { EvalClient } from './evals/eval-client.ts';
 import { activeEpochFor } from './overview-model.ts';

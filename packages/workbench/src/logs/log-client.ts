@@ -3,10 +3,10 @@ import type {
   DevLogRecord,
   DevLogReplay,
   DevLogReplayGap,
-} from '../../../agent-bundle/src/dev/dev-log-service.ts';
-import { devLogKinds, devLogLevels, devLogProducers, hasControlOrSeparators } from '../../../agent-bundle/src/dev/dev-log-kinds.ts';
-import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
-import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
+} from '../../../agent-bundle/src/contracts/dev-logs.ts';
+import { devLogKinds, devLogLevels, devLogProducers, hasControlOrSeparators } from '../../../agent-bundle/src/contracts/dev-logs.ts';
+import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
 import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys as hasExactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { abortableNdjsonStream, readNdjsonByteFrames } from '../ndjson.ts';

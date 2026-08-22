@@ -1,23 +1,23 @@
-import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
+import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
 import type {
   EvalCaseSummary,
   EvalRunResult,
   EvalSuiteListing,
   EvalSuiteSummary,
-} from '../../../agent-bundle/src/dev/eval-service.ts';
+} from '../../../agent-bundle/src/contracts/eval.ts';
 import type {
   EvalRunEvent,
   EvalRunRecord,
   EvalTrialProvenance,
   EvalTrialRecord,
   EvalTrialUsage,
-} from '../../../agent-bundle/src/eval/run-store.ts';
+} from '../../../agent-bundle/src/contracts/eval.ts';
 import type {
   ActivationEvidence,
   EvalAssertionKind,
   EvalAssertionOutcome,
   EvalTrialEvidence,
-} from '../../../agent-bundle/src/eval/types.ts';
+} from '../../../agent-bundle/src/contracts/eval.ts';
 import type { EvalRunStart } from './eval-client.ts';
 
 export type EvalPageState = 'empty' | 'loading' | 'ran' | 'ready';

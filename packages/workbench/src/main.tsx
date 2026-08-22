@@ -2,8 +2,8 @@ import { errorMessage as messageFrom } from './client-helpers.ts';
 import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import type { PlaygroundRun } from '../../agent-bundle/src/contracts/playground.ts';
+import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
 import { ComparisonClient } from './comparisons/comparison-client.ts';

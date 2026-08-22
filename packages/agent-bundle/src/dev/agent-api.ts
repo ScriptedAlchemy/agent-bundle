@@ -18,8 +18,18 @@ import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol
 
 import { stableJson } from '../core/digest.ts';
 import { isRecord, snapshotStrictJsonValue } from '../core/strict-json.ts';
+import {
+  diagnosticsListWireDto,
+  epochWireIdentities,
+  evalRunAdmissionWireDto,
+  projectStatusWireDto,
+  type AgentApiEpochSummary,
+  type AgentApiEvalRunAdmission,
+} from './agent-api-wire.ts';
 import type { EvalService } from './eval-service.ts';
 import type { ProjectStatus } from './types.ts';
+
+export type { AgentApiEpochSummary } from './agent-api-wire.ts';
 
 export const agentApiToolNames = Object.freeze([
   'project_status',
@@ -49,17 +59,6 @@ export interface AgentApiEpochStore {
   acquireActiveEpochReference(): Promise<AgentApiEpochReference>;
   acquireEpochReference(epochId: string): Promise<AgentApiEpochReference>;
   listEpochs(): Promise<readonly AgentApiEpochSummary[]>;
-}
-
-/** Deliberately path-free epoch identity permitted on the Agent API wire. */
-export interface AgentApiEpochSummary {
-  readonly configDigest?: string;
-  readonly createdAt?: string;
-  readonly diagnostics?: Readonly<{ readonly errors: number; readonly infos: number; readonly warnings: number }>;
-  readonly id: string;
-  readonly modelDigest?: string;
-  readonly projectRevision?: string;
-  readonly targetDigests?: Readonly<Record<string, string>>;
 }
 
 export interface AgentApiMcpSession {
@@ -256,266 +255,6 @@ const safeErrorCode = (error: unknown): string => {
     if (current === undefined) break;
   }
   return 'AGENT_API_OPERATION_FAILED';
-};
-
-type AgentApiJsonRecord = Readonly<Record<string, unknown>>;
-
-interface AgentApiDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly recovery?: string;
-  readonly severity: 'error' | 'info' | 'warning';
-  readonly target?: string;
-}
-
-interface AgentApiProjectStatus {
-  readonly artifact: unknown;
-  readonly build: unknown;
-  readonly source: Readonly<{ readonly diagnostics: readonly AgentApiDiagnostic[]; readonly revision?: string; readonly state: string }>;
-}
-
-/** Durable, path-free acknowledgement returned when an eval background job is admitted. */
-interface AgentApiEvalRunAdmission {
-  readonly id: string;
-  readonly status: 'admitted';
-}
-
-const maximumDiagnosticTextLength = 4_096;
-const safeDiagnosticCodePattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
-const safeDigestPattern = /^[a-f0-9]{64}$/iu;
-const safeEpochIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
-const safeTargetPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
-const safeTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
-const secretAssignmentPattern = /\b(?:api[_ -]?key|authorization|password|secret|token)\s*(?:=|:)/iu;
-const diagnosticMessageFallback = 'Diagnostic details are available in the local workbench.';
-const diagnosticRecoveryFallback = 'Recovery guidance is available in the local workbench.';
-
-const hasControlCharacter = (value: string): boolean => {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
-  }
-  return false;
-};
-
-const snapshotValue = (value: unknown): unknown => {
-  try {
-    return snapshotStrictJsonValue(value);
-  } catch {
-    return undefined;
-  }
-};
-
-const snapshotRecord = (value: unknown): AgentApiJsonRecord | undefined => {
-  const snapshot = snapshotValue(value);
-  return isRecord(snapshot) ? snapshot as AgentApiJsonRecord : undefined;
-};
-
-const snapshotArray = (value: unknown): readonly unknown[] | undefined => {
-  const snapshot = snapshotValue(value);
-  return Array.isArray(snapshot) ? snapshot : undefined;
-};
-
-const safeDigest = (value: unknown): string | undefined =>
-  typeof value === 'string' && safeDigestPattern.test(value) ? value : undefined;
-
-const safeDiagnosticCode = (value: unknown): string | undefined =>
-  typeof value === 'string' && safeDiagnosticCodePattern.test(value) ? value : undefined;
-
-const safeEpochId = (value: unknown): string | undefined =>
-  typeof value === 'string' && safeEpochIdPattern.test(value) ? value : undefined;
-
-const safeTarget = (value: unknown): string | undefined =>
-  typeof value === 'string' && safeTargetPattern.test(value) ? value : undefined;
-
-const safeTimestamp = (value: unknown): string | undefined =>
-  typeof value === 'string' && safeTimestampPattern.test(value) && Number.isFinite(Date.parse(value))
-    ? value
-    : undefined;
-
-/** Deliberately excludes run provenance, artifact bindings, and later execution results. */
-const evalRunAdmissionWireDto = (value: unknown): AgentApiEvalRunAdmission => {
-  const run = snapshotRecord(value);
-  const id = safeEpochId(run?.id);
-  if (id === undefined) {
-    throw apiError('AGENT_API_OPERATION_FAILED', 'Eval admission did not return a durable run identity.');
-  }
-  return Object.freeze({ id, status: 'admitted' });
-};
-
-/** Messages fail closed: any path-like, control, or secret-assignment text is never partially redacted. */
-const safeDiagnosticText = (value: unknown, fallback: string): string =>
-  typeof value === 'string' && value.length <= maximumDiagnosticTextLength &&
-    !value.includes('/') && !value.includes('\\') && !hasControlCharacter(value) &&
-    !secretAssignmentPattern.test(value)
-    ? value
-    : fallback;
-
-/** Dedicated, detached DTO: only diagnostic fields that can be safely named reach the wire. */
-const diagnosticWireDto = (value: unknown): AgentApiDiagnostic | undefined => {
-  const diagnostic = snapshotRecord(value);
-  if (diagnostic === undefined) return undefined;
-  const code = safeDiagnosticCode(diagnostic.code);
-  const severity = diagnostic.severity;
-  if (code === undefined || (severity !== 'error' && severity !== 'info' && severity !== 'warning')) return undefined;
-  const recovery = typeof diagnostic.recovery === 'string'
-    ? safeDiagnosticText(diagnostic.recovery, diagnosticRecoveryFallback)
-    : undefined;
-  const target = safeTarget(diagnostic.target);
-  return Object.freeze({
-    code,
-    message: safeDiagnosticText(diagnostic.message, diagnosticMessageFallback),
-    ...(recovery === undefined ? {} : { recovery }),
-    severity,
-    ...(target === undefined ? {} : { target }),
-  });
-};
-
-const diagnosticWireDtos = (value: unknown): readonly AgentApiDiagnostic[] => Object.freeze(
-  (snapshotArray(value) ?? []).flatMap((diagnostic) => {
-    const projected = diagnosticWireDto(diagnostic);
-    return projected === undefined ? [] : [projected];
-  }),
-);
-
-const diagnosticSummaryWireDto = (value: unknown): AgentApiEpochSummary['diagnostics'] | undefined => {
-  const summary = snapshotRecord(value);
-  if (summary === undefined) return undefined;
-  const errors = summary.errors;
-  const infos = summary.infos;
-  const warnings = summary.warnings;
-  if (![errors, infos, warnings].every((count) => Number.isSafeInteger(count) && (count as number) >= 0)) return undefined;
-  return Object.freeze({ errors: errors as number, infos: infos as number, warnings: warnings as number });
-};
-
-const targetDigestsWireDto = (value: unknown): Readonly<Record<string, string>> | undefined => {
-  const targetDigests = snapshotRecord(value);
-  if (targetDigests === undefined) return undefined;
-  const entries = Object.entries(targetDigests);
-  if (entries.length === 0 || entries.some(([target, digest]) => safeTarget(target) === undefined || safeDigest(digest) === undefined)) {
-    return undefined;
-  }
-  return Object.freeze(Object.fromEntries(entries.map(([target, digest]) => [target, digest as string])));
-};
-
-/** Explicit safe epoch identity; manifest/root/source fields are intentionally not represented. */
-const epochWireIdentity = (value: unknown): AgentApiEpochSummary | undefined => {
-  const epoch = snapshotRecord(value);
-  if (epoch === undefined) return undefined;
-  const id = safeEpochId(epoch.id);
-  if (id === undefined) return undefined;
-  const configDigest = safeDigest(epoch.configDigest);
-  const createdAt = safeTimestamp(epoch.createdAt);
-  const diagnostics = diagnosticSummaryWireDto(epoch.diagnostics);
-  const modelDigest = safeDigest(epoch.modelDigest);
-  const projectRevision = safeDigest(epoch.projectRevision);
-  const targetDigests = targetDigestsWireDto(epoch.targetDigests);
-  return Object.freeze({
-    ...(configDigest === undefined ? {} : { configDigest }),
-    ...(createdAt === undefined ? {} : { createdAt }),
-    ...(diagnostics === undefined ? {} : { diagnostics }),
-    id,
-    ...(modelDigest === undefined ? {} : { modelDigest }),
-    ...(projectRevision === undefined ? {} : { projectRevision }),
-    ...(targetDigests === undefined ? {} : { targetDigests }),
-  });
-};
-
-const epochWireIdentities = (value: unknown): readonly AgentApiEpochSummary[] => Object.freeze(
-  (snapshotArray(value) ?? []).flatMap((epoch) => {
-    const projected = epochWireIdentity(epoch);
-    return projected === undefined ? [] : [projected];
-  }),
-);
-
-const sourceWireDto = (value: unknown): AgentApiProjectStatus['source'] => {
-  const source = snapshotRecord(value);
-  const state = source?.state;
-  const revision = safeDigest(source?.revision);
-  return Object.freeze({
-    diagnostics: diagnosticWireDtos(source?.diagnostics),
-    ...(revision === undefined ? {} : { revision }),
-    state: state === 'invalid' || state === 'ready' || state === 'unknown' ? state : 'unknown',
-  });
-};
-
-const buildAttemptWireDto = (value: unknown): unknown | undefined => {
-  const attempt = snapshotRecord(value);
-  if (attempt === undefined) return undefined;
-  const outcome = attempt.outcome;
-  const id = safeEpochId(attempt.id);
-  const sourceRevision = safeDigest(attempt.sourceRevision);
-  const startedAt = safeTimestamp(attempt.startedAt);
-  if (id === undefined || sourceRevision === undefined || startedAt === undefined ||
-    (outcome !== 'failed' && outcome !== 'running' && outcome !== 'succeeded')) return undefined;
-  const completedAt = safeTimestamp(attempt.completedAt);
-  if (outcome === 'running') {
-    return Object.freeze({ diagnostics: diagnosticWireDtos(attempt.diagnostics), id, outcome, sourceRevision, startedAt });
-  }
-  if (completedAt === undefined) return undefined;
-  const result = snapshotRecord(attempt.result);
-  const epoch = epochWireIdentity(result?.epoch);
-  return Object.freeze({
-    completedAt,
-    diagnostics: diagnosticWireDtos(attempt.diagnostics),
-    id,
-    outcome,
-    ...(outcome === 'succeeded' && epoch !== undefined ? { result: Object.freeze({ epoch }) } : {}),
-    sourceRevision,
-    startedAt,
-  });
-};
-
-const artifactWireDto = (value: unknown): unknown => {
-  const artifact = snapshotRecord(value);
-  const state = artifact?.state;
-  if (artifact === undefined || (state !== 'active' && state !== 'stale')) return Object.freeze({ state: 'missing' });
-  const activeEpoch = epochWireIdentity(artifact.activeEpoch);
-  const currentSourceRevision = safeDigest(artifact.currentSourceRevision);
-  return Object.freeze({
-    ...(activeEpoch === undefined ? {} : { activeEpoch }),
-    ...(currentSourceRevision === undefined ? {} : { currentSourceRevision }),
-    state,
-  });
-};
-
-const buildWireDto = (value: unknown): unknown => {
-  const build = snapshotRecord(value);
-  const state = build?.state;
-  const activeAttempt = buildAttemptWireDto(build?.activeAttempt);
-  const lastAttempt = buildAttemptWireDto(build?.lastAttempt);
-  if (state === 'building' && activeAttempt !== undefined) {
-    return Object.freeze({ activeAttempt, ...(lastAttempt === undefined ? {} : { lastAttempt }), state });
-  }
-  if (state === 'failed' && lastAttempt !== undefined) return Object.freeze({ lastAttempt, state });
-  return Object.freeze({ ...(lastAttempt === undefined ? {} : { lastAttempt }), state: 'idle' });
-};
-
-/** Explicit status DTO that carries only safe state, epoch identity, and projected diagnostics. */
-const projectStatusWireDto = (value: unknown): AgentApiProjectStatus => {
-  const status = snapshotRecord(value);
-  return Object.freeze({
-    artifact: artifactWireDto(status?.artifact),
-    build: buildWireDto(status?.build),
-    source: sourceWireDto(status?.source),
-  });
-};
-
-/** Flattens only known diagnostic arrays from a direct service result or a ProjectStatus-shaped result. */
-const diagnosticsListWireDto = (value: unknown): readonly AgentApiDiagnostic[] => {
-  const result = snapshotRecord(value);
-  if (result === undefined) return Object.freeze([]);
-  const direct = snapshotArray(result.diagnostics);
-  if (direct !== undefined) return diagnosticWireDtos(direct);
-  const source = snapshotRecord(result.source);
-  const build = snapshotRecord(result.build);
-  const activeAttempt = snapshotRecord(build?.activeAttempt);
-  const lastAttempt = snapshotRecord(build?.lastAttempt);
-  return Object.freeze([
-    ...diagnosticWireDtos(source?.diagnostics),
-    ...diagnosticWireDtos(activeAttempt?.diagnostics),
-    ...diagnosticWireDtos(lastAttempt?.diagnostics),
-  ]);
 };
 
 const safeToolResult = (value: unknown) => {
@@ -762,83 +501,95 @@ export class AgentApi {
         };
       })),
     evals_list: async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ runs: await this.#evals.list(), suites: await this.#evals.suites() })),
-    eval_run: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async (signal) => {
-        const caseIds = stringListArgument(arguments_, 'case_ids');
-        const suites = stringListArgument(arguments_, 'suites');
-        const trials = optionalIntegerArgument(arguments_, 'trials');
-        const requestedEpochId = optionalStringArgument(arguments_, 'epoch');
-        const reference = requestedEpochId === undefined
-          ? await this.#epochs.acquireActiveEpochReference()
-          : await this.#epochs.acquireEpochReference(requestedEpochId);
-        const lifecycle = new AbortController();
-        const lifecycleSettled = Promise.withResolvers<void>();
-        const completeLifecycle = (): void => {
-          if (this.#evalLifecycles.delete(lifecycle)) lifecycleSettled.resolve();
-        };
-        let releaseStarted = false;
-        let subscription: Awaited<ReturnType<AgentApiOptions['evals']['subscribeEvents']>> | undefined;
-        try {
-          // Request cancellation governs admission only; an admitted run belongs to its lifecycle.
-          signal.throwIfAborted();
-          this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
-          const admission = await this.#evals.start({
-            artifact: reference.root,
-            ...(caseIds === undefined ? {} : { caseIds }),
-            harness: 'deterministic',
-            ...(suites === undefined ? {} : { suites }),
-            ...(trials === undefined ? {} : { trials }),
-            signal: lifecycle.signal,
-          });
-          subscription = await this.#evals.subscribeEvents(admission.run.id, 0);
-          const eventSubscription = subscription;
-          let released: Promise<void> | undefined;
-          const release = (): Promise<void> => {
-            releaseStarted = true;
-            released ??= Promise.allSettled([
-              Promise.resolve().then(() => eventSubscription.close()),
-              reference.close(),
-            ]).then((results) => {
-              const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-              if (failures.length > 0) {
-                throw new AggregateError(failures, 'Agent API eval lifecycle cleanup failed.', { cause: failures[0] });
-              }
-            }).catch((error) => {
-              this.#evalLifecycleFailures.add(error);
-              throw error;
-            }).finally(completeLifecycle);
-            return released;
-          };
-          const terminal = (kind: string): boolean =>
-            kind === 'run.cancelled' || kind === 'run.completed' || kind === 'run.failed';
-          if (eventSubscription.replay.events.some((event) => terminal(event.kind))) await release();
-          else eventSubscription.activate((event) => {
-            if (terminal(event.kind)) void release().catch(() => undefined);
-          });
-          return { run: evalRunAdmissionWireDto(admission.run) };
-        } catch (error) {
-          lifecycle.abort(error);
-          completeLifecycle();
-          if (!releaseStarted) {
-            const closingSubscription = subscription;
-            const cleanup = await Promise.allSettled([
-              ...(closingSubscription === undefined ? [] : [Promise.resolve().then(() => closingSubscription.close())]),
-              reference.close(),
-            ]);
-            const failures = cleanup.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-            if (failures.length > 0) {
-              throw new AggregateError([error, ...failures], 'Agent API eval admission and epoch release both failed.', { cause: error });
-            }
-          }
-          throw error;
-        }
+      this.#tool(context.mcpReq.signal, async () => {
+        const [runs, suites] = await Promise.all([this.#evals.list(), this.#evals.suites()]);
+        return { runs, suites };
       }),
+    eval_run: async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, (signal) => this.#admitEvalRun(arguments_, signal)),
     eval_get: async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(arguments_, 'run_id')) })),
     diagnostics_list: async (_arguments, context) =>
       this.#tool(context.mcpReq.signal, async () => ({ diagnostics: diagnosticsListWireDto(await this.#diagnostics.list()) })),
     });
+  }
+
+  /**
+   * Admission/subscription/terminal-release protocol for one background eval
+   * run: lease the epoch, admit under a lifecycle signal (request cancellation
+   * governs admission only), subscribe to run events, and release the
+   * subscription and epoch lease exactly once — at the run's terminal event,
+   * or immediately when admission or subscription fails before release began.
+   */
+  async #admitEvalRun(arguments_: unknown, signal: AbortSignal): Promise<{ run: AgentApiEvalRunAdmission }> {
+    const caseIds = stringListArgument(arguments_, 'case_ids');
+    const suites = stringListArgument(arguments_, 'suites');
+    const trials = optionalIntegerArgument(arguments_, 'trials');
+    const requestedEpochId = optionalStringArgument(arguments_, 'epoch');
+    const reference = requestedEpochId === undefined
+      ? await this.#epochs.acquireActiveEpochReference()
+      : await this.#epochs.acquireEpochReference(requestedEpochId);
+    const lifecycle = new AbortController();
+    const lifecycleSettled = Promise.withResolvers<void>();
+    const completeLifecycle = (): void => {
+      if (this.#evalLifecycles.delete(lifecycle)) lifecycleSettled.resolve();
+    };
+    let releaseStarted = false;
+    let subscription: Awaited<ReturnType<AgentApiOptions['evals']['subscribeEvents']>> | undefined;
+    try {
+      // Request cancellation governs admission only; an admitted run belongs to its lifecycle.
+      signal.throwIfAborted();
+      this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
+      const admission = await this.#evals.start({
+        artifact: reference.root,
+        ...(caseIds === undefined ? {} : { caseIds }),
+        harness: 'deterministic',
+        ...(suites === undefined ? {} : { suites }),
+        ...(trials === undefined ? {} : { trials }),
+        signal: lifecycle.signal,
+      });
+      subscription = await this.#evals.subscribeEvents(admission.run.id, 0);
+      const eventSubscription = subscription;
+      let released: Promise<void> | undefined;
+      const release = (): Promise<void> => {
+        releaseStarted = true;
+        released ??= Promise.allSettled([
+          Promise.resolve().then(() => eventSubscription.close()),
+          reference.close(),
+        ]).then((results) => {
+          const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+          if (failures.length > 0) {
+            throw new AggregateError(failures, 'Agent API eval lifecycle cleanup failed.', { cause: failures[0] });
+          }
+        }).catch((error) => {
+          this.#evalLifecycleFailures.add(error);
+          throw error;
+        }).finally(completeLifecycle);
+        return released;
+      };
+      const terminal = (kind: string): boolean =>
+        kind === 'run.cancelled' || kind === 'run.completed' || kind === 'run.failed';
+      if (eventSubscription.replay.events.some((event) => terminal(event.kind))) await release();
+      else eventSubscription.activate((event) => {
+        if (terminal(event.kind)) void release().catch(() => undefined);
+      });
+      return { run: evalRunAdmissionWireDto(admission.run) };
+    } catch (error) {
+      lifecycle.abort(error);
+      completeLifecycle();
+      if (!releaseStarted) {
+        const closingSubscription = subscription;
+        const cleanup = await Promise.allSettled([
+          ...(closingSubscription === undefined ? [] : [Promise.resolve().then(() => closingSubscription.close())]),
+          reference.close(),
+        ]);
+        const failures = cleanup.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+        if (failures.length > 0) {
+          throw new AggregateError([error, ...failures], 'Agent API eval admission and epoch release both failed.', { cause: error });
+        }
+      }
+      throw error;
+    }
   }
 
   async #mcpServers(epochId: string, target: string): Promise<unknown> {

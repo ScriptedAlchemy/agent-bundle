@@ -1,10 +1,10 @@
 import { z } from 'zod';
 
-import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
+import type { EvalComparison } from '../../../agent-bundle/src/contracts/eval.ts';
 import {
   explicitInvocationProvenancePattern,
   semanticGraderIdentityPattern,
-} from '../../../agent-bundle/src/eval/provenance.ts';
+} from '../../../agent-bundle/src/contracts/eval.ts';
 import { CodedClientError } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';

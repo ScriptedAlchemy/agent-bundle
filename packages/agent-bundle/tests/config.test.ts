@@ -72,7 +72,8 @@ it('loads an async TypeScript config and discovers its conventional skill files'
   } finally {
     await removeProjectFixture(fixture.root);
   }
-});
+  // The first jiti compile of the package source graph dominates this test; keep headroom over the 5s default.
+}, 30_000);
 
 it('honors an explicit empty skills list instead of conventional discovery', async () => {
   const fixture = await createProjectFixture({ skills: [] });
@@ -92,7 +93,7 @@ it('honors an explicit empty skills list instead of conventional discovery', asy
   } finally {
     await removeProjectFixture(fixture.root);
   }
-});
+}, 30_000);
 
 it('loads sync config objects from relative and absolute explicit paths', async () => {
   const fixture = await createProjectFixture();
@@ -128,7 +129,7 @@ it('loads sync config objects from relative and absolute explicit paths', async 
   } finally {
     await removeProjectFixture(fixture.root);
   }
-});
+}, 30_000);
 
 it('rejects external config paths before evaluating their modules', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-external-config-'));
@@ -150,7 +151,7 @@ it('rejects external config paths before evaluating their modules', async () => 
   } finally {
     await rm(parent, { force: true, recursive: true });
   }
-});
+}, 30_000);
 
 it('rejects config symlinks whose resolved targets escape the real project root before evaluation', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-symlink-config-'));
@@ -171,7 +172,7 @@ it('rejects config symlinks whose resolved targets escape the real project root 
   } finally {
     await rm(parent, { force: true, recursive: true });
   }
-});
+}, 30_000);
 
 it('reloads an edited native ESM config on each load', async () => {
   const fixture = await createProjectFixture();
@@ -209,7 +210,7 @@ it('reloads an edited native ESM config on each load', async () => {
   } finally {
     await removeProjectFixture(fixture.root);
   }
-});
+}, 30_000);
 
 it('discovers an explicit non-conventional skill path relative to the project root', async () => {
   const fixture = await createProjectFixture();

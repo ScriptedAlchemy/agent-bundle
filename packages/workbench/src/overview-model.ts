@@ -1,5 +1,5 @@
-import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import type { ArtifactEpoch, ArtifactState, ProjectStatus, SourceState } from '../../agent-bundle/src/dev/types.ts';
+import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
+import type { ArtifactEpoch, ArtifactState, ProjectStatus, SourceState } from '../../agent-bundle/src/contracts/project.ts';
 
 /** The active (or last-good) artifact epoch, or undefined when none was published. */
 export const activeEpochFor = (status: ProjectStatus): ArtifactEpoch | undefined =>

@@ -1,4 +1,4 @@
-import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
+import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
 import type {
   ArtifactEpochDiff,
   ArtifactInspection,
@@ -10,7 +10,7 @@ import type {
   ArtifactInspectionSourceInput,
   ArtifactInspectionTarget,
   ArtifactInspectionTreeNode,
-} from '../../../agent-bundle/src/dev/types.ts';
+} from '../../../agent-bundle/src/contracts/artifacts.ts';
 
 export type ArtifactDiffChange = 'added' | 'changed' | 'removed' | 'unchanged';
 

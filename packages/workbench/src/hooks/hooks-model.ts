@@ -7,7 +7,7 @@ import type {
   HookPlaygroundHostMapping,
   HookPlaygroundReplay,
   HookPlaygroundSimulation,
-} from '../../../agent-bundle/src/dev/hook-playground-service.ts';
+} from '../../../agent-bundle/src/contracts/hooks.ts';
 import { deeplyFrozenHookValue } from './hook-client.ts';
 
 export type HookPlaygroundResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation | undefined;

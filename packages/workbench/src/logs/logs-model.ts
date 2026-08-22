@@ -1,4 +1,4 @@
-import type { DevLogRecord, DevLogReplayGap } from '../../../agent-bundle/src/dev/dev-log-service.ts';
+import type { DevLogRecord, DevLogReplayGap } from '../../../agent-bundle/src/contracts/dev-logs.ts';
 
 export interface LogsViewOptions {
   readonly context: string | undefined;

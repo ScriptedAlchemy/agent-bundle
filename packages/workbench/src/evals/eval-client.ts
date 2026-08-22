@@ -5,9 +5,9 @@ import type {
   EvalRunResult,
   EvalRunSelection,
   EvalSuiteListing,
-} from '../../../agent-bundle/src/dev/eval-service.ts';
-import type { JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
-import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
+} from '../../../agent-bundle/src/contracts/eval.ts';
+import type { JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
 import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, decodeDiagnosticError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { abortableNdjsonStream, readNdjsonByteFrames } from '../ndjson.ts';

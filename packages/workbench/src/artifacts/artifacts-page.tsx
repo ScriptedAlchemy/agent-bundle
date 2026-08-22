@@ -1,8 +1,8 @@
 import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useState } from 'react';
 
-import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
-import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/dev/types.ts';
+import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
+import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/contracts/artifacts.ts';
 
 import { ArtifactClient, ArtifactClientError } from './artifact-client.ts';
 import {

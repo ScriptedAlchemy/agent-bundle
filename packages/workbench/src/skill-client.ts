@@ -1,12 +1,12 @@
-import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import type { JsonValue } from '../../agent-bundle/src/core/strict-json.ts';
-import type { SourceProvenance } from '../../agent-bundle/src/core/types.ts';
+import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
+import type { JsonValue } from '../../agent-bundle/src/contracts/strict-json.ts';
+import type { SourceProvenance } from '../../agent-bundle/src/contracts/project.ts';
 import type {
   ServedSkillDocument,
   SkillDocumentBase,
   SkillDocumentResource,
   SkillDocumentTree,
-} from '../../agent-bundle/src/dev/skill-document-service.ts';
+} from '../../agent-bundle/src/contracts/skills.ts';
 
 import {
   CodedClientError,

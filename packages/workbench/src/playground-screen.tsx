@@ -1,9 +1,9 @@
 import { errorMessage as messageFrom } from './client-helpers.ts';
 import { useEffect, useState } from 'react';
 
-import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
-import type { NativePlaygroundCatalog } from '../../agent-bundle/src/dev/native-playground-service.ts';
+import type { PlaygroundRun } from '../../agent-bundle/src/contracts/playground.ts';
+import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
+import type { NativePlaygroundCatalog } from '../../agent-bundle/src/contracts/playground.ts';
 
 import type { ArtifactClient } from './artifacts/artifact-client.ts';
 import { activeEpochFor } from './overview-model.ts';

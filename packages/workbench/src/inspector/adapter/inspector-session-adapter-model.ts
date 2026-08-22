@@ -1,4 +1,4 @@
-import type { McpSessionTraceEntry } from '../../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import type { McpSessionTraceEntry } from '../../../../agent-bundle/src/contracts/mcp-session.ts';
 import { isRecord } from '../../client-helpers.ts';
 import type { McpBrowserSessionModel, McpBrowserSessionTimelineEntry } from '../../mcp/mcp-session-model.ts';
 

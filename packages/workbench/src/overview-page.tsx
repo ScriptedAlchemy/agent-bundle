@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
-import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
+import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
 
 import { overviewFor } from './overview-model.ts';
 import type { ProjectClient } from './project-client.ts';

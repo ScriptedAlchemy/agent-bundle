@@ -125,36 +125,176 @@ const scriptCleanupEvidence = (error: unknown): readonly PlaygroundJsonObject[] 
   scriptPlaygroundCleanupFailures(error).map(({ code }): PlaygroundJsonObject => Object.freeze({ code })),
 );
 
-const operationIntent = (operation: PlaygroundOperationRequest): PlaygroundSessionInput['invocation'] => {
-  if (operation.operation === 'skill.inspect') {
-    return Object.freeze({ intent: Object.freeze({ skillId: operation.skillId }), kind: operation.operation });
-  }
-  if (operation.operation === 'hook.simulate') {
-    return Object.freeze({ intent: Object.freeze({ hook: operation.hook }), kind: operation.operation });
-  }
-  if (operation.operation === 'mcp.call-tool') {
-    return Object.freeze({ intent: Object.freeze({ serverName: operation.serverName, tool: operation.tool }), kind: operation.operation });
-  }
-  if (operation.operation === 'native.prompt') {
-    return Object.freeze({
-      intent: Object.freeze({ caseId: operation.caseId, fixtureId: operation.fixtureId, host: operation.host, modelPinId: operation.modelPinId }),
-      kind: operation.operation,
-    });
-  }
-  return Object.freeze({ intent: Object.freeze({ scriptId: operation.scriptId }), kind: operation.operation });
-};
-
-const taskText = (operation: PlaygroundOperationRequest): string => {
-  if (operation.operation === 'skill.inspect') return 'Inspect an emitted Skill.';
-  if (operation.operation === 'hook.simulate') return 'Simulate an emitted Hook.';
-  if (operation.operation === 'mcp.call-tool') return 'Call an emitted MCP tool.';
-  if (operation.operation === 'native.prompt') return operation.prompt;
-  return 'Run an emitted script.';
-};
-
 const unavailable = (name: string): never => {
   throw new Error(`Playground ${name} service is not available.`);
 };
+
+/** Narrows an acquired lease to the native boundary shape without an assertion cast. */
+const hasEpochMetadata = (
+  reference: PlaygroundEpochReference,
+): reference is NativePlaygroundEpochReference & PlaygroundEpochReference => reference.epoch !== undefined;
+
+type PlaygroundOperationKind = PlaygroundOperationRequest['operation'];
+
+/** Keyed operation shapes keep handler dispatch correlated with each kind. */
+type PlaygroundOperationByKind = {
+  readonly [K in PlaygroundOperationKind]: Extract<PlaygroundOperationRequest, { readonly operation: K }>;
+};
+
+/** Everything admission must pin before a durable session may open. */
+interface PlaygroundOperationAdmission {
+  readonly epoch: ArtifactEpoch;
+  readonly fixtureId?: string;
+  readonly preparedNative?: NativePlaygroundPrepared;
+  readonly reference: PlaygroundEpochReference;
+}
+
+interface PlaygroundAdmissionContext {
+  readonly acquireNativeEpochReference: (epochId: string | undefined) => Promise<NativePlaygroundEpochReference>;
+  readonly native: PlaygroundOrchestrationServiceOptions['native'];
+}
+
+interface PlaygroundOperationContext {
+  /** Appends to the run's durable session so hosts can stream progress evidence. */
+  readonly appendEvent: (event: PlaygroundEventInput) => Promise<void>;
+  readonly epochId: string;
+  readonly hookPlayground: PlaygroundOrchestrationServiceOptions['hookPlayground'];
+  readonly mcpSessions: PlaygroundOrchestrationServiceOptions['mcpSessions'];
+  readonly native: PlaygroundOrchestrationServiceOptions['native'];
+  readonly preparedNative: NativePlaygroundPrepared | undefined;
+  readonly runId: string;
+  readonly scripts: PlaygroundOrchestrationServiceOptions['scripts'];
+  readonly signal: AbortSignal;
+  readonly skillDocuments: PlaygroundOrchestrationServiceOptions['skillDocuments'];
+  readonly targetDigest: string;
+}
+
+interface PlaygroundOperationHandler<K extends PlaygroundOperationKind> {
+  readonly execute: (operation: PlaygroundOperationByKind[K], context: PlaygroundOperationContext) => Promise<PlaygroundOperationResult>;
+  readonly intent: (operation: PlaygroundOperationByKind[K]) => PlaygroundSessionInput['invocation'];
+  /** Admission capability for kinds that must pin their own epoch and host preparation. */
+  readonly prepare?: (operation: PlaygroundOperationByKind[K], context: PlaygroundAdmissionContext) => Promise<PlaygroundOperationAdmission>;
+  readonly taskText: (operation: PlaygroundOperationByKind[K]) => string;
+}
+
+/** Adding an operation kind fails compilation here until its handler exists. */
+type PlaygroundOperationHandlers = { readonly [K in PlaygroundOperationKind]: PlaygroundOperationHandler<K> };
+
+const playgroundOperationHandlers = Object.freeze<PlaygroundOperationHandlers>({
+  'hook.simulate': {
+    execute: async (operation, context) => {
+      const service = context.hookPlayground ?? unavailable('Hook playground');
+      const result = await service.simulate({ epochId: context.epochId, hook: operation.hook, input: { inline: operation.input }, signal: context.signal, target: operation.target });
+      context.signal.throwIfAborted();
+      return Object.freeze({ event: Object.freeze({ kind: 'hook.simulated', raw: Object.freeze({ hook: operation.hook, result: evidenceValue(result) }), source: 'hook', summary: 'Simulated emitted Hook.' }), status: 'diagnostics' in result ? 'failed' : 'passed' });
+    },
+    intent: (operation) => Object.freeze({ intent: Object.freeze({ hook: operation.hook }), kind: operation.operation }),
+    taskText: () => 'Simulate an emitted Hook.',
+  },
+  'mcp.call-tool': {
+    execute: async (operation, context) => {
+      const service = context.mcpSessions ?? unavailable('MCP session');
+      const session = await service.open({ epochId: context.epochId, serverName: operation.serverName, signal: context.signal, target: operation.target });
+      try {
+        context.signal.throwIfAborted();
+        const result = await session.callTool({ arguments: operation.arguments, name: operation.tool, requestId: context.runId, signal: context.signal });
+        context.signal.throwIfAborted();
+        return Object.freeze({ event: Object.freeze({ kind: 'mcp.tool.called', raw: Object.freeze({ result: evidenceValue(result), serverName: operation.serverName, tool: operation.tool }), source: 'mcp', summary: 'Called emitted MCP tool.' }), status: resultHasError(result) ? 'failed' : 'passed' });
+      } finally {
+        await service.closeSession(session.id);
+        context.signal.throwIfAborted();
+      }
+    },
+    intent: (operation) => Object.freeze({ intent: Object.freeze({ serverName: operation.serverName, tool: operation.tool }), kind: operation.operation }),
+    taskText: () => 'Call an emitted MCP tool.',
+  },
+  'native.prompt': {
+    execute: async (_operation, context) => {
+      const service = context.native ?? unavailable('Native Playground');
+      const prepared = context.preparedNative ?? unavailable('prepared Native Playground');
+      const result = await service.run(prepared, { emit: context.appendEvent, signal: context.signal });
+      return Object.freeze({
+        events: result.events,
+        ...(result.response === undefined && result.workspace === undefined
+          ? {}
+          : { outcome: Object.freeze({
+            ...(result.response === undefined ? {} : { response: result.response }),
+            ...(result.workspace === undefined ? {} : { workspace: result.workspace }),
+          }) }),
+        status: result.status,
+      });
+    },
+    intent: (operation) => Object.freeze({
+      intent: Object.freeze({ caseId: operation.caseId, fixtureId: operation.fixtureId, host: operation.host, modelPinId: operation.modelPinId }),
+      kind: operation.operation,
+    }),
+    prepare: async (operation, context) => {
+      const service = context.native ?? unavailable('Native Playground');
+      const reference = await context.acquireNativeEpochReference(operation.epochId);
+      try {
+        const preparedNative = await service.prepare(reference, operation);
+        return Object.freeze({ epoch: reference.epoch, fixtureId: operation.fixtureId, preparedNative, reference });
+      } catch (error) {
+        try { await reference.close(); }
+        catch (releaseError) {
+          throw new AggregateError([error, releaseError], 'Native Playground admission and epoch release both failed.', { cause: releaseError });
+        }
+        throw error;
+      }
+    },
+    taskText: (operation) => operation.prompt,
+  },
+  'script.run': {
+    execute: async (operation, context) => {
+      const service = context.scripts ?? unavailable('Script');
+      const result = await service.run({ epochId: context.epochId, scriptId: operation.scriptId, signal: context.signal, target: operation.target });
+      context.signal.throwIfAborted();
+      return Object.freeze({
+        event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest: context.targetDigest }), source: 'script', summary: 'Ran emitted script.' }),
+        status: result.exitCode === 0 && (result.cleanupFailures?.length ?? 0) === 0 ? 'passed' : 'failed',
+      });
+    },
+    intent: (operation) => Object.freeze({ intent: Object.freeze({ scriptId: operation.scriptId }), kind: operation.operation }),
+    taskText: () => 'Run an emitted script.',
+  },
+  'skill.inspect': {
+    execute: async (operation, context) => {
+      const service = context.skillDocuments ?? unavailable('Skill document');
+      await service.generated(context.epochId, operation.target, operation.skillId);
+      context.signal.throwIfAborted();
+      return Object.freeze({ event: Object.freeze({ kind: 'skill.inspected', raw: Object.freeze({ skillId: operation.skillId }), source: 'skill-evidence', summary: 'Inspected emitted Skill.' }), status: 'passed' });
+    },
+    intent: (operation) => Object.freeze({ intent: Object.freeze({ skillId: operation.skillId }), kind: operation.operation }),
+    taskText: () => 'Inspect an emitted Skill.',
+  },
+});
+
+/*
+ * The generic kind parameter keeps each lookup correlated with its own
+ * operation shape, so callers holding the full request union dispatch
+ * through these helpers instead of re-branching per kind.
+ */
+const admitOperation = <K extends PlaygroundOperationKind>(
+  kind: K,
+  operation: PlaygroundOperationByKind[K],
+  context: PlaygroundAdmissionContext,
+): Promise<PlaygroundOperationAdmission> | undefined => playgroundOperationHandlers[kind].prepare?.(operation, context);
+
+const operationIntent = <K extends PlaygroundOperationKind>(
+  kind: K,
+  operation: PlaygroundOperationByKind[K],
+): PlaygroundSessionInput['invocation'] => playgroundOperationHandlers[kind].intent(operation);
+
+const operationTaskText = <K extends PlaygroundOperationKind>(
+  kind: K,
+  operation: PlaygroundOperationByKind[K],
+): string => playgroundOperationHandlers[kind].taskText(operation);
+
+const executeOperation = <K extends PlaygroundOperationKind>(
+  kind: K,
+  operation: PlaygroundOperationByKind[K],
+  context: PlaygroundOperationContext,
+): Promise<PlaygroundOperationResult> => playgroundOperationHandlers[kind].execute(operation, context);
 
 /**
  * Owns the public Playground operation lifecycle. It creates durable sessions
@@ -202,27 +342,11 @@ export class PlaygroundOrchestrationService {
     const id = this.#createRunId();
     const controller = new AbortController();
     const signal = options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal]);
-    let epoch: ArtifactEpoch;
-    let reference: PlaygroundEpochReference;
-    let preparedNative: NativePlaygroundPrepared | undefined;
-    if (input.operation === 'native.prompt') {
-      const service = this.#native ?? unavailable('Native Playground');
-      reference = await this.#nativeReference(input.epochId);
-      epoch = reference.epoch!;
-      try { preparedNative = await service.prepare(reference as NativePlaygroundEpochReference, input); }
-      catch (error) {
-        try { await reference.close(); }
-        catch (releaseError) {
-          throw new AggregateError([error, releaseError], 'Native Playground admission and epoch release both failed.', { cause: releaseError });
-        }
-        throw error;
-      }
-    } else {
-      const artifact = this.#coordinator.status().artifact;
-      if (artifact.state === 'missing') throw new Error('Playground requires an active artifact epoch.');
-      epoch = artifact.activeEpoch;
-      reference = await this.#epochStore.acquireEpochReference(epoch.id);
-    }
+    const admission = await (admitOperation(input.operation, input, Object.freeze({
+      acquireNativeEpochReference: (epochId: string | undefined) => this.#nativeReference(epochId),
+      native: this.#native,
+    })) ?? this.#activeEpochAdmission());
+    const { epoch, preparedNative, reference } = admission;
     const targetDigest = epoch.targetDigests[input.target];
     if (typeof targetDigest !== 'string') {
       await reference.close();
@@ -242,11 +366,11 @@ export class PlaygroundOrchestrationService {
       if (this.#closed) throw new Error('Playground orchestration service is closed.');
       const session = await this.#trace.openSession(Object.freeze({
         epoch: Object.freeze({ digest: epochDigest, id: epoch.id }),
-        fixture: Object.freeze({ digest: fixtureDigest, id: input.operation === 'native.prompt' ? input.fixtureId : 'server-owned-workspace' }),
-        invocation: operationIntent(input),
+        fixture: Object.freeze({ digest: fixtureDigest, id: admission.fixtureId ?? 'server-owned-workspace' }),
+        invocation: operationIntent(input.operation, input),
         sessionId,
         target: Object.freeze({ digest: targetDigest, name: input.target }),
-        task: Object.freeze({ id, text: taskText(input) }),
+        task: Object.freeze({ id, text: operationTaskText(input.operation, input) }),
       }));
       opened = true;
       await this.#trace.append(sessionId, Object.freeze({
@@ -416,7 +540,7 @@ export class PlaygroundOrchestrationService {
     }
   }
 
-  async #operation(
+  #operation(
     operation: PlaygroundOperationRequest,
     epochId: string,
     targetDigest: string,
@@ -425,63 +549,34 @@ export class PlaygroundOrchestrationService {
     sessionId: string,
     preparedNative: NativePlaygroundPrepared | undefined,
   ): Promise<PlaygroundOperationResult> {
-    if (operation.operation === 'skill.inspect') {
-      const service = this.#skillDocuments ?? unavailable('Skill document');
-      await service.generated(epochId, operation.target, operation.skillId);
-      signal.throwIfAborted();
-      return Object.freeze({ event: Object.freeze({ kind: 'skill.inspected', raw: Object.freeze({ skillId: operation.skillId }), source: 'skill-evidence', summary: 'Inspected emitted Skill.' }), status: 'passed' });
-    }
-    if (operation.operation === 'hook.simulate') {
-      const service = this.#hookPlayground ?? unavailable('Hook playground');
-      const result = await service.simulate({ epochId, hook: operation.hook, input: { inline: operation.input }, signal, target: operation.target });
-      signal.throwIfAborted();
-      return Object.freeze({ event: Object.freeze({ kind: 'hook.simulated', raw: Object.freeze({ hook: operation.hook, result: evidenceValue(result) }), source: 'hook', summary: 'Simulated emitted Hook.' }), status: 'diagnostics' in result ? 'failed' : 'passed' });
-    }
-    if (operation.operation === 'mcp.call-tool') {
-      const service = this.#mcpSessions ?? unavailable('MCP session');
-      const session = await service.open({ epochId, serverName: operation.serverName, signal, target: operation.target });
-      try {
-        signal.throwIfAborted();
-        const result = await session.callTool({ arguments: operation.arguments, name: operation.tool, requestId: runId, signal });
-        signal.throwIfAborted();
-        return Object.freeze({ event: Object.freeze({ kind: 'mcp.tool.called', raw: Object.freeze({ result: evidenceValue(result), serverName: operation.serverName, tool: operation.tool }), source: 'mcp', summary: 'Called emitted MCP tool.' }), status: resultHasError(result) ? 'failed' : 'passed' });
-      } finally {
-        await service.closeSession(session.id);
-        signal.throwIfAborted();
-      }
-    }
-    if (operation.operation === 'native.prompt') {
-      const service = this.#native ?? unavailable('Native Playground');
-      const prepared = preparedNative ?? unavailable('prepared Native Playground');
-      const result = await service.run(prepared, {
-        emit: async (event) => { await this.#trace.append(sessionId, event); },
-        signal,
-      });
-      return Object.freeze({
-        events: result.events,
-        ...(result.response === undefined && result.workspace === undefined
-          ? {}
-          : { outcome: Object.freeze({
-            ...(result.response === undefined ? {} : { response: result.response }),
-            ...(result.workspace === undefined ? {} : { workspace: result.workspace }),
-          }) }),
-        status: result.status,
-      });
-    }
-    const service = this.#scripts ?? unavailable('Script');
-    const result = await service.run({ epochId, scriptId: operation.scriptId, signal, target: operation.target });
-    signal.throwIfAborted();
-    return Object.freeze({
-      event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest }), source: 'script', summary: 'Ran emitted script.' }),
-      status: result.exitCode === 0 && (result.cleanupFailures?.length ?? 0) === 0 ? 'passed' : 'failed',
-    });
+    return executeOperation(operation.operation, operation, Object.freeze({
+      appendEvent: async (event: PlaygroundEventInput) => { await this.#trace.append(sessionId, event); },
+      epochId,
+      hookPlayground: this.#hookPlayground,
+      mcpSessions: this.#mcpSessions,
+      native: this.#native,
+      preparedNative,
+      runId,
+      scripts: this.#scripts,
+      signal,
+      skillDocuments: this.#skillDocuments,
+      targetDigest,
+    }));
+  }
+
+  /** Default admission for operations without their own prepare capability. */
+  async #activeEpochAdmission(): Promise<PlaygroundOperationAdmission> {
+    const artifact = this.#coordinator.status().artifact;
+    if (artifact.state === 'missing') throw new Error('Playground requires an active artifact epoch.');
+    const epoch = artifact.activeEpoch;
+    return Object.freeze({ epoch, reference: await this.#epochStore.acquireEpochReference(epoch.id) });
   }
 
   async #nativeReference(epochId: string | undefined): Promise<NativePlaygroundEpochReference> {
     const reference = epochId === undefined
       ? await (this.#epochStore.acquireActiveEpochReference?.() ?? unavailable('active epoch'))
       : await this.#epochStore.acquireEpochReference(epochId);
-    if (reference.epoch !== undefined) return reference as NativePlaygroundEpochReference;
+    if (hasEpochMetadata(reference)) return reference;
     try { await reference.close(); }
     catch { /* The missing metadata refusal remains the primary safe diagnosis. */ }
     throw new Error('Playground native epoch reference lacks immutable metadata.');

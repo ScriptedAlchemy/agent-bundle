@@ -1,9 +1,9 @@
 import { execFile as executeFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
+import { isMissingExecutableError } from './native-host-spine.ts';
 
 // Pure parsing and opt-in probing contract for subscription-backed native host CLIs.
 export type NativeHost = 'claude' | 'codex';
@@ -456,8 +456,6 @@ const helpCommandFor = (manifest: HostContractManifest, probe: HostContractHelpP
   host: manifest.host,
   kind: 'help',
 });
-
-const isMissingExecutableError = (error: unknown): boolean => isErrno(error, 'ENOENT');
 
 export const compareInstalledHostContract = async (
   manifestInput: unknown,

@@ -11,7 +11,7 @@ import type {
   ProjectEventMessage,
   ProjectStatus,
   SourceStatus,
-} from '../../agent-bundle/src/dev/types.ts';
+} from '../../agent-bundle/src/contracts/project.ts';
 import { diagnosticSchema } from './client-helpers.ts';
 import { ForegroundSessionAuthority, type ForegroundSessionSnapshot, wait } from './foreground-session.ts';
 import { nonnegativeIntegerSchema, positiveIntegerSchema } from './schema-atoms.ts';

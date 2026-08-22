@@ -5,7 +5,7 @@ import type {
   HookPlaygroundListOptions,
   HookPlaygroundReplay,
   HookPlaygroundSimulation,
-} from '../../../agent-bundle/src/dev/hook-playground-service.ts';
+} from '../../../agent-bundle/src/contracts/hooks.ts';
 import { z } from 'zod';
 
 import { CodedClientError } from '../client-helpers.ts';

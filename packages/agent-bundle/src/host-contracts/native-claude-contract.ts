@@ -7,7 +7,15 @@ import { digest } from '../core/digest.ts';
 import { isCredentialKey } from '../core/credentials.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
-import { digestFileTree } from './native-codex-contract.ts';
+import {
+  digestFileTree,
+  isMissingExecutableError,
+  nativeSmokeOptIn,
+  sameDigestSnapshot,
+  snapshotDigestSites,
+  withoutEnvironmentKeysMatching,
+  type DigestSnapshot,
+} from './native-host-spine.ts';
 import { runBoundedChildProcess } from './process.ts';
 
 export interface NativeClaudeCommandOptions {
@@ -53,8 +61,9 @@ const removesSubscriptionBypass = (name: string): boolean => subscriptionBypassV
 // routing.
 export const createNativeClaudeChildEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): NodeJS.ProcessEnv => Object.fromEntries(
-  Object.entries(environment).filter(([name]) => !isCredentialKey(name) && !removesSubscriptionBypass(name)),
+): NodeJS.ProcessEnv => withoutEnvironmentKeysMatching(
+  environment,
+  (name) => isCredentialKey(name) || removesSubscriptionBypass(name),
 );
 
 export type ClaudeActivationEvidence = 'observed' | 'unavailable';
@@ -247,13 +256,8 @@ export interface NativeClaudeSmokeReport {
   readonly status: 'harness-failure' | 'passed' | 'skipped';
 }
 
-interface ClaudeNormalHomeSnapshot {
-  readonly claudeJson: string;
-  readonly config: string;
-  readonly localSettings: string;
-  readonly plugins: string;
-  readonly settings: string;
-}
+type ClaudeNormalHomeSite = 'claudeJson' | 'config' | 'localSettings' | 'plugins' | 'settings';
+type ClaudeNormalHomeSnapshot = DigestSnapshot<ClaudeNormalHomeSite>;
 
 const candidateSkillEventName = (pluginName: string, skillName: string): string => `${pluginName}:${skillName}`;
 
@@ -353,23 +357,17 @@ const digestClaudeStateFile = async (path: string): Promise<string> => {
 // installs, removals, or content changes register as mutations.
 const isClaudePluginRuntimeMarker = (name: string): boolean => name === '.in_use';
 
-const snapshotClaudeNormalHome = async (paths: ClaudeNormalHomePaths): Promise<ClaudeNormalHomeSnapshot> => Object.freeze({
-  claudeJson: await digestClaudeStateFile(paths.stateFile),
-  config: await digestClaudeFileTree(join(paths.directory, 'config.json')),
-  localSettings: await digestClaudeFileTree(join(paths.directory, 'settings.local.json')),
-  plugins: await digestFileTree(
-    join(paths.directory, 'plugins'),
-    Object.freeze({ exclude: isClaudePluginRuntimeMarker, hashContents: true, includeIdentity: false }),
-  ),
-  settings: await digestClaudeFileTree(join(paths.directory, 'settings.json')),
-});
-
-const sameClaudeNormalHome = (left: ClaudeNormalHomeSnapshot, right: ClaudeNormalHomeSnapshot): boolean =>
-  left.claudeJson === right.claudeJson
-  && left.config === right.config
-  && left.localSettings === right.localSettings
-  && left.plugins === right.plugins
-  && left.settings === right.settings;
+const snapshotClaudeNormalHome = (paths: ClaudeNormalHomePaths): Promise<ClaudeNormalHomeSnapshot> =>
+  snapshotDigestSites<ClaudeNormalHomeSite>(Object.freeze({
+    claudeJson: () => digestClaudeStateFile(paths.stateFile),
+    config: () => digestClaudeFileTree(join(paths.directory, 'config.json')),
+    localSettings: () => digestClaudeFileTree(join(paths.directory, 'settings.local.json')),
+    plugins: () => digestFileTree(
+      join(paths.directory, 'plugins'),
+      Object.freeze({ exclude: isClaudePluginRuntimeMarker, hashContents: true, includeIdentity: false }),
+    ),
+    settings: () => digestClaudeFileTree(join(paths.directory, 'settings.json')),
+  }));
 
 const normalHomeFailure = (code: string, message: string): NativeClaudeSmokeReport => Object.freeze({
   diagnostics: diagnostic(code, message),
@@ -380,8 +378,6 @@ const normalHomeChangedDiagnostic = Object.freeze({
   code: 'claude-native.normal-home.changed',
   message: 'Claude normal config/settings/plugins state changed; inspect local state without retaining its output.',
 });
-
-const isMissingExecutableError = (error: unknown): boolean => isErrno(error, 'ENOENT');
 
 const looksUnauthenticated = (output: string): boolean =>
   /(?:not\s+logged\s+in|authentication|authenticate|unauthorized|subscription)/iu.test(output);
@@ -466,7 +462,7 @@ const processOptionsFor = (value: AbortSignal | NativeClaudeProcessOptions | und
 
 export const nativeClaudeSmokeEnabled = (
   environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): boolean => environment.AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE === '1';
+): boolean => nativeSmokeOptIn(environment, 'AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE');
 
 export const runNativeClaudeProcess = async (
   request: NativeClaudeProcessRequest,
@@ -762,7 +758,7 @@ export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): P
       status: 'harness-failure',
     });
   }
-  if (!sameClaudeNormalHome(before, after)) {
+  if (!sameDigestSnapshot(before, after)) {
     return Object.freeze({
       ...result,
       diagnostics: Object.freeze([normalHomeChangedDiagnostic]),

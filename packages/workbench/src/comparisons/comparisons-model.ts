@@ -5,9 +5,9 @@ import type {
   EvalComparisonRow,
   EvalConditionMetrics,
   EvalNonComparableReason,
-} from '../../../agent-bundle/src/eval/compare.ts';
-import type { EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
-import type { EvalAssertionOutcome } from '../../../agent-bundle/src/eval/types.ts';
+} from '../../../agent-bundle/src/contracts/eval.ts';
+import type { EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
+import type { EvalAssertionOutcome } from '../../../agent-bundle/src/contracts/eval.ts';
 
 export type ComparisonsState = 'compared' | 'empty' | 'insufficient-runs' | 'ready';
 

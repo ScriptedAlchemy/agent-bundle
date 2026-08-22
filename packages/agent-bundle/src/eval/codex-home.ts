@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { meetsMinimumVersion, parseSemanticVersion } from '../core/semver.ts';
-import { copyOpaqueCodexAuthState, digestFileTree, withoutProviderApiKeys } from '../host-contracts/native-codex-contract.ts';
+import { copyOpaqueCodexAuthState, withoutProviderApiKeys } from '../host-contracts/native-codex-contract.ts';
+import { digestFileTree } from '../host-contracts/native-host-spine.ts';
 import { withoutEvalCredentialEnvironment } from './credentials.ts';
 import { CodexEvalHarnessError } from './codex-errors.ts';
 

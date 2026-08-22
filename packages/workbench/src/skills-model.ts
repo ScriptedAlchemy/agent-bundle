@@ -1,4 +1,4 @@
-import type { SkillDocumentBase } from '../../agent-bundle/src/dev/skill-document-service.ts';
+import type { SkillDocumentBase } from '../../agent-bundle/src/contracts/skills.ts';
 
 const encodedSegment = (value: string): string => encodeURIComponent(value);
 

@@ -1,6 +1,6 @@
 import { useRef, type KeyboardEvent } from 'react';
 
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
 
 import type { ForegroundSessionAuthority } from './foreground-session.ts';
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';

@@ -182,6 +182,26 @@ const requestedAfterSequence = (value: number): number => {
   return value;
 };
 
+/**
+ * The one terminal-failure transition for both the trial-loop failure and the
+ * terminal-append failure: a durability error whose failed event was terminal
+ * proves that event reached the log ('written'), while an uncertain write
+ * leaves the log state unknowable ('uncertain'). Any other failure leaves the
+ * terminal state untouched so #execute still appends a terminal event.
+ */
+const classifyTerminalFailure = (active: ActiveEvalRun, error: unknown): void => {
+  if (
+    error instanceof EvalRunEventDurabilityError
+    && (error.event.kind === 'run.cancelled' || error.event.kind === 'run.completed' || error.event.kind === 'run.failed')
+  ) {
+    active.terminal = 'written';
+  }
+  if (error instanceof EvalRunEventWriteUncertainError) {
+    active.terminal = 'uncertain';
+    active.uncertainty = error;
+  }
+};
+
 
 
 /**
@@ -588,16 +608,7 @@ export class EvalService {
     } catch (error) {
       executionFailure = error;
       executionFailed = true;
-      if (
-        error instanceof EvalRunEventDurabilityError
-        && (error.event.kind === 'run.cancelled' || error.event.kind === 'run.completed' || error.event.kind === 'run.failed')
-      ) {
-        active.terminal = 'written';
-      }
-      if (error instanceof EvalRunEventWriteUncertainError) {
-        active.terminal = 'uncertain';
-        active.uncertainty = error;
-      }
+      classifyTerminalFailure(active, error);
       if (active.terminal !== 'persisted' && active.terminal !== 'uncertain' && active.terminal !== 'written') {
         active.terminal = 'finishing';
         try {
@@ -607,14 +618,7 @@ export class EvalService {
           });
           active.terminal = 'persisted';
         } catch (terminalFailure) {
-          if (terminalFailure instanceof EvalRunEventDurabilityError
-            && (terminalFailure.event.kind === 'run.cancelled' || terminalFailure.event.kind === 'run.failed')) {
-            active.terminal = 'written';
-          }
-          if (terminalFailure instanceof EvalRunEventWriteUncertainError) {
-            active.terminal = 'uncertain';
-            active.uncertainty = terminalFailure;
-          }
+          classifyTerminalFailure(active, terminalFailure);
           executionFailure = new AggregateError([executionFailure, terminalFailure], 'Eval run execution and terminal persistence both failed.', { cause: executionFailure });
         }
       }

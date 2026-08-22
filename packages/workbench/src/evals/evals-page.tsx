@@ -3,8 +3,8 @@ import React, { useEffect, useRef, useState } from 'react';
 
 import { wait } from '../foreground-session.ts';
 import type { EvalArtifact, EvalClient, EvalHarness, EvalRunAdmission, EvalRunStart } from './eval-client.ts';
-import type { EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/dev/eval-service.ts';
-import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
+import type { EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/contracts/eval.ts';
+import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
 import {
   admitEvalRunLifecycle,
   createEvalRunLifecycle,

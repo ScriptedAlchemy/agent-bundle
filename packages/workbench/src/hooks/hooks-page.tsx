@@ -5,7 +5,7 @@ import type {
   HookPlaygroundBinding,
   HookPlaygroundHook,
   HookPlaygroundReplay,
-} from '../../../agent-bundle/src/dev/hook-playground-service.ts';
+} from '../../../agent-bundle/src/contracts/hooks.ts';
 
 import {
   parseRawJsonRecord,

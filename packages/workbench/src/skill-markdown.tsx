@@ -2,7 +2,7 @@ import React, { lazy, Suspense, type ComponentPropsWithoutRef, type ReactNode } 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import type { SkillDocumentBase } from '../../agent-bundle/src/dev/skill-document-service.ts';
+import type { SkillDocumentBase } from '../../agent-bundle/src/contracts/skills.ts';
 
 import { resourceUrlFor } from './skills-model.ts';
 import { supportedShikiLanguage } from './shiki-languages.ts';

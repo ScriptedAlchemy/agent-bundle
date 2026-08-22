@@ -5,7 +5,7 @@ import type {
   McpSessionOperation,
   McpSessionTraceEntry,
   McpSessionTraceReplayGap,
-} from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+} from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import { isRecord } from '../client-helpers.ts';
 import { readNdjsonByteFrames } from '../ndjson.ts';
 import { AgentBundleRemoteTransport } from './agent-bundle-remote-transport.ts';

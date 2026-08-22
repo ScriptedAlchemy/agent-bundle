@@ -1,4 +1,4 @@
-import type { McpSessionBinding } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import type { McpSessionBinding } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 
 import type {
   McpBrowserSessionConnection,

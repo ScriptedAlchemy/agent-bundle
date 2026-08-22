@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
-import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import { errorMessage as messageFrom, isRecord } from '../client-helpers.ts';
 
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
