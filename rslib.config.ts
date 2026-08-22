@@ -24,26 +24,14 @@ export default defineConfig({
     distPath: {
       root: './packages/agent-bundle/dist',
     },
-    externals: [
-      '@modelcontextprotocol/client',
-      '@modelcontextprotocol/client/stdio',
-      '@modelcontextprotocol/node',
-      '@modelcontextprotocol/server',
-      '@rsbuild/core',
-      '@rsbuild/plugin-react',
-      '@rslib/core',
-      '@rslint/core',
-      '@rstackjs/load-config',
-      '@rspack/core',
-      'ajv',
-      'ajv/dist/2020.js',
-      'chokidar',
-      'commander',
-      'fast-glob',
-      'ignore',
-      'jiti',
-      'yaml',
-    ],
+    // autoExternal cannot see the published dependencies here because this
+    // config builds from the workspace root, whose package.json declares no
+    // runtime dependencies. Derive externals from the published manifest so
+    // the list cannot drift, matching subpaths (e.g. ajv/dist/2020.js) the
+    // way autoExternal does.
+    externals: Object.keys(packageManifest.dependencies).map(
+      (name) => new RegExp(`^${name.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}($|/)`),
+    ),
     target: 'node',
   },
   source: {
