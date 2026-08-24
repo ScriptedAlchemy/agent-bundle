@@ -108,7 +108,6 @@ const traceCursor = (entry: McpSessionTraceMessage): number =>
 export class McpSessionTraceClient {
   readonly #options: McpSessionTraceClientOptions;
   #refresh: TraceRefresh | undefined;
-  /** Latches until reset() so one admitted session never opens a second subscription. */
   #stream: NdjsonStream | undefined;
   #task: Promise<void> | undefined;
 
@@ -116,7 +115,6 @@ export class McpSessionTraceClient {
     this.#options = options;
   }
 
-  /** The in-flight subscription, exposed to the owner as a drainable cleanup resource. */
   get task(): Promise<void> | undefined {
     return this.#task;
   }

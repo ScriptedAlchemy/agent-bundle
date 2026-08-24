@@ -1,13 +1,13 @@
 import type {
+  EvalAssertionOutcome,
   EvalComparison,
   EvalComparisonDelta,
   EvalComparisonEvidence,
   EvalComparisonRow,
   EvalConditionMetrics,
   EvalNonComparableReason,
+  EvalRunRecord,
 } from '../../../agent-bundle/src/contracts/eval.ts';
-import type { EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
-import type { EvalAssertionOutcome } from '../../../agent-bundle/src/contracts/eval.ts';
 
 export type ComparisonsState = 'compared' | 'empty' | 'insufficient-runs' | 'ready';
 

@@ -1,19 +1,21 @@
 import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
+import type { ArtifactInspectionScript } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import type {
   DraftEvalCase,
+  NativePlaygroundCatalog,
+  NativePlaygroundHost,
   PlaygroundEpochIdentity,
   PlaygroundExport,
   PlaygroundJsonObject,
+  PlaygroundOperationRequest,
   PlaygroundReplay,
+  PlaygroundRun,
   PlaygroundSession,
   PlaygroundTarget,
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/contracts/playground.ts';
-import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/contracts/playground.ts';
-import type { ArtifactInspectionScript } from '../../../agent-bundle/src/contracts/artifacts.ts';
-import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/contracts/playground.ts';
 
 import { wait } from '../foreground-session.ts';
 import { parseRawJsonRecord, serializeJsonRecord } from '../mcp/mcp-json-input.tsx';

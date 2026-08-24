@@ -2,16 +2,17 @@ import { z } from 'zod';
 
 import type {
   DraftEvalCase,
+  NativePlaygroundCatalog,
   PlaygroundExport,
+  PlaygroundOperationRequest,
   PlaygroundReplay,
+  PlaygroundRun,
   PlaygroundSession,
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/contracts/playground.ts';
-import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/contracts/playground.ts';
-import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/contracts/playground.ts';
 import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord, nonemptyString } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
-import { readNdjsonResponseFrames } from '../ndjson.ts';
+import { abortableNdjsonStream, readNdjsonResponseFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface PlaygroundClientOptions {
@@ -328,9 +329,7 @@ export class PlaygroundClient {
 
   /** Reads the ndjson trace stream frame by frame; closing aborts the request itself. */
   stream(sessionId: string, options: PlaygroundStreamOptions): PlaygroundStream {
-    const controller = new AbortController();
-    const done = this.#stream(sessionId, options, controller.signal);
-    return Object.freeze({ close: () => controller.abort(), done });
+    return abortableNdjsonStream(undefined, (signal) => this.#stream(sessionId, options, signal));
   }
 
   #path(sessionId: string): string {

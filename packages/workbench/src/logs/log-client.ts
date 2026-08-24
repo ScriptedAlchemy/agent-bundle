@@ -10,7 +10,6 @@ import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle
 import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys as hasExactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { abortableNdjsonStream, readNdjsonResponseFrames } from '../ndjson.ts';
-import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface LogClientOptions {
   readonly authority?: ForegroundSessionAuthority;

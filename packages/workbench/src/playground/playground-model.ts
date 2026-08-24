@@ -1,14 +1,15 @@
 import type {
+  NativePlaygroundCatalog,
+  NativePlaygroundHost,
   PlaygroundEpochIdentity,
   PlaygroundExport,
   PlaygroundJsonValue,
+  PlaygroundOperationRequest,
   PlaygroundSession,
   PlaygroundTarget,
   PlaygroundTraceEvent,
   PlaygroundTraceSource,
 } from '../../../agent-bundle/src/contracts/playground.ts';
-import type { PlaygroundOperationRequest } from '../../../agent-bundle/src/contracts/playground.ts';
-import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/contracts/playground.ts';
 
 export type PlaygroundState = 'finalized' | 'no-epoch' | 'no-session' | 'open';
 

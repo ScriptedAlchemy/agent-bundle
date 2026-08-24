@@ -1,13 +1,14 @@
 import { z } from 'zod';
 
 import type {
+  EvalRunEvent,
   EvalRunEventsReplay,
+  EvalRunRecord,
   EvalRunResult,
   EvalRunSelection,
   EvalSuiteListing,
 } from '../../../agent-bundle/src/contracts/eval.ts';
 import type { JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
-import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
 import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, decodeDiagnosticError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { abortableNdjsonStream, readNdjsonResponseFrames } from '../ndjson.ts';
