@@ -9,17 +9,14 @@ import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bu
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
 import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys as hasExactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
-import { abortableNdjsonStream, readNdjsonResponseFrames } from '../ndjson.ts';
+import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
 
 export interface LogClientOptions {
   readonly authority?: ForegroundSessionAuthority;
   readonly fetch?: typeof fetch;
 }
 
-export interface LogStream {
-  close(): void;
-  readonly done: Promise<void>;
-}
+export type LogStream = NdjsonStream;
 
 export interface LogStreamOptions {
   readonly afterSequence: number;
@@ -72,12 +69,12 @@ const isGap = (value: unknown): value is DevLogReplayGap => hasExactKeys(value, 
   safeInteger(value.latestDroppedSequence) && value.earliestAvailableSequence === value.latestDroppedSequence + 1 &&
   value.requestedAfterSequence < value.earliestAvailableSequence;
 const invalid = (): LogClientError => new LogClientError('AB8093', 'Dev Log route returned an invalid response.');
+const rethrowOrInvalid = (error: unknown, signal?: AbortSignal | null): never => {
+  if (error instanceof LogClientError || isAbort(error) || signal?.aborted) throw error;
+  throw invalid();
+};
 const snapshot = (value: unknown): JsonValue => strictJsonSnapshot(value, invalid);
 const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalid);
-const parseMessage = (line: string): JsonValue => {
-  try { return snapshot(parseJsonWithoutDuplicateKeys(line)); }
-  catch { throw invalid(); }
-};
 const contiguous = (records: readonly DevLogRecord[], afterSequence: number): boolean => records.every((record, index) =>
   record.sequence === afterSequence + index + 1);
 
@@ -111,7 +108,9 @@ const replayFor = (value: unknown, afterSequence: number): DevLogReplay => {
 };
 
 const messageFor = (line: string): DevLogMessage => {
-  const parsed = parseMessage(line);
+  let parsed: JsonValue;
+  try { parsed = snapshot(parseJsonWithoutDuplicateKeys(line)); }
+  catch { throw invalid(); }
   if (isDevRecord(parsed) || isGap(parsed)) return parsed;
   throw invalid();
 };
@@ -158,8 +157,7 @@ export class LogClient {
       const bytes = await awaitWithAbort(init.signal, () => response.arrayBuffer());
       return parseResponseJson(new Uint8Array(bytes));
     } catch (error) {
-      if (error instanceof LogClientError || isAbort(error) || init.signal?.aborted) throw error;
-      throw invalid();
+      return rethrowOrInvalid(error, init.signal);
     }
   }
 
@@ -170,8 +168,7 @@ export class LogClient {
       const bytes = await awaitWithAbort(init.signal, () => response.arrayBuffer());
       throw diagnosticFor(parseResponseJson(new Uint8Array(bytes)));
     } catch (error) {
-      if (error instanceof LogClientError || isAbort(error) || init.signal?.aborted) throw error;
-      throw invalid();
+      return rethrowOrInvalid(error, init.signal);
     }
   }
 

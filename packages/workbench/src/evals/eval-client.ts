@@ -11,7 +11,7 @@ import type {
 import type { JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
 import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, decodeDiagnosticError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
-import { abortableNdjsonStream, readNdjsonResponseFrames } from '../ndjson.ts';
+import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
 import {
   nonnegativeIntegerSchema,
   positiveIntegerSchema,
@@ -43,10 +43,7 @@ export interface EvalRunCancellation {
   readonly runId: string;
 }
 
-export interface EvalEventStream {
-  close(): void;
-  readonly done: Promise<void>;
-}
+export type EvalEventStream = NdjsonStream;
 
 export interface EvalEventStreamOptions {
   readonly afterSequence: number;
@@ -77,6 +74,10 @@ const isIsoTimestamp = (value: unknown): value is string =>
   typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
 const invalidResponse = (): EvalClientError =>
   new EvalClientError('AB8073', 'Eval route returned an invalid response.');
+const rethrowOrInvalid = (error: unknown, signal?: AbortSignal | null): never => {
+  if (error instanceof EvalClientError || isAbort(error) || signal?.aborted) throw error;
+  throw invalidResponse();
+};
 
 const textSchema = z.string();
 const timestampSchema = z.string().refine(isIsoTimestamp);
@@ -394,8 +395,7 @@ export class EvalClient {
       if (bytes.byteLength !== declaredSize || bytes.byteLength > maximumArtifactBytes) throw invalidResponse();
       return Object.freeze({ blob: new Blob([bytes], { type: mediaType }), filename, mediaType });
     } catch (error) {
-      if (error instanceof EvalClientError || isAbort(error) || signal?.aborted) throw error;
-      throw invalidResponse();
+      return rethrowOrInvalid(error, signal);
     }
   }
 
@@ -404,8 +404,7 @@ export class EvalClient {
       const response = await this.#response(path, init, expectedStatus);
       return parseResponseJson(new Uint8Array(await awaitWithAbort(init.signal, () => response.arrayBuffer())));
     } catch (error) {
-      if (error instanceof EvalClientError || isAbort(error) || init.signal?.aborted) throw error;
-      throw invalidResponse();
+      return rethrowOrInvalid(error, init.signal);
     }
   }
 
@@ -419,8 +418,7 @@ export class EvalClient {
       if (decoded !== undefined) throw new EvalClientError(decoded.code, decoded.message);
       throw new EvalClientError('AB8073', `Eval request failed with HTTP ${response.status}.`);
     } catch (error) {
-      if (error instanceof EvalClientError || isAbort(error) || init.signal?.aborted) throw error;
-      throw invalidResponse();
+      return rethrowOrInvalid(error, init.signal);
     }
   }
 

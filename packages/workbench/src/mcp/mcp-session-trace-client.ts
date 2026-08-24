@@ -37,10 +37,14 @@ const maximumTraceFrameBytes = 256 * 1024;
 const validCursor = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
-const traceOperations: ReadonlySet<string> = new Set([
+const traceOperations = new Set<string>([
   'callTool', 'cancel', 'close', 'getPrompt', 'initialize', 'listPrompts', 'listResources', 'listResourceTemplates', 'listTools', 'readResource', 'restart',
 ]);
-const tracePhases: ReadonlySet<string> = new Set(['started', 'succeeded', 'failed']);
+const tracePhases = new Set<string>(['started', 'succeeded', 'failed']);
+const isTraceOperation = (value: unknown): value is McpSessionOperation =>
+  typeof value === 'string' && traceOperations.has(value);
+const isTracePhase = (value: unknown): value is 'failed' | 'started' | 'succeeded' =>
+  typeof value === 'string' && tracePhases.has(value);
 
 const traceEntry = (value: unknown, invalid: () => Error): McpSessionTraceMessage => {
   if (!isRecord(value)) throw invalid();
@@ -67,14 +71,11 @@ const traceEntry = (value: unknown, invalid: () => Error): McpSessionTraceMessag
   if (value.kind === 'logging' || value.kind === 'progress') {
     return { kind: value.kind, occurredAt: value.occurredAt, payload: value.payload, sequence: value.sequence };
   }
-  if (
-    value.kind === 'operation' && typeof value.operation === 'string' && typeof value.phase === 'string' &&
-    traceOperations.has(value.operation) && tracePhases.has(value.phase)
-  ) return {
+  if (value.kind === 'operation' && isTraceOperation(value.operation) && isTracePhase(value.phase)) return {
     kind: 'operation',
     occurredAt: value.occurredAt,
-    operation: value.operation as McpSessionOperation,
-    phase: value.phase as 'failed' | 'started' | 'succeeded',
+    operation: value.operation,
+    phase: value.phase,
     sequence: value.sequence,
   };
   throw invalid();

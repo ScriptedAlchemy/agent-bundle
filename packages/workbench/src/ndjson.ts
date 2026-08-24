@@ -1,4 +1,4 @@
-export interface ReadNdjsonByteFramesOptions {
+interface ReadNdjsonByteFramesOptions {
   readonly maxFrameBytes: number;
   readonly onFrame: (bytes: Uint8Array) => void;
   /** Called when the stream ends with bytes that never saw a terminating newline. */
@@ -12,7 +12,7 @@ export interface ReadNdjsonByteFramesOptions {
  * every span between `0x0a` bytes; leftover bytes after the stream ends are
  * reported as one trailing frame so callers can reject or emit them.
  */
-export const readNdjsonByteFrames = async (
+const readNdjsonByteFrames = async (
   reader: ReadableStreamDefaultReader<Uint8Array>,
   options: ReadNdjsonByteFramesOptions,
 ): Promise<void> => {
@@ -24,11 +24,15 @@ export const readNdjsonByteFrames = async (
     partBytes += part.byteLength;
   };
   const takeFrame = (): Uint8Array => {
-    const bytes = new Uint8Array(partBytes);
-    let offset = 0;
-    for (const part of parts) {
-      bytes.set(part, offset);
-      offset += part.byteLength;
+    const [only] = parts;
+    let bytes = only;
+    if (bytes === undefined || parts.length !== 1) {
+      bytes = new Uint8Array(partBytes);
+      let offset = 0;
+      for (const part of parts) {
+        bytes.set(part, offset);
+        offset += part.byteLength;
+      }
     }
     parts.length = 0;
     partBytes = 0;

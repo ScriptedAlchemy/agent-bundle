@@ -12,7 +12,7 @@ import type {
 } from '../../../agent-bundle/src/contracts/playground.ts';
 import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord, nonemptyString } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
-import { abortableNdjsonStream, readNdjsonResponseFrames } from '../ndjson.ts';
+import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface PlaygroundClientOptions {
@@ -25,11 +25,8 @@ export interface PlaygroundStreamOptions {
   readonly onEvent: (event: PlaygroundTraceEvent) => void;
 }
 
-export interface PlaygroundStream {
-  close(): void;
-  /** Settles when the ndjson body ends, the stream is closed, or the transport fails. */
-  readonly done: Promise<void>;
-}
+/** Settles when the ndjson body ends, the stream is closed, or the transport fails. */
+export type PlaygroundStream = NdjsonStream;
 
 export class PlaygroundClientError extends CodedClientError {
   constructor(code: string, message: string) {
