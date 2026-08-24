@@ -400,7 +400,7 @@ it('syncs candidate contents and the containing directory before acquisition res
   }
 });
 
-it('returns a live lock handle when candidate cleanup fails after publication', async () => {
+it('unpublishes the lock and fails loudly when candidate cleanup fails after publication', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle lock candidate cleanup '));
   const cleanupFailure = new Error('candidate cleanup failed');
   let candidatePath: string | undefined;
@@ -415,7 +415,7 @@ it('returns a live lock handle when candidate cleanup fails after publication', 
   };
 
   try {
-    const lock = await acquireDevLock({
+    await expect(acquireDevLock({
       projectRoot: root,
       storage: {
         link,
@@ -425,13 +425,20 @@ it('returns a live lock handle when candidate cleanup fails after publication', 
         readFile,
         remove: controlledRemove,
       },
-    } as Parameters<typeof acquireDevLock>[0]);
+    } as Parameters<typeof acquireDevLock>[0])).rejects.toMatchObject({
+      errors: [cleanupFailure],
+      message: 'Development lock candidate cleanup failed.',
+    });
 
-    await expect(readFile(lockPathFor(root), 'utf8')).resolves.toContain(lock.owner.nonce);
     expect(candidatePath).toContain('.candidate-');
-    await lock.close();
+    // The rollback unpublished the failed acquisition: neither the lock nor
+    // its candidate survives, so nothing holds the project.
     await expect(readFile(lockPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(candidatePath!, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    // A fresh acquisition succeeds immediately because nothing leaked.
+    const lock = await acquireDevLock({ projectRoot: root });
+    await lock.close();
   } finally {
     await rm(root, { force: true, recursive: true });
   }

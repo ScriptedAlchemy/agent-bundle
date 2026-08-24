@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, readdir, readFile, realpath, rename, rm, writeFile, type open } from 'node:fs/promises';
+import { lstat, readdir, realpath, rename, rm, type open } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { mapConcurrent } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
-import { syncPath } from '../core/durable-fs.ts';
+import { readPinnedFile, syncPath, writeNewPinnedFile } from '../core/durable-fs.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
 import { isInside } from '../core/paths.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
@@ -94,6 +94,7 @@ export interface EpochStagingContext {
 }
 
 const stagingMarkerFileName = '.agent-bundle-epoch-stage.json';
+const stagingMarkerMaximumBytes = 1024;
 export const stagingPrefix = '.stage-';
 const syncTreeConcurrency = 16;
 
@@ -146,7 +147,10 @@ export const syncDurablePath = async (storage: EpochDurabilityStorage, path: str
 /** Writes the store-owned staging marker and returns its exact contents. */
 export const createStagingMarker = async (root: string): Promise<string> => {
   const markerContents = `${stableJson({ token: randomUUID() })}\n`;
-  await writeFile(join(root, stagingMarkerFileName), markerContents, 'utf8');
+  await writeNewPinnedFile(join(root, stagingMarkerFileName), markerContents, {
+    invalid: () =>
+      new EpochStoreError('EPOCH_STAGING_INVALID', 'The store-created staging marker could not be created safely.'),
+  });
   return markerContents;
 };
 
@@ -188,7 +192,7 @@ const syncStagedTree = async (storage: EpochDurabilityStorage, path: string): Pr
   const entries = await readdir(path, { withFileTypes: true });
   const directories: string[] = [];
   const files: string[] = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)) {
     const child = join(path, entry.name);
     if (entry.isDirectory() && !entry.isSymbolicLink()) directories.push(child);
     else files.push(child);
@@ -218,21 +222,23 @@ export const verifyStaging = async (context: EpochStagingContext, record: Stagin
   ) {
     throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The store-created staging root was replaced.');
   }
+  const markerReplaced = (): EpochStoreError =>
+    new EpochStoreError('EPOCH_STAGING_INVALID', 'The store-created staging marker was replaced.');
+  let markerContents: string;
   try {
-    const markerMetadata = await lstat(join(record.root, stagingMarkerFileName));
-    if (
-      !markerMetadata.isFile() ||
-      markerMetadata.isSymbolicLink() ||
-      await readFile(join(record.root, stagingMarkerFileName), 'utf8') !== record.markerContents
-    ) {
-      throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The store-created staging marker was replaced.');
-    }
+    markerContents = await readPinnedFile(join(record.root, stagingMarkerFileName), {
+      changedWhileOpening: markerReplaced,
+      changedWhileReading: markerReplaced,
+      maximumBytes: stagingMarkerMaximumBytes,
+      unsafe: markerReplaced,
+    });
   } catch (error) {
     if (isErrno(error, 'ENOENT')) {
       throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The store-created staging marker is missing.');
     }
     throw error;
   }
+  if (markerContents !== record.markerContents) throw markerReplaced();
 
   const [epochsRoot, stagingRoot] = await Promise.all([
     realpath(context.epochsPath),
