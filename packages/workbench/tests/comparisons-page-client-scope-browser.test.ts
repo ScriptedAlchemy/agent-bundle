@@ -153,6 +153,7 @@ e2e('aborts and hides a stale comparison synchronously when its client is replac
     await expect(page.locator('#comparison-base')).toHaveValue('client-b-base');
     expect(pageErrors).toEqual([]);
   } finally {
+    await page.close();
     await fixture.close();
   }
 });
@@ -183,6 +184,7 @@ e2e('aborts an active comparison when only its Eval client is replaced', { timeo
     await page.waitForTimeout(25);
     expect(await page.locator('body').innerText()).not.toContain('late-a');
   } finally {
+    await page.close();
     await fixture.close();
   }
 });
