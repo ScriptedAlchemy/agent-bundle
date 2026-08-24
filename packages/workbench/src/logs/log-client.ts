@@ -9,7 +9,7 @@ import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bu
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
 import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys as hasExactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
-import { abortableNdjsonStream, readNdjsonByteFrames } from '../ndjson.ts';
+import { abortableNdjsonStream, readNdjsonResponseFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface LogClientOptions {
@@ -183,42 +183,28 @@ export class LogClient {
       if (isAbort(error) || signal.aborted) return;
       throw error;
     }
-    if (response.body === null) throw invalid();
-    const reader = response.body.getReader();
-    const cancelReader = (): void => { void reader.cancel().catch(() => undefined); };
-    signal.addEventListener('abort', cancelReader, { once: true });
-    if (signal.aborted) cancelReader();
     const decoder = new TextDecoder('utf-8', { fatal: true });
     let expectedSequence = options.afterSequence + 1;
     let receivedMessage = false;
     try {
-      await readNdjsonByteFrames(reader, {
-        maxFrameBytes: maximumLogFrameBytes,
-        onFrame: (bytes) => {
-          const line = decoder.decode(bytes).trim();
-          if (line.length === 0) return;
-          const message = messageFor(line);
-          if ('sequence' in message) {
-            if (message.sequence !== expectedSequence) throw invalid();
-            expectedSequence += 1;
-          } else {
-            if (receivedMessage || message.requestedAfterSequence !== options.afterSequence) throw invalid();
-            expectedSequence = message.earliestAvailableSequence;
-          }
-          receivedMessage = true;
-          options.onMessage(message);
-        },
-        onIncomplete: () => { throw invalid(); },
-        onLimitExceeded: () => { throw invalid(); },
-        signal,
-      });
+      await readNdjsonResponseFrames(response, (bytes) => {
+        const line = decoder.decode(bytes).trim();
+        if (line.length === 0) return;
+        const message = messageFor(line);
+        if ('sequence' in message) {
+          if (message.sequence !== expectedSequence) throw invalid();
+          expectedSequence += 1;
+        } else {
+          if (receivedMessage || message.requestedAfterSequence !== options.afterSequence) throw invalid();
+          expectedSequence = message.earliestAvailableSequence;
+        }
+        receivedMessage = true;
+        options.onMessage(message);
+      }, { invalidFrameError: invalid, maxFrameBytes: maximumLogFrameBytes, signal });
     } catch (error) {
       if (isAbort(error) || signal.aborted) return;
       if (error instanceof LogClientError) throw error;
       throw invalid();
-    } finally {
-      signal.removeEventListener('abort', cancelReader);
-      await reader.cancel().catch(() => undefined);
     }
   }
 }

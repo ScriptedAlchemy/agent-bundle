@@ -42,7 +42,8 @@ const traceStream = (): {
     },
   }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
   return Object.freeze({
-    close: () => controller?.close(),
+    // The trace client cancels its reader on abort, which may have closed the stream already.
+    close: () => { try { controller?.close(); } catch { /* already closed */ } },
     response,
     send: (entry) => controller?.enqueue(new TextEncoder().encode(`${JSON.stringify(entry)}\n`)),
   });

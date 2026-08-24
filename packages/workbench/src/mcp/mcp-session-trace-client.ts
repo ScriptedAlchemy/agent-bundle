@@ -3,8 +3,8 @@ import type {
   McpSessionTraceEntry,
   McpSessionTraceReplayGap,
 } from '../../../agent-bundle/src/contracts/mcp-session.ts';
-import { isRecord } from '../client-helpers.ts';
-import { readNdjsonByteFrames } from '../ndjson.ts';
+import { isRecord, parseStrictResponseJson } from '../client-helpers.ts';
+import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
 import type { McpRouteTrace } from './mcp-route-client.ts';
 
 export type McpSessionTraceMessage = McpSessionTraceEntry | McpSessionTraceReplayGap;
@@ -107,8 +107,9 @@ const traceCursor = (entry: McpSessionTraceMessage): number =>
 /** Owns the NDJSON trace subscription, replay-gap validation, and cursor-ordered publishing for one controller. */
 export class McpSessionTraceClient {
   readonly #options: McpSessionTraceClientOptions;
-  #abort: AbortController | undefined;
   #refresh: TraceRefresh | undefined;
+  /** Latches until reset() so one admitted session never opens a second subscription. */
+  #stream: NdjsonStream | undefined;
   #task: Promise<void> | undefined;
 
   constructor(options: McpSessionTraceClientOptions) {
@@ -121,7 +122,7 @@ export class McpSessionTraceClient {
   }
 
   abort(): void {
-    this.#abort?.abort();
+    this.#stream?.close();
   }
 
   beginRefresh(generation: number): McpSessionTraceRefresh {
@@ -139,7 +140,9 @@ export class McpSessionTraceClient {
   }
 
   publish(entries: readonly McpSessionTraceMessage[]): void {
-    const ordered = [...entries].sort((left, right) => traceCursor(left) - traceCursor(right));
+    const ordered = entries.length === 1
+      ? entries
+      : [...entries].sort((left, right) => traceCursor(left) - traceCursor(right));
     for (const entry of ordered) {
       const cursor = traceCursor(entry);
       if (cursor <= this.#options.lastSequence()) continue;
@@ -156,13 +159,15 @@ export class McpSessionTraceClient {
   }
 
   reset(): void {
-    this.#abort = undefined;
+    this.#stream = undefined;
     this.#task = undefined;
   }
 
   subscribe(sessionId: string, generation: number): void {
-    if (this.#abort !== undefined) return;
-    const task = this.#subscribe(sessionId, generation);
+    if (this.#stream !== undefined) return;
+    const stream = abortableNdjsonStream(undefined, (signal) => this.#subscribe(sessionId, generation, signal));
+    this.#stream = stream;
+    const task = stream.done;
     this.#task = task;
     void task.finally(() => {
       if (this.#task === task) this.#task = undefined;
@@ -180,34 +185,25 @@ export class McpSessionTraceClient {
     this.publish([entry]);
   }
 
-  async #subscribe(sessionId: string, generation: number): Promise<void> {
-    const abort = new AbortController();
-    this.#abort = abort;
+  async #subscribe(sessionId: string, generation: number, signal: AbortSignal): Promise<void> {
     try {
-      const response = await this.#options.stream(sessionId, this.#options.lastSequence(), abort.signal);
-      if (response.body === null) throw this.#options.createError('Foreground MCP trace stream did not include a body.');
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+      const response = await this.#options.stream(sessionId, this.#options.lastSequence(), signal);
       const receiveLine = (bytes: Uint8Array): void => {
-        const line = decoder.decode(bytes);
-        if (line.length > 0) this.#receive(traceEntry(JSON.parse(line), this.#invalid), generation);
+        if (bytes.byteLength === 0) return;
+        this.#receive(traceEntry(parseStrictResponseJson(bytes, this.#invalid), this.#invalid), generation);
       };
-      try {
-        await readNdjsonByteFrames(reader, {
-          maxFrameBytes: maximumTraceFrameBytes,
-          onFrame: receiveLine,
-          onIncomplete: receiveLine,
-          onLimitExceeded: () => { throw this.#invalid(); },
-          signal: abort.signal,
-        });
-      } finally {
-        reader.releaseLock();
-      }
-      if (!abort.signal.aborted && this.#options.isCurrent(generation)) {
+      await readNdjsonResponseFrames(response, receiveLine, {
+        invalidFrameError: this.#invalid,
+        maxFrameBytes: maximumTraceFrameBytes,
+        missingBodyError: () => this.#options.createError('Foreground MCP trace stream did not include a body.'),
+        onIncomplete: receiveLine,
+        signal,
+      });
+      if (!signal.aborted && this.#options.isCurrent(generation)) {
         this.#options.publishFailure('mcp.trace.stream.closed', 'Foreground MCP trace stream closed unexpectedly.');
       }
     } catch (reason) {
-      if (!abort.signal.aborted && this.#options.isCurrent(generation)) {
+      if (!signal.aborted && this.#options.isCurrent(generation)) {
         this.#options.publishFailure('mcp.trace.stream.error', reason);
       }
     }

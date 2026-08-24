@@ -611,7 +611,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
             setActionError(`MCP operation ${request.id} is no longer active.`);
             return;
           }
-          setCancelledRequests((current) => current.includes(request.id) ? current : [...current, request.id]);
+          setCancelledRequests((current) => [...current.filter((id) => Object.hasOwn(model.activeRequests, id)), request.id]);
         }} type="button">Cancel {request.id}</button></li>)}</ul>
       </section>}
     </section>

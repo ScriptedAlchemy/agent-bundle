@@ -11,7 +11,7 @@ import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-b
 import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/contracts/playground.ts';
 import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord, nonemptyString } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
-import { readNdjsonByteFrames } from '../ndjson.ts';
+import { readNdjsonResponseFrames } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
 
 export interface PlaygroundClientOptions {
@@ -371,26 +371,20 @@ export class PlaygroundClient {
     if (!response.ok) {
       throw this.#transport.diagnosticError(await response.json().catch(() => undefined), response.status);
     }
-    const body = response.body;
-    if (body === null) throw invalidResponse();
-    const reader = body.getReader();
     const decoder = new TextDecoder();
     const emitLine = (bytes: Uint8Array): void => {
       const line = decoder.decode(bytes).trim();
       if (line.length > 0) options.onEvent(traceEventLine(line));
     };
     try {
-      await readNdjsonByteFrames(reader, {
+      await readNdjsonResponseFrames(response, emitLine, {
+        invalidFrameError: invalidResponse,
         maxFrameBytes: maximumTraceFrameBytes,
-        onFrame: emitLine,
         onIncomplete: emitLine,
-        onLimitExceeded: () => { throw invalidResponse(); },
         signal,
       });
     } catch (error) {
       if (!isAbort(error) && !signal.aborted) throw error;
-    } finally {
-      await reader.cancel().catch(() => undefined);
     }
   }
 

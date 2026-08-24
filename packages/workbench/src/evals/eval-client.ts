@@ -10,7 +10,7 @@ import type { JsonValue } from '../../../agent-bundle/src/contracts/strict-json.
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
 import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, decodeDiagnosticError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
 import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
-import { abortableNdjsonStream, readNdjsonByteFrames } from '../ndjson.ts';
+import { abortableNdjsonStream, readNdjsonResponseFrames } from '../ndjson.ts';
 import {
   nonnegativeIntegerSchema,
   positiveIntegerSchema,
@@ -434,33 +434,20 @@ export class EvalClient {
       if (isAbort(error) || signal.aborted) return;
       throw error;
     }
-    if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/x-ndjson') || response.body === null) throw invalidResponse();
-    const reader = response.body.getReader();
-    const cancel = (): void => { void reader.cancel().catch(() => undefined); };
-    signal.addEventListener('abort', cancel, { once: true });
-    if (signal.aborted) cancel();
+    if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/x-ndjson')) throw invalidResponse();
     let expected = options.afterSequence + 1;
     try {
-      await readNdjsonByteFrames(reader, {
-        maxFrameBytes: maximumEventFrameBytes,
-        onFrame: (bytes) => {
-          if (bytes.byteLength === 0) return;
-          const event = eventFor(parseResponseJson(bytes));
-          if (event.sequence !== expected) throw invalidResponse();
-          expected += 1;
-          options.onEvent(event);
-        },
-        onIncomplete: () => { throw invalidResponse(); },
-        onLimitExceeded: () => { throw invalidResponse(); },
-        signal,
-      });
+      await readNdjsonResponseFrames(response, (bytes) => {
+        if (bytes.byteLength === 0) return;
+        const event = eventFor(parseResponseJson(bytes));
+        if (event.sequence !== expected) throw invalidResponse();
+        expected += 1;
+        options.onEvent(event);
+      }, { invalidFrameError: invalidResponse, maxFrameBytes: maximumEventFrameBytes, signal });
     } catch (error) {
       if (isAbort(error) || signal.aborted) return;
       if (error instanceof EvalClientError) throw error;
       throw invalidResponse();
-    } finally {
-      signal.removeEventListener('abort', cancel);
-      await reader.cancel().catch(() => undefined);
     }
   }
 }

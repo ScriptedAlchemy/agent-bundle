@@ -51,6 +51,55 @@ export const readNdjsonByteFrames = async (
   if (partBytes > 0) options.onIncomplete(takeFrame());
 };
 
+export interface ReadNdjsonResponseFramesOptions {
+  /** Error for oversized frames and, unless overridden, missing bodies and incomplete trailing frames. */
+  readonly invalidFrameError: () => Error;
+  readonly maxFrameBytes: number;
+  /** Replaces `invalidFrameError` for a response that carries no body. */
+  readonly missingBodyError?: () => Error;
+  /** Receives trailing bytes with no terminating newline; defaults to throwing `invalidFrameError`. */
+  readonly onIncomplete?: (bytes: Uint8Array) => void;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Reads one NDJSON response body frame by frame: rejects a missing body, owns
+ * the reader, cancels it when `signal` aborts so pending reads settle, and
+ * always releases it. A trailing incomplete frame after an abort is dropped,
+ * matching the frame-drop behavior `readNdjsonByteFrames` applies on abort.
+ */
+export const readNdjsonResponseFrames = async (
+  response: Response,
+  onFrame: (bytes: Uint8Array) => void,
+  options: ReadNdjsonResponseFramesOptions,
+): Promise<void> => {
+  if (response.body === null) throw (options.missingBodyError ?? options.invalidFrameError)();
+  const reader = response.body.getReader();
+  const cancelReader = (): void => { void reader.cancel().catch(() => undefined); };
+  options.signal.addEventListener('abort', cancelReader, { once: true });
+  if (options.signal.aborted) cancelReader();
+  try {
+    await readNdjsonByteFrames(reader, {
+      maxFrameBytes: options.maxFrameBytes,
+      onFrame,
+      onIncomplete: (bytes) => {
+        if (options.signal.aborted) return;
+        if (options.onIncomplete === undefined) throw options.invalidFrameError();
+        options.onIncomplete(bytes);
+      },
+      onLimitExceeded: () => { throw options.invalidFrameError(); },
+      signal: options.signal,
+    });
+  } finally {
+    options.signal.removeEventListener('abort', cancelReader);
+    try {
+      await reader.cancel().catch(() => undefined);
+    } finally {
+      reader.releaseLock();
+    }
+  }
+};
+
 export interface NdjsonStream {
   close(): void;
   readonly done: Promise<void>;
