@@ -391,9 +391,14 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
 
       phase = 'Logs, Evals, and Comparisons pages';
+      const initialLogsReplay = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' && url.pathname === '/api/logs/replay' && url.search === '?after=0';
+      });
       await page.goto(`${origin}#logs`);
       phase = 'Logs page heading';
       await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
+      expect((await initialLogsReplay).ok()).toBe(true);
       await page.goto(`${origin}#evals`);
       phase = 'Evals page heading';
       await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
