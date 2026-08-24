@@ -596,6 +596,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect(page.getByText('epoch.bound')).toBeVisible({ timeout: browserTimeout });
 
       phase = 'invalid edit retains stale epoch B';
+      const lastGoodBeforeInvalid = activeEpochFrom(await call('project_status'), 'last good before invalid edit');
+      expect(lastGoodBeforeInvalid.artifactStatus.state).toBe('active');
+      await expectGeneratedSkill('last good before invalid edit', lastGoodBeforeInvalid.epochId, epochBMarker);
       const invalidConfig = originalConfig.replace('ui://packed-release/dashboard.html', 'https://packed-release.example/dashboard.html');
       if (invalidConfig === originalConfig) throw new Error('The packed fixture did not contain the resource URI used for the invalid rebuild.');
       await writeFile(configSource, invalidConfig);
@@ -604,12 +607,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await rebuildFromOverview('invalid epoch B');
       const staleStatus = activeEpochFrom(await call('project_status'), 'stale epoch B');
       expect(staleStatus.artifactStatus.state).toBe('stale');
-      expect(staleStatus.epochId).toBe(epochB);
+      expect(staleStatus.epochId).toBe(lastGoodBeforeInvalid.epochId);
       const staleDiagnostics = await client.callTool({ name: 'diagnostics_list' });
       const staleDiagnosticRows = record(staleDiagnostics.structuredContent, 'stale diagnostics').diagnostics;
       expect(Array.isArray(staleDiagnosticRows)).toBe(true);
       expect(staleDiagnosticRows).not.toHaveLength(0);
-      await expectGeneratedSkill('stale epoch B', epochB, epochBMarker);
+      await expectGeneratedSkill('stale epoch B', lastGoodBeforeInvalid.epochId, epochBMarker);
 
       phase = 'repaired edit rebuild C';
       const epochCMarker = 'Epoch C repaired the packed review guidance.';
