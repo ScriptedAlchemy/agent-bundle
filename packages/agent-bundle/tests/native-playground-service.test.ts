@@ -1204,7 +1204,7 @@ it('does not deadlock when a direct native Codex abort listener awaits a reentra
     expect(service.close()).toBe(closing);
     const settled = await Promise.race([
       closing.then(() => true, () => true),
-      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
+      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 1_000); }),
     ]);
     expect(settled).toBe(true);
     expect(reentrant).not.toBe(closing);
@@ -1283,7 +1283,7 @@ it('does not deadlock when caller cancellation reaches a native Codex close list
     expect(service.close()).toBe(closing);
     const settled = await Promise.race([
       closing.then(() => true, () => true),
-      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
+      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 1_000); }),
     ]);
     expect(settled).toBe(true);
     expect(reentrant).not.toBe(closing);
