@@ -89,6 +89,7 @@ const writePlaygroundProject = async (root: string): Promise<void> => {
       '',
     ].join('\n')),
     writeFile(join(root, 'src', 'large-output.ts'), "process.stdout.write('x'.repeat(64 * 1024));\n"),
+    writeFile(join(root, 'src', 'wait.ts'), "setInterval(() => undefined, 1_000);\n"),
     writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
       "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
@@ -98,7 +99,6 @@ const writePlaygroundProject = async (root: string): Promise<void> => {
       "server.registerTool('echo', { description: 'Echo one message.', inputSchema: z.object({ message: z.string() }) }, async ({ message }) => ({",
       "  content: [{ type: 'text', text: `Echo: ${message}` }],",
       '}));',
-      "server.registerTool('wait', { description: 'Wait until the foreground cancels this operation.' }, async () => new Promise(() => {}));",
       'await server.connect(new StdioServerTransport());',
       '',
     ].join('\n')),
@@ -109,7 +109,7 @@ const writePlaygroundProject = async (root: string): Promise<void> => {
       "  hooks: { sessionStart: './src/hooks/session-start.ts' },",
       "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
       "  plugin: { name: 'playground-real-fixture', version: '1.0.0' },",
-      "  scripts: { large: './src/large-output.ts', review: './src/review.ts' },",
+      "  scripts: { large: './src/large-output.ts', review: './src/review.ts', wait: './src/wait.ts' },",
       "  skills: ['skills/review'],",
       "  targets: ['claude'],",
       '});',
@@ -196,10 +196,11 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     await expect(page.getByText('mcp.tool.called')).toBeVisible({ timeout: browserTimeout });
     await mcpStarted;
 
-    await page.locator('#playground-mcp-tool').fill('wait');
-    await page.locator('#playground-mcp-arguments').fill('{}');
+    await page.locator('#playground-operation').selectOption('script.run');
+    await expect(page.locator('#playground-script-id option[value="script:wait"]')).toBeAttached({ timeout: browserTimeout });
+    await page.locator('#playground-script-id').selectOption('script:wait');
     const waitingStarted = waitForRun();
-    await page.getByRole('button', { name: 'Start run' }).click();
+    await page.getByRole('button', { name: 'Run script' }).click();
     const waiting = await waitingStarted;
     const pinnedEpoch = waiting.run.session.identity.epoch.id;
     await expect(page.getByRole('button', { name: 'Cancel run' })).toBeEnabled({ timeout: browserTimeout });
@@ -248,6 +249,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     await expect(page.getByRole('heading', { name: /Draft eval case/u })).toBeVisible({ timeout: browserTimeout });
 
     expect(runBodies).toHaveLength(6);
+    expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:wait', target: 'claude' });
     expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:review', target: 'claude' });
     expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:large', target: 'claude' });
     for (const body of runBodies) {
