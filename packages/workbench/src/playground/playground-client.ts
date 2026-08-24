@@ -10,7 +10,7 @@ import type {
   PlaygroundSession,
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/contracts/playground.ts';
-import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord, nonemptyString } from '../client-helpers.ts';
+import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord, nonemptyString, parseStrictResponseJson } from '../client-helpers.ts';
 import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
 import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
@@ -242,16 +242,10 @@ const draftEvalBody = (value: unknown): DraftEvalCase => {
   return body as unknown as DraftEvalCase;
 };
 
-const traceEventLine = (line: string): PlaygroundTraceEvent => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    throw invalidResponse();
-  }
-  const detached = detachedJson(parsed);
-  if (detached === invalidJson || !isTraceEvent(detached)) throw invalidResponse();
-  return detached;
+const traceEventFrame = (bytes: Uint8Array): PlaygroundTraceEvent => {
+  const event = parseStrictResponseJson(bytes, invalidResponse);
+  if (!isTraceEvent(event)) throw invalidResponse();
+  return event;
 };
 
 /** A typed, credential-memory-only browser client for the durable playground trace routes. */
@@ -367,16 +361,13 @@ export class PlaygroundClient {
     if (!response.ok) {
       throw this.#transport.diagnosticError(await response.json().catch(() => undefined), response.status);
     }
-    const decoder = new TextDecoder();
     const emitLine = (bytes: Uint8Array): void => {
-      const line = decoder.decode(bytes).trim();
-      if (line.length > 0) options.onEvent(traceEventLine(line));
+      if (bytes.byteLength > 0) options.onEvent(traceEventFrame(bytes));
     };
     try {
       await readNdjsonResponseFrames(response, emitLine, {
         invalidFrameError: invalidResponse,
         maxFrameBytes: maximumTraceFrameBytes,
-        onIncomplete: emitLine,
         signal,
       });
     } catch (error) {

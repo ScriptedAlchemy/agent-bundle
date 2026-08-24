@@ -233,6 +233,43 @@ it('decodes NDJSON trace frames split across transport chunks', async () => {
   expect(Object.isFrozen(received[0])).toBe(true);
 });
 
+for (const [name, body] of [
+  ['a duplicate-key frame', `${JSON.stringify(event(1, 'Bound.')).replace('"summary":"Bound."', '"summary":"First.","summary":"Bound."')}\n`],
+  ['an unterminated frame', JSON.stringify(event(1, 'Bound.'))],
+] as const) {
+  it(`rejects ${name} from the NDJSON trace`, async () => {
+    const client = new PlaygroundClient({
+      fetch: async (input) => String(input) === '/api/project/session'
+        ? response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+        : ndjson([body]),
+    });
+
+    const stream = client.stream('session-1', { onEvent: () => undefined });
+
+    await expect(stream.done).rejects.toMatchObject({ code: 'AB8043' });
+  });
+}
+
+it('rejects invalid UTF-8 from the NDJSON trace', async () => {
+  const serialized = JSON.stringify(event(1, 'Bound.'));
+  const summary = serialized.indexOf('Bound.');
+  const prefix = new TextEncoder().encode(serialized.slice(0, summary));
+  const suffix = new TextEncoder().encode(`${serialized.slice(summary + 'Bound.'.length)}\n`);
+  const bytes = new Uint8Array(prefix.byteLength + 1 + suffix.byteLength);
+  bytes.set(prefix);
+  bytes[prefix.byteLength] = 0xff;
+  bytes.set(suffix, prefix.byteLength + 1);
+  const client = new PlaygroundClient({
+    fetch: async (input) => String(input) === '/api/project/session'
+      ? response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+      : new Response(bytes, { headers: { 'content-type': 'application/x-ndjson' } }),
+  });
+
+  const stream = client.stream('session-1', { onEvent: () => undefined });
+
+  await expect(stream.done).rejects.toMatchObject({ code: 'AB8043' });
+});
+
 it('decodes a route diagnostic body into a coded client error', async () => {
   const client = new PlaygroundClient({
     fetch: recordingFetch([], () => response({ diagnostic: { code: 'AB8046', message: 'Playground session is already finalized.' } }, 409)),

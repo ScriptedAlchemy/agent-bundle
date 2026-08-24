@@ -195,7 +195,6 @@ export class McpSessionTraceClient {
         invalidFrameError: this.#invalid,
         maxFrameBytes: maximumTraceFrameBytes,
         missingBodyError: () => this.#options.createError('Foreground MCP trace stream did not include a body.'),
-        onIncomplete: receiveLine,
         signal,
       });
       if (!signal.aborted && this.#options.isCurrent(generation)) {

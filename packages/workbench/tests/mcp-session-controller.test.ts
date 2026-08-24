@@ -984,6 +984,31 @@ it('reports a terminal trace stream EOF as an explicit controller error instead 
   await controller.close();
 });
 
+it('rejects an unterminated MCP trace frame instead of publishing partial telemetry', async () => {
+  const entry = { direction: 'server', kind: 'logging', occurredAt: 1, payload: { message: 'partial' }, sequence: 1 };
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async () => new Response(JSON.stringify(entry), {
+      headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
+    }),
+    trace: async () => ({ entries: [] }),
+  };
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes,
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(binding);
+  await eventually(() => controller.model.phase === 'error');
+
+  expect(controller.model.logs).toEqual([]);
+  expect(controller.model.diagnostics).toContainEqual(expect.objectContaining({ code: 'mcp.trace.stream.error' }));
+  await controller.close();
+});
+
 it('admits one opening session and disposes that exact client and transport when connection fails', async () => {
   const connecting = deferred<void>();
   const events: string[] = [];
