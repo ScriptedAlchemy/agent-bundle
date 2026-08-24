@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 
 import { expect, it } from '@rstest/core';
 
+import { errnoFailure } from './support/errors.ts';
+
 type Host = 'claude' | 'codex';
 
 const fixtureRoot = (host: Host) => new URL(`../../../fixtures/contracts/hosts/${host}/`, import.meta.url);
@@ -276,8 +278,7 @@ it('returns a structured missing-host diagnostic without a compatibility fallbac
   const missing = await contracts!.compareInstalledHostContract(claude.contract, {
     enabled: true,
     run: async () => {
-      const error = Object.assign(new Error('not found'), { code: 'ENOENT' });
-      throw error;
+      throw errnoFailure('ENOENT', 'not found');
     },
   });
 

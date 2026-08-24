@@ -15,6 +15,7 @@ import { expectExitCode } from '../src/eval/assertions.ts';
 import type { DiscoveredEvalSuite } from '../src/eval/discovery.ts';
 import type { EvalFixturePlan } from '../src/eval/fixtures.ts';
 import { defineEvalSuite } from '../src/eval/suite.ts';
+import { errnoFailure } from './support/errors.ts';
 
 const epoch = (id: string, root: string, target = 'claude') => Object.freeze({
   close: async () => undefined,
@@ -623,7 +624,7 @@ it('tolerates only Windows directory fsync capability failures during catalog pu
           get(target, property) {
             if (property === 'sync') {
               return async () => {
-                throw Object.assign(new Error(`${code} directory sync`), { code });
+                throw errnoFailure(code, `${code} directory sync`);
               };
             }
             const value = Reflect.get(target, property, target);
