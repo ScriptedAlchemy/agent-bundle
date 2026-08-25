@@ -37,18 +37,18 @@ export const BundleWorkflow = ({ onNavigate }: { readonly onNavigate: (page: Wor
   </div>
   <ol className="bundle-workflow">
     <li>
-      <h2>1. Author</h2>
+      <h2>Author</h2>
       <p>Define Skills, Hooks, scripts, and MCP capabilities from one source bundle.</p>
       <button onClick={() => onNavigate('skills')} type="button">Skills</button>
       <button onClick={() => onNavigate('hooks')} type="button">Hooks</button>
     </li>
     <li>
-      <h2>2. Build</h2>
+      <h2>Build</h2>
       <p>Build an immutable artifact epoch for the hosts you selected.</p>
       <button onClick={() => onNavigate('artifacts')} type="button">Artifacts</button>
     </li>
     <li>
-      <h2>3. Exercise</h2>
+      <h2>Exercise</h2>
       <p>Exercise emitted Skills, Hooks, Playground, and MCP behavior.</p>
       <button onClick={() => onNavigate('skills')} type="button">Skills</button>
       <button onClick={() => onNavigate('hooks')} type="button">Hooks</button>
@@ -56,7 +56,7 @@ export const BundleWorkflow = ({ onNavigate }: { readonly onNavigate: (page: Wor
       <button onClick={() => onNavigate('mcp')} type="button">MCP</button>
     </li>
     <li>
-      <h2>4. Evaluate</h2>
+      <h2>Evaluate</h2>
       <p>Evaluate host-ready behavior, compare results, and inspect durable evidence.</p>
       <button onClick={() => onNavigate('evals')} type="button">Evals</button>
       <button onClick={() => onNavigate('comparisons')} type="button">Comparisons</button>

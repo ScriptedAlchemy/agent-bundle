@@ -123,6 +123,8 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await failedRebuild;
     await expect(page.getByRole('heading', { name: /Diagnostics \([1-9]/u })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.epoch-row--stale')).toContainText('Last good artifact epoch', { timeout: browserTimeout });
+    await page.waitForTimeout(500);
+    await expect(page.locator('#overview .status-text')).not.toHaveText('Building', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-stale');
 
     await writeFile(hookSource, healthyHook);
@@ -150,6 +152,14 @@ e2e('drives the MCP App and deterministic eval in real Chrome', { timeout: 150_0
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
+    await page.goto(`${server.url}#overview`);
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('Author once, exercise host-ready behavior, and evaluate durable evidence.', { exact: true })).toBeVisible({ timeout: browserTimeout });
+    for (const stage of ['Author', 'Build', 'Exercise', 'Evaluate']) {
+      await expect(page.getByRole('heading', { name: stage, exact: true })).toBeVisible({ timeout: browserTimeout });
+    }
+    await expect(page.getByRole('heading', { name: /^[1-4]\.\s/u })).toHaveCount(0, { timeout: browserTimeout });
     await page.goto(`${server.url}#mcp`);
     await waitForSettledWorkbench(page);
     await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#mcp-server-name')?.value === 'status', undefined, { timeout: browserTimeout });

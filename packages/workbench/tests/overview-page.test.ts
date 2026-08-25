@@ -15,19 +15,22 @@ it('introduces the bundle dashboard and its author-to-evidence workflow', () => 
 it('groups workflow navigation by the author, build, exercise, and evaluate lifecycle', () => {
   const markup = renderToStaticMarkup(createElement(BundleWorkflow, { onNavigate: () => undefined }));
   const stages = [...markup.matchAll(/<li>(.*?)<\/li>/gu)].map((match) => match[1]!);
+  const headings = [...markup.matchAll(/<h2>(.*?)<\/h2>/gu)].map((match) => match[1]!);
 
   expect(stages).toHaveLength(4);
-  expect(stages[0]).toContain('1. Author');
+  expect(headings).toEqual(['Author', 'Build', 'Exercise', 'Evaluate']);
+  expect(markup).not.toMatch(/<h2>[1-4]\.\s/gu);
+  expect(stages[0]).toContain('>Author<');
   expect(stages[0]).toContain('>Skills<');
   expect(stages[0]).toContain('>Hooks<');
-  expect(stages[1]).toContain('2. Build');
+  expect(stages[1]).toContain('>Build<');
   expect(stages[1]).toContain('>Artifacts<');
-  expect(stages[2]).toContain('3. Exercise');
+  expect(stages[2]).toContain('>Exercise<');
   expect(stages[2]).toContain('>Skills<');
   expect(stages[2]).toContain('>Hooks<');
   expect(stages[2]).toContain('>Playground<');
   expect(stages[2]).toContain('>MCP<');
-  expect(stages[3]).toContain('4. Evaluate');
+  expect(stages[3]).toContain('>Evaluate<');
   expect(stages[3]).toContain('>Evals<');
   expect(stages[3]).toContain('>Comparisons<');
 });
