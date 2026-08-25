@@ -127,8 +127,9 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await failedRebuild;
     await expect(page.getByRole('heading', { name: /Diagnostics \([1-9]/u })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.epoch-row--stale')).toContainText('Last good artifact epoch', { timeout: browserTimeout });
+    await expect(page.locator('#overview .status-text')).toHaveText('failed', { timeout: browserTimeout });
     await page.waitForTimeout(500);
-    await expect(page.locator('#overview .status-text')).not.toHaveText('Building', { timeout: browserTimeout });
+    await expect(page.locator('#overview .status-text')).toHaveText('failed', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-stale');
 
     await writeFile(hookSource, healthyHook);
