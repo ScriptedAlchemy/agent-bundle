@@ -1,9 +1,8 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import { isHealthyCompilerFixture } from '../compiler-status-contract.ts';
 
-const fixturePath = join(process.cwd(), 'evals', 'fixtures', 'status', 'result.json');
+const fixturePath = new URL('../assets/evals/fixtures/status/result.json', import.meta.url);
 
 try {
   const fixture = JSON.parse(await readFile(fixturePath, 'utf8')) as unknown;

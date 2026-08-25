@@ -1,6 +1,7 @@
 import { defineConfig } from 'agent-bundle';
 
 export default defineConfig({
+  assets: ['evals/fixtures/status/result.json'],
   hooks: {
     sessionStart: { handler: './src/hooks/session-start.ts' },
   },
