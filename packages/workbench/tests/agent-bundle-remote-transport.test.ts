@@ -40,6 +40,13 @@ const closedStream = (...entries: readonly unknown[]): Response => new Response(
   },
 }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
 
+const rawClosedStream = (...chunks: readonly Uint8Array[]): Response => new Response(new ReadableStream<Uint8Array>({
+  start(controller) {
+    for (const chunk of chunks) controller.enqueue(chunk);
+    controller.close();
+  },
+}), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
+
 const cancellableStream = (): Readonly<{ readonly cancelled: () => boolean; readonly response: Response }> => {
   let wasCancelled = false;
   return Object.freeze({
@@ -283,6 +290,30 @@ it('reports malformed trace data and closes its bound session rather than leavin
 
   expect(errors).toEqual(['Foreground MCP trace stream contained an invalid entry.']);
   expect(fixture.requests.filter((request) => request.url === '/api/mcp/sessions/session-a')).toHaveLength(1);
+});
+
+it('rejects noncanonical NDJSON bytes before accepting an MCP trace entry', async () => {
+  const encoder = new TextEncoder();
+  const streams = [
+    rawClosedStream(encoder.encode('{"kind":"frame","sequence":1}')),
+    rawClosedStream(Uint8Array.from([0xff, 0x0a])),
+    rawClosedStream(encoder.encode('{"kind":"frame","sequence":1,"sequence":2}\n')),
+  ];
+
+  for (const stream of streams) {
+    const fixture = routeFetch({ streams: [stream] });
+    const transport = new AgentBundleRemoteTransport({ binding, routes: new McpRouteClient({ fetch: fixture.fetch }) });
+    const errors: string[] = [];
+    let closed = false;
+    transport.onerror = (error) => errors.push(error.message);
+    transport.onclose = () => { closed = true; };
+
+    await transport.start();
+    await eventually(() => closed);
+
+    expect(errors).toEqual(['Foreground MCP trace stream contained an invalid entry.']);
+    expect(fixture.requests.filter((request) => request.url === '/api/mcp/sessions/session-a')).toHaveLength(1);
+  }
 });
 
 it('forwards only raw server notification frames and never trace responses or server requests with colliding ids', async () => {
