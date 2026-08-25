@@ -58,12 +58,45 @@ export interface McpPageProps {
   readonly onResetSession?: () => void;
   /** Artifact-inspected server choices are advisory defaults; operators may still enter another server name. */
   readonly serverOptions?: readonly McpPageServerOption[];
+  /** Prevents an unresolved replacement catalog from reclassifying the previous catalog choice as manual input. */
+  readonly serverCatalogState?: McpPageServerCatalogState;
   readonly targetOptions: readonly string[];
 }
 
 export interface McpPageServerOption {
   readonly name: string;
   readonly target: string;
+}
+
+export type McpPageServerCatalogState = 'loading' | 'ready';
+
+export interface McpPageServerCatalog {
+  readonly epochId: string;
+  readonly options: readonly McpPageServerOption[];
+}
+
+export interface McpPageArtifactInspection {
+  readonly epochId: string;
+  readonly runtime: Readonly<{
+    readonly mcpServers: readonly McpPageServerOption[];
+  }>;
+}
+
+export type McpPageServerNameOrigin = 'catalog' | 'manual';
+
+export interface McpPageBinding {
+  readonly epochId: string;
+  readonly serverName: string;
+  readonly serverNameOrigin: McpPageServerNameOrigin;
+  readonly target: string;
+}
+
+export interface McpPageBindingOptions {
+  readonly epochId: string;
+  readonly serverCatalogState: McpPageServerCatalogState;
+  readonly serverOptions: readonly McpPageServerOption[];
+  readonly sessionPhase: McpBrowserSessionModel['phase'];
+  readonly targetOptions: readonly string[];
 }
 
 export type McpConfigDownload = McpDownload;
@@ -130,16 +163,23 @@ const traceTabs: readonly TraceTab[] = ['raw', 'logs', 'progress'];
 
 const noMcpPageServerOptions: readonly McpPageServerOption[] = Object.freeze([]);
 
+const frozenMcpPageServerOptionsFor = (options: readonly McpPageServerOption[]): readonly McpPageServerOption[] => Object.freeze(
+  options.map((option) => Object.freeze({ name: option.name, target: option.target })),
+);
+
 /** Keeps only the immutable artifact servers that the selected generated target can start. */
 export const mcpPageServerOptionsFor = (
   options: readonly McpPageServerOption[],
   target: string,
-): readonly McpPageServerOption[] => Object.freeze(options
-  .filter((option) => option.target === target)
-  .map((option) => Object.freeze({ name: option.name, target: option.target })));
+): readonly McpPageServerOption[] => frozenMcpPageServerOptionsFor(options.filter((option) => option.target === target));
 
 const mcpPageTargetFor = (target: string, options: readonly string[]): string =>
   options.includes(target) ? target : options[0] ?? '';
+
+const mcpPageCatalogServerNameFor = (
+  serverName: string,
+  options: readonly McpPageServerOption[],
+): string => options.some((option) => option.name === serverName) ? serverName : options[0]?.name ?? '';
 
 /** Replaces only a stale catalog-backed name, retaining arbitrary operator-entered names for the datalist input. */
 export const mcpPageServerNameFor = (
@@ -150,6 +190,44 @@ export const mcpPageServerNameFor = (
   if (options.some((option) => option.name === serverName)) return serverName;
   if (serverName.length > 0 && !allOptions.some((option) => option.name === serverName)) return serverName;
   return options[0]?.name ?? '';
+};
+
+/** Publishes an immutable catalog only when the completed inspection still belongs to the active epoch. */
+export const mcpPageServerCatalogFor = (
+  epochId: string,
+  inspection: McpPageArtifactInspection,
+  signal: Pick<AbortSignal, 'aborted'>,
+): McpPageServerCatalog | undefined => {
+  if (signal.aborted || inspection.epochId !== epochId) return undefined;
+  return Object.freeze({ epochId, options: frozenMcpPageServerOptionsFor(inspection.runtime.mcpServers) });
+};
+
+const sameMcpPageBinding = (left: McpPageBinding, right: McpPageBinding): boolean =>
+  left.epochId === right.epochId
+  && left.serverName === right.serverName
+  && left.serverNameOrigin === right.serverNameOrigin
+  && left.target === right.target;
+
+/** Rebinds only an idle form, preserving typed server names across active artifact rebuilds. */
+export const mcpPageBindingFor = (
+  binding: McpPageBinding,
+  options: McpPageBindingOptions,
+): McpPageBinding => {
+  if (options.sessionPhase !== 'idle') return binding;
+  const epochChanged = binding.epochId !== options.epochId;
+  const target = epochChanged ? options.targetOptions[0] ?? '' : mcpPageTargetFor(binding.target, options.targetOptions);
+  if (options.serverCatalogState === 'loading') {
+    return Object.freeze({ ...binding, epochId: options.epochId, target });
+  }
+  const targetServerOptions = mcpPageServerOptionsFor(options.serverOptions, target);
+  return Object.freeze({
+    ...binding,
+    epochId: options.epochId,
+    serverName: binding.serverNameOrigin === 'manual'
+      ? binding.serverName
+      : mcpPageCatalogServerNameFor(binding.serverName, targetServerOptions),
+    target,
+  });
 };
 
 export const createMcpPageActionTracker = (): McpPageActionTracker => {
@@ -419,14 +497,24 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   </section>;
 };
 
-export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onResetSession, presentationActive = true, serverOptions = noMcpPageServerOptions, targetOptions }: McpPageProps) => {
+export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onResetSession, presentationActive = true, serverCatalogState = 'ready', serverOptions = noMcpPageServerOptions, targetOptions }: McpPageProps) => {
   const [model, setModel] = useState(() => controller.model);
-  const [epochId, setEpochId] = useState(initialBinding?.epochId ?? '');
-  const [target, setTarget] = useState(() => mcpPageTargetFor(initialBinding?.target ?? '', targetOptions));
-  const [serverName, setServerName] = useState(() => {
+  const [binding, setBinding] = useState<McpPageBinding>(() => {
     const initialTarget = mcpPageTargetFor(initialBinding?.target ?? '', targetOptions);
-    return mcpPageServerNameFor(initialBinding?.serverName ?? '', mcpPageServerOptionsFor(serverOptions, initialTarget), serverOptions);
+    const initialTargetServerOptions = mcpPageServerOptionsFor(serverOptions, initialTarget);
+    const initialServerName = initialBinding?.serverName ?? '';
+    const serverNameOrigin: McpPageServerNameOrigin = initialServerName.length > 0
+      && !initialTargetServerOptions.some((option) => option.name === initialServerName)
+      ? 'manual'
+      : 'catalog';
+    return Object.freeze({
+      epochId: initialBinding?.epochId ?? '',
+      serverName: mcpPageServerNameFor(initialServerName, initialTargetServerOptions, serverOptions),
+      serverNameOrigin,
+      target: initialTarget,
+    });
   });
+  const { epochId, serverName, target } = binding;
   const [timeoutMs, setTimeoutMs] = useState('5000');
   const [timeoutError, setTimeoutError] = useState<string>();
   const [activeTimeoutMs, setActiveTimeoutMs] = useState(controller.session?.timeoutMs);
@@ -464,12 +552,17 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     setActiveTimeoutMs(controller.session?.timeoutMs);
   }), [controller]);
   useEffect(() => {
-    setTarget((current) => mcpPageTargetFor(current, targetOptions));
-  }, [targetOptions]);
-  useEffect(() => {
-    const options = mcpPageServerOptionsFor(serverOptions, target);
-    setServerName((current) => mcpPageServerNameFor(current, options, serverOptions));
-  }, [serverOptions, target]);
+    setBinding((current) => {
+      const next = mcpPageBindingFor(current, {
+        epochId: initialBinding?.epochId ?? current.epochId,
+        serverCatalogState,
+        serverOptions,
+        sessionPhase: model.phase,
+        targetOptions,
+      });
+      return sameMcpPageBinding(current, next) ? current : next;
+    });
+  }, [initialBinding?.epochId, model.phase, serverCatalogState, serverOptions, targetOptions]);
   useEffect(() => () => { void appPreviewController.current?.close(); }, []);
 
   const setActiveAppPreviewController = useCallback((next: McpAppPreviewController | undefined): void => {
@@ -602,7 +695,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         run('open', () => controller.open({ epochId, serverName, target }, parsedTimeoutMs));
       }}>
         <label htmlFor="mcp-epoch">Artifact epoch
-          <select disabled={!controls.open} id="mcp-epoch" onChange={(event) => setEpochId(event.currentTarget.value)} required value={epochId}>
+          <select disabled={!controls.open} id="mcp-epoch" onChange={(event) => setBinding((current) => Object.freeze({ ...current, epochId: event.currentTarget.value }))} required value={epochId}>
             <option value="">Select an epoch</option>
             {epochOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
@@ -610,15 +703,31 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         <label htmlFor="mcp-target">Generated target
           <select disabled={!controls.open} id="mcp-target" onChange={(event) => {
             const nextTarget = event.currentTarget.value;
-            setTarget(nextTarget);
-            setServerName((current) => mcpPageServerNameFor(current, mcpPageServerOptionsFor(serverOptions, nextTarget), serverOptions));
+            setBinding((current) => {
+              const target = mcpPageTargetFor(nextTarget, targetOptions);
+              const targetServerOptions = mcpPageServerOptionsFor(serverOptions, target);
+              return Object.freeze({
+                ...current,
+                serverName: current.serverNameOrigin === 'manual' || serverCatalogState === 'loading'
+                  ? current.serverName
+                  : mcpPageCatalogServerNameFor(current.serverName, targetServerOptions),
+                target,
+              });
+            });
           }} required value={target}>
             <option value="">Select a target</option>
             {targetOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
         <label htmlFor="mcp-server-name">Server name
-          <input disabled={!controls.open} id="mcp-server-name" list="mcp-server-options" onChange={(event) => setServerName(event.currentTarget.value)} required value={serverName} />
+          <input disabled={!controls.open} id="mcp-server-name" list="mcp-server-options" onChange={(event) => {
+            const nextServerName = event.currentTarget.value;
+            setBinding((current) => Object.freeze({
+              ...current,
+              serverName: nextServerName,
+              serverNameOrigin: targetServerOptions.some((option) => option.name === nextServerName) ? 'catalog' : 'manual',
+            }));
+          }} required value={serverName} />
           <datalist id="mcp-server-options">
             {targetServerOptions.map((option) => <option key={`${option.target}/${option.name}`} value={option.name}>{option.name}</option>)}
           </datalist>

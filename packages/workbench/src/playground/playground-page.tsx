@@ -97,7 +97,7 @@ export const playgroundScriptsForTarget = (
   scripts: readonly PlaygroundScriptCatalogEntry[],
   target: string,
 ): readonly PlaygroundScriptCatalogEntry[] => Object.freeze(
-  scripts.filter((script) => script.target === target).sort((left, right) => left.id.localeCompare(right.id)),
+  scripts.filter((script) => script.target === target),
 );
 
 /** A changed target or rebuilt catalog must never submit a stale server script id. */
@@ -121,9 +121,9 @@ export const playgroundSelectionFor = (
 ): PlaygroundSelection => {
   const target = targets.some((entry) => entry.name === input.target)
     ? input.target
-    : targets.find((entry) => entry.name === 'portable')?.name ?? targets[0]?.name ?? '';
+    : targets[0]?.name ?? '';
   const targetScripts = playgroundScriptsForTarget(scripts, target);
-  const defaultScriptId = targetScripts.find((script) => script.name.startsWith('verify-'))?.id ?? targetScripts[0]?.id ?? '';
+  const defaultScriptId = targetScripts[0]?.id ?? '';
   return Object.freeze({
     operation: input.operationIsImplicit ? targetScripts.length > 0 ? 'script.run' : 'skill.inspect' : input.operation,
     scriptId: playgroundSelectedScriptId(input.scriptId, scripts, target) || defaultScriptId,

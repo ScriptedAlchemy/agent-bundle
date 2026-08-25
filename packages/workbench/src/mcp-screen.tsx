@@ -6,7 +6,7 @@ import type { ForegroundSessionAuthority } from './foreground-session.ts';
 import type { ArtifactClient } from './artifacts/artifact-client.ts';
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
 import type { McpAppClient } from './mcp/mcp-app-client.ts';
-import { McpPage, type McpPageServerOption } from './mcp/mcp-page.tsx';
+import { McpPage, mcpPageServerCatalogFor, type McpPageServerCatalog } from './mcp/mcp-page.tsx';
 import { mcpProtocolTraceDownload, type McpDownload } from './mcp/mcp-protocol-trace.ts';
 import { McpRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
@@ -16,15 +16,6 @@ import { WorkbenchScreen, type WorkbenchPage } from './workbench-screen.tsx';
 export type McpPresentation = 'inspector' | 'playground';
 
 const mcpTargets = ['portable', 'claude', 'codex'] as const;
-
-type McpServerCatalog = Readonly<{
-  readonly epochId: string;
-  readonly options: readonly McpPageServerOption[];
-}>;
-
-const mcpServerOptionsFor = (servers: readonly McpPageServerOption[]): readonly McpPageServerOption[] => Object.freeze(
-  servers.map((server) => Object.freeze({ name: server.name, target: server.target })),
-);
 
 export const createMcpController = (authority: ForegroundSessionAuthority) => createMcpSessionController({
   routes: new McpRouteClient({ authority }),
@@ -53,19 +44,20 @@ export const McpScreen = ({ appPreviewClient, artifactClient, connectionError, c
 }) => {
   const presentationTabs = useRef<Record<McpPresentation, HTMLButtonElement | null>>({ inspector: null, playground: null });
   const activeEpoch = activeEpochFor(status);
-  const [serverCatalog, setServerCatalog] = useState<McpServerCatalog>();
+  const [serverCatalog, setServerCatalog] = useState<McpPageServerCatalog>();
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
-  const serverOptions = serverCatalog !== undefined && serverCatalog.epochId === activeEpoch?.id
-    ? serverCatalog.options
-    : [];
+  const serverCatalogState = activeEpoch !== undefined && (serverCatalog === undefined || serverCatalog.epochId !== activeEpoch.id)
+    ? 'loading'
+    : 'ready';
+  const serverOptions = activeEpoch !== undefined && serverCatalogState === 'ready' ? serverCatalog?.options ?? [] : [];
   useEffect(() => {
     const epochId = activeEpoch?.id;
     const controller = new AbortController();
     setServerCatalog(undefined);
     if (epochId === undefined) return () => controller.abort();
     void artifactClient.inspect(epochId, controller.signal).then((inspection) => {
-      if (controller.signal.aborted || inspection.epochId !== epochId) return;
-      setServerCatalog(Object.freeze({ epochId, options: mcpServerOptionsFor(inspection.runtime.mcpServers) }));
+      const catalog = mcpPageServerCatalogFor(epochId, inspection, controller.signal);
+      if (catalog !== undefined) setServerCatalog(catalog);
     }).catch(() => {
       // An unavailable inspection leaves the editable server field available without stale catalog suggestions.
     });
@@ -139,6 +131,7 @@ export const McpScreen = ({ appPreviewClient, artifactClient, connectionError, c
           onDownloadTrace={downloadMcpFile}
           onResetSession={onResetSession}
           presentationActive={presentation === 'playground'}
+          serverCatalogState={serverCatalogState}
           serverOptions={serverOptions}
           targetOptions={targetOptions}
         />

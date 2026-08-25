@@ -180,6 +180,78 @@ describe('MCP page', () => {
     expect(mcpPageServerNameFor('manually-entered', options, allOptions)).toBe('manually-entered');
   });
 
+  it('rebinds an idle catalog selection to the current epoch without treating an unresolved catalog as manual input', () => {
+    const { mcpPageBindingFor } = mcpPage as typeof mcpPage & {
+      readonly mcpPageBindingFor: (binding: {
+        readonly epochId: string;
+        readonly serverName: string;
+        readonly serverNameOrigin: 'catalog' | 'manual';
+        readonly target: string;
+      }, options: {
+        readonly epochId: string;
+        readonly serverCatalogState: 'loading' | 'ready';
+        readonly serverOptions: readonly { readonly name: string; readonly target: string }[];
+        readonly sessionPhase: 'idle' | 'opening' | 'ready';
+        readonly targetOptions: readonly string[];
+      }) => {
+        readonly epochId: string;
+        readonly serverName: string;
+        readonly serverNameOrigin: 'catalog' | 'manual';
+        readonly target: string;
+      };
+    };
+    const catalogA = { epochId: 'epoch-A', serverName: 'status', serverNameOrigin: 'catalog' as const, target: 'portable' as const };
+    const loadingB = mcpPageBindingFor(catalogA, {
+      epochId: 'epoch-B', serverCatalogState: 'loading', serverOptions: [], sessionPhase: 'idle', targetOptions: ['codex', 'portable'],
+    });
+
+    expect(loadingB).toEqual({ epochId: 'epoch-B', serverName: 'status', serverNameOrigin: 'catalog', target: 'codex' });
+    expect(mcpPageBindingFor(loadingB, {
+      epochId: 'epoch-B',
+      serverCatalogState: 'ready',
+      serverOptions: [{ name: 'build', target: 'codex' }],
+      sessionPhase: 'idle',
+      targetOptions: ['codex', 'portable'],
+    })).toEqual({ epochId: 'epoch-B', serverName: 'build', serverNameOrigin: 'catalog', target: 'codex' });
+    expect(mcpPageBindingFor({ ...catalogA, serverName: 'operator-server', serverNameOrigin: 'manual' }, {
+      epochId: 'epoch-B',
+      serverCatalogState: 'ready',
+      serverOptions: [{ name: 'build', target: 'codex' }],
+      sessionPhase: 'idle',
+      targetOptions: ['codex', 'portable'],
+    })).toEqual({ epochId: 'epoch-B', serverName: 'operator-server', serverNameOrigin: 'manual', target: 'codex' });
+    expect(mcpPageBindingFor(catalogA, {
+      epochId: 'epoch-B',
+      serverCatalogState: 'ready',
+      serverOptions: [{ name: 'build', target: 'codex' }],
+      sessionPhase: 'ready',
+      targetOptions: ['codex', 'portable'],
+    })).toEqual(catalogA);
+  });
+
+  it('ignores an aborted or stale artifact-inspection result before it can publish a server catalog', () => {
+    const { mcpPageServerCatalogFor } = mcpPage as typeof mcpPage & {
+      readonly mcpPageServerCatalogFor: (epochId: string, inspection: {
+        readonly epochId: string;
+        readonly runtime: { readonly mcpServers: readonly { readonly name: string; readonly target: string }[] };
+      }, signal: Pick<AbortSignal, 'aborted'>) => unknown;
+    };
+    const cancelled = new AbortController();
+    cancelled.abort();
+
+    expect(mcpPageServerCatalogFor('epoch-A', {
+      epochId: 'epoch-A', runtime: { mcpServers: [{ name: 'status', target: 'portable' }] },
+    }, cancelled.signal)).toBeUndefined();
+    expect(mcpPageServerCatalogFor('epoch-B', {
+      epochId: 'epoch-A', runtime: { mcpServers: [{ name: 'status', target: 'portable' }] },
+    }, new AbortController().signal)).toBeUndefined();
+    expect(mcpPageServerCatalogFor('epoch-B', {
+      epochId: 'epoch-B', runtime: { mcpServers: [{ name: 'build', target: 'portable' }] },
+    }, new AbortController().signal)).toEqual({
+      epochId: 'epoch-B', options: [{ name: 'build', target: 'portable' }],
+    });
+  });
+
   it('renders the epoch-bound lifecycle, ordered catalog, operations, history, and one accessible trace view', () => {
     const markup = renderToStaticMarkup(createElement(McpPage, {
       controller: controller(),

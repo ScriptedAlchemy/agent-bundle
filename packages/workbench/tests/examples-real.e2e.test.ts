@@ -86,7 +86,7 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await page.getByRole('link', { name: 'Playground', exact: true }).click();
     await waitForSettledWorkbench(page);
     await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#playground-script-id')?.value === 'script:verify-release', undefined, { timeout: browserTimeout });
-    expect(await page.locator('#playground-target').inputValue()).toBe('portable');
+    expect(await page.locator('#playground-target').inputValue()).toBe('claude');
     expect(await page.locator('#playground-operation').inputValue()).toBe('script.run');
     expect(await page.locator('#playground-script-id').inputValue()).toBe('script:verify-release');
     await page.getByRole('button', { name: 'Run script' }).click();
@@ -94,10 +94,11 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await expect(page.locator('.playground-trace')).toContainText('ready for packaging', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'script-success');
 
+    await page.locator('#playground-target').selectOption('portable');
     await page.locator('#playground-script-id').selectOption('script:detect-risk');
     await page.getByRole('button', { name: 'Run script' }).click();
     await expect(page.locator('.playground-trace')).toContainText('REL-204', { timeout: browserTimeout });
-    await expect(page.locator('.playground-trace')).toContainText('2', { timeout: browserTimeout });
+    await expect(page.locator('.playground-event-card').filter({ hasText: 'script.completed' }).last().locator('.playground-json')).toContainText('"exitCode": 2', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'script-failure');
 
     await page.getByRole('link', { name: 'Logs' }).click();
