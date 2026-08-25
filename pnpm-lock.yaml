@@ -130,8 +130,8 @@ importers:
         specifier: 19.2.4
         version: 19.2.4(@types/react@19.2.18)
       agent-bundle:
-        specifier: 0.1.0
-        version: 0.1.0(supports-color@7.2.0)
+        specifier: workspace:*
+        version: link:../../packages/agent-bundle
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
