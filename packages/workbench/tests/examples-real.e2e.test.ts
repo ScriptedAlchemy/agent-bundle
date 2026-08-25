@@ -18,6 +18,24 @@ import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts
 
 const browserTimeout = 15_000;
 
+const waitForExampleValue = async <Value>(
+  page: Parameters<typeof captureExampleState>[0],
+  read: () => Promise<Value>,
+  accepts: (value: Value) => boolean,
+  label: string,
+): Promise<Value> => {
+  const deadline = Date.now() + browserTimeout;
+  let value = await read();
+  while (!accepts(value) && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+    value = await read();
+  }
+  if (!accepts(value)) {
+    throw new Error(`Timed out waiting for ${label}; last value was ${JSON.stringify(value)}.`);
+  }
+  return value;
+};
+
 e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
   const server = await startDevServer({
@@ -262,11 +280,36 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
       }
       return undefined;
     };
-    await expect.poll(() => appText('#service'), { timeout: browserTimeout }).toBe('payments-api');
-    await expect.poll(() => appText('#status'), { timeout: browserTimeout }).toBe('degraded');
-    await expect.poll(() => appText('#summary'), { timeout: browserTimeout }).toBe('Payment latency is above the release threshold.');
-    await expect.poll(() => appText('#checks'), { timeout: browserTimeout }).toContain('Availabilitypassing');
-    await expect.poll(() => appText('#checks'), { timeout: browserTimeout }).toContain('P95 latencyfailing');
+    await waitForExampleValue(
+      page,
+      () => appText('#service'),
+      (value) => value === 'payments-api',
+      'the App service',
+    );
+    await waitForExampleValue(
+      page,
+      () => appText('#status'),
+      (value) => value === 'degraded',
+      'the App status',
+    );
+    await waitForExampleValue(
+      page,
+      () => appText('#summary'),
+      (value) => value === 'Payment latency is above the release threshold.',
+      'the App summary',
+    );
+    await waitForExampleValue(
+      page,
+      () => appText('#checks'),
+      (value) => value?.includes('Availabilitypassing') === true,
+      'the App availability check',
+    );
+    await waitForExampleValue(
+      page,
+      () => appText('#checks'),
+      (value) => value?.includes('P95 latencyfailing') === true,
+      'the App latency check',
+    );
     const appPreviewVisualState = async () => {
       for (const frame of page.frames()) {
         try {
@@ -312,13 +355,18 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
       }
       return undefined;
     };
-    await expect.poll(async () => (await appPreviewVisualState())?.state, { timeout: browserTimeout }).toBe('degraded');
+    await waitForExampleValue(
+      page,
+      appPreviewVisualState,
+      (value) => value?.state === 'degraded',
+      'the degraded App preview',
+    );
     const appPreviewVisual = await appPreviewVisualState();
     expect(appPreviewVisual?.dotBackground.red).toBeGreaterThan(appPreviewVisual?.dotBackground.green ?? Number.POSITIVE_INFINITY);
     expect(appPreviewVisual?.bodyBackground.alpha).toBe(1);
     expect(appPreviewVisual?.panelBackground.alpha).toBe(1);
     expect(appPreviewVisual?.contrast).toBeGreaterThanOrEqual(4.5);
-    await expect.poll(async () => {
+    await waitForExampleValue(page, async () => {
       for (const frame of page.frames()) {
         try {
           const toggle = frame.locator('#toggle-details');
@@ -331,8 +379,8 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
         }
       }
       return false;
-    }, { timeout: browserTimeout }).toBe(true);
-    await expect.poll(async () => {
+    }, (value) => value, 'the App details toggle');
+    await waitForExampleValue(page, async () => {
       for (const frame of page.frames()) {
         try {
           const details = frame.locator('#details');
@@ -342,7 +390,7 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
         }
       }
       return false;
-    }, { timeout: browserTimeout }).toBe(true);
+    }, (value) => value, 'the App details panel');
     await captureExampleState(page, 'mcp-app', 'mcp-app-preview');
     await expectHealthyExamplePage(ledger);
 
