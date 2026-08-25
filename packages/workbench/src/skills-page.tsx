@@ -121,8 +121,8 @@ const nextTab = <Tab extends string>(tabs: readonly Tab[], current: Tab, event: 
 };
 
 const documentLabel = (selected: ServedSkillDocument): string => selected.base.kind === 'generated'
-  ? `Generated document · ${selected.base.epochId}/${selected.base.target}`
-  : `Source document · ${selected.id.replace(/^skill:/u, '')}`;
+  ? `Generated for ${selected.base.target}`
+  : 'Authored SKILL.md';
 
 const provenanceLabel = (selected: ServedSkillDocument): string => selected.base.kind === 'generated'
   ? `Generated · ${selected.base.epochId}/${selected.base.target}`
@@ -265,14 +265,14 @@ const selectedDocumentFor = (
 ): ServedSkillDocument | undefined =>
   tree?.skills.find((skill) => skill.id === selectedId) ?? tree?.skills[0];
 
-const SkillTree = ({ label = 'Skills', onSelect, selectedId, tree }: {
+export const SkillTree = ({ label = 'Skills', onSelect, selectedId, tree }: {
   readonly label?: string;
   readonly onSelect: (id: string) => void;
   readonly selectedId: string | undefined;
   readonly tree: SkillDocumentTree;
 }) => <aside aria-label="Skills" className="skill-tree-pane">
   <div className="skill-tree-heading"><h2>{label}</h2><span>{tree.skills.length}</span></div>
-  {tree.skills.length === 0 ? <p className="empty-row">No normalized Skills are available.</p> : <div className="skill-tree">
+  {tree.skills.length === 0 ? <p className="empty-row">No authored Skills are available. Add a Skill path to agent-bundle.config.ts.</p> : <div className="skill-tree">
     {tree.skills.map((skill) => <button
       aria-current={selectedId === skill.id ? 'page' : undefined}
       className={selectedId === skill.id ? 'skill-tree-item skill-tree-item--active' : 'skill-tree-item'}
@@ -390,7 +390,7 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
     )}
     <div className="skills-content">
       <div className="page-heading skills-page-heading">
-        <div><h1>Skills</h1><p>Server-parsed source and immutable generated documents.</p></div>
+        <div><h1>Skills</h1><p>Browse the authored SKILL.md, its linked resources, the immutable host-generated document, and authored eval coverage.</p></div>
       </div>
       {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
       {document === 'source' && sourceTree !== undefined && sourceTree.diagnostics.length > 0 ? <div className="skill-diagnostics" role="status">
