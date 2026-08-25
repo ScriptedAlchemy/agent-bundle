@@ -23,9 +23,16 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
-      - run: npm run test:spot-check
+      - run: corepack enable
+      - id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v5
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-22.19-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-22.19-
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:spot-check
 
   verify:
     name: Verify (Node ${{ matrix.node-version }})
@@ -39,17 +46,24 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chrome
+      - run: corepack enable
+      - id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v5
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-${{ matrix.node-version }}-
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chrome
       # Build first: checked-in suites and API tests import the package's built type
-      # declarations, so typecheck requires dist (same order as `npm run check`).
-      - run: npm run build
+      # declarations, so typecheck requires dist (same order as `pnpm check`).
+      - run: pnpm build
       - name: Package lint (publint)
-        run: npm run lint:package
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm test
+        run: pnpm lint:package
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
 
   release-gates:
     name: Release gates (Node 22.19)
@@ -59,10 +73,17 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chrome
-      - run: npm run check:release
+      - run: corepack enable
+      - id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v5
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-22.19-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-22.19-
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chrome
+      - run: pnpm check:release
 
   dependency-review:
     if: github.event_name == 'pull_request'

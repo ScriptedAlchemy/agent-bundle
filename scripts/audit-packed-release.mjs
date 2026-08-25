@@ -11,7 +11,7 @@ const packageRoot = join(repositoryRoot, 'packages', 'agent-bundle');
 const { NODE_PATH: _nodePath, ...productionEnvironment } = process.env;
 
 const fail = (message) => {
-  throw new Error(`Invalid packed release SBOM: ${message}`);
+  throw new Error(`Invalid packed release audit: ${message}`);
 };
 
 const asRecord = (value, message) => {
@@ -134,8 +134,8 @@ const validateSbom = (sbom, productManifest, installedPackages) => {
   }
 };
 
-const auditPackedSbom = async () => {
-  const auditRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-sbom-'));
+const auditPackedRelease = async () => {
+  const auditRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-audit-'));
 
   try {
     const tarballs = join(auditRoot, 'tarballs');
@@ -162,6 +162,19 @@ const auditPackedSbom = async () => {
       tarball,
     ], { cwd: consumer, env: productionEnvironment });
 
+    await execFile('npm', ['ls', '--omit=dev', '--json'], {
+      cwd: consumer,
+      env: productionEnvironment,
+    });
+    await execFile('npm', ['audit', '--omit=dev', '--json'], {
+      cwd: consumer,
+      env: productionEnvironment,
+    });
+    await execFile('npm', ['audit', 'signatures', '--json'], {
+      cwd: consumer,
+      env: productionEnvironment,
+    });
+
     const productManifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
     const sbom = JSON.parse((await execFile('npm', [
       'sbom',
@@ -176,4 +189,4 @@ const auditPackedSbom = async () => {
   }
 };
 
-await auditPackedSbom();
+await auditPackedRelease();

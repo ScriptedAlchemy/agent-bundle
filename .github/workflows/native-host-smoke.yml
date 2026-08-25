@@ -27,10 +27,10 @@ jobs:
         include:
           - host: claude
             source_tests: packages/agent-bundle/tests/native-claude-contract.test.ts packages/agent-bundle/tests/eval-claude-harness.test.ts
-            packed_command: npm run test:packed:native:claude
+            packed_command: pnpm test:packed:native:claude
           - host: codex
             source_tests: packages/agent-bundle/tests/native-codex-contract.test.ts packages/agent-bundle/tests/eval-codex-home.test.ts
-            packed_command: npm run test:packed:native:codex
+            packed_command: pnpm test:packed:native:codex
     steps:
       - uses: actions/checkout@v7
         if: inputs.host == 'both' || inputs.host == matrix.host
@@ -38,15 +38,25 @@ jobs:
         if: inputs.host == 'both' || inputs.host == matrix.host
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
+      - run: corepack enable
+        if: inputs.host == 'both' || inputs.host == matrix.host
+      - id: pnpm-store
+        if: inputs.host == 'both' || inputs.host == matrix.host
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v5
+        if: inputs.host == 'both' || inputs.host == matrix.host
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-22.19-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-22.19-
+      - run: pnpm install --frozen-lockfile
         if: inputs.host == 'both' || inputs.host == matrix.host
       - name: ${{ matrix.host }} source signed-in smoke
         if: inputs.host == 'both' || inputs.host == matrix.host
         env:
           AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: ${{ matrix.host == 'claude' && '1' || '' }}
           AGENT_BUNDLE_NATIVE_CODEX_SMOKE: ${{ matrix.host == 'codex' && '1' || '' }}
-        run: npm run test -- ${{ matrix.source_tests }}
+        run: pnpm test -- ${{ matrix.source_tests }}
       - name: ${{ matrix.host }} installed-tarball native smoke
         if: inputs.host == 'both' || inputs.host == matrix.host
         run: ${{ matrix.packed_command }}
