@@ -8,7 +8,7 @@
   },
   "packageManager": "pnpm@11.23.0",
   "scripts": {
-    "build": "pnpm --filter agent-bundle build",
+    "build": "pnpm --filter @agent-bundle/rsc-runtime build && pnpm --filter agent-bundle build",
     "lint:package": "publint packages/agent-bundle",
     "test": "pnpm test:unit && pnpm test:integration",
     "test:unit": "rstest --config rstest.unit.config.ts",
