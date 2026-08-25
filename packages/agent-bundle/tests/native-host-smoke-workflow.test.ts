@@ -38,12 +38,12 @@ it('keeps source and installed-tarball native smokes in the manual self-hosted m
     {
       host: 'claude',
       source_tests: 'packages/agent-bundle/tests/native-claude-contract.test.ts packages/agent-bundle/tests/eval-claude-harness.test.ts',
-      packed_command: 'npm run test:packed:native:claude',
+      packed_command: 'pnpm test:packed:native:claude',
     },
     {
       host: 'codex',
       source_tests: 'packages/agent-bundle/tests/native-codex-contract.test.ts packages/agent-bundle/tests/eval-codex-home.test.ts',
-      packed_command: 'npm run test:packed:native:codex',
+      packed_command: 'pnpm test:packed:native:codex',
     },
   ]));
   expect(workflow).toContain("AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: ${{ matrix.host == 'claude' && '1' || '' }}");
@@ -52,9 +52,11 @@ it('keeps source and installed-tarball native smokes in the manual self-hosted m
   expect(workflow).not.toMatch(/\b(?:push|pull_request):/u);
   expect(workflow).not.toMatch(/\bsecrets\./u);
   expect(workflow).not.toMatch(/API[_-]?KEY/iu);
-  expect(packageDocument.scripts?.['test:packed:native:claude']).toBe('node scripts/run-packed-native-smoke.mjs claude');
-  expect(packageDocument.scripts?.['test:packed:native:codex']).toBe('node scripts/run-packed-native-smoke.mjs codex');
+  expect(packageDocument.scripts?.['test:packed:native:claude']).toBe('pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CLAUDE_SMOKE=1 pnpm test:packed:native');
+  expect(packageDocument.scripts?.['test:packed:native:codex']).toBe('pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CODEX_SMOKE=1 pnpm test:packed:native');
   expect(launcher).toContain("process.platform === 'win32' ? 'npm.cmd' : 'npm'");
   expect(launcher).toContain("spawn(npm, args, { env: environment, stdio: 'inherit' })");
   expect(launcher).not.toMatch(/(?:^|\s)AGENT_BUNDLE_PACKED_NATIVE_[A-Z_]+=1\s+npm/u);
+  expect(workflow).not.toMatch(/\bcorepack\b/u);
+  expect(workflow).toContain('uses: pnpm/setup@v1');
 });

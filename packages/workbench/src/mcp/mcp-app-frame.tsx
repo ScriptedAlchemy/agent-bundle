@@ -8,7 +8,7 @@ import type {
 } from './mcp-app-client.ts';
 import { assertCurrentMcpAppDocumentPolicy, type McpAppRuntimeClient, type McpAppTrustedDocumentPolicy } from './mcp-app-client.ts';
 import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
-import { AppRenderer, type BridgeFactory, type AppRendererProps } from '../inspector/adapter/closure-spike.ts';
+import { AppRenderer, type BridgeFactory, type AppRendererProps } from '../inspector/adapter/inspector-closure-vendor.js';
 
 const proxyReadyMethod = 'ui/notifications/sandbox-proxy-ready';
 const resourceReadyMethod = 'ui/notifications/sandbox-resource-ready';
@@ -327,7 +327,7 @@ export class McpAppFrameRelay {
     if (!this.#post(validated)) throw new McpAppFrameRelayError('MCP App proxy window is not available.');
   }
 
-  #post(message: RpcMessage): boolean {
+  #post(message: RpcMessage, enforceMessageLimit = true): boolean {
     const proxy = this.#iframe.contentWindow;
     if (proxy === null || finiteOrdinaryJsonByteLength(message, { maximumBytes: this.#frame.relay.maxMessageBytes }) === undefined) return false;
     try {

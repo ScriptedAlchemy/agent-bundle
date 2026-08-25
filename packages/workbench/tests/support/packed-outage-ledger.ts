@@ -126,15 +126,26 @@ const isPlaygroundSessionReplayPath = (path: string): boolean => {
     segments[2] === 'sessions' && segments[3]!.length > 0 && segments[4] === 'replay';
 };
 
+const isPlaygroundSessionReadCancellation = (request: NetworkLedgerEntry): boolean => {
+  const segments = request.path.split('/').filter((segment) => segment.length > 0);
+  const responseIsAbsent = request.respondedAt === undefined && request.status === undefined;
+  const responseIsSuccessful = request.respondedAt !== undefined && request.status !== undefined &&
+    request.status >= 200 && request.status < 300;
+  return segments.length === 4 && segments[0] === 'api' && segments[1] === 'playground' &&
+    segments[2] === 'sessions' && segments[3]!.length > 0 && request.url === `${request.origin}${request.path}` &&
+    request.completedAt !== undefined && request.at <= request.completedAt && (responseIsAbsent || responseIsSuccessful);
+};
+
 /**
  * The playground screen retires a superseded in-flight catalog request when
  * its effect re-runs (one AbortController per effect), and route changes abort
- * pending session replay reads the same way they abort live streams.
+ * pending session reads and replays the same way they abort live streams.
  */
 const isKnownPreOutageClientCancellation = (request: NetworkLedgerEntry): boolean =>
   request.error === 'net::ERR_ABORTED' && request.method === 'GET' && (
     knownStreamClass(request.path) !== undefined ||
     request.path === '/api/playground/catalog' ||
+    isPlaygroundSessionReadCancellation(request) ||
     isPlaygroundSessionReplayPath(request.path) ||
     (request.path === '/api/logs/replay' && request.status !== undefined && request.status >= 200 && request.status < 300)
   );

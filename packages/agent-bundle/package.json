@@ -20,13 +20,18 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "scripts": {
+    "build": "pnpm build:workbench && rslib build",
+    "build:workbench": "pnpm --filter agent-bundle-workbench build"
+  },
   "files": [
+    "bin",
     "dist",
     "!dist/workbench/**/*.map",
     "README.md"
   ],
   "bin": {
-    "agent-bundle": "./dist/cli.js"
+    "agent-bundle": "./bin/agent-bundle.js"
   },
   "exports": {
     ".": {

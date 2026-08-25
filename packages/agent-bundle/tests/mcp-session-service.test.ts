@@ -16,6 +16,7 @@ import { McpAppBindingService, type McpAppSessionAuthority } from '../src/dev/mc
 import { mcpAppClientCapabilities, McpSession, McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { pathTokens, type AgentBundleConfig, type NormalizationTargetRegistry } from '../src/core/types.ts';
+import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -80,7 +81,7 @@ const publishFixtureEpoch = async (
   await mkdir(join(root, 'src'), { recursive: true });
   await mkdir(join(root, 'node_modules'), { recursive: true });
   await symlink(
-    join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
+    join(agentBundleNodeModules, '@modelcontextprotocol'),
     join(root, 'node_modules', '@modelcontextprotocol'),
     'dir',
   );

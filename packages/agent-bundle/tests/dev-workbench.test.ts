@@ -19,6 +19,7 @@ import {
 } from '../src/dev/workbench-server.ts';
 import type { ForegroundCoordinator, ForegroundServerOptions } from '../src/dev/foreground-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
+import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 
 const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
   const decoder = new TextDecoder();
@@ -100,7 +101,7 @@ const writeMcpProject = async (root: string): Promise<void> => {
   await Promise.all([
     mkdir(join(root, 'src'), { recursive: true }),
     symlink(
-      join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
       join(root, 'node_modules', '@modelcontextprotocol'),
       'dir',
     ),

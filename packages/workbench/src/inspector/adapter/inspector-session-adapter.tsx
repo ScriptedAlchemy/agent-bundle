@@ -107,6 +107,7 @@ export const agentBundleInspectorTheme = createTheme({
 });
 
 const operationError = (reason: unknown): string => reason instanceof Error ? reason.message : 'The Inspector operation failed.';
+const unsupportedLogLevelMessage = 'Log-level changes are unavailable because this session does not support logging/setLevel.';
 
 export const InspectorRuntimeEvidence = ({ evidence }: InspectorRuntimeEvidenceProps): React.ReactNode => {
   if (evidence.kind === 'protocol') return <section aria-label="Runtime protocol evidence" className="inspector-runtime-evidence">
@@ -148,7 +149,7 @@ export const InspectorSessionAdapter = ({ availability = allOperationsAvailable,
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => new Set());
   const [protocolCleared, setProtocolCleared] = useState(false);
   const [loggingCleared, setLoggingCleared] = useState(false);
-  const [loggingDiagnostic, setLoggingDiagnostic] = useState('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
+  const [loggingDiagnostic, setLoggingDiagnostic] = useState(unsupportedLogLevelMessage);
   const [sortDirection, setSortDirection] = useState<SortDirection>('oldest-first');
   const [compact, setCompact] = useState(false);
   const [protocolReplayUnavailable, setProtocolReplayUnavailable] = useState(false);
@@ -170,7 +171,7 @@ export const InspectorSessionAdapter = ({ availability = allOperationsAvailable,
     setPinnedIds(new Set());
     setProtocolCleared(false);
     setLoggingCleared(false);
-    setLoggingDiagnostic('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
+    setLoggingDiagnostic(unsupportedLogLevelMessage);
     setSortDirection('oldest-first');
     setCompact(false);
     setProtocolReplayUnavailable(false);
@@ -324,7 +325,7 @@ export const InspectorSessionAdapter = ({ availability = allOperationsAvailable,
         entries={displayedLogs as unknown as LogEntryData[]}
           onClear={() => setLoggingCleared(true)}
           onExport={() => onExportTrace?.(model.timeline.entries)}
-          onSetLevel={() => setLoggingDiagnostic('Log-level changes remain unavailable because this W13 session does not expose logging/setLevel.')}
+          onSetLevel={() => setLoggingDiagnostic(unsupportedLogLevelMessage)}
           onSortChange={setSortDirection}
           onUiChange={setLogsUi}
           sortDirection={sortDirection}

@@ -9,6 +9,8 @@ const workflowUrl = new URL('../../../.github/workflows/ci.yml', import.meta.url
 interface WorkflowStep {
   readonly name?: string;
   readonly run?: string;
+  readonly uses?: string;
+  readonly with?: Readonly<Record<string, unknown>>;
 }
 
 it('runs publint explicitly in CI and the local release audit', async () => {
@@ -25,11 +27,14 @@ it('runs publint explicitly in CI and the local release audit', async () => {
     };
   };
   const steps = parsed.jobs?.verify?.steps ?? [];
-  const packageLintIndex = steps.findIndex((step) => step.run === 'npm run lint:package');
+  const packageLintIndex = steps.findIndex((step) => step.run === 'pnpm lint:package');
+  const setup = steps.find((step) => step.uses === 'pnpm/setup@v1');
 
   expect(packageJson.scripts?.['lint:package']).toBe('publint packages/agent-bundle');
-  expect(packageJson.scripts?.['audit:release']).toMatch(/^npm run lint:package && /u);
+  expect(packageJson.scripts?.['audit:release']).toMatch(/^pnpm lint:package && /u);
+  expect(setup?.with).toEqual({ cache: true, install: false, runtime: 'node@${{ matrix.node-version }}' });
   expect(packageLintIndex).toBeGreaterThan(0);
-  expect(steps[packageLintIndex]).toEqual({ name: 'Package lint (publint)', run: 'npm run lint:package' });
-  expect(steps[packageLintIndex - 1]?.run).toBe('npm run build');
+  expect(steps[packageLintIndex]).toEqual({ name: 'Package lint (publint)', run: 'pnpm lint:package' });
+  expect(steps[packageLintIndex - 1]?.run).toBe('pnpm build');
+  expect(workflow).not.toMatch(/\bcorepack\b/u);
 });

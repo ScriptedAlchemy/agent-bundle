@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { build, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
+import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 
 const execFile = promisify(executeFile);
 const fixturesRoot = join(process.cwd(), 'fixtures', 'integration');
@@ -26,7 +27,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
   await chmod(join(root, 'src', 'python.py'), 0o711);
   await mkdir(join(root, 'node_modules'), { recursive: true });
   await symlink(
-    join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
+    join(agentBundleNodeModules, '@modelcontextprotocol'),
     join(root, 'node_modules', '@modelcontextprotocol'),
     'dir',
   );

@@ -32,7 +32,7 @@ export const availablePort = async (): Promise<number> => {
 
 export const buildPackage = (): Promise<void> => builtPackage ??= (async (): Promise<void> => {
   const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('npm', ['run', 'build'], {
+  await execFile('pnpm', ['build'], {
     cwd: workspaceRoot,
     env: { ...environment, NODE_ENV: 'production' },
   });

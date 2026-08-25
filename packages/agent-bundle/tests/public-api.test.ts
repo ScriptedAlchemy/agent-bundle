@@ -37,6 +37,7 @@ import type {
   CreateDevRuntimeProvider,
   DevRuntimeProvider,
 } from '../src/api.ts';
+import { agentBundleNodeModules, workspaceNodeModules } from './helpers/workspace-paths.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
 
 interface PackageManifest {
@@ -56,7 +57,7 @@ const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
 let buildPromise: Promise<void> | undefined;
 
 const buildPackage = async (): Promise<void> => {
-  buildPromise ??= execFile('npm', ['run', 'build'], {
+  buildPromise ??= execFile('pnpm', ['build'], {
     cwd: workspaceRoot,
   }).then(() => undefined);
   await buildPromise;
@@ -93,8 +94,9 @@ const producerFrom = async (output: string): Promise<{ readonly name: string; re
 };
 
 it('keeps package output filenames stable', async () => {
-  const config = (await import('../../../rslib.config.ts')).default;
+  const config = (await import('../rslib.config.ts')).default;
   expect(config).toMatchObject({ output: { filenameHash: false } });
+  expect(config.output).not.toHaveProperty('externals');
 });
 
 it('preserves a synchronous config and exposes opaque path tokens', () => {
@@ -389,19 +391,19 @@ it('keeps bundled config extension types in emitted root declarations', async ()
     const emittedPackageRoot = join(consumerRoot, 'node_modules', 'agent-bundle');
     await mkdir(emittedPackageRoot, { recursive: true });
     await symlink(
-      join(workspaceRoot, 'node_modules', '@modelcontextprotocol'),
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
       join(consumerRoot, 'node_modules', '@modelcontextprotocol'),
       'dir',
     );
     await symlink(
-      join(workspaceRoot, 'node_modules', '@types'),
+      join(workspaceNodeModules, '@types'),
       join(consumerRoot, 'node_modules', '@types'),
       'dir',
     );
     // The adapter validator factory types its ajv engine, so the emitted
     // declaration graph resolves ajv exactly as installed consumers do.
     await symlink(
-      join(workspaceRoot, 'node_modules', 'ajv'),
+      join(agentBundleNodeModules, 'ajv'),
       join(consumerRoot, 'node_modules', 'ajv'),
       'dir',
     );

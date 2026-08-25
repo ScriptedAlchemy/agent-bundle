@@ -36,15 +36,15 @@ it('publishes one locked package preview for pull requests', async () => {
   expect(parsed.permissions).toEqual({});
   expect(steps.map((step) => step.uses ?? step.run)).toEqual([
     'actions/checkout@v7',
-    'actions/setup-node@v7',
-    'npm ci',
-    'npm run build',
-    'npm run preview:publish',
+    'pnpm/setup@v1',
+    'pnpm install --frozen-lockfile',
+    'pnpm build',
+    'pnpm preview:publish',
   ]);
-  expect(steps[1]?.with).toEqual({ cache: 'npm', 'node-version': '22.19.0' });
+  expect(steps[1]?.with).toEqual({ cache: true, install: false, runtime: 'node@22.19.0' });
   expect(packageJson.devDependencies?.['pkg-pr-new']).toBe('0.0.88');
   expect(packageJson.scripts?.['preview:publish']).toBe(
     "pkg-pr-new publish --previewVersion --no-compact --no-template './packages/agent-bundle'",
   );
-  expect(workflow).not.toMatch(/pull_request_target|secrets\.|\bnpx\b/u);
+  expect(workflow).not.toMatch(/pull_request_target|secrets\.|\b(?:corepack|npx)\b/u);
 });

@@ -18,6 +18,8 @@ import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts'
 import type { McpAppBoundOperationResult } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { McpAppJsonValue } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { McpAppBindingOperation } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+import { parseStrictResponseJson } from '../client-helpers.ts';
+import { readNdjsonResponseFrames } from '../ndjson.ts';
 import { AgentBundleRemoteTransport, dispatchAgentBundleMcpRequest, type AgentBundleMcpDispatchResult } from './agent-bundle-remote-transport.ts';
 import {
   invocationHistoryFor,
@@ -1044,24 +1046,14 @@ export class McpSessionController {
     this.#traceAbort = abort;
     try {
       const response = await this.#routes.stream(sessionId, this.#model.timeline.lastSequence, abort.signal);
-      if (response.body === null) throw new McpSessionControllerError('Foreground MCP trace stream did not include a body.');
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffered = '';
-      try {
-        while (!abort.signal.aborted) {
-          const next = await reader.read();
-          if (next.done) break;
-          buffered += decoder.decode(next.value, { stream: true });
-          const lines = buffered.split('\n');
-          buffered = lines.pop() ?? '';
-          for (const line of lines) if (line.length > 0) this.#receiveTrace(traceEntry(JSON.parse(line)), generation);
-        }
-        buffered += decoder.decode();
-        if (buffered.length > 0) this.#receiveTrace(traceEntry(JSON.parse(buffered)), generation);
-      } finally {
-        reader.releaseLock();
-      }
+      await readNdjsonResponseFrames(response, (bytes) => {
+        if (bytes.byteLength === 0) return;
+        this.#receiveTrace(traceEntry(parseStrictResponseJson(bytes, invalidTrace)), generation);
+      }, {
+        invalidFrameError: invalidTrace,
+        missingBodyError: () => new McpSessionControllerError('Foreground MCP trace stream did not include a body.'),
+        signal: abort.signal,
+      });
       if (!abort.signal.aborted && this.#current(generation)) {
         this.#publish({
           diagnostic: { code: 'mcp.trace.stream.closed', message: 'Foreground MCP trace stream closed unexpectedly.', severity: 'error' },

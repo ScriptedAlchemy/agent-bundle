@@ -386,7 +386,7 @@ export const EvalRunControls = ({
     <option value="codex">Codex</option>
   </select>
   <p className="eval-model-pin">Authored model pins are read-only and shown with recorded trials.</p>
-  <label htmlFor="eval-trials">Trials (authored count when empty)</label>
+  <label htmlFor="eval-trials">Trial override (leave blank to use authored count)</label>
   <input
     aria-describedby={runnable ? undefined : 'eval-trials-error'}
     aria-invalid={runnable ? undefined : true}

@@ -29,7 +29,7 @@ import type { McpAppConsentChallenge as RuntimeMcpAppConsentChallenge } from '..
 import { RuntimeConsentDialog } from './mcp/runtime-consent-dialog.tsx';
 import { createRuntimeConsentQueue, type RuntimeConsentQueue, type RuntimeConsentQueueCurrent } from './mcp/runtime-consent-queue.ts';
 import { McpAppPreview } from './mcp/mcp-app-preview.tsx';
-import { McpPage, type McpConfigDownload, type McpPagePreviewSelection, type McpPageRuntimePreviewDependencies } from './mcp/mcp-page.tsx';
+import { McpPage, mcpPageEmptyServerCatalogFor, mcpPageServerCatalogFor, type McpConfigDownload, type McpPagePreviewSelection, type McpPageRuntimePreviewDependencies, type McpPageServerCatalog } from './mcp/mcp-page.tsx';
 import { ForegroundRouteClient, McpRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
 import {
@@ -630,8 +630,9 @@ const HooksScreen = ({ connectionError, hookClient, onNavigate, runtimeAvailable
   <HooksPage client={hookClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, presentation, registerPreviewClose, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
+const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, presentation, registerPreviewClose, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
+  readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly mcpDepartureDiagnostic?: string;
@@ -653,7 +654,26 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
     if (selection !== undefined) onRuntimeInitialPreviewConsumed(selection);
   }, [onRuntimeInitialPreviewConsumed, runtimeHandoff]);
   const activeEpoch = status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
+  const [serverCatalog, setServerCatalog] = useState<McpPageServerCatalog>();
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
+  const serverCatalogState = activeEpoch !== undefined && (serverCatalog === undefined || serverCatalog.epochId !== activeEpoch.id)
+    ? 'loading' as const
+    : 'ready' as const;
+  const serverOptions = activeEpoch !== undefined && serverCatalogState === 'ready' ? serverCatalog?.options ?? [] : [];
+  useEffect(() => {
+    const epochId = activeEpoch?.id;
+    const request = new AbortController();
+    setServerCatalog(undefined);
+    if (epochId === undefined) return () => request.abort();
+    void artifactClient.inspect(epochId, request.signal).then((inspection) => {
+      const catalog = mcpPageServerCatalogFor(epochId, inspection, request.signal);
+      if (catalog !== undefined) setServerCatalog(catalog);
+    }).catch(() => {
+      const catalog = mcpPageEmptyServerCatalogFor(epochId, request.signal);
+      if (catalog !== undefined) setServerCatalog(catalog);
+    });
+    return () => request.abort();
+  }, [activeEpoch?.id, artifactClient]);
   const runtimeSource = isRuntimeModelBinding(model.binding)
     ? Object.freeze({ binding: model.binding.binding, kind: 'runtime' as const })
     : undefined;
@@ -743,7 +763,10 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
               onDownloadConfig={downloadMcpFile}
               onDownloadTrace={downloadMcpFile}
               onResetSession={onResetSession}
+              presentationActive={presentation === 'playground'}
               registerPreviewClose={registerPreviewClose}
+              serverCatalogState={serverCatalogState}
+              serverOptions={serverOptions}
               targetOptions={targetOptions}
             />
           : <MantineProvider><McpPage
@@ -1295,6 +1318,7 @@ const Workbench = () => {
     if (page === 'mcp') {
       return withConnectionGate(<McpScreen
         appPreviewClient={mcpAppClient.current}
+        artifactClient={artifactClient.current}
         connectionError={connectionError}
         controller={mcpController}
         mcpDepartureDiagnostic={mcpDepartureError}

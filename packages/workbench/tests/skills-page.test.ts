@@ -7,7 +7,7 @@ import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { SkillClient } from '../src/skill-client.ts';
-import { SkillDocumentPanel, SkillsPage } from '../src/skills-page.tsx';
+import { SkillDocumentPanel, SkillsPage, SkillTree } from '../src/skills-page.tsx';
 
 const document = {
   base: { kind: 'source' as const, skillId: 'skill:review' },
@@ -50,7 +50,8 @@ it('renders independent document and view selectors for the generated Markdown d
   expect(markup).toContain('>Target<');
   expect(markup).toContain('aria-label="Skill document"');
   expect(markup).toContain('aria-label="Document view"');
-  expect(markup).toContain('Generated document · epoch-01/portable');
+  expect(markup).toContain('Generated for portable');
+  expect(markup).toContain('Generated · epoch-01/portable');
   expect(markup).toContain('Generated review instructions');
   expect(markup).toContain('# Generated review');
   expect(markup).not.toContain('Reviews changes');
@@ -67,9 +68,49 @@ it('renders source raw Markdown from the selected source document', () => {
     view: 'markdown',
   }));
 
-  expect(markup).toContain('Source document · review');
+  expect(markup).toContain('Authored SKILL.md');
   expect(markup).toContain('---\nname: review');
   expect(markup).toContain('/api/skills/source/skill%3Areview/resources/guide.md');
+});
+
+it('explains the authored, generated, resource, and eval-coverage views', () => {
+  const fetch = async (): Promise<Response> => { throw new Error('Effects do not run during server rendering.'); };
+  const markup = renderToStaticMarkup(createElement(SkillsPage, {
+    client: new SkillClient({ fetch }),
+    evalClient: new EvalClient({ foreground: new ForegroundRouteClient({ fetch }) }),
+    status: {
+      artifact: { state: 'missing' },
+      build: { state: 'idle' },
+      source: { diagnostics: [], state: 'unknown' },
+    },
+  }));
+
+  expect(markup).toContain('authored SKILL.md');
+  expect(markup).toContain('linked resources');
+  expect(markup).toContain('immutable host-generated document');
+  expect(markup).toContain('authored eval coverage');
+});
+
+it('tells authors how to add their first Skill', () => {
+  const markup = renderToStaticMarkup(createElement(SkillTree, {
+    onSelect: () => undefined,
+    selectedId: undefined,
+    tree: { diagnostics: [], skills: [] },
+  }));
+
+  expect(markup).toContain('Add a Skill path to agent-bundle.config.ts');
+});
+
+it('explains when the selected generated target has no Skills', () => {
+  const markup = renderToStaticMarkup(createElement(SkillTree, {
+    kind: 'generated',
+    onSelect: () => undefined,
+    selectedId: undefined,
+    tree: { diagnostics: [], skills: [] },
+  }));
+
+  expect(markup).toContain('No generated Skills are available for this target.');
+  expect(markup).not.toContain('No authored Skills are available.');
 });
 
 it('gives both two-option groups a complete roving-tab and labelled-tabpanel contract', () => {

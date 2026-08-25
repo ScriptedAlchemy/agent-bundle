@@ -32,6 +32,44 @@ export interface HooksPageProps {
 
 const draftError = 'Canonical hook input must be a JSON object.';
 
+type CanonicalHookEvent = HookPlaygroundHook['hook']['event'];
+
+const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, ImmutableJsonRecord>> = Object.freeze({
+  afterTool: Object.freeze({
+    cwd: '/workspace',
+    sessionId: 'workbench-preview',
+    toolInput: Object.freeze({}),
+    toolName: 'shell',
+    toolResponse: Object.freeze({}),
+    toolUseId: 'workbench-preview-tool',
+    transcriptPath: '/workspace/transcript.json',
+  }),
+  beforeTool: Object.freeze({
+    cwd: '/workspace',
+    sessionId: 'workbench-preview',
+    toolInput: Object.freeze({}),
+    toolName: 'shell',
+    toolUseId: 'workbench-preview-tool',
+    transcriptPath: '/workspace/transcript.json',
+  }),
+  sessionStart: Object.freeze({
+    cwd: '/workspace',
+    sessionId: 'workbench-preview',
+    source: 'workbench',
+    transcriptPath: '/workspace/transcript.json',
+  }),
+  stop: Object.freeze({
+    cwd: '/workspace',
+    lastAssistantMessage: 'Workbench preview completed.',
+    sessionId: 'workbench-preview',
+    stopHookActive: false,
+    transcriptPath: '/workspace/transcript.json',
+  }),
+});
+
+/** Provides one event-shaped document that can run a generated Hook without host-contract guesswork. */
+export const canonicalHookInput = (event: CanonicalHookEvent): ImmutableJsonRecord => canonicalHookInputs[event];
+
 const errorMessage = (reason: unknown): string => messageFrom(reason, 'The hook playground request could not be completed.');
 
 export type HookInputMode = 'fixture' | 'inline';
@@ -144,6 +182,7 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
   const [listState, setListState] = useState<'error' | 'loading' | 'ready'>(() => epochId === undefined ? 'ready' : 'loading');
   const [result, setResult] = useState<HookPlaygroundResult>();
   const [selectedKey, setSelectedKey] = useState<string>();
+  const draftIsDirty = useRef(false);
   const lifecycle = useRef<HookRequestLifecycle>(new HookRequestLifecycle()).current;
   const currentEpochIsListed = listedEpochId === epochId;
   const view = hookPlaygroundViewFor({
@@ -154,6 +193,11 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
     selectedKey,
   });
   const parsed = parseRawJsonRecord(draft);
+
+  useEffect(() => {
+    if (view.selected === undefined || draftIsDirty.current) return;
+    setDraft(serializeJsonRecord(canonicalHookInput(view.selected.event as CanonicalHookEvent)));
+  }, [view.selected?.event]);
 
   useEffect(() => {
     lifecycle.invalidate();
@@ -254,7 +298,10 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
             aria-invalid={parsed === null ? true : undefined}
             disabled={busy}
             id="hook-canonical-input"
-            onChange={(event) => setDraft(event.currentTarget.value)}
+            onChange={(event) => {
+              draftIsDirty.current = true;
+              setDraft(event.currentTarget.value);
+            }}
             spellCheck={false}
             value={draft}
           />

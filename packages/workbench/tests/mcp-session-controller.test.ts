@@ -138,7 +138,11 @@ const traceStream = (): {
     },
   }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
   return Object.freeze({
-    close: () => controller?.close(),
+    close: () => {
+      try { controller?.close(); } catch (error) {
+        if (!(error instanceof TypeError && error.message === 'Invalid state: Controller is already closed')) throw error;
+      }
+    },
     response,
     send: (entry) => controller?.enqueue(new TextEncoder().encode(`${JSON.stringify(entry)}\n`)),
   });
@@ -2069,6 +2073,72 @@ it('reports a terminal trace stream EOF as an explicit controller error instead 
   }]);
   await controller.close();
 });
+
+it('keeps a built MCP App resource frame in the live trace', async () => {
+  const stream = traceStream();
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async () => stream.response,
+    trace: async () => ({ entries: [] }),
+  };
+  const controller = createMcpSessionController({ clientFactory: fakeClient, routes, transportFactory: fakeTransport });
+  await controller.open(binding);
+
+  const text = 'x'.repeat(2 * 1024 * 1024);
+  stream.send({ direction: 'server', kind: 'frame', message: { result: { contents: [{ text }] } }, occurredAt: 1, sequence: 1 });
+  await eventually(() => controller.model.timeline.entries.length === 1);
+
+  expect(controller.model.phase).toBe('ready');
+  expect(controller.model.timeline.entries).toEqual([
+    { direction: 'server', kind: 'frame', message: { result: { contents: [{ text }] } }, occurredAt: 1, sequence: 1 },
+  ]);
+  stream.close();
+  await controller.close();
+});
+
+const invalidTraceBodies = (): readonly (readonly [string, BodyInit])[] => {
+  const entry = { direction: 'server', kind: 'logging', occurredAt: 1, payload: { message: 'partial' }, sequence: 1 };
+  const serialized = JSON.stringify(entry);
+  const prefix = new TextEncoder().encode(serialized.slice(0, serialized.indexOf('partial')));
+  const suffix = new TextEncoder().encode(`${serialized.slice(serialized.indexOf('partial') + 'partial'.length)}\n`);
+  const malformed = new Uint8Array(prefix.byteLength + 1 + suffix.byteLength);
+  malformed.set(prefix);
+  malformed[prefix.byteLength] = 0xff;
+  malformed.set(suffix, prefix.byteLength + 1);
+  return [
+    ['a duplicate-key frame', `${serialized.replace('"message":"partial"', '"message":"first","message":"partial"')}\n`],
+    ['an unterminated frame', serialized],
+    ['invalid UTF-8', malformed],
+  ];
+};
+
+for (const [name, body] of invalidTraceBodies()) {
+  it(`rejects ${name} from the MCP trace instead of publishing partial telemetry`, async () => {
+    const routes: McpSessionControllerRoutes = {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => new Response(body, {
+        headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
+      }),
+      trace: async () => ({ entries: [] }),
+    };
+    const controller = createMcpSessionController({
+      clientFactory: fakeClient,
+      routes,
+      transportFactory: fakeTransport,
+    });
+
+    await controller.open(binding);
+    await eventually(() => controller.model.phase === 'error');
+
+    expect(controller.model.logs).toEqual([]);
+    expect(controller.model.diagnostics).toContainEqual(expect.objectContaining({ code: 'mcp.trace.stream.error' }));
+    await controller.close();
+  });
+}
 
 it('admits one opening session and disposes that exact client and transport when connection fails', async () => {
   const connecting = deferred<void>();

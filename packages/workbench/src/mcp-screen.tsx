@@ -1,10 +1,11 @@
-import { useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
 
+import type { ArtifactClient } from './artifacts/artifact-client.ts';
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
 import type { McpAppClient } from './mcp/mcp-app-client.ts';
-import { McpPage } from './mcp/mcp-page.tsx';
+import { McpPage, mcpPageEmptyServerCatalogFor, mcpPageServerCatalogFor, type McpPageServerCatalog } from './mcp/mcp-page.tsx';
 import { mcpProtocolTraceDownload, type McpDownload } from './mcp/mcp-protocol-trace.ts';
 import { McpRouteClient, type ForegroundRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
@@ -28,8 +29,9 @@ const downloadMcpFile = ({ blob, filename }: McpDownload): void => {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 };
 
-export const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, presentation, setPresentation, status }: {
+export const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, model, onNavigate, onResetSession, presentation, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
+  readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly model: ReturnType<typeof createMcpController>['model'];
@@ -41,7 +43,26 @@ export const McpScreen = ({ appPreviewClient, connectionError, controller, model
 }) => {
   const presentationTabs = useRef<Record<McpPresentation, HTMLButtonElement | null>>({ inspector: null, playground: null });
   const activeEpoch = activeEpochFor(status);
+  const [serverCatalog, setServerCatalog] = useState<McpPageServerCatalog>();
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
+  const serverCatalogState = activeEpoch !== undefined && (serverCatalog === undefined || serverCatalog.epochId !== activeEpoch.id)
+    ? 'loading'
+    : 'ready';
+  const serverOptions = activeEpoch !== undefined && serverCatalogState === 'ready' ? serverCatalog?.options ?? [] : [];
+  useEffect(() => {
+    const epochId = activeEpoch?.id;
+    const controller = new AbortController();
+    setServerCatalog(undefined);
+    if (epochId === undefined) return () => controller.abort();
+    void artifactClient.inspect(epochId, controller.signal).then((inspection) => {
+      const catalog = mcpPageServerCatalogFor(epochId, inspection, controller.signal);
+      if (catalog !== undefined) setServerCatalog(catalog);
+    }).catch(() => {
+      const catalog = mcpPageEmptyServerCatalogFor(epochId, controller.signal);
+      if (catalog !== undefined) setServerCatalog(catalog);
+    });
+    return () => controller.abort();
+  }, [activeEpoch?.id, artifactClient]);
   const selectPresentation = (next: McpPresentation): void => {
     setPresentation(next);
     presentationTabs.current[next]?.focus();
@@ -109,6 +130,9 @@ export const McpScreen = ({ appPreviewClient, connectionError, controller, model
           onDownloadConfig={downloadMcpFile}
           onDownloadTrace={downloadMcpFile}
           onResetSession={onResetSession}
+          presentationActive={presentation === 'playground'}
+          serverCatalogState={serverCatalogState}
+          serverOptions={serverOptions}
           targetOptions={targetOptions}
         />
       </section>

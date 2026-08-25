@@ -2,7 +2,6 @@ import { execFile as executeFile } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
@@ -13,24 +12,8 @@ const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 
 const releaseEnvironment = (): NodeJS.ProcessEnv => ({ ...process.env, NODE_ENV: 'production' });
 
-it('launches npm through its JavaScript entrypoint on every platform', async () => {
-  const helperUrl = pathToFileURL(join(workspaceRoot, 'scripts', 'npm-cli.mjs')).href;
-  const source = [
-    `import { npmCliInvocation } from ${JSON.stringify(helperUrl)};`,
-    `process.stdout.write(JSON.stringify(npmCliInvocation({ npm_execpath: 'C:\\\\Program Files\\\\nodejs\\\\node_modules\\\\npm\\\\bin\\\\npm-cli.js', npm_node_execpath: 'C:\\\\Program Files\\\\nodejs\\\\node.exe' })));`,
-  ].join('\n');
-  const { stdout } = await execFile(process.execPath, ['--input-type=module', '--eval', source], {
-    cwd: workspaceRoot,
-  });
-
-  expect(JSON.parse(stdout)).toEqual({
-    args: ['C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js'],
-    command: 'C:\\Program Files\\nodejs\\node.exe',
-  });
-});
-
-it('generates a CycloneDX SBOM from an externally installed production tarball', async () => {
-  const { stdout } = await execFile(process.execPath, ['scripts/audit-packed-sbom.mjs'], {
+it('audits an externally installed production tarball and generates its CycloneDX SBOM', async () => {
+  const { stdout } = await execFile(process.execPath, ['scripts/audit-packed-release.mjs'], {
     cwd: workspaceRoot,
     env: releaseEnvironment(),
   });
@@ -127,7 +110,7 @@ it('ships repository and support metadata that matches the verified origin', asy
 });
 
 it('runs a release pack dry run with the CLI in its tarball', async () => {
-  const { stdout } = await execFile('npm', ['run', 'pack:dry-run'], {
+  const { stdout } = await execFile('pnpm', ['pack:dry-run'], {
     cwd: workspaceRoot,
     env: releaseEnvironment(),
   });
@@ -140,7 +123,7 @@ it('packs generated Workbench legal companion files', async () => {
   const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-audit-'));
 
   try {
-    await execFile('npm', ['run', 'build'], { cwd: workspaceRoot, env: releaseEnvironment() });
+    await execFile('pnpm', ['build'], { cwd: workspaceRoot, env: releaseEnvironment() });
     const { stdout } = await execFile('npm', [
       'pack',
       '--json',
@@ -148,10 +131,13 @@ it('packs generated Workbench legal companion files', async () => {
       tarballRoot,
     ], { cwd: packageRoot, env: releaseEnvironment() });
     const [{ files }] = JSON.parse(stdout) as Array<{ readonly files: readonly { readonly path: string }[] }>;
+    const productManifest = await readFile(join(packageRoot, 'package.json'), 'utf8');
 
     expect(files.map((file) => file.path)).toContainEqual(
       expect.stringMatching(/^dist\/workbench\/.*\.LICENSE\.txt$/u),
     );
+    expect(files.some(({ path }) => path.startsWith('examples/'))).toBe(false);
+    expect(productManifest).not.toContain('workspace:');
   } finally {
     await rm(tarballRoot, { force: true, recursive: true });
   }
@@ -162,7 +148,7 @@ it('installs public entrypoints and an externally resolved CLI for production co
   const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-tarball-'));
 
   try {
-    await execFile('npm', ['run', 'build'], { cwd: workspaceRoot, env: releaseEnvironment() });
+    await execFile('pnpm', ['build'], { cwd: workspaceRoot, env: releaseEnvironment() });
     const { stdout: packed } = await execFile('npm', [
       'pack',
       '--json',
@@ -187,6 +173,8 @@ it('installs public entrypoints and an externally resolved CLI for production co
       readonly dependencies?: Readonly<Record<string, string>>;
     };
     expect(manifest.dependencies?.commander).toBe('15.0.0');
+    expect(manifest.dependencies?.['agent-bundle']).toBeUndefined();
+    expect(JSON.stringify(manifest)).not.toContain('workspace:');
     await Promise.all([
       writeFile(join(consumerRoot, 'canonical-contract.mts'), [
         "import { type CompareEvalsOptions, type RunEvalsOptions } from 'agent-bundle/api';",

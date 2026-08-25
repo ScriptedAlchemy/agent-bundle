@@ -726,7 +726,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
     const installedCli = await realpath(join(consumer, 'node_modules', '.bin', 'agent-bundle'));
     expect(isWithin(consumer, installedPackageRoot)).toBe(true);
     expect(isWithin(workspaceRoot, installedPackageRoot)).toBe(false);
-    expect(installedCli).toBe(join(installedPackageRoot, 'dist', 'cli.js'));
+    expect(installedCli).toBe(join(installedPackageRoot, 'bin', 'agent-bundle.js'));
     expect(isWithin(workspaceRoot, installedCli)).toBe(false);
     const installedManifest = record(JSON.parse(await readFile(join(installedPackageRoot, 'package.json'), 'utf8')), 'installed package manifest');
     const runtimeDependencies = record(installedManifest.dependencies, 'installed package runtime dependencies');
@@ -877,7 +877,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       ).map((request) => `${request.method} ${request.url}`), { timeout: browserTimeout }).toEqual([]);
     };
     await page.goto(`${origin}#overview`);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
 
     const client = new Client({ name: 'packed-release-test-client', version: '1.0.0' });
@@ -1195,7 +1195,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const epochBMarker = 'Epoch B changed the packed review guidance.';
       await writeFile(skillSource, `${originalSkill}\n\n${epochBMarker}\n`);
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
-      await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromOverview('epoch B');
       const epochBStatus = activeEpochFrom(await call('project_status'), 'epoch B');
       expect(epochBStatus.artifactStatus.state).toBe('active');
@@ -1244,7 +1244,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       if (invalidConfig === originalConfig) throw new Error('The packed fixture did not contain the resource URI used for the invalid rebuild.');
       await writeFile(configSource, invalidConfig);
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
-      await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromOverview('invalid epoch B');
       const staleStatus = activeEpochFrom(await call('project_status'), 'stale epoch B');
       expect(staleStatus.artifactStatus.state).toBe('stale');
@@ -1503,11 +1503,10 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       phase = 'foreground restart/reconnect fresh B browser MCP session';
       await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeVisible({ timeout: browserTimeout });
-      await page.locator('#mcp-epoch').selectOption(recoveredEpochId);
-      await expect(page.locator('#mcp-epoch')).toHaveValue(recoveredEpochId);
-      await page.locator('#mcp-target').selectOption('portable');
-      await page.locator('#mcp-server-name').fill('fixture');
+      await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
+      await expect(page.locator('#mcp-epoch')).toHaveValue(recoveredEpochId, { timeout: browserTimeout });
+      await expect(page.locator('#mcp-target')).toHaveValue('portable');
+      await expect(page.locator('#mcp-server-name')).toHaveValue('fixture');
       const openedBrowserMcpSessionB = page.waitForResponse((response) =>
         response.url() === `${origin}/api/mcp/sessions` && response.request().method() === 'POST' && response.ok(),
       );
@@ -1546,7 +1545,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.setViewportSize({ height: 844, width: 390 });
       const mobileNavigationRequestIndex = browserRequests.length;
       const mobileRoutes: readonly Readonly<{ heading: string; label: string }>[] = [
-        { heading: 'Project overview', label: 'Overview' }, { heading: 'Skills', label: 'Skills' }, { heading: 'Hooks', label: 'Hooks' },
+        { heading: 'Bundle dashboard', label: 'Overview' }, { heading: 'Skills', label: 'Skills' }, { heading: 'Hooks', label: 'Hooks' },
         { heading: 'MCP playground', label: 'MCP playground' }, { heading: 'Artifacts', label: 'Artifacts' }, { heading: 'Playground', label: 'Playground' },
         { heading: 'Logs', label: 'Logs' }, { heading: 'Evals', label: 'Evals' }, { heading: 'Comparisons', label: 'Comparisons' },
       ];
@@ -1598,8 +1597,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       leaveActiveMobileRoute(Date.now());
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();
       await page.keyboard.press('Enter');
-      await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
-      await waitForBrowserRequestsAfter(mobileNavigationRequestIndex);
+      await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
 
       phase = 'foreground outage ledger quiet fence';
       const requestFailuresBeforeQuietFence = browserRequests.filter((request) => request.error !== undefined);

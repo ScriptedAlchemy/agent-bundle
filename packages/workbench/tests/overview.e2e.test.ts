@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import type { Locator, Page } from 'playwright';
 
+import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
 import { ArtifactService } from '../../agent-bundle/src/dev/artifacts/artifact-service.ts';
 import { EpochStore } from '../../agent-bundle/src/dev/epoch-store.ts';
 import { ProjectEventHub, startForegroundServer } from '../../agent-bundle/src/dev/index.ts';
@@ -91,8 +92,8 @@ const startFrozenEpochServer = async (root: string) => {
 const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
   await Promise.all([
     mkdir(join(root, 'src'), { recursive: true }),
-    symlink(join(workspaceRoot, 'node_modules', '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
-    symlink(join(workspaceRoot, 'node_modules', 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
+    symlink(join(agentBundleNodeModules, '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
+    symlink(join(workbenchNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
   ]);
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
@@ -1409,7 +1410,7 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
       if (request.resourceType() === 'script' && request.url().includes('/static/js/async/')) asyncScripts.add(request.url());
     });
     await page.goto(server.url);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     for (const name of ['Normalization summary', 'Artifact epoch', 'Generated targets', 'Diagnostics (0)', 'Next action']) {
       await expect(page.getByRole('heading', { name })).toBeVisible({ timeout: browserTimeout });
     }
@@ -1445,13 +1446,13 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     await expect(page.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', /-document-tab-generated/u);
     await expect(page.getByRole('heading', { name: 'Generated skills', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('#skills .skill-target')).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByText(/Generated document ·/)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText(/Generated ·/)).toBeVisible({ timeout: browserTimeout });
     expect([...asyncScripts]).toEqual([]);
     await page.setViewportSize({ height: 844, width: 390 });
     await expect(page.locator('#skills .skills-page-heading > div > h1')).toHaveText('Skills', { timeout: browserTimeout });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.getByRole('link', { name: 'Overview' }).click();
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
 
     const rebuild = page.getByRole('button', { name: 'Rebuild' });
     let rebuildPosts = 0;
@@ -1470,7 +1471,7 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
 
     await page.setViewportSize({ height: 844, width: 390 });
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   } finally {
     await server.close();
@@ -1486,7 +1487,7 @@ e2e('renders the latest changed files from a live foreground source event withou
   page.on('pageerror', (error) => pageErrors.push(error));
   try {
     await page.goto(`${server.url}#overview`);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.waitForTimeout(100);
     eventHub.publish({
       payload: {
@@ -1531,7 +1532,7 @@ e2e('loads the lazy Shiki chunk only after a fenced non-Mermaid Skill is rendere
       if (request.resourceType() === 'script' && request.url().includes('/static/js/async/')) asyncScripts.add(request.url());
     });
     await page.goto(server.url);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     expect([...asyncScripts]).toEqual([]);
     await page.getByRole('link', { name: 'Skills' }).click();
     await expect(page.locator('.skill-code-block')).toContainText('const answer: number = 42;', { timeout: browserTimeout });
@@ -1561,7 +1562,7 @@ e2e('delivers active Skill resources as downloads without letting their page scr
   });
   try {
     await page.goto(server.url);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     let protectedRequests = 0;
     page.on('request', (request) => {
       if (/\/api\/project\/(?:session|rebuild)$/u.test(request.url())) protectedRequests += 1;
@@ -1589,12 +1590,12 @@ e2e('lists an immutable epoch Skill tree even after the current source Skill is 
     await writeFile(join(renamed, 'SKILL.md'), project.skillMarkdown.replace('name: review', 'name: revised'));
 
     await page.goto(server.url);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('link', { name: 'Skills' }).click();
     await expect(page.locator('.skill-tree-item')).toContainText('revised', { timeout: browserTimeout });
     await page.getByRole('tab', { name: 'Generated' }).click();
     await expect(page.locator('.skill-tree-item')).toContainText('review', { timeout: browserTimeout });
-    await expect(page.getByText(/Generated document ·/)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText(/Generated ·/)).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
   } finally {
     await server.close();
@@ -1615,7 +1616,7 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
   page.on('pageerror', (error) => pageErrors.push(error));
   try {
     await page.goto(server.url);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     let failedStatusRequests = 0;
     await page.route('**/api/project/status', async (route) => {
       failedStatusRequests += 1;
@@ -1630,7 +1631,7 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
 
     await expect.poll(() => failedStatusRequests, { timeout: browserTimeout }).toBe(1);
     await expect(page.getByRole('status')).toContainText('Foreground server unavailable', { timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
     expect(pageErrors).toEqual([]);
   } finally {
@@ -1675,7 +1676,7 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
   });
   try {
     await page.goto(server.url);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.waitForTimeout(100);
     const firstEvents = eventHubs[0];
     if (firstEvents === undefined) throw new Error('Expected the first foreground event hub.');
@@ -1711,8 +1712,8 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
     server = await startRestartableServer(port);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.connection-content')).not.toHaveAttribute('data-recovery-probe', 'foreground-a');
-    await expect(page.locator('#mcp-target')).toHaveValue('');
-    await expect(page.locator('#mcp-server-name')).toHaveValue('');
+    await expect(page.locator('#mcp-target')).toHaveValue('portable');
+    await expect(page.locator('#mcp-server-name')).toHaveValue('fixture');
     await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
     await expect.poll(() => releasedMcpSessions.length, { timeout: browserTimeout }).toBe(1);
     expect(releasedMcpSessions).toEqual([{ token: 'foreground-token-a' }]);

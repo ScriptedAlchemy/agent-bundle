@@ -9,11 +9,12 @@ import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { chromium } from 'playwright';
 
+import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const previewComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-app-preview.tsx');
 const runtimeClientSource = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-app-client.ts');
 const runtimeRouteClientSource = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-route-client.ts');
-const vendorRoot = join(workspaceRoot, 'packages', 'workbench', 'src', 'inspector', 'vendor');
 
 const mountedPreviewFixture = async () => {
   const bootstrapRequests: string[] = [];
@@ -82,15 +83,7 @@ const mountedPreviewFixture = async () => {
       },
       plugins: [pluginReact()],
       resolve: {
-        alias: {
-          '@inspector/core/json/xMcpHeader.js': join(vendorRoot, 'core', 'json', 'xMcpHeader.ts'),
-          '@inspector/core/mcp/fetchTracking.js': join(vendorRoot, 'core', 'mcp', 'fetchTracking.ts'),
-          '@inspector/core/mcp/types.js': join(vendorRoot, 'core', 'mcp', 'types.ts'),
-          '@inspector/core': join(vendorRoot, 'core'),
-          '@mantine/core': join(workspaceRoot, 'node_modules', '@mantine', 'core', 'esm', 'index.mjs'),
-          react: join(workspaceRoot, 'node_modules', 'react'),
-          'react-dom/client': join(workspaceRoot, 'node_modules', 'react-dom', 'client.js'),
-        },
+        alias: workbenchBrowserAliases,
       },
       source: {
         define: { 'process.env.NODE_ENV': JSON.stringify('production') },

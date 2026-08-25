@@ -513,6 +513,7 @@ it('renders the suite, trial, and recorded run controls of a project that declar
 
   expect(markup).toContain('id="eval-suite"');
   expect(markup).toContain('id="eval-trials"');
+  expect(markup).toContain('Trial override (leave blank to use authored count)');
   expect(markup).toContain('id="eval-run"');
   expect(markup).toContain('Run deterministic suite');
   expect(markup).toContain('Open recorded run');

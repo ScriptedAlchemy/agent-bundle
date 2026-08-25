@@ -1,9 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "rootDir": "./packages/agent-bundle/src"
-  },
-  "include": [
-    "packages/agent-bundle/src/**/*.ts"
-  ]
-}

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
 
+import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
@@ -10,14 +11,15 @@ import { e2e, execFile, workbenchAssets, workspaceRoot } from './support/workben
 
 const browserTimeout = 5_000;
 
-// This file rebuilds the workbench in both development and production modes, so it keeps
-// its own non-memoized build instead of the shared memoized production-only buildWorkbench.
+// The development-mode case needs its own build; prepared integration runs reuse the
+// production artifact that the integration entrypoint built once.
 const buildWorkbench = async (mode: 'development' | 'production' = 'production'): Promise<void> => {
+  if (mode === 'production' && process.env['AGENT_BUNDLE_WORKBENCH_PREBUILT'] === '1') return;
   const { NODE_ENV: _nodeEnv, RSTEST: _rstest, ...environment } = process.env;
   const isProduction = mode === 'production';
-  await execFile('npm', isProduction
-    ? ['run', 'build', '--workspace', 'agent-bundle-workbench']
-    : ['exec', 'rsbuild', '--', 'build', '--mode', mode], {
+  await execFile('pnpm', isProduction
+    ? ['--filter', 'agent-bundle-workbench', 'build']
+    : ['exec', 'rsbuild', 'build', '--mode', mode], {
     cwd: isProduction ? workspaceRoot : join(workspaceRoot, 'packages', 'workbench'),
     env: { ...environment, NODE_ENV: mode },
   });
@@ -26,8 +28,8 @@ const buildWorkbench = async (mode: 'development' | 'production' = 'production')
 const writeInspectorProject = async (root: string): Promise<void> => {
   await Promise.all([
     mkdir(join(root, 'src'), { recursive: true }),
-    symlink(join(workspaceRoot, 'node_modules', '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
-    symlink(join(workspaceRoot, 'node_modules', 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
+    symlink(join(agentBundleNodeModules, '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
+    symlink(join(workbenchNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
   ]);
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
@@ -83,7 +85,7 @@ e2e('treats an unsupported Inspector hash as the overview without opening an MCP
 
     await page.goto(`${server.url}#inspector`);
     await expect(page).toHaveURL(/#inspector$/u, { timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveCount(0);
     expect(sessionPosts).toBe(0);

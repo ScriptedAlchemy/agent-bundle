@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
@@ -28,6 +28,41 @@ const StateMark = ({ state }: { readonly state: string }) => (
         : '–'
   }</span>
 );
+
+/** A navigation-only guide to the bundle lifecycle; authoritative state remains below. */
+export const BundleWorkflow = ({ onNavigate }: { readonly onNavigate: (page: WorkbenchPage) => void }) => <section aria-labelledby="bundle-dashboard-heading" className="section">
+  <div className="page-heading">
+    <h1 id="bundle-dashboard-heading">Bundle dashboard</h1>
+    <p>Author once, exercise host-ready behavior, and evaluate durable evidence.</p>
+  </div>
+  <ol className="bundle-workflow">
+    <li>
+      <h2>Author</h2>
+      <p>Define Skills, Hooks, scripts, and MCP capabilities from one source bundle.</p>
+      <button onClick={() => onNavigate('skills')} type="button">Skills</button>
+      <button onClick={() => onNavigate('hooks')} type="button">Hooks</button>
+    </li>
+    <li>
+      <h2>Build</h2>
+      <p>Build an immutable artifact epoch for the hosts you selected.</p>
+      <button onClick={() => onNavigate('artifacts')} type="button">Artifacts</button>
+    </li>
+    <li>
+      <h2>Exercise</h2>
+      <p>Exercise emitted Skills, Hooks, Playground, and MCP behavior.</p>
+      <button onClick={() => onNavigate('skills')} type="button">Skills</button>
+      <button onClick={() => onNavigate('hooks')} type="button">Hooks</button>
+      <button onClick={() => onNavigate('playground')} type="button">Playground</button>
+      <button onClick={() => onNavigate('mcp')} type="button">MCP</button>
+    </li>
+    <li>
+      <h2>Evaluate</h2>
+      <p>Evaluate host-ready behavior, compare results, and inspect durable evidence.</p>
+      <button onClick={() => onNavigate('evals')} type="button">Evals</button>
+      <button onClick={() => onNavigate('comparisons')} type="button">Comparisons</button>
+    </li>
+  </ol>
+</section>;
 
 export const Overview = ({ changedFiles, client, connectionError, onNavigate, status, onStatus }: {
   readonly changedFiles: readonly string[];
@@ -59,9 +94,7 @@ export const Overview = ({ changedFiles, client, connectionError, onNavigate, st
       <main className="canvas" id="overview">
         <Topbar connectionError={connectionError} />
         <div className="page-content">
-          <div className="page-heading">
-            <h1>Project overview</h1>
-          </div>
+          <BundleWorkflow onNavigate={onNavigate} />
 
           <section aria-labelledby="normalization-heading" className="section">
             <h2 id="normalization-heading">Normalization summary</h2>

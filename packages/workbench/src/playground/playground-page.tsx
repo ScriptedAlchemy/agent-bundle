@@ -69,7 +69,7 @@ export interface PlaygroundPageProps {
   readonly targets: readonly PlaygroundTarget[];
 }
 
-type PlaygroundOperation = PlaygroundOperationRequest['operation'];
+export type PlaygroundOperation = PlaygroundOperationRequest['operation'];
 
 const jsonDraftError = 'This field must contain a JSON object.';
 
@@ -107,7 +107,7 @@ export const playgroundScriptsForTarget = (
   scripts: readonly PlaygroundScriptCatalogEntry[],
   target: string,
 ): readonly PlaygroundScriptCatalogEntry[] => Object.freeze(
-  scripts.filter((script) => script.target === target).sort((left, right) => left.id.localeCompare(right.id)),
+  scripts.filter((script) => script.target === target),
 );
 
 /** A changed target or rebuilt catalog must never submit a stale server script id. */
@@ -116,6 +116,30 @@ export const playgroundSelectedScriptId = (
   scripts: readonly PlaygroundScriptCatalogEntry[],
   target: string,
 ): string => scripts.some((script) => script.id === scriptId && script.target === target) ? scriptId : '';
+
+export interface PlaygroundSelection {
+  readonly operation: PlaygroundOperation;
+  readonly scriptId: string;
+  readonly target: string;
+}
+
+/** Defaults only missing or stale catalog choices, keeping a user's valid selection intact. */
+export const playgroundSelectionFor = (
+  input: Readonly<PlaygroundSelection & { readonly operationIsImplicit: boolean }> ,
+  targets: readonly PlaygroundTarget[],
+  scripts: readonly PlaygroundScriptCatalogEntry[],
+): PlaygroundSelection => {
+  const target = targets.some((entry) => entry.name === input.target)
+    ? input.target
+    : targets[0]?.name ?? '';
+  const targetScripts = playgroundScriptsForTarget(scripts, target);
+  const defaultScriptId = targetScripts[0]?.id ?? '';
+  return Object.freeze({
+    operation: input.operationIsImplicit ? targetScripts.length > 0 ? 'script.run' : 'skill.inspect' : input.operation,
+    scriptId: playgroundSelectedScriptId(input.scriptId, scripts, target) || defaultScriptId,
+    target,
+  });
+};
 
 export interface PlaygroundRunObserverOptions {
   readonly client: Pick<PlaygroundClient, 'replay' | 'session' | 'stream'>;
@@ -606,6 +630,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const [nativePrompt, setNativePrompt] = useState('');
   const [nativeSelection, setNativeSelection] = useState<NativePlaygroundSelection>(emptyNativeSelection);
   const [targetName, setTargetName] = useState('');
+  const operationIsImplicit = useRef(true);
   const cancelFlight = useRef(createPlaygroundCancelFlight());
   const cancelPresentation = useRef<Promise<void> | undefined>(undefined);
   const clientOwner = useRef(client);
@@ -644,8 +669,11 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const selectedScriptId = playgroundSelectedScriptId(scriptId, scripts, selectedTargetName);
 
   useEffect(() => {
-    if (selectedScriptId !== scriptId) setScriptId(selectedScriptId);
-  }, [scriptId, selectedScriptId]);
+    const next = playgroundSelectionFor({ operation, operationIsImplicit: operationIsImplicit.current, scriptId, target: targetName }, targets, scripts);
+    if (next.operation !== operation) setOperation(next.operation);
+    if (next.scriptId !== scriptId) setScriptId(next.scriptId);
+    if (next.target !== targetName) setTargetName(next.target);
+  }, [operation, scriptId, scripts, targetName, targets]);
 
   useEffect(() => {
     if (!clientResetPending.current) return;
@@ -838,7 +866,10 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
         <section aria-label="Server-owned operation" className="playground-controls">
           <p className="playground-note">A new run binds the current server epoch. An admitted run stays pinned to the epoch in its persisted session identity.</p>
           <label htmlFor="playground-operation">Operation</label>
-          <select disabled={controlsDisabled} id="playground-operation" onChange={(event) => setOperation(event.currentTarget.value as PlaygroundOperation)} value={operation}>
+          <select disabled={controlsDisabled} id="playground-operation" onChange={(event) => {
+            operationIsImplicit.current = false;
+            setOperation(event.currentTarget.value as PlaygroundOperation);
+          }} value={operation}>
             <option value="skill.inspect">Skill inspection</option>
             <option value="hook.simulate">Hook simulation</option>
             <option value="mcp.call-tool">MCP tool call</option>

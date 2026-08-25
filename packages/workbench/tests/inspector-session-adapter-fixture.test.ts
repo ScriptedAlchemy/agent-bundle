@@ -69,7 +69,7 @@ describe('Inspector session adapter production fixture', () => {
         ['Resources', 'fixture-resource'],
         ['Prompts', 'fixture-prompt'],
         ['Protocol', 'Messages'],
-        ['Logging', 'Log-level changes are unavailable because this W13 session does not expose logging/setLevel.'],
+        ['Logging', 'Log-level changes are unavailable because this session does not support logging/setLevel.'],
       ] as const) {
         await page.getByRole('button', { name: label }).click();
         await page.getByText(expected, { exact: true }).waitFor({ timeout: 5_000 });

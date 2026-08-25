@@ -95,7 +95,7 @@ Host MCP catalog changes can require that host to reload its MCP connection; Age
 use `notifications/tools/list_changed` as a workbench HMR mechanism.
 
 Rsbuild UI HMR is contributor-only. It runs through
-`AGENT_BUNDLE_WORKBENCH_API_PROXY=<foreground-url> npm run dev --workspace agent-bundle-workbench`,
+`AGENT_BUNDLE_WORKBENCH_API_PROXY=<foreground-url> pnpm --filter agent-bundle-workbench dev`,
 whose `packages/workbench/scripts/dev.mjs` wrapper refuses to start without the foreground API
 proxy. Published `agent-bundle dev` serves prebuilt assets and live project events instead.
 
@@ -192,26 +192,67 @@ artifact/
 
 Portable artifacts contain portable plugin, skills, MCP, and App-resource files. Codex and Claude artifacts contain their respective native metadata and generated hook wrappers. Terminal hosts can use normal MCP tools and resources; visual rendering of an MCP App depends on the host supporting the standard resource metadata.
 
+## Public examples
+
+The repository includes three credential-free public example workspaces. Each
+uses only the public `agent-bundle` CLI and package exports, exactly as an
+external project would. The Workbench is a desktop product; these walkthroughs
+and its acceptance suite use a 1440×900 desktop viewport.
+
+| Example | Start here when you want to… | Command |
+| --- | --- | --- |
+| [Skills Starter](examples/skills-starter) | author a release-review Skill and deterministic evidence | `pnpm example:skills` |
+| [Hooks and Scripts](examples/hooks-and-scripts) | simulate a Hook and inspect successful and blocking script traces | `pnpm example:hooks` |
+| [MCP App](examples/mcp-app) | exercise a degraded service result in an interactive App and deterministic eval | `pnpm example:mcp-app` |
+
+Run these commands from the repository root. The filtered package command runs
+inside the selected example, so `agent-bundle` infers that example directory as
+its project root. `pnpm examples:check` performs every example's noninteractive
+validation and build. To run a command from an example directly, first `cd` to
+that example; its package-local `pnpm validate`, `pnpm build`, and `pnpm dev`
+commands infer the same root.
+
+Every Workbench starts on **Overview**, the Bundle dashboard: **Author** points
+to Skills and Hooks, **Build** to Artifacts, **Exercise** to Skills, Hooks,
+Playground, and MCP, and **Evaluate** to Evals and Comparisons. The pages show
+different evidence rather than alternative launchers:
+
+- **Skills** compares authored source, linked resources, generated output, and
+  declared eval coverage.
+- **Hooks** simulates canonical host input and replays the saved epoch-bound
+  input. **Playground** runs an emitted capability and retains its durable
+  trace; **Logs** exposes those producer records and raw details.
+- **Artifacts** shows the selected target's emitted files and provenance.
+  **Comparisons** needs two recorded eval runs before it can align outcomes.
+- **MCP playground** opens an epoch-bound generated-server session, invokes
+  tools, shows the protocol trace, and renders a compatible MCP App. **Evals**
+  runs the selected deterministic case against checked-in fixtures.
+
+The per-example walkthroughs record the actual initial selections and a safe
+diagnostic repair loop. Wait for a completed, failed, or idle state before
+capturing or judging a Workbench result; a loading/building state is not a
+durable outcome.
+
 ## Contributor delivery and release gates
 
 From this repository, run the complete local delivery gate with:
 
 ```sh
-npm run check && npm run check:release
+pnpm check && pnpm check:release
 ```
 
-`npm run check:release` is the release-only gate: it runs `npm run pack:dry-run`,
-`npm run audit:release`, and `npm run test:packed`; it does not replace `npm run check`.
+`pnpm check:release` is the release-only gate: it runs `pnpm pack:dry-run`,
+`pnpm audit:release`, and `pnpm test:packed`; it does not replace `pnpm check`.
 
-The micro-eval spot-check is the end-to-end CI confidence gate: `npm run test:spot-check` builds,
+The micro-eval spot-check is the end-to-end CI confidence gate: `pnpm test:spot-check` builds,
 validates, and runs one deterministic eval against the checked-in `fixtures/integration/micro-eval`
-project through the real CLI. It also runs inside every default `npm test`, is never skip-gated,
+project through the real CLI. It also runs inside every default `pnpm test`, is never skip-gated,
 and needs no Claude or Codex installation.
 
 Native Claude/Codex host smokes are intentionally opt-in and stay skipped in CI. They run only on a
 machine with that CLI installed and signed in — via `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE=1` /
-`AGENT_BUNDLE_NATIVE_CODEX_SMOKE=1`, the packed variants `npm run test:packed:native:claude` /
-`npm run test:packed:native:codex`, or the manually dispatched self-hosted **Native host smoke**
+`AGENT_BUNDLE_NATIVE_CODEX_SMOKE=1`, the packed variants `pnpm test:packed:native:claude` /
+`pnpm test:packed:native:codex`, or the manually dispatched self-hosted **Native host smoke**
 workflow. A skipped native smoke in CI is the intended state, not a delivery gap.
 
 Repository-owned Chromium E2E runs independently of a connected ChatGPT Chrome extension. The

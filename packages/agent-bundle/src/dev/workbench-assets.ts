@@ -1,7 +1,8 @@
 import { realpath, stat, readFile } from 'node:fs/promises';
-import { basename, extname, relative, resolve, sep } from 'node:path';
+import { basename, extname, resolve } from 'node:path';
 
 import { isErrno } from '../core/errors.ts';
+import { isInside } from '../core/paths.ts';
 
 import type { WorkbenchAssetSource } from './foreground-server.ts';
 
@@ -33,11 +34,6 @@ const packageRoot = basename(import.meta.dirname) === 'dist'
 
 const defaultRoot = (): string => resolve(packageRoot, 'dist', 'workbench');
 
-const contained = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path.length > 0 && path !== '..' && !path.startsWith(`..${sep}`) && !path.includes(`..${sep}`);
-};
-
 const contentTypeFor = (path: string): string => contentTypes[extname(path).toLowerCase()] ?? 'application/octet-stream';
 
 /**
@@ -58,12 +54,12 @@ export const createWorkbenchAssetSource = (
     read: async (path: string) => {
       if (!path || path.includes('\0')) return undefined;
       const candidate = resolve(root, path);
-      if (!contained(root, candidate)) return undefined;
+      if (!isInside(root, candidate)) return undefined;
       const cached = served.get(candidate);
       if (cached !== undefined) return cached;
       try {
         const [actualRoot, actualPath] = await Promise.all([resolvedRoot, realpath(candidate)]);
-        if (!contained(actualRoot, actualPath)) return undefined;
+        if (!isInside(actualRoot, actualPath)) return undefined;
         const metadata = await stat(actualPath);
         if (!metadata.isFile()) return undefined;
         const asset = Object.freeze({ body: await readFile(actualPath), contentType: contentTypeFor(actualPath) });

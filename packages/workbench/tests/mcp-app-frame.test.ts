@@ -273,6 +273,35 @@ describe('MCP App frame relay', () => {
     }]);
   });
 
+  it('provides a valid built App resource without imposing the runtime message-size limit', () => {
+    const browser = fakeBrowser();
+    const html = `<main>${'x'.repeat(frame.relay.maxMessageBytes)}</main>`;
+    const relay = createMcpAppFrameRelay({
+      bindingId: 'binding-built-app',
+      frame,
+      iframe: browser.iframe,
+      resource: Object.freeze({ html, kind: 'resource' as const }),
+      routes: {
+        close: async () => closeResult(),
+        forceClose: async () => true,
+        message: async () => messageResult(),
+      },
+      window: browser.window,
+    });
+    relay.start();
+
+    browser.emit({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child });
+
+    expect(browser.child.posts).toEqual([{
+      message: {
+        jsonrpc: '2.0',
+        method: 'ui/notifications/sandbox-resource-ready',
+        params: { html },
+      },
+      targetOrigin: frame.targetOrigin,
+    }]);
+  });
+
   it('forwards valid frames one at a time and returns ordered server frames only to its exact proxy origin', async () => {
     const browser = fakeBrowser();
     const first = deferred<McpAppRouteMessages>();

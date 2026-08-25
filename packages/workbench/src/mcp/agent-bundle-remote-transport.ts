@@ -1,6 +1,7 @@
 import type { JSONRPCMessage, Transport, TransportSendOptions } from '@modelcontextprotocol/client';
 
-import { isRecord } from '../client-helpers.ts';
+import { isRecord, parseStrictResponseJson } from '../client-helpers.ts';
+import { readNdjsonResponseFrames } from '../ndjson.ts';
 import {
   McpRouteClient,
   type McpRouteConnection,
@@ -30,6 +31,9 @@ export class AgentBundleRemoteTransportError extends Error {
     this.name = 'AgentBundleRemoteTransportError';
   }
 }
+
+const invalidTrace = (): AgentBundleRemoteTransportError =>
+  new AgentBundleRemoteTransportError('Foreground MCP trace stream contained an invalid entry.');
 
 const request = (value: unknown): JsonRpcRequest | undefined => {
   if (!isRecord(value) || value.jsonrpc !== '2.0' || typeof value.method !== 'string' || !Object.hasOwn(value, 'id')) return undefined;
@@ -194,7 +198,6 @@ export class AgentBundleRemoteTransport implements Transport {
   #startPromise: Promise<void> | undefined;
   #streamAbort: AbortController | undefined;
   #streamPromise: Promise<void> | undefined;
-  #streamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   #sendTail: Promise<void> = Promise.resolve();
 
   constructor(options: AgentBundleRemoteTransportOptions) {
@@ -234,15 +237,12 @@ export class AgentBundleRemoteTransport implements Transport {
     this.#streamAbort?.abort();
     for (const controller of this.#operationControllers) controller.abort();
     for (const controller of this.#cancellations.keys()) controller.abort();
-    const reader = this.#streamReader;
-    const readerCancellation = reader?.cancel().catch(() => undefined);
     this.#closePromise = (async () => {
       try {
         await settled(this.#startPromise);
         await settled(this.#sendTail);
         await Promise.all([...this.#cancellations.values()].map(settled));
         await settled(this.#streamPromise);
-        await settled(readerCancellation);
         const session = this.#session;
         this.#session = undefined;
         if (session !== undefined) await this.#releaseSession(session.id);
@@ -376,32 +376,19 @@ export class AgentBundleRemoteTransport implements Transport {
   }
 
   async #consumeStream(response: Response): Promise<boolean> {
-    if (response.body === null) throw new AgentBundleRemoteTransportError('Foreground MCP trace stream did not include a body.');
-    const reader = response.body.getReader();
-    this.#streamReader = reader;
-    const decoder = new TextDecoder();
-    let buffered = '';
+    const signal = this.#streamAbort?.signal;
+    if (signal === undefined) throw new AgentBundleRemoteTransportError('Foreground MCP trace stream is not active.');
     let delivered = false;
-    try {
-      while (!this.#closed) {
-        const next = await reader.read();
-        if (next.done) break;
-        buffered += decoder.decode(next.value, { stream: true });
-        const lines = buffered.split('\n');
-        buffered = lines.pop() ?? '';
-        for (const line of lines) {
-          if (line.length === 0) continue;
-          this.#deliverTrace(JSON.parse(line));
-          delivered = true;
-        }
-      }
-      buffered += decoder.decode();
-      if (buffered.length > 0) this.#deliverTrace(JSON.parse(buffered));
-      return delivered || buffered.length > 0;
-    } finally {
-      if (this.#streamReader === reader) this.#streamReader = undefined;
-      reader.releaseLock();
-    }
+    await readNdjsonResponseFrames(response, (bytes) => {
+      if (bytes.byteLength === 0) return;
+      this.#deliverTrace(parseStrictResponseJson(bytes, invalidTrace));
+      delivered = true;
+    }, {
+      invalidFrameError: invalidTrace,
+      missingBodyError: () => new AgentBundleRemoteTransportError('Foreground MCP trace stream did not include a body.'),
+      signal,
+    });
+    return delivered;
   }
 
   #deliverTrace(entry: unknown): void {

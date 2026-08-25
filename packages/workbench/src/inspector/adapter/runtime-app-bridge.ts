@@ -20,7 +20,7 @@ import type { McpAppConsentCapability, McpAppConsentChallenge, McpAppConsentRequ
 import type { McpAppClient, McpAppRuntimeClient } from '../../mcp/mcp-app-client.ts';
 import type { McpSessionController, McpSessionControllerAppAccess, McpSessionControllerAppAttachment } from '../../mcp/mcp-session-controller.ts';
 
-import { snapshotHostContext, type AppRendererBridge, type BridgeFactory } from './closure-spike.ts';
+import { snapshotHostContext, type AppRendererBridge, type BridgeFactory } from './inspector-closure-vendor.js';
 
 export interface McpAppInstalledHostHandlers {
   readonly downloadFile?: (download: McpAppValidatedDownload) => Promise<void>;

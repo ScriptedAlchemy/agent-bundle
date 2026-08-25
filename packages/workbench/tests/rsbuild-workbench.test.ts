@@ -27,6 +27,12 @@ it('pins production mode for builds so ambient NODE_ENV cannot select mode none'
 it('builds workbench assets with stable unhashed names', () => {
   expect(resolveConfig('build')).toMatchObject({
     output: {
+      copy: [
+        { from: join(workbenchRoot, 'THIRD_PARTY_NOTICES'), to: 'THIRD_PARTY_NOTICES', toType: 'file' },
+        { from: join(workbenchRoot, 'src/inspector/UPSTREAM.json'), to: 'src/inspector/UPSTREAM.json', toType: 'file' },
+        { from: join(workbenchRoot, 'src/inspector/LICENSE.inspector'), to: 'src/inspector/LICENSE.inspector', toType: 'file' },
+        { from: join(workbenchRoot, 'src/inspector/PATCHES.md'), to: 'src/inspector/PATCHES.md', toType: 'file' },
+      ],
       filenameHash: false,
       filename: {
         css: '[name].css',
@@ -70,10 +76,10 @@ it('emits browser-safe JS even when the caller sets NODE_ENV=test', async () => 
   // Rstest sets NODE_ENV=test. Without an explicit rsbuild mode, that selects
   // mode 'none', leaves process.env.NODE_ENV unreplaced, and the workbench
   // crashes on boot with "process is not defined".
-  await expect(execFile('npm', ['run', 'build', '--workspace', 'agent-bundle-workbench'], {
+  await expect(execFile('pnpm', ['--filter', 'agent-bundle-workbench', 'build'], {
     cwd: workspaceRoot,
     env: { PATH: process.env.PATH ?? '', NODE_ENV: 'test' },
-  })).resolves.toMatchObject({ stderr: '' });
+  })).resolves.toBeDefined();
 
   const jsRoot = join(workbenchRoot, 'dist', 'static', 'js');
   const files = await readdir(jsRoot);

@@ -12,7 +12,7 @@ export interface KeepAliveStreamHeadOptions {
 }
 
 export interface BackpressuredWriteOptions {
-  readonly byteLimit: number;
+  readonly byteLimit?: number;
   /** When true, a frame already handed to `write()` but not yet drained counts toward `byteLimit`. */
   readonly countInFlightBytes?: boolean;
   /** Called after a drain flushes every queued frame, i.e. the writer became `idle` again. */
@@ -111,7 +111,7 @@ export const createBackpressuredWriter = (
     enqueue(frame: string): BackpressuredWriteResult {
       if (closed || response.writableEnded || response.destroyed) return 'closed';
       const bytes = Buffer.byteLength(frame, 'utf8');
-      if (options.rejectOversizedFrame === true && bytes > options.byteLimit) return 'overflow';
+      if (options.rejectOversizedFrame === true && options.byteLimit !== undefined && bytes > options.byteLimit) return 'overflow';
       if (!backpressured) {
         if (!response.write(frame)) {
           backpressured = true;
@@ -121,7 +121,7 @@ export const createBackpressuredWriter = (
         return 'ok';
       }
       const used = (options.countInFlightBytes === true ? inFlightBytes : 0) + queuedBytes + bytes;
-      if (used > options.byteLimit) return 'overflow';
+      if (options.byteLimit !== undefined && used > options.byteLimit) return 'overflow';
       if (options.recordLimit !== undefined && queued.length >= options.recordLimit) return 'overflow';
       queued.push(Object.freeze({ bytes, frame }));
       queuedBytes += bytes;

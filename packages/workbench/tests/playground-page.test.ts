@@ -19,6 +19,7 @@ import {
   PlaygroundPage,
   PlaygroundTraceView,
 } from '../src/playground/playground-page.tsx';
+import * as playgroundPage from '../src/playground/playground-page.tsx';
 
 const epoch = { digest: 'sha256-current', id: 'epoch-current' };
 const identity = {
@@ -69,6 +70,38 @@ const replay = (nextSession: PlaygroundSession, events: readonly PlaygroundTrace
   cursor: { afterSequence: events.at(-1)?.sequence ?? 0 }, events, session: nextSession,
 });
 
+it('chooses the first target and its first catalog script without replacing valid explicit choices', () => {
+  const { playgroundSelectionFor } = playgroundPage as typeof playgroundPage & {
+    readonly playgroundSelectionFor: (input: {
+      readonly operation: 'native.prompt' | 'skill.inspect' | 'hook.simulate' | 'mcp.call-tool' | 'script.run';
+      readonly operationIsImplicit: boolean;
+      readonly scriptId: string;
+      readonly target: string;
+    }, targets: readonly { readonly digest: string; readonly name: string }[], scripts: readonly { readonly id: string; readonly name: string; readonly target: string }[]) => {
+      readonly operation: string;
+      readonly scriptId: string;
+      readonly target: string;
+    };
+  };
+  const targets = [
+    { digest: 'codex-digest', name: 'codex' },
+    { digest: 'portable-digest', name: 'portable' },
+  ] as const;
+  const scripts = [
+    { id: 'script:zeta', name: 'zeta', target: 'codex' },
+    { id: 'script:alpha', name: 'alpha', target: 'codex' },
+    { id: 'script:other', name: 'other', target: 'portable' },
+  ] as const;
+
+  expect(playgroundSelectionFor).toBeTypeOf('function');
+  expect(playgroundSelectionFor({ operation: 'skill.inspect', operationIsImplicit: true, scriptId: '', target: '' }, targets, scripts)).toEqual({
+    operation: 'script.run', scriptId: 'script:zeta', target: 'codex',
+  });
+  expect(playgroundSelectionFor({ operation: 'skill.inspect', operationIsImplicit: false, scriptId: 'script:other', target: 'portable' }, targets, scripts)).toEqual({
+    operation: 'skill.inspect', scriptId: 'script:other', target: 'portable',
+  });
+});
+
 it('renders typed server-owned operation drafts including a catalog-selected script capability', () => {
   const client = new PlaygroundClient({ foreground: foreground(async () => { throw new Error('Static rendering issues no request.'); }) });
   const markup = renderToStaticMarkup(createElement(PlaygroundPage, {
@@ -117,15 +150,15 @@ it('renders a compact catalog-backed native prompt grid with no browser executio
   }
 });
 
-it('filters the server catalog to the selected target in stable script-id order', async () => {
+it('filters the server catalog to the selected target while preserving catalog order', async () => {
   const { playgroundScriptsForTarget } = await import('../src/playground/playground-page.tsx');
   expect(playgroundScriptsForTarget([
     { id: 'script:zeta', name: 'zeta', target: 'portable' },
     { id: 'script:alpha', name: 'alpha', target: 'portable' },
     { id: 'script:other', name: 'other', target: 'claude' },
   ], 'portable')).toEqual([
-    { id: 'script:alpha', name: 'alpha', target: 'portable' },
     { id: 'script:zeta', name: 'zeta', target: 'portable' },
+    { id: 'script:alpha', name: 'alpha', target: 'portable' },
   ]);
 });
 

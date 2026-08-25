@@ -333,7 +333,7 @@ describe('Inspector session adapter', () => {
       'setPinnedIds(new Set())',
       'setProtocolCleared(false)',
       'setLoggingCleared(false)',
-      "setLoggingDiagnostic('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.')",
+      'setLoggingDiagnostic(unsupportedLogLevelMessage)',
       "setSortDirection('oldest-first')",
       'setCompact(false)',
       'setProtocolReplayUnavailable(false)',

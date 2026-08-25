@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
+import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
@@ -65,8 +66,8 @@ const writePlaygroundProject = async (root: string): Promise<void> => {
     mkdir(join(root, 'evals', 'fixtures', 'native'), { recursive: true }),
     mkdir(join(root, 'evals', 'graders'), { recursive: true }),
     mkdir(join(root, 'src', 'hooks'), { recursive: true }),
-    symlink(join(workspaceRoot, 'node_modules', '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
-    symlink(join(workspaceRoot, 'node_modules', 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
+    symlink(join(agentBundleNodeModules, '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
+    symlink(join(workbenchNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
   ]);
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
@@ -247,7 +248,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     const rebuilt = await rebuildCompleted;
     const rebuiltStatus = await rebuilt.json() as { readonly status: { readonly artifact: { readonly activeEpoch?: { readonly id: string } } } };
     expect(rebuiltStatus.status.artifact.activeEpoch?.id).not.toBe(pinnedEpoch);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('link', { name: 'Playground', exact: true }).click();
     await expect(page.getByText(pinnedEpoch, { exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('operation.cancelled')).toBeVisible({ timeout: browserTimeout });

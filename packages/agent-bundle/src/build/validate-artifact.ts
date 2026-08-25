@@ -400,7 +400,8 @@ const isSkillArtifactPath = (relativePath: string, skills: string | undefined): 
 const isRecursiveArtifactPath = (relativePath: string, directory: string | undefined): boolean => {
   if (directory === undefined) return false;
   const [layout, ...segments] = relativePath.split('/');
-  return layout === directory && segments.length > 0 && segments.every((segment) => segment.length > 0);
+  return layout === directory && segments.length > 0 && segments.every((segment) =>
+    segment.length > 0 && segment !== '.' && segment !== '..' && !segment.includes('\\'));
 };
 
 const isTargetArtifactPath = (

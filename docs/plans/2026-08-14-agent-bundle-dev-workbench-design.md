@@ -99,7 +99,7 @@ trial belongs to its lifecycle and closes on Ctrl-C or programmatic `close()`.
 Rsbuild builds the React workbench. While contributing to Agent Bundle, its built-in dev server
 provides React/CSS HMR and proxies typed Agent Bundle APIs to a running foreground coordinator. The
 only supported contributor entry point is
-`AGENT_BUNDLE_WORKBENCH_API_PROXY=<foreground-url> npm run dev --workspace agent-bundle-workbench`;
+`AGENT_BUNDLE_WORKBENCH_API_PROXY=<foreground-url> pnpm --filter agent-bundle-workbench dev`;
 `packages/workbench/scripts/dev.mjs` refuses to start without that proxy. This is the fast
 frontend-development loop.
 

@@ -19,6 +19,7 @@ import {
   type NormalizationTargetRegistry,
 } from '../src/core/types.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
+import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -970,7 +971,7 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
     await mkdir(join(root, 'views'), { recursive: true });
     await mkdir(join(root, 'node_modules'), { recursive: true });
     await symlink(
-      join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
       join(root, 'node_modules', '@modelcontextprotocol'),
       'dir',
     );
@@ -1095,7 +1096,7 @@ it('lists tools from a validated copied artifact without reading project source'
     await mkdir(join(root, 'src'), { recursive: true });
     await mkdir(join(root, 'node_modules'), { recursive: true });
     await symlink(
-      join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
       join(root, 'node_modules', '@modelcontextprotocol'),
       'dir',
     );
