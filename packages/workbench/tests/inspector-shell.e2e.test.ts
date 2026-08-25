@@ -1,26 +1,17 @@
-import { execFile as executeFile } from 'node:child_process';
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
-import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import { expect } from '@rstest/playwright';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { e2e, execFile, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
 
-const execFile = promisify(executeFile);
-const workspaceRoot = process.cwd();
-const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 5_000;
 
-const e2e = test.extend({
-  playwright: {
-    launchOptions: { channel: 'chrome' },
-    contextOptions: { viewport: { height: 900, width: 1440 } },
-  } satisfies PlaywrightOptions,
-});
-
+// This file rebuilds the workbench in both development and production modes, so it keeps
+// its own non-memoized build instead of the shared memoized production-only buildWorkbench.
 const buildWorkbench = async (mode: 'development' | 'production' = 'production'): Promise<void> => {
   const { NODE_ENV: _nodeEnv, RSTEST: _rstest, ...environment } = process.env;
   const isProduction = mode === 'production';

@@ -7,7 +7,7 @@ import {
 } from '../src/mcp/mcp-session-model.ts';
 
 it('snapshots and freezes the selected session binding, connection, catalogs, and config', () => {
-  const binding = { epochId: 'epoch-a', serverName: 'weather', target: 'claude' };
+  const binding = { epochId: 'epoch-a', serverName: 'weather', target: 'claude' as const };
   const connection = {
     protocolVersion: '2026-06-18',
     serverCapabilities: { logging: {}, tools: { listChanged: true } },

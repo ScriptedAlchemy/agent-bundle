@@ -1,3 +1,5 @@
+import { CodedError } from '../core/errors.ts';
+
 export type EvalDefinitionErrorCode =
   | 'EVAL_ASSERTION_INVALID'
   | 'EVAL_CASE_INVALID'
@@ -10,13 +12,9 @@ export type EvalDefinitionErrorCode =
   | 'EVAL_SUITE_INVALID'
   | 'EVAL_TRIALS_INVALID';
 
-export class EvalDefinitionError extends Error {
-  readonly code: EvalDefinitionErrorCode;
-
+export class EvalDefinitionError extends CodedError<EvalDefinitionErrorCode> {
   constructor(code: EvalDefinitionErrorCode, message: string) {
-    super(message);
-    this.name = 'EvalDefinitionError';
-    this.code = code;
+    super('EvalDefinitionError', code, message);
   }
 }
 
@@ -26,30 +24,22 @@ export type EvalConfigErrorCode =
   | 'EVAL_INCLUDE_INVALID'
   | 'EVAL_RUNS_DIR_INVALID';
 
-export class EvalConfigError extends Error {
-  readonly code: EvalConfigErrorCode;
-
+export class EvalConfigError extends CodedError<EvalConfigErrorCode> {
   constructor(code: EvalConfigErrorCode, message: string) {
-    super(message);
-    this.name = 'EvalConfigError';
-    this.code = code;
+    super('EvalConfigError', code, message);
   }
 }
 
 export type EvalDiscoveryErrorCode =
   | 'EVAL_SUITE_DUPLICATE'
   | 'EVAL_SUITE_EXPORT_INVALID'
-  | 'EVAL_SUITE_LOAD_FAILED'
-  | 'EVAL_SUITE_PATH_INVALID';
+  | 'EVAL_SUITE_LOAD_FAILED';
 
-export class EvalDiscoveryError extends Error {
-  readonly code: EvalDiscoveryErrorCode;
+export class EvalDiscoveryError extends CodedError<EvalDiscoveryErrorCode> {
   readonly sourcePath?: string;
 
   constructor(code: EvalDiscoveryErrorCode, message: string, sourcePath?: string) {
-    super(message);
-    this.name = 'EvalDiscoveryError';
-    this.code = code;
+    super('EvalDiscoveryError', code, message);
     this.sourcePath = sourcePath;
   }
 }
@@ -60,13 +50,9 @@ export type EvalFixtureErrorCode =
   | 'EVAL_FIXTURE_GIT_FAILED'
   | 'EVAL_FIXTURE_SOURCE_INVALID';
 
-export class EvalFixtureError extends Error {
-  readonly code: EvalFixtureErrorCode;
-
+export class EvalFixtureError extends CodedError<EvalFixtureErrorCode> {
   constructor(code: EvalFixtureErrorCode, message: string) {
-    super(message);
-    this.name = 'EvalFixtureError';
-    this.code = code;
+    super('EvalFixtureError', code, message);
   }
 }
 
@@ -79,15 +65,14 @@ export type EvalRunStoreErrorCode =
   | 'EVAL_RUN_OWNED'
   | 'EVAL_RUN_RECORD_INVALID';
 
-export class EvalRunStoreError extends Error {
-  readonly code: EvalRunStoreErrorCode;
-
+export class EvalRunStoreError extends CodedError<EvalRunStoreErrorCode> {
   constructor(code: EvalRunStoreErrorCode, message: string) {
-    super(message);
-    this.name = 'EvalRunStoreError';
-    this.code = code;
+    super('EvalRunStoreError', code, message);
   }
 }
+
+export const storeError = (code: EvalRunStoreErrorCode, message: string): EvalRunStoreError =>
+  new EvalRunStoreError(code, message);
 
 export type EvalHarnessErrorCode =
   | 'EVAL_ARTIFACT_INVALID'
@@ -96,12 +81,11 @@ export type EvalHarnessErrorCode =
   | 'EVAL_HARNESS_INPUT_INVALID'
   | 'EVAL_MODEL_BACKED_UNSUPPORTED';
 
-export class EvalHarnessError extends Error {
-  readonly code: EvalHarnessErrorCode;
-
+export class EvalHarnessError extends CodedError<EvalHarnessErrorCode> {
   constructor(code: EvalHarnessErrorCode, message: string) {
-    super(message);
-    this.name = 'EvalHarnessError';
-    this.code = code;
+    super('EvalHarnessError', code, message);
   }
 }
+
+export const harnessError = (code: EvalHarnessErrorCode, message: string): EvalHarnessError =>
+  new EvalHarnessError(code, message);

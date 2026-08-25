@@ -5,9 +5,9 @@ import type {
   EvalRunResult,
   EvalRunSelection,
   EvalSuiteListing,
-} from '../../../agent-bundle/src/dev/eval-service.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
-import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
+} from '../../../agent-bundle/src/contracts/eval.ts';
+import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
 import { awaitWithAbort, type ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import {
   nonnegativeIntegerSchema,

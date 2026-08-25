@@ -4,6 +4,7 @@ import {
   type NativeClaudeProcessResult,
   type NativeClaudeProcessRunner,
 } from '../host-contracts/native-claude-contract.ts';
+import { isErrno } from '../core/errors.ts';
 import type { EvalHarnessFailure } from './types.ts';
 
 export interface ClaudeProcessOutcome {
@@ -25,8 +26,7 @@ export interface ClaudeProcessOptions {
 
 export const minimumClaudeEvalVersion = '2.1.232';
 
-const isMissingExecutable = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+const isMissingExecutable = (error: unknown): boolean => isErrno(error, 'ENOENT');
 
 export const claudeProcessFailure = (message: string): EvalHarnessFailure => Object.freeze({
   code: 'EVAL_PROCESS_UNAVAILABLE',

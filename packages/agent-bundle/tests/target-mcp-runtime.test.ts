@@ -8,7 +8,7 @@ import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
-import { McpSessionService } from '../src/dev/mcp-session-service.ts';
+import { McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import type { TargetMcpRuntimeContract } from '../src/services/mcp-runtime.ts';
 import {

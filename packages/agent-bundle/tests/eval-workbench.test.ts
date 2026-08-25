@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import type { EvalRunResult, EvalSuiteListing } from '../src/dev/eval-service.ts';
+import type { EvalRunResult, EvalSuiteListing } from '../src/dev/eval/eval-service.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import type { EvalRunRecord } from '../src/eval/run-store.ts';

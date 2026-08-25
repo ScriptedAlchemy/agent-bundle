@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 
 import { expect, it } from '@rstest/core';
 
-import { createMcpAppConsentAuthority } from '../src/dev/mcp-app-sandbox.ts';
+import { createMcpAppConsentAuthority } from '../src/dev/mcp-apps/mcp-app-sandbox.ts';
 import {
   createMcpAppBridge,
   createMcpAppFailClosedSender,
@@ -14,8 +14,8 @@ import {
   validateMcpAppDisplayModeRequest,
   validateMcpAppDownloadRequest,
   validateMcpAppExternalLink,
-} from '../src/dev/mcp-app-bridge.ts';
-import type { McpAppBinding, McpAppJsonValue } from '../src/dev/mcp-app-binding-service.ts';
+} from '../src/dev/mcp-apps/mcp-app-bridge.ts';
+import type { McpAppBinding, McpAppJsonValue } from '../src/dev/mcp-apps/mcp-app-binding-service.ts';
 
 interface BridgeFixture {
   readonly binding: McpAppBinding;

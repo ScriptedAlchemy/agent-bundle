@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import type { PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
+import type { PlaygroundTraceEvent } from '../../agent-bundle/src/contracts/playground.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 

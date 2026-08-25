@@ -29,7 +29,7 @@ import type {
   McpAppPreviewAppsSnapshot,
   McpAppPreviewSnapshot,
   McpAppRuntimeInvalidationDetails,
-} from '../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
+} from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { AppRendererHandle, McpAppRendererTool } from '../inspector/adapter/closure-spike.ts';
 import type { RuntimeAppBridgeFactory, RuntimeAppBridgeOperationTrace } from '../inspector/adapter/runtime-app-bridge.ts';
 import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';

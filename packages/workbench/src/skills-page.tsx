@@ -1,9 +1,11 @@
+import { errorMessage as messageFrom } from './client-helpers.ts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
-import type { ServedSkillDocument, SkillDocumentTree } from '../../agent-bundle/src/dev/skill-document-service.ts';
+import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
+import type { ServedSkillDocument, SkillDocumentTree } from '../../agent-bundle/src/contracts/skills.ts';
 
 import type { EvalClient } from './evals/eval-client.ts';
+import { activeEpochFor } from './overview-model.ts';
 import { SkillClient, SkillClientError } from './skill-client.ts';
 import { SkillMarkdown } from './skill-markdown.tsx';
 import { skillEvalCoverageFor, type SkillEvalCoverageState } from './skills-eval-coverage.ts';
@@ -101,11 +103,7 @@ const EvalCoverage = ({ coverage }: { readonly coverage: SkillEvalCoverageState 
   </section>
 );
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : 'Skill documents could not be loaded.';
-
-const artifactEpoch = (status: ProjectStatus) =>
-  status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
+const errorMessage = (error: unknown): string => messageFrom(error, 'Skill documents could not be loaded.');
 
 const nextTab = <Tab extends string>(tabs: readonly Tab[], current: Tab, event: React.KeyboardEvent<HTMLButtonElement>): Tab | undefined => {
   const index = tabs.indexOf(current);
@@ -201,7 +199,7 @@ export const SkillDocumentPanel = ({
       <div className="skill-detail-heading">
         <div>
           <p className="skill-eyebrow">Skill document</p>
-          <h1>{selected.name}</h1>
+          <h2>{selected.name}</h2>
           {selected.description === undefined ? undefined : <p className="skill-description">{selected.description}</p>}
         </div>
         <span className="skill-provenance">{provenanceLabel(selected)}</span>
@@ -316,7 +314,7 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
   const [selectedIds, setSelectedIds] = useState<Partial<Record<SkillDocumentKind, string>>>({});
   const [suitesState, setSuitesState] = useState<SuitesState>({ state: 'loading' });
   const [view, setView] = useState<SkillView>('rendered');
-  const epoch = artifactEpoch(status);
+  const epoch = activeEpochFor(status);
   const targetNames = useMemo(() => Object.keys(epoch?.targetDigests ?? {}).sort((left, right) => left.localeCompare(right)), [epoch]);
   const [target, setTarget] = useState<string>();
   const [generatedTree, setGeneratedTree] = useState<GeneratedTreeState>(() => unavailableTree('No artifact epoch is active.'));

@@ -1,75 +1,47 @@
-import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../agent-bundle/src/core/strict-json.ts';
-import type { SourceProvenance } from '../../agent-bundle/src/core/types.ts';
+import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
+import type { JsonValue } from '../../agent-bundle/src/contracts/strict-json.ts';
+import type { SourceProvenance } from '../../agent-bundle/src/contracts/project.ts';
 import type {
   ServedSkillDocument,
   SkillDocumentBase,
   SkillDocumentResource,
   SkillDocumentTree,
-} from '../../agent-bundle/src/dev/skill-document-service.ts';
+} from '../../agent-bundle/src/contracts/skills.ts';
 
+import {
+  CodedClientError,
+  decodeDiagnosticError,
+  decodeExactDiagnostic,
+  hasAllowedKeys,
+  isRecord,
+  optionalString,
+  parseStrictResponseJson,
+  requiredString,
+} from './client-helpers.ts';
 import { generatedSkillPath, sourceSkillPath } from './skills-model.ts';
 
 export interface SkillClientOptions {
   readonly fetch?: typeof fetch;
 }
 
-export class SkillClientError extends Error {
-  readonly code: string;
-
+export class SkillClientError extends CodedClientError {
   constructor(code: string, message: string) {
-    super(message);
-    this.name = 'SkillClientError';
-    this.code = code;
+    super('SkillClientError', code, message);
   }
 }
-
-type JsonRecord = Readonly<Record<string, JsonValue>>;
-
-const isRecord = (value: unknown): value is JsonRecord =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const hasAllowedKeys = (
-  value: unknown,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): value is JsonRecord =>
-  isRecord(value) && required.every((key) => Object.hasOwn(value, key)) &&
-  Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
 
 const invalidResponse = (): SkillClientError =>
   new SkillClientError('SKILL_RESPONSE_INVALID', 'Skill route returned an invalid response.');
 
-const requiredString = (value: JsonRecord, key: string): string => {
-  const candidate = value[key];
-  if (typeof candidate !== 'string') throw invalidResponse();
-  return candidate;
-};
-
-const optionalString = (value: JsonRecord, key: string): string | undefined => {
-  if (!Object.hasOwn(value, key)) return undefined;
-  return requiredString(value, key);
-};
+const readString = (value: Readonly<Record<string, unknown>>, key: string): string =>
+  requiredString(value, key, invalidResponse);
+const readOptionalString = (value: Readonly<Record<string, unknown>>, key: string): string | undefined =>
+  optionalString(value, key, invalidResponse);
 
 const diagnostic = (value: unknown): Diagnostic => {
-  if (!hasAllowedKeys(value, ['code', 'message', 'severity'], ['generatedPath', 'recovery', 'sourcePath', 'target'])) {
-    throw invalidResponse();
-  }
-  const severity = value.severity;
-  if (severity !== 'error' && severity !== 'info' && severity !== 'warning') throw invalidResponse();
-  const generatedPath = optionalString(value, 'generatedPath');
-  const recovery = optionalString(value, 'recovery');
-  const sourcePath = optionalString(value, 'sourcePath');
-  const target = optionalString(value, 'target');
-  return Object.freeze({
-    code: requiredString(value, 'code'),
-    ...(generatedPath === undefined ? {} : { generatedPath }),
-    message: requiredString(value, 'message'),
-    ...(recovery === undefined ? {} : { recovery }),
-    severity,
-    ...(sourcePath === undefined ? {} : { sourcePath }),
-    ...(target === undefined ? {} : { target }),
-  });
+  const decoded = decodeExactDiagnostic(value);
+  if (decoded === undefined) throw invalidResponse();
+  return decoded;
 };
 
 const diagnostics = (value: unknown): readonly Diagnostic[] => {
@@ -81,22 +53,22 @@ const provenance = (value: unknown): SourceProvenance => {
   if (!hasAllowedKeys(value, ['kind', 'sourcePath'])) throw invalidResponse();
   const kind = value.kind;
   if (kind !== 'config' && kind !== 'conventional' && kind !== 'explicit') throw invalidResponse();
-  return Object.freeze({ kind, sourcePath: requiredString(value, 'sourcePath') });
+  return Object.freeze({ kind, sourcePath: readString(value, 'sourcePath') });
 };
 
 const documentBase = (value: unknown): SkillDocumentBase => {
   if (!isRecord(value)) throw invalidResponse();
   if (value.kind === 'source') {
     if (!hasAllowedKeys(value, ['kind', 'skillId'])) throw invalidResponse();
-    return Object.freeze({ kind: 'source', skillId: requiredString(value, 'skillId') });
+    return Object.freeze({ kind: 'source', skillId: readString(value, 'skillId') });
   }
   if (value.kind === 'generated') {
     if (!hasAllowedKeys(value, ['epochId', 'kind', 'skillId', 'target'])) throw invalidResponse();
     return Object.freeze({
-      epochId: requiredString(value, 'epochId'),
+      epochId: readString(value, 'epochId'),
       kind: 'generated',
-      skillId: requiredString(value, 'skillId'),
-      target: requiredString(value, 'target'),
+      skillId: readString(value, 'skillId'),
+      target: readString(value, 'target'),
     });
   }
   throw invalidResponse();
@@ -109,7 +81,7 @@ const resources = (value: unknown): readonly SkillDocumentResource[] => {
       typeof resource.bytes !== 'number' || !Number.isSafeInteger(resource.bytes) || resource.bytes < 0) {
       throw invalidResponse();
     }
-    return Object.freeze({ bytes: resource.bytes, relativePath: requiredString(resource, 'relativePath') });
+    return Object.freeze({ bytes: resource.bytes, relativePath: readString(resource, 'relativePath') });
   }));
 };
 
@@ -126,16 +98,16 @@ const skillDocument = (value: unknown): ServedSkillDocument => {
   const sourceRequired = [...required, 'provenance', 'targets'];
   if (!hasAllowedKeys(value, base.kind === 'source' ? sourceRequired : required, ['description'])) throw invalidResponse();
   if (!isRecord(value.frontmatter)) throw invalidResponse();
-  const description = optionalString(value, 'description');
+  const description = readOptionalString(value, 'description');
   const shared = {
     base,
-    body: requiredString(value, 'body'),
+    body: readString(value, 'body'),
     ...(description === undefined ? {} : { description }),
     diagnostics: diagnostics(value.diagnostics),
     frontmatter: value.frontmatter,
-    id: requiredString(value, 'id'),
-    markdown: requiredString(value, 'markdown'),
-    name: requiredString(value, 'name'),
+    id: readString(value, 'id'),
+    markdown: readString(value, 'markdown'),
+    name: readString(value, 'name'),
     resources: resources(value.resources),
   };
   if (base.kind === 'source') {
@@ -162,19 +134,11 @@ const documentResponse = (value: unknown, kind: SkillDocumentBase['kind']): Serv
   return document;
 };
 
-const parseResponseJson = (bytes: Uint8Array): JsonValue => {
-  try {
-    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    return snapshotStrictJsonValue(parseJsonWithoutDuplicateKeys(decoded));
-  } catch {
-    throw invalidResponse();
-  }
-};
+const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalidResponse);
 
 const diagnosticError = (value: unknown, status: number): SkillClientError => {
-  if (hasAllowedKeys(value, ['diagnostic']) && hasAllowedKeys(value.diagnostic, ['code', 'message'])) {
-    return new SkillClientError(requiredString(value.diagnostic, 'code'), requiredString(value.diagnostic, 'message'));
-  }
+  const detail = decodeDiagnosticError(value);
+  if (detail !== undefined) return new SkillClientError(detail.code, detail.message);
   return new SkillClientError('SKILL_REQUEST_FAILED', `Skill request failed with HTTP ${status}.`);
 };
 

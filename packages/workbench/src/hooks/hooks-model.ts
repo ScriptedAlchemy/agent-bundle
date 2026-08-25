@@ -7,7 +7,7 @@ import type {
   HookPlaygroundHostMapping,
   HookPlaygroundReplay,
   HookPlaygroundSimulation,
-} from '../../../agent-bundle/src/dev/hook-playground-service.ts';
+} from '../../../agent-bundle/src/contracts/hooks.ts';
 import { deeplyFrozenHookValue } from './hook-client.ts';
 
 export type HookPlaygroundResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation | undefined;
@@ -113,9 +113,9 @@ export const hookPlaygroundViewFor = (options: HookPlaygroundViewOptions): HookP
     : listState === 'loading' ? 'loading'
       : listState === 'error' ? 'list-error'
         : hooks.length === 0 ? 'empty'
-      : simulation !== undefined ? 'simulated'
-        : diagnostics.length > 0 ? 'diagnostics'
-          : 'ready';
+          : simulation !== undefined ? 'simulated'
+            : diagnostics.length > 0 ? 'diagnostics'
+              : 'ready';
   return Object.freeze({
     canonicalInput: simulation?.canonicalIntent.input,
     canonicalResult: simulation?.canonicalResult,

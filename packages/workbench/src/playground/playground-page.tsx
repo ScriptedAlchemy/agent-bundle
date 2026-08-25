@@ -9,10 +9,10 @@ import type {
   PlaygroundSession,
   PlaygroundTarget,
   PlaygroundTraceEvent,
-} from '../../../agent-bundle/src/services/playground-service.ts';
-import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
-import type { ArtifactInspectionScript } from '../../../agent-bundle/src/dev/types.ts';
-import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/dev/native-playground-service.ts';
+} from '../../../agent-bundle/src/contracts/playground.ts';
+import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/contracts/playground.ts';
+import type { ArtifactInspectionScript } from '../../../agent-bundle/src/contracts/artifacts.ts';
+import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/contracts/playground.ts';
 
 import { parseRawJsonRecord, serializeJsonRecord } from '../mcp/mcp-json-input.tsx';
 import { PlaygroundClientError, type PlaygroundClient } from './playground-client.ts';

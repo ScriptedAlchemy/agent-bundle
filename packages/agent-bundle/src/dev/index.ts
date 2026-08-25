@@ -6,12 +6,12 @@ export {
   type ArtifactValidator,
   type FailedArtifactEpochResult,
   type SucceededArtifactEpochResult,
-} from './artifact-service.ts';
+} from './artifacts/artifact-service.ts';
 export {
   ArtifactInspectionService,
   ArtifactInspectionServiceError,
   type ArtifactInspectionServiceErrorCode,
-} from './artifact-inspection-service.ts';
+} from './artifacts/artifact-inspection-service.ts';
 export {
   DevCoordinator,
   type AffectedFileDiagnostics,
@@ -31,7 +31,6 @@ export {
   type SourceWatchEvent,
 } from './watcher.ts';
 export {
-  createProjectEventHub,
   ProjectEventHub,
   ProjectEventHubError,
   type ProjectEventHubErrorCode,
@@ -61,8 +60,8 @@ export {
   type DevLogSink,
   type DevLogSubscribeOptions,
   type DevLogSubscription,
-} from './dev-log-service.ts';
-export { DevLogRoutes, type DevLogRoutesOptions } from './dev-log-routes.ts';
+} from './logs/dev-log-service.ts';
+export { DevLogRoutes, type DevLogRoutesOptions } from './logs/dev-log-routes.ts';
 export {
   ForegroundServer,
   ForegroundServerCloseError,
@@ -102,7 +101,7 @@ export {
   type McpSessionServiceOptions,
   type McpSessionToolCallOptions,
   type OpenMcpSessionOptions,
-} from './mcp-session-service.ts';
+} from './mcp-session/mcp-session-service.ts';
 export type {
   McpSessionBinding,
   McpSessionId,
@@ -116,7 +115,7 @@ export type {
   McpSessionTraceReplayGap,
   McpSessionTraceSubscription,
   McpSessionTraceSubscriptionOptions,
-} from './mcp-session-protocol.ts';
+} from './mcp-session/mcp-session-protocol.ts';
 export {
   startDevServer,
   closeDevServerLifecycle,

@@ -1,9 +1,9 @@
 import { isCallToolResult } from '@modelcontextprotocol/client';
 
 import type { ProjectClient } from '../project-client.ts';
-import type { ProjectEventMessage } from '../../../agent-bundle/src/dev/types.ts';
-import { validateMcpAppUiUri } from '../../../agent-bundle/src/dev/mcp-app-action-validation.ts';
-import { runtimeAppMessageLimits } from '../../../agent-bundle/src/dev/runtime-app-message-limits.ts';
+import type { ProjectEventMessage } from '../../../agent-bundle/src/contracts/project.ts';
+import { validateMcpAppUiUri } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+import { runtimeAppMessageLimits } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type {
   CreateMcpAppPreviewRequest as RuntimeCreateRequest,
   McpAppBindingOperation,
@@ -11,13 +11,13 @@ import type {
   McpAppConsentDecisionResponse,
   McpAppPreviewSnapshot,
   McpAppRuntimeInvalidationDetails,
-} from '../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
+} from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type {
   McpAppBoundOperationResult,
   McpAppPublicRuntimeVector,
   McpAppRuntimeBindingSnapshot,
-} from '../../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
-import type { McpAppConsentRequest, McpAppDocumentPolicySnapshot } from '../../../agent-bundle/src/dev/mcp-app-sandbox.ts';
+} from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { McpAppConsentRequest, McpAppDocumentPolicySnapshot } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 
 import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
 import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp-route-client.ts';

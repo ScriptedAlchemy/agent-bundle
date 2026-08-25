@@ -3,6 +3,8 @@ import { join, relative, sep } from 'node:path';
 
 import ignore, { type Ignore } from 'ignore';
 
+import { isErrno } from '../core/errors.ts';
+
 const mandatoryDirectoryNames = new Set([
   '.agent-bundle',
   '.git',
@@ -21,7 +23,7 @@ export const readProjectIgnoreRules = async (root: string): Promise<Ignore> => {
   try {
     rules.add(await readFile(join(root, '.gitignore'), 'utf8'));
   } catch (error: unknown) {
-    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') {
+    if (!isErrno(error, 'ENOENT')) {
       throw error;
     }
   }

@@ -18,7 +18,7 @@ import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol
 
 import { stableJson } from '../core/digest.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue } from '../core/strict-json.ts';
-import type { EvalService } from './eval-service.ts';
+import type { EvalService } from './eval/eval-service.ts';
 import { runtimeAppFiniteOrdinaryJsonByteLength } from './runtime-app-message-limits.ts';
 import type { ProjectStatus } from './types.ts';
 
@@ -112,7 +112,6 @@ export class AgentApiCloseError extends Error {
     this.failures = Object.freeze([...failures]);
   }
 }
-
 const apiError = (code: string, message: string): Error & Readonly<{ readonly code: string }> =>
   Object.assign(new Error(message), { code });
 

@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { meetsMinimumVersion, parseSemanticVersion } from '../core/semver.ts';
 import { copyOpaqueCodexAuthState, withoutProviderApiKeys } from '../host-contracts/native-codex-contract.ts';
+import { digestFileTree } from '../host-contracts/native-host-spine.ts';
 import { withoutEvalCredentialEnvironment } from './credentials.ts';
 import { CodexEvalHarnessError } from './codex-errors.ts';
 
@@ -23,50 +24,12 @@ export interface TemporaryCodexTrialHome {
   readonly workspace: string;
 }
 
-interface SemanticVersion {
-  readonly major: number;
-  readonly minor: number;
-  readonly patch: number;
-  readonly prerelease: boolean;
-}
-
-/**
- * Hashes file contents for the small credential and configuration files, and file identity
- * (size, mode, mtime) for the installed-plugin tree, which is far too large to read twice a trial.
- */
-const digestTree = async (path: string, contents: boolean): Promise<string> => {
-  let entry;
-  try {
-    entry = await lstat(path);
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return 'absent';
-    throw error;
-  }
-  const hash = createHash('sha256');
-  if (entry.isFile()) {
-    hash.update(`file\0${entry.mode}\0${entry.size}\0`);
-    if (contents) hash.update(await readFile(path));
-    else hash.update(`${entry.mtimeMs}\0`);
-    return hash.digest('hex');
-  }
-  if (entry.isDirectory()) {
-    hash.update('directory\0');
-    const children = await readdir(path, { withFileTypes: true });
-    for (const child of [...children].sort((left, right) => left.name.localeCompare(right.name))) {
-      hash.update(`${child.name}\0${await digestTree(join(path, child.name), contents)}\0`);
-    }
-    return hash.digest('hex');
-  }
-  hash.update(`other\0${entry.mode}\0`);
-  return hash.digest('hex');
-};
-
 /** Digests only the state a run could plausibly disturb: auth, config, and installed plugins. */
 export const digestCodexHome = async (codexHome: string): Promise<CodexHomeDigest> => {
   const [auth, config, plugins] = await Promise.all([
-    digestTree(join(codexHome, 'auth.json'), true),
-    digestTree(join(codexHome, 'config.toml'), true),
-    digestTree(join(codexHome, 'plugins'), false),
+    digestFileTree(join(codexHome, 'auth.json'), { hashContents: true, includeIdentity: true }),
+    digestFileTree(join(codexHome, 'config.toml'), { hashContents: true, includeIdentity: true }),
+    digestFileTree(join(codexHome, 'plugins'), { hashContents: false, includeIdentity: true }),
   ]);
   return Object.freeze({ auth, config, plugins });
 };
@@ -125,25 +88,11 @@ export const adoptCodexAuthState = async (
   }
 };
 
-const parseSemanticVersion = (value: string): SemanticVersion | undefined => {
-  const match = /(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?(?:$|[^0-9])/u.exec(value);
-  if (match === null) return undefined;
-  return Object.freeze({
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-    prerelease: match[4] !== undefined,
-  });
-};
-
 export const codexVersionCompatible = (raw: string): boolean => {
   const observed = parseSemanticVersion(raw);
   const minimum = parseSemanticVersion(minimumCodexEvalVersion);
   if (observed === undefined || minimum === undefined) return false;
-  for (const key of ['major', 'minor', 'patch'] as const) {
-    if (observed[key] !== minimum[key]) return observed[key] > minimum[key];
-  }
-  return !observed.prerelease;
+  return meetsMinimumVersion(observed, minimum);
 };
 
 export const codexUnauthenticatedOutput = (output: string): boolean =>

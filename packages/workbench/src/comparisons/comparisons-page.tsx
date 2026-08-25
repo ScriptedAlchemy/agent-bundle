@@ -1,7 +1,7 @@
+import { isAbortError, errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
-import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
-import type { EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
+import type { EvalComparison, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
 import type { ComparisonClient } from './comparison-client.ts';
 import {
   comparisonsViewFor,
@@ -29,8 +29,7 @@ export interface ComparisonsPageProps {
   readonly evalClient: EvalClient;
 }
 
-const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The eval comparison request could not be completed.';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'The eval comparison request could not be completed.');
 
 export const loadComparisonRuns = async (
   client: EvalClient,
@@ -89,8 +88,6 @@ export class ComparisonsRequestLifecycle {
       (owner === undefined || request.owner?.comparisonClient === owner.comparisonClient && request.owner.evalClient === owner.evalClient);
   }
 }
-
-const isAbortError = (reason: unknown): boolean => reason instanceof Error && reason.name === 'AbortError';
 
 const MetricCell = ({ cell }: { readonly cell: ComparisonMetricCell | undefined }) => cell === undefined
   ? <td className="comparison-cell"><p className="empty-row">Not recorded in this run.</p></td>

@@ -1,7 +1,6 @@
-import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
 import { posix } from 'node:path';
 
+import { createTargetDiagnostics } from './diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
@@ -20,9 +19,9 @@ import {
   encodeNativeHookPlaygroundInput,
   encodeNativeHookPlaygroundOutput,
   nativeHookWrapperSource,
-  nativeHooksFor,
   planHooks,
   readStandardNativeHookCommands,
+  validatedNativeHookDocument,
   type TargetHookContract,
 } from './hook-contract.ts';
 import schemaProvenance from './schemas/codex/PROVENANCE.json' with { type: 'json' };
@@ -31,6 +30,11 @@ import marketplaceSchema from './schemas/codex/marketplace.schema.json' with { t
 import mcpSchema from './schemas/codex/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/codex/plugin.schema.json' with { type: 'json' };
 import {
+  createAdapterValidator,
+  hasPathToken,
+  schemaDescriptorsFrom,
+  sortedEntries,
+  sourceInputs,
   validateJsonSchemaDocument,
   type TargetAdapter,
   type TargetArtifactEntry,
@@ -48,9 +52,7 @@ declare module '../core/types.ts' {
 }
 
 const codexName = 'codex';
-const installFormats = addFormats as unknown as (target: Ajv2020) => void;
-const validator = new Ajv2020({ allErrors: true, strict: false });
-installFormats(validator);
+const validator = createAdapterValidator();
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
@@ -71,15 +73,7 @@ const metadata = Object.freeze({
   capabilityRevision: capabilityTable.observedCliVersion,
   capabilitySha256: '4b08c8820ace59ca068677dcb1863a9fd4cb730b7e00733b994b0076958beaf0',
   observedVersion: capabilityTable.observedCliVersion,
-  schemas: Object.freeze(
-    Object.entries(schemaProvenance.schemas)
-      .map(([fileName, schema]) => Object.freeze({
-        name: fileName.replace(/\.schema\.json$/, ''),
-        revision: schemaProvenance.observedCliVersion,
-        sha256: schema.sha256,
-      }))
-      .sort((left, right) => left.name.localeCompare(right.name)),
-  ),
+  schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
 
 const artifactValidation = Object.freeze({
@@ -108,34 +102,9 @@ const mcpRuntime = createTargetMcpRuntime({
   }),
 });
 
-const errorDiagnostic = (code: string, message: string): Diagnostic => ({
-  code,
-  message,
-  severity: 'error',
-  target: codexName,
-});
-
-const schemaDiagnostics = (
-  document: 'plugin' | 'mcp' | 'marketplace' | 'hooks',
-  valid: boolean,
-  errors: readonly ErrorObject[] | null | undefined,
-): Diagnostic[] => valid
-  ? []
-  : [errorDiagnostic(
-      `codex.schema.${document}`,
-      `Codex ${document}.json is invalid: ${(errors ?? [])
-        .map((error) => `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`)
-        .join('; ') || 'schema validation failed'}.`,
-    )];
+const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(codexName, 'Codex');
 
 const selectedForCodex = (targets: readonly string[]): boolean => targets.includes(codexName);
-
-const sourceInputs = (...sources: readonly (string | undefined)[]): readonly string[] =>
-  Object.freeze([...new Set(sources.filter((source): source is string => source !== undefined))]);
-
-const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetArtifactEntry[] => Object.freeze(
-  entries.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0),
-);
 
 const hasLeadingPluginRoot = (value: string): boolean =>
   value === pathTokens.pluginRoot || value.startsWith(`${pathTokens.pluginRoot}/`);
@@ -231,7 +200,7 @@ const planMcpServer = (
     const env = server.env === undefined
       ? undefined
       : Object.fromEntries(Object.entries(server.env).map(([key, value]) => {
-          if (key.includes(pathTokens.pluginRoot) || key.includes(pathTokens.pluginData) || key.includes(pathTokens.workspaceRoot)) {
+          if (hasPathToken(key)) {
             diagnostics.push(errorDiagnostic(
               'codex.mcp.token.env.key',
               `Codex MCP environment key "${key}" cannot use a path token.`,
@@ -263,7 +232,7 @@ const planMcpServer = (
   const headers = server.headers === undefined
     ? undefined
     : Object.fromEntries(Object.entries(server.headers).map(([key, value]) => {
-        if (key.includes(pathTokens.pluginRoot) || key.includes(pathTokens.pluginData) || key.includes(pathTokens.workspaceRoot)) {
+        if (hasPathToken(key)) {
           diagnostics.push(errorDiagnostic('codex.mcp.token.headers.key', `Codex MCP header key "${key}" cannot use a path token.`));
         }
         return [key, convertCodexValue(value, `headers.${key}`, false, diagnostics)];
@@ -292,32 +261,17 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   }
 
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
-  if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
+  const mcpValid = mcp !== undefined && validateMcp(mcp);
+  if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
   const generatedHooks = planHooks(model, codexName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
   }
-  const nativeHooks = nativeHooksFor(model, codexName);
-  let nativeHookDocument: Record<string, unknown> | undefined;
-  if (nativeHooks?.issue === 'missing' || nativeHooks?.issue === 'parse') {
-    diagnostics.push(errorDiagnostic(
-      `codex.native-hooks.${nativeHooks.issue}`,
-      `Codex native hooks file ${JSON.stringify(nativeHooks.source)} could not be ${nativeHooks.issue === 'missing' ? 'found' : 'parsed'}.`,
-    ));
-  } else if (nativeHooks?.document !== undefined) {
-    if (!validateHooks(nativeHooks.document)) {
-      diagnostics.push(errorDiagnostic(
-        'codex.native-hooks.schema',
-        `Codex native hooks file ${JSON.stringify(nativeHooks.source)} is invalid: ${(validateHooks.errors ?? [])
-          .map((error) => `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`)
-          .join('; ') || 'schema validation failed'}.`,
-      ));
-    } else {
-      nativeHookDocument = nativeHooks.document as Record<string, unknown>;
-    }
-  }
-  const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHookDocument);
+  const nativeHooks = validatedNativeHookDocument(model, codexName, 'Codex', validateHooks, errorDiagnostic);
+  diagnostics.push(...nativeHooks.diagnostics);
+  const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHooks.document);
+  const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
 
   const description = model.metadata.description ?? model.metadata.name;
   const interfaceMetadata = {
@@ -357,8 +311,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       source: { path: './', source: 'local' },
     }],
   };
+  const marketplaceValid = marketplace !== undefined && validateMarketplace(marketplace);
   if (marketplace !== undefined) {
-    diagnostics.push(...schemaDiagnostics('marketplace', validateMarketplace(marketplace), validateMarketplace.errors));
+    diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
   }
 
   const targetSourceInputs = model.targets
@@ -390,7 +345,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       ...skillSourceInputs,
     ),
   }];
-  if (mcp !== undefined && validateMcp(mcp)) {
+  if (mcp !== undefined && mcpValid) {
     entries.push({
       content: `${stableJson(mcp)}\n`,
       kind: 'write',
@@ -398,7 +353,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       sourceInputs: sourceInputs(...targetSourceInputs, ...mcpSourceInputs),
     });
   }
-  if (hookDocument !== undefined && validateHooks(hookDocument)) {
+  if (hookDocument !== undefined && hookDocumentValid) {
     entries.push({
       content: `${stableJson(hookDocument)}\n`,
       kind: 'write',
@@ -410,7 +365,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       ),
     });
   }
-  if (marketplace !== undefined && validateMarketplace(marketplace)) {
+  if (marketplace !== undefined && marketplaceValid) {
     entries.push({
       content: `${stableJson(marketplace)}\n`,
       kind: 'write',
@@ -445,9 +400,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     entries: sortedEntries(entries),
-    hookEntries: hookDocument !== undefined && validateHooks(hookDocument)
-      ? generatedHooks.hookEntries
-      : Object.freeze([]),
+    hookEntries: hookDocumentValid ? generatedHooks.hookEntries : Object.freeze([]),
   });
 };
 

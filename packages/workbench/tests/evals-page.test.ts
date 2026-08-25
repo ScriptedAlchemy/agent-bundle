@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { expect, it } from '@rstest/core';
 
-import type { EvalRunResult, EvalSuiteListing } from '../../agent-bundle/src/dev/eval-service.ts';
+import type { EvalRunResult, EvalSuiteListing } from '../../agent-bundle/src/contracts/eval.ts';
 import type { EvalRunEvent, EvalRunRecord, EvalTrialRecord } from '../../agent-bundle/src/eval/run-store.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';

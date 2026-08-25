@@ -1,5 +1,6 @@
-import { createRslib } from '@rslib/core';
-import { rspack } from '@rspack/core';
+// Rslib re-exports its own rspack; installing @rspack/core separately risks
+// version conflicts (https://rslib.rs/api/javascript-api/core).
+import { createRslib, rspack } from '@rslib/core';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -80,7 +81,10 @@ export const buildWithRslib = async (options: {
           bundle: true,
           dts: false,
           format: 'esm',
-          performance: { chunkSplit: { strategy: 'all-in-one' } },
+          // Rsbuild 2.x deprecated performance.chunkSplit 'all-in-one'; the
+          // documented migration is top-level splitChunks: false, which also
+          // guards against the node-target splitting default added in v2.2.
+          splitChunks: false,
           syntax: 'es2022',
           output: {
             cleanDistPath: false,
@@ -101,14 +105,14 @@ export const buildWithRslib = async (options: {
             rspack: (config) => {
               config.output.asyncChunks = false;
               if (hasVirtualModules) {
-                    config.resolve.alias = {
-                      ...config.resolve.alias,
-                      ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
-                    };
-                    config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
-                      ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
-                      ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
-                    }));
+                config.resolve.alias = {
+                  ...config.resolve.alias,
+                  ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
+                };
+                config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
+                  ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
+                  ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
+                }));
               }
             },
           },

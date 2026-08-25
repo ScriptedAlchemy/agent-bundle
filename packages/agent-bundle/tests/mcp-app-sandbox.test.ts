@@ -9,7 +9,7 @@ import {
   createMcpAppSandboxFrame,
   createMcpAppSandboxProxy,
   deriveMcpAppSandboxPolicy,
-} from '../src/dev/mcp-app-sandbox.ts';
+} from '../src/dev/mcp-apps/mcp-app-sandbox.ts';
 
 const relay = Object.freeze({ maxMessageBytes: 1_024, maxQueuedMessages: 1 });
 const proxyEndpoint = Object.freeze({ origin: 'http://127.0.0.1:43124', relay });

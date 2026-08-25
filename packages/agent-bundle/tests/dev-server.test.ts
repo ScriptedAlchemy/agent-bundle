@@ -2,12 +2,12 @@ import { createServer as createNodeServer, get as httpGet } from 'node:http';
 
 import { expect, it } from '@rstest/core';
 
-import type { HookPlaygroundRouteService } from '../src/dev/hook-playground-routes.ts';
+import type { HookPlaygroundRouteService } from '../src/dev/playground/hook-playground-routes.ts';
 import type {
   HookPlaygroundHook,
   HookPlaygroundReplay,
   HookPlaygroundSimulationOptions,
-} from '../src/dev/hook-playground-service.ts';
+} from '../src/dev/playground/hook-playground-service.ts';
 import {
   ForegroundServer,
   ProjectEventHub,
@@ -15,9 +15,9 @@ import {
   type Invalidation,
   type ProjectStatus,
 } from '../src/dev/index.ts';
-import { ArtifactInspectionServiceError } from '../src/dev/artifact-inspection-service.ts';
-import type { EvalRouteService } from '../src/dev/eval-routes.ts';
-import type { McpSessionService } from '../src/dev/mcp-session-service.ts';
+import { ArtifactInspectionServiceError } from '../src/dev/artifacts/artifact-inspection-service.ts';
+import type { EvalRouteService } from '../src/dev/eval/eval-routes.ts';
+import type { McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
 
 const status = (): ProjectStatus => ({
   artifact: { state: 'missing' },

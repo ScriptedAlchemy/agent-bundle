@@ -1,13 +1,17 @@
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
+
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { snapshotStrictJsonValue } from '../core/strict-json.ts';
-import type {
-  AgentBundleConfig,
-  CanonicalHookEvent,
-  NormalizedHook,
-  NormalizedPlugin,
+import {
+  pathTokens,
+  type AgentBundleConfig,
+  type NormalizedPlugin,
 } from '../core/types.ts';
-import type { TargetHookContract } from './hook-contract.ts';
+import type { TargetHookContract, TargetHookEntry } from './hook-contract.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
+
+export type { TargetHookEntry, TargetHookWrapper } from './hook-contract.ts';
 
 export interface TargetArtifactWrite {
   readonly content: string;
@@ -28,19 +32,14 @@ export interface TargetArtifactCopy {
 
 export type TargetArtifactEntry = TargetArtifactWrite | TargetArtifactCopy;
 
-export interface TargetHookWrapper {
-  readonly event: CanonicalHookEvent;
-  readonly hook: NormalizedHook;
-  readonly nativeEvent: string;
-  /** The computed native tool matcher, absent when the host applies the hook unconditionally. */
-  readonly nativeMatcher?: string;
-  readonly relativePath: string;
-  readonly target: string;
-}
+/** Deduplicated, defined authored inputs for a generated artifact entry. */
+export const sourceInputs = (...sources: readonly (string | undefined)[]): readonly string[] =>
+  Object.freeze([...new Set(sources.filter((source): source is string => source !== undefined))]);
 
-export interface TargetHookEntry extends TargetHookWrapper {
-  readonly virtualSource: string;
-}
+/** Deterministic artifact ordering shared by every target plan. */
+export const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetArtifactEntry[] => Object.freeze(
+  entries.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0),
+);
 
 export interface TargetArtifactPlan {
   readonly diagnostics: readonly Diagnostic[];
@@ -57,6 +56,34 @@ export interface TargetSchemaDescriptor {
   readonly revision: string;
   readonly sha256: string;
 }
+
+/** ajv-formats ships CJS-flavored typings; this single cast localizes the mismatch. */
+const installFormats = addFormats as unknown as (target: Ajv2020) => void;
+
+/** The one AJV configuration every adapter's pinned schema validators share. */
+export const createAdapterValidator = (): Ajv2020 => {
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  return validator;
+};
+
+/** Sorted metadata schema descriptors derived from a target's pinned provenance document. */
+export const schemaDescriptorsFrom = (
+  provenance: Readonly<{ readonly schemas: Readonly<Record<string, { readonly sha256: string }>> }>,
+  revision: string,
+): readonly TargetSchemaDescriptor[] => Object.freeze(
+  Object.entries(provenance.schemas)
+    .map(([fileName, schema]) => Object.freeze({
+      name: fileName.replace(/\.schema\.json$/, ''),
+      revision,
+      sha256: schema.sha256,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name)),
+);
+
+/** True when a value embeds any canonical Agent Bundle path token. */
+export const hasPathToken = (value: string): boolean =>
+  value.includes(pathTokens.pluginRoot) || value.includes(pathTokens.pluginData) || value.includes(pathTokens.workspaceRoot);
 
 export interface TargetAdapterMetadata {
   readonly adapterRevision: string;

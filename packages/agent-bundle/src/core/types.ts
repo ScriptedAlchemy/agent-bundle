@@ -5,9 +5,13 @@ export interface AgentBundlePluginConfig {
   [key: string]: unknown;
 }
 
-export type CanonicalHookEvent = 'sessionStart' | 'beforeTool' | 'afterTool' | 'stop';
+export const canonicalHookEvents = Object.freeze(['sessionStart', 'beforeTool', 'afterTool', 'stop'] as const);
 
-export type CanonicalHookTool = 'shell' | 'file.read' | 'file.write' | 'mcp' | 'agent';
+export type CanonicalHookEvent = (typeof canonicalHookEvents)[number];
+
+export const canonicalHookTools = Object.freeze(['shell', 'file.read', 'file.write', 'mcp', 'agent'] as const);
+
+export type CanonicalHookTool = (typeof canonicalHookTools)[number];
 
 /** A host-native tool named through the explicit `<target>:<native-name>` selector escape hatch. */
 export interface NativeHookToolSelector {

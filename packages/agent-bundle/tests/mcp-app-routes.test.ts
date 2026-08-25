@@ -7,11 +7,11 @@ import { expect, it } from '@rstest/core';
 import {
   McpAppRoutes,
   type McpAppRoutePreviewService,
-} from '../src/dev/mcp-app-routes.ts';
+} from '../src/dev/mcp-apps/mcp-app-routes.ts';
 import { runtimeAppMessageLimits } from '../src/dev/runtime-app-message-limits.ts';
 import { McpAppRuntimePreviewError } from '../src/dev/mcp-app-runtime-preview-service.ts';
 import type { McpAppRuntimeRoutePreviewService } from '../src/dev/mcp-app-runtime-preview-service.ts';
-import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-app-bridge.ts';
+import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-apps/mcp-app-bridge.ts';
 
 interface StartedRoutes {
   readonly close: () => Promise<void>;

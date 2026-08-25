@@ -3,20 +3,20 @@ import { ListToolsRequestSchema, ListToolsResultSchema } from '@modelcontextprot
 
 import type {
   McpAppBridgeMessage,
-} from '../../../../agent-bundle/src/dev/mcp-app-bridge.ts';
+} from '../../../../agent-bundle/src/contracts/mcp-apps.ts';
 import {
   validateMcpAppDownloadContents,
   validateMcpAppExternalUrl,
   type McpAppValidatedDownload,
-} from '../../../../agent-bundle/src/dev/mcp-app-action-validation.ts';
+} from '../../../../agent-bundle/src/contracts/mcp-apps.ts';
 import {
   runtimeAppFiniteOrdinaryJsonByteLength,
   runtimeAppMessageLimits,
-} from '../../../../agent-bundle/src/dev/runtime-app-message-limits.ts';
-import type { McpAppJsonValue } from '../../../../agent-bundle/src/dev/mcp-app-metadata.ts';
-import type { McpAppBoundOperationResult, McpAppPublicRuntimeVector } from '../../../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
-import type { McpAppBindingOperation, McpAppPreviewAppsSnapshot, McpAppPreviewSnapshot } from '../../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
-import type { McpAppConsentCapability, McpAppConsentChallenge, McpAppConsentRequest } from '../../../../agent-bundle/src/dev/mcp-app-sandbox.ts';
+} from '../../../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { McpAppJsonValue } from '../../../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { McpAppBoundOperationResult, McpAppPublicRuntimeVector } from '../../../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { McpAppBindingOperation, McpAppPreviewAppsSnapshot, McpAppPreviewSnapshot } from '../../../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { McpAppConsentCapability, McpAppConsentChallenge, McpAppConsentRequest } from '../../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { McpAppClient, McpAppRuntimeClient } from '../../mcp/mcp-app-client.ts';
 import type { McpSessionController, McpSessionControllerAppAccess, McpSessionControllerAppAttachment } from '../../mcp/mcp-session-controller.ts';
 

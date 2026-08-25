@@ -12,8 +12,8 @@ import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
-import { McpAppBindingService, type McpAppSessionAuthority } from '../src/dev/mcp-app-binding-service.ts';
-import { mcpAppClientCapabilities, McpSession, McpSessionService } from '../src/dev/mcp-session-service.ts';
+import { McpAppBindingService, type McpAppSessionAuthority } from '../src/dev/mcp-apps/mcp-app-binding-service.ts';
+import { mcpAppClientCapabilities, McpSession, McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { pathTokens, type AgentBundleConfig, type NormalizationTargetRegistry } from '../src/core/types.ts';
 
@@ -1300,7 +1300,7 @@ it('fails closed when projecting adversarial generated launch configuration for 
   });
   const stdioProjection = stdio.inspectorConfig();
   const stdioJson = JSON.stringify(stdioProjection);
-    
+
   expect(stdioJson).not.toContain('header-secret');
   expect(stdioJson).not.toContain('cookie-secret');
   expect(stdioJson).not.toContain('token-secret');

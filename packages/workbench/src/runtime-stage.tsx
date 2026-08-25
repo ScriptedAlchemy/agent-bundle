@@ -1,6 +1,6 @@
 import React from 'react';
 
-import type { DevRuntimeInspectionEnvelope, DevRuntimeRun, DevRuntimeStatus, DevRuntimeSurface } from '../../agent-bundle/src/dev/runtime-protocol.ts';
+import type { DevRuntimeInspectionEnvelope, DevRuntimeRun, DevRuntimeStatus, DevRuntimeSurface } from '../../agent-bundle/src/contracts/runtime.ts';
 import type { RuntimeProfileOption } from './runtime-model.ts';
 import type { RuntimeAppPreviewLifecycleRegistrar } from './runtime-playground.tsx';
 

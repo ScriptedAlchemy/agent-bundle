@@ -1,12 +1,11 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import fastGlob from 'fast-glob';
 
-import { digest } from '../core/digest.ts';
+import { digest, sha256File, sha256Hex } from '../core/digest.ts';
 import { EvalFixtureError } from './errors.ts';
 import type { EvalFixture } from './types.ts';
 import { isInside } from '../core/paths.ts';
@@ -106,7 +105,7 @@ export const planEvalFixture = async (options: PlanEvalFixtureOptions): Promise<
     entries.push(Object.freeze({
       executable: (metadata.mode & 0o111) !== 0,
       path: match,
-      sha256: createHash('sha256').update(await readFile(candidate)).digest('hex'),
+      sha256: await sha256File(candidate),
     }));
   }
   const frozenEntries = Object.freeze(entries);
@@ -165,7 +164,7 @@ export const materializeEvalFixture = async (
     const source = join(options.plan.sourcePath, entry.path);
     const target = join(destination, entry.path);
     const contents = await readFile(source);
-    if (createHash('sha256').update(contents).digest('hex') !== entry.sha256) {
+    if (sha256Hex(contents) !== entry.sha256) {
       throw fixtureError(
         'EVAL_FIXTURE_SOURCE_INVALID',
         `Eval fixture entry ${JSON.stringify(entry.path)} changed after its digest was recorded.`,

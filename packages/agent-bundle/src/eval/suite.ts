@@ -1,7 +1,7 @@
-import { isAbsolute } from 'node:path';
-
 import { digest } from '../core/digest.ts';
-import type { DraftEvalCase, PlaygroundSelectedAssertion } from '../services/playground-service.ts';
+import { isContainedRelativePath } from '../core/paths.ts';
+import { isRecord } from '../core/strict-json.ts';
+import type { DraftEvalCase, PlaygroundSelectedAssertion } from '../dev/playground/playground-store.ts';
 import {
   expectExitCode,
   expectMcpCall,
@@ -38,9 +38,6 @@ const maximumTrials = 100;
 const parsedSuiteKeys = Object.freeze(['cases', 'digest', 'name']);
 const safeIdentifier = /^[a-z0-9][a-z0-9._-]*$/iu;
 const suiteKeys = Object.freeze(['cases', 'name']);
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const definitionError = (
   code: ConstructorParameters<typeof EvalDefinitionError>[0],
@@ -84,14 +81,8 @@ const requireProjectRelativePath = (
   code: ConstructorParameters<typeof EvalDefinitionError>[0],
   label: string,
 ): string => {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw definitionError(code, `${label} must be a non-empty string.`);
-  }
-  if (isAbsolute(value) || /^[a-z]:/iu.test(value)) {
-    throw definitionError(code, `${label} must be relative to the suite file.`);
-  }
-  if (value.split(/[/\\]/u).includes('..')) {
-    throw definitionError(code, `${label} must not escape the suite directory.`);
+  if (typeof value !== 'string' || !isContainedRelativePath(value)) {
+    throw definitionError(code, `${label} must be a non-empty relative path that never escapes the suite directory.`);
   }
   return value;
 };

@@ -413,7 +413,7 @@ const deltaFor = (baseline: EvalConditionMetrics, candidate: EvalConditionMetric
 };
 
 const conditionsOf = (side: EvalComparisonSide): ReadonlyMap<string, Condition> => {
-  const conditions = new Map<string, Condition>();
+  const conditions = new Map<string, Omit<Condition, 'trials'> & { readonly trials: Condition['trials'][number][] }>();
   for (const trial of side.trials) {
     const key = conditionKey(trial.caseId, trial.host);
     const existing = conditions.get(key);
@@ -421,7 +421,7 @@ const conditionsOf = (side: EvalComparisonSide): ReadonlyMap<string, Condition> 
       conditions.set(key, { caseId: trial.caseId, host: trial.host, side, trials: [trial] });
       continue;
     }
-    conditions.set(key, { ...existing, trials: [...existing.trials, trial] });
+    existing.trials.push(trial);
   }
   return conditions;
 };

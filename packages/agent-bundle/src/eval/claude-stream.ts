@@ -1,3 +1,4 @@
+import { isRecord } from '../core/strict-json.ts';
 import { EvalHarnessError } from './errors.ts';
 import type { EvalActivationEvidence, EvalMcpCallRecord } from './types.ts';
 
@@ -72,9 +73,6 @@ const emptyUsage: ClaudeUsage = Object.freeze({
 
 const harnessError = (message: string): EvalHarnessError =>
   new EvalHarnessError('EVAL_HARNESS_INPUT_INVALID', message);
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isSafeLabel = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(value);

@@ -1,12 +1,11 @@
-import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { request as httpRequest } from 'node:http';
 
 import { expect, it } from '@rstest/core';
 
 import {
   HookPlaygroundRoutes,
   type HookPlaygroundRouteService,
-} from '../src/dev/hook-playground-routes.ts';
+} from '../src/dev/playground/hook-playground-routes.ts';
 import type {
   HookPlaygroundDiagnosticResult,
   HookPlaygroundHook,
@@ -14,70 +13,24 @@ import type {
   HookPlaygroundReplay,
   HookPlaygroundSimulation,
   HookPlaygroundSimulationOptions,
-} from '../src/dev/hook-playground-service.ts';
-
-interface StartedRoutes {
-  readonly close: () => Promise<void>;
-  readonly routes: HookPlaygroundRoutes;
-  readonly url: string;
-}
-
-const routeError = (code: string, message: string, status: number): Error & {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-} => Object.assign(new Error(message), { code, message, status });
-
-const authorize = (request: IncomingMessage): void => {
-  if (request.headers.origin !== 'http://127.0.0.1:4567') {
-    throw routeError('AB8003', 'Request origin is not this foreground server.', 403);
-  }
-  if (request.headers['x-agent-bundle-session'] !== 'test-session-token') {
-    throw routeError('AB8004', 'A valid same-session token is required.', 403);
-  }
-};
+} from '../src/dev/playground/hook-playground-service.ts';
+import {
+  authorize,
+  originHeaders as headers,
+  startRoutes as startRouteServer,
+  type StartedRoutes,
+} from './support/route-harness.ts';
 
 const startRoutes = async (
   service?: HookPlaygroundRouteService,
   onAuthorize?: () => void,
-): Promise<StartedRoutes> => {
-  const routes = new HookPlaygroundRoutes({
-    authorize: (request) => {
-      authorize(request);
-      onAuthorize?.();
-    },
-    ...(service === undefined ? {} : { service }),
-  });
-  const server = createServer((request, response) => {
-    void routes.handle(request, response).then((handled) => {
-      if (!handled) response.writeHead(404).end();
-    }).catch((error: unknown) => {
-      const diagnostic = error as Partial<{ code: string; message: string; status: number }>;
-      if (response.headersSent || response.writableEnded) {
-        response.destroy();
-        return;
-      }
-      response.writeHead(diagnostic.status ?? 500, { 'content-type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ diagnostic: {
-        code: diagnostic.code ?? 'AB8007',
-        message: diagnostic.message ?? 'Request could not be completed.',
-      } }));
-    });
-  });
-  await new Promise<void>((resolvePromise) => server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
-  const address = server.address() as AddressInfo;
-  return Object.freeze({
-    close: async () => {
-      await routes.close();
-      await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
-        if (error === undefined) resolvePromise();
-        else rejectPromise(error);
-      }));
-    },
-    routes,
-    url: `http://127.0.0.1:${address.port}`,
-  });
-};
+): Promise<StartedRoutes<HookPlaygroundRoutes>> => startRouteServer(new HookPlaygroundRoutes({
+  authorize: (request) => {
+    authorize(request);
+    onAuthorize?.();
+  },
+  ...(service === undefined ? {} : { service }),
+}), { closeMode: 'awaited' });
 
 const hookFixture: HookPlaygroundHook = Object.freeze({
   binding: Object.freeze({ epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }),
@@ -171,11 +124,6 @@ class RecordingService implements HookPlaygroundRouteService {
     return simulationFixture;
   }
 }
-
-const headers = (): Readonly<Record<string, string>> => ({
-  origin: 'http://127.0.0.1:4567',
-  'x-agent-bundle-session': 'test-session-token',
-});
 
 const jsonHeaders = (): Readonly<Record<string, string>> => ({ ...headers(), 'content-type': 'application/json' });
 

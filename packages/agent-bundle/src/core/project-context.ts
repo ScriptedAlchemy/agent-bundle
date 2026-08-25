@@ -1,7 +1,10 @@
 import { realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 
 import { digest } from './digest.ts';
+import { deepFreeze } from './freeze.ts';
+import { isInsideOrEqual } from './paths.ts';
+import { snapshotStrictJsonValue } from './strict-json.ts';
 import type { NormalizedPlugin, SourceProvenance } from './types.ts';
 
 /** One deterministic, byte-addressed authored input in a project identity. */
@@ -33,10 +36,7 @@ export interface CreateProjectContextOptions {
   readonly sourceInputs: readonly ProjectSourceSnapshotInput[];
 }
 
-const escapesRoot = (root: string, candidate: string): boolean => {
-  const relativeCandidate = relative(root, candidate);
-  return relativeCandidate === '..' || relativeCandidate.startsWith(`..${sep}`) || isAbsolute(relativeCandidate);
-};
+const escapesRoot = (root: string, candidate: string): boolean => !isInsideOrEqual(root, candidate);
 
 const sha256Pattern = /^[a-f0-9]{64}$/u;
 
@@ -91,29 +91,6 @@ const canonicalProvenance = (root: string, provenance: SourceProvenance): Source
   sourcePath: canonicalCompilerPath(root, provenance.sourcePath, 'Model provenance path'),
 });
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-
-const cloneJsonValue = (value: unknown, ancestors = new Set<object>()): JsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
-  if (typeof value === 'number') {
-    if (Number.isFinite(value)) return value;
-    throw new TypeError('Normalized project models must contain only JSON values.');
-  }
-  if (typeof value !== 'object') throw new TypeError('Normalized project models must contain only JSON values.');
-  if (ancestors.has(value)) throw new TypeError('Normalized project models must not contain cyclic values.');
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) return value.map((item) => cloneJsonValue(item, ancestors));
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError('Normalized project models must contain only plain JSON objects.');
-    }
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneJsonValue(item, ancestors)]));
-  } finally {
-    ancestors.delete(value);
-  }
-};
-
 const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   model.metadata.provenance.sourcePath,
   ...(model.assets ?? []).flatMap((asset) => [asset.provenance.sourcePath, asset.source]),
@@ -146,15 +123,6 @@ const assertModelPathsResolveInsideProject = (root: string, model: NormalizedPlu
   }
 };
 
-const deepFreeze = <Value>(value: Value, seen = new WeakSet<object>()): Value => {
-  if (typeof value !== 'object' || value === null || seen.has(value)) return value;
-  seen.add(value);
-  for (const property of Reflect.ownKeys(value)) {
-    deepFreeze(Reflect.get(value, property), seen);
-  }
-  return Object.freeze(value);
-};
-
 /**
  * Produces the root-independent form used for model identity. It never mutates
  * the executable normalized model; every compiler-owned absolute path becomes
@@ -164,7 +132,7 @@ export const canonicalizeNormalizedModel = (
   root: string,
   model: NormalizedPlugin,
 ): Readonly<Record<string, unknown>> => {
-  const detached = cloneJsonValue(model) as unknown as NormalizedPlugin;
+  const detached = snapshotStrictJsonValue(model) as unknown as NormalizedPlugin;
   return deepFreeze({
     ...detached,
     ...(detached.assets === undefined

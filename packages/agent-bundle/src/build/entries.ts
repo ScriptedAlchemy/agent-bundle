@@ -3,6 +3,7 @@ import { extname, relative, resolve } from 'node:path';
 
 import type { TargetHookEntry } from '../adapters/types.ts';
 import type { NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
+import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
@@ -103,7 +104,7 @@ export const compileEntries = async (
 const localMcpOutputName = (server: NormalizedMcpServer): string => {
   const output = server.args?.[0];
   const match = typeof output === 'string'
-    ? /^mcp\/(mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs)$/u.exec(output)
+    ? mcpEntryAliasPattern.exec(output)
     : undefined;
   if (server.source === undefined || match?.[1] === undefined) {
     throw new Error(`MCP server ${JSON.stringify(server.name)} has an unsafe local output alias.`);

@@ -6,8 +6,8 @@ import type {
   DevRuntimeMcpSessionControlRequest,
   DevRuntimeMcpSessionRequest,
   RuntimeVector,
-} from '../../../agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject } from '../../../agent-bundle/src/dev/types.ts';
+} from '../../../agent-bundle/src/contracts/runtime.ts';
+import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 
 export type McpRouteTarget = 'claude' | 'codex' | 'portable';
 

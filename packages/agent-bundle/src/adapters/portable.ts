@@ -1,5 +1,4 @@
-import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';
-
+import { createTargetDiagnostics } from './diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
@@ -20,6 +19,9 @@ import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: '
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'json' };
 import {
+  createAdapterValidator,
+  schemaDescriptorsFrom,
+  sourceInputs,
   validateJsonSchemaDocument,
   validateModernMcpDocument,
   type TargetAdapter,
@@ -41,7 +43,7 @@ const portablePluginSchema =
   'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const portableMcpSchema = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
 const portableName = 'portable';
-const schemaValidator = new Ajv2020({ allErrors: true, strict: false });
+const schemaValidator = createAdapterValidator();
 const validatePlugin = schemaValidator.compile(pluginSchema);
 const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
@@ -49,15 +51,7 @@ const metadata = Object.freeze({
   capabilityRevision: capabilityTable.observedSpecificationVersion,
   capabilitySha256: '642da9f921374a4d0143da21ed4b4b2260a2375a5eb33c4cbb4ef531f2bb7352',
   observedVersion: capabilityTable.observedSpecificationVersion,
-  schemas: Object.freeze(
-    Object.entries(schemaProvenance.schemas)
-      .map(([fileName, schema]) => Object.freeze({
-        name: fileName.replace(/\.schema\.json$/, ''),
-        revision: schemaProvenance.version,
-        sha256: schema.sha256,
-      }))
-      .sort((left, right) => left.name.localeCompare(right.name)),
-  ),
+  schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.version),
 });
 
 const artifactValidation = Object.freeze({
@@ -83,13 +77,6 @@ const mcpRuntime = createTargetMcpRuntime({
       '${PLUGIN_ROOT}': 'pluginRoot',
     })),
   }),
-});
-
-const errorDiagnostic = (code: string, message: string): Diagnostic => ({
-  code,
-  message,
-  severity: 'error',
-  target: portableName,
 });
 
 const containsToken = (value: string): boolean =>
@@ -121,30 +108,10 @@ const unsupportedTokenDiagnostic = (
   );
 };
 
-const schemaDiagnostics = (
-  name: 'plugin' | 'mcp',
-  valid: boolean,
-  errors: readonly ErrorObject[] | null | undefined,
-): Diagnostic[] =>
-  valid
-    ? []
-    : [
-        errorDiagnostic(
-          `portable.schema.${name}`,
-          `Portable ${name}.json is invalid: ${(errors ?? [])
-            .map(
-              (error) =>
-                `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`,
-            )
-            .join('; ') || 'schema validation failed'}.`,
-        ),
-      ];
+const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(portableName, 'Portable');
 
 const hasPortableTarget = (targets: readonly string[]): boolean =>
   targets.includes(portableName);
-
-const sourceInputs = (...sources: readonly (string | undefined)[]): readonly string[] =>
-  Object.freeze([...new Set(sources.filter((source): source is string => source !== undefined))]);
 
 const planMcpServer = (
   server: NormalizedMcpServer,

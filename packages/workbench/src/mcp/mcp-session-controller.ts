@@ -6,18 +6,18 @@ import type {
   McpSessionOperation,
   McpSessionTraceEntry,
   McpSessionTraceReplayGap,
-} from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+} from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type {
   DevRuntimeMcpAppRunBinding,
   DevRuntimeMcpOperationRequest,
   DevRuntimeMcpOperationResult,
   DevRuntimeMcpSessionControlRequest,
   DevRuntimeMcpSessionRequest,
-} from '../../../agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject } from '../../../agent-bundle/src/dev/types.ts';
-import type { McpAppBoundOperationResult } from '../../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
-import type { McpAppJsonValue } from '../../../agent-bundle/src/dev/mcp-app-metadata.ts';
-import type { McpAppBindingOperation } from '../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
+} from '../../../agent-bundle/src/contracts/runtime.ts';
+import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
+import type { McpAppBoundOperationResult } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { McpAppJsonValue } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { McpAppBindingOperation } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import { AgentBundleRemoteTransport, dispatchAgentBundleMcpRequest, type AgentBundleMcpDispatchResult } from './agent-bundle-remote-transport.ts';
 import {
   invocationHistoryFor,

@@ -1,4 +1,6 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
+import { escapeRegExp } from '../core/strings.ts';
 import type {
   CanonicalHookEvent,
   CanonicalHookTool,
@@ -6,7 +8,20 @@ import type {
   NormalizedNativeHook,
   NormalizedPlugin,
 } from '../core/types.ts';
-import type { TargetHookEntry, TargetHookWrapper } from './types.ts';
+
+export interface TargetHookWrapper {
+  readonly event: CanonicalHookEvent;
+  readonly hook: NormalizedHook;
+  readonly nativeEvent: string;
+  /** The computed native tool matcher, absent when the host applies the hook unconditionally. */
+  readonly nativeMatcher?: string;
+  readonly relativePath: string;
+  readonly target: string;
+}
+
+export interface TargetHookEntry extends TargetHookWrapper {
+  readonly virtualSource: string;
+}
 
 export interface TargetNativeHookCommand {
   readonly command: string;
@@ -35,53 +50,8 @@ export interface TargetHookContract {
   readonly wrapperSource: (entry: TargetHookWrapper) => string;
 }
 
-const isPlainDataRecord = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  return Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => 'value' in descriptor);
-};
-
-const hasDataKeys = (
-  value: unknown,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): value is Record<string, unknown> => {
-  if (!isPlainDataRecord(value)) return false;
-  const allowed = new Set([...required, ...optional]);
-  return Reflect.ownKeys(value).length >= required.length &&
-    Reflect.ownKeys(value).every((key) => typeof key === 'string' && allowed.has(key)) &&
-    required.every((key) => Object.hasOwn(value, key));
-};
-
-const ownDataValue = (value: object, key: string): { readonly found: boolean; readonly value: unknown } | undefined => {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  if (descriptor === undefined) return { found: false, value: undefined };
-  return 'value' in descriptor ? { found: true, value: descriptor.value } : undefined;
-};
-
-const dataArray = (value: unknown): readonly unknown[] | undefined => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
-  const length = Object.getOwnPropertyDescriptor(value, 'length');
-  if (
-    length === undefined ||
-    !('value' in length) ||
-    typeof length.value !== 'number' || !Number.isSafeInteger(length.value) || length.value < 0 ||
-    Reflect.ownKeys(value).length !== length.value + 1
-  ) {
-    return undefined;
-  }
-  const entries: unknown[] = [];
-  for (let index = 0; index < length.value; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (descriptor === undefined || !('value' in descriptor)) return undefined;
-    entries.push(descriptor.value);
-  }
-  return Object.freeze(entries);
-};
-
 const snapshotNativeHookCommands = (value: unknown): readonly TargetNativeHookCommand[] | undefined => {
-  const candidates = dataArray(value);
+  const candidates = dataArrayValues(value);
   if (candidates === undefined) return undefined;
   const commands: TargetNativeHookCommand[] = [];
   for (const candidate of candidates) {
@@ -116,6 +86,7 @@ export const readTargetNativeHookCommands = (
     if (typeof reader !== 'function') return Object.freeze({ status: 'invalid' });
     return snapshotNativeHookCommandResult(reader(document)) ?? Object.freeze({ status: 'invalid' });
   } catch {
+    // Target command readers are untrusted; a throw is an invalid document.
     return Object.freeze({ status: 'invalid' });
   }
 };
@@ -127,13 +98,13 @@ export const readStandardNativeHookCommands = (document: unknown): TargetNativeH
   if (hooks === undefined || !hooks.found || !isPlainDataRecord(hooks.value)) return Object.freeze({ status: 'invalid' });
   const commands: TargetNativeHookCommand[] = [];
   for (const groups of Object.values(hooks.value)) {
-    const entries = dataArray(groups);
+    const entries = dataArrayValues(groups);
     if (entries === undefined) return Object.freeze({ status: 'invalid' });
     for (const group of entries) {
       if (!isPlainDataRecord(group)) return Object.freeze({ status: 'invalid' });
       const nativeHooks = ownDataValue(group, 'hooks');
       if (nativeHooks === undefined || !nativeHooks.found) return Object.freeze({ status: 'invalid' });
-      const hooksInGroup = dataArray(nativeHooks.value);
+      const hooksInGroup = dataArrayValues(nativeHooks.value);
       if (hooksInGroup === undefined) return Object.freeze({ status: 'invalid' });
       for (const hook of hooksInGroup) {
         if (!isPlainDataRecord(hook)) return Object.freeze({ status: 'invalid' });
@@ -221,13 +192,51 @@ export interface HookPlan {
   readonly hookEntries: readonly TargetHookEntry[];
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 export const nativeHooksFor = (
   model: NormalizedPlugin,
   target: 'codex' | 'claude',
 ): NormalizedNativeHook | undefined => model.nativeHooks?.find((nativeHooks) => nativeHooks.target === target);
+
+interface NativeHookSchemaValidator {
+  (document: unknown): boolean;
+  readonly errors?: readonly { readonly instancePath: string; readonly message?: string }[] | null;
+}
+
+export interface NativeHookDocumentValidation {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Record<string, unknown>;
+}
+
+/** Validates a target's authored native-hook document; a diagnostic never yields a document. */
+export const validatedNativeHookDocument = (
+  model: NormalizedPlugin,
+  target: 'codex' | 'claude',
+  label: string,
+  validate: NativeHookSchemaValidator,
+  errorDiagnostic: (code: string, message: string) => Diagnostic,
+): NativeHookDocumentValidation => {
+  const nativeHooks = nativeHooksFor(model, target);
+  if (nativeHooks?.issue === 'missing' || nativeHooks?.issue === 'parse') {
+    return {
+      diagnostics: [errorDiagnostic(
+        `${target}.native-hooks.${nativeHooks.issue}`,
+        `${label} native hooks file ${JSON.stringify(nativeHooks.source)} could not be ${nativeHooks.issue === 'missing' ? 'found' : 'parsed'}.`,
+      )],
+    };
+  }
+  if (nativeHooks?.document === undefined) return { diagnostics: [] };
+  if (!validate(nativeHooks.document)) {
+    return {
+      diagnostics: [errorDiagnostic(
+        `${target}.native-hooks.schema`,
+        `${label} native hooks file ${JSON.stringify(nativeHooks.source)} is invalid: ${(validate.errors ?? [])
+          .map((error) => `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`)
+          .join('; ') || 'schema validation failed'}.`,
+      )],
+    };
+  }
+  return { diagnostics: [], document: nativeHooks.document as Record<string, unknown> };
+};
 
 export const mergeHookDocuments = (
   generated: Record<string, unknown> | undefined,
@@ -271,8 +280,6 @@ const error = (target: string, code: string, message: string): Diagnostic => ({
   severity: 'error',
   target,
 });
-
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 
 const matcherFor = (
   target: string,

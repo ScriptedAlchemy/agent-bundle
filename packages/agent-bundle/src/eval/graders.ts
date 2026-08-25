@@ -3,10 +3,16 @@ import { lstat, readFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { Ajv2020 } from 'ajv/dist/2020.js';
+import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
-import type { EvalAssertionOutcome, EvalScriptOutcome } from './types.ts';
+import { loadJiti } from './jiti.ts';
+import type {
+  EvalAssertion,
+  EvalAssertionOutcome,
+  EvalHarnessFailure,
+  EvalScriptOutcome,
+} from './types.ts';
 import { isErrno } from '../core/errors.ts';
 
 const runCommand = promisify(execFile);
@@ -115,6 +121,18 @@ const gradeFile = async (
     : outcome('fail', `${spec.path} does not contain the expected content.`);
 };
 
+/** Compiled author schemas are cached per schema object; a compile failure still surfaces on first use. */
+const compiledSchemaValidators = new WeakMap<Readonly<Record<string, unknown>>, ValidateFunction>();
+
+const compiledJsonSchemaValidator = (schema: Readonly<Record<string, unknown>>): ValidateFunction => {
+  const cached = compiledSchemaValidators.get(schema);
+  if (cached !== undefined) return cached;
+  // Author schemas are arbitrary JSON Schema documents, so strict vocabulary checking stays off.
+  const validate = new Ajv2020({ allErrors: true, strict: false }).compile(schema);
+  compiledSchemaValidators.set(schema, validate);
+  return validate;
+};
+
 const gradeJsonSchema = async (
   spec: EvalJsonSchemaGraderSpec,
   context: EvalGraderContext,
@@ -127,8 +145,7 @@ const gradeJsonSchema = async (
     if (isErrno(error, 'ENOENT')) return outcome('fail', `${spec.path} does not exist.`);
     return outcome('fail', `${spec.path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
-  // Author schemas are arbitrary JSON Schema documents, so strict vocabulary checking stays off.
-  const validate = new Ajv2020({ allErrors: true, strict: false }).compile(spec.schema);
+  const validate = compiledJsonSchemaValidator(spec.schema);
   return validate(parsed)
     ? outcome('pass', `${spec.path} matches its JSON Schema.`)
     : outcome('fail', `${spec.path} violates its JSON Schema: ${(validate.errors ?? []).map((issue) => `${issue.instancePath} ${issue.message ?? ''}`.trim()).join('; ')}`);
@@ -171,8 +188,7 @@ const gradeScript = async (
   context: EvalGraderContext,
 ): Promise<EvalScriptOutcome> => {
   const target = containedPath(spec.suiteDir, spec.script);
-  const { createJiti } = await import('jiti');
-  const loaded = await createJiti(import.meta.url, { moduleCache: false }).import(target);
+  const loaded = await (await loadJiti()).import(target);
   const grader = (typeof loaded === 'object' && loaded !== null && 'default' in loaded ? loaded.default : loaded);
   if (typeof grader !== 'function') {
     throw new TypeError(`Grader ${JSON.stringify(spec.script)} must default-export a grader function.`);
@@ -218,3 +234,26 @@ export const runEvalGraders = async (
 
 export const evalScriptGraderSpec = (script: string, suiteDir: string): EvalScriptGraderSpec =>
   Object.freeze({ id: script, kind: 'script', script, suiteDir });
+
+/** Maps a case's outcome assertions to script grader specs, optionally excluding one reserved script id. */
+export const outcomeGraderSpecs = (
+  assertions: readonly EvalAssertion[],
+  suiteDir: string,
+  excludedScript?: string,
+): readonly EvalScriptGraderSpec[] => Object.freeze(assertions.flatMap((assertion) =>
+  assertion.kind === 'outcome' && assertion.script !== excludedScript
+    ? [evalScriptGraderSpec(assertion.script, suiteDir)]
+    : []));
+
+/** The shared EVAL_GRADER_FAILED harness failure for a trial whose grading is incomplete. */
+export const graderFailureFor = (
+  failures: readonly (EvalGraderFailure | string)[],
+): EvalHarnessFailure | undefined => failures.length === 0
+  ? undefined
+  : Object.freeze({
+    code: 'EVAL_GRADER_FAILED',
+    message: `Grading is incomplete: ${failures
+      .map((failure) => typeof failure === 'string' ? failure : `${failure.id}: ${failure.message}`)
+      .join('; ')}`,
+    stage: 'grader',
+  });

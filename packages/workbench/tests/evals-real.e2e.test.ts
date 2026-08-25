@@ -1,12 +1,10 @@
-import { execFile as executeFile } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { promisify } from 'node:util';
 
-import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import { expect } from '@rstest/playwright';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
@@ -15,28 +13,12 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from '../../agent-bundle/tests/support/eval-project.ts';
 import { readFinalizedEvalRun } from '../src/evals/evals-page.tsx';
+import { closeServer } from './support/http.ts';
+import { buildWorkbench, e2e, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
 
-const execFile = promisify(executeFile);
-const workspaceRoot = process.cwd();
-const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
 const browserTimeout = 12_000;
 const runCompletionTimeout = 60_000;
-
-const e2e = test.extend({
-  playwright: {
-    launchOptions: { channel: 'chrome' },
-    contextOptions: { viewport: { height: 900, width: 1440 } },
-  } satisfies PlaywrightOptions,
-});
-
-const buildWorkbench = async (): Promise<void> => {
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('npm', ['run', 'build', '--workspace', 'agent-bundle-workbench'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
-  });
-};
 
 e2e('retries a terminal canonical read until the durable run finalization is visible', async () => {
   let reads = 0;
@@ -93,12 +75,6 @@ const listen = async (server: Server): Promise<string> => {
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('Eval client-scope fixture did not receive a TCP address.');
   return `http://127.0.0.1:${address.port}`;
-};
-
-const closeServer = async (server: Server): Promise<void> => {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => error === undefined ? resolve() : reject(error));
-  });
 };
 
 const mountedEvalClientScopeFixture = async (): Promise<{ readonly close: () => Promise<void>; readonly url: string }> => {

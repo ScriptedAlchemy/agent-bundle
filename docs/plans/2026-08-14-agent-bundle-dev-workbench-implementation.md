@@ -1,6 +1,6 @@
 # Agent Bundle developer workbench implementation plan
 
-**Status:** Implemented; W26 delivery verification and packed-consumer release verification are in progress
+**Status:** Implemented and delivered; W26 delivery verification and packed-consumer release verification run in repository CI
 
 **Date:** 2026-08-14
 

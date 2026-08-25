@@ -1,6 +1,6 @@
-import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
-import { snapshotStrictJsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
-import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/dev/types.ts';
+import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
+import { snapshotStrictJsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 
 export interface ArtifactClientOptions {

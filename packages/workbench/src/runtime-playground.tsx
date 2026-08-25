@@ -7,8 +7,8 @@ import type {
   DevRuntimeStateIdentity,
   DevRuntimeStateResetRequest,
   DevRuntimeSurface,
-} from '../../agent-bundle/src/dev/runtime-protocol.ts';
-import type { ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/dev/types.ts';
+} from '../../agent-bundle/src/contracts/runtime.ts';
+import type { ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/contracts/runtime.ts';
 import { RuntimeClientError, type RuntimeBootstrap } from './runtime-client.ts';
 import { McpJsonInput, serializeJsonValue, type ImmutableJsonValue } from './mcp/mcp-json-input.tsx';
 import {

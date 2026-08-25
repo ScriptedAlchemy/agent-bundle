@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import type { PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
+import type { PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/dev/playground/playground-store.ts';
 import {
   mergePlaygroundEvents,
   nativePlaygroundRequestFor,

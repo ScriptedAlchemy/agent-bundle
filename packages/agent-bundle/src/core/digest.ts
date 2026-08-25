@@ -1,13 +1,12 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
+import { isPlainRecord } from './strict-json.ts';
 
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
+export const sha256Hex = (bytes: string | Uint8Array): string =>
+  createHash('sha256').update(bytes).digest('hex');
+
+export const sha256File = async (path: string): Promise<string> => sha256Hex(await readFile(path));
 
 const serializeJson = (value: unknown, key = ''): string | undefined => {
   if (value !== null && typeof value === 'object') {
@@ -34,7 +33,7 @@ const serializeJson = (value: unknown, key = ''): string | undefined => {
 
     const object = value as Record<string, unknown>;
     const keys = Object.keys(object);
-    const orderedKeys = isPlainObject(object) ? keys.sort() : keys;
+    const orderedKeys = isPlainRecord(object) ? keys.sort() : keys;
     const entries = orderedKeys.flatMap((objectKey) => {
       const serialized = serializeJson(object[objectKey], objectKey);
       return serialized === undefined

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
+import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
 import {
   freezeJsonValue,
   type ArtifactEpoch,
@@ -14,7 +14,7 @@ import {
   type ProjectReplayGap,
   type ProjectStatus,
   type SourceStatus,
-} from '../../agent-bundle/src/dev/types.ts';
+} from '../../agent-bundle/src/contracts/project.ts';
 import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp/mcp-route-client.ts';
 
 export interface EventSourceMessage {

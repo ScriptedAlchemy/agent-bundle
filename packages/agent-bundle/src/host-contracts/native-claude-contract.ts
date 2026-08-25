@@ -209,6 +209,8 @@ export interface NativeClaudeSmokeOptions extends NativeClaudeCommandOptions {
   readonly homeDirectory?: string;
   readonly run?: NativeClaudeProcessRunner;
   readonly signal?: AbortSignal;
+  /** Per-process timeout override for slow or heavily loaded machines. */
+  readonly timeoutMs?: number;
 }
 
 export interface NativeClaudeSmokeDiagnostic {
@@ -363,7 +365,7 @@ const isMissingExecutableError = (error: unknown): boolean =>
 const looksUnauthenticated = (output: string): boolean =>
   /(?:not\s+logged\s+in|authentication|authenticate|unauthorized|subscription)/iu.test(output);
 
-interface ClaudeVersion {
+export interface ClaudeVersion {
   readonly major: number;
   readonly minor: number;
   readonly patch: number;
@@ -372,7 +374,7 @@ interface ClaudeVersion {
 
 const minimumClaudeVersion = Object.freeze({ major: 2, minor: 1, patch: 232, prerelease: false });
 
-const parseClaudeVersion = (output: string): ClaudeVersion | undefined => {
+export const parseClaudeVersion = (output: string): ClaudeVersion | undefined => {
   const match = /(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?=$|[^0-9A-Za-z.-])/u.exec(output);
   if (match === null) return undefined;
   return Object.freeze({
@@ -383,9 +385,9 @@ const parseClaudeVersion = (output: string): ClaudeVersion | undefined => {
   });
 };
 
-const formatClaudeVersion = (version: ClaudeVersion): string => `${version.major}.${version.minor}.${version.patch}`;
+export const formatClaudeVersion = (version: ClaudeVersion): string => `${version.major}.${version.minor}.${version.patch}`;
 
-const isCompatibleClaudeVersion = (version: ClaudeVersion): boolean => {
+export const isCompatibleClaudeVersion = (version: ClaudeVersion): boolean => {
   for (const field of ['major', 'minor', 'patch'] as const) {
     if (version[field] !== minimumClaudeVersion[field]) return version[field] > minimumClaudeVersion[field];
   }
@@ -527,7 +529,10 @@ const runNativeClaudeSmokeUnchecked = async (options: NativeClaudeSmokeOptions):
   }
 
   const environment = createNativeClaudeChildEnvironment(options.environment);
-  const run = options.run ?? ((request: NativeClaudeProcessRequest) => runNativeClaudeProcess(request, options.signal));
+  const run = options.run ?? ((request: NativeClaudeProcessRequest) => runNativeClaudeProcess(request, {
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  }));
   const versionRequest: NativeClaudeProcessRequest = Object.freeze({
     args: Object.freeze(['--version']),
     cwd: options.cwd,

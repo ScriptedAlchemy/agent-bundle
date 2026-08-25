@@ -8,7 +8,7 @@ import {
   inspectMcpAppConfigExtensions,
   MCP_APP_PROFILE_DESCRIPTORS,
   resolveMcpAppHostProfile,
-} from '../src/dev/mcp-app-host-profiles.ts';
+} from '../src/dev/mcp-apps/mcp-app-host-profiles.ts';
 
 const projectRoot = '/workspace/weather';
 

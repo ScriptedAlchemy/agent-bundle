@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve, win32 } from 'node:path';
 
 import { assertInside } from '../core/paths.ts';
+import { isRecord } from '../core/strict-json.ts';
 
 export type ArtifactOutputKind = 'bundle' | 'copy' | 'generated';
 
@@ -54,9 +55,7 @@ const sourceInputsFor = (projectRoot: string, sourceInputs: readonly string[]): 
   sortedUnique(sourceInputs.map((source) => toPosixRelative(projectRoot, source)));
 
 const asRecord = (value: unknown): JsonRecord | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as JsonRecord
-    : undefined;
+  isRecord(value) ? value as JsonRecord : undefined;
 
 const recordsAt = (value: unknown): readonly JsonRecord[] =>
   Array.isArray(value)
@@ -78,7 +77,7 @@ const hasSharedChunk = (left: readonly (string | number)[], right: readonly (str
   left.some((chunk) => right.includes(chunk));
 
 const throwOnFilteredStats = (record: JsonRecord): void => {
-  for (const key of ['filteredAssets', 'filteredChildren', 'filteredModules']) {
+  for (const key of ['filteredAssets', 'filteredModules']) {
     if ((numberAt(record, key) ?? 0) > 0) {
       throw new Error(`Bundler stats are filtered (${key}) and cannot prove output provenance.`);
     }
@@ -113,15 +112,14 @@ const isIgnoredModule = (path: string, ignoredSourcePaths: readonly string[]): b
   path.replaceAll('\\', '/').split('/').includes('node_modules') ||
   ignoredSourcePaths.some((ignored) => isLexicallyInside(ignored, path));
 
+// Rspack stats emit type: "module" for every real module; runtime modules are
+// identified by moduleType and externals by their readable identifier prefix
+// (an external's moduleType is "javascript/dynamic", never "external").
 const isKnownNoAuthorSourceModule = (module: JsonRecord): boolean => {
-  const type = stringAt(module, 'type');
   const moduleType = stringAt(module, 'moduleType');
   const name = stringAt(module, 'name');
   return recordsAt(module.modules).length > 0 ||
-    type === 'runtime' ||
-    type === 'external' ||
     moduleType === 'runtime' ||
-    moduleType === 'external' ||
     name?.startsWith('external ') === true;
 };
 

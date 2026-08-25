@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { ScriptPlaygroundService } from '../src/dev/script-playground-service.ts';
+import { ScriptPlaygroundService } from '../src/dev/playground/script-playground-service.ts';
 
 const temporaryScript = async (source: string): Promise<Readonly<{ readonly close: () => Promise<void>; readonly path: string }>> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-playground-test-'));

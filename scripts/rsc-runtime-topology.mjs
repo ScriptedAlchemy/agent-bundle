@@ -19,7 +19,7 @@ const ALLOWLIST = Object.freeze([
   'packages/agent-bundle/src/core/types.ts',
   'packages/agent-bundle/src/dev',
   'packages/agent-bundle/src/index.ts',
-  'packages/agent-bundle/src/services/playground-service.ts',
+  'packages/agent-bundle/src/dev/playground/playground-store.ts',
   'packages/agent-bundle/tests',
   'packages/workbench/rsbuild.config.ts',
   'packages/workbench/scripts',
@@ -44,7 +44,7 @@ const agentBundleSource = new Set([
   'packages/agent-bundle/src/core/digest.ts',
   'packages/agent-bundle/src/core/project-context.ts',
   'packages/agent-bundle/src/index.ts',
-  'packages/agent-bundle/src/services/playground-service.ts',
+  'packages/agent-bundle/src/dev/playground/playground-store.ts',
 ]);
 
 const agentBundleBuild = new Set([
@@ -59,14 +59,14 @@ const agentBundleBuild = new Set([
 
 const agentBundleDev = new Set([
   'packages/agent-bundle/src/dev/foreground-server.ts',
-  'packages/agent-bundle/src/dev/hook-playground-service.ts',
+  'packages/agent-bundle/src/dev/playground/hook-playground-service.ts',
   'packages/agent-bundle/src/dev/mcp-app-action-validation.ts',
-  'packages/agent-bundle/src/dev/mcp-app-binding-service.ts',
-  'packages/agent-bundle/src/dev/mcp-app-preview-service.ts',
+  'packages/agent-bundle/src/dev/mcp-apps/mcp-app-binding-service.ts',
+  'packages/agent-bundle/src/dev/mcp-apps/mcp-app-preview-service.ts',
   'packages/agent-bundle/src/dev/mcp-app-runtime-binding-service.ts',
   'packages/agent-bundle/src/dev/mcp-app-runtime-preview-service.ts',
-  'packages/agent-bundle/src/dev/mcp-app-routes.ts',
-  'packages/agent-bundle/src/dev/mcp-session-service.ts',
+  'packages/agent-bundle/src/dev/mcp-apps/mcp-app-routes.ts',
+  'packages/agent-bundle/src/dev/mcp-session/mcp-session-service.ts',
   'packages/agent-bundle/src/dev/project-service.ts',
   'packages/agent-bundle/src/dev/runtime-app-message-limits.ts',
   'packages/agent-bundle/src/dev/runtime-client-surface-proxy.ts',

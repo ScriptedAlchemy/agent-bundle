@@ -5,6 +5,7 @@ import fastGlob from 'fast-glob';
 import type { Ignore } from 'ignore';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { isErrno } from '../core/errors.ts';
 import {
   isProjectPathIgnored,
   readProjectIgnoreRules,
@@ -37,7 +38,7 @@ const findProjectRoot = async (skillDir: string): Promise<string> => {
       await access(join(current, '.gitignore'));
       return current;
     } catch (error: unknown) {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') {
+      if (!isErrno(error, 'ENOENT')) {
         throw error;
       }
     }

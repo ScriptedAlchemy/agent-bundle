@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { rspack } from '@rspack/core';
+import { rspack } from '@rslib/core';
 import { expect, it, rs } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
@@ -13,7 +13,7 @@ import { build } from './support/build.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
 import { buildWithRslib } from '../src/build/rslib.ts';
 import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
-import { parseArtifactHookIndex } from '../src/services/hook-index.ts';
+import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { NormalizationTargetRegistry, NormalizedPlugin } from '../src/core/types.ts';

@@ -1,6 +1,10 @@
 import { execFile as executeFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { isRecord } from '../core/strict-json.ts';
+import { escapeRegExp } from '../core/strings.ts';
+import { isMissingExecutableError } from './native-host-spine.ts';
+
 // Pure parsing and opt-in probing contract for subscription-backed native host CLIs.
 export type NativeHost = 'claude' | 'codex';
 
@@ -85,9 +89,6 @@ interface SemanticVersion {
   readonly prerelease?: readonly string[];
 }
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const isNativeHost = (value: unknown): value is NativeHost => value === 'claude' || value === 'codex';
 
 const isStringArray = (value: unknown): value is readonly string[] =>
@@ -143,8 +144,6 @@ const compareSemanticVersions = (left: SemanticVersion, right: SemanticVersion):
   return comparePrereleases(left.prerelease, right.prerelease);
 };
 
-const escapeRegularExpression = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-
 const sameStringArrays = (left: readonly string[], right: readonly string[]): boolean =>
   left.length === right.length && left.every((entry, index) => entry === right[index]);
 
@@ -177,7 +176,7 @@ const declaredCommands = (helpOutput: string): ReadonlySet<string> => Object.fre
 ));
 
 const hasExactToken = (value: string, token: string): boolean =>
-  new RegExp(`(?:^|[^A-Za-z0-9_-])${escapeRegularExpression(token)}(?![A-Za-z0-9_-])`, 'u').test(value);
+  new RegExp(`(?:^|[^A-Za-z0-9_-])${escapeRegExp(token)}(?![A-Za-z0-9_-])`, 'u').test(value);
 
 const missingHelpRequirement = (probe: HostContractHelpProbe, output: string): { readonly label: string; readonly values: readonly string[] } | undefined => {
   const options = (probe.requiredOptions ?? []).filter((option) => !declaredOptions(output).has(option));
@@ -457,9 +456,6 @@ const helpCommandFor = (manifest: HostContractManifest, probe: HostContractHelpP
   host: manifest.host,
   kind: 'help',
 });
-
-const isMissingExecutableError = (error: unknown): boolean =>
-  isRecord(error) && error.code === 'ENOENT';
 
 export const compareInstalledHostContract = async (
   manifestInput: unknown,

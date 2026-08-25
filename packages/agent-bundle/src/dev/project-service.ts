@@ -8,8 +8,6 @@ import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.t
 import { loadConfig } from '../config/load.ts';
 import { normalizeEvalConfig } from '../eval/config.ts';
 import {
-  configExtensionFiniteJsonDiagnosticMessage,
-  isConfigExtensionFiniteJsonError,
   normalizeProject,
 } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
@@ -60,6 +58,7 @@ export interface PreparedProject {
   readonly projectContext?: ProjectContext;
   readonly registry: TargetRegistry;
   readonly root: string;
+  readonly snapshotSource?: () => Promise<ProjectSourceSnapshot>;
   readonly source: SourceStatus;
 }
 
@@ -281,6 +280,11 @@ const sourceDiagnostic = (message: string, sourcePath: string): Diagnostic => Ob
   severity: 'error',
   sourcePath,
 });
+
+const configExtensionFiniteJsonDiagnosticMessage = 'A registered config extension must contain strict finite JSON data.';
+
+const isConfigExtensionFiniteJsonError = (error: unknown): boolean =>
+  error instanceof Error && error.message.startsWith('AB4500:');
 
 const runtimeDeclaration = (
   include: boolean,

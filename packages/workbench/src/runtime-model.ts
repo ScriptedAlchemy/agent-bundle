@@ -8,8 +8,8 @@ import type {
   DevRuntimeStatus,
   DevRuntimeSurface,
   RuntimeVector,
-} from '../../agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonValue, ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/dev/types.ts';
+} from '../../agent-bundle/src/contracts/runtime.ts';
+import type { JsonValue, ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/contracts/runtime.ts';
 import type { RuntimeBootstrap } from './runtime-client.ts';
 
 export type RuntimeInspectorTab = 'tree' | 'result' | 'flight' | 'protocol' | 'state' | 'diagnostics';

@@ -1,6 +1,6 @@
 # Agent Bundle design
 
-**Status:** Approved and implemented foundation; developer-workbench delivery verification is in progress
+**Status:** Approved and implemented foundation; developer-workbench delivery is verified by the repository CI gates
 
 **Date:** 2026-08-13
 

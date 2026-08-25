@@ -71,6 +71,9 @@ const mcpEntryName = (name: string): string => {
   return `mcp-${slug(name)}-${hash}.mjs`;
 };
 
+/** Anchored alias contract for generated target-local MCP entry modules. */
+export const mcpEntryAliasPattern = /^mcp\/(mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs)$/u;
+
 const isHookEntryList = (
   input: AgentBundleHookInput,
 ): input is readonly (string | AgentBundleHookEntry)[] => Array.isArray(input);

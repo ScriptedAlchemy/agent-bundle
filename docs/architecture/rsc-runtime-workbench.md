@@ -28,14 +28,15 @@ packages/
     src/core/project-context.ts
     src/core/types.ts
     src/dev/foreground-server.ts
-    src/dev/hook-playground-service.ts
     src/dev/mcp-app-action-validation.ts
-    src/dev/mcp-app-binding-service.ts
-    src/dev/mcp-app-preview-service.ts
-    src/dev/mcp-app-routes.ts
     src/dev/mcp-app-runtime-binding-service.ts
     src/dev/mcp-app-runtime-preview-service.ts
-    src/dev/mcp-session-service.ts
+    src/dev/mcp-apps/mcp-app-binding-service.ts
+    src/dev/mcp-apps/mcp-app-preview-service.ts
+    src/dev/mcp-apps/mcp-app-routes.ts
+    src/dev/mcp-session/mcp-session-service.ts
+    src/dev/playground/hook-playground-service.ts
+    src/dev/playground/playground-store.ts
     src/dev/project-service.ts
     src/dev/runtime-app-message-limits.ts
     src/dev/runtime-client-surface-proxy.ts
@@ -48,7 +49,6 @@ packages/
     src/dev/runtime-routes.ts
     src/dev/workbench-server.ts
     src/index.ts
-    src/services/playground-service.ts
     tests/dev-artifact-service.test.ts
     tests/dev-workbench-packaging.test.ts
     tests/dev-workbench.test.ts

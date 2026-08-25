@@ -1,7 +1,8 @@
+import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useState } from 'react';
 
-import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
-import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/dev/types.ts';
+import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
+import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/contracts/artifacts.ts';
 
 import { ArtifactClient, ArtifactClientError } from './artifact-client.ts';
 import {
@@ -33,8 +34,7 @@ export interface ArtifactInspectionResult {
 
 const noDiagnostics: readonly Diagnostic[] = Object.freeze([]);
 
-const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The artifact inspection request could not be completed.';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'The artifact inspection request could not be completed.');
 
 /**
  * A refused epoch reports why through its validation diagnostics, so AB8064 is a

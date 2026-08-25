@@ -1,10 +1,10 @@
 import { z } from 'zod';
 
-import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
+import type { EvalComparison } from '../../../agent-bundle/src/contracts/eval.ts';
 import {
   explicitInvocationProvenancePattern,
   semanticGraderIdentityPattern,
-} from '../../../agent-bundle/src/eval/provenance.ts';
+} from '../../../agent-bundle/src/contracts/eval.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import {
   nonnegativeIntegerSchema,

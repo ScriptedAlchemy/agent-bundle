@@ -1,6 +1,6 @@
 import { isCallToolResult } from '@modelcontextprotocol/client';
 
-import type { McpAppJsonValue, McpAppToolDefinition } from './mcp-app-binding-service.ts';
+import type { McpAppJsonValue, McpAppToolDefinition } from './mcp-apps/mcp-app-binding-service.ts';
 
 export interface McpAppResultInspection {
   readonly appVisible: McpAppJsonValue;

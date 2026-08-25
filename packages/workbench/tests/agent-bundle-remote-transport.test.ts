@@ -3,6 +3,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/client';
 
 import { AgentBundleRemoteTransport, dispatchAgentBundleMcpRequest } from '../src/mcp/agent-bundle-remote-transport.ts';
 import { McpRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { deferred, eventually } from './support/async.ts';
 
 interface RecordedRequest {
   readonly body: string | undefined;
@@ -14,11 +15,6 @@ interface HeldStream {
   readonly response: Response;
   close(): void;
   send(value: unknown): void;
-}
-
-interface Deferred<Value> {
-  readonly promise: Promise<Value>;
-  resolve(value: Value): void;
 }
 
 const json = (value: unknown, status = 200): Response => Response.json(value, { status });
@@ -44,14 +40,6 @@ const closedStream = (...entries: readonly unknown[]): Response => new Response(
   },
 }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
 
-const deferred = <Value>(): Deferred<Value> => {
-  let resolve!: (value: Value) => void;
-  const promise = new Promise<Value>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-};
-
 const cancellableStream = (): Readonly<{ readonly cancelled: () => boolean; readonly response: Response }> => {
   let wasCancelled = false;
   return Object.freeze({
@@ -62,14 +50,6 @@ const cancellableStream = (): Readonly<{ readonly cancelled: () => boolean; read
       },
     }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } }),
   });
-};
-
-const eventually = async (predicate: () => boolean, timeout = 300): Promise<void> => {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeout}ms.`);
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 1));
-  }
 };
 
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' });

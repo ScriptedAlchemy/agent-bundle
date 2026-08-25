@@ -1,7 +1,7 @@
 import { expect, it } from '@rstest/core';
 
-import { attachProjectEventLogs, createProjectDevLogger } from '../src/dev/dev-log-producers.ts';
-import { DevLogService } from '../src/dev/dev-log-service.ts';
+import { attachProjectEventLogs, createProjectDevLogger } from '../src/dev/logs/dev-log-producers.ts';
+import { DevLogService } from '../src/dev/logs/dev-log-service.ts';
 import { ProjectEventHub } from '../src/dev/events.ts';
 
 it('records project service events and derives build, artifact, and diagnostic records from the project hub', () => {

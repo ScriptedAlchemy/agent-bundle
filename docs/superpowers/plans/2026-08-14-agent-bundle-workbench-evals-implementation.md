@@ -1,6 +1,6 @@
 # Agent Bundle Workbench and Evals Implementation Plan
 
-**Status:** Implemented through Task 11; Task 12 delivery verification, authenticated native smokes, and packed-consumer verification remain in progress.
+**Status:** Implemented and delivered through Task 12. Delivery and packed-consumer verification run in repository CI; authenticated native smokes are intentionally opt-in (skip-gated) and run on demand via the self-hosted Native host smoke workflow.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -415,9 +415,10 @@ THIRD_PARTY_NOTICES
 
 ### Task 12: Optional agent-facing MCP and end-to-end packaged dogfood
 
-**Status (2026-08-18):** The optional Agent API and its thirteen-tool contract are implemented.
-Documentation is current; packed-consumer dogfood, native authenticated smokes, and the complete
-release gate remain the tracked delivery checks in Steps 4 and 6 below.
+**Status (2026-08-19):** The optional Agent API and its thirteen-tool contract are implemented.
+Documentation is current. Packed-consumer dogfood and the complete release gate run in repository
+CI (`npm run check:release`); native authenticated smokes are intentionally opt-in and run on
+demand via the self-hosted Native host smoke workflow.
 
 **Files:**
 - Create: `packages/agent-bundle/src/dev/agent-api.ts`

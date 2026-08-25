@@ -6,13 +6,13 @@ import { dirname, join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import {
-  PlaygroundService,
+  PlaygroundStore as PlaygroundService,
   PlaygroundServiceCloseError,
   PlaygroundSessionCloseError,
   type PlaygroundEventInput,
   type PlaygroundJsonObject,
   type PlaygroundServiceOptions,
-} from '../src/services/playground-service.ts';
+} from '../src/dev/playground/playground-store.ts';
 
 interface SessionIndex {
   readonly kind: 'agent-bundle-playground-session-index';

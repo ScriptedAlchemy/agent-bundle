@@ -51,6 +51,18 @@ overview and diagnostics, Skill documents, artifact tree and provenance with epo
 artifact-bound MCP playground with the raw protocol trace, a hook playground that runs the emitted
 wrapper, a durable ordered Playground trace with replay and export, and eval runs and comparisons.
 
+The same session is available programmatically through the public `startDevServer` export, which
+accepts the options the CLI flags map to (`root`, `port`, `open`, `agentApi`) and resolves to a
+`DevServerSession` exposing the loopback `url`, a `status()` snapshot, and `close()`:
+
+```ts
+import { startDevServer } from 'agent-bundle';
+
+const session = await startDevServer({ root: process.cwd(), port: 3100 });
+console.log(session.url);
+await session.close();
+```
+
 `script.run` is a production-mounted, trusted-local Playground operation. It runs only the selected
 manifest-owned emitted script for the selected target, in a managed workspace, and preserves bounded
 stdout/stderr, exit, cancellation, and raw event references. Native prompts choose a server catalog
@@ -219,5 +231,9 @@ Run the complete local delivery gate with `npm run check && npm run check:releas
 `npm run check:release` is release-only: its exact package-script components are
 `npm run pack:dry-run`, `npm run audit:release`, and `npm run test:packed`, and it does not replace
 `npm run check`.
+`npm run test:spot-check` is the fast end-to-end confidence gate: it builds, validates, and runs
+one deterministic eval against the checked-in micro fixture through the real CLI, with no native
+host and no opt-in environment gate. Native Claude/Codex smokes stay intentionally opt-in and
+skipped in ordinary CI.
 Publication is deliberately not scripted here: the release owner must decide the npm package
 name/scope, license, and `publishConfig` before publishing.

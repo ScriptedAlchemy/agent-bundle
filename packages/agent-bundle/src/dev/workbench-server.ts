@@ -4,34 +4,34 @@ import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { AgentApi } from './agent-api.ts';
-import { ArtifactInspectionService } from './artifact-inspection-service.ts';
+import { ArtifactInspectionService } from './artifacts/artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
-import { DevLogService } from './dev-log-service.ts';
-import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogger } from './dev-log-producers.ts';
+import { DevLogService } from './logs/dev-log-service.ts';
+import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogger } from './logs/dev-log-producers.ts';
 import { EpochStore } from './epoch-store.ts';
-import { EvalService } from './eval-service.ts';
+import { EvalService } from './eval/eval-service.ts';
 import { ProjectEventHub } from './events.ts';
-import { HookPlaygroundService } from './hook-playground-service.ts';
+import { HookPlaygroundService } from './playground/hook-playground-service.ts';
 import {
   startForegroundServer,
   type ForegroundCoordinator,
   type ForegroundServerOptions,
   type WorkbenchAssetSource,
 } from './foreground-server.ts';
-import { McpAppBindingService, type McpAppToolDefinition } from './mcp-app-binding-service.ts';
-import type { McpAppRoutePreviewService } from './mcp-app-routes.ts';
-import { McpAppPreviewService } from './mcp-app-preview-service.ts';
+import { McpAppBindingService, type McpAppToolDefinition } from './mcp-apps/mcp-app-binding-service.ts';
+import type { McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
+import { McpAppPreviewService } from './mcp-apps/mcp-app-preview-service.ts';
 import { McpAppRuntimeBindingService } from './mcp-app-runtime-binding-service.ts';
 import { McpAppRuntimePreviewService } from './mcp-app-runtime-preview-service.ts';
 import {
   createMcpAppSandboxProxy,
   type CreateMcpAppSandboxProxyOptions,
   type McpAppSandboxProxy,
-} from './mcp-app-sandbox.ts';
-import { McpSessionService } from './mcp-session-service.ts';
-import { NativePlaygroundService } from './native-playground-service.ts';
-import { PlaygroundOrchestrationService } from './playground-orchestration-service.ts';
-import { PlaygroundService } from '../services/playground-service.ts';
+} from './mcp-apps/mcp-app-sandbox.ts';
+import { McpSessionService } from './mcp-session/mcp-session-service.ts';
+import { NativePlaygroundService } from './playground/native-playground-service.ts';
+import { PlaygroundOrchestrationService } from './playground/playground-orchestration-service.ts';
+import { PlaygroundStore as PlaygroundService } from './playground/playground-store.ts';
 import { ProjectService } from './project-service.ts';
 import { DevRuntimeController } from './runtime-controller.ts';
 import {
@@ -46,7 +46,7 @@ import {
   type DevRuntimeClientSurfaceProxyBinding,
   type DevRuntimeEventInput,
 } from './runtime-provider.ts';
-import { ScriptPlaygroundService } from './script-playground-service.ts';
+import { ScriptPlaygroundService } from './playground/script-playground-service.ts';
 import { SkillDocumentService } from './skill-document-service.ts';
 import { createWorkbenchAssetSource } from './workbench-assets.ts';
 import type { Invalidation, ProjectStatus } from './types.ts';

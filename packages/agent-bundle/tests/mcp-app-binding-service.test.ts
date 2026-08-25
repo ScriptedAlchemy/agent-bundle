@@ -7,7 +7,7 @@ import {
   type McpAppSessionAuthority,
   type McpAppSessionLease,
   type McpAppToolDefinition,
-} from '../src/dev/mcp-app-binding-service.ts';
+} from '../src/dev/mcp-apps/mcp-app-binding-service.ts';
 
 interface SessionFixture {
   readonly calls: Array<{ readonly arguments: McpAppJsonValue | undefined; readonly name: string }>;

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 
@@ -578,7 +578,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
         },
         root: leftRoot,
         sourceInputs: left.projectContext?.sourceInputs ?? [],
-      })).toThrow(/(?:JSON values|cyclic values|plain JSON objects)/i);
+      })).toThrow(/JSON (?:values|objects)/i);
     }
   } finally {
     await Promise.all([
@@ -819,6 +819,40 @@ it('derives source revisions from authored bytes, including resources and invali
       rm(equivalentRoot, { force: true, recursive: true }),
       rm(invalidRoot, { force: true, recursive: true }),
     ]);
+  }
+});
+
+it('invalidates cached source hashes after a same-size rewrite with a restored mtime', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    '[Guide](guide.txt)',
+    '',
+  ].join('\n'));
+  const guide = join(root, 'skills', 'review', 'guide.txt');
+
+  try {
+    await writeFile(guide, 'one');
+    const canonicalTime = new Date(Math.floor(Date.now() / 1_000) * 1_000 - 10_000);
+    await utimes(guide, canonicalTime, canonicalTime);
+    const before = await stat(guide);
+    const service = new ProjectService({ root });
+    const initial = await service.prepare('build');
+
+    await writeFile(guide, 'two');
+    await utimes(guide, before.atime, before.mtime);
+    const rewritten = await stat(guide);
+    expect(rewritten.ino).toBe(before.ino);
+    expect(rewritten.mtimeMs).toBe(before.mtimeMs);
+    expect(rewritten.size).toBe(before.size);
+
+    const changed = await service.prepare('build');
+
+    expect(changed.source.revision).not.toBe(initial.source.revision);
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 

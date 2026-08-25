@@ -25,9 +25,9 @@ const expectedTree = `packages/
     src/config/normalize.ts
     src/core/types.ts
     src/dev/mcp-app-action-validation.ts
+    src/dev/playground/playground-store.ts
     src/dev/runtime-provider.ts
     src/index.ts
-    src/services/playground-service.ts
     tests/normalization.test.ts
     tests/playground-service.test.ts
     tests/runtime-provider.test.ts
@@ -79,7 +79,7 @@ describe('rsc runtime topology script', () => {
         'packages/agent-bundle/src/dev/mcp-app-action-validation.ts',
         'packages/agent-bundle/src/dev/runtime-provider.ts',
         'packages/agent-bundle/src/index.ts',
-        'packages/agent-bundle/src/services/playground-service.ts',
+        'packages/agent-bundle/src/dev/playground/playground-store.ts',
         'packages/agent-bundle/tests/normalization.test.ts',
         'packages/agent-bundle/tests/playground-service.test.ts',
         'packages/agent-bundle/tests/runtime-provider.test.ts',

@@ -4,8 +4,8 @@ import type {
   McpSessionOperation,
   McpSessionTraceEntry,
   McpSessionTraceReplayGap,
-} from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
-import type { DevRuntimeMcpAppRunBinding, RuntimeVector } from '../../../agent-bundle/src/dev/runtime-protocol.ts';
+} from '../../../agent-bundle/src/contracts/mcp-session.ts';
+import type { DevRuntimeMcpAppRunBinding, RuntimeVector } from '../../../agent-bundle/src/contracts/runtime.ts';
 
 export type McpBrowserSessionBinding =
   | McpSessionBinding

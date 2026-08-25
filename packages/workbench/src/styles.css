@@ -177,7 +177,7 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
 .skill-detail { border-top: 1px solid #d9dee7; padding-top: 27px; }
 .skill-detail-heading { align-items: flex-start; display: flex; gap: 24px; justify-content: space-between; }
 .skill-eyebrow { color: #0b5bd3; font-size: 12px; font-weight: 800; letter-spacing: .08em; margin: 0 0 7px; text-transform: uppercase; }
-.skill-detail h1 { font-size: clamp(28px, 3vw, 36px); }
+.skill-detail-heading h2 { color: #141821; font-size: clamp(28px, 3vw, 36px); font-weight: 700; letter-spacing: -0.055em; line-height: 1.08; margin: 0; text-transform: none; }
 .skill-description { color: #4f5866; font-size: 16px; margin: 9px 0 0; }
 .skill-provenance { border: 1px solid #c9d4e4; border-radius: 999px; color: #375271; font-size: 12px; font-weight: 750; padding: 5px 9px; text-transform: capitalize; }
 .skill-frontmatter { border-bottom: 1px solid #d9dee7; border-top: 1px solid #d9dee7; display: grid; gap: 0; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin: 25px 0 0; }

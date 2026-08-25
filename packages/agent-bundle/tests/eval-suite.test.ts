@@ -13,7 +13,7 @@ import {
   resolveEvalAssertions,
   type EvalTrialEvidence,
 } from '../src/eval/index.ts';
-import type { DraftEvalCase } from '../src/services/playground-service.ts';
+import type { DraftEvalCase } from '../src/dev/playground/playground-store.ts';
 
 const hosts = Object.freeze({
   claude: Object.freeze({ model: 'claude-sonnet-4-5' }),

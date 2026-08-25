@@ -16,7 +16,7 @@ import {
   type AgentApiEpochReference,
   type AgentApiOptions,
 } from '../src/dev/agent-api.ts';
-import { EvalService } from '../src/dev/eval-service.ts';
+import { EvalService } from '../src/dev/eval/eval-service.ts';
 import { ForegroundServerCloseError, ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
@@ -1083,7 +1083,11 @@ it('keeps an initialized official stateless transport usable after the fixed URL
     await initial.close();
     await expect(fetch(`${initial.url}/mcp`, { method: 'POST' })).rejects.toThrow();
     restarted = await startApi({ port });
-    expect((await client.listTools()).tools[0]).toMatchObject({ name: 'project_status' });
+    // The client may first dispatch onto the pooled keep-alive socket the closed server
+    // already finished; one retry gets a fresh connection and proves the initialized
+    // client keeps working without reconnecting or re-initializing the transport.
+    const tools = await client.listTools().catch(() => client.listTools());
+    expect(tools.tools[0]).toMatchObject({ name: 'project_status' });
   } finally {
     await client.close();
     await restarted?.close();

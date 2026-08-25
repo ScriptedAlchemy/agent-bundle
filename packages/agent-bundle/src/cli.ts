@@ -407,11 +407,11 @@ export const runCli = async (
     mcpCommand.command('list').description('List tools from one MCP server'),
     true,
   ).requiredOption('--server <server>', 'MCP server name');
-  mcpListCommand.action(async (options: ArtifactCommandOptions & { readonly server: string }) => {
+  mcpListCommand.action(async (options: ArtifactCommandOptions & { readonly server: string; readonly target: string }) => {
     const result = await listMcp({
       ...artifactOptions(options),
       server: options.server,
-      target: options.target!,
+      target: options.target,
     });
     if (options.json === true) writeMachine(stdout, result);
     else stdout.write(`Listed ${result.tools.length} tool(s) from ${options.server}\n`);
@@ -427,13 +427,14 @@ export const runCli = async (
     .option('--input-file <path>', 'JSON object input file');
   mcpInvokeCommand.action(async (options: ArtifactCommandOptions & JsonInputOptions & {
     readonly server: string;
+    readonly target: string;
     readonly tool: string;
   }) => {
     const result = await invokeMcp({
       ...artifactOptions(options),
       input: await parseJsonObject(options),
       server: options.server,
-      target: options.target!,
+      target: options.target,
       tool: options.tool,
     });
     if (options.json === true) writeMachine(stdout, result);
@@ -459,12 +460,13 @@ export const runCli = async (
     .option('--input-file <path>', 'JSON object input file');
   hooksSimulateCommand.action(async (options: ArtifactCommandOptions & JsonInputOptions & {
     readonly hook: string;
+    readonly target: string;
   }) => {
     const result = await simulateHook({
       ...artifactOptions(options),
       hook: options.hook,
       input: await parseJsonObject(options),
-      target: options.target!,
+      target: options.target,
     });
     if (options.json === true) writeMachine(stdout, result);
     else stdout.write(`Simulated ${options.hook}\n`);

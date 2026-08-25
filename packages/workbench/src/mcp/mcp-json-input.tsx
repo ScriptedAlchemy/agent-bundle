@@ -1,6 +1,6 @@
 import React, { type Ref, useState } from 'react';
 
-import type { JsonObject, JsonValue } from '../../../agent-bundle/src/dev/types.ts';
+import type { JsonObject, JsonValue } from '../../../agent-bundle/src/contracts/runtime.ts';
 
 export type ImmutableJsonValue = JsonValue;
 export type ImmutableJsonRecord = JsonObject;

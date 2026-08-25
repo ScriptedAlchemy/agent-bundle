@@ -3,7 +3,9 @@ import { link, lstat, mkdir, open, readFile, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
+import { publishFileByLink } from '../core/durable-fs.ts';
+import { CodedError, isErrno } from '../core/errors.ts';
+import { acquireOwnerLockFile, isProcessAlive, ownerLockRaceLost } from '../core/owner-lock.ts';
 
 export interface DevLockOwner {
   readonly createdAt: string;
@@ -30,14 +32,11 @@ export interface DevLockStorage {
 
 export type DevLockErrorCode = 'DEV_LOCK_HELD' | 'DEV_LOCK_INVALID';
 
-export class DevLockError extends Error {
-  readonly code: DevLockErrorCode;
+export class DevLockError extends CodedError<DevLockErrorCode> {
   readonly owner?: DevLockOwner;
 
   constructor(code: DevLockErrorCode, message: string, owner?: DevLockOwner) {
-    super(message);
-    this.name = 'DevLockError';
-    this.code = code;
+    super('DevLockError', code, message);
     this.owner = owner;
   }
 }
@@ -49,15 +48,6 @@ const defaultStorage: DevLockStorage = Object.freeze({ link, lstat, mkdir, open,
 interface RecoveryRecord {
   readonly owner: DevLockOwner;
 }
-
-const isProcessRunning = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return !isErrno(error, 'ESRCH');
-  }
-};
 
 const parseOwnerValue = (value: unknown, projectRoot: string): DevLockOwner | undefined => {
   try {
@@ -119,17 +109,7 @@ const parseRecoveryRecord = (value: string, projectRoot: string): RecoveryRecord
 const candidatePathFor = (path: string, nonce: string): string =>
   join(dirname(path), `.${basename(path)}.candidate-${nonce}`);
 
-const syncDirectory = async (storage: DevLockStorage, path: string): Promise<void> => {
-  const handle = await storage.open(path, 'r');
-  try {
-    await handle.sync();
-  } catch (error) {
-    if (process.platform === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
-    throw error;
-  } finally {
-    await handle.close();
-  }
-};
+const candidateCleanupFailedMessage = 'Development lock candidate cleanup failed.';
 
 const writeCompleteExclusive = async (
   storage: DevLockStorage,
@@ -138,67 +118,43 @@ const writeCompleteExclusive = async (
   nonce: string,
 ): Promise<boolean> => {
   const candidate = candidatePathFor(path, nonce);
-  const handle = await storage.open(candidate, 'wx', 0o600);
   try {
-    await handle.writeFile(contents, 'utf8');
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-
-  let published = false;
-  let publicationFailure: unknown;
-  try {
-    await storage.link(candidate, path);
-    published = true;
+    return await publishFileByLink(path, contents, {
+      link: storage.link,
+      open: storage.open,
+      openExclusive: storage.open,
+      publicationCleanupFailed: 'Development lock publication and cleanup both failed.',
+      remove: storage.remove,
+      // Content-conditional: only this acquisition's published record is ever
+      // unlinked, never a lock another process published after winning a race.
+      rollback: async () => { await removeIfOwned(storage, path, contents); },
+      stagingCleanupFailed: candidateCleanupFailedMessage,
+      stagingPath: candidate,
+    });
   } catch (error) {
-    if (!isErrno(error, 'EEXIST')) publicationFailure = error;
-  }
-  let candidateCleanupFailure: unknown;
-  try {
-    await storage.remove(candidate, { force: true });
-  } catch (error) {
-    candidateCleanupFailure = error;
-  }
-  if (publicationFailure !== undefined) {
-    if (candidateCleanupFailure !== undefined) {
+    // publishFileByLink runs the rollback only when a primary failure follows
+    // a successful link; a candidate-cleanup-only failure still leaves the
+    // published lock behind with no handle to release it. Unpublish both
+    // records content-conditionally so a failed acquisition leaks nothing —
+    // a raced winner's differing contents are never touched.
+    if (!(error instanceof AggregateError) || error.message !== candidateCleanupFailedMessage) throw error;
+    const rollbackFailures: unknown[] = [];
+    for (const record of [path, candidate]) {
+      try {
+        await removeIfOwned(storage, record, contents);
+      } catch (rollbackFailure) {
+        rollbackFailures.push(rollbackFailure);
+      }
+    }
+    if (rollbackFailures.length > 0) {
       throw new AggregateError(
-        [publicationFailure, candidateCleanupFailure],
-        'Development lock publication and candidate cleanup both failed.',
-        { cause: publicationFailure },
-      );
-    }
-    throw publicationFailure;
-  }
-  if (!published) {
-    if (candidateCleanupFailure !== undefined) throw candidateCleanupFailure;
-    return false;
-  }
-
-  try {
-    await syncDirectory(storage, dirname(path));
-  } catch (error) {
-    const cleanupFailures: unknown[] = [];
-    try {
-      await removeIfOwned(storage, path, contents);
-    } catch (cleanupFailure) {
-      cleanupFailures.push(cleanupFailure);
-    }
-    try {
-      await removeIfOwned(storage, candidate, contents);
-    } catch (cleanupFailure) {
-      cleanupFailures.push(cleanupFailure);
-    }
-    if (cleanupFailures.length > 0) {
-      throw new AggregateError(
-        [error, ...cleanupFailures],
-        'Development lock publication and rollback both failed.',
+        [error, ...rollbackFailures],
+        'Development lock candidate cleanup and rollback both failed.',
         { cause: error },
       );
     }
     throw error;
   }
-  return true;
 };
 
 const removeIfOwned = async (storage: DevLockStorage, path: string, contents: string): Promise<void> => {
@@ -211,8 +167,11 @@ const removeIfOwned = async (storage: DevLockStorage, path: string, contents: st
   }
 };
 
-const yieldToFilesystem = async (): Promise<void> => {
-  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+const initialRecoveryRetryDelayMs = 25;
+const maximumRecoveryRetryDelayMs = 250;
+
+const sleep = async (delayMs: number): Promise<void> => {
+  await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, delayMs));
 };
 
 const recoveryContentsFor = (owner: DevLockOwner): string => `${stableJson({ owner })}\n`;
@@ -224,29 +183,44 @@ const acquireRecoveryGate = async (
   probeProcess: (pid: number) => boolean,
 ): Promise<string> => {
   const contents = recoveryContentsFor(owner);
-  for (;;) {
-    if (await writeCompleteExclusive(storage, recoveryPath, contents, owner.nonce)) return contents;
-
-    let currentContents: string;
-    try {
-      currentContents = await storage.readFile(recoveryPath, 'utf8');
-    } catch (error) {
-      if (isErrno(error, 'ENOENT')) continue;
-      throw error;
-    }
-    const recovery = parseRecoveryRecord(currentContents, owner.projectRoot);
-    if (recovery === undefined) {
-      throw new DevLockError(
-        'DEV_LOCK_INVALID',
-        'The development lock recovery gate does not contain valid owner metadata.',
-      );
-    }
-    if (probeProcess(recovery.owner.pid)) {
-      await yieldToFilesystem();
-      continue;
-    }
-    await removeIfOwned(storage, recoveryPath, currentContents);
-  }
+  let retryDelayMs = initialRecoveryRetryDelayMs;
+  return acquireOwnerLockFile<string>({
+    // Acquisition never concedes: it waits out live holders and retries until
+    // the exclusive create wins or the contention judge throws, so the
+    // exhausted error is unreachable.
+    attempts: Number.POSITIVE_INFINITY,
+    // A lost link race routes to the contention judge via the sentinel.
+    create: async () =>
+      await writeCompleteExclusive(storage, recoveryPath, contents, owner.nonce)
+        ? contents
+        : ownerLockRaceLost,
+    exhausted: () =>
+      new DevLockError('DEV_LOCK_HELD', 'The development lock recovery gate could not be acquired.'),
+    onContention: async () => {
+      let currentContents: string;
+      try {
+        currentContents = await storage.readFile(recoveryPath, 'utf8');
+      } catch (error) {
+        if (isErrno(error, 'ENOENT')) return undefined;
+        throw error;
+      }
+      const recovery = parseRecoveryRecord(currentContents, owner.projectRoot);
+      if (recovery === undefined) {
+        throw new DevLockError(
+          'DEV_LOCK_INVALID',
+          'The development lock recovery gate does not contain valid owner metadata.',
+        );
+      }
+      if (probeProcess(recovery.owner.pid)) {
+        // A live holder releases the gate on its own schedule; back off instead of busy-waiting.
+        await sleep(retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, maximumRecoveryRetryDelayMs);
+        return undefined;
+      }
+      await removeIfOwned(storage, recoveryPath, currentContents);
+      return undefined;
+    },
+  });
 };
 
 export class DevLock {
@@ -320,7 +294,7 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
     projectRoot,
   });
   const contents = `${stableJson(owner)}\n`;
-  const probeProcess = options.probeProcess ?? isProcessRunning;
+  const probeProcess = options.probeProcess ?? isProcessAlive;
   const recoveryPath = `${path}${recoverySuffix}`;
   const directoryPath = dirname(path);
   await storage.mkdir(directoryPath, { recursive: true });
@@ -331,61 +305,70 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
     );
   }
 
-  for (;;) {
-    if (await writeCompleteExclusive(storage, path, contents, owner.nonce)) {
-      return new DevLock(path, recoveryPath, contents, owner, probeProcess, storage);
-    }
-
-    let currentContents: string;
-    try {
-      currentContents = await storage.readFile(path, 'utf8');
-    } catch (error) {
-      if (isErrno(error, 'ENOENT')) continue;
-      throw error;
-    }
-    const currentOwner = parseOwner(currentContents, projectRoot);
-    if (currentOwner === undefined) {
-      throw new DevLockError(
-        'DEV_LOCK_INVALID',
-        'The existing development lock does not contain valid owner metadata.',
-      );
-    }
-    if (probeProcess(currentOwner.pid)) {
-      throw new DevLockError(
-        'DEV_LOCK_HELD',
-        `Another agent-bundle dev process owns this project (pid ${currentOwner.pid}).`,
-        currentOwner,
-      );
-    }
-
-    const recoveryContents = await acquireRecoveryGate(storage, recoveryPath, owner, probeProcess);
-    try {
-      let currentDuringRecovery: string;
+  return acquireOwnerLockFile<DevLock>({
+    // Acquisition never concedes: it retries until the exclusive create wins
+    // or the contention judge throws, so the exhausted error is unreachable.
+    attempts: Number.POSITIVE_INFINITY,
+    // A lost link race routes to the contention judge via the sentinel.
+    create: async () =>
+      await writeCompleteExclusive(storage, path, contents, owner.nonce)
+        ? new DevLock(path, recoveryPath, contents, owner, probeProcess, storage)
+        : ownerLockRaceLost,
+    exhausted: () =>
+      new DevLockError('DEV_LOCK_HELD', 'The development lock could not be acquired.'),
+    onContention: async () => {
+      let currentContents: string;
       try {
-        currentDuringRecovery = await storage.readFile(path, 'utf8');
+        currentContents = await storage.readFile(path, 'utf8');
       } catch (error) {
-        if (isErrno(error, 'ENOENT')) continue;
+        if (isErrno(error, 'ENOENT')) return undefined;
         throw error;
       }
-      if (currentDuringRecovery !== currentContents) continue;
-      const ownerDuringRecovery = parseOwner(currentDuringRecovery, projectRoot);
-      if (ownerDuringRecovery === undefined) {
+      const currentOwner = parseOwner(currentContents, projectRoot);
+      if (currentOwner === undefined) {
         throw new DevLockError(
           'DEV_LOCK_INVALID',
           'The existing development lock does not contain valid owner metadata.',
         );
       }
-      if (probeProcess(ownerDuringRecovery.pid)) continue;
-      await removeIfOwned(storage, path, currentContents);
-      await removeIfOwned(
-        storage,
-        candidatePathFor(path, ownerDuringRecovery.nonce),
-        currentContents,
-      );
-    } catch (error) {
-      if (!isErrno(error, 'ENOENT')) throw error;
-    } finally {
-      await removeIfOwned(storage, recoveryPath, recoveryContents);
-    }
-  }
+      if (probeProcess(currentOwner.pid)) {
+        throw new DevLockError(
+          'DEV_LOCK_HELD',
+          `Another agent-bundle dev process owns this project (pid ${currentOwner.pid}).`,
+          currentOwner,
+        );
+      }
+
+      const recoveryContents = await acquireRecoveryGate(storage, recoveryPath, owner, probeProcess);
+      try {
+        let currentDuringRecovery: string;
+        try {
+          currentDuringRecovery = await storage.readFile(path, 'utf8');
+        } catch (error) {
+          if (isErrno(error, 'ENOENT')) return undefined;
+          throw error;
+        }
+        if (currentDuringRecovery !== currentContents) return undefined;
+        const ownerDuringRecovery = parseOwner(currentDuringRecovery, projectRoot);
+        if (ownerDuringRecovery === undefined) {
+          throw new DevLockError(
+            'DEV_LOCK_INVALID',
+            'The existing development lock does not contain valid owner metadata.',
+          );
+        }
+        if (probeProcess(ownerDuringRecovery.pid)) return undefined;
+        await removeIfOwned(storage, path, currentContents);
+        await removeIfOwned(
+          storage,
+          candidatePathFor(path, ownerDuringRecovery.nonce),
+          currentContents,
+        );
+      } catch (error) {
+        if (!isErrno(error, 'ENOENT')) throw error;
+      } finally {
+        await removeIfOwned(storage, recoveryPath, recoveryContents);
+      }
+      return undefined;
+    },
+  });
 };

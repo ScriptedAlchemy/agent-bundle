@@ -1,5 +1,5 @@
 import { stableJson } from '../core/digest.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runClaudeStreamProcess, type ClaudeProcessOptions } from './claude-process.ts';
 import { normalizeClaudeStream, type ClaudeTraceEvent } from './claude-stream.ts';
 import { claudeSemanticGraderContractRevision, isEvalScriptOutcome } from './graders.ts';
@@ -28,9 +28,6 @@ export interface ClaudeSemanticGraderRun {
   readonly raw: ClaudeSemanticGraderRawOutput;
   readonly result?: EvalScriptOutcome;
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** The semantic response has one strict terminal stream-json result envelope, never an assistant-text fallback. */
 const terminalSemanticResult = (raw: string): string | undefined => {

@@ -6,10 +6,10 @@ import type {
   PlaygroundReplay,
   PlaygroundSession,
   PlaygroundTraceEvent,
-} from '../../../agent-bundle/src/services/playground-service.ts';
+} from '../../../agent-bundle/src/contracts/playground.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
-import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
-import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/dev/native-playground-service.ts';
+import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/contracts/playground.ts';
+import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/contracts/playground.ts';
 
 export interface PlaygroundClientOptions {
   readonly foreground: ForegroundRequestAuthority;

@@ -1,10 +1,11 @@
+import { isAbortError, errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
 import type {
   HookPlaygroundBinding,
   HookPlaygroundHook,
   HookPlaygroundReplay,
-} from '../../../agent-bundle/src/dev/hook-playground-service.ts';
+} from '../../../agent-bundle/src/contracts/hooks.ts';
 
 import {
   parseRawJsonRecord,
@@ -31,11 +32,7 @@ export interface HooksPageProps {
 
 const draftError = 'Canonical hook input must be a JSON object.';
 
-const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The hook playground request could not be completed.';
-
-const isAbortError = (reason: unknown): boolean =>
-  reason instanceof Error && reason.name === 'AbortError';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'The hook playground request could not be completed.');
 
 export type HookInputMode = 'fixture' | 'inline';
 
@@ -225,7 +222,7 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
     await run((signal) => runHookReplay(client, saved, signal));
   };
 
-  return <main className="hooks-content">
+  return <div className="hooks-content">
     <div className="page-heading hooks-page-heading">
       <div>
         <h1>Hooks</h1>
@@ -277,5 +274,5 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
         </section>
         <HookSimulationView view={view} />
       </>}
-  </main>;
+  </div>;
 };

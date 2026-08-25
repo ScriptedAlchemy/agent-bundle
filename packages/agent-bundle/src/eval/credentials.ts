@@ -1,40 +1,13 @@
-const providerCredentialPatterns = Object.freeze([
-  /\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b/iu,
-  /\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b/iu,
-  /\bbearer[ \t]+[a-z0-9._~+/=-]{20,}\b/iu,
-]);
+import { containsProviderCredential, isCredentialKey } from '../core/credentials.ts';
+import { isRecord } from '../core/strict-json.ts';
 
-const credentialAssignmentPattern = /((?:["']?)(?:api[-_ ]?key|api[-_ ]?token|access[-_ ]?token|authorization|credential|password|secret|token)(?:["']?)\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n]+)/giu;
+export { isCredentialKey, redactCredentialText as redactEvalCredentialText } from '../core/credentials.ts';
 
 const structuralEnvironmentKeys = new Set(['codex_home', 'home', 'path']);
 
-const credentialKeywords = Object.freeze([
-  'authorization',
-  'credential',
-  'credentials',
-  'password',
-  'secret',
-  'token',
-]);
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-/** Mirrors the playground service key heuristic so eval configuration cannot become a credential surface. */
-export const isCredentialKey = (key: string): boolean => {
-  const segments = key
-    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
-    .toLocaleLowerCase('en-US')
-    .split(/[^a-z0-9]+/u)
-    .filter((segment) => segment.length > 0);
-  const compact = segments.join('');
-  return segments.some((segment) => credentialKeywords.includes(segment))
-    || /(?:apikey|apitoken|authtoken|accesstoken)$/u.test(compact);
-};
-
 export const findCredentialConfiguration = (value: unknown, path = ''): string | undefined => {
   if (typeof value === 'string') {
-    return providerCredentialPatterns.some((pattern) => pattern.test(value)) ? (path === '' ? 'value' : path) : undefined;
+    return containsProviderCredential(value) ? (path === '' ? 'value' : path) : undefined;
   }
   if (Array.isArray(value)) {
     for (const [index, item] of value.entries()) {
@@ -62,15 +35,3 @@ export const withoutEvalCredentialEnvironment = (
     structuralEnvironmentKeys.has(name.toLocaleLowerCase('en-US'))
     || (!isCredentialKey(name) && (value === undefined || findCredentialConfiguration(value) === undefined))),
 ));
-
-/** Raw process output remains useful evidence after known credential material is irreversibly removed. */
-export const redactEvalCredentialText = (value: string): string => {
-  let redacted = value.replace(credentialAssignmentPattern, (_match, prefix: string, assigned: string) => {
-    const quote = assigned[0] === '"' || assigned[0] === "'" ? assigned[0] : '';
-    return `${prefix}${quote}[REDACTED]${quote}`;
-  });
-  for (const pattern of providerCredentialPatterns) {
-    redacted = redacted.replace(new RegExp(pattern.source, `${pattern.flags}g`), '[REDACTED]');
-  }
-  return redacted;
-};

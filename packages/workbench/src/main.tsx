@@ -2,12 +2,12 @@ import { type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type R
 import { createRoot } from 'react-dom/client';
 import { MantineProvider } from '@mantine/core';
 
-import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-bundle/src/dev/mcp-app-profile-descriptors.ts';
-import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
-import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
-import type { NativePlaygroundCatalog } from '../../agent-bundle/src/dev/native-playground-service.ts';
+import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
+import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { PlaygroundRun } from '../../agent-bundle/src/contracts/playground.ts';
+import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
+import type { NativePlaygroundCatalog } from '../../agent-bundle/src/contracts/playground.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
 import { ComparisonClient } from './comparisons/comparison-client.ts';
@@ -25,7 +25,7 @@ import {
   type RuntimeAppBridgeTrace,
 } from './inspector/adapter/runtime-app-bridge.ts';
 import { McpAppClient, type McpAppConsentChallenge } from './mcp/mcp-app-client.ts';
-import type { McpAppConsentChallenge as RuntimeMcpAppConsentChallenge } from '../../agent-bundle/src/dev/mcp-app-sandbox.ts';
+import type { McpAppConsentChallenge as RuntimeMcpAppConsentChallenge } from '../../agent-bundle/src/contracts/mcp-apps.ts';
 import { RuntimeConsentDialog } from './mcp/runtime-consent-dialog.tsx';
 import { createRuntimeConsentQueue, type RuntimeConsentQueue, type RuntimeConsentQueueCurrent } from './mcp/runtime-consent-queue.ts';
 import { McpAppPreview } from './mcp/mcp-app-preview.tsx';

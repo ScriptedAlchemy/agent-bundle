@@ -8,6 +8,8 @@ import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
+import { closeServer } from './support/http.ts';
+
 const workspaceRoot = process.cwd();
 const comparisonsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'comparisons', 'comparisons-page.tsx');
 const browserTimeout = 8_000;
@@ -25,12 +27,6 @@ const listen = async (server: Server): Promise<string> => {
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('Comparison client-scope fixture did not receive a TCP address.');
   return `http://127.0.0.1:${address.port}`;
-};
-
-const closeServer = async (server: Server): Promise<void> => {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => error === undefined ? resolve() : reject(error));
-  });
 };
 
 const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Promise<void>; readonly url: string }> => {
@@ -162,6 +158,7 @@ e2e('aborts and hides a stale comparison synchronously when its client is replac
     await expect(page.locator('#comparison-base')).toHaveValue('client-b-base');
     expect(pageErrors).toEqual([]);
   } finally {
+    await page.close();
     await fixture.close();
   }
 });
@@ -197,6 +194,7 @@ e2e('aborts an active comparison when only its Eval client is replaced', { timeo
     }).__comparisonsClientScopeFixture.resolveRunsB());
     await expect(page.locator('#comparison-base')).toHaveValue('client-b-base');
   } finally {
+    await page.close();
     await fixture.close();
   }
 });

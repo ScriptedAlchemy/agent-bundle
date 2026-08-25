@@ -160,7 +160,17 @@ const runDisposableEpochSpike = async (root: string): Promise<EpochEvidence> => 
 it('generates and validates local epoch publication and lock-ownership evidence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-epoch-spike-'));
   try {
-    expect(await runDisposableEpochSpike(root)).toEqual(fixture);
+    // The recorded environment stamp names the machine that generated the fixture; the
+    // durable contract is the operations evidence, so compare against the live runtime.
+    expect(await runDisposableEpochSpike(root)).toEqual({
+      ...fixture,
+      environment: {
+        architecture: process.arch,
+        nodeVersion: process.version,
+        platform: process.platform,
+        runtime: 'node',
+      },
+    });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

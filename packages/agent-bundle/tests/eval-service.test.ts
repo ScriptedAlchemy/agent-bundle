@@ -9,7 +9,7 @@ import {
   EvalServiceBackgroundFailureOverflowError,
   EvalServiceBackgroundFailureRetention,
   EvalServiceError,
-} from '../src/dev/eval-service.ts';
+} from '../src/dev/eval/eval-service.ts';
 import { evalCaseFromDraft } from '../src/eval/index.ts';
 import { EvalRunWriter } from '../src/eval/run-store.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';

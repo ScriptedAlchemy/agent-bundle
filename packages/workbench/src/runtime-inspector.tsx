@@ -1,7 +1,7 @@
 import React, { useRef, useState, type KeyboardEvent } from 'react';
 
-import type { DevRuntimeDiagnostic, DevRuntimeRun, DevRuntimeStatus, DevRuntimeSurface, DevRuntimeTreeNode } from '../../agent-bundle/src/dev/runtime-protocol.ts';
-import { InspectorRuntimeEvidence } from './inspector/adapter/inspector-session-adapter-entry.ts';
+import type { DevRuntimeDiagnostic, DevRuntimeRun, DevRuntimeStatus, DevRuntimeSurface, DevRuntimeTreeNode } from '../../agent-bundle/src/contracts/runtime.ts';
+import { InspectorRuntimeEvidence } from './inspector/adapter/inspector-session-adapter.tsx';
 import type { RuntimeInspectorTab } from './runtime-model.ts';
 
 export interface RuntimeInspectorProps {

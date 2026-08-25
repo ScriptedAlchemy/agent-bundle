@@ -69,6 +69,7 @@ const resourcePath = (rawReference: string): string | undefined => {
   try {
     return posix.normalize(decodeURIComponent(pathOnly));
   } catch {
+    // Malformed percent-encoding still yields the literal path for lookup.
     return posix.normalize(pathOnly);
   }
 };

@@ -9,7 +9,7 @@ import type {
   RuntimeVector,
 } from '../../agent-bundle/src/dev/index.ts';
 import type { ProjectEventMessage } from '../../agent-bundle/src/dev/types.ts';
-import { MCP_APP_PROFILE_DESCRIPTORS } from '../../agent-bundle/src/dev/mcp-app-host-profiles.ts';
+import { MCP_APP_PROFILE_DESCRIPTORS } from '../../agent-bundle/src/dev/mcp-apps/mcp-app-host-profiles.ts';
 import type { RuntimeBootstrap } from '../src/runtime-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { RuntimeClient } from '../src/runtime-client.ts';

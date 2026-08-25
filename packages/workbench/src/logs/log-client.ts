@@ -3,13 +3,13 @@ import type {
   DevLogRecord,
   DevLogReplay,
   DevLogReplayGap,
-} from '../../../agent-bundle/src/dev/dev-log-service.ts';
+} from '../../../agent-bundle/src/contracts/dev-logs.ts';
 import {
   parseJsonWithoutDuplicateKeys,
   snapshotStrictJsonValue,
   type JsonValue,
-} from '../../../agent-bundle/src/core/strict-json.ts';
-import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
+} from '../../../agent-bundle/src/contracts/strict-json.ts';
+import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
 import {
   awaitWithAbort,
   ForegroundRouteClientError,

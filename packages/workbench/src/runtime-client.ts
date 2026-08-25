@@ -17,7 +17,7 @@ import type {
   DevRuntimeTreeNode,
   DevRuntimeTraceSpan,
   RuntimeVector,
-} from '../../agent-bundle/src/dev/runtime-protocol.ts';
+} from '../../agent-bundle/src/contracts/runtime.ts';
 import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp/mcp-route-client.ts';
 
 export type RuntimeBootstrap =

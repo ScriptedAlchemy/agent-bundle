@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { provenanceIdentifierPattern } from '../../agent-bundle/src/eval/provenance.ts';
+import { provenanceIdentifierPattern } from '../../agent-bundle/src/contracts/eval.ts';
 
 export const safeIntegerSchema = z.number().refine(Number.isSafeInteger);
 export const nonnegativeIntegerSchema = safeIntegerSchema.refine((value) => value >= 0);

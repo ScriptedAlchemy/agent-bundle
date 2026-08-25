@@ -7,7 +7,7 @@ import type {
   HookPlaygroundDiagnosticResult,
   HookPlaygroundHook,
   HookPlaygroundSimulation,
-} from '../../agent-bundle/src/dev/hook-playground-service.ts';
+} from '../../agent-bundle/src/dev/playground/hook-playground-service.ts';
 import { HookClient } from '../src/hooks/hook-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { HookRequestLifecycle, HookSimulationView, HooksPage, runHookReplay, runHookSimulation } from '../src/hooks/hooks-page.tsx';
@@ -114,7 +114,9 @@ it('renders the hook controls and no request state when no epoch is active', () 
   expect(markup).toContain('No artifact epoch is active');
   expect(markup).not.toContain('id="hook-binding"');
   expect(markup).not.toContain('Run simulation');
-  expect(markup).toContain('<main');
+  expect(markup).toContain('class="hooks-content"');
+  // The single main landmark belongs to the WorkbenchScreen shell, not the page.
+  expect(markup).not.toContain('<main');
 });
 
 it('renders the simulation and replay controls for an active epoch', () => {

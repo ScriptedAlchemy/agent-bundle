@@ -4,7 +4,7 @@ import type {
   HookPlaygroundDiagnosticResult,
   HookPlaygroundHook,
   HookPlaygroundSimulation,
-} from '../../agent-bundle/src/dev/hook-playground-service.ts';
+} from '../../agent-bundle/src/dev/playground/hook-playground-service.ts';
 import {
   canonicalIntentRowsFor,
   hookOptionKeyFor,

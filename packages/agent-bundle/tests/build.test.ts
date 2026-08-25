@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -15,6 +14,7 @@ import type { TargetAdapter } from '../src/adapters/types.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
+import { sha256 } from './support/sha256.ts';
 
 interface TestProject {
   readonly assetPath: string;
@@ -32,9 +32,6 @@ interface FileDigest {
   readonly path: string;
   readonly sha256: string;
 }
-
-const sha256 = (contents: Uint8Array): string =>
-  createHash('sha256').update(contents).digest('hex');
 
 const testAdapterMetadata = Object.freeze({
   adapterRevision: 'test',

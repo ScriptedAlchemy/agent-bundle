@@ -79,11 +79,7 @@ export class ProjectWatcher {
     this.#now = options.now ?? (() => new Date());
     this.#onError = options.onError;
     this.#onInvalidation = options.onInvalidation;
-    this.addOutputPaths(options.outputPaths ?? ['dist']);
-    for (const path of options.ignoredPaths ?? []) {
-      const ignored = relativePath(this.#root, path);
-      if (ignored !== undefined) this.#outputPaths.add(ignored);
-    }
+    this.addOutputPaths([...(options.ignoredPaths ?? []), ...(options.outputPaths ?? ['dist'])]);
     this.#ignored = (path) => {
       const source = relativePath(this.#root, path);
       if (source === undefined) return true;
@@ -92,16 +88,14 @@ export class ProjectWatcher {
         [...this.#outputPaths].some((ignored) => source === ignored || source.startsWith(`${ignored}/`)) ||
         (source.length > 0 && options.isIgnored?.(resolve(this.#root, path)) === true);
     };
-    let resolveReady: (() => void) | undefined;
-    this.#ready = new Promise<void>((resolvePromise) => {
-      resolveReady = resolvePromise;
-    });
+    const ready = Promise.withResolvers<void>();
+    this.#ready = ready.promise;
     this.#watcher = (options.createWatcher ?? defaultWatcher)(this.#root, { ignored: this.#ignored });
     for (const event of sourceEvents) this.#watcher.on(event, (path) => this.#record(path));
     if (options.createWatcher === undefined) {
-      this.#watcher.on('ready', () => resolveReady?.());
+      this.#watcher.on('ready', () => ready.resolve());
     } else {
-      resolveReady?.();
+      ready.resolve();
     }
   }
 
@@ -109,11 +103,11 @@ export class ProjectWatcher {
     return this.#ready;
   }
 
-  /** Generated roots discovered after startup are add-only and immediately excluded from source events. */
+  /** Adds generated roots discovered after a configuration recovery without replacing the live watcher. */
   addOutputPaths(paths: readonly string[]): void {
     for (const path of paths) {
-      const output = relativePath(this.#root, path);
-      if (output !== undefined && output.length > 0) this.#outputPaths.add(output);
+      const relativeOutput = relativePath(this.#root, path);
+      if (relativeOutput !== undefined && relativeOutput.length > 0) this.#outputPaths.add(relativeOutput);
     }
   }
 

@@ -1,4 +1,4 @@
-import type { McpAppJsonValue } from './mcp-app-binding-service.ts';
+import type { McpAppJsonValue } from './mcp-apps/mcp-app-binding-service.ts';
 import { cloneMcpAppFiniteJson } from './mcp-app-metadata.ts';
 import { runtimeAppFiniteOrdinaryJsonByteLength } from './runtime-app-message-limits.ts';
 

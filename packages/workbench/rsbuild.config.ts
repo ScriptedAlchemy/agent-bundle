@@ -21,7 +21,6 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
       root: 'dist',
     },
     filenameHash: false,
-    legalComments: 'linked' as const,
     filename: {
       assets: '[name][ext]',
       css: '[name].css',
@@ -46,20 +45,18 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
   ...(apiProxyTarget === undefined ? {} : {
     server: {
       proxy: {
-        '/api': { changeOrigin: true, target: apiProxyTarget },
+        '/api': { target: apiProxyTarget },
       },
     },
   }),
-  tools: {
-    rspack: {
-      resolve: {
-        extensionAlias: {
-          '.js': ['.js', '.ts', '.tsx'],
-          '.jsx': ['.jsx', '.tsx'],
-        },
-      },
-    },
-  },
 });
 
-export default defineConfig(createWorkbenchConfig());
+// Without an explicit mode, rsbuild falls back to mode 'none' whenever the
+// ambient NODE_ENV is any nonstandard value (such as 'test' from a test
+// runner), which disables the NODE_ENV define and minification and ships a
+// bundle that crashes in the browser with "process is not defined". Pinning
+// the mode to the CLI command keeps builds hermetic regardless of caller env.
+export default defineConfig(({ command }) => ({
+  mode: command === 'dev' ? ('development' as const) : ('production' as const),
+  ...createWorkbenchConfig(),
+}));

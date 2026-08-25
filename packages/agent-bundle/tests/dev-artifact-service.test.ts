@@ -9,7 +9,7 @@ import { EpochStore, type CreateStagingEpochOptions, type EpochStaging, type Sta
 import { build } from '../src/build/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { ArtifactService } from '../src/dev/index.ts';
-import { NativePlaygroundService } from '../src/dev/native-playground-service.ts';
+import { NativePlaygroundService } from '../src/dev/playground/native-playground-service.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';

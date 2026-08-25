@@ -9,11 +9,11 @@ import {
   PlaygroundOrchestrationService,
   type PlaygroundDurableTraceStore,
   type PlaygroundEpochAuthority,
-} from '../src/dev/playground-orchestration-service.ts';
+} from '../src/dev/playground/playground-orchestration-service.ts';
 import {
   ScriptPlaygroundAbortError,
   ScriptPlaygroundFailure,
-} from '../src/dev/script-playground-service.ts';
+} from '../src/dev/playground/script-playground-service.ts';
 import type {
   DraftEvalCase,
   PlaygroundDurableOutcome,
@@ -27,9 +27,10 @@ import type {
   PlaygroundSubscribeOptions,
   PlaygroundSubscription,
   PlaygroundTraceEvent,
-} from '../src/services/playground-service.ts';
-import { PlaygroundService } from '../src/services/playground-service.ts';
+} from '../src/dev/playground/playground-store.ts';
+import { PlaygroundStore } from '../src/dev/playground/playground-store.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
+import { eventuallyPasses } from './support/eventually.ts';
 
 const activeEpoch = Object.freeze({
   configDigest: 'config-sha256',
@@ -48,14 +49,8 @@ const currentStatus = (): ProjectStatus => Object.freeze({
   source: Object.freeze({ diagnostics: Object.freeze([]), state: 'ready' as const }),
 });
 
-const eventually = async (assertion: () => void): Promise<void> => {
-  let failure: unknown;
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    try { assertion(); return; } catch (error) { failure = error; }
-    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 2); });
-  }
-  throw failure;
-};
+const eventually = (assertion: () => void): Promise<void> =>
+  eventuallyPasses(assertion, { attempts: 25, delayMs: 2 });
 
 const deferred = <Value,>() => {
   let reject!: (reason: unknown) => void;
@@ -556,7 +551,7 @@ it('exports and promotes the real durable response event reference from a native
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-durable-'));
   const projectRoot = join(root, 'project');
   await mkdir(projectRoot, { recursive: true });
-  const trace = new PlaygroundService({
+  const trace = new PlaygroundStore({
     projectId: 'native-durable-project',
     projectRoot,
     storageRoot: join(projectRoot, '.agent-bundle', 'playground'),

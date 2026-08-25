@@ -10,13 +10,13 @@ import {
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { isAbsolute, posix, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import type { Stream } from 'node:stream';
 
 import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
-import { assertInside } from '../core/paths.ts';
+import { joinArtifact, assertInside } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
 import { readTargetMcpServer, type ModernMcpServer, type TargetMcpRuntimeContract } from './mcp-runtime.ts';
@@ -107,13 +107,6 @@ interface StderrCapture {
   readonly waitForEnd: (timeoutMs: number) => Promise<void>;
 }
 
-const safeArtifactPath = (path: string): boolean =>
-  path.length > 0 &&
-  !isAbsolute(path) &&
-  path === posix.normalize(path) &&
-  path !== '..' &&
-  !path.startsWith('../');
-
 const resolveContained = (root: string, path: string): string =>
   isAbsolute(path) ? path : assertInside(root, resolve(root, path));
 
@@ -130,14 +123,11 @@ const captureStderr = (stream: Stream | null, close: () => Promise<void>): Stder
   let bytes = 0;
   let overflow = false;
   let finished = false;
-  let resolveFinished: (() => void) | undefined;
-  const finishedPromise = new Promise<void>((resolve) => {
-    resolveFinished = resolve;
-  });
+  const finishedGate = Promise.withResolvers<void>();
   const onFinished = () => {
     if (finished) return;
     finished = true;
-    resolveFinished?.();
+    finishedGate.resolve();
   };
   const onData = (chunk: Buffer | string) => {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -164,7 +154,7 @@ const captureStderr = (stream: Stream | null, close: () => Promise<void>): Stder
       if (finished) return;
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        finishedPromise,
+        finishedGate.promise,
         new Promise<void>((resolve) => {
           timer = setTimeout(resolve, timeoutMs);
         }),
@@ -362,10 +352,3 @@ export class McpService {
     );
   }
 }
-
-const joinArtifact = (root: string, relativePath: string): string => {
-  if (!safeArtifactPath(relativePath)) {
-    throw new Error(`Unsafe artifact path ${JSON.stringify(relativePath)}.`);
-  }
-  return assertInside(root, resolve(root, relativePath));
-};

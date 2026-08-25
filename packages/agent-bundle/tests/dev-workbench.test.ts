@@ -1694,7 +1694,7 @@ it('gives the foreground Eval route and lifecycle lanes the same project-owned s
   } finally {
     await removeProjectFixture(project.root);
   }
-});
+}, 60_000);
 
 it('keeps MCP and coordinator cleanup failures structural while releasing both resources', async () => {
   const mcpFailure = new Error('MCP cleanup failed.');

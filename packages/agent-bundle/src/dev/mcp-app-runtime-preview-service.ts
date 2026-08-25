@@ -5,7 +5,7 @@ import {
   type McpAppProfileId,
   type McpAppRuntimeBindingSnapshot,
 } from './mcp-app-runtime-binding-service.ts';
-import { parseMcpAppResource, type McpAppParsedResource } from './mcp-app-bridge.ts';
+import { parseMcpAppResource, type McpAppParsedResource } from './mcp-apps/mcp-app-bridge.ts';
 import {
   cloneMcpAppFiniteJson,
   inspectMcpAppMetadata,
@@ -22,7 +22,7 @@ import {
   type McpAppAppsHostProfile,
   type McpAppConfigExtensionInspectionOptions,
   type McpAppFallbackHostProfile,
-} from './mcp-app-host-profiles.ts';
+} from './mcp-apps/mcp-app-host-profiles.ts';
 import {
   createMcpAppConsentActionDigest,
   createMcpAppConsentAuthority,
@@ -34,7 +34,7 @@ import {
   type McpAppConsentRequest,
   type McpAppDocumentPolicySnapshot,
   type McpAppSandboxDeclaration,
-} from './mcp-app-sandbox.ts';
+} from './mcp-apps/mcp-app-sandbox.ts';
 import type { RuntimeClientSurfaceContentPolicy } from './runtime-client-surface-proxy.ts';
 import type { DevRuntimeClientSurfaceProxyBinding, DevRuntimeMcpRegistryMessage, DevRuntimeMcpSessionView, DevRuntimeSession } from './runtime-provider.ts';
 import type { DevRuntimeMcpAppRunBinding, DevRuntimeMcpConnectionState, RuntimeVector } from './runtime-protocol.ts';

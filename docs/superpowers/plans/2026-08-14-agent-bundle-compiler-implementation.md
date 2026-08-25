@@ -1,6 +1,6 @@
 # Agent Bundle Compiler Implementation Plan
 
-**Status:** Implemented through Task 10; the applicable Task 11 fixture, packed-consumer, and documentation work is implemented, while final delivery verification remains in progress.
+**Status:** Implemented and delivered through Task 11. Delivery is verified by the repository CI gates (`npm run check`, `npm run check:release`, and the micro-eval spot-check); native host smokes remain intentionally opt-in.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -432,7 +432,7 @@ expect(new DiagnosticBag([error]).throwIfErrors).toThrow(DiagnosticError);
 
   Run: `git add packages/agent-bundle/src packages/agent-bundle/tests/cli.test.ts && git commit -m "feat: expose agent bundle API and CLI"`
 
-### Task 11: Full compiler fixture matrix and packed-consumer verification — delivery verification in progress
+### Task 11: Full compiler fixture matrix and packed-consumer verification — delivered
 
 **Files:**
 - Create: `fixtures/integration/*`

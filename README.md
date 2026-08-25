@@ -41,6 +41,18 @@ when a contributor runs it, and never accepts or stores API keys.
 epochs, exercising artifact-bound MCP, hook, script, and native-host operations, and running evals.
 It never becomes part of a generated artifact.
 
+The same foreground session is available programmatically through the public `startDevServer`
+export. It accepts the options the CLI flags map to (`root`, `port`, `open`, `agentApi`) and
+resolves to a `DevServerSession` exposing the loopback `url`, a `status()` snapshot, and `close()`:
+
+```ts
+import { startDevServer } from 'agent-bundle';
+
+const session = await startDevServer({ root: process.cwd(), port: 3100 });
+console.log(session.url);
+await session.close();
+```
+
 The Playground is the durable whole-plugin workflow. `script.run` is available there for trusted
 local use: it selects a manifest-owned emitted script for the selected target and records its exit,
 bounded stdout/stderr, cancellation, and epoch-bound evidence. Native prompts select a
@@ -190,6 +202,18 @@ npm run check && npm run check:release
 
 `npm run check:release` is the release-only gate: it runs `npm run pack:dry-run`,
 `npm run audit:release`, and `npm run test:packed`; it does not replace `npm run check`.
+
+The micro-eval spot-check is the end-to-end CI confidence gate: `npm run test:spot-check` builds,
+validates, and runs one deterministic eval against the checked-in `fixtures/integration/micro-eval`
+project through the real CLI. It also runs inside every default `npm test`, is never skip-gated,
+and needs no Claude or Codex installation.
+
+Native Claude/Codex host smokes are intentionally opt-in and stay skipped in CI. They run only on a
+machine with that CLI installed and signed in — via `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE=1` /
+`AGENT_BUNDLE_NATIVE_CODEX_SMOKE=1`, the packed variants `npm run test:packed:native:claude` /
+`npm run test:packed:native:codex`, or the manually dispatched self-hosted **Native host smoke**
+workflow. A skipped native smoke in CI is the intended state, not a delivery gap.
+
 Repository-owned Chromium E2E runs independently of a connected ChatGPT Chrome extension. The
 extension is for the separate final manual visual pass, not a substitute for repository or packed
 consumer verification. Publication has no repository script: selecting the npm package name/scope,

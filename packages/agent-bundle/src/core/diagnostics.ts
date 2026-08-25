@@ -10,6 +10,52 @@ export interface Diagnostic {
   recovery?: string;
 }
 
+const diagnosticRequiredKeys = ['code', 'message', 'severity'] as const;
+const diagnosticOptionalKeys = ['generatedPath', 'recovery', 'sourcePath', 'target'] as const;
+
+const isSeverity = (value: unknown): value is DiagnosticSeverity =>
+  value === 'error' || value === 'info' || value === 'warning';
+
+/** Structural guard for wire values claiming to be diagnostics; extra keys are tolerated. */
+export const isDiagnostic = (value: unknown): value is Diagnostic =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) &&
+  typeof (value as Diagnostic).code === 'string' &&
+  typeof (value as Diagnostic).message === 'string' &&
+  isSeverity((value as Diagnostic).severity) &&
+  diagnosticOptionalKeys.every((key) => {
+    const optional = (value as Readonly<Record<string, unknown>>)[key];
+    return optional === undefined || typeof optional === 'string';
+  });
+
+export interface DecodeDiagnosticOptions {
+  /** Reject values carrying keys outside the Diagnostic contract. */
+  readonly strict?: boolean;
+}
+
+/** Decodes one wire diagnostic into a frozen normalized copy, or undefined when malformed. */
+export const decodeDiagnostic = (
+  value: unknown,
+  options: DecodeDiagnosticOptions = {},
+): Diagnostic | undefined => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Readonly<Record<string, unknown>>;
+  if (!isDiagnostic(value)) return undefined;
+  if (options.strict === true) {
+    const allowed: readonly string[] = [...diagnosticRequiredKeys, ...diagnosticOptionalKeys];
+    if (!Object.keys(record).every((key) => allowed.includes(key))) return undefined;
+    if (diagnosticOptionalKeys.some((key) => Object.hasOwn(record, key) && record[key] === undefined)) return undefined;
+  }
+  return Object.freeze({
+    code: value.code,
+    ...(value.generatedPath === undefined ? {} : { generatedPath: value.generatedPath }),
+    message: value.message,
+    ...(value.recovery === undefined ? {} : { recovery: value.recovery }),
+    severity: value.severity,
+    ...(value.sourcePath === undefined ? {} : { sourcePath: value.sourcePath }),
+    ...(value.target === undefined ? {} : { target: value.target }),
+  });
+};
+
 const diagnosticIdentity = (diagnostic: Diagnostic): string => JSON.stringify([
   diagnostic.code,
   diagnostic.message,
@@ -112,3 +158,9 @@ export class DiagnosticBag {
     }
   }
 }
+
+export const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
+  Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
+
+export const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
+  diagnostics.some((diagnostic) => diagnostic.severity === 'error');

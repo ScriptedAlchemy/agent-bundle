@@ -1,4 +1,4 @@
-import type { DevRuntimeMcpAppRunBinding } from '../../../agent-bundle/src/dev/runtime-protocol.ts';
+import type { DevRuntimeMcpAppRunBinding } from '../../../agent-bundle/src/contracts/runtime.ts';
 
 import type { McpPagePreviewSelection, McpPageSource } from './mcp-page.tsx';
 import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';

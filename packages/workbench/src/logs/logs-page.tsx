@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 
-import type { DevLogRecord, DevLogReplayGap } from '../../../agent-bundle/src/dev/dev-log-service.ts';
+import type { DevLogRecord, DevLogReplayGap } from '../../../agent-bundle/src/contracts/dev-logs.ts';
 import { LogClient, LogClientError } from './log-client.ts';
 import { logsViewFor, mergeDevLogRecords, type LogsView as LogsViewModel } from './logs-model.ts';
 import './logs-page.css';

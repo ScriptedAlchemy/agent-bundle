@@ -1,5 +1,5 @@
-import type { McpSessionTraceEntry } from '../../../../agent-bundle/src/dev/mcp-session-protocol.ts';
-import type { DevRuntimeDiagnostic, DevRuntimeInspectionEnvelope, DevRuntimeTraceSpan } from '../../../../agent-bundle/src/dev/runtime-protocol.ts';
+import type { McpSessionTraceEntry } from '../../../../agent-bundle/src/contracts/mcp-session.ts';
+import type { DevRuntimeDiagnostic, DevRuntimeInspectionEnvelope, DevRuntimeTraceSpan } from '../../../../agent-bundle/src/contracts/runtime.ts';
 import type { McpBrowserSessionModel, McpBrowserSessionTimelineEntry } from '../../mcp/mcp-session-model.ts';
 
 export type InspectorTab = 'tools' | 'resources' | 'prompts' | 'protocol' | 'logging';

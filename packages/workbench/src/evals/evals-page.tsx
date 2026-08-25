@@ -1,8 +1,8 @@
+import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
 import type { EvalArtifact, EvalClient, EvalHarness, EvalRunAdmission, EvalRunStart } from './eval-client.ts';
-import type { EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/dev/eval-service.ts';
-import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
+import type { EvalRunEvent, EvalRunRecord, EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/contracts/eval.ts';
 import {
   admitEvalRunLifecycle,
   createEvalRunLifecycle,
@@ -65,8 +65,7 @@ const evalClientScopeKeyFor = (client: EvalClient): number => {
   return key;
 };
 
-const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The eval request could not be completed.';
+const errorMessage = (reason: unknown): string => messageFrom(reason, 'The eval request could not be completed.');
 
 const noEvalEvents: readonly EvalRunEvent[] = Object.freeze([]);
 
@@ -477,19 +476,22 @@ const reconnectDelayMilliseconds = 250;
 
 const maximumTerminalResultReads = 8;
 
-const waitForReconnect = (milliseconds: number, signal: AbortSignal): Promise<void> => new Promise((resolvePromise) => {
+const sleepUntilReconnect = (milliseconds: number, signal: AbortSignal): Promise<void> => new Promise((resolve) => {
   if (signal.aborted) {
-    resolvePromise();
+    resolve();
     return;
   }
-  const timeout = setTimeout(finish, milliseconds);
-  function finish(): void {
-    clearTimeout(timeout);
-    signal.removeEventListener('abort', finish);
-    resolvePromise();
+  const timer = setTimeout(done, milliseconds);
+  function done(): void {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', done);
+    resolve();
   }
-  signal.addEventListener('abort', finish, { once: true });
+  signal.addEventListener('abort', done, { once: true });
 });
+
+const waitForReconnect = (milliseconds: number, signal: AbortSignal): Promise<void> =>
+  sleepUntilReconnect(milliseconds, signal);
 
 export interface EvalFinalizedRunReadOptions {
   readonly client: Pick<EvalClient, 'read'>;
