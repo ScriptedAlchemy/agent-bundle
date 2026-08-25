@@ -5,23 +5,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Service status</title>
     <style>
-      :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
-      body { margin: 0; padding: 20px; }
-      main { border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 12px; padding: 18px; }
-      .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; opacity: .65; text-transform: uppercase; }
+      :root {
+        color-scheme: light dark;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        --app-background: #f1f5f9;
+        --app-border: #cbd5e1;
+        --app-foreground: #172033;
+        --app-muted: #526075;
+        --app-surface: #ffffff;
+        --status-checking: #2563eb;
+        --status-degraded: #b45309;
+        --status-healthy: #15803d;
+        --status-unknown: #64748b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --app-background: #0f172a;
+          --app-border: #475569;
+          --app-foreground: #f8fafc;
+          --app-muted: #cbd5e1;
+          --app-surface: #172033;
+          --status-checking: #60a5fa;
+          --status-degraded: #fbbf24;
+          --status-healthy: #4ade80;
+          --status-unknown: #94a3b8;
+        }
+      }
+      body { background: var(--app-background); color: var(--app-foreground); margin: 0; min-height: 100vh; padding: 20px; }
+      main { background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 12px; padding: 18px; }
+      .eyebrow { color: var(--app-muted); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
       .status { align-items: center; display: flex; gap: 10px; margin: 14px 0; }
-      .dot { background: #22c55e; border-radius: 999px; height: 10px; width: 10px; }
+      .dot { background: var(--status-unknown); border-radius: 999px; height: 10px; width: 10px; }
+      .status[data-state="checking"] .dot { background: var(--status-checking); }
+      .status[data-state="healthy"] .dot { background: var(--status-healthy); }
+      .status[data-state="degraded"] .dot { background: var(--status-degraded); }
       .checks { display: grid; gap: 8px; list-style: none; margin: 18px 0; padding: 0; }
-      .checks li { align-items: center; border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent); display: flex; justify-content: space-between; padding-top: 8px; }
-      .checks strong { text-transform: capitalize; }
-      button { border: 1px solid currentColor; border-radius: 8px; cursor: pointer; padding: 8px 12px; }
+      .checks li { align-items: center; border-top: 1px solid var(--app-border); display: flex; justify-content: space-between; padding-top: 8px; }
+      .checks strong { color: var(--app-muted); text-transform: capitalize; }
+      .checks li[data-state="healthy"] strong { color: var(--status-healthy); }
+      .checks li[data-state="degraded"] strong { color: var(--status-degraded); }
+      button { background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 8px; color: var(--app-foreground); cursor: pointer; padding: 8px 12px; }
     </style>
   </head>
   <body>
     <main>
       <div class="eyebrow">MCP App example</div>
       <h1 id="service">No service selected</h1>
-      <div class="status"><span class="dot"></span><strong id="status">unknown</strong></div>
+      <div class="status" data-state="unknown" id="status-indicator"><span class="dot"></span><strong id="status">unknown</strong></div>
       <p id="summary">Invoke the readiness tool to inspect a service.</p>
       <ul aria-label="Service checks" class="checks" id="checks"></ul>
       <button id="toggle-details" type="button">Toggle details</button>

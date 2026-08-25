@@ -267,6 +267,57 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await expect.poll(() => appText('#summary'), { timeout: browserTimeout }).toBe('Payment latency is above the release threshold.');
     await expect.poll(() => appText('#checks'), { timeout: browserTimeout }).toContain('Availabilitypassing');
     await expect.poll(() => appText('#checks'), { timeout: browserTimeout }).toContain('P95 latencyfailing');
+    const appPreviewVisualState = async () => {
+      for (const frame of page.frames()) {
+        try {
+          const marker = frame.locator('#status-indicator');
+          if (await marker.count() !== 1) continue;
+          return await marker.evaluate((indicator) => {
+            const parseColor = (value: string) => {
+              const channels = value.match(/[\d.]+/gu)?.map(Number) ?? [];
+              return {
+                alpha: channels[3] ?? 1,
+                blue: channels[2] ?? 0,
+                green: channels[1] ?? 0,
+                red: channels[0] ?? 0,
+              };
+            };
+            const relativeLuminance = ({ red, green, blue }: ReturnType<typeof parseColor>) => {
+              const channel = (value: number) => {
+                const normalized = value / 255;
+                return normalized <= 0.04045
+                  ? normalized / 12.92
+                  : ((normalized + 0.055) / 1.055) ** 2.4;
+              };
+              return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue);
+            };
+            const statusText = indicator.querySelector<HTMLElement>('#status')!;
+            const dot = indicator.querySelector<HTMLElement>('.dot')!;
+            const panel = document.querySelector<HTMLElement>('main')!;
+            const bodyBackground = parseColor(getComputedStyle(document.body).backgroundColor);
+            const panelBackground = parseColor(getComputedStyle(panel).backgroundColor);
+            const contrast = (relativeLuminance(parseColor(getComputedStyle(statusText).color)) + 0.05)
+              / (relativeLuminance(panelBackground) + 0.05);
+            return {
+              bodyBackground,
+              contrast: Math.max(contrast, 1 / contrast),
+              dotBackground: parseColor(getComputedStyle(dot).backgroundColor),
+              panelBackground,
+              state: indicator.getAttribute('data-state'),
+            };
+          });
+        } catch {
+          // Retry against the App frame if the sandbox proxy is being replaced.
+        }
+      }
+      return undefined;
+    };
+    await expect.poll(async () => (await appPreviewVisualState())?.state, { timeout: browserTimeout }).toBe('degraded');
+    const appPreviewVisual = await appPreviewVisualState();
+    expect(appPreviewVisual?.dotBackground.red).toBeGreaterThan(appPreviewVisual?.dotBackground.green ?? Number.POSITIVE_INFINITY);
+    expect(appPreviewVisual?.bodyBackground.alpha).toBe(1);
+    expect(appPreviewVisual?.panelBackground.alpha).toBe(1);
+    expect(appPreviewVisual?.contrast).toBeGreaterThanOrEqual(4.5);
     await expect.poll(async () => {
       for (const frame of page.frames()) {
         try {

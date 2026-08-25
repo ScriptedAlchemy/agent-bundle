@@ -44,8 +44,9 @@ and Claude artifacts; the App resource remains portable.
    Open the session, list tools, select `show-status`, choose `payments-api`,
    and invoke it. Invocation history shows the degraded summary and labelled
    Availability and P95 latency checks (the latter fails). Open the App preview:
-   the rendered panel also shows `payments-api`, `degraded`, the same summary,
-   and the passing/failing checks through the MCP Apps bridge. Inspect the
+   the rendered panel also shows `payments-api`, a text-labelled amber
+   `degraded` indicator, the same summary, and passing/failing checks through
+   the MCP Apps bridge. Inspect the
    protocol trace, use **Restart MCP session**, then close, reset, and reopen
    it to exercise the lifecycle.
 7. **Evals** defaults to the deterministic `mcp-app-status` suite. Run
