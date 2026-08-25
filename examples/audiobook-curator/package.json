@@ -1,6 +1,7 @@
 {
   "name": "@agent-bundle-example/audiobook-curator",
   "version": "1.0.0",
+  "private": true,
   "description": "A safe TypeScript audiobook inventory, preparation, and audit CLI plus Agent Bundle example.",
   "type": "module",
   "engines": {

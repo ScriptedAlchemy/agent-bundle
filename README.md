@@ -258,5 +258,6 @@ workflow. A skipped native smoke in CI is the intended state, not a delivery gap
 
 Repository-owned Chromium E2E runs independently of a connected ChatGPT Chrome extension. The
 extension is for the separate final manual visual pass, not a substitute for repository or packed
-consumer verification. Publication has no repository script: selecting the npm package name/scope,
-license, and `publishConfig` remains an explicit release-owner decision.
+consumer verification. Package versions and release PRs use Changesets. Add a changeset with
+`pnpm changeset`; merges to `main` update or publish through the standard Changesets action. Pull
+requests publish `agent-bundle` and `@agent-bundle/rsc-runtime` canaries through pkg.pr.new.

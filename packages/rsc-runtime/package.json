@@ -1,6 +1,6 @@
 {
   "name": "@agent-bundle/rsc-runtime",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "React Server Component primitives for Agent Bundle hook and MCP results.",
   "license": "MIT",
   "keywords": [
@@ -16,6 +16,9 @@
     "type": "git",
     "url": "git+https://github.com/ScriptedAlchemy/agent-bundle.git",
     "directory": "packages/rsc-runtime"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "type": "module",
   "engines": {
