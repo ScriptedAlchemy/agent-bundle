@@ -192,7 +192,7 @@ e2e('redirects a direct Runtime deep link only after capability discovery report
     expect(new URL(page.url()).hash).toBe('#runtime');
 
     releaseProjectStatus();
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     expect(new URL(page.url()).hash).toBe('#overview');
     expect(await page.locator('a[href="#runtime"]').count()).toBe(0);
   } finally {

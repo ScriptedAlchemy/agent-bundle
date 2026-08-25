@@ -32,6 +32,7 @@ it('selects product packages through the pinned pnpm workspace', async () => {
     '@agent-bundle-example/hooks-and-scripts',
     '@agent-bundle-example/mcp-app',
     '@agent-bundle-example/skills-starter',
+    '@agent-bundle/rsc-agent-runtime-demo',
     'agent-bundle',
     'agent-bundle-workbench',
     'agent-bundle-workspace',

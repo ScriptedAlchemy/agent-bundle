@@ -69,7 +69,7 @@ const SHELL = `<!doctype html>
         if (message.method === resourceReadyMethod && !Object.hasOwn(message, 'id')) {
           const params = message.params;
           if (lifecycle !== 'proxy-ready' || !isRecord(params) || typeof params.html !== 'string') return;
-          if (byteLength(message) > maxMessageBytes || (Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string') || typeof params.allow !== 'string' || typeof params.contentSecurityPolicy !== 'string') return;
+          if ((Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string') || typeof params.allow !== 'string' || typeof params.contentSecurityPolicy !== 'string') return;
           app.allow = params.allow;
           app.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(params.contentSecurityPolicy) + '">' + params.html;
           lifecycle = 'resource-ready';

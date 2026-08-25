@@ -205,7 +205,7 @@ export class McpAppFrameRelay {
     if (isProxyReady(message)) {
       if (this.#resourceProvided) return false;
       this.#resourceProvided = true;
-      return this.#post(messageForResource(this.#frame, this.#resource));
+      return this.#post(messageForResource(this.#frame, this.#resource), false);
     }
     if (!this.#resourceProvided) return false;
     return this.#enqueue(() => this.#deliver(message));
@@ -329,7 +329,12 @@ export class McpAppFrameRelay {
 
   #post(message: RpcMessage, enforceMessageLimit = true): boolean {
     const proxy = this.#iframe.contentWindow;
-    if (proxy === null || finiteOrdinaryJsonByteLength(message, { maximumBytes: this.#frame.relay.maxMessageBytes }) === undefined) return false;
+    if (
+      proxy === null ||
+      finiteOrdinaryJsonByteLength(message, {
+        maximumBytes: enforceMessageLimit ? this.#frame.relay.maxMessageBytes : Number.MAX_SAFE_INTEGER,
+      }) === undefined
+    ) return false;
     try {
       proxy.postMessage(message, this.#frame.targetOrigin);
       return true;

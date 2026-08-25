@@ -307,6 +307,7 @@ it('uses an opaque child relay shell with real MCP Apps JSON-RPC notification me
     expect(shell).toContain("method.startsWith('ui/notifications/sandbox-')");
     expect(shell).toContain('configuration.maxMessageBytes');
     expect(shell).toContain("Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string'");
+    expect(shell).not.toContain('byteLength(message) > maxMessageBytes');
     expect(new URL(frame.src).hash).toContain('maxMessageBytes');
   } finally {
     await proxy.close();

@@ -369,6 +369,13 @@ const isExactOldMcpStreamReset = (request: NetworkLedgerEntry, ledger: OutageLed
   return url.href === `${ledger.origin}${oldStreamPath}${url.search}`;
 };
 
+const isExactOldMcpStreamSocketNotConnected = (
+  request: NetworkLedgerEntry,
+  ledger: OutageLedger,
+  oldSessionPath: string,
+): boolean => request.error === 'net::ERR_SOCKET_NOT_CONNECTED' &&
+  isExactOldMcpStreamReset({ ...request, error: 'net::ERR_CONNECTION_RESET' }, ledger, oldSessionPath);
+
 const assertLedger: (condition: unknown, message: string) => asserts condition = (condition, message) => {
   if (!condition) throw new Error(`Foreground outage ledger rejected: ${message}`);
 };
@@ -432,7 +439,11 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
     }
     const recognizedPostRecoveryFailures = [...freshMcpStreamFailures, ...navigationFailures];
     assertLedger(recognizedPostRecoveryFailures.length === postRecoveryFailures.length,
-      `unknown post-recovery failure: ${JSON.stringify(postRecoveryFailures)}`);
+      `unknown post-recovery failure: ${JSON.stringify({
+        navigation: ledger.postRecovery.navigation,
+        recognized: recognizedPostRecoveryFailures,
+        unrecognized: postRecoveryFailures.filter((failure) => !recognizedPostRecoveryFailures.includes(failure)),
+      })}`);
     const postRecoveryConsoleErrors = ledger.consoleErrors.filter((consoleError) => consoleError.at >= ledger.recoveredAt);
     assertLedger(postRecoveryConsoleErrors.length === 0, `post-recovery console errors: ${JSON.stringify(postRecoveryConsoleErrors)}`);
   }
@@ -453,9 +464,14 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
   const oldStreamResets = oldStreams.filter((request) => request.error === 'net::ERR_CONNECTION_RESET');
   assertLedger(oldStreamResets.length <= 1 && oldStreamResets.every((request) => isExactOldMcpStreamReset(request, ledger, oldSessionPath)),
     `old MCP stream has an invalid reset termination: ${JSON.stringify(oldStreamResets)}`);
+  const oldStreamDisconnectedSockets = oldStreams.filter((request) => request.error === 'net::ERR_SOCKET_NOT_CONNECTED');
+  assertLedger(oldStreamDisconnectedSockets.length <= 1 && oldStreamDisconnectedSockets.every((request) =>
+    isExactOldMcpStreamSocketNotConnected(request, ledger, oldSessionPath)),
+  `old MCP stream has an invalid disconnected-socket termination: ${JSON.stringify(oldStreamDisconnectedSockets)}`);
   assertLedger(oldStreams.every((request) => request.method === 'GET' && (
     request.error === 'net::ERR_CONNECTION_REFUSED' || request.error === 'net::ERR_ABORTED' ||
-    isExactOldMcpStreamReset(request, ledger, oldSessionPath)
+    isExactOldMcpStreamReset(request, ledger, oldSessionPath) ||
+    isExactOldMcpStreamSocketNotConnected(request, ledger, oldSessionPath)
   )),
     `old MCP stream has an unrecognized failure: ${JSON.stringify(oldStreams)}`);
 
@@ -525,7 +541,8 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
       (pathClass === 'project-session' && failure.method === 'GET' && failure.error === 'net::ERR_CONNECTION_REFUSED') ||
       (pathClass === 'old-mcp-stream' && failure.method === 'GET' && (
         failure.error === 'net::ERR_CONNECTION_REFUSED' || failure.error === 'net::ERR_ABORTED' ||
-        isExactOldMcpStreamReset(failure, ledger, oldSessionPath)
+        isExactOldMcpStreamReset(failure, ledger, oldSessionPath) ||
+        isExactOldMcpStreamSocketNotConnected(failure, ledger, oldSessionPath)
       )) ||
       (pathClass === 'old-mcp-session' && failure.method === 'DELETE' && failure.error === 'net::ERR_CONNECTION_REFUSED') ||
       (knownStreamClass(failure.path) !== undefined && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED');
@@ -576,6 +593,11 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
     requests: Object.freeze([...valid.requests, request]),
   });
   const validOldStreamReset = withOldStreamReset(resetRequest, resetConsole);
+  const socketNotConnectedRequest = ledgerRequest({ ...resetRequest, error: 'net::ERR_SOCKET_NOT_CONNECTED' });
+  const validOldStreamSocketNotConnected = withOldStreamReset(socketNotConnectedRequest, Object.freeze({
+    ...resetConsole,
+    text: 'Failed to load resource: net::ERR_SOCKET_NOT_CONNECTED',
+  }));
   const resetWithAlteredQuery = withOldStreamReset(
     ledgerRequest({ ...resetRequest, url: `${valid.origin}${oldStreamPath}?after=01` }),
     Object.freeze({ ...resetConsole, url: `${valid.origin}${oldStreamPath}?after=01` }),
@@ -683,6 +705,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(malformedLedgers.map(legacyOutageLedgerPasses)).toEqual([true, true, true]);
   expect(() => validateOutageLedger(valid)).not.toThrow();
   expect(() => validateOutageLedger(validOldStreamReset)).not.toThrow();
+  expect(() => validateOutageLedger(validOldStreamSocketNotConnected)).not.toThrow();
   expect(() => validateOutageLedger(preStartedOutageStreamTermination)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageLogsReplayCancellation)).not.toThrow();
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
@@ -1541,8 +1564,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
       const browserMcpSessionBCloseCompletedAt = Date.now();
 
-      phase = 'mobile overflow floor';
-      await page.setViewportSize({ height: 844, width: 390 });
+      phase = 'desktop navigation floor';
+      await page.setViewportSize({ height: 900, width: 1440 });
       const mobileNavigationRequestIndex = browserRequests.length;
       const mobileRoutes: readonly Readonly<{ heading: string; label: string }>[] = [
         { heading: 'Bundle dashboard', label: 'Overview' }, { heading: 'Skills', label: 'Skills' }, { heading: 'Hooks', label: 'Hooks' },
@@ -1551,6 +1574,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       ];
       const postRecoveryNavigationUrls = new Map<string, readonly string[]>([
         ['Hooks', [`${origin}/api/hooks?epochId=${encodeURIComponent(recoveredEpochId)}`]],
+        ['MCP playground', [`${origin}/api/artifacts/epochs/${encodeURIComponent(recoveredEpochId)}`]],
         ['Playground', [`${origin}/api/playground/catalog?epochId=${encodeURIComponent(recoveredEpochId)}`]],
         ['Logs', [`${origin}/api/logs/replay?after=0`]],
         ['Evals', [`${origin}/api/evals/suites`, `${origin}/api/evals/runs`]],

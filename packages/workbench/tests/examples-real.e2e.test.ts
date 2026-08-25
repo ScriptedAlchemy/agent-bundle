@@ -31,7 +31,9 @@ const waitForExampleValue = async <Value>(
     value = await read();
   }
   if (!accepts(value)) {
-    throw new Error(`Timed out waiting for ${label}; last value was ${JSON.stringify(value)}.`);
+    throw new Error(
+      `Timed out waiting for ${label}; last value was ${JSON.stringify(value)}; frames were ${JSON.stringify(page.frames().map((frame) => frame.url()))}.`,
+    );
   }
   return value;
 };
@@ -280,12 +282,17 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
       }
       return undefined;
     };
-    await waitForExampleValue(
-      page,
-      () => appText('#service'),
-      (value) => value === 'payments-api',
-      'the App service',
-    );
+    try {
+      await waitForExampleValue(
+        page,
+        () => appText('#service'),
+        (value) => value === 'payments-api',
+        'the App service',
+      );
+    } catch (error) {
+      await expectHealthyExamplePage(ledger);
+      throw error;
+    }
     await waitForExampleValue(
       page,
       () => appText('#status'),

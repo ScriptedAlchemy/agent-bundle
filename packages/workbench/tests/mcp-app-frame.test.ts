@@ -296,7 +296,11 @@ describe('MCP App frame relay', () => {
       message: {
         jsonrpc: '2.0',
         method: 'ui/notifications/sandbox-resource-ready',
-        params: { html },
+        params: {
+          allow: frame.allow,
+          contentSecurityPolicy: frame.policy.contentSecurityPolicy,
+          html,
+        },
       },
       targetOrigin: frame.targetOrigin,
     }]);
