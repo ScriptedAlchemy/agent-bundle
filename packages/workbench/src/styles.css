@@ -132,6 +132,7 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
 .skill-tab--active { border-bottom-color: #0b5bd3; color: #073d8d; }
 .skill-document-view { padding: 23px 0; }
 .skill-base-label { color: #596372; font: 600 12px "SFMono-Regular", Consolas, monospace; margin: 0 0 18px; }
+.skill-translation-note { background: #eef5ff; border-left: 3px solid #0b5bd3; color: #294969; font-size: 13px; margin: 0 0 20px; padding: 10px 13px; }
 .skill-source { background: #101822; border: 1px solid #25364b; color: #edf3fb; font: 13px/1.55 "SFMono-Regular", Consolas, monospace; margin: 0; overflow-x: auto; padding: 18px; white-space: pre-wrap; }
 .skill-resource-tree { border-top: 1px solid #d9dee7; margin-top: 28px; padding-top: 18px; }
 .skill-resource-tree h2 { font-size: 13px; margin: 0 0 8px; }

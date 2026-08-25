@@ -48,19 +48,27 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
   try {
     await page.goto(`${server.url}#skills`);
     await waitForSettledWorkbench(page);
-    await expect(page.getByRole('heading', { name: 'release-review', exact: true })).toBeVisible({ timeout: browserTimeout });
-    for (const unavailable of ['Hooks', 'MCP playground', 'Playground']) {
-      await expect(page.getByRole('link', { name: unavailable, exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'dependency-upgrade', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.skill-tree-item')).toHaveCount(3, { timeout: browserTimeout });
+    for (const skill of ['dependency-upgrade', 'incident-triage', 'release-review']) {
+      await expect(page.getByRole('button', { name: new RegExp(skill, 'u') })).toBeVisible({ timeout: browserTimeout });
     }
+    for (const unavailable of ['Hooks', 'MCP playground', 'Playground']) {
+      await expect(page.getByRole('link', { name: unavailable, exact: true })).toHaveCount(0, { timeout: browserTimeout });
+    }
+    await page.getByRole('button', { name: /release-review/u }).click();
+    await expect(page.getByRole('heading', { name: 'release-review', exact: true })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('tab', { name: 'Markdown' }).click();
     await expect(page.locator('.skill-source')).toContainText('Release review', { timeout: browserTimeout });
+    await page.getByRole('tab', { name: 'Generated' }).click();
+    await expect(page.locator('.skill-translation-note')).toContainText('Unchanged for', { timeout: browserTimeout });
     await captureExampleState(page, 'skills-starter', 'skills-populated');
 
     await page.goto(`${server.url}#hooks`);
     await waitForSettledWorkbench(page);
-    await expect(page).toHaveURL(new URL('#overview', server.url).href);
+    await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
 
     await page.getByRole('link', { name: 'Artifacts' }).click();
     await waitForSettledWorkbench(page);

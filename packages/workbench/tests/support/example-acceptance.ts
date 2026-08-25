@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
@@ -105,8 +106,8 @@ const allowedUnmountCancellation = ({ error, request }: FailedRequest, origin: s
 };
 
 export const expectHealthyExamplePage = async (ledger: ExampleErrorLedger): Promise<void> => {
-  expect(ledger.pageErrors).toEqual([]);
-  expect(ledger.consoleErrors).toEqual([]);
+  assert.deepEqual(ledger.pageErrors, []);
+  assert.deepEqual(ledger.consoleErrors, []);
   const unexpectedFailures = ledger.failedRequests.filter((failure) => !allowedUnmountCancellation(failure, ledger.origin));
-  expect(unexpectedFailures.map(({ error, request }) => ({ error, method: request.method(), url: request.url() }))).toEqual([]);
+  assert.deepEqual(unexpectedFailures.map(({ error, request }) => ({ error, method: request.method(), url: request.url() })), []);
 };

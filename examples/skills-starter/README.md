@@ -13,8 +13,12 @@ checked-in fixture.
 
 ## What is authored
 
-- `agent-bundle.config.ts` declares the plugin, its Skill, and portable, Codex,
+- `agent-bundle.config.ts` declares the plugin, its three Skills, and portable, Codex,
   and Claude targets.
+- `skills/incident-triage/SKILL.md` guides a production incident from first
+  signal through containment, evidence collection, and a handoff-ready update.
+- `skills/dependency-upgrade/SKILL.md` plans dependency upgrades with API,
+  runtime, rollout, and rollback checks.
 - `skills/release-review/SKILL.md` defines the evidence, severity, workflow,
   and final-report requirements for an explicit release review.
 - `references/checklist.md` and `references/release-policy.md` provide the
@@ -25,12 +29,12 @@ checked-in fixture.
 
 ## Workbench walkthrough
 
-1. **Overview** opens on the Bundle dashboard. Its ordered Author, Build,
-   Exercise, and Evaluate stages link to the pages where the corresponding
-   evidence lives; the status below them is the current artifact epoch.
-2. **Skills** defaults to `release-review`. Compare the authored `SKILL.md`,
-   linked checklist and policy resources, and the generated target document;
-   the page also marks the explicit deterministic eval coverage.
+1. **Overview** opens on the Bundle dashboard. It summarizes the three Skills,
+   generated targets, build health, and the next useful actions.
+2. **Skills** lists `dependency-upgrade`, `incident-triage`, and
+   `release-review`. Browse their linked checklists and report templates. Switch
+   between Source and Generated to see whether a target copied or adapted the
+   authored document; `release-review` also shows deterministic eval coverage.
 3. **Artifacts** defaults to the Claude target. Change the target to compare
    the portable, Codex, and Claude output trees and their provenance.
 4. **Evals** defaults to the `release-readiness` suite. Run its deterministic
@@ -39,7 +43,7 @@ checked-in fixture.
 5. To practice repair, make a reversible policy edit, press **Rebuild**, and
    wait for the failed or idle result rather than a Building state. Restore the
    checked-in policy and rebuild. The prior eval becomes stale for the changed
-   epoch; rerun `release-readiness` to record current, repaired evidence.
+   build; rerun `release-readiness` to record current, repaired evidence.
 
 ## Noninteractive checks
 

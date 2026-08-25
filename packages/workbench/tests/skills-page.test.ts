@@ -71,6 +71,23 @@ it('renders source raw Markdown from the selected source document', () => {
   expect(markup).toContain('/api/skills/source/skill%3Areview/resources/guide.md');
 });
 
+it('explains when generated output intentionally matches the authored Skill', () => {
+  const markup = renderToStaticMarkup(createElement(SkillDocumentPanel, {
+    document: 'generated',
+    onDocumentChange: () => undefined,
+    onTargetChange: () => undefined,
+    onViewChange: () => undefined,
+    selected: generatedDocument,
+    target: 'portable',
+    targetNames: ['portable'],
+    translationSummary: 'Unchanged for portable — this target ships the authored Skill document as written.',
+    view: 'rendered',
+  }));
+
+  expect(markup).toContain('Unchanged for portable');
+  expect(markup).toContain('ships the authored Skill document as written');
+});
+
 it('explains the authored, generated, resource, and eval-coverage views', () => {
   const markup = renderToStaticMarkup(createElement(SkillsPage, {
     client: new SkillClient(),

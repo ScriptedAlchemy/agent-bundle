@@ -41,6 +41,7 @@ export interface SkillDocumentPanelProps {
   readonly summary?: string;
   readonly target?: string;
   readonly targetNames?: readonly string[];
+  readonly translationSummary?: string;
   readonly view: SkillView;
 }
 
@@ -141,6 +142,7 @@ export const SkillDocumentPanel = ({
   summary,
   target,
   targetNames = [],
+  translationSummary,
   view,
 }: SkillDocumentPanelProps) => {
   const documentTabButtons = useRef<Partial<Record<SkillDocumentKind, HTMLButtonElement | null>>>({});
@@ -249,6 +251,7 @@ export const SkillDocumentPanel = ({
     >
       {selected === undefined ? <p className="empty-row" role="status">{summary ?? 'Select a Skill to inspect its documentation.'}</p> : <>
         <p className="skill-base-label">{documentLabel(selected)}</p>
+        {translationSummary === undefined ? undefined : <p className="skill-translation-note">{translationSummary}</p>}
         {view === 'rendered'
           ? <SkillMarkdown base={selected.base} body={selected.body} resources={resourcePaths(selected)} />
           : <pre className="skill-source"><code>{selected.markdown}</code></pre>}
@@ -317,6 +320,14 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
       ? generatedTree.tree
       : undefined;
   const selected = selectedDocumentFor(selectedTree, selectedIds[document]);
+  const sourceCounterpart = sourceTree?.skills.find((skill) => skill.id === selected?.id);
+  const translationSummary = document !== 'generated' || selected === undefined || target === undefined
+    ? undefined
+    : sourceCounterpart === undefined
+      ? `Generated for ${target} — no authored counterpart is available for comparison.`
+      : selected.markdown === sourceCounterpart.markdown
+        ? `Unchanged for ${target} — this target ships the authored Skill document as written.`
+        : `Adapted for ${target} — review this generated document against the authored source.`;
   const generatedSummary = generatedTree.state === 'ready'
     ? 'The selected build has no generated Skills for this target.'
     : generatedTree.summary;
@@ -409,6 +420,7 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
         summary={detailSummary}
         target={target}
         targetNames={targetNames}
+        translationSummary={translationSummary}
         view={view}
       />
     </div>
