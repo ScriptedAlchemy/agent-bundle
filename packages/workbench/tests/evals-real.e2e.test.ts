@@ -399,7 +399,7 @@ e2e('does not cancel a gated run when a newer admission replaces it or the Eval 
     await page.waitForTimeout(150);
     await expect(page.locator('.eval-summary')).not.toContainText(first.run.id);
     await page.goto(`${server.url}#overview`);
-    await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     expect(cancellations).toBe(0);
   } finally {
     await gate.release();
