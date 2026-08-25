@@ -91,7 +91,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
     const installedCli = await realpath(join(consumer, 'node_modules', '.bin', 'agent-bundle'));
     expect(isWithin(consumer, installedPackageRoot)).toBe(true);
     expect(isWithin(workspaceRoot, installedPackageRoot)).toBe(false);
-    expect(installedCli).toBe(join(installedPackageRoot, 'dist', 'cli.js'));
+    expect(installedCli).toBe(join(installedPackageRoot, 'bin', 'agent-bundle.js'));
     expect(isWithin(workspaceRoot, installedCli)).toBe(false);
     const installedManifest = record(JSON.parse(await readFile(join(installedPackageRoot, 'package.json'), 'utf8')), 'installed package manifest');
     const runtimeDependencies = record(installedManifest.dependencies, 'installed package runtime dependencies');
