@@ -64,37 +64,39 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await page.goto(`${server.url}#hooks`);
     await waitForSettledWorkbench(page);
     await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
-    await page.locator('#hook-canonical-input').fill(JSON.stringify({
+    const canonicalHookDraft = JSON.stringify({
       cwd: '/workspace',
-      sessionId: 'example-browser',
-      source: 'browser',
+      sessionId: 'workbench-preview',
+      source: 'workbench',
       transcriptPath: '/workspace/transcript.json',
-    }));
+    }, null, 2);
+    await page.waitForFunction((value) => document.querySelector<HTMLTextAreaElement>('#hook-canonical-input')?.value === value, canonicalHookDraft, { timeout: browserTimeout });
+    expect(await page.locator('#hook-canonical-input').inputValue()).toBe(canonicalHookDraft);
     await page.getByRole('button', { name: 'Run simulation' }).click();
     await expect(page.getByRole('heading', { name: 'Canonical result' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.hook-json').last()).toContainText('example session from browser', { timeout: browserTimeout });
+    await expect(page.locator('.hook-json').last()).toContainText('workbench-preview', { timeout: browserTimeout });
     const replayed = page.waitForResponse((response) => (
       response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/hooks/replays'
     ));
     await page.getByRole('button', { name: 'Replay saved simulation' }).click();
     expect((await replayed).ok()).toBe(true);
-    await expect(page.locator('.hook-json').last()).toContainText('example session from browser', { timeout: browserTimeout });
+    await expect(page.locator('.hook-json').last()).toContainText('workbench-preview', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'hooks-populated');
 
     await page.getByRole('link', { name: 'Playground', exact: true }).click();
     await waitForSettledWorkbench(page);
-    await page.locator('#playground-target').selectOption('portable');
-    await page.locator('#playground-operation').selectOption('script.run');
-    await page.locator('#playground-script-id').selectOption('script:succeed');
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#playground-script-id')?.value === 'script:verify-release', undefined, { timeout: browserTimeout });
+    expect(await page.locator('#playground-target').inputValue()).toBe('portable');
+    expect(await page.locator('#playground-operation').inputValue()).toBe('script.run');
+    expect(await page.locator('#playground-script-id').inputValue()).toBe('script:verify-release');
     await page.getByRole('button', { name: 'Run script' }).click();
     await expect(page.getByText('script.completed')).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.playground-trace')).toContainText('example success', { timeout: browserTimeout });
-    await expect(page.locator('.playground-trace')).toContainText('example warning', { timeout: browserTimeout });
+    await expect(page.locator('.playground-trace')).toContainText('ready for packaging', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'script-success');
 
-    await page.locator('#playground-script-id').selectOption('script:fail');
+    await page.locator('#playground-script-id').selectOption('script:detect-risk');
     await page.getByRole('button', { name: 'Run script' }).click();
-    await expect(page.locator('.playground-trace')).toContainText('example failure', { timeout: browserTimeout });
+    await expect(page.locator('.playground-trace')).toContainText('REL-204', { timeout: browserTimeout });
     await expect(page.locator('.playground-trace')).toContainText('2', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'script-failure');
 
@@ -149,8 +151,9 @@ e2e('drives the MCP App and deterministic eval in real Chrome', { timeout: 150_0
   try {
     await page.goto(`${server.url}#mcp`);
     await waitForSettledWorkbench(page);
-    await page.locator('#mcp-target').selectOption('portable');
-    await page.locator('#mcp-server-name').fill('status');
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#mcp-server-name')?.value === 'status', undefined, { timeout: browserTimeout });
+    expect(await page.locator('#mcp-target').inputValue()).toBe('portable');
+    expect(await page.locator('#mcp-server-name').inputValue()).toBe('status');
     await page.locator('#mcp-session-timeout').fill(String(browserTimeout));
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
@@ -159,10 +162,14 @@ e2e('drives the MCP App and deterministic eval in real Chrome', { timeout: 150_0
     await captureExampleState(page, 'mcp-app', 'mcp-session-ready');
 
     await page.getByRole('button', { name: 'show-status', exact: true }).click();
-    await page.locator('#mcp-tool-arguments-service').fill('compiler');
+    await page.locator('#mcp-tool-arguments-service').selectOption('compiler');
+    await page.waitForFunction(() => {
+      const input = document.querySelector<HTMLSelectElement>('#mcp-tool-arguments-service');
+      return input?.value === 'compiler' && input.getAttribute('aria-invalid') === null;
+    }, undefined, { timeout: browserTimeout });
     await page.getByRole('button', { name: 'Call show-status' }).click();
     const history = page.getByRole('region', { name: 'Invocation history' });
-    await expect(history).toContainText('compiler is healthy', { timeout: browserTimeout });
+    await expect(history).toContainText('Compiler service is ready for release.', { timeout: browserTimeout });
     await expect(history).toContainText('"status": "healthy"', { timeout: browserTimeout });
     await captureExampleState(page, 'mcp-app', 'mcp-tool-result');
 

@@ -9,6 +9,7 @@ import type {
   HookPlaygroundSimulation,
 } from '../../agent-bundle/src/dev/playground/hook-playground-service.ts';
 import { HookClient } from '../src/hooks/hook-client.ts';
+import * as hooksPage from '../src/hooks/hooks-page.tsx';
 import { HookRequestLifecycle, HookSimulationView, HooksPage, runHookReplay, runHookSimulation } from '../src/hooks/hooks-page.tsx';
 import { hookPlaygroundViewFor } from '../src/hooks/hooks-model.ts';
 
@@ -55,6 +56,44 @@ const diagnostics: HookPlaygroundDiagnosticResult = {
 const response = (body: unknown): Response => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json' },
   status: 200,
+});
+
+it('provides event-shaped canonical documents for each Hook event', () => {
+  const { canonicalHookInput } = hooksPage as typeof hooksPage & {
+    readonly canonicalHookInput: (event: 'afterTool' | 'beforeTool' | 'sessionStart' | 'stop') => Readonly<Record<string, unknown>>;
+  };
+
+  expect(canonicalHookInput).toBeTypeOf('function');
+  expect(canonicalHookInput('sessionStart')).toEqual({
+    cwd: '/workspace',
+    sessionId: 'workbench-preview',
+    source: 'workbench',
+    transcriptPath: '/workspace/transcript.json',
+  });
+  expect(canonicalHookInput('beforeTool')).toEqual({
+    cwd: '/workspace',
+    sessionId: 'workbench-preview',
+    toolInput: {},
+    toolName: 'shell',
+    toolUseId: 'workbench-preview-tool',
+    transcriptPath: '/workspace/transcript.json',
+  });
+  expect(canonicalHookInput('afterTool')).toEqual({
+    cwd: '/workspace',
+    sessionId: 'workbench-preview',
+    toolInput: {},
+    toolName: 'shell',
+    toolResponse: {},
+    toolUseId: 'workbench-preview-tool',
+    transcriptPath: '/workspace/transcript.json',
+  });
+  expect(canonicalHookInput('stop')).toEqual({
+    cwd: '/workspace',
+    lastAssistantMessage: 'Workbench preview completed.',
+    sessionId: 'workbench-preview',
+    stopHookActive: false,
+    transcriptPath: '/workspace/transcript.json',
+  });
 });
 
 it('renders the canonical intent, host mapping, and native trace of a simulation', () => {

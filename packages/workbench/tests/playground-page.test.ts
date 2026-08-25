@@ -14,6 +14,7 @@ import {
   PlaygroundPage,
   PlaygroundTraceView,
 } from '../src/playground/playground-page.tsx';
+import * as playgroundPage from '../src/playground/playground-page.tsx';
 import { deferred } from './support/async.ts';
 
 const epoch = { digest: 'sha256-current', id: 'epoch-current' };
@@ -40,6 +41,46 @@ const nativeCatalog = {
 
 const replay = (nextSession: PlaygroundSession, events: readonly PlaygroundTraceEvent[] = []): PlaygroundReplay => ({
   cursor: { afterSequence: events.at(-1)?.sequence ?? 0 }, events, session: nextSession,
+});
+
+it('chooses the first valid target and script without replacing valid explicit choices', () => {
+  const { playgroundSelectionFor } = playgroundPage as typeof playgroundPage & {
+    readonly playgroundSelectionFor: (input: {
+      readonly operation: 'native.prompt' | 'skill.inspect' | 'hook.simulate' | 'mcp.call-tool' | 'script.run';
+      readonly operationIsImplicit: boolean;
+      readonly scriptId: string;
+      readonly target: string;
+    }, targets: readonly { readonly digest: string; readonly name: string }[], scripts: readonly { readonly id: string; readonly name: string; readonly target: string }[]) => {
+      readonly operation: string;
+      readonly scriptId: string;
+      readonly target: string;
+    };
+  };
+  const targets = [
+    { digest: 'portable-digest', name: 'portable' },
+    { digest: 'codex-digest', name: 'codex' },
+  ] as const;
+  const scripts = [
+    { id: 'script:zeta', name: 'zeta', target: 'portable' },
+    { id: 'script:alpha', name: 'alpha', target: 'portable' },
+    { id: 'script:other', name: 'other', target: 'codex' },
+  ] as const;
+
+  expect(playgroundSelectionFor).toBeTypeOf('function');
+  expect(playgroundSelectionFor({ operation: 'skill.inspect', operationIsImplicit: true, scriptId: '', target: '' }, targets, scripts)).toEqual({
+    operation: 'script.run', scriptId: 'script:alpha', target: 'portable',
+  });
+  expect(playgroundSelectionFor({ operation: 'skill.inspect', operationIsImplicit: false, scriptId: 'script:zeta', target: 'portable' }, targets, scripts)).toEqual({
+    operation: 'skill.inspect', scriptId: 'script:zeta', target: 'portable',
+  });
+  expect(playgroundSelectionFor({ operation: 'skill.inspect', operationIsImplicit: true, scriptId: '', target: '' }, [
+    { digest: 'claude-digest', name: 'claude' },
+    { digest: 'portable-digest', name: 'portable' },
+  ], scripts)).toMatchObject({ target: 'portable' });
+  expect(playgroundSelectionFor({ operation: 'skill.inspect', operationIsImplicit: true, scriptId: '', target: 'portable' }, targets, [
+    { id: 'script:detect-risk', name: 'detect-risk', target: 'portable' },
+    { id: 'script:verify-release', name: 'verify-release', target: 'portable' },
+  ])).toMatchObject({ scriptId: 'script:verify-release' });
 });
 
 it('renders typed server-owned operation drafts including a catalog-selected script capability', () => {

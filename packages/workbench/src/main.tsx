@@ -161,6 +161,7 @@ const Workbench = () => {
       case 'mcp':
         screen = <McpScreen
           appPreviewClient={mcpAppClient.current}
+          artifactClient={artifactClient.current}
           connectionError={connectionError}
           controller={mcpController}
           model={mcpModel}

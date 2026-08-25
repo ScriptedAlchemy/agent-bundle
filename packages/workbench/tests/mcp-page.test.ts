@@ -28,6 +28,7 @@ import {
   supportedMcpAppPreviewProfiles,
   type McpPageController,
 } from '../src/mcp/mcp-page.tsx';
+import * as mcpPage from '../src/mcp/mcp-page.tsx';
 import { mcpProtocolTraceDownload } from '../src/mcp/mcp-protocol-trace.ts';
 
 const traceBinding = Object.freeze({ epochId: 'epoch-trace', serverName: 'weather', target: 'portable' as const });
@@ -154,6 +155,31 @@ const reducedModelForConfig = (config: McpSessionInspectorConfig): McpBrowserSes
 };
 
 describe('MCP page', () => {
+  it('filters frozen artifact server options to the target and chooses the first valid server', () => {
+    const { mcpPageServerNameFor, mcpPageServerOptionsFor } = mcpPage as typeof mcpPage & {
+      readonly mcpPageServerNameFor: (serverName: string, options: readonly { readonly name: string; readonly target: string }[], allOptions: readonly { readonly name: string; readonly target: string }[]) => string;
+      readonly mcpPageServerOptionsFor: (options: readonly { readonly name: string; readonly target: string }[], target: string) => readonly { readonly name: string; readonly target: string }[];
+    };
+    const allOptions = [
+      { name: 'status', target: 'portable' },
+      { name: 'build', target: 'portable' },
+      { name: 'codex-only', target: 'codex' },
+    ] as const;
+
+    expect(mcpPageServerOptionsFor).toBeTypeOf('function');
+    expect(mcpPageServerNameFor).toBeTypeOf('function');
+    const options = mcpPageServerOptionsFor(allOptions, 'portable');
+    expect(options).toEqual([
+      { name: 'status', target: 'portable' },
+      { name: 'build', target: 'portable' },
+    ]);
+    expect(Object.isFrozen(options)).toBe(true);
+    expect(Object.isFrozen(options[0]!)).toBe(true);
+    expect(mcpPageServerNameFor('', options, allOptions)).toBe('status');
+    expect(mcpPageServerNameFor('codex-only', options, allOptions)).toBe('status');
+    expect(mcpPageServerNameFor('manually-entered', options, allOptions)).toBe('manually-entered');
+  });
+
   it('renders the epoch-bound lifecycle, ordered catalog, operations, history, and one accessible trace view', () => {
     const markup = renderToStaticMarkup(createElement(McpPage, {
       controller: controller(),

@@ -56,7 +56,14 @@ export interface McpPageProps {
   readonly onDownloadTrace?: (download: McpDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
   readonly onResetSession?: () => void;
+  /** Artifact-inspected server choices are advisory defaults; operators may still enter another server name. */
+  readonly serverOptions?: readonly McpPageServerOption[];
   readonly targetOptions: readonly string[];
+}
+
+export interface McpPageServerOption {
+  readonly name: string;
+  readonly target: string;
 }
 
 export type McpConfigDownload = McpDownload;
@@ -120,6 +127,30 @@ type CatalogItem = Readonly<{
 }>;
 
 const traceTabs: readonly TraceTab[] = ['raw', 'logs', 'progress'];
+
+const noMcpPageServerOptions: readonly McpPageServerOption[] = Object.freeze([]);
+
+/** Keeps only the immutable artifact servers that the selected generated target can start. */
+export const mcpPageServerOptionsFor = (
+  options: readonly McpPageServerOption[],
+  target: string,
+): readonly McpPageServerOption[] => Object.freeze(options
+  .filter((option) => option.target === target)
+  .map((option) => Object.freeze({ name: option.name, target: option.target })));
+
+const mcpPageTargetFor = (target: string, options: readonly string[]): string =>
+  options.includes(target) ? target : options[0] ?? '';
+
+/** Replaces only a stale catalog-backed name, retaining arbitrary operator-entered names for the datalist input. */
+export const mcpPageServerNameFor = (
+  serverName: string,
+  options: readonly McpPageServerOption[],
+  allOptions: readonly McpPageServerOption[],
+): string => {
+  if (options.some((option) => option.name === serverName)) return serverName;
+  if (serverName.length > 0 && !allOptions.some((option) => option.name === serverName)) return serverName;
+  return options[0]?.name ?? '';
+};
 
 export const createMcpPageActionTracker = (): McpPageActionTracker => {
   const pending = new Set<string>();
@@ -388,11 +419,14 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   </section>;
 };
 
-export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onResetSession, presentationActive = true, targetOptions }: McpPageProps) => {
+export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onResetSession, presentationActive = true, serverOptions = noMcpPageServerOptions, targetOptions }: McpPageProps) => {
   const [model, setModel] = useState(() => controller.model);
   const [epochId, setEpochId] = useState(initialBinding?.epochId ?? '');
-  const [target, setTarget] = useState(initialBinding?.target ?? '');
-  const [serverName, setServerName] = useState(initialBinding?.serverName ?? '');
+  const [target, setTarget] = useState(() => mcpPageTargetFor(initialBinding?.target ?? '', targetOptions));
+  const [serverName, setServerName] = useState(() => {
+    const initialTarget = mcpPageTargetFor(initialBinding?.target ?? '', targetOptions);
+    return mcpPageServerNameFor(initialBinding?.serverName ?? '', mcpPageServerOptionsFor(serverOptions, initialTarget), serverOptions);
+  });
   const [timeoutMs, setTimeoutMs] = useState('5000');
   const [timeoutError, setTimeoutError] = useState<string>();
   const [activeTimeoutMs, setActiveTimeoutMs] = useState(controller.session?.timeoutMs);
@@ -429,6 +463,13 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     setModel(next);
     setActiveTimeoutMs(controller.session?.timeoutMs);
   }), [controller]);
+  useEffect(() => {
+    setTarget((current) => mcpPageTargetFor(current, targetOptions));
+  }, [targetOptions]);
+  useEffect(() => {
+    const options = mcpPageServerOptionsFor(serverOptions, target);
+    setServerName((current) => mcpPageServerNameFor(current, options, serverOptions));
+  }, [serverOptions, target]);
   useEffect(() => () => { void appPreviewController.current?.close(); }, []);
 
   const setActiveAppPreviewController = useCallback((next: McpAppPreviewController | undefined): void => {
@@ -507,6 +548,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const traceEntries = traceTab === 'raw' ? rawTrace : traceTab === 'logs' ? model.logs : model.progress;
   const traceLabel = traceTab === 'raw' ? 'Raw protocol' : traceTab === 'logs' ? 'Logs' : 'Progress';
   const tracePanelId = 'mcp-trace-panel';
+  const targetServerOptions = mcpPageServerOptionsFor(serverOptions, target);
   const selectTraceTab = (next: TraceTab): void => {
     setTraceTab(next);
     traceTabsByName.current[next]?.focus();
@@ -566,13 +608,20 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
           </select>
         </label>
         <label htmlFor="mcp-target">Generated target
-          <select disabled={!controls.open} id="mcp-target" onChange={(event) => setTarget(event.currentTarget.value)} required value={target}>
+          <select disabled={!controls.open} id="mcp-target" onChange={(event) => {
+            const nextTarget = event.currentTarget.value;
+            setTarget(nextTarget);
+            setServerName((current) => mcpPageServerNameFor(current, mcpPageServerOptionsFor(serverOptions, nextTarget), serverOptions));
+          }} required value={target}>
             <option value="">Select a target</option>
             {targetOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
         <label htmlFor="mcp-server-name">Server name
-          <input disabled={!controls.open} id="mcp-server-name" onChange={(event) => setServerName(event.currentTarget.value)} required value={serverName} />
+          <input disabled={!controls.open} id="mcp-server-name" list="mcp-server-options" onChange={(event) => setServerName(event.currentTarget.value)} required value={serverName} />
+          <datalist id="mcp-server-options">
+            {targetServerOptions.map((option) => <option key={`${option.target}/${option.name}`} value={option.name}>{option.name}</option>)}
+          </datalist>
         </label>
         <label htmlFor="mcp-session-timeout">Session timeout (ms)
           <input
