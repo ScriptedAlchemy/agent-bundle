@@ -132,13 +132,16 @@ it('publishes the MCP App example service readiness across targets and returns d
         },
       },
     });
-    expect(inspected.model).toMatchObject({
-      hooks: [{ event: 'sessionStart', targets: ['claude', 'codex'] }],
-      mcpApps: [{ name: 'status', targets: ['portable'] }],
-      mcpServers: [{ name: 'status', targets: ['claude', 'codex', 'portable'] }],
-      scripts: [{ name: 'check-service-fixture', targets: ['claude', 'codex', 'portable'] }],
-      skills: [{ name: 'service-readiness', targets: ['portable', 'codex', 'claude'] }],
-      targets: [{ name: 'portable' }, { name: 'codex' }, { name: 'claude' }],
+    expect(inspected).toMatchObject({
+      model: {
+        hooks: [{ event: 'sessionStart', targets: ['claude', 'codex'] }],
+        mcpApps: [{ name: 'status', targets: ['portable'] }],
+        mcpServers: [{ name: 'status', targets: ['claude', 'codex', 'portable'] }],
+        scripts: [{ name: 'check-service-fixture', targets: ['claude', 'codex', 'portable'] }],
+        skills: [{ name: 'service-readiness', targets: ['portable', 'codex', 'claude'] }],
+        targets: [{ name: 'portable' }, { name: 'codex' }, { name: 'claude' }],
+      },
+      state: 'ready',
     });
     for (const target of ['portable', 'codex', 'claude'] as const) {
       await expect(readFile(join(output, target, 'skills', 'service-readiness', 'SKILL.md'), 'utf8'))
@@ -213,6 +216,7 @@ it('publishes the MCP App example service readiness across targets and returns d
 it('simulates the Hooks example and executes release checks', async () => {
   const root = join(examplesRoot, 'hooks-and-scripts');
   const output = join(root, '.agent-bundle', 'example-contract');
+  const unrelatedCwd = await mkdtemp(join(tmpdir(), 'hooks-and-scripts-contract-'));
   await rm(output, { force: true, recursive: true });
 
   try {
@@ -220,6 +224,10 @@ it('simulates the Hooks example and executes release checks', async () => {
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
     const artifactCatalog = built.build.compiledEntries.map(({ name }) => name);
     expect(artifactCatalog).toEqual(expect.arrayContaining(['verify-release', 'detect-risk']));
+    await expect(readFile(join(output, 'portable', 'assets', 'release', 'release-manifest.json'), 'utf8'))
+      .resolves.toContain('"version": "2.4.0"');
+    await expect(readFile(join(output, 'portable', 'assets', 'release', 'risk-register.json'), 'utf8'))
+      .resolves.toContain('"id": "REL-204"');
     const hooks = await listHooks({ artifact: output, root });
     expect(hooks).toHaveLength(2);
     const hook = hooks.find(({ target }) => target === 'codex');
@@ -236,14 +244,14 @@ it('simulates the Hooks example and executes release checks', async () => {
       root,
       target: hook!.target,
     });
-    expect(result.additionalContext).toContain('release preparation');
+    expect(result).toMatchObject({ additionalContext: expect.stringContaining('release preparation') });
     const verify = await execFile(process.execPath, [
       join(output, 'portable', 'scripts', 'verify-release.mjs'),
-    ], { cwd: root });
+    ], { cwd: unrelatedCwd });
     expect(verify.stdout).toContain('Release 2.4.0 is ready for packaging.');
     const blocker = await execFile(process.execPath, [
       join(output, 'portable', 'scripts', 'detect-risk.mjs'),
-    ], { cwd: root }).then(
+    ], { cwd: unrelatedCwd }).then(
       () => {
         throw new Error('Expected detect-risk to block release packaging.');
       },
@@ -252,6 +260,9 @@ it('simulates the Hooks example and executes release checks', async () => {
     expect(blocker.stderr).toContain('REL-204');
     expect(blocker.code).toBe(2);
   } finally {
-    await rm(output, { force: true, recursive: true });
+    await Promise.all([
+      rm(output, { force: true, recursive: true }),
+      rm(unrelatedCwd, { force: true, recursive: true }),
+    ]);
   }
 });

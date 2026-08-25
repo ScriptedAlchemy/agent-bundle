@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
 const requiredArtifacts = ['package', 'checksums', 'sbom'] as const;
 
@@ -15,7 +14,7 @@ interface ReleaseManifest {
   readonly version?: unknown;
 }
 
-const manifestPath = join(process.cwd(), 'release', 'release-manifest.json');
+const manifestPath = new URL('../assets/release/release-manifest.json', import.meta.url);
 
 const readManifest = async (): Promise<ReleaseManifest> => JSON.parse(await readFile(manifestPath, 'utf8')) as ReleaseManifest;
 

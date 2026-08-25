@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
 interface ReleaseRisk {
   readonly id?: unknown;
@@ -12,7 +11,7 @@ interface RiskRegister {
   readonly risks?: readonly ReleaseRisk[];
 }
 
-const registerPath = join(process.cwd(), 'release', 'risk-register.json');
+const registerPath = new URL('../assets/release/risk-register.json', import.meta.url);
 
 try {
   const register = JSON.parse(await readFile(registerPath, 'utf8')) as RiskRegister;

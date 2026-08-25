@@ -19,8 +19,9 @@ blocking script traces, and live Logs.
    release checks before it continues the session.
 2. Press **Replay saved simulation** to rerun the exact epoch-bound Hook input.
 3. Open **Playground** and run `verify-release`. It reads
-   `release/release-manifest.json`, confirms the changelog and three required
-   artifacts, and reports that release 2.4.0 is ready for packaging.
+   the packaged `release/release-manifest.json` asset relative to its emitted
+   module, confirms the changelog and three required artifacts, and reports
+   that release 2.4.0 is ready for packaging.
 4. Run `detect-risk`. It reads `release/risk-register.json`, reports the open
    high-severity risk `REL-204`, and exits with code 2 to block packaging.
 5. Open **Logs** to filter the emitted records by producer, level, kind, or
