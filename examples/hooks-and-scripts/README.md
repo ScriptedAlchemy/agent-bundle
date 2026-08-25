@@ -27,7 +27,7 @@ The checked-in project is healthy. To see last-good artifact behavior, replace
 the body of `src/hooks/session-start.ts` temporarily with:
 
 ```ts
-export default () => ({ outcome: 'not-a-canonical-outcome' });
+export default () => ({
 ```
 
 Press **Rebuild**. The Workbench reports the new diagnostic while retaining the

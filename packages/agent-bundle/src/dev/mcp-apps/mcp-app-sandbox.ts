@@ -21,7 +21,8 @@ const PROXY_CONTENT_SECURITY_POLICY = [
   "frame-src 'self'",
   'img-src data:',
   "script-src 'unsafe-inline'",
-  "style-src 'sha256-9kMTjdnsu6JTVyJ5Ypiyx8E5kewvUVarbjptSSH/2bM='",
+  // The App srcdoc inherits this policy before its resource-specific CSP is applied.
+  "style-src 'unsafe-inline'",
 ].join('; ');
 
 const SHELL = `<!doctype html>
@@ -52,7 +53,8 @@ const SHELL = `<!doctype html>
       try { const serialized = JSON.stringify(value); return typeof serialized === 'string' ? new TextEncoder().encode(serialized).byteLength : Infinity; } catch { return Infinity; } // Non-JSON messages exceed the size budget.
     };
     const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
-    const isRpc = (value) => isRecord(value) && value.jsonrpc === '${JSON_RPC_VERSION}' && byteLength(value) <= maxMessageBytes && (typeof value.method === 'string' || Object.hasOwn(value, 'id'));
+    const isRpcShape = (value) => isRecord(value) && value.jsonrpc === '${JSON_RPC_VERSION}' && (typeof value.method === 'string' || Object.hasOwn(value, 'id'));
+    const isRpc = (value) => isRpcShape(value) && byteLength(value) <= maxMessageBytes;
     const isNotification = (value, method) => isRpc(value) && value.method === method && !Object.hasOwn(value, 'id');
     const isSandboxMethod = (method) => typeof method === 'string' && method.startsWith('ui/notifications/sandbox-');
     const cspSources = (sources) => {
@@ -84,17 +86,18 @@ const SHELL = `<!doctype html>
     const isInitializeResponse = (value) => isRpc(value) && !Object.hasOwn(value, 'method') && Object.hasOwn(value, 'id') && value.id === initializeId && (Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error'));
     window.addEventListener('message', (event) => {
       if (event.source === parent) {
-        if (event.origin !== configuration.hostOrigin || !isRpc(event.data)) return;
+        if (event.origin !== configuration.hostOrigin || !isRpcShape(event.data)) return;
         const message = event.data;
-        if (isNotification(message, resourceReadyMethod)) {
+        if (message.method === resourceReadyMethod && !Object.hasOwn(message, 'id')) {
           const params = message.params;
           if (lifecycle !== 'proxy-ready' || !isRecord(params) || typeof params.html !== 'string') return;
-          if (byteLength(message) > maxMessageBytes || (Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string') || (Object.hasOwn(params, 'csp') && !isRecord(params.csp)) || (Object.hasOwn(params, 'permissions') && !isRecord(params.permissions))) return;
+          if ((Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string') || (Object.hasOwn(params, 'csp') && !isRecord(params.csp)) || (Object.hasOwn(params, 'permissions') && !isRecord(params.permissions))) return;
           app.allow = permissionsAllow(params.permissions);
           app.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(buildCsp(params.csp)) + '">' + params.html;
           lifecycle = 'resource-ready';
           return;
         }
+        if (!isRpc(message)) return;
         if (isSandboxMethod(message.method)) return;
         if (lifecycle === 'initializing' && isInitializeResponse(message)) {
           lifecycle = 'initialize-responded';
@@ -426,7 +429,6 @@ export const createMcpAppSandboxBridge = (
         ...(resource.csp === undefined ? {} : { csp: resource.csp }),
         ...(resource.permissions === undefined ? {} : { permissions: resource.permissions }),
       });
-      if (!isMessage(message, relay.maxMessageBytes)) return false;
       lifecycle = 'resource-ready';
       post(message);
       return true;

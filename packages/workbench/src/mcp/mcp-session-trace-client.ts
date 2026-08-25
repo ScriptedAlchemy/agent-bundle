@@ -31,9 +31,6 @@ export interface McpSessionTraceClientOptions {
   stream(sessionId: string, after: number, signal?: AbortSignal): Promise<Response>;
 }
 
-// Matches the foreground MCP session route's per-subscriber stream byte budget.
-const maximumTraceFrameBytes = 256 * 1024;
-
 const validCursor = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
@@ -193,7 +190,6 @@ export class McpSessionTraceClient {
       };
       await readNdjsonResponseFrames(response, receiveLine, {
         invalidFrameError: this.#invalid,
-        maxFrameBytes: maximumTraceFrameBytes,
         missingBodyError: () => this.#options.createError('Foreground MCP trace stream did not include a body.'),
         signal,
       });

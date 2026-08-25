@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json",
     "check": "pnpm build && pnpm test && pnpm lint && pnpm typecheck",
     "test:spot-check": "rstest --config rstest.config.ts packages/agent-bundle/tests/micro-eval-spot-check.test.ts",
+    "test:examples:browser": "rstest --config rstest.config.ts packages/workbench/tests/examples-real.e2e.test.ts",
     "test:packed": "rstest --config rstest.config.ts packages/agent-bundle/tests/release-audit.test.ts packages/agent-bundle/tests/packed-consumer.test.ts packages/agent-bundle/tests/dev-workbench-packaging.test.ts packages/workbench/tests/packed-release.e2e.test.ts",
     "test:packed:native": "rstest --config rstest.config.ts packages/agent-bundle/tests/packed-native-smoke.test.ts",
     "test:packed:native:claude": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CLAUDE_SMOKE=1 pnpm test:packed:native",

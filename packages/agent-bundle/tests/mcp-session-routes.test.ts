@@ -1,4 +1,3 @@
-import { get as httpGet } from 'node:http';
 
 import { expect, it } from '@rstest/core';
 
@@ -16,7 +15,6 @@ import type {
   McpSessionReplayOverflow,
   McpSessionTraceSubscription,
 } from '../src/dev/mcp-session/mcp-session-service.ts';
-import { eventually } from './support/eventually.ts';
 import {
   authorize,
   originHeaders as headers,
@@ -178,19 +176,6 @@ const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promi
     output += decoder.decode(next.value, { stream: true });
   }
 };
-
-const readAbortedStream = async (url: string): Promise<string> => new Promise((resolvePromise) => {
-  let output = '';
-  const request = httpGet(url, { headers: headers() }, (response) => {
-    response.setEncoding('utf8');
-    response.on('data', (chunk: string) => {
-      output += chunk;
-    });
-    response.once('close', () => resolvePromise(output));
-    response.once('error', () => resolvePromise(output));
-  });
-  request.once('error', () => resolvePromise(output));
-});
 
 it('admits one positive session timeout with the immutable session snapshot', async () => {
   const service = new RecordingService();
@@ -447,35 +432,16 @@ it('keeps an authenticated trace reader open while cancel and restart preserve t
   }
 });
 
-it('unsubscribes a synchronous replay stream when bounded backpressure closes it before subscription assignment', async () => {
+it('streams a built MCP App resource frame without imposing a bundle-size cap', async () => {
   const service = new RecordingService();
-  const oversized = 'x'.repeat(512 * 1024);
-  service.session.queueReplay({ kind: 'logging', occurredAt: 1, payload: oversized, sequence: 1 });
-  service.session.queueReplay({ kind: 'logging', occurredAt: 2, payload: oversized, sequence: 2 });
+  const payload = 'x'.repeat(2 * 1024 * 1024);
+  const entry = { direction: 'server' as const, kind: 'frame' as const, message: { result: { contents: [{ text: payload }] } }, occurredAt: 1, sequence: 1 };
+  service.session.queueReplay(entry);
   const started = await startRoutes(service);
 
   try {
-    await new Promise<void>((resolvePromise) => {
-      const request = httpGet(`${started.url}/api/mcp/sessions/session-a/stream?after=0`, { headers: headers() }, (response) => {
-        response.resume();
-        resolvePromise();
-      });
-      request.once('error', () => resolvePromise());
-    });
-    await eventually(() => service.session.subscriptionCount === 0, 250);
-  } finally {
-    await started.close();
-  }
-});
-
-it('closes an oversized first replay frame before any NDJSON bytes reach the reader', async () => {
-  const service = new RecordingService();
-  service.session.queueReplay({ kind: 'logging', occurredAt: 1, payload: 'x'.repeat(512 * 1024), sequence: 1 });
-  const started = await startRoutes(service);
-
-  try {
-    await expect(within(readAbortedStream(`${started.url}/api/mcp/sessions/session-a/stream?after=0`), 250)).resolves.toBe('');
-    expect(service.session.subscriptionCount).toBe(0);
+    const stream = await fetch(`${started.url}/api/mcp/sessions/session-a/stream?after=0`, { headers: headers() });
+    await expect(readLines(stream, 1)).resolves.toEqual([entry]);
   } finally {
     await started.close();
   }

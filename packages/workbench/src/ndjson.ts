@@ -1,5 +1,5 @@
 interface ReadNdjsonByteFramesOptions {
-  readonly maxFrameBytes: number;
+  readonly maxFrameBytes?: number;
   readonly onFrame: (bytes: Uint8Array) => void;
   /** Called when the stream ends with bytes that never saw a terminating newline. */
   readonly onIncomplete: (bytes: Uint8Array) => void;
@@ -19,7 +19,7 @@ const readNdjsonByteFrames = async (
   const parts: Uint8Array[] = [];
   let partBytes = 0;
   const append = (part: Uint8Array): void => {
-    if (partBytes + part.byteLength > options.maxFrameBytes) options.onLimitExceeded();
+    if (options.maxFrameBytes !== undefined && partBytes + part.byteLength > options.maxFrameBytes) options.onLimitExceeded();
     if (part.byteLength > 0) parts.push(part);
     partBytes += part.byteLength;
   };
@@ -56,9 +56,9 @@ const readNdjsonByteFrames = async (
 };
 
 export interface ReadNdjsonResponseFramesOptions {
-  /** Error for oversized frames and, unless overridden, missing bodies and incomplete trailing frames. */
+  /** Error for rejected frames and, unless overridden, missing bodies and incomplete trailing frames. */
   readonly invalidFrameError: () => Error;
-  readonly maxFrameBytes: number;
+  readonly maxFrameBytes?: number;
   /** Replaces `invalidFrameError` for a response that carries no body. */
   readonly missingBodyError?: () => Error;
   /** Receives trailing bytes with no terminating newline; defaults to throwing `invalidFrameError`. */

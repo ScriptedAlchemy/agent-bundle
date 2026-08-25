@@ -201,7 +201,7 @@ export class McpAppFrameRelay {
     if (isProxyReady(message)) {
       if (this.#resourceProvided) return false;
       this.#resourceProvided = true;
-      return this.#post(messageForResource(this.#resource));
+      return this.#post(messageForResource(this.#resource), false);
     }
     if (!this.#resourceProvided) return false;
     return this.#enqueue(() => this.#deliver(message));
@@ -303,10 +303,10 @@ export class McpAppFrameRelay {
     if (!this.#post(validated)) throw new McpAppFrameRelayError('MCP App proxy window is not available.');
   }
 
-  #post(message: RpcMessage): boolean {
+  #post(message: RpcMessage, enforceMessageLimit = true): boolean {
     const proxy = this.#iframe.contentWindow;
     const size = byteLength(message);
-    if (proxy === null || size === undefined || size > this.#frame.relay.maxMessageBytes) return false;
+    if (proxy === null || size === undefined || (enforceMessageLimit && size > this.#frame.relay.maxMessageBytes)) return false;
     try {
       proxy.postMessage(message, this.#frame.targetOrigin);
       return true;

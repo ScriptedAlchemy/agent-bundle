@@ -23,8 +23,6 @@ import type {
 } from './mcp-session-service.ts';
 import { createBackpressuredWriter, encodedNdjsonFrame, writeKeepAliveStreamHead } from '../route-streams.ts';
 
-const streamQueueByteLimit = 256 * 1024;
-
 interface CreateRoute {
   readonly kind: 'create';
 }
@@ -370,11 +368,7 @@ export class McpSessionRoutes {
     });
 
     const stream = { subscription: undefined as McpSessionTraceSubscription | undefined };
-    const writer = createBackpressuredWriter(response, {
-      byteLimit: streamQueueByteLimit,
-      countInFlightBytes: true,
-      rejectOversizedFrame: true,
-    });
+    const writer = createBackpressuredWriter(response, {});
     let cleanup = (): void => undefined;
     const finishStream = (): void => {
       if (writer.closed) return;

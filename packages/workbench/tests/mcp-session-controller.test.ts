@@ -984,6 +984,30 @@ it('reports a terminal trace stream EOF as an explicit controller error instead 
   await controller.close();
 });
 
+it('keeps a built MCP App resource frame in the live trace', async () => {
+  const stream = traceStream();
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async () => stream.response,
+    trace: async () => ({ entries: [] }),
+  };
+  const controller = createMcpSessionController({ clientFactory: fakeClient, routes, transportFactory: fakeTransport });
+  await controller.open(binding);
+
+  const text = 'x'.repeat(2 * 1024 * 1024);
+  stream.send({ direction: 'server', kind: 'frame', message: { result: { contents: [{ text }] } }, occurredAt: 1, sequence: 1 });
+  await eventually(() => controller.model.timeline.entries.length === 1);
+
+  expect(controller.model.phase).toBe('ready');
+  expect(controller.model.timeline.entries).toEqual([
+    { direction: 'server', kind: 'frame', message: { result: { contents: [{ text }] } }, occurredAt: 1, sequence: 1 },
+  ]);
+  stream.close();
+  await controller.close();
+});
+
 const invalidTraceBodies = (): readonly (readonly [string, BodyInit])[] => {
   const entry = { direction: 'server', kind: 'logging', occurredAt: 1, payload: { message: 'partial' }, sequence: 1 };
   const serialized = JSON.stringify(entry);

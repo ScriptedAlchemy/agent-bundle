@@ -178,6 +178,31 @@ it('enforces the JSON-RPC proxy lifecycle and holds host traffic until initializ
   expect(bridge.send(rpcNotification('app/after-close'))).toBe(false);
 });
 
+it('provides a valid built App resource without imposing the runtime message-size limit', () => {
+  const sent: unknown[] = [];
+  const proxyWindow = {
+    postMessage(message: unknown) {
+      sent.push(message);
+    },
+  };
+  const bridge = createMcpAppSandboxBridge({
+    frame: frameFor(),
+    proxyWindow,
+  });
+  const proxyReady = {
+    data: rpcNotification('ui/notifications/sandbox-proxy-ready'),
+    origin: 'http://127.0.0.1:43124',
+    source: proxyWindow,
+  };
+  const html = `<main>${'x'.repeat(relay.maxMessageBytes)}</main>`;
+  expect(bridge.receive(proxyReady)).toBe(true);
+
+  expect(bridge.provideResource({ html })).toBe(true);
+  expect(sent).toEqual([
+    rpcNotification('ui/notifications/sandbox-resource-ready', { html }),
+  ]);
+});
+
 it('uses an opaque child relay shell with real MCP Apps JSON-RPC notification methods', async () => {
   const proxy = await createMcpAppSandboxProxy({
     hostOrigin: 'http://127.0.0.1:43123',

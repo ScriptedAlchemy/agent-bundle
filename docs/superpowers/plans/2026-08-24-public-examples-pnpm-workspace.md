@@ -837,7 +837,7 @@ Copy the Hooks example to a temporary directory before mutation. Drive these set
 1. `#hooks`: select `sessionStart`, fill canonical input with `source: "browser"`, simulate, assert `additionalContext` equals `example session from browser`.
 2. `#playground`: run `succeed`, assert stdout, stderr, exit 0, and `script.completed`; run `fail`, assert stderr and exit 2.
 3. `#logs`: assert records exist; exercise producer, level, kind, and context filters; open one detail panel.
-4. Replace the copied Hook with `export default () => ({ outcome: 'not-a-canonical-outcome' });`, press Rebuild, assert a visible diagnostic and stale/last-good artifact indicator.
+4. Replace the copied Hook with the incomplete source `export default () => ({`, press Rebuild, assert a visible diagnostic and stale/last-good artifact indicator.
 5. Restore the original bytes, press Rebuild, assert the diagnostic clears and a new ready epoch appears.
 
 Capture `hooks-populated.png`, `script-success.png`, `script-failure.png`, `logs-populated.png`, `diagnostic-stale.png`, and `diagnostic-repaired.png`.
