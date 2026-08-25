@@ -1,24 +1,55 @@
-import type { ReactNode } from 'react';
+import React, { type ReactNode } from 'react';
 
 export type WorkbenchPage = 'artifacts' | 'comparisons' | 'evals' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'skills';
 
-const navigationItems: readonly Readonly<{ glyph: string; label: string; page: WorkbenchPage }>[] = [
-  { glyph: '⊞', label: 'Overview', page: 'overview' },
-  { glyph: '⌘', label: 'Skills', page: 'skills' },
-  { glyph: '⌥', label: 'Hooks', page: 'hooks' },
-  { glyph: '⌁', label: 'MCP playground', page: 'mcp' },
-  { glyph: '▤', label: 'Artifacts', page: 'artifacts' },
-  { glyph: '◇', label: 'Playground', page: 'playground' },
-  { glyph: '≡', label: 'Logs', page: 'logs' },
-  { glyph: '✓', label: 'Evals', page: 'evals' },
-  { glyph: '⇄', label: 'Comparisons', page: 'comparisons' },
+interface NavigationItem {
+  readonly glyph: string;
+  readonly label: string;
+  readonly page: WorkbenchPage;
+}
+
+interface NavigationGroup {
+  readonly items: readonly NavigationItem[];
+  readonly label: string;
+}
+
+const navigationGroups: readonly NavigationGroup[] = [
+  { items: [{ glyph: '⊞', label: 'Overview', page: 'overview' }], label: 'Build' },
+  {
+    items: [
+      { glyph: '⌘', label: 'Skills', page: 'skills' },
+      { glyph: '⌥', label: 'Hooks', page: 'hooks' },
+      { glyph: '◇', label: 'Playground', page: 'playground' },
+      { glyph: '⌁', label: 'MCP playground', page: 'mcp' },
+    ],
+    label: 'Capabilities',
+  },
+  {
+    items: [
+      { glyph: '✓', label: 'Evals', page: 'evals' },
+      { glyph: '⇄', label: 'Comparisons', page: 'comparisons' },
+    ],
+    label: 'Quality',
+  },
+  {
+    items: [
+      { glyph: '▤', label: 'Artifacts', page: 'artifacts' },
+      { glyph: '≡', label: 'Logs', page: 'logs' },
+    ],
+    label: 'Inspect',
+  },
 ];
 
-const workbenchPages: ReadonlySet<string> = new Set(navigationItems.map((item) => item.page));
+const navigationItems = navigationGroups.flatMap((group) => group.items);
 
-export const pageForHash = (): WorkbenchPage => {
-  const page = window.location.hash.slice(1);
-  return workbenchPages.has(page) ? page as WorkbenchPage : 'overview';
+const workbenchPages: ReadonlySet<WorkbenchPage> = new Set(navigationItems.map((item) => item.page));
+
+export const pageForHash = (
+  hash = globalThis.window?.location.hash ?? '',
+  pages: ReadonlySet<WorkbenchPage> = workbenchPages,
+): WorkbenchPage => {
+  const page = hash.slice(1);
+  return workbenchPages.has(page as WorkbenchPage) && pages.has(page as WorkbenchPage) ? page as WorkbenchPage : 'overview';
 };
 
 export const Topbar = ({ connectionError }: { readonly connectionError?: string }) => <header className="topbar">
@@ -29,32 +60,40 @@ export const Topbar = ({ connectionError }: { readonly connectionError?: string 
   </span>
 </header>;
 
-export const Navigation = ({ onNavigate, page }: {
+export const Navigation = ({ onNavigate, page, pages }: {
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
+  readonly pages: ReadonlySet<WorkbenchPage>;
 }) => <nav className="rail" aria-label="Workbench navigation">
   <div className="brand">Agent Bundle</div>
-  {navigationItems.map((item) => (
-    <a
-      key={item.page}
-      aria-current={page === item.page ? 'page' : undefined}
-      className={page === item.page ? 'nav-item nav-item--active' : 'nav-item'}
-      href={`#${item.page}`}
-      onClick={(event) => { event.preventDefault(); onNavigate(item.page); }}
-    >
-      <span aria-hidden="true" className="nav-glyph">{item.glyph}</span>
-      {item.label}
-    </a>
-  ))}
+  {navigationGroups.map((group) => {
+    const items = group.items.filter((item) => pages.has(item.page));
+    return items.length === 0 ? undefined : <div className="nav-group" key={group.label}>
+      <span className="nav-group-label">{group.label}</span>
+      {items.map((item) => (
+        <a
+          key={item.page}
+          aria-current={page === item.page ? 'page' : undefined}
+          className={page === item.page ? 'nav-item nav-item--active' : 'nav-item'}
+          href={`#${item.page}`}
+          onClick={(event) => { event.preventDefault(); onNavigate(item.page); }}
+        >
+          <span aria-hidden="true" className="nav-glyph">{item.glyph}</span>
+          {item.label}
+        </a>
+      ))}
+    </div>;
+  })}
 </nav>;
 
-export const WorkbenchScreen = ({ children, connectionError, onNavigate, page }: {
+export const WorkbenchScreen = ({ children, connectionError, onNavigate, page, pages }: {
   readonly children: ReactNode;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
+  readonly pages: ReadonlySet<WorkbenchPage>;
 }) => <div className="workbench-shell">
-  <Navigation onNavigate={onNavigate} page={page} />
+  <Navigation onNavigate={onNavigate} page={page} pages={pages} />
   <main className="canvas" id={page}>
     <Topbar connectionError={connectionError} />
     {children}

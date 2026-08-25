@@ -64,12 +64,13 @@ export const BundleWorkflow = ({ onNavigate }: { readonly onNavigate: (page: Wor
   </ol>
 </section>;
 
-export const Overview = ({ changedFiles, client, connectionError, onNavigate, status, onStatus }: {
+export const Overview = ({ changedFiles, client, connectionError, onNavigate, pages, status, onStatus }: {
   readonly changedFiles: readonly string[];
   readonly client: ProjectClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onStatus: (status: ProjectStatus) => void;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly status: ProjectStatus;
 }) => {
   const overview = overviewFor(status, changedFiles);
@@ -90,7 +91,7 @@ export const Overview = ({ changedFiles, client, connectionError, onNavigate, st
 
   return (
     <div className="workbench-shell">
-      <Navigation onNavigate={onNavigate} page="overview" />
+      <Navigation onNavigate={onNavigate} page="overview" pages={pages} />
       <main className="canvas" id="overview">
         <Topbar connectionError={connectionError} />
         <div className="page-content">

@@ -49,9 +49,18 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     await page.goto(`${server.url}#skills`);
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'release-review', exact: true })).toBeVisible({ timeout: browserTimeout });
+    for (const unavailable of ['Hooks', 'MCP playground', 'Playground']) {
+      await expect(page.getByRole('link', { name: unavailable, exact: true })).toHaveCount(0);
+    }
     await page.getByRole('tab', { name: 'Markdown' }).click();
     await expect(page.locator('.skill-source')).toContainText('Release review', { timeout: browserTimeout });
     await captureExampleState(page, 'skills-starter', 'skills-populated');
+
+    await page.goto(`${server.url}#hooks`);
+    await waitForSettledWorkbench(page);
+    await expect(page).toHaveURL(new URL('#overview', server.url).href);
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0);
 
     await page.getByRole('link', { name: 'Artifacts' }).click();
     await waitForSettledWorkbench(page);

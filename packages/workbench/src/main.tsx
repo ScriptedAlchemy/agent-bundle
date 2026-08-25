@@ -25,6 +25,11 @@ import { PlaygroundScreen } from './playground-screen.tsx';
 import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
+import {
+  generalWorkbenchPages,
+  loadWorkbenchCapabilities,
+  type WorkbenchCapabilities,
+} from './workbench-capabilities.ts';
 import { Navigation, pageForHash, Topbar, WorkbenchScreen, type WorkbenchPage } from './workbench-screen.tsx';
 import './styles.css';
 
@@ -32,19 +37,26 @@ const errorMessage = (reason: unknown): string => messageFrom(reason, 'Foregroun
 
 const activeEpochId = (status: ProjectStatus): string | undefined => activeEpochFor(status)?.id;
 
-const SkillsScreen = ({ connectionError, evalClient, onNavigate, skillClient, status }: {
+const SkillsScreen = ({ connectionError, evalClient, onNavigate, pages, skillClient, status }: {
   readonly connectionError?: string;
   readonly evalClient: EvalClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly skillClient: SkillClient;
   readonly status: ProjectStatus;
 }) => <div className="workbench-shell">
-  <Navigation onNavigate={onNavigate} page="skills" />
+  <Navigation onNavigate={onNavigate} page="skills" pages={pages} />
   <main className="canvas" id="skills">
     <Topbar connectionError={connectionError} />
     <SkillsPage client={skillClient} evalClient={evalClient} status={status} />
   </main>
 </div>;
+
+type CapabilityState =
+  | Readonly<{ readonly state: 'empty' }>
+  | Readonly<{ readonly buildId: string; readonly state: 'loading' }>
+  | Readonly<{ readonly buildId: string; readonly message: string; readonly state: 'error' }>
+  | Readonly<{ readonly state: 'ready'; readonly value: WorkbenchCapabilities }>;
 
 const Workbench = () => {
   const sessionAuthority = useRef<ForegroundSessionAuthority | undefined>(undefined);
@@ -60,6 +72,8 @@ const Workbench = () => {
   const foregroundGeneration = useRef<number | undefined>(undefined);
   const authority = sessionAuthority.current ?? (sessionAuthority.current = new ForegroundSessionAuthority());
   const [connection, setConnection] = useState<ProjectConnectionState>({ state: 'connecting' });
+  const [capabilityRetry, setCapabilityRetry] = useState(0);
+  const [capabilityState, setCapabilityState] = useState<CapabilityState>({ state: 'empty' });
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
   const [mcpController, setMcpController] = useState(() => createMcpController(authority));
@@ -77,12 +91,21 @@ const Workbench = () => {
   if (logClient.current === undefined) logClient.current = new LogClient({ authority });
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ authority });
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient({ authority });
+  if (skillClient.current === undefined) skillClient.current = new SkillClient();
+
+  const buildId = status === undefined ? undefined : activeEpochId(status);
+  const capabilities = capabilityState.state === 'ready' && capabilityState.value.buildId === buildId
+    ? capabilityState.value
+    : undefined;
+  const pages = capabilities?.pages ?? generalWorkbenchPages;
+  const routesReady = status !== undefined && (buildId === undefined || capabilities !== undefined);
 
   const navigate = (next: WorkbenchPage): void => {
-    const hash = `#${next}`;
+    const available = pages.has(next) ? next : 'overview';
+    const hash = `#${available}`;
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
-    if (next === 'mcp') setMcpPresentation('playground');
-    setPage(next);
+    if (available === 'mcp') setMcpPresentation('playground');
+    setPage(available);
   };
 
   const resetMcpSession = (): void => {
@@ -93,10 +116,8 @@ const Workbench = () => {
 
   useEffect(() => {
     const next = new ProjectClient({ authority });
-    const nextSkillClient = new SkillClient();
     let mounted = true;
     client.current = next;
-    skillClient.current = nextSkillClient;
     const unsubscribeActivity = next.onActivity((activity) => {
       if (mounted) setChangedFiles(activity.changedFiles);
     });
@@ -135,14 +156,46 @@ const Workbench = () => {
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
+    if (buildId === undefined) {
+      setCapabilityState({ state: 'empty' });
+      return () => controller.abort();
+    }
+    setCapabilityState((current) => current.state === 'ready' && current.value.buildId === buildId
+      ? current
+      : { buildId, state: 'loading' });
+    void loadWorkbenchCapabilities({
+      artifactClient: artifactClient.current!,
+      buildId,
+      evalClient: evalClient.current!,
+      signal: controller.signal,
+      skillClient: skillClient.current!,
+    }).then(
+      (value) => { if (!controller.signal.aborted) setCapabilityState({ state: 'ready', value }); },
+      (reason: unknown) => {
+        if (controller.signal.aborted) return;
+        setCapabilityState({
+          buildId,
+          message: messageFrom(reason, 'Bundle capabilities could not be loaded.'),
+          state: 'error',
+        });
+      },
+    );
+    return () => controller.abort();
+  }, [buildId, capabilityRetry]);
+
+  useEffect(() => {
+    if (!routesReady) return undefined;
     const updatePage = () => {
-      setPage(pageForHash());
-      if (window.location.hash === '#mcp') setMcpPresentation('playground');
+      const next = pageForHash(window.location.hash, pages);
+      if (`#${next}` !== window.location.hash) window.history.replaceState(undefined, '', `#${next}`);
+      setPage(next);
+      if (next === 'mcp') setMcpPresentation('playground');
     };
     updatePage();
     window.addEventListener('hashchange', updatePage);
     return () => window.removeEventListener('hashchange', updatePage);
-  }, []);
+  }, [pages, routesReady]);
 
   useEffect(() => () => { void mcpController.close().catch(() => undefined); }, [mcpController]);
   useEffect(() => mcpController.subscribe(setMcpModel), [mcpController]);
@@ -154,6 +207,16 @@ const Workbench = () => {
       <p>{unavailable ? 'Waiting for the foreground server to recover.' : 'Connecting to the foreground server.'}</p>
       {connectionError === undefined ? undefined : <p role="alert">{connectionError}</p>}
     </main>;
+  }
+  if (status !== undefined && buildId !== undefined && capabilities === undefined) {
+    if (capabilityState.state === 'error' && capabilityState.buildId === buildId) {
+      return <main aria-live="polite" className="loading-state">
+        <h1>Bundle capabilities unavailable</h1>
+        <p role="alert">{capabilityState.message}</p>
+        <button onClick={() => setCapabilityRetry((current) => current + 1)} type="button">Retry</button>
+      </main>;
+    }
+    return <main aria-live="polite" className="loading-state"><strong>Loading bundle capabilities…</strong></main>;
   }
   if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
     let screen: ReactNode;
@@ -167,6 +230,7 @@ const Workbench = () => {
           model={mcpModel}
           onNavigate={navigate}
           onResetSession={resetMcpSession}
+          pages={pages}
           presentation={mcpPresentation}
           setPresentation={setMcpPresentation}
           status={status}
@@ -178,41 +242,42 @@ const Workbench = () => {
           connectionError={connectionError}
           onNavigate={navigate}
           onRunChange={setPlaygroundRun}
+          pages={pages}
           playgroundClient={playgroundClient.current}
           run={playgroundRun}
           status={status}
         />;
         break;
       case 'logs':
-        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="logs">
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="logs" pages={pages}>
           <LogsPage client={logClient.current} />
         </WorkbenchScreen>;
         break;
       case 'evals':
-        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="evals">
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="evals" pages={pages}>
           <EvalsPage client={evalClient.current} />
         </WorkbenchScreen>;
         break;
       case 'comparisons':
-        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="comparisons">
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="comparisons" pages={pages}>
           <ComparisonsPage comparisonClient={comparisonClient.current} evalClient={evalClient.current} />
         </WorkbenchScreen>;
         break;
       case 'artifacts':
-        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="artifacts">
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="artifacts" pages={pages}>
           <ArtifactsPage client={artifactClient.current} epochId={activeEpochId(status)} />
         </WorkbenchScreen>;
         break;
       case 'hooks':
-        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="hooks">
+        screen = <WorkbenchScreen connectionError={connectionError} onNavigate={navigate} page="hooks" pages={pages}>
           <HooksPage client={hookClient.current} epochId={activeEpochId(status)} />
         </WorkbenchScreen>;
         break;
       case 'skills':
-        screen = <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} skillClient={skillClient.current} status={status} />;
+        screen = <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} pages={pages} skillClient={skillClient.current} status={status} />;
         break;
       case 'overview':
-        screen = <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} status={status} />;
+        screen = <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} pages={pages} status={status} />;
         break;
       default: {
         const unhandled: never = page;
