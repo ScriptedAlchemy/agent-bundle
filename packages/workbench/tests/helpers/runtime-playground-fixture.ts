@@ -37,7 +37,7 @@ export interface RuntimePlaygroundFixtureOptions {
 
 const buildWorkbench = async (): Promise<void> => {
   const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('npm', ['run', 'build', '--workspace', 'agent-bundle-workbench'], {
+  await execFile('pnpm', ['--filter', 'agent-bundle-workbench', 'build'], {
     cwd: workspaceRoot,
     env: { ...environment, NODE_ENV: 'production' },
   });

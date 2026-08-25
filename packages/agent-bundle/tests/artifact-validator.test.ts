@@ -188,6 +188,7 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
     schemas: [{ name: 'document', validate }],
   },
   artifactLayout: {
+    assets: 'assets',
     scripts: { allowedSuffixes: ['.json', '.mjs', '.sh'], directory: 'scripts' },
     skills: 'skills',
   },

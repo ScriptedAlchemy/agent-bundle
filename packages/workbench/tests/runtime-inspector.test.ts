@@ -61,7 +61,7 @@ const fixtureSource = (root: string): string => `
 describe('Runtime inspector', () => {
   it('renders the six accessible panels, decoded tree, shared protocol, and provider-only render trace in the production bundle', async () => {
     const root = process.cwd();
-    const temp = await mkdtemp(join(root, '.runtime-inspector-'));
+    const temp = await mkdtemp(join(root, 'packages/workbench/.runtime-inspector-'));
     const entry = join(temp, 'runtime-inspector-fixture.tsx');
     const output = join(temp, 'dist');
     await writeFile(entry, fixtureSource(root));
@@ -80,6 +80,8 @@ describe('Runtime inspector', () => {
       const errors: string[] = [];
       page.on('pageerror', (error) => errors.push(error.stack ?? error.message));
       await page.goto(url, { timeout: 5_000, waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(250);
+      if (errors.length > 0) throw new Error(errors.join('\n'));
       await page.getByText('Decoded React tree', { exact: true }).waitFor({ timeout: 5_000 });
       expect(await page.getByRole('tab').allTextContents()).toEqual(['Tree', 'Result', 'Flight', 'Protocol', 'State', 'Diagnostics']);
       expect(await page.locator('[role="tree"]').count()).toBe(1);

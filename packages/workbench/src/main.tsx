@@ -51,6 +51,7 @@ import {
   type PlaygroundScriptCatalog,
 } from './playground/playground-page.tsx';
 import { overviewFor } from './overview-model.ts';
+import { BundleWorkflow } from './overview-page.tsx';
 import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
@@ -386,9 +387,7 @@ const Overview = ({ changedFiles, client, connectionError, onNavigate, runtimeAv
           </span>
         </header>
         <div className="page-content">
-          <div className="page-heading">
-            <h1>Project overview</h1>
-          </div>
+          <BundleWorkflow onNavigate={onNavigate} />
 
           <section aria-labelledby="normalization-heading" className="section">
             <h2 id="normalization-heading">Normalization summary</h2>
