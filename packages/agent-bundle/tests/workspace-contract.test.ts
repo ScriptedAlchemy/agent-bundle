@@ -54,13 +54,21 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   }));
 
   const rootManifest = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as {
+    readonly devDependencies?: Readonly<Record<string, string>>;
     readonly scripts?: Readonly<Record<string, string>>;
   };
   const agentBundleManifest = JSON.parse(
     await readFile(join(process.cwd(), 'packages/agent-bundle/package.json'), 'utf8'),
   ) as {
+    readonly bin?: Readonly<Record<string, string>>;
+    readonly files?: readonly string[];
     readonly scripts?: Readonly<Record<string, string>>;
   };
+  expect(rootManifest.devDependencies).toMatchObject({
+    '@modelcontextprotocol/server': '2.0.0',
+    'agent-bundle': 'workspace:*',
+    'playwright-core': '1.62.1',
+  });
   expect(rootManifest.scripts).toMatchObject({
     build: 'pnpm --filter agent-bundle build',
     'example:hooks': 'pnpm build && pnpm --filter @agent-bundle-example/hooks-and-scripts dev',
@@ -73,6 +81,9 @@ it('selects product packages through the pinned pnpm workspace', async () => {
     build: 'pnpm build:workbench && rslib build',
     'build:workbench': 'pnpm --filter agent-bundle-workbench build',
   });
+  expect(agentBundleManifest.bin).toEqual({ 'agent-bundle': './bin/agent-bundle.js' });
+  expect(agentBundleManifest.files).toContain('bin');
+  await expect(access(join(process.cwd(), 'packages/agent-bundle/bin/agent-bundle.js'))).resolves.toBeUndefined();
 
   await expect(access(join(process.cwd(), 'packages/agent-bundle/rslib.config.ts'))).resolves.toBeUndefined();
   await expect(access(join(process.cwd(), 'rslib.config.ts'))).rejects.toMatchObject({ code: 'ENOENT' });

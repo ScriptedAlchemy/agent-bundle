@@ -11,6 +11,9 @@ importers:
       '@arethetypeswrong/cli':
         specifier: 0.18.5
         version: 0.18.5
+      '@modelcontextprotocol/server':
+        specifier: 2.0.0
+        version: 2.0.0
       '@rsbuild/core':
         specifier: 2.1.13
         version: 2.1.13
@@ -35,6 +38,9 @@ importers:
       '@types/node':
         specifier: 26.2.0
         version: 26.2.0
+      agent-bundle:
+        specifier: workspace:*
+        version: link:packages/agent-bundle
       commander:
         specifier: 15.0.0
         version: 15.0.0
@@ -42,6 +48,9 @@ importers:
         specifier: 0.0.88
         version: 0.0.88
       playwright:
+        specifier: 1.62.1
+        version: 1.62.1
+      playwright-core:
         specifier: 1.62.1
         version: 1.62.1
       publint:

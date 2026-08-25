@@ -35,6 +35,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
+    "@modelcontextprotocol/server": "2.0.0",
     "@rsbuild/core": "2.1.13",
     "@rsbuild/plugin-react": "2.1.0",
     "@rslib/core": "0.23.2",
@@ -43,9 +44,11 @@
     "@rstest/core": "0.11.9",
     "@rstest/playwright": "0.11.9",
     "@types/node": "26.2.0",
+    "agent-bundle": "workspace:*",
     "commander": "15.0.0",
     "pkg-pr-new": "0.0.88",
     "playwright": "1.62.1",
+    "playwright-core": "1.62.1",
     "publint": "0.3.23",
     "typescript": "7.0.2"
   }
