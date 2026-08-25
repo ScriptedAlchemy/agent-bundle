@@ -98,6 +98,12 @@ const allowedUnmountCancellation = ({ error, request }: FailedRequest, origin: s
   if (error !== 'net::ERR_ABORTED' || request.method() !== 'GET') return false;
   const url = new URL(request.url());
   if (url.origin !== origin) return false;
+  if (url.pathname === '/api/hooks') {
+    const buildId = url.searchParams.get('epochId');
+    return [...url.searchParams.keys()].length === 1
+      && typeof buildId === 'string'
+      && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u.test(buildId);
+  }
   return url.pathname === '/api/logs/stream'
     || url.pathname === '/api/logs/replay'
     || /^\/api\/evals\/runs\/[^/]+\/(?:events|stream)$/u.test(url.pathname)
