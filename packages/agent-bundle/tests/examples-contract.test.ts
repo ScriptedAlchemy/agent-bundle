@@ -45,6 +45,8 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
     await expect(readFile(join(output, 'portable', 'skills', 'release-review', 'SKILL.md'), 'utf8'))
       .resolves.toContain('# Release review');
+    await expect(readFile(join(output, 'portable', 'skills', 'release-review', 'SKILL.md'), 'utf8'))
+      .resolves.toContain('## When to use');
     await expect(readFile(join(
       output,
       'portable',
@@ -58,9 +60,34 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
       'portable',
       'skills',
       'release-review',
+      'references',
+      'release-policy.md',
+    ), 'utf8')).resolves.toContain('# Release readiness policy');
+    await expect(readFile(join(
+      output,
+      'portable',
+      'skills',
+      'release-review',
       'assets',
       'report-template.md',
-    ), 'utf8')).resolves.toContain('# Release report');
+    ), 'utf8')).resolves.toContain('# Release readiness report');
+    await expect(runEvals({
+      artifact: output,
+      caseIds: ['release-artifact-is-ready'],
+      root,
+      trials: 1,
+    })).resolves.toMatchObject({
+      run: {
+        harness: 'deterministic',
+        summary: { cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 },
+      },
+      trials: [{
+        caseId: 'release-artifact-is-ready',
+        host: 'portable',
+        outcome: 'pass',
+        provenance: { invocation: { mode: 'explicit', skill: 'release-review' } },
+      }],
+    });
   } finally {
     await rm(output, { force: true, recursive: true });
   }
