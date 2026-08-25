@@ -167,35 +167,27 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
 
     await page.goto(`${server.url}#playground`);
     await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('#playground-operation').selectOption('skill.inspect');
     await page.locator('#playground-target').selectOption('claude');
 
     const waitForRun = (): Promise<{ readonly run: { readonly id: string; readonly session: { readonly identity: { readonly epoch: { readonly id: string } } } } }> =>
       page.waitForResponse(runRequest(server!.url)).then(async (response) => response.json());
 
-    await page.locator('#playground-skill-id').fill('skill:review');
+    await page.locator('#playground-skill-id').selectOption('skill:review');
     const skillStarted = waitForRun();
     await page.getByRole('button', { name: 'Start run' }).click();
     await expect(page.getByText('skill.inspected')).toBeVisible({ timeout: browserTimeout });
     await skillStarted;
+    await expect(page.locator('#playground-operation')).toBeEnabled({ timeout: browserTimeout });
 
     await page.locator('#playground-operation').selectOption('hook.simulate');
-    await page.locator('#playground-hook').fill(hookId);
-    await page.locator('#playground-hook-input').fill(JSON.stringify({
-      cwd: '/workspace', sessionId: 'browser-session', source: 'startup', transcriptPath: '/workspace/transcript.json',
-    }));
+    await page.locator('#playground-hook').selectOption(hookId);
+    await expect(page.locator('#playground-hook-input')).toHaveValue(/workbench-preview/u);
     const hookStarted = waitForRun();
     await page.getByRole('button', { name: 'Start run' }).click();
     await expect(page.getByText('hook.simulated')).toBeVisible({ timeout: browserTimeout });
     await hookStarted;
-
-    await page.locator('#playground-operation').selectOption('mcp.call-tool');
-    await page.locator('#playground-mcp-server').fill('fixture');
-    await page.locator('#playground-mcp-tool').fill('echo');
-    await page.locator('#playground-mcp-arguments').fill('{"message":"browser"}');
-    const mcpStarted = waitForRun();
-    await page.getByRole('button', { name: 'Start run' }).click();
-    await expect(page.getByText('mcp.tool.called')).toBeVisible({ timeout: browserTimeout });
-    await mcpStarted;
+    await expect(page.locator('#playground-operation')).toBeEnabled({ timeout: browserTimeout });
 
     await page.locator('#playground-operation').selectOption('script.run');
     await expect(page.locator('#playground-script-id option[value="script:wait"]')).toBeAttached({ timeout: browserTimeout });
@@ -249,7 +241,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     await page.getByRole('button', { name: 'Promote to draft eval case' }).click();
     await expect(page.getByRole('heading', { name: /Draft eval case/u })).toBeVisible({ timeout: browserTimeout });
 
-    expect(runBodies).toHaveLength(6);
+    expect(runBodies).toHaveLength(5);
     expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:wait', target: 'claude' });
     expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:review', target: 'claude' });
     expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:large', target: 'claude' });

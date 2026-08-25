@@ -153,10 +153,9 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await page.getByRole('button', { name: 'Rebuild' }).click();
     await failedRebuild;
     await expect(page.getByRole('heading', { name: /Diagnostics \([1-9]/u })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.epoch-row--stale')).toContainText('Last good artifact epoch', { timeout: browserTimeout });
-    await expect(page.locator('#overview .status-text')).toHaveText('failed', { timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Last good build', { timeout: browserTimeout });
     await page.waitForTimeout(500);
-    await expect(page.locator('#overview .status-text')).toHaveText('failed', { timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Last good build', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-stale');
 
     await writeFile(hookSource, healthyHook);
@@ -164,10 +163,9 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await page.getByRole('button', { name: 'Rebuild' }).click();
     await repaired;
     await expect(page.getByRole('heading', { name: 'Diagnostics (0)' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.epoch-row--active')).toContainText('Current artifact epoch', { timeout: browserTimeout });
-    await expect(page.locator('#overview .status-text')).toHaveText('idle', { timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
     await page.waitForTimeout(500);
-    await expect(page.locator('#overview .status-text')).toHaveText('idle', { timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-repaired');
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();

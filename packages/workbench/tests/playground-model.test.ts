@@ -75,7 +75,7 @@ it('promotes only selected persisted raw event references once the server finali
   expect(view.state).toBe('finalized');
   expect(view.rawEventRefs).toEqual(['events.jsonl#2']);
   expect(view.canPromote).toBe(true);
-  expect(view.identity).toContainEqual({ label: 'Epoch', value: 'epoch-1' });
+  expect(view.identity).toContainEqual({ label: 'Build ID', value: 'epoch-1' });
 });
 
 it('blocks promotion while a server-owned run remains open', () => {

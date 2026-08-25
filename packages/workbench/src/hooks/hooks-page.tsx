@@ -70,6 +70,10 @@ const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, ImmutableJsonReco
 /** Provides one event-shaped document that can run a generated Hook without host-contract guesswork. */
 export const canonicalHookInput = (event: CanonicalHookEvent): ImmutableJsonRecord => canonicalHookInputs[event];
 
+/** Returns a runnable example only for the canonical Hook events understood by the Workbench. */
+export const canonicalHookInputFor = (event: string): ImmutableJsonRecord | undefined =>
+  Object.hasOwn(canonicalHookInputs, event) ? canonicalHookInputs[event as CanonicalHookEvent] : undefined;
+
 const errorMessage = (reason: unknown): string => messageFrom(reason, 'The hook playground request could not be completed.');
 
 export type HookInputMode = 'fixture' | 'inline';

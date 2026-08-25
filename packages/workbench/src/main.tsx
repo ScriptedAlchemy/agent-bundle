@@ -238,13 +238,14 @@ const Workbench = () => {
         break;
       case 'playground':
         screen = <PlaygroundScreen
-          artifactClient={artifactClient.current}
           connectionError={connectionError}
+          inspection={capabilities!.inspection}
           onNavigate={navigate}
           onRunChange={setPlaygroundRun}
           pages={pages}
           playgroundClient={playgroundClient.current}
           run={playgroundRun}
+          skillTree={capabilities!.skillTree}
           status={status}
         />;
         break;

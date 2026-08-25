@@ -5,13 +5,13 @@ import type { PlaygroundRun } from '../../agent-bundle/src/contracts/playground.
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
 import type { NativePlaygroundCatalog } from '../../agent-bundle/src/contracts/playground.ts';
 
-import type { ArtifactClient } from './artifacts/artifact-client.ts';
+import type { ArtifactInspection } from '../../agent-bundle/src/contracts/artifacts.ts';
+import type { SkillDocumentTree } from '../../agent-bundle/src/contracts/skills.ts';
 import { activeEpochFor } from './overview-model.ts';
 import type { PlaygroundClient } from './playground/playground-client.ts';
 import {
   PlaygroundPage,
   playgroundScriptsForEpoch,
-  type PlaygroundScriptCatalog,
 } from './playground/playground-page.tsx';
 import { WorkbenchScreen, type WorkbenchPage } from './workbench-screen.tsx';
 
@@ -30,23 +30,23 @@ const playgroundTargetsFor = (status: ProjectStatus) => {
     : Object.entries(epoch.targetDigests).map(([name, digest]) => ({ digest, name }));
 };
 
-export const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, pages, playgroundClient, run, status }: {
-  readonly artifactClient: ArtifactClient;
+export const PlaygroundScreen = ({ connectionError, inspection, onNavigate, onRunChange, pages, playgroundClient, run, skillTree, status }: {
   readonly connectionError?: string;
+  readonly inspection: ArtifactInspection;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly pages: ReadonlySet<WorkbenchPage>;
   readonly playgroundClient: PlaygroundClient;
   readonly run: PlaygroundRun | undefined;
+  readonly skillTree: SkillDocumentTree;
   readonly status: ProjectStatus;
 }) => {
   const epoch = activeEpochFor(status);
   const [nativeCatalog, setNativeCatalog] = useState<NativePlaygroundCatalog>();
   const [nativeCatalogError, setNativeCatalogError] = useState<string>();
   const [nativeCatalogLoading, setNativeCatalogLoading] = useState(false);
-  const [scriptCatalog, setScriptCatalog] = useState<PlaygroundScriptCatalog>();
   const visibleNativeCatalog = nativeCatalog?.epochId === epoch?.id ? nativeCatalog : undefined;
-  const scripts = playgroundScriptsForEpoch(scriptCatalog, epoch?.id);
+  const scripts = playgroundScriptsForEpoch({ epochId: inspection.epochId, scripts: inspection.runtime.scripts }, epoch?.id);
 
   useEffect(() => {
     const requestedEpochId = epoch?.id;
@@ -66,21 +66,6 @@ export const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, 
     return () => controller.abort();
   }, [epoch?.id, playgroundClient]);
 
-  useEffect(() => {
-    let current = true;
-    if (epoch === undefined) {
-      setScriptCatalog(undefined);
-      return () => { current = false; };
-    }
-    setScriptCatalog({ epochId: epoch.id, scripts: [] });
-    void artifactClient.inspect(epoch.id).then((inspection) => {
-      if (current) setScriptCatalog({ epochId: epoch.id, scripts: inspection.runtime.scripts });
-    }).catch(() => {
-      if (current) setScriptCatalog({ epochId: epoch.id, scripts: [] });
-    });
-    return () => { current = false; };
-  }, [artifactClient, epoch?.id]);
-
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground" pages={pages}>
     <PlaygroundPage
       catalog={visibleNativeCatalog}
@@ -88,9 +73,11 @@ export const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, 
       catalogLoading={nativeCatalogLoading || (epoch !== undefined && visibleNativeCatalog === undefined && nativeCatalogError === undefined)}
       client={playgroundClient}
       epoch={playgroundEpochFor(status)}
+      hooks={inspection.runtime.hooks}
       onRunChange={onRunChange}
       run={run}
       scripts={scripts}
+      skills={skillTree.skills}
       targets={playgroundTargetsFor(status)}
     />
   </WorkbenchScreen>;
