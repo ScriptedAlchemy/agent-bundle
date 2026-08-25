@@ -11,9 +11,10 @@ import { e2e, execFile, workbenchAssets, workspaceRoot } from './support/workben
 
 const browserTimeout = 5_000;
 
-// This file rebuilds the workbench in both development and production modes, so it keeps
-// its own non-memoized build instead of the shared memoized production-only buildWorkbench.
+// The development-mode case needs its own build; prepared integration runs reuse the
+// production artifact that the integration entrypoint built once.
 const buildWorkbench = async (mode: 'development' | 'production' = 'production'): Promise<void> => {
+  if (mode === 'production' && process.env['AGENT_BUNDLE_WORKBENCH_PREBUILT'] === '1') return;
   const { NODE_ENV: _nodeEnv, RSTEST: _rstest, ...environment } = process.env;
   const isProduction = mode === 'production';
   await execFile('pnpm', isProduction

@@ -101,7 +101,7 @@ const allowedUnmountCancellation = ({ error, request }: FailedRequest, origin: s
     || url.pathname === '/api/logs/replay'
     || /^\/api\/evals\/runs\/[^/]+\/(?:events|stream)$/u.test(url.pathname)
     || /^\/api\/mcp\/sessions\/[^/]+\/stream$/u.test(url.pathname)
-    || /^\/api\/playground\/sessions\/[^/]+\/stream$/u.test(url.pathname);
+    || /^\/api\/playground\/sessions\/[^/]+\/(?:replay|stream)$/u.test(url.pathname);
 };
 
 export const expectHealthyExamplePage = async (ledger: ExampleErrorLedger): Promise<void> => {

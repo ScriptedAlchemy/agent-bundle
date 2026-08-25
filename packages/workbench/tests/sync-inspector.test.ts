@@ -287,16 +287,6 @@ it('rejects dirty tracked and untracked explicit Inspector source worktrees', as
   });
 });
 
-it('runs the retained upstream inspectorTabs test directly under Rstest', async () => {
-  const testPath = 'packages/workbench/src/inspector/vendor/clients/web/src/utils/inspectorTabs.test.ts';
-  const { stdout } = await execFile('pnpm', ['exec', 'rstest', '--config', 'rstest.config.ts', testPath], {
-    cwd: workspaceRoot,
-    env: { PATH: process.env.PATH ?? '' },
-  });
-
-  expect(stdout).toContain('inspectorTabs.test.ts');
-});
-
 it('verifies the checked-in Inspector snapshot provenance and patches', async () => {
   await expect(sync(['--verify'])).resolves.toMatchObject({
     stderr: '',

@@ -71,10 +71,13 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   });
   expect(rootManifest.scripts).toMatchObject({
     build: 'pnpm --filter agent-bundle build',
+    check: 'pnpm build && pnpm test:unit && pnpm test:integration:run && pnpm lint && pnpm typecheck',
     'example:hooks': 'pnpm build && pnpm --filter @agent-bundle-example/hooks-and-scripts dev',
     'example:mcp-app': 'pnpm build && pnpm --filter @agent-bundle-example/mcp-app dev',
     'example:skills': 'pnpm build && pnpm --filter @agent-bundle-example/skills-starter dev',
     'examples:check': "pnpm build && pnpm --filter './examples/*' --workspace-concurrency=1 check",
+    'test:integration': 'pnpm --filter agent-bundle-workbench build && pnpm test:integration:run',
+    'test:integration:run': 'AGENT_BUNDLE_WORKBENCH_PREBUILT=1 rstest --config rstest.integration.config.ts --pool.maxWorkers 1',
   });
   expect(rootManifest.scripts).not.toHaveProperty('build:workbench');
   expect(agentBundleManifest.scripts).toEqual({

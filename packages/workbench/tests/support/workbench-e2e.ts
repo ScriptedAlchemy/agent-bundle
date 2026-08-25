@@ -18,6 +18,7 @@ export const e2e = test.extend({
 let workbenchBuild: Promise<void> | undefined;
 
 export const buildWorkbench = (): Promise<void> => workbenchBuild ??= (async (): Promise<void> => {
+  if (process.env['AGENT_BUNDLE_WORKBENCH_PREBUILT'] === '1') return;
   const { RSTEST: _rstest, ...environment } = process.env;
   await execFile('pnpm', ['--filter', 'agent-bundle-workbench', 'build'], {
     cwd: workspaceRoot,
