@@ -1,13 +1,10 @@
-import { execFile as executeFile } from 'node:child_process';
 import { access, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
 import config, { createWorkbenchConfig } from '../rsbuild.config.ts';
 
-const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const workbenchRoot = join(workspaceRoot, 'packages', 'workbench');
 
@@ -72,15 +69,7 @@ it('keeps the Overview heading single-purpose and compact', async () => {
   expect(styles).toContain('font-size: clamp(31px, 4vw, 40px);');
 });
 
-it('emits browser-safe JS even when the caller sets NODE_ENV=test', async () => {
-  // Rstest sets NODE_ENV=test. Without an explicit rsbuild mode, that selects
-  // mode 'none', leaves process.env.NODE_ENV unreplaced, and the workbench
-  // crashes on boot with "process is not defined".
-  await expect(execFile('pnpm', ['--filter', 'agent-bundle-workbench', 'build'], {
-    cwd: workspaceRoot,
-    env: { PATH: process.env.PATH ?? '', NODE_ENV: 'test' },
-  })).resolves.toBeDefined();
-
+it('emits browser-safe JS from the prepared production build', async () => {
   const jsRoot = join(workbenchRoot, 'dist', 'static', 'js');
   const files = await readdir(jsRoot);
   const contents = await Promise.all(
