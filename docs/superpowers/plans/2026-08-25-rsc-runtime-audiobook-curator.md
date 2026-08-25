@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Publish the reusable RSC protocol primitives and prove them with a safe Claude/Codex Audiobook Curator example backed by the existing curator CLI.
+**Goal:** Publish the reusable RSC protocol primitives and prove them with a safe, self-contained Claude/Codex Audiobook Curator core, CLI, Skill, and MCP server.
 
-**Architecture:** `@agent-bundle/rsc-runtime` owns only JSX protocol elements, strict lowerers, and generic request context. The audiobook example owns its Skill, CLI subprocess adapter, four MCP tools, and host-target configuration; it treats the Python CLI as an external executable capability.
+**Architecture:** `@agent-bundle/rsc-runtime` owns only JSX protocol elements, strict lowerers, and generic request context. The audiobook example owns one TypeScript curator core, a globally installable CLI, three MCP tools that call the core directly, its Skill, and host-target configuration. The core orchestrates system ffprobe/ffmpeg without a shell and never depends on the old Python repository or globally installed wrapper.
 
-**Tech Stack:** TypeScript 7, React 19, Rslib, Rstest, MCP Server 2, Zod 4, Agent Bundle, Node 22 child processes.
+**Tech Stack:** TypeScript 7, React 19, Rslib, Rstest, MCP Server 2, Zod 4, Agent Bundle, Node 22 filesystem/crypto/child processes, ffprobe, and ffmpeg.
 
 **Spec:** `docs/superpowers/specs/2026-08-25-rsc-runtime-audiobook-curator-design.md`
 
@@ -16,7 +16,7 @@
 - The runtime package is publishable and contains no demo provider, host packaging, or JSONL state implementation.
 - The audiobook example targets `codex` and `claude`, contains one Skill and one MCP server, and contains no hooks.
 - Child processes never use a shell and never inherit an unbounded environment or output stream.
-- `--apply` and `--overwrite` may not be supplied through free-form arguments; only explicit typed inputs can enable them.
+- Conversion is plan-only by default; only the typed `apply` field enables it, outputs are separate from sources, and originals are immutable.
 - Real audiobook-volume acceptance is read-only unless the user separately authorizes mutation.
 
 ---
@@ -163,59 +163,47 @@ git add examples/rsc-agent-runtime pnpm-lock.yaml
 git commit -m "refactor(example): consume public RSC runtime"
 ```
 
-### Task 3: Safe audiobook CLI adapter
+### Task 3: Self-contained audiobook curator core and CLI
 
 **Files:**
 - Create: `examples/audiobook-curator/package.json`
+- Create: `examples/audiobook-curator/rslib.config.ts`
 - Create: `examples/audiobook-curator/rstest.config.ts`
-- Create: `examples/audiobook-curator/src/curator-process.ts`
-- Create: `examples/audiobook-curator/tests/fixtures/fake-curator.mjs`
-- Create: `examples/audiobook-curator/tests/curator-process.test.ts`
+- Create: `examples/audiobook-curator/tsconfig.build.json`
+- Create: `examples/audiobook-curator/src/media-process.ts`
+- Create: `examples/audiobook-curator/src/curator-core.ts`
+- Create: `examples/audiobook-curator/src/cli.ts`
+- Create: `examples/audiobook-curator/bin/audiobook-curator.js`
+- Create: `examples/audiobook-curator/tests/fixtures/fake-ffprobe.mjs`
+- Create: `examples/audiobook-curator/tests/fixtures/fake-ffmpeg.mjs`
+- Create: `examples/audiobook-curator/tests/curator-core.test.ts`
+- Create: `examples/audiobook-curator/tests/cli.test.ts`
 - Modify: `pnpm-lock.yaml`
 
 **Interfaces:**
-- Produces: `runCurator(input, options): Promise<CuratorExecution>`.
-- `CuratorExecution` is `{ command, exitCode: 0 | 2, receipt: Record<string, JsonValue>, reviewRequired: boolean, summary: string }`.
-- `CuratorRunInput` contains `{ command: CuratorCommand; args: readonly string[]; receiptPath: string; apply?: boolean; overwrite?: boolean }`.
+- Produces: `inventorySources`, `prepareAudiobook`, `auditAudiobook`, and the `audiobook-curator` executable.
+- The core accepts injected bounded process runners for deterministic tests and uses ffprobe/ffmpeg defaults in production.
+- Receipts are detached finite JSON values with explicit file, traversal, byte, and process limits.
 
-- [ ] **Step 1: Write failing process-boundary tests**
+- [ ] **Step 1: Write failing core and CLI contract tests**
 
-Tests must use a real executable fixture and assert:
-
-```ts
-await expect(runCurator({ command: 'inventory', args: ['source'], receiptPath }, { binary: fake }))
-  .resolves.toMatchObject({ exitCode: 0, reviewRequired: false });
-
-await expect(runCurator({ command: 'convert', args: ['--apply'], receiptPath }, { binary: fake }))
-  .rejects.toThrow('Free-form curator arguments may not contain --apply or --overwrite.');
-```
-
-Also cover exit `2`, malformed/missing receipt, output over 256 KiB, timeout, and caller abort.
+Use synthetic media plus real executable fixtures to assert bounded recursive inventory, ffprobe normalization, deterministic plans, immutable source paths, temp-output verification and promotion, hashes, optional full-decode, malformed output, output overflow, timeout, and caller abort. CLI tests must cover exact subcommands, JSON output, typed `--apply`, and invalid/unknown options.
 
 - [ ] **Step 2: Run and verify RED**
 
-Run: `pnpm --filter @agent-bundle-example/audiobook-curator test -- tests/curator-process.test.ts`
+Run: `pnpm --filter @agent-bundle-example/audiobook-curator test -- tests/curator-core.test.ts tests/cli.test.ts`
 
-Expected: FAIL because `runCurator` does not exist.
+Expected: FAIL because the core and CLI do not exist.
 
-- [ ] **Step 3: Implement the bounded runner**
+- [ ] **Step 3: Implement the bounded process runner and curator core**
 
-Use `spawn(binary, argv, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })`. Construct `argv` as:
+Use `spawn(executable, argv, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })`, a minimal allowlisted environment, independent 256 KiB stdout/stderr caps, AbortSignal ownership, and operation-specific deadlines. Inventory walks regular files without following symlinks and admits a bounded extension allowlist. Preparation creates a deterministic plan; applying writes only under a separate output root via a curator-owned temporary file, verifies with ffprobe, and atomically promotes without overwrite. Audit computes SHA-256 and optionally sends bounded files through ffmpeg's null output.
 
-```ts
-const argv = [input.command, ...input.args, '--receipt', input.receiptPath];
-if (input.apply === true) argv.push('--apply');
-if (input.overwrite === true) {
-  if (input.apply !== true || input.command !== 'convert') throw new Error('Overwrite requires an applied conversion.');
-  argv.push('--overwrite');
-}
-```
-
-Reject free-form `--apply`, `--overwrite`, and `--receipt`. Bound stdout and stderr independently to 256 KiB, default timeout to 10 minutes, terminate on abort/timeout, accept only exit `0` or `2`, and parse a plain JSON object from the exact receipt path.
+The CLI supports exact `inspect`, `prepare`, and `audit` subcommands, emits one JSON receipt, and calls the core directly. Its package declares `bin/audiobook-curator.js`; no Agent Bundle schema extension is needed.
 
 - [ ] **Step 4: Run and verify GREEN**
 
-Run: `pnpm --filter @agent-bundle-example/audiobook-curator test -- tests/curator-process.test.ts`
+Run: `pnpm --filter @agent-bundle-example/audiobook-curator test -- tests/curator-core.test.ts tests/cli.test.ts`
 
 Expected: PASS.
 
@@ -223,7 +211,7 @@ Expected: PASS.
 
 ```bash
 git add examples/audiobook-curator pnpm-lock.yaml
-git commit -m "feat(example): add bounded audiobook curator adapter"
+git commit -m "feat(example): add native audiobook curator CLI"
 ```
 
 ### Task 4: Audiobook MCP tools and Skill
@@ -237,12 +225,12 @@ git commit -m "feat(example): add bounded audiobook curator adapter"
 - Create: `examples/audiobook-curator/tests/mcp-tools.test.tsx`
 
 **Interfaces:**
-- Consumes: `Mcp` and `lowerMcpResult` from Task 1; `runCurator` from Task 3.
-- Produces MCP tools: `inspect_sources`, `identify_edition`, `prepare_audiobook`, and `audit_audiobook`.
+- Consumes: `Mcp` and `lowerMcpResult` from Task 1; curator core operations from Task 3.
+- Produces MCP tools: `inspect_sources`, `prepare_audiobook`, and `audit_audiobook`.
 
 - [ ] **Step 1: Write failing tool contract tests**
 
-Register tools through an exported `createAudiobookCuratorServer(options)` so tests can inject the fake binary. Assert the tool catalog has exactly four tools, the generated result contains both text and structured receipt content, exit `2` sets `isError: false` with `reviewRequired: true`, and `prepare_audiobook` forwards `apply` only from the typed field.
+Register tools through an exported `createAudiobookCuratorServer(options)` so tests can inject core dependencies. Assert the catalog has exactly three tools, results contain both text and structured receipts, cancellation reaches the core, and `prepare_audiobook` forwards `apply` only from the typed field.
 
 - [ ] **Step 2: Run and verify RED**
 
@@ -250,7 +238,7 @@ Run: `pnpm --filter @agent-bundle-example/audiobook-curator test -- tests/mcp-to
 
 Expected: FAIL because the server and result component do not exist.
 
-- [ ] **Step 3: Implement RSC result rendering and four tools**
+- [ ] **Step 3: Implement RSC result rendering and three tools**
 
 Render every execution with:
 
@@ -266,11 +254,11 @@ export const CuratorResult = ({ execution }: { execution: CuratorExecution }) =>
 );
 ```
 
-Each tool schema exposes a strict operation enum, `args: string[]`, `receiptPath`, and only the applicable `apply`/`overwrite` booleans. Tool handlers call `lowerMcpResult(<CuratorResult execution={await runCurator(...)} />)`.
+Each tool schema exposes only bounded paths/options and the applicable `apply` boolean. Tool handlers call the shared curator core directly and lower `<CuratorResult receipt={...} />` through `@agent-bundle/rsc-runtime`.
 
 - [ ] **Step 4: Add the native Skill and Agent Bundle configuration**
 
-The Skill must require inspect/select before identity, explicit candidate review, dry-run before apply, immutable sources, and final full audit. Configure:
+The Skill must require inspect before preparation, plan review before apply, immutable sources, and final audit. Audible/Whisper/acoustic enrichment is explicitly deferred. Configure:
 
 ```ts
 export default defineConfig({
@@ -323,7 +311,7 @@ Expected: FAIL until package files, exports, and build order are complete.
 
 - [ ] **Step 3: Complete release metadata and docs**
 
-Document the stable public boundary, peer dependency, JSX examples, curator executable preflight, dry-run safety, and Claude/Codex build/install commands. Update root build and preview-publish scripts to include `@agent-bundle/rsc-runtime` without changing the `agent-bundle` package contents.
+Document the stable public boundary, peer dependency, JSX examples, global curator CLI installation, plan-only safety, and Claude/Codex build/install commands. Update root build and preview-publish scripts to include `@agent-bundle/rsc-runtime` without changing the `agent-bundle` package contents.
 
 - [ ] **Step 4: Run broad repository gates**
 
@@ -360,7 +348,7 @@ git commit -m "docs: ship RSC runtime and curator example"
 
 - [ ] **Step 1: Write a failing synthetic smoke test**
 
-Assert the smoke script rejects missing/non-directory roots, selects at most one bounded subdirectory, invokes only `inventory` and `audit` without `--apply`, and writes receipts beneath an owned temporary directory rather than the mounted volume.
+Assert the smoke script rejects missing/non-directory roots, selects at most one bounded subdirectory, invokes only the core inventory and audit operations, and writes receipts beneath an owned temporary directory rather than the mounted volume.
 
 - [ ] **Step 2: Run and verify RED**
 
@@ -370,7 +358,7 @@ Expected: FAIL because the script does not exist.
 
 - [ ] **Step 3: Implement the read-only smoke**
 
-Resolve and validate the supplied root, choose one direct child containing supported audio without printing unrelated names, create a temporary receipt directory, invoke the generated bundle's MCP adapter in inventory/audit modes, and always remove only the owned receipt directory. Reject every apply/overwrite option at argument parsing.
+Resolve and validate the supplied root, choose one direct child containing supported audio without printing unrelated names, create a temporary receipt directory, invoke the globally installed CLI plus generated bundle MCP tools in inventory/audit modes, and always remove only the owned receipt directory. Reject every apply option at argument parsing.
 
 - [ ] **Step 4: Run synthetic and mounted acceptance**
 

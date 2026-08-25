@@ -18,25 +18,26 @@ The existing RSC example must consume the workspace package rather than duplicat
 
 ## Audiobook Curator example
 
-`examples/audiobook-curator` is a public Agent Bundle example targeting Claude Code and Codex. It contains:
+`examples/audiobook-curator` is a public, self-contained TypeScript Agent Bundle example targeting Claude Code and Codex. It contains:
 
 - one portable `curate-audiobooks` Skill describing the plan-first, receipt-backed workflow;
-- one TypeScript MCP server exposing a small set of phase-oriented audiobook tools;
+- one shared curator core used directly by a TypeScript MCP server and a globally installable `audiobook-curator` CLI;
 - no hooks;
-- no copied Python implementation and no dependency on the other repository's source tree.
+- no dependency on the other repository, its Python implementation, or an already-installed curator executable.
 
-The MCP adapter executes a configured `audiobook-curator` binary directly, never through a shell. The executable is selected from `AUDIOBOOK_CURATOR_BIN` or `audiobook-curator` on `PATH`. Startup preflight returns an actionable error when it is unavailable.
+The curator core orchestrates system `ffprobe` and `ffmpeg` executables directly, never through a shell. Executable paths can be injected for tests and controlled deployments; production defaults resolve `ffprobe` and `ffmpeg` on `PATH`. The package exposes a `bin` entry so the same core can be installed globally without inventing a new Agent Bundle manifest concept.
 
 The initial tool set is intentionally small:
 
-1. `inspect_sources` for library audit, inventory, and deterministic selection;
-2. `identify_edition` for Audible search/review/cache and optional acoustic or speech evidence;
-3. `prepare_audiobook` for conversion, metadata, and chapter plans or explicitly approved application;
-4. `audit_audiobook` for structural, hash, and optional full-decode verification.
+1. `inspect_sources` for bounded recursive audio inventory and deterministic source inspection;
+2. `prepare_audiobook` for conversion planning or explicitly approved application;
+3. `audit_audiobook` for structural, hash, and optional bounded full-decode verification.
 
-Each tool uses a strict discriminated input schema, supplies its own receipt path, and returns an RSC-rendered text summary plus the parsed JSON receipt as `structuredContent`. Child-process stdout and stderr are UTF-8 byte-bounded. Cancellation terminates the owned process. Exit code `0` is success, `2` is a review-required non-error result, and other exits are bounded operational failures.
+Each tool uses a strict input schema and returns an RSC-rendered text summary plus a detached receipt as `structuredContent`. Child-process stdout and stderr are UTF-8 byte-bounded, cancellation terminates the owned process, and traversal/file/output limits are explicit. The CLI renders the same receipts as bounded JSON and chooses an exit status from the typed result.
 
-Mutation-capable operations are dry-run by default. The adapter emits `--apply` only when the MCP input contains `apply: true`; the Skill instructs the agent to obtain explicit user approval first. Original media is never deleted, renamed, or selected as an output path.
+Mutation-capable operations are plan-only by default. Application requires `apply: true`; the Skill instructs the agent to obtain explicit user approval first. Conversion writes to a curator-owned temporary destination, verifies the new file, then atomically promotes it to a separate output root. Original media is never deleted, renamed, overwritten, or selected as an output path.
+
+Audible edition lookup, Whisper transcription, and acoustic matching are useful later integrations, but they do not block the first complete inventory/prepare/audit product. Their credentials and heavyweight dependencies stay outside the initial bundle.
 
 ## Why Skills stay Markdown
 
@@ -48,15 +49,16 @@ Automated verification covers:
 
 - RED-to-GREEN unit tests for every public RSC export and lowerer boundary;
 - package typecheck, build, pack, and isolated consumer import;
-- fake-executable MCP tests for success, review-required, malformed receipt, bounded output, cancellation, timeout, and explicit apply forwarding;
+- synthetic `ffprobe`/`ffmpeg` process tests for success, malformed output, bounded output, cancellation, timeout, plan-only behavior, and explicit apply forwarding;
+- direct CLI tests proving the globally installable command and MCP server share the same curator core contracts;
 - full Agent Bundle build and validation for Claude and Codex;
 - the existing RSC runtime example after migration.
 
-Real-world verification installs the generated Claude and Codex bundles and invokes their MCP tools against the mounted ZeroFS audiobook volume. This acceptance is read-only: inventory, selection planning, and audit without `--apply`, metadata mutation, chapter mutation, conversion, overwrite, deletion, or rename. The test records the exact bundle, host, selected bounded fixture directory, receipt, and result without exposing unrelated audiobook filenames or media contents.
+Real-world verification globally installs the newly built CLI, installs the generated Claude and Codex bundles in isolated host homes, and invokes their inventory/audit tools against one bounded child of the mounted ZeroFS audiobook volume. This acceptance is read-only: no `apply`, metadata mutation, chapter mutation, conversion, overwrite, deletion, or rename. Receipts live in a test-owned temporary directory. Verification records the exact CLI, bundle, host, bounded fixture, and result without exposing unrelated audiobook filenames or media contents.
 
 ## Non-goals
 
-- Reimplementing ffmpeg, Audible, Audiolocate, Whisper, or the Python curator in TypeScript.
+- Implementing media codecs, Audible integration, Audiolocate, Whisper, or acoustic matching in the initial slice; the core orchestrates system ffprobe/ffmpeg.
 - Bundling credentials, Python environments, media, receipts, or machine-specific paths.
 - Distributed runtime state or a general JSX plugin-definition framework.
 - Native hooks for audiobook operations.
