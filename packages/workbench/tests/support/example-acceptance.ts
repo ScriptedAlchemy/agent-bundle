@@ -58,15 +58,24 @@ export const waitForSettledWorkbench = async (page: Page): Promise<void> => {
 
 export const captureExampleState = async (page: Page, example: ExampleName, state: string): Promise<void> => {
   await waitForSettledWorkbench(page);
+  const viewport = page.viewportSize();
+  if (viewport?.width !== 1440 || viewport.height !== 900) {
+    throw new Error(`Expected a 1440×900 desktop capture, received ${viewport === null ? 'an unbounded viewport' : `${viewport.width}×${viewport.height}`}.`);
+  }
   if (captureRoot === undefined) return;
   await mkdir(captureRoot, { recursive: true });
-  const file = `${state}.png`;
+  const file = `${example}-${state}.png`;
   await page.screenshot({ animations: 'disabled', path: join(captureRoot, file) });
   captures.push({ example, file, hash: new URL(page.url()).hash, state, viewport: { height: 900, width: 1440 } });
 };
 
 export const writeExampleReport = async (): Promise<void> => {
   if (captureRoot === undefined) return;
+  const names = new Set<string>();
+  for (const capture of captures) {
+    if (names.has(capture.file)) throw new Error(`Example capture filename was reused: ${capture.file}`);
+    names.add(capture.file);
+  }
   await writeFile(join(captureRoot, 'report.json'), `${JSON.stringify({ captures }, undefined, 2)}\n`);
 };
 

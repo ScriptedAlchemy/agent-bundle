@@ -172,20 +172,44 @@ Portable artifacts contain portable plugin, skills, MCP, and App-resource files.
 
 ## Public examples
 
-The repository includes three private, credential-free example workspaces. Each
-uses the public `agent-bundle` CLI and package exports exactly as an external
-project would. These commands open the desktop Workbench; the example UI is
-designed and acceptance-tested for desktop use.
+The repository includes three credential-free public example workspaces. Each
+uses only the public `agent-bundle` CLI and package exports, exactly as an
+external project would. The Workbench is a desktop product; these walkthroughs
+and its acceptance suite use a 1440×900 desktop viewport.
 
 | Example | Start here when you want to… | Command |
 | --- | --- | --- |
-| [Skills Starter](examples/skills-starter) | author a portable Skill | `pnpm example:skills` |
-| [Hooks and Scripts](examples/hooks-and-scripts) | simulate hooks and inspect script traces | `pnpm example:hooks` |
-| [MCP App](examples/mcp-app) | build a tool with an interactive App and eval | `pnpm example:mcp-app` |
+| [Skills Starter](examples/skills-starter) | author a release-review Skill and deterministic evidence | `pnpm example:skills` |
+| [Hooks and Scripts](examples/hooks-and-scripts) | simulate a Hook and inspect successful and blocking script traces | `pnpm example:hooks` |
+| [MCP App](examples/mcp-app) | exercise a degraded service result in an interactive App and deterministic eval | `pnpm example:mcp-app` |
 
-Each command runs from the example directory, so the CLI infers that directory
-as the project root. Run every noninteractive example check with
-`pnpm examples:check`.
+Run these commands from the repository root. The filtered package command runs
+inside the selected example, so `agent-bundle` infers that example directory as
+its project root. `pnpm examples:check` performs every example's noninteractive
+validation and build. To run a command from an example directly, first `cd` to
+that example; its package-local `pnpm validate`, `pnpm build`, and `pnpm dev`
+commands infer the same root.
+
+Every Workbench starts on **Overview**, the Bundle dashboard: **Author** points
+to Skills and Hooks, **Build** to Artifacts, **Exercise** to Skills, Hooks,
+Playground, and MCP, and **Evaluate** to Evals and Comparisons. The pages show
+different evidence rather than alternative launchers:
+
+- **Skills** compares authored source, linked resources, generated output, and
+  declared eval coverage.
+- **Hooks** simulates canonical host input and replays the saved epoch-bound
+  input. **Playground** runs an emitted capability and retains its durable
+  trace; **Logs** exposes those producer records and raw details.
+- **Artifacts** shows the selected target's emitted files and provenance.
+  **Comparisons** needs two recorded eval runs before it can align outcomes.
+- **MCP playground** opens an epoch-bound generated-server session, invokes
+  tools, shows the protocol trace, and renders a compatible MCP App. **Evals**
+  runs the selected deterministic case against checked-in fixtures.
+
+The per-example walkthroughs record the actual initial selections and a safe
+diagnostic repair loop. Wait for a completed, failed, or idle state before
+capturing or judging a Workbench result; a loading/building state is not a
+durable outcome.
 
 ## Contributor delivery and release gates
 

@@ -92,6 +92,8 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await page.getByRole('button', { name: 'Run script' }).click();
     await expect(page.getByText('script.completed')).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.playground-trace')).toContainText('ready for packaging', { timeout: browserTimeout });
+    await expect(page.locator('.playground-trace')).toContainText('is finalized', { timeout: browserTimeout });
+    await expect(page.getByRole('button', { name: 'Run script' })).toBeEnabled({ timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'script-success');
 
     await page.locator('#playground-target').selectOption('portable');
@@ -99,6 +101,8 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await page.getByRole('button', { name: 'Run script' }).click();
     await expect(page.locator('.playground-trace')).toContainText('REL-204', { timeout: browserTimeout });
     await expect(page.locator('.playground-event-card').filter({ hasText: 'script.completed' }).last().locator('.playground-json')).toContainText('"exitCode": 2', { timeout: browserTimeout });
+    await expect(page.locator('.playground-trace')).toContainText('is finalized', { timeout: browserTimeout });
+    await expect(page.getByRole('button', { name: 'Run script' })).toBeEnabled({ timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'script-failure');
 
     await page.getByRole('link', { name: 'Logs' }).click();
@@ -133,6 +137,9 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await repaired;
     await expect(page.getByRole('heading', { name: 'Diagnostics (0)' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.epoch-row--active')).toContainText('Current artifact epoch', { timeout: browserTimeout });
+    await expect(page.locator('#overview .status-text')).toHaveText('idle', { timeout: browserTimeout });
+    await page.waitForTimeout(500);
+    await expect(page.locator('#overview .status-text')).toHaveText('idle', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-repaired');
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();
@@ -142,13 +149,14 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
   }
 });
 
-e2e('drives the MCP App and deterministic eval in real Chrome', { timeout: 150_000 }, async ({ page }) => {
+e2e('drives every populated MCP App workflow surface in real Chrome', { timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
+  const project = await copyExample('mcp-app');
   const server = await startDevServer({
     assets: createWorkbenchAssetSource({ root: workbenchAssets }),
     open: false,
     port: 0,
-    root: exampleRoot('mcp-app'),
+    root: project.root,
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
@@ -160,7 +168,57 @@ e2e('drives the MCP App and deterministic eval in real Chrome', { timeout: 150_0
       await expect(page.getByRole('heading', { name: stage, exact: true })).toBeVisible({ timeout: browserTimeout });
     }
     await expect(page.getByRole('heading', { name: /^[1-4]\.\s/u })).toHaveCount(0, { timeout: browserTimeout });
-    await page.goto(`${server.url}#mcp`);
+    await captureExampleState(page, 'mcp-app', 'overview-dashboard');
+
+    await page.getByRole('link', { name: 'Skills', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Skills', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'service-readiness', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByLabel('Eval coverage')).toContainText('Indirect 1', { timeout: browserTimeout });
+    await captureExampleState(page, 'mcp-app', 'skills-populated');
+
+    await page.getByRole('link', { name: 'Hooks', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Hooks', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
+    await page.getByRole('button', { name: 'Run simulation' }).click();
+    await expect(page.getByRole('heading', { name: 'Canonical result' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.hook-json').last()).toContainText('payments-api', { timeout: browserTimeout });
+    await captureExampleState(page, 'mcp-app', 'hooks-populated');
+
+    await page.getByRole('link', { name: 'Playground', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#playground-script-id')?.value === 'script:check-service-fixture', undefined, { timeout: browserTimeout });
+    expect(await page.locator('#playground-target').inputValue()).toBe('claude');
+    expect(await page.locator('#playground-operation').inputValue()).toBe('script.run');
+    await page.getByRole('button', { name: 'Run script' }).click();
+    await expect(page.getByText('script.completed')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.playground-trace')).toContainText('Compiler fixture is healthy.', { timeout: browserTimeout });
+    await expect(page.locator('.playground-trace')).toContainText('is finalized', { timeout: browserTimeout });
+    await expect(page.getByRole('button', { name: 'Run script' })).toBeEnabled({ timeout: browserTimeout });
+    await captureExampleState(page, 'mcp-app', 'playground-script-success');
+
+    await page.getByRole('link', { name: 'Logs', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.logs-entries > li').first()).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.logs-entries')).toContainText('script.completed', { timeout: browserTimeout });
+    await captureExampleState(page, 'mcp-app', 'logs-populated');
+
+    await page.getByRole('link', { name: 'Artifacts', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Artifacts', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('#artifact-target').selectOption('portable');
+    await expect(page.locator('.artifact-table').first()).toContainText('mcp-apps/status.html', { timeout: browserTimeout });
+    await captureExampleState(page, 'mcp-app', 'artifacts-populated');
+
+    await page.getByRole('link', { name: 'Comparisons', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Comparisons', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.comparisons-content [role="status"]')).toHaveText('At least two recorded runs are needed before a comparison can be aligned.', { timeout: browserTimeout });
+    await captureExampleState(page, 'mcp-app', 'comparisons-insufficient-runs');
+
+    await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
     await waitForSettledWorkbench(page);
     await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#mcp-server-name')?.value === 'status', undefined, { timeout: browserTimeout });
     expect(await page.locator('#mcp-target').inputValue()).toBe('portable');
@@ -170,19 +228,24 @@ e2e('drives the MCP App and deterministic eval in real Chrome', { timeout: 150_0
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
     await page.getByRole('button', { name: 'List tools' }).click();
     await expect(page.getByRole('button', { name: 'show-status', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('.mcp-page-phase').scrollIntoViewIfNeeded();
     await captureExampleState(page, 'mcp-app', 'mcp-session-ready');
 
     await page.getByRole('button', { name: 'show-status', exact: true }).click();
-    await page.locator('#mcp-tool-arguments-service').selectOption('compiler');
+    await page.locator('#mcp-tool-arguments-service').selectOption('payments-api');
     await page.waitForFunction(() => {
       const input = document.querySelector<HTMLSelectElement>('#mcp-tool-arguments-service');
-      return input?.value === 'compiler' && input.getAttribute('aria-invalid') === null;
+      return input?.value === 'payments-api' && input.getAttribute('aria-invalid') === null;
     }, undefined, { timeout: browserTimeout });
     await page.getByRole('button', { name: 'Call show-status' }).click();
     const history = page.getByRole('region', { name: 'Invocation history' });
-    await expect(history).toContainText('Compiler service is ready for release.', { timeout: browserTimeout });
-    await expect(history).toContainText('"status": "healthy"', { timeout: browserTimeout });
-    await captureExampleState(page, 'mcp-app', 'mcp-tool-result');
+    await expect(history).toContainText('Payment latency is above the release threshold.', { timeout: browserTimeout });
+    await expect(history).toContainText('"status": "degraded"', { timeout: browserTimeout });
+    await expect(history).toContainText('"label": "Availability"', { timeout: browserTimeout });
+    await expect(history).toContainText('"label": "P95 latency"', { timeout: browserTimeout });
+    await expect(history).toContainText('"status": "failing"', { timeout: browserTimeout });
+    await history.locator('li').last().scrollIntoViewIfNeeded();
+    await captureExampleState(page, 'mcp-app', 'mcp-degraded-tool-result');
 
     await page.getByRole('button', { name: /Open App preview/u }).click();
     const outerFrame = page.locator('iframe[title="MCP App preview: show-status"]');
@@ -198,8 +261,11 @@ e2e('drives the MCP App and deterministic eval in real Chrome', { timeout: 150_0
       }
       return undefined;
     };
-    await expect.poll(() => appText('#service'), { timeout: browserTimeout }).toBe('compiler');
-    await expect.poll(() => appText('#status'), { timeout: browserTimeout }).toBe('healthy');
+    await expect.poll(() => appText('#service'), { timeout: browserTimeout }).toBe('payments-api');
+    await expect.poll(() => appText('#status'), { timeout: browserTimeout }).toBe('degraded');
+    await expect.poll(() => appText('#summary'), { timeout: browserTimeout }).toBe('Payment latency is above the release threshold.');
+    await expect.poll(() => appText('#checks'), { timeout: browserTimeout }).toContain('Availabilitypassing');
+    await expect.poll(() => appText('#checks'), { timeout: browserTimeout }).toContain('P95 latencyfailing');
     await expect.poll(async () => {
       for (const frame of page.frames()) {
         try {
@@ -257,5 +323,6 @@ e2e('drives the MCP App and deterministic eval in real Chrome', { timeout: 150_0
     await writeExampleReport();
   } finally {
     await server.close();
+    await project.release();
   }
 });

@@ -23,25 +23,40 @@ and Claude artifacts; the App resource remains portable.
 
 ## Workbench walkthrough
 
-1. Open **Skills**, select `service-readiness`, and inspect its status policy
-   and readiness report resource.
-2. Open **Hooks**, select a `sessionStart` binding, and simulate the canonical
-   event to add the readiness workflow to the session.
-3. Open **Playground**, run `check-service-fixture`, and confirm the checked-in
-   compiler fixture is healthy.
-4. Open **MCP**, start the `status` session, and refresh its catalogs.
-5. Select `show-status`, enter `{ "service": "payments-api" }`, and invoke it.
-   Inspect its degraded summary and labelled availability and P95 latency checks
-   in the structured result and rendered status panel. The panel receives
-   official tool-input and tool-result notifications through the MCP Apps bridge.
-6. Inspect the protocol trace and export the Inspector configuration.
-7. Press **Restart MCP session**, then close, reset, and reopen it to exercise
-   the complete lifecycle.
-8. Open **Evals**, run `mcp-app-status`, and inspect the completed passing trial
-   attributed to `service-readiness`.
-9. Open **Artifacts** to inspect portable, Codex, and Claude outputs; only the
-   portable artifact contains the MCP App resource. Open **Comparisons** to see
-   the expected empty state for this single-epoch walkthrough.
+1. **Overview** opens on the Bundle dashboard. Its Author, Build, Exercise,
+   and Evaluate stages connect the source capability to its emitted artifact,
+   runtime evidence, and eval result.
+2. **Skills** defaults to `service-readiness`; compare its authored status
+   policy and readiness-report resource with generated output and its explicit
+   eval coverage. **Hooks** defaults to a populated Claude `sessionStart`
+   canonical input; run the simulation to attach the readiness workflow.
+3. **Playground** defaults to Script execution, the Claude target, and
+   `check-service-fixture`. Run it and wait for the finalized session. The
+   emitted checker resolves the packaged status fixture beside its emitted
+   module, so it succeeds without depending on the shell working directory.
+4. **Logs** exposes the resulting producer records. In **Artifacts**, select
+   portable to inspect `mcp-apps/status.html`; Codex and Claude retain their
+   host artifacts but not this portable App resource.
+5. Before recording two eval runs, **Comparisons** deliberately displays:
+   `At least two recorded runs are needed before a comparison can be aligned.`
+   That is the precise empty state, not an error.
+6. In **MCP playground**, the defaults are portable and the `status` server.
+   Open the session, list tools, select `show-status`, choose `payments-api`,
+   and invoke it. Invocation history shows the degraded summary and labelled
+   Availability and P95 latency checks (the latter fails). Open the App preview:
+   the rendered panel also shows `payments-api`, `degraded`, the same summary,
+   and the passing/failing checks through the MCP Apps bridge. Inspect the
+   protocol trace, use **Restart MCP session**, then close, reset, and reopen
+   it to exercise the lifecycle.
+7. **Evals** defaults to the deterministic `mcp-app-status` suite. Run
+   `status-is-healthy` and inspect its completed passing trial attributed to
+   `service-readiness`; it reads only checked-in fixture data and needs no
+   native login or API key.
+
+If you intentionally edit a source file, rebuild and wait for a failed or idle
+state before judging the result. Restore the checked-in source and rebuild to
+repair the diagnostic; a new active epoch is the repair evidence, while a
+Building state is still in progress.
 
 ## Noninteractive checks
 

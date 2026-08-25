@@ -25,17 +25,21 @@ checked-in fixture.
 
 ## Workbench walkthrough
 
-1. Open **Overview** to see the active artifact epoch and its three targets.
-2. Open **Skills**, select `release-review`, and compare the authored document
-   with its generated target documents and linked resources.
-3. Open **Evals**, run `release-readiness`, and inspect the passing
-   `release-artifact-is-ready` trial. Its explicit invocation keeps authored
-   Skill coverage distinct from automatic coverage.
-4. Open **Artifacts** to inspect the portable, Codex, and Claude output trees
-   and provenance.
-5. Edit the release policy, press **Rebuild**, then return to **Evals**. If the
-   previous run is marked stale for the changed artifact epoch, select that
-   diagnostic and rerun `release-readiness` to repair it with current evidence.
+1. **Overview** opens on the Bundle dashboard. Its ordered Author, Build,
+   Exercise, and Evaluate stages link to the pages where the corresponding
+   evidence lives; the status below them is the current artifact epoch.
+2. **Skills** defaults to `release-review`. Compare the authored `SKILL.md`,
+   linked checklist and policy resources, and the generated target document;
+   the page also marks the explicit deterministic eval coverage.
+3. **Artifacts** defaults to the Claude target. Change the target to compare
+   the portable, Codex, and Claude output trees and their provenance.
+4. **Evals** defaults to the `release-readiness` suite. Run its deterministic
+   `release-artifact-is-ready` case and inspect the passing trial. It consumes
+   only the checked-in evidence fixture, so no model login or API key is needed.
+5. To practice repair, make a reversible policy edit, press **Rebuild**, and
+   wait for the failed or idle result rather than a Building state. Restore the
+   checked-in policy and rebuild. The prior eval becomes stale for the changed
+   epoch; rerun `release-readiness` to record current, repaired evidence.
 
 ## Noninteractive checks
 
