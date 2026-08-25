@@ -1,4 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
@@ -26,8 +28,18 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   const packages = documents.flat();
 
   expect(packages.map(({ name }) => name).sort()).toEqual([
+    '@agent-bundle-example/skills-starter',
     'agent-bundle',
     'agent-bundle-workbench',
     'agent-bundle-workspace',
   ]);
+
+  const examples = packages.filter(({ name }) => name.startsWith('@agent-bundle-example/'));
+  expect(examples.every(({ private: isPrivate }) => isPrivate === true)).toBe(true);
+  await Promise.all(examples.map(async ({ path }) => {
+    const manifest = JSON.parse(await readFile(join(path, 'package.json'), 'utf8')) as {
+      readonly devDependencies?: Readonly<Record<string, string>>;
+    };
+    expect(manifest.devDependencies?.['agent-bundle']).toBe('workspace:*');
+  }));
 });
