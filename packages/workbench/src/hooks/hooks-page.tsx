@@ -270,7 +270,7 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
     <div className="page-heading hooks-page-heading">
       <div>
         <h1>Hooks</h1>
-        <p>Canonical intent, host mapping, and emitted wrapper execution for one immutable epoch.</p>
+        <p>Choose a generated Hook, review its host mapping, and simulate a canonical event.</p>
       </div>
     </div>
     {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}

@@ -519,7 +519,7 @@ export const PlaygroundNativePromptControls = ({
     ? 'Loading native host choices…'
     : catalogError === undefined
       ? catalog === undefined
-        ? 'Native host choices are unavailable for this artifact epoch.'
+        ? 'Native host choices are unavailable for this build.'
         : `Catalog epoch: ${catalog.epochId}`
       : `Native host choices could not be loaded: ${catalogError}`;
   return <div className="playground-native-workbench">
@@ -856,7 +856,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     <div className="page-heading playground-page-heading">
       <div>
         <h1>Playground</h1>
-        <p>Run a typed operation against the current artifact epoch; the server owns identity, evidence, outcome, and durable trace.</p>
+        <p>Choose a supported operation, review its defaults, and run it against the current build.</p>
       </div>
     </div>
     {clientReplaced || error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
@@ -864,7 +864,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
         <section aria-label="Server-owned operation" className="playground-controls">
-          <p className="playground-note">A new run binds the current server epoch. An admitted run stays pinned to the epoch in its persisted session identity.</p>
+          <p className="playground-note">Each run stays attached to the build it started from, so its evidence remains reproducible after a rebuild.</p>
           <label htmlFor="playground-operation">Operation</label>
           <select disabled={controlsDisabled} id="playground-operation" onChange={(event) => {
             operationIsImplicit.current = false;

@@ -4,33 +4,31 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from '@rstest/core';
 
 import { BundleWorkflow } from '../src/overview-page.tsx';
+import type { WorkbenchCapabilities } from '../src/workbench-capabilities.ts';
 
-it('introduces the bundle dashboard and its author-to-evidence workflow', () => {
-  const markup = renderToStaticMarkup(createElement(BundleWorkflow, { onNavigate: () => undefined }));
+const capabilities: Pick<WorkbenchCapabilities, 'counts' | 'pages'> = {
+  counts: { evalSuites: 1, hooks: 0, mcpServers: 0, scripts: 0, skills: 1, targets: 3 },
+  pages: new Set(['overview', 'skills', 'artifacts', 'logs', 'evals', 'comparisons']),
+};
+
+it('introduces the bundle dashboard as a plain-language capability summary', () => {
+  const markup = renderToStaticMarkup(createElement(BundleWorkflow, { capabilities, onNavigate: () => undefined }));
 
   expect(markup).toContain('Bundle dashboard');
-  expect(markup).toContain('Author once, exercise host-ready behavior, and evaluate durable evidence.');
+  expect(markup).toContain('See what this bundle publishes, try supported workflows, and rebuild after source changes.');
+  expect(markup).toContain('1 Skill');
+  expect(markup).toContain('1 Eval suite');
+  expect(markup).toContain('3 generated targets');
 });
 
-it('groups workflow navigation by the author, build, exercise, and evaluate lifecycle', () => {
-  const markup = renderToStaticMarkup(createElement(BundleWorkflow, { onNavigate: () => undefined }));
-  const stages = [...markup.matchAll(/<li>(.*?)<\/li>/gu)].map((match) => match[1]!);
-  const headings = [...markup.matchAll(/<h2>(.*?)<\/h2>/gu)].map((match) => match[1]!);
+it('offers only unique actions supported by the current bundle', () => {
+  const markup = renderToStaticMarkup(createElement(BundleWorkflow, { capabilities, onNavigate: () => undefined }));
 
-  expect(stages).toHaveLength(4);
-  expect(headings).toEqual(['Author', 'Build', 'Exercise', 'Evaluate']);
-  expect(markup).not.toMatch(/<h2>[1-4]\.\s/gu);
-  expect(stages[0]).toContain('>Author<');
-  expect(stages[0]).toContain('>Skills<');
-  expect(stages[0]).toContain('>Hooks<');
-  expect(stages[1]).toContain('>Build<');
-  expect(stages[1]).toContain('>Artifacts<');
-  expect(stages[2]).toContain('>Exercise<');
-  expect(stages[2]).toContain('>Skills<');
-  expect(stages[2]).toContain('>Hooks<');
-  expect(stages[2]).toContain('>Playground<');
-  expect(stages[2]).toContain('>MCP<');
-  expect(stages[3]).toContain('>Evaluate<');
-  expect(stages[3]).toContain('>Evals<');
-  expect(stages[3]).toContain('>Comparisons<');
+  expect(markup.match(/>Review authored Skills</gu)).toHaveLength(1);
+  expect(markup.match(/>Run evaluations</gu)).toHaveLength(1);
+  expect(markup.match(/>Inspect generated output</gu)).toHaveLength(1);
+  expect(markup).not.toContain('Hooks');
+  expect(markup).not.toContain('MCP');
+  expect(markup).not.toContain('<ol');
+  expect(markup).not.toContain('<button');
 });

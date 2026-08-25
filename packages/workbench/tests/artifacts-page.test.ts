@@ -135,7 +135,7 @@ const readyView = artifactViewFor({
 it('renders the epoch identity, artifact tree, runtime metadata, and provenance', () => {
   const markup = renderToStaticMarkup(createElement(ArtifactInspectionView, { view: readyView }));
 
-  expect(markup).toContain('Epoch identity');
+  expect(markup).toContain('Build identity');
   expect(markup).toContain('Artifact tree');
   expect(markup).toContain('Runtime');
   expect(markup).toContain('Provenance');
@@ -181,19 +181,19 @@ it('renders each diff group with its count and both epoch digests', () => {
   expect(markup).toContain('d'.repeat(64));
 });
 
-it('states that no epoch comparison has been requested yet', () => {
+it('states that no build comparison has been requested yet', () => {
   const markup = renderToStaticMarkup(createElement(ArtifactEpochDiffView, { view: readyView }));
 
-  expect(markup).toContain('No epoch comparison has been requested.');
+  expect(markup).toContain('No build comparison has been requested.');
 });
 
-it('renders no inspection controls when no epoch is active', () => {
+it('renders no inspection controls when no build is available', () => {
   const client = new ArtifactClient({
     foreground: foreground(async () => { throw new Error('No epoch may issue an artifact inspection request.'); }),
   });
   const markup = renderToStaticMarkup(createElement(ArtifactsPage, { client, epochId: undefined }));
 
-  expect(markup).toContain('No artifact epoch is active');
+  expect(markup).toContain('No successful build is available');
   expect(markup).not.toContain('id="artifact-target"');
   expect(markup).not.toContain('id="artifact-diff-base"');
 });
@@ -204,7 +204,7 @@ it('renders the target and epoch comparison controls for an active epoch', () =>
 
   expect(markup).toContain('id="artifact-target"');
   expect(markup).toContain('id="artifact-diff-base"');
-  expect(markup).toContain('Compare epochs');
+  expect(markup).toContain('Compare builds');
 });
 
 it('turns a validation failure into renderable diagnostics instead of an opaque error', async () => {

@@ -55,6 +55,12 @@ import { BundleWorkflow } from './overview-page.tsx';
 import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
+import {
+  generalWorkbenchPages,
+  loadWorkbenchCapabilities,
+  type WorkbenchCapabilities,
+} from './workbench-capabilities.ts';
+import type { WorkbenchPage as GeneralWorkbenchPage } from './workbench-screen.tsx';
 import { RuntimeClient, type RuntimeBootstrap } from './runtime-client.ts';
 import {
   createRuntimeEventBuffer,
@@ -302,9 +308,15 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-type WorkbenchPage = 'artifacts' | 'comparisons' | 'evals' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'runtime' | 'skills';
+type WorkbenchPage = GeneralWorkbenchPage | 'runtime';
 type RuntimeCapability = 'available' | 'unavailable' | 'unknown';
 type McpPresentation = 'inspector' | 'playground';
+
+type CapabilityState =
+  | Readonly<{ readonly state: 'empty' }>
+  | Readonly<{ readonly buildId: string; readonly state: 'loading' }>
+  | Readonly<{ readonly buildId: string; readonly message: string; readonly state: 'error' }>
+  | Readonly<{ readonly state: 'ready'; readonly value: WorkbenchCapabilities }>;
 
 const navigationItems: readonly Readonly<{ glyph: string; label: string; page: WorkbenchPage }>[] = [
   { glyph: '⊞', label: 'Overview', page: 'overview' },
@@ -319,22 +331,22 @@ const navigationItems: readonly Readonly<{ glyph: string; label: string; page: W
   { glyph: '⇄', label: 'Comparisons', page: 'comparisons' },
 ];
 
-const workbenchPages: ReadonlySet<string> = new Set(navigationItems.map((item) => item.page));
+const workbenchPages: ReadonlySet<WorkbenchPage> = new Set(navigationItems.map((item) => item.page));
 
-const pageForHash = (runtimeAvailable = false): WorkbenchPage => {
+const pageForHash = (runtimeAvailable = false, pages: ReadonlySet<WorkbenchPage> = workbenchPages): WorkbenchPage => {
   const page = window.location.hash.slice(1);
   if (page === 'runtime' && !runtimeAvailable) return 'overview';
-  return workbenchPages.has(page) ? page as WorkbenchPage : 'overview';
+  return workbenchPages.has(page as WorkbenchPage) && pages.has(page as WorkbenchPage) ? page as WorkbenchPage : 'overview';
 };
 
-const Navigation = ({ onNavigate, page, runtimeAvailable = false, runtimeDiagnostic }: {
+const Navigation = ({ onNavigate, page, pages, runtimeDiagnostic }: {
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
-  readonly runtimeAvailable?: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic?: string;
 }) => <aside className="rail" aria-label="Workbench navigation">
   <div className="brand">Agent Bundle</div>
-  {navigationItems.filter((item) => item.page !== 'runtime' || runtimeAvailable).map((item) => (
+  {navigationItems.filter((item) => pages.has(item.page)).map((item) => (
     <a
       key={item.page}
       aria-current={page === item.page ? 'page' : undefined}
@@ -349,13 +361,14 @@ const Navigation = ({ onNavigate, page, runtimeAvailable = false, runtimeDiagnos
   {runtimeDiagnostic === undefined ? undefined : <p className="runtime-capability-error" role="status">Runtime capability issue: {runtimeDiagnostic}</p>}
 </aside>;
 
-const Overview = ({ changedFiles, client, connectionError, onNavigate, runtimeAvailable = false, runtimeDiagnostic, status, onStatus }: {
+const Overview = ({ capabilities, changedFiles, client, connectionError, onNavigate, pages, runtimeDiagnostic, status, onStatus }: {
+  readonly capabilities?: WorkbenchCapabilities;
   readonly changedFiles: readonly string[];
   readonly client: ProjectClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onStatus: (status: ProjectStatus) => void;
-  readonly runtimeAvailable?: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic?: string;
   readonly status: ProjectStatus;
 }) => {
@@ -377,7 +390,7 @@ const Overview = ({ changedFiles, client, connectionError, onNavigate, runtimeAv
 
   return (
     <div className="workbench-shell">
-      <Navigation onNavigate={onNavigate} page="overview" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic} />
+      <Navigation onNavigate={onNavigate} page="overview" pages={pages} runtimeDiagnostic={runtimeDiagnostic} />
       <main className="canvas" id="overview">
         <header className="topbar">
           <span className="menu-glyph" aria-hidden="true">☰</span>
@@ -387,7 +400,7 @@ const Overview = ({ changedFiles, client, connectionError, onNavigate, runtimeAv
           </span>
         </header>
         <div className="page-content">
-          <BundleWorkflow onNavigate={onNavigate} />
+          <BundleWorkflow capabilities={capabilities} onNavigate={onNavigate} />
 
           <section aria-labelledby="normalization-heading" className="section">
             <h2 id="normalization-heading">Normalization summary</h2>
@@ -459,16 +472,16 @@ const Overview = ({ changedFiles, client, connectionError, onNavigate, runtimeAv
   );
 };
 
-const SkillsScreen = ({ connectionError, evalClient, onNavigate, runtimeAvailable = false, runtimeDiagnostic, skillClient, status }: {
+const SkillsScreen = ({ connectionError, evalClient, onNavigate, pages, runtimeDiagnostic, skillClient, status }: {
   readonly connectionError?: string;
   readonly evalClient: EvalClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly runtimeAvailable?: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic?: string;
   readonly skillClient: SkillClient;
   readonly status: ProjectStatus;
 }) => <div className="workbench-shell">
-  <Navigation onNavigate={onNavigate} page="skills" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic} />
+  <Navigation onNavigate={onNavigate} page="skills" pages={pages} runtimeDiagnostic={runtimeDiagnostic} />
   <main className="canvas" id="skills">
     <header className="topbar">
       <span className="menu-glyph" aria-hidden="true">☰</span>
@@ -481,16 +494,16 @@ const SkillsScreen = ({ connectionError, evalClient, onNavigate, runtimeAvailabl
   </main>
 </div>;
 
-const WorkbenchScreen = ({ children, connectionError, inert = false, onNavigate, page, runtimeAvailable, runtimeDiagnostic }: {
+const WorkbenchScreen = ({ children, connectionError, inert = false, onNavigate, page, pages, runtimeDiagnostic }: {
   readonly children: ReactNode;
   readonly connectionError?: string;
   readonly inert?: boolean;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
-  readonly runtimeAvailable: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic: string | undefined;
 }) => <div className="workbench-shell" inert={inert || undefined}>
-  <Navigation onNavigate={onNavigate} page={page} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic} />
+  <Navigation onNavigate={onNavigate} page={page} pages={pages} runtimeDiagnostic={runtimeDiagnostic} />
   <div className="canvas" id={page}>
     <header className="topbar">
       <span className="menu-glyph" aria-hidden="true">☰</span>
@@ -503,46 +516,46 @@ const WorkbenchScreen = ({ children, connectionError, inert = false, onNavigate,
   </div>
 </div>;
 
-const EvalsScreen = ({ connectionError, evalClient, onNavigate, runtimeAvailable, runtimeDiagnostic }: {
+const EvalsScreen = ({ connectionError, evalClient, onNavigate, pages, runtimeDiagnostic }: {
   readonly connectionError?: string;
   readonly evalClient: EvalClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly runtimeAvailable: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic: string | undefined;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="evals" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="evals" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
   <EvalsPage client={evalClient} />
 </WorkbenchScreen>;
 
-const ComparisonsScreen = ({ comparisonClient, connectionError, evalClient, onNavigate, runtimeAvailable, runtimeDiagnostic }: {
+const ComparisonsScreen = ({ comparisonClient, connectionError, evalClient, onNavigate, pages, runtimeDiagnostic }: {
   readonly comparisonClient: ComparisonClient;
   readonly connectionError?: string;
   readonly evalClient: EvalClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly runtimeAvailable: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic: string | undefined;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="comparisons" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="comparisons" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
   <ComparisonsPage comparisonClient={comparisonClient} evalClient={evalClient} />
 </WorkbenchScreen>;
 
-const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, runtimeAvailable, runtimeDiagnostic, status }: {
+const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, pages, runtimeDiagnostic, status }: {
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly runtimeAvailable: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic: string | undefined;
   readonly status: ProjectStatus;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="artifacts" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="artifacts" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
   <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, playgroundClient, run, runtimeAvailable, runtimeDiagnostic, status }: {
+const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, pages, playgroundClient, run, runtimeDiagnostic, status }: {
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly playgroundClient: PlaygroundClient;
   readonly run: PlaygroundRun | undefined;
-  readonly runtimeAvailable: boolean;
   readonly runtimeDiagnostic: string | undefined;
   readonly status: ProjectStatus;
 }) => {
@@ -593,7 +606,7 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
     return () => { current = false; };
   }, [artifactClient, epoch?.id]);
 
-  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
+  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
     <PlaygroundPage
       catalog={visibleNativeCatalog}
       catalogError={nativeCatalogError}
@@ -608,28 +621,28 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
   </WorkbenchScreen>;
 };
 
-const LogsScreen = ({ connectionError, logClient, onNavigate, runtimeAvailable, runtimeDiagnostic }: {
+const LogsScreen = ({ connectionError, logClient, onNavigate, pages, runtimeDiagnostic }: {
   readonly connectionError?: string;
   readonly logClient: LogClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly runtimeAvailable: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic: string | undefined;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="logs" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="logs" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
   <LogsPage client={logClient} />
 </WorkbenchScreen>;
 
-const HooksScreen = ({ connectionError, hookClient, onNavigate, runtimeAvailable, runtimeDiagnostic, status }: {
+const HooksScreen = ({ connectionError, hookClient, onNavigate, pages, runtimeDiagnostic, status }: {
   readonly connectionError?: string;
   readonly hookClient: HookClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly runtimeAvailable: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic: string | undefined;
   readonly status: ProjectStatus;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
   <HooksPage client={hookClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, presentation, registerPreviewClose, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
+const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, pages, presentation, registerPreviewClose, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
@@ -639,7 +652,7 @@ const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controll
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onResetSession: () => void;
   readonly onRuntimeInitialPreviewConsumed: (selection: Extract<McpPagePreviewSelection, { readonly kind: 'runtime' }>) => void;
-  readonly runtimeAvailable?: boolean;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic?: string;
   readonly runtimeHandoff?: RuntimeMcpHandoff;
   readonly runtimePreviewDependencies: McpPageRuntimePreviewDependencies;
@@ -713,7 +726,7 @@ const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controll
       model: { ...model, timeline: { ...model.timeline, entries } },
     }));
   };
-  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
+  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
     <div className="mcp-content">
       {mcpDepartureDiagnostic === undefined ? undefined : <p role="alert">{mcpDepartureDiagnostic}</p>}
       <div aria-label="MCP presentation" className="mcp-presentation-tabs" role="tablist">
@@ -791,12 +804,13 @@ const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controll
   </WorkbenchScreen>;
 };
 
-const RuntimeScreen = ({ connectionError, controller, handoffDiagnostic, liveMcpPageAdapter, onNavigate, registerAppPreviewLifecycle, renderAppPreview, runtimeConsent, runtimeDiagnostic, resolveRuntimeConsent }: {
+const RuntimeScreen = ({ connectionError, controller, handoffDiagnostic, liveMcpPageAdapter, onNavigate, pages, registerAppPreviewLifecycle, renderAppPreview, runtimeConsent, runtimeDiagnostic, resolveRuntimeConsent }: {
   readonly connectionError?: string;
   readonly controller: RuntimePlaygroundController;
   readonly handoffDiagnostic?: string;
   readonly liveMcpPageAdapter: RuntimeLiveMcpPageAdapter;
   readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly registerAppPreviewLifecycle: (handle: Readonly<{ close(): Promise<void> }>) => () => void;
   readonly renderAppPreview: RuntimeAppPreviewRenderer;
   readonly resolveRuntimeConsent: (current: RuntimeConsentQueueCurrent, decision: 'allow-once' | 'deny') => boolean;
@@ -806,7 +820,7 @@ const RuntimeScreen = ({ connectionError, controller, handoffDiagnostic, liveMcp
   const diagnostic = useRef<HTMLParagraphElement>(null);
   useEffect(() => { diagnostic.current?.focus(); }, [handoffDiagnostic]);
   return <>
-    <WorkbenchScreen connectionError={connectionError} inert={runtimeConsent !== undefined} onNavigate={onNavigate} page="runtime" runtimeAvailable runtimeDiagnostic={runtimeDiagnostic}>
+    <WorkbenchScreen connectionError={connectionError} inert={runtimeConsent !== undefined} onNavigate={onNavigate} page="runtime" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
       <div className="runtime-content">
         {handoffDiagnostic === undefined ? undefined : <p ref={diagnostic} role="alert" tabIndex={-1}>{handoffDiagnostic}</p>}
         <RuntimePlayground
@@ -843,6 +857,8 @@ const Workbench = () => {
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const [connectionError, setConnectionError] = useState<string>();
   const [connection, setConnection] = useState<ProjectConnectionState>({ state: 'connecting' });
+  const [capabilityRetry, setCapabilityRetry] = useState(0);
+  const [capabilityState, setCapabilityState] = useState<CapabilityState>({ state: 'empty' });
   if (foreground.current === undefined) foreground.current = new ForegroundRouteClient();
   if (mcpRoutes.current === undefined) mcpRoutes.current = new WorkbenchMcpRouteClient({ foreground: foreground.current });
 
@@ -895,6 +911,7 @@ const Workbench = () => {
         setRuntimeHandoff(undefined);
         setPlaygroundRun(undefined);
         setChangedFiles([]);
+        setCapabilityState({ state: 'empty' });
         const replacement = createMcpController(mcpRoutes.current!);
         mcpControllerRef.current = replacement;
         setMcpController(replacement);
@@ -916,17 +933,28 @@ const Workbench = () => {
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ foreground: foreground.current! });
 
   const runtimeAvailable = runtimeCapability === 'available';
+  const buildId = status === undefined ? undefined : activeEpochId(status);
+  const capabilities = capabilityState.state === 'ready' && capabilityState.value.buildId === buildId
+    ? capabilityState.value
+    : undefined;
+  const capabilityPages = capabilities?.pages ?? generalWorkbenchPages;
+  const pages = useMemo<ReadonlySet<WorkbenchPage>>(() => Object.freeze(new Set<WorkbenchPage>([
+    ...capabilityPages,
+    ...(runtimeAvailable ? ['runtime' as const] : []),
+  ])), [capabilityPages, runtimeAvailable]);
+  const routesReady = status !== undefined && (buildId === undefined || capabilities !== undefined);
 
   const commitNavigation = useCallback((next: WorkbenchPage): void => {
-    if (next !== 'runtime') {
+    const available = pages.has(next) ? next : 'overview';
+    if (available !== 'runtime') {
       handoffCoordinator.current?.cancel();
       mcpPreviewDeparture.current?.cancel();
     }
-    const hash = `#${next}`;
+    const hash = `#${available}`;
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
-    if (next === 'mcp') setMcpPresentation('playground');
-    setPage(next);
-  }, []);
+    if (available === 'mcp') setMcpPresentation('playground');
+    setPage(available);
+  }, [pages]);
 
   if (mcpPreviewDeparture.current === undefined) {
     mcpPreviewDeparture.current = new McpPreviewDepartureCoordinator({
@@ -1279,13 +1307,39 @@ const Workbench = () => {
   }, [clearRuntimeOperationTraces, navigate]);
 
   useEffect(() => {
+    const request = new AbortController();
+    if (buildId === undefined) {
+      setCapabilityState({ state: 'empty' });
+      return () => request.abort();
+    }
+    setCapabilityState((current) => current.state === 'ready' && current.value.buildId === buildId
+      ? current
+      : { buildId, state: 'loading' });
+    void loadWorkbenchCapabilities({
+      artifactClient: artifactClient.current!,
+      buildId,
+      evalClient: evalClient.current!,
+      signal: request.signal,
+      skillClient: skillClient.current!,
+    }).then(
+      (value) => { if (!request.signal.aborted) setCapabilityState({ state: 'ready', value }); },
+      (reason: unknown) => {
+        if (request.signal.aborted) return;
+        setCapabilityState({ buildId, message: errorMessage(reason), state: 'error' });
+      },
+    );
+    return () => request.abort();
+  }, [buildId, capabilityRetry]);
+
+  useEffect(() => {
+    if (!routesReady) return undefined;
     const updatePage = (fromHashChange: boolean) => {
       if (window.location.hash === '#runtime' && !runtimeAvailable) {
         if (runtimeCapability === 'unavailable') window.history.replaceState(undefined, '', '#overview');
         navigate('overview');
         return;
       }
-      const next = pageForHash(runtimeAvailable);
+      const next = pageForHash(runtimeAvailable, pages);
       if (!fromHashChange && next === pageRef.current) return;
       navigate(next);
       if (fromHashChange && next === 'mcp' && pageRef.current !== 'mcp') setMcpPresentation('playground');
@@ -1294,7 +1348,7 @@ const Workbench = () => {
     updatePage(false);
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, [navigate, runtimeAvailable, runtimeCapability]);
+  }, [navigate, pages, routesReady, runtimeAvailable, runtimeCapability]);
 
   useEffect(() => () => {
     // Root shutdown owns the active controller's ordered preview→controller
@@ -1313,6 +1367,16 @@ const Workbench = () => {
     {connectionGate}
   </>;
   if (connection.generation === undefined && connectionGate !== undefined) return connectionGate;
+  if (status !== undefined && buildId !== undefined && capabilities === undefined) {
+    const content = capabilityState.state === 'error' && capabilityState.buildId === buildId
+      ? <main aria-live="polite" className="loading-state">
+          <h1>Bundle capabilities unavailable</h1>
+          <p role="alert">{capabilityState.message}</p>
+          <button onClick={() => setCapabilityRetry((current) => current + 1)} type="button">Retry</button>
+        </main>
+      : <main aria-live="polite" className="loading-state"><strong>Loading bundle capabilities…</strong></main>;
+    return withConnectionGate(content);
+  }
   if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
     if (page === 'mcp') {
       return withConnectionGate(<McpScreen
@@ -1325,8 +1389,8 @@ const Workbench = () => {
         onNavigate={navigate}
         onRuntimeInitialPreviewConsumed={consumeRuntimeInitialPreview}
         onResetSession={resetMcpSession}
+        pages={pages}
         registerPreviewClose={registerMcpPreviewClose}
-        runtimeAvailable={runtimeAvailable}
         runtimeDiagnostic={runtimeError}
         runtimeHandoff={runtimeHandoff}
         runtimePreviewDependencies={runtimePreviewDependencies}
@@ -1342,6 +1406,7 @@ const Workbench = () => {
         handoffDiagnostic={runtimeHandoffError}
         liveMcpPageAdapter={liveMcpPageAdapter}
         onNavigate={navigate}
+        pages={pages}
         registerAppPreviewLifecycle={registerAppPreviewLifecycle}
         renderAppPreview={renderAppPreview}
         resolveRuntimeConsent={resolveRuntimeConsent}
@@ -1355,9 +1420,9 @@ const Workbench = () => {
         connectionError={connectionError}
         onNavigate={navigate}
         onRunChange={setPlaygroundRun}
+        pages={pages}
         playgroundClient={playgroundClient.current}
         run={playgroundRun}
-        runtimeAvailable={runtimeAvailable}
         runtimeDiagnostic={runtimeError}
         status={status}
       />);
@@ -1367,12 +1432,12 @@ const Workbench = () => {
         connectionError={connectionError}
         logClient={logClient.current}
         onNavigate={navigate}
-        runtimeAvailable={runtimeAvailable}
+        pages={pages}
         runtimeDiagnostic={runtimeError}
       />);
     }
     if (page === 'evals') {
-      return withConnectionGate(<EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} />);
+      return withConnectionGate(<EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} pages={pages} runtimeDiagnostic={runtimeError} />);
     }
     if (page === 'comparisons') {
       return withConnectionGate(<ComparisonsScreen
@@ -1380,26 +1445,26 @@ const Workbench = () => {
         connectionError={connectionError}
         evalClient={evalClient.current}
         onNavigate={navigate}
-        runtimeAvailable={runtimeAvailable}
+        pages={pages}
         runtimeDiagnostic={runtimeError}
       />);
     }
     if (page === 'artifacts') {
-      return withConnectionGate(<ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />);
+      return withConnectionGate(<ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} pages={pages} runtimeDiagnostic={runtimeError} status={status} />);
     }
     if (page === 'hooks') {
       return withConnectionGate(<HooksScreen
         connectionError={connectionError}
         hookClient={hookClient.current}
         onNavigate={navigate}
-        runtimeAvailable={runtimeAvailable}
+        pages={pages}
         runtimeDiagnostic={runtimeError}
         status={status}
       />);
     }
     return withConnectionGate(page === 'skills'
-      ? <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} skillClient={skillClient.current} status={status} />
-      : <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />);
+      ? <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} pages={pages} runtimeDiagnostic={runtimeError} skillClient={skillClient.current} status={status} />
+      : <Overview capabilities={capabilities} changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} pages={pages} runtimeDiagnostic={runtimeError} status={status} />);
   }
   if (connectionGate !== undefined) return connectionGate;
   return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{runtimeError === undefined ? undefined : <p className="runtime-capability-error">Runtime capability issue: {runtimeError}</p>}</main>;

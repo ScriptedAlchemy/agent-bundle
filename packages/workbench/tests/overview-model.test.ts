@@ -23,13 +23,13 @@ it('projects one real active epoch, generated targets, and a current-source norm
   });
 
   expect(overview.normalization).toEqual({ label: 'Normalized successfully', revision: 'revision-1', state: 'ready' });
-  expect(overview.epoch).toMatchObject({ id: 'epoch-active', state: 'active', summary: 'Current artifact epoch' });
+  expect(overview.epoch).toMatchObject({ id: 'epoch-active', state: 'active', summary: 'Current build' });
   expect(overview.targets).toEqual([
     { digest: 'claude-digest', name: 'claude', state: 'built' },
     { digest: 'codex-digest', name: 'codex', state: 'built' },
   ]);
   expect(overview.diagnostics).toEqual([]);
-  expect(overview.nextAction).toEqual({ label: 'Rebuild', summary: 'Artifact epoch is current' });
+  expect(overview.nextAction).toEqual({ label: 'Rebuild', summary: 'The current build matches your source' });
 });
 
 it('uses only real diagnostics to explain a stale epoch and its next rebuild action', () => {
@@ -67,7 +67,7 @@ it('uses only real diagnostics to explain a stale epoch and its next rebuild act
   });
 
   expect(overview.normalization).toEqual({ label: 'Normalization needs attention', revision: 'revision-2', state: 'invalid' });
-  expect(overview.epoch).toMatchObject({ id: 'epoch-last-good', state: 'stale', summary: 'Last good artifact epoch' });
+  expect(overview.epoch).toMatchObject({ id: 'epoch-last-good', state: 'stale', summary: 'Last good build' });
   expect(overview.targets).toEqual([{ digest: 'portable-digest', name: 'portable', state: 'last-good' }]);
   expect(overview.diagnostics).toEqual([{ code: 'AB4000', message: 'Plugin name is required.', severity: 'error' }]);
   expect(overview.nextAction).toEqual({ label: 'Rebuild', summary: 'Resolve 1 error, then rebuild' });

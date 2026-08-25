@@ -266,9 +266,9 @@ const summaryFor = (
   session: PlaygroundSession | undefined,
   count: number,
 ): string => {
-  if (state === 'no-epoch') return 'No artifact epoch is active, so no playground session can be bound to one.';
+  if (state === 'no-epoch') return 'No successful build is available, so the Playground cannot start a run.';
   if (state === 'no-session' || session === undefined) {
-    return `Start a server-owned playground run against epoch ${epoch?.id ?? 'unknown'} to record an ordered trace.`;
+    return `Start a run against the current build to record an ordered trace.`;
   }
   const suffix = `epoch ${session.identity.epoch.id} with ${String(count)} recorded ${count === 1 ? 'event' : 'events'}.`;
   if (state === 'finalized') {

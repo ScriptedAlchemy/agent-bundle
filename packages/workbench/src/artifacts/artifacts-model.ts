@@ -200,7 +200,7 @@ export const artifactTargetOptionsFor = (
 
 export const artifactEpochIdentityRowsFor = (inspection: ArtifactInspection): readonly ArtifactDetailRow[] =>
   Object.freeze([
-    row('Epoch', inspection.epochId),
+    row('Build ID', inspection.epochId),
     row('Project revision', inspection.project.revision),
     row('Config digest', inspection.project.configDigest),
     row('Model digest', inspection.project.modelDigest),
@@ -296,19 +296,19 @@ export const artifactDiffViewFor = (diff: ArtifactEpochDiff): ArtifactDiffView =
     diffGroup('changed', 'Changed', diff.changed),
     diffGroup('unchanged', 'Unchanged', diff.unchanged),
   ]),
-  summary: `Epoch ${diff.candidateEpochId} against epoch ${diff.baseEpochId}: ` +
+  summary: `Build ${diff.candidateEpochId} compared with ${diff.baseEpochId}: ` +
     `${diff.added.length} added, ${diff.removed.length} removed, ` +
     `${diff.changed.length} changed, ${diff.unchanged.length} unchanged.`,
 });
 
 const summaryFor = (state: ArtifactViewState, inspection: ArtifactInspection | undefined): string => {
-  if (state === 'no-epoch') return 'No artifact epoch is active, so no published artifact can be inspected.';
-  if (state === 'diagnostics') return 'This artifact epoch failed validation, so its inspection was refused.';
+  if (state === 'no-epoch') return 'No successful build is available, so there is no generated output to inspect.';
+  if (state === 'diagnostics') return 'This build failed validation, so its generated output cannot be inspected.';
   if (state === 'ready' && inspection !== undefined) {
-    return `Epoch ${inspection.epochId} published ${inspection.files.length} files ` +
+    return `Build ${inspection.epochId} contains ${inspection.files.length} files ` +
       `across ${inspection.targets.length} targets.`;
   }
-  return 'No artifact inspection has been read for this epoch yet.';
+  return 'Generated output has not been loaded for this build yet.';
 };
 
 /** Derives every Artifacts page section from one epoch inspection, its diagnostics, and an optional diff. */

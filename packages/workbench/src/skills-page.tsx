@@ -320,7 +320,7 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
   const epoch = activeEpochFor(status);
   const targetNames = useMemo(() => Object.keys(epoch?.targetDigests ?? {}).sort((left, right) => left.localeCompare(right)), [epoch]);
   const [target, setTarget] = useState<string>();
-  const [generatedTree, setGeneratedTree] = useState<GeneratedTreeState>(() => unavailableTree('No artifact epoch is active.'));
+  const [generatedTree, setGeneratedTree] = useState<GeneratedTreeState>(() => unavailableTree('No successful build is available.'));
   const selectedTree = document === 'source'
     ? sourceTree
     : generatedTree.state === 'ready'
@@ -328,7 +328,7 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
       : undefined;
   const selected = selectedDocumentFor(selectedTree, selectedIds[document]);
   const generatedSummary = generatedTree.state === 'ready'
-    ? 'The selected artifact epoch has no generated Skills for this target.'
+    ? 'The selected build has no generated Skills for this target.'
     : generatedTree.summary;
   const detailSummary = document === 'generated'
     ? generatedSummary
@@ -380,14 +380,14 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
   useEffect(() => {
     let current = true;
     if (epoch === undefined) {
-      setGeneratedTree(unavailableTree('No artifact epoch is active.'));
+      setGeneratedTree(unavailableTree('No successful build is available.'));
       return () => { current = false; };
     }
     if (target === undefined) {
-      setGeneratedTree(unavailableTree('The selected artifact epoch has no generated targets.'));
+      setGeneratedTree(unavailableTree('The selected build has no generated targets.'));
       return () => { current = false; };
     }
-    setGeneratedTree(loadingTree(`Loading ${target} from epoch ${epoch.id}…`));
+    setGeneratedTree(loadingTree(`Loading ${target} from the current build…`));
     void client.generatedTree(epoch.id, target).then(
       (tree) => { if (current) setGeneratedTree(Object.freeze({ state: 'ready', tree })); },
       (reason) => {

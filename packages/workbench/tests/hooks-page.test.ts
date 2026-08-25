@@ -146,11 +146,11 @@ it('renders returned diagnostics as a visible alert', () => {
   expect(markup).toContain('Target: codex');
 });
 
-it('renders the hook controls and no request state when no epoch is active', () => {
+it('renders the hook controls and no request state when no build is available', () => {
   const client = new HookClient({ foreground: foreground(async () => { throw new Error('No epoch may issue a hook playground request.'); }) });
   const markup = renderToStaticMarkup(createElement(HooksPage, { client, epochId: undefined }));
 
-  expect(markup).toContain('No artifact epoch is active');
+  expect(markup).toContain('No successful build is available');
   expect(markup).not.toContain('id="hook-binding"');
   expect(markup).not.toContain('Run simulation');
   expect(markup).toContain('class="hooks-content"');

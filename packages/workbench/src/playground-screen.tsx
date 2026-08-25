@@ -30,11 +30,12 @@ const playgroundTargetsFor = (status: ProjectStatus) => {
     : Object.entries(epoch.targetDigests).map(([name, digest]) => ({ digest, name }));
 };
 
-export const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, playgroundClient, run, status }: {
+export const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, pages, playgroundClient, run, status }: {
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
+  readonly pages: ReadonlySet<WorkbenchPage>;
   readonly playgroundClient: PlaygroundClient;
   readonly run: PlaygroundRun | undefined;
   readonly status: ProjectStatus;
@@ -80,7 +81,7 @@ export const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, 
     return () => { current = false; };
   }, [artifactClient, epoch?.id]);
 
-  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
+  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground" pages={pages}>
     <PlaygroundPage
       catalog={visibleNativeCatalog}
       catalogError={nativeCatalogError}

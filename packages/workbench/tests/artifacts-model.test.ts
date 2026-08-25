@@ -132,7 +132,7 @@ it('flattens one target tree into ordered directory and file rows', () => {
 
 it('derives epoch identity rows from the inspection and its project context', () => {
   expect(artifactEpochIdentityRowsFor(inspection)).toEqual([
-    { label: 'Epoch', value: 'epoch-2' },
+    { label: 'Build ID', value: 'epoch-2' },
     { label: 'Project revision', value: 'revision-9' },
     { label: 'Config digest', value: 'config-digest' },
     { label: 'Model digest', value: 'model-digest' },
@@ -223,7 +223,7 @@ it('derives a ready view bound to the selected target', () => {
   expect(view.mcpServers).toHaveLength(1);
   expect(view.executables).toHaveLength(1);
   expect(view.provenance).toHaveLength(2);
-  expect(view.identity[0]).toEqual({ label: 'Epoch', value: 'epoch-2' });
+  expect(view.identity[0]).toEqual({ label: 'Build ID', value: 'epoch-2' });
   expect(view.summary).toContain('epoch-2');
   expect(view.diagnostics).toEqual([]);
   expect(Object.isFrozen(view)).toBe(true);
@@ -274,9 +274,9 @@ it('reports the empty and no-active-epoch states', () => {
 
   expect(empty.state).toBe('empty');
   expect(empty.selected).toBeUndefined();
-  expect(empty.summary).toContain('No artifact inspection');
+  expect(empty.summary).toContain('Generated output has not been loaded');
   expect(missing.state).toBe('no-epoch');
-  expect(missing.summary).toContain('No artifact epoch is active');
+  expect(missing.summary).toContain('No successful build is available');
 });
 
 it('keeps a loaded diff on the view alongside the inspection', () => {

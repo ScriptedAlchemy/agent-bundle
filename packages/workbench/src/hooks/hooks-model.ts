@@ -90,13 +90,13 @@ export const hostMappingRowsFor = (mapping: HookPlaygroundHostMapping): readonly
 ]);
 
 const summaryFor = (state: HookPlaygroundState, simulation: HookPlaygroundSimulation | undefined): string => {
-  if (state === 'no-epoch') return 'No artifact epoch is active, so no generated hook can be simulated.';
-  if (state === 'loading') return 'Loading generated hooks for this artifact epoch.';
-  if (state === 'list-error') return 'Generated hooks could not be loaded for this artifact epoch.';
-  if (state === 'empty') return 'This artifact epoch has no generated hooks.';
+  if (state === 'no-epoch') return 'No successful build is available, so no generated Hook can be simulated.';
+  if (state === 'loading') return 'Loading generated Hooks from the current build.';
+  if (state === 'list-error') return 'Generated Hooks could not be loaded from the current build.';
+  if (state === 'empty') return 'The current build has no generated Hooks.';
   if (state === 'diagnostics') return 'The hook playground returned diagnostics instead of a simulation.';
   if (state === 'simulated' && simulation !== undefined) {
-    return `Simulated ${simulation.canonicalIntent.hook} on ${simulation.binding.target} from epoch ${simulation.binding.epochId}.`;
+    return `Simulated ${simulation.canonicalIntent.hook} on ${simulation.binding.target} from the selected build.`;
   }
   return 'Select a generated hook and run a simulation to see its canonical and native trace.';
 };

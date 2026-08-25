@@ -98,7 +98,7 @@ export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) =>
     </p>)}
   </div>}
   {view.state !== 'ready' ? undefined : <>
-    <DetailRows label="Epoch identity" rows={view.identity} />
+    <DetailRows label="Build identity" rows={view.identity} />
     <section className="artifact-detail">
       <h2>Artifact tree</h2>
       {view.tree.length === 0
@@ -114,7 +114,7 @@ export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) =>
       <h2>Runtime</h2>
       <h3>Hooks</h3>
       {view.hooks.length === 0
-        ? <p className="empty-row">This epoch published no hooks.</p>
+        ? <p className="empty-row">This build contains no Hooks.</p>
         : <table className="artifact-table">
           <thead>
             <tr><th scope="col">Hook</th><th scope="col">Wrapper path</th><th scope="col">Timeout</th><th scope="col">Bytes</th><th scope="col">SHA-256</th></tr>
@@ -129,7 +129,7 @@ export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) =>
         </table>}
       <h3>MCP servers</h3>
       {view.mcpServers.length === 0
-        ? <p className="empty-row">This epoch published no MCP servers.</p>
+        ? <p className="empty-row">This build contains no MCP servers.</p>
         : <table className="artifact-table">
           <thead>
             <tr><th scope="col">Server</th><th scope="col">Manifest path</th><th scope="col">Entry paths</th></tr>
@@ -142,7 +142,7 @@ export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) =>
         </table>}
       <h3>Executables</h3>
       {view.executables.length === 0
-        ? <p className="empty-row">This epoch published no executable files.</p>
+        ? <p className="empty-row">This build contains no executable files.</p>
         : <table className="artifact-table">
           <thead>
             <tr><th scope="col">Path</th><th scope="col">Kind</th><th scope="col">Mode</th><th scope="col">Bytes</th><th scope="col">SHA-256</th></tr>
@@ -159,7 +159,7 @@ export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) =>
     <section className="artifact-detail">
       <h2>Provenance</h2>
       {view.provenance.length === 0
-        ? <p className="empty-row">This epoch declared no direct source provenance.</p>
+        ? <p className="empty-row">This build contains no direct source provenance.</p>
         : <table className="artifact-table">
           <thead><tr><th scope="col">Output path</th><th scope="col">Source inputs</th></tr></thead>
           <tbody>{view.provenance.map((entry) => <tr key={entry.key}>
@@ -179,9 +179,9 @@ export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) =>
 
 /** The counted added, removed, changed, and unchanged files between a base epoch and the active one. */
 export const ArtifactEpochDiffView = ({ view }: ArtifactEpochDiffViewProps) => <section className="artifact-detail">
-  <h2>Epoch diff</h2>
+  <h2>Build comparison</h2>
   {view.diff === undefined
-    ? <p className="empty-row">No epoch comparison has been requested.</p>
+    ? <p className="empty-row">No build comparison has been requested.</p>
     : <>
       <p className="artifact-summary" role="status">{view.diff.summary}</p>
       {view.diff.groups.map((group) => <div className="artifact-diff-group" key={group.change}>
@@ -250,7 +250,7 @@ export const ArtifactsPage = ({ client, epochId }: ArtifactsPageProps) => {
     <div className="page-heading artifacts-page-heading">
       <div>
         <h1>Artifacts</h1>
-        <p>Emitted files, runtime metadata, provenance, and epoch comparison for one immutable epoch.</p>
+        <p>Inspect generated files, runtime metadata, provenance, and changes between published builds.</p>
       </div>
     </div>
     {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
@@ -267,7 +267,7 @@ export const ArtifactsPage = ({ client, epochId }: ArtifactsPageProps) => {
           >
             {view.targets.map((option) => <option key={option.key} value={option.name}>{option.label}</option>)}
           </select>
-          <label htmlFor="artifact-diff-base">Base epoch id</label>
+          <label htmlFor="artifact-diff-base">Earlier build ID</label>
           <input
             disabled={busy}
             id="artifact-diff-base"
@@ -277,7 +277,7 @@ export const ArtifactsPage = ({ client, epochId }: ArtifactsPageProps) => {
           />
           <div className="artifact-actions">
             <button disabled={busy || baseDraft.trim().length === 0} onClick={() => void compare()} type="button">
-              Compare epochs
+              Compare builds
             </button>
           </div>
         </section>
