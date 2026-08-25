@@ -98,6 +98,18 @@ it('tells authors how to add their first Skill', () => {
   expect(markup).toContain('Add a Skill path to agent-bundle.config.ts');
 });
 
+it('explains when the selected generated target has no Skills', () => {
+  const markup = renderToStaticMarkup(createElement(SkillTree, {
+    kind: 'generated',
+    onSelect: () => undefined,
+    selectedId: undefined,
+    tree: { diagnostics: [], skills: [] },
+  }));
+
+  expect(markup).toContain('No generated Skills are available for this target.');
+  expect(markup).not.toContain('No authored Skills are available.');
+});
+
 it('gives both two-option groups a complete roving-tab and labelled-tabpanel contract', () => {
   const markup = renderToStaticMarkup(createElement(SkillDocumentPanel, {
     document: 'source',

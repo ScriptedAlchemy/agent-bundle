@@ -49,14 +49,17 @@ export const BundleWorkflow = ({ onNavigate }: { readonly onNavigate: (page: Wor
     </li>
     <li>
       <h2>3. Exercise</h2>
-      <p>Run emitted behavior through Playground and MCP.</p>
+      <p>Exercise emitted Skills, Hooks, Playground, and MCP behavior.</p>
+      <button onClick={() => onNavigate('skills')} type="button">Skills</button>
+      <button onClick={() => onNavigate('hooks')} type="button">Hooks</button>
       <button onClick={() => onNavigate('playground')} type="button">Playground</button>
       <button onClick={() => onNavigate('mcp')} type="button">MCP</button>
     </li>
     <li>
       <h2>4. Evaluate</h2>
-      <p>Evaluate host-ready behavior and inspect durable evidence.</p>
+      <p>Evaluate host-ready behavior, compare results, and inspect durable evidence.</p>
       <button onClick={() => onNavigate('evals')} type="button">Evals</button>
+      <button onClick={() => onNavigate('comparisons')} type="button">Comparisons</button>
     </li>
   </ol>
 </section>;

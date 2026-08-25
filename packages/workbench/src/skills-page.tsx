@@ -265,14 +265,17 @@ const selectedDocumentFor = (
 ): ServedSkillDocument | undefined =>
   tree?.skills.find((skill) => skill.id === selectedId) ?? tree?.skills[0];
 
-export const SkillTree = ({ label = 'Skills', onSelect, selectedId, tree }: {
+export const SkillTree = ({ kind = 'source', label = 'Skills', onSelect, selectedId, tree }: {
+  readonly kind?: SkillDocumentKind;
   readonly label?: string;
   readonly onSelect: (id: string) => void;
   readonly selectedId: string | undefined;
   readonly tree: SkillDocumentTree;
 }) => <aside aria-label="Skills" className="skill-tree-pane">
   <div className="skill-tree-heading"><h2>{label}</h2><span>{tree.skills.length}</span></div>
-  {tree.skills.length === 0 ? <p className="empty-row">No authored Skills are available. Add a Skill path to agent-bundle.config.ts.</p> : <div className="skill-tree">
+  {tree.skills.length === 0 ? <p className="empty-row">{kind === 'generated'
+    ? 'No generated Skills are available for this target.'
+    : 'No authored Skills are available. Add a Skill path to agent-bundle.config.ts.'}</p> : <div className="skill-tree">
     {tree.skills.map((skill) => <button
       aria-current={selectedId === skill.id ? 'page' : undefined}
       className={selectedId === skill.id ? 'skill-tree-item skill-tree-item--active' : 'skill-tree-item'}
@@ -386,7 +389,7 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
 
   return <div className="skills-layout">
     {selectedTree === undefined ? <aside className="skill-tree-pane"><p className="empty-row">{detailSummary}</p></aside> : (
-      <SkillTree label={document === 'generated' ? 'Generated skills' : 'Source skills'} onSelect={selectSkill} selectedId={selected?.id} tree={selectedTree} />
+      <SkillTree kind={document} label={document === 'generated' ? 'Generated skills' : 'Source skills'} onSelect={selectSkill} selectedId={selected?.id} tree={selectedTree} />
     )}
     <div className="skills-content">
       <div className="page-heading skills-page-heading">
