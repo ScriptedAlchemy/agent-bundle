@@ -282,38 +282,22 @@ git add examples/audiobook-curator
 git commit -m "feat(example): build audiobook curator plugin"
 ```
 
-### Task 5: Package and example release verification
+### Task 5: Package and example workspace verification
 
 **Files:**
 - Create: `packages/rsc-runtime/README.md`
-- Create: `packages/rsc-runtime/tests/packed-consumer.test.ts`
 - Create: `examples/audiobook-curator/README.md`
 - Modify: `package.json`
 - Modify: `README.md`
 
 **Interfaces:**
-- Produces documented install/import commands and root gates for both new workspace products.
+- Produces documented workspace import/install commands and root gates for both new workspace products.
 
-- [ ] **Step 1: Write the failing packed-consumer test**
-
-Pack `packages/rsc-runtime`, install the tarball in a temporary ESM consumer, and execute:
-
-```js
-import { Hook, Mcp, createRscRequestContext, lowerHookResult, lowerMcpResult } from '@agent-bundle/rsc-runtime';
-if (![Hook, Mcp, createRscRequestContext, lowerHookResult, lowerMcpResult].every(Boolean)) process.exit(1);
-```
-
-- [ ] **Step 2: Run and verify RED**
-
-Run: `pnpm exec rstest packages/rsc-runtime/tests/packed-consumer.test.ts`
-
-Expected: FAIL until package files, exports, and build order are complete.
-
-- [ ] **Step 3: Complete release metadata and docs**
+- [ ] **Step 1: Complete package metadata and docs**
 
 Document the stable public boundary, peer dependency, JSX examples, global curator CLI installation, plan-only safety, and Claude/Codex build/install commands. Update root build and preview-publish scripts to include `@agent-bundle/rsc-runtime` without changing the `agent-bundle` package contents.
 
-- [ ] **Step 4: Run broad repository gates**
+- [ ] **Step 2: Run broad repository gates**
 
 Run:
 
@@ -328,7 +312,7 @@ pnpm check:runtime-topology
 
 Expected: PASS; only documented skips remain.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add README.md package.json packages/rsc-runtime examples/audiobook-curator

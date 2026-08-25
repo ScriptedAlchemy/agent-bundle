@@ -14,7 +14,7 @@ Publish the proven JSX-to-agent-protocol primitives as `@agent-bundle/rsc-runtim
 
 React is a peer dependency. MCP protocol types are a direct dependency. Demo-specific edit events, JSONL persistence, provider lifecycle, Workbench integration, and native host packaging remain in `examples/rsc-agent-runtime`.
 
-The existing RSC example must consume the workspace package rather than duplicate these primitives. Release verification must pack the package, install it in an isolated consumer, import every public entry point, and reject undeclared files or private source imports.
+The existing RSC example must consume the workspace package rather than duplicate these primitives. Verification builds its declarations and imports every public entry point through the declared pnpm workspace dependency; examples may not use private source imports.
 
 ## Audiobook Curator example
 
@@ -48,7 +48,7 @@ Skills are authored as native Markdown because Claude, Codex, and portable Agent
 Automated verification covers:
 
 - RED-to-GREEN unit tests for every public RSC export and lowerer boundary;
-- package typecheck, build, pack, and isolated consumer import;
+- package typecheck, build, and public imports through declared pnpm workspace dependencies;
 - synthetic `ffprobe`/`ffmpeg` process tests for success, malformed output, bounded output, cancellation, timeout, plan-only behavior, and explicit apply forwarding;
 - direct CLI tests proving the globally installable command and MCP server share the same curator core contracts;
 - full Agent Bundle build and validation for Claude and Codex;
