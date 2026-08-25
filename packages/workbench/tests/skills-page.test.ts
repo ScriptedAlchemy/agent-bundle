@@ -5,7 +5,7 @@ import { expect, it } from '@rstest/core';
 
 import { EvalClient } from '../src/evals/eval-client.ts';
 import { SkillClient } from '../src/skill-client.ts';
-import { SkillDocumentPanel, SkillsPage, SkillTree } from '../src/skills-page.tsx';
+import { SkillDocumentPanel, skillGenerationSummaryFor, SkillsPage, SkillTree } from '../src/skills-page.tsx';
 
 const document = {
   base: { kind: 'source' as const, skillId: 'skill:review' },
@@ -49,12 +49,27 @@ it('renders independent document and view selectors for the generated Markdown d
   expect(markup).toContain('aria-label="Skill document"');
   expect(markup).toContain('aria-label="Document view"');
   expect(markup).toContain('Generated for portable');
-  expect(markup).toContain('Generated · epoch-01/portable');
+  expect(markup).toContain('Generated for portable');
+  expect(markup).not.toContain('Generated · epoch-01/portable');
+  expect(markup).toContain('Document details');
+  expect(markup).toContain('Build ID');
+  expect(markup).toContain('epoch-01');
   expect(markup).toContain('Generated review instructions');
   expect(markup).toContain('# Generated review');
   expect(markup).not.toContain('Reviews changes');
   expect(markup).toContain('Resource tree');
   expect(markup).toContain('/api/skills/epochs/epoch-01/portable/skill%3Areview/resources/portable-guide.md');
+});
+
+it('describes identical and adapted host output without implying a transformation', () => {
+  expect(skillGenerationSummaryFor(document, { ...generatedDocument, markdown: document.markdown }, 'portable')).toEqual({
+    kind: 'identical',
+    message: 'This target keeps the authored instructions unchanged. Agent Bundle only changes the portable package layout.',
+  });
+  expect(skillGenerationSummaryFor(document, generatedDocument, 'claude')).toEqual({
+    kind: 'modified',
+    message: 'Generated output differs from the authored Skill for claude. Review the generated document before shipping.',
+  });
 });
 
 it('renders source raw Markdown from the selected source document', () => {

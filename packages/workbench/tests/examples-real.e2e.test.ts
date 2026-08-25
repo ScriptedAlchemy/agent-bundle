@@ -51,7 +51,10 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     await expect(page.getByRole('heading', { name: 'dependency-upgrade', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.skill-tree-item')).toHaveCount(3, { timeout: browserTimeout });
     for (const skill of ['dependency-upgrade', 'incident-triage', 'release-review']) {
-      await expect(page.getByRole('button', { name: new RegExp(skill, 'u') })).toBeVisible({ timeout: browserTimeout });
+      await page.getByRole('button', { name: new RegExp(skill, 'u') }).click();
+      await expect(page.getByRole('heading', { name: skill, exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByLabel('Eval coverage')).toContainText('Indirect 1', { timeout: browserTimeout });
+      await expect(page.getByLabel('Resource tree').getByRole('link')).not.toHaveCount(0, { timeout: browserTimeout });
     }
     for (const unavailable of ['Hooks', 'MCP playground', 'Playground']) {
       await expect(page.getByRole('link', { name: unavailable, exact: true })).toHaveCount(0, { timeout: browserTimeout });
@@ -61,7 +64,11 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     await page.getByRole('tab', { name: 'Markdown' }).click();
     await expect(page.locator('.skill-source')).toContainText('Release review', { timeout: browserTimeout });
     await page.getByRole('tab', { name: 'Generated' }).click();
-    await expect(page.locator('.skill-translation-note')).toContainText('Unchanged for', { timeout: browserTimeout });
+    await page.getByLabel('Target').selectOption('codex');
+    await expect(page.locator('.skill-translation-note')).toHaveText(
+      'This target keeps the authored instructions unchanged. Agent Bundle only changes the codex package layout.',
+      { timeout: browserTimeout },
+    );
     await captureExampleState(page, 'skills-starter', 'skills-populated');
 
     await page.goto(`${server.url}#hooks`);

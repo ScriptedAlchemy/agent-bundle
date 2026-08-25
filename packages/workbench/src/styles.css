@@ -124,6 +124,12 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
 .skill-frontmatter div:last-child { border-right: 0; }
 .skill-frontmatter dt { color: #596372; font-size: 12px; font-weight: 750; margin: 0 0 6px; }
 .skill-frontmatter dd { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.skill-document-details { border-bottom: 1px solid #d9dee7; padding: 10px 14px; }
+.skill-document-details summary { color: #375271; cursor: pointer; font-size: 12px; font-weight: 750; }
+.skill-document-details dl { display: grid; gap: 8px; margin: 10px 0 0; }
+.skill-document-details dl div { display: grid; gap: 12px; grid-template-columns: 130px minmax(0, 1fr); }
+.skill-document-details dt { color: #596372; font-size: 12px; font-weight: 750; }
+.skill-document-details dd { font-size: 12px; overflow-wrap: anywhere; }
 .skill-diagnostics { background: #fff7f7; border-left: 3px solid #c01d26; color: #78242a; margin: 18px 0; padding: 9px 14px; }
 .skill-diagnostics p { font-size: 13px; margin: 5px 0; }
 .skill-tabs { border-bottom: 1px solid #cfd6e1; display: flex; gap: 3px; margin-top: 28px; }

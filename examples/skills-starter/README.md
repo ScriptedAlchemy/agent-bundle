@@ -8,8 +8,7 @@ pnpm example:skills
 
 The command validates and builds the project, starts the foreground development
 server, and opens the Agent Bundle Workbench. No API key or native host login is
-required. The release-readiness eval is deterministic and reads only its
-checked-in fixture.
+required. Both eval suites are deterministic and read only checked-in fixtures.
 
 ## What is authored
 
@@ -21,11 +20,12 @@ checked-in fixture.
   runtime, rollout, and rollback checks.
 - `skills/release-review/SKILL.md` defines the evidence, severity, workflow,
   and final-report requirements for an explicit release review.
-- `references/checklist.md` and `references/release-policy.md` provide the
-  checklist and verdict policy loaded only when needed.
-- `assets/report-template.md` is the reusable readiness report template.
+- Each Skill links its own `references/` checklist or runbook and reusable
+  `assets/` handoff or planning template.
 - `evals/release-readiness.eval.ts` defines the deterministic
   `release-artifact-is-ready` case and its checked-in evidence fixture.
+- `evals/engineering-operations.eval.ts` directly exercises the incident and
+  dependency-upgrade Skills with evidence and rollback/stop conditions.
 
 ## Workbench walkthrough
 
@@ -34,7 +34,9 @@ checked-in fixture.
 2. **Skills** lists `dependency-upgrade`, `incident-triage`, and
    `release-review`. Browse their linked checklists and report templates. Switch
    between Source and Generated to see whether a target copied or adapted the
-   authored document; `release-review` also shows deterministic eval coverage.
+   authored document. Every Skill shows its deterministic outcome-eval coverage;
+   it is labeled indirect because the deterministic harness cannot observe host
+   Skill activation.
 3. **Artifacts** defaults to the Claude target. Change the target to compare
    the portable, Codex, and Claude output trees and their provenance.
 4. **Evals** defaults to the `release-readiness` suite. Run its deterministic

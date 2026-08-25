@@ -126,10 +126,27 @@ const documentLabel = (selected: ServedSkillDocument): string => selected.base.k
   : 'Authored SKILL.md';
 
 const provenanceLabel = (selected: ServedSkillDocument): string => selected.base.kind === 'generated'
-  ? `Generated · ${selected.base.epochId}/${selected.base.target}`
-  : selected.provenance === undefined
-    ? 'Source document'
-    : `Source · ${selected.provenance.kind}`;
+  ? `Generated for ${selected.base.target}`
+  : 'Authored';
+
+export interface SkillGenerationSummary {
+  readonly kind: 'identical' | 'modified';
+  readonly message: string;
+}
+
+export const skillGenerationSummaryFor = (
+  source: ServedSkillDocument,
+  generated: ServedSkillDocument,
+  target: string,
+): SkillGenerationSummary => source.markdown === generated.markdown
+  ? Object.freeze({
+    kind: 'identical',
+    message: `This target keeps the authored instructions unchanged. Agent Bundle only changes the ${target} package layout.`,
+  })
+  : Object.freeze({
+    kind: 'modified',
+    message: `Generated output differs from the authored Skill for ${target}. Review the generated document before shipping.`,
+  });
 
 /** The selected served Skill document and its rendered or raw Markdown view. */
 export const SkillDocumentPanel = ({
@@ -188,6 +205,16 @@ export const SkillDocumentPanel = ({
           <strong>{diagnostic.code}</strong> {diagnostic.message}
         </p>)}
       </div>}
+      <details className="skill-document-details">
+        <summary>Document details</summary>
+        <dl>
+          <div><dt>Document ID</dt><dd className="identifier">{selected.id}</dd></div>
+          {selected.base.kind === 'generated' ? <>
+            <div><dt>Build ID</dt><dd className="identifier">{selected.base.epochId}</dd></div>
+            <div><dt>Generated target</dt><dd>{selected.base.target}</dd></div>
+          </> : <div><dt>Provenance</dt><dd>{selected.provenance?.kind ?? 'source'}</dd></div>}
+        </dl>
+      </details>
     </>}
     <div className="skill-controls">
       <div className="skill-control-group">
@@ -325,9 +352,7 @@ export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
     ? undefined
     : sourceCounterpart === undefined
       ? `Generated for ${target} — no authored counterpart is available for comparison.`
-      : selected.markdown === sourceCounterpart.markdown
-        ? `Unchanged for ${target} — this target ships the authored Skill document as written.`
-        : `Adapted for ${target} — review this generated document against the authored source.`;
+      : skillGenerationSummaryFor(sourceCounterpart, selected, target).message;
   const generatedSummary = generatedTree.state === 'ready'
     ? 'The selected build has no generated Skills for this target.'
     : generatedTree.summary;
