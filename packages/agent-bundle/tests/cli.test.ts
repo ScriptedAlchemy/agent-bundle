@@ -15,7 +15,7 @@ const cliPath = join(packageRoot, 'dist/cli.js');
 let buildPackage: Promise<void> | undefined;
 
 const buildCliPackage = async (): Promise<void> => {
-  buildPackage ??= execFile('npm', ['run', 'build'], { cwd: workspaceRoot }).then(() => undefined);
+  buildPackage ??= execFile('pnpm', ['build'], { cwd: workspaceRoot }).then(() => undefined);
   await buildPackage;
 };
 

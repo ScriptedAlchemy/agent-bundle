@@ -5,6 +5,8 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
+import { integrationTestFiles } from '../../../rstest.integration-tests.ts';
+
 const execFile = promisify(executeFile);
 
 it('selects product packages through the pinned pnpm workspace', async () => {
@@ -74,4 +76,10 @@ it('selects product packages through the pinned pnpm workspace', async () => {
 
   await expect(access(join(process.cwd(), 'packages/agent-bundle/rslib.config.ts'))).resolves.toBeUndefined();
   await expect(access(join(process.cwd(), 'rslib.config.ts'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+  expect(integrationTestFiles).toEqual(expect.arrayContaining([
+    'packages/agent-bundle/tests/examples-contract.test.ts',
+    'packages/agent-bundle/tests/workspace-contract.test.ts',
+  ]));
+  expect(integrationTestFiles).not.toContain('packages/agent-bundle/tests/package-preview-workflow.test.ts');
 });

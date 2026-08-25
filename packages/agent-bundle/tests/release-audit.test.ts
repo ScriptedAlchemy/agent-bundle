@@ -110,7 +110,7 @@ it('ships repository and support metadata that matches the verified origin', asy
 });
 
 it('runs a release pack dry run with the CLI in its tarball', async () => {
-  const { stdout } = await execFile('corepack', ['pnpm', 'pack:dry-run'], {
+  const { stdout } = await execFile('pnpm', ['pack:dry-run'], {
     cwd: workspaceRoot,
     env: releaseEnvironment(),
   });
@@ -123,7 +123,7 @@ it('packs generated Workbench legal companion files', async () => {
   const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-audit-'));
 
   try {
-    await execFile('corepack', ['pnpm', 'build'], { cwd: workspaceRoot, env: releaseEnvironment() });
+    await execFile('pnpm', ['build'], { cwd: workspaceRoot, env: releaseEnvironment() });
     const { stdout } = await execFile('npm', [
       'pack',
       '--json',
@@ -148,7 +148,7 @@ it('installs public entrypoints and an externally resolved CLI for production co
   const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-tarball-'));
 
   try {
-    await execFile('corepack', ['pnpm', 'build'], { cwd: workspaceRoot, env: releaseEnvironment() });
+    await execFile('pnpm', ['build'], { cwd: workspaceRoot, env: releaseEnvironment() });
     const { stdout: packed } = await execFile('npm', [
       'pack',
       '--json',

@@ -15,9 +15,9 @@ const browserTimeout = 5_000;
 const buildWorkbench = async (mode: 'development' | 'production' = 'production'): Promise<void> => {
   const { NODE_ENV: _nodeEnv, RSTEST: _rstest, ...environment } = process.env;
   const isProduction = mode === 'production';
-  await execFile('npm', isProduction
-    ? ['run', 'build', '--workspace', 'agent-bundle-workbench']
-    : ['exec', 'rsbuild', '--', 'build', '--mode', mode], {
+  await execFile('pnpm', isProduction
+    ? ['--filter', 'agent-bundle-workbench', 'build']
+    : ['exec', 'rsbuild', 'build', '--mode', mode], {
     cwd: isProduction ? workspaceRoot : join(workspaceRoot, 'packages', 'workbench'),
     env: { ...environment, NODE_ENV: mode },
   });

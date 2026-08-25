@@ -46,7 +46,7 @@ const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
 let buildPromise: Promise<void> | undefined;
 
 const buildPackage = async (): Promise<void> => {
-  buildPromise ??= execFile('npm', ['run', 'build'], {
+  buildPromise ??= execFile('pnpm', ['build'], {
     cwd: workspaceRoot,
   }).then(() => undefined);
   await buildPromise;

@@ -6,8 +6,8 @@ if (target === undefined || target.trim().length === 0) {
   console.error('Set AGENT_BUNDLE_WORKBENCH_API_PROXY to the running Agent Bundle foreground server URL before starting contributor HMR.');
   process.exitCode = 2;
 } else {
-  const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const child = spawn(command, ['exec', '--no-install', 'rsbuild', '--', 'dev', ...process.argv.slice(2)], {
+  const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const child = spawn(command, ['exec', 'rsbuild', 'dev', ...process.argv.slice(2)], {
     env: process.env,
     stdio: 'inherit',
   });

@@ -21,10 +21,10 @@ const packedEnvironment = (): NodeJS.ProcessEnv => {
 
 const buildPackage = async (force = false): Promise<void> => {
   if (force) {
-    await execFile('npm', ['run', 'build'], { cwd: workspaceRoot });
+    await execFile('pnpm', ['build'], { cwd: workspaceRoot });
     return;
   }
-  built ??= execFile('npm', ['run', 'build'], { cwd: workspaceRoot }).then(() => undefined);
+  built ??= execFile('pnpm', ['build'], { cwd: workspaceRoot }).then(() => undefined);
   await built;
 };
 
