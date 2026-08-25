@@ -1,5 +1,7 @@
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
 import type { ArtifactEpoch, ArtifactState, ProjectStatus, SourceState } from '../../agent-bundle/src/contracts/project.ts';
+import type { WorkbenchCapabilities } from './workbench-capabilities.ts';
+import type { WorkbenchPage } from './workbench-screen.tsx';
 
 /** The active (or last-good) artifact epoch, or undefined when none was published. */
 export const activeEpochFor = (status: ProjectStatus): ArtifactEpoch | undefined =>
@@ -29,6 +31,12 @@ export interface OverviewNextAction {
   readonly summary: string;
 }
 
+export interface BundleSummary {
+  readonly capabilityLabels: readonly string[];
+  readonly nextPages: readonly WorkbenchPage[];
+  readonly targetCount: number;
+}
+
 export interface OverviewModel {
   readonly changedFiles: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
@@ -44,6 +52,29 @@ const sourceLabel = (state: SourceState): string => {
     case 'invalid': return 'Normalization needs attention';
     case 'unknown': return 'Normalization has not completed';
   }
+};
+
+const counted = (count: number, singular: string, plural = `${singular}s`): string =>
+  `${String(count)} ${count === 1 ? singular : plural}`;
+
+export const bundleSummaryFor = (
+  capabilities: Pick<WorkbenchCapabilities, 'counts' | 'pages'>,
+): BundleSummary => {
+  const { counts, pages } = capabilities;
+  const capabilityLabels = Object.freeze([
+    ...(counts.skills === 0 ? [] : [counted(counts.skills, 'Skill')]),
+    ...(counts.hooks === 0 ? [] : [counted(counts.hooks, 'Hook')]),
+    ...(counts.scripts === 0 ? [] : [counted(counts.scripts, 'script')]),
+    ...(counts.mcpServers === 0 ? [] : [counted(counts.mcpServers, 'MCP server')]),
+    ...(counts.evalSuites === 0 ? [] : [counted(counts.evalSuites, 'Eval suite')]),
+    counted(counts.targets, 'generated target'),
+  ]);
+  const preferred: readonly WorkbenchPage[] = ['skills', 'hooks', 'playground', 'mcp', 'evals', 'artifacts'];
+  return Object.freeze({
+    capabilityLabels,
+    nextPages: Object.freeze(preferred.filter((page) => pages.has(page)).slice(0, 3)),
+    targetCount: counts.targets,
+  });
 };
 
 const buildDiagnostics = (status: ProjectStatus): readonly Diagnostic[] =>
@@ -69,12 +100,12 @@ const uniqueDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnos
 };
 
 const epochFor = (status: ProjectStatus): OverviewEpoch => {
-  if (status.artifact.state === 'missing') return { state: 'missing', summary: 'No validated artifact epoch' };
+  if (status.artifact.state === 'missing') return { state: 'missing', summary: 'No successful build' };
   return {
     createdAt: status.artifact.activeEpoch.createdAt,
     id: status.artifact.activeEpoch.id,
     state: status.artifact.state,
-    summary: status.artifact.state === 'active' ? 'Current artifact epoch' : 'Last good artifact epoch',
+    summary: status.artifact.state === 'active' ? 'Current build' : 'Last good build',
   };
 };
 
@@ -89,9 +120,9 @@ const targetsFor = (status: ProjectStatus): readonly OverviewTarget[] => {
 const nextActionFor = (status: ProjectStatus, diagnostics: readonly Diagnostic[]): OverviewNextAction => {
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length;
   if (errors > 0) return { label: 'Rebuild', summary: `Resolve ${errors} ${errors === 1 ? 'error' : 'errors'}, then rebuild` };
-  if (status.artifact.state === 'missing') return { label: 'Rebuild', summary: 'Build the first artifact epoch' };
+  if (status.artifact.state === 'missing') return { label: 'Rebuild', summary: 'Create the first successful build' };
   if (status.artifact.state === 'stale') return { label: 'Rebuild', summary: 'Rebuild the latest normalized source' };
-  return { label: 'Rebuild', summary: 'Artifact epoch is current' };
+  return { label: 'Rebuild', summary: 'The current build matches your source' };
 };
 
 export const overviewFor = (status: ProjectStatus, changedFiles: readonly string[] = []): OverviewModel => {

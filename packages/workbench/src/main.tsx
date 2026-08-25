@@ -277,7 +277,7 @@ const Workbench = () => {
         screen = <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} pages={pages} skillClient={skillClient.current} status={status} />;
         break;
       case 'overview':
-        screen = <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} pages={pages} status={status} />;
+        screen = <Overview capabilities={capabilities} changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} pages={pages} status={status} />;
         break;
       default: {
         const unhandled: never = page;

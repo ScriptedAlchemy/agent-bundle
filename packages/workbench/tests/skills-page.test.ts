@@ -197,7 +197,7 @@ it('keeps generated document navigation and its target available while no genera
     onTargetChange: () => undefined,
     onViewChange: () => undefined,
     selected: undefined,
-    summary: 'Loading portable from epoch epoch-01…',
+    summary: 'Loading portable from the current build…',
     target: 'portable',
     targetNames: ['portable'],
     view: 'rendered',
@@ -207,7 +207,7 @@ it('keeps generated document navigation and its target available while no genera
   expect(markup).toContain('>View<');
   expect(markup).toContain('>Target<');
   expect([...markup.matchAll(/role="tablist"/gu)]).toHaveLength(2);
-  expect(markup).toContain('Loading portable from epoch epoch-01…');
+  expect(markup).toContain('Loading portable from the current build…');
   expect(markup).toContain('id="skill-skills-panel"');
   expect(markup).toContain('aria-controls="skill-skills-panel"');
   expect(markup).toContain('aria-labelledby="skill-skills-document-tab-generated skill-skills-view-tab-rendered"');

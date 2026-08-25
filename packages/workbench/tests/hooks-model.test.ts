@@ -102,7 +102,7 @@ it('derives a simulated view with every canonical and native trace section', () 
   const view = hookPlaygroundViewFor({ epochId: 'epoch-1', hooks, result: simulation, selectedKey: 'claude/hook:session-start' });
 
   expect(view.state).toBe('simulated');
-  expect(view.summary).toContain('epoch-1');
+  expect(view.summary).toContain('selected build');
   expect(view.selected?.key).toBe('claude/hook:session-start');
   expect(view.canonicalInput).toEqual(simulation.canonicalIntent.input);
   expect(view.nativeInput).toEqual(simulation.nativeInput);
@@ -144,9 +144,9 @@ it('reports the ready, empty, and no-active-epoch states', () => {
   expect(ready.selected?.key).toBe('claude/hook:session-start');
   expect(empty.state).toBe('empty');
   expect(empty.selected).toBeUndefined();
-  expect(empty.summary).toContain('no generated hooks');
+  expect(empty.summary).toContain('no generated Hooks');
   expect(missing.state).toBe('no-epoch');
-  expect(missing.summary).toContain('No artifact epoch is active');
+  expect(missing.summary).toContain('No successful build is available');
 });
 
 it('keeps loading and a list failure distinct from an empty hook list', () => {

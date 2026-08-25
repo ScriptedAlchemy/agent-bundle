@@ -689,7 +689,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
       <div>
         <p className="mcp-page-eyebrow">Artifact-bound protocol workbench</p>
         <h1>MCP playground</h1>
-        <p>Start one server from an explicit epoch, inspect its negotiated protocol, and replay recorded calls.</p>
+        <p>Choose a generated server, open a session, and inspect or replay its protocol calls.</p>
       </div>
       <p className={`mcp-page-phase mcp-page-phase--${model.phase}`} role="status">Session {model.phase}</p>
     </header>
@@ -725,9 +725,9 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         setTimeoutError(undefined);
         run('open', () => controller.open(openBinding, parsedTimeoutMs));
       }}>
-        <label htmlFor="mcp-epoch">Artifact epoch
+        <label htmlFor="mcp-epoch">Build
           <select disabled={!controls.open} id="mcp-epoch" onChange={(event) => setBinding((current) => Object.freeze({ ...current, epochId: event.currentTarget.value }))} required value={epochId}>
-            <option value="">Select an epoch</option>
+            <option value="">Select a build</option>
             {epochOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
