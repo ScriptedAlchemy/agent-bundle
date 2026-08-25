@@ -851,13 +851,13 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const recoveredStatus = await client.callTool({ name: 'project_status' });
       const recoveredEpochStatus = activeEpochFrom(recoveredStatus, 'recovered project status');
       expect(recoveredEpochStatus.artifactStatus).toEqual(expect.objectContaining({ state: 'active' }));
+      const recoveredEpochId = recoveredEpochStatus.epochId;
 
       phase = 'foreground restart/reconnect fresh B browser MCP session';
       await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
-      const browserMcpEpochB = await page.locator('#mcp-epoch').inputValue();
-      expect(browserMcpEpochB).not.toBe('');
+      await expect(page.locator('#mcp-epoch')).toHaveValue(recoveredEpochId, { timeout: browserTimeout });
       await expect(page.locator('#mcp-target')).toHaveValue('portable');
       await expect(page.locator('#mcp-server-name')).toHaveValue('fixture');
       const openedBrowserMcpSessionB = page.waitForResponse((response) =>
@@ -873,7 +873,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       if (browserMcpSessionBRequest === undefined) throw new Error('The fresh B browser MCP session admission was not recorded.');
       const browserMcpSessionBOpenedAt = browserMcpSessionBRequest.at;
       expect(browserMcpSessionBId).not.toBe(oldBrowserMcpSessionId);
-      expect(record(browserMcpSessionBRecord.binding, 'B browser MCP session binding').epochId).toBe(browserMcpEpochB);
+      expect(record(browserMcpSessionBRecord.binding, 'B browser MCP session binding').epochId).toBe(recoveredEpochId);
       await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
       await page.getByRole('button', { name: 'show-dashboard', exact: true }).click();
       const browserMcpSessionBOperation = page.waitForResponse((response) =>
