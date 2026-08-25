@@ -91,6 +91,7 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   expect(integrationTestFiles).toEqual(expect.arrayContaining([
     'packages/agent-bundle/tests/examples-contract.test.ts',
     'packages/agent-bundle/tests/workspace-contract.test.ts',
+    'packages/workbench/tests/examples-real.e2e.test.ts',
   ]));
   expect(integrationTestFiles).not.toContain('packages/agent-bundle/tests/package-preview-workflow.test.ts');
 });

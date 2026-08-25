@@ -47,6 +47,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/artifacts-real.e2e.test.ts',
   'packages/workbench/tests/comparisons-page-client-scope-browser.test.ts',
   'packages/workbench/tests/evals-real.e2e.test.ts',
+  'packages/workbench/tests/examples-real.e2e.test.ts',
   'packages/workbench/tests/inspector-modern-mcp-types.test.ts',
   'packages/workbench/tests/inspector-session-adapter-fixture.test.ts',
   'packages/workbench/tests/inspector-shell.e2e.test.ts',
