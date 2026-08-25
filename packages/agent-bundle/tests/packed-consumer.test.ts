@@ -84,7 +84,7 @@ it('uses only an installed tarball after source deletion', async () => {
   try {
     await cp(packageRoot, packedPackageRoot, { recursive: true });
     await execFile(join(workspaceRoot, 'node_modules', '.bin', 'rslib'), [
-      'build', '--dist-path', join(packedPackageRoot, 'dist'),
+      'build', '--config', join(packageRoot, 'rslib.config.ts'), '--dist-path', join(packedPackageRoot, 'dist'),
     ], { cwd: workspaceRoot, env: installedEnvironment() });
     const { stdout: packed } = await execFile('npm', [
       'pack',
