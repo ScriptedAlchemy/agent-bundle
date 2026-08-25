@@ -30,8 +30,17 @@ required.
 
 ## Noninteractive checks
 
+After the repository-level `pnpm build` has built the local `agent-bundle`
+workspace dependency, the package-local workflow is:
+
 ```bash
-pnpm --filter @agent-bundle-example/skills-starter check
+cd examples/skills-starter
+pnpm validate
+pnpm build
+pnpm dev
 ```
 
-Generated output is written under `.agent-bundle/` and is not source material.
+Use `pnpm check` when you want validation and a build without starting the
+Workbench. Generated output is written to `dist/`; its root contract is
+`dist/agent-bundle.manifest.json`. The `.agent-bundle/` directory contains
+development state and is not source material.

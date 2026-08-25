@@ -174,7 +174,8 @@ Portable artifacts contain portable plugin, skills, MCP, and App-resource files.
 
 The repository includes three private, credential-free example workspaces. Each
 uses the public `agent-bundle` CLI and package exports exactly as an external
-project would.
+project would. These commands open the desktop Workbench; the example UI is
+designed and acceptance-tested for desktop use.
 
 | Example | Start here when you want to… | Command |
 | --- | --- | --- |

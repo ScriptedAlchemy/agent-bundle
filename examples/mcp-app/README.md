@@ -17,14 +17,23 @@ an interactive MCP App resource, and a deterministic eval.
    **Toggle details** button. The panel receives the result through the official
    MCP Apps bridge.
 4. Inspect the protocol trace and export the Inspector configuration.
-5. Close and reopen the session to exercise the complete lifecycle.
+5. Press **Restart MCP session**, then close, reset, and reopen it to exercise
+   the complete lifecycle.
 6. Open **Evals**, run `mcp-app-status`, and inspect the completed passing trial.
 
 ## Noninteractive checks
 
+After the repository-level `pnpm build`, run the public CLI workflow directly
+from the example package:
+
 ```bash
-pnpm --filter @agent-bundle-example/mcp-app check
+cd examples/mcp-app
+pnpm validate
+pnpm build
+pnpm dev
 ```
+
+Use `pnpm check` for validation and build without opening the Workbench.
 
 The deterministic portable eval reads only its checked-in fixture and requires
 no native Claude/Codex login or API key.

@@ -73,6 +73,12 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await page.getByRole('button', { name: 'Run simulation' }).click();
     await expect(page.getByRole('heading', { name: 'Canonical result' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.hook-json').last()).toContainText('example session from browser', { timeout: browserTimeout });
+    const replayed = page.waitForResponse((response) => (
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/hooks/replays'
+    ));
+    await page.getByRole('button', { name: 'Replay saved simulation' }).click();
+    expect((await replayed).ok()).toBe(true);
+    await expect(page.locator('.hook-json').last()).toContainText('example session from browser', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'hooks-populated');
 
     await page.getByRole('link', { name: 'Playground', exact: true }).click();

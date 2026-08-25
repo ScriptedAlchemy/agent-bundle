@@ -15,10 +15,11 @@ failed script traces, and live Logs.
 1. Open **Hooks**, select the Codex `sessionStart` binding, enter a canonical
    event with `"source": "workbench"`, and run the simulation. The result adds
    `example session from workbench` and continues the session.
-2. Open **Playground** and run `succeed`. Its trace contains stdout, stderr, and
+2. Press **Replay saved simulation** to rerun the exact epoch-bound Hook input.
+3. Open **Playground** and run `succeed`. Its trace contains stdout, stderr, and
    a zero exit code.
-3. Run `fail`. Its trace contains `example failure` and exit code 2.
-4. Open **Logs** to filter the emitted records by producer, level, kind, or
+4. Run `fail`. Its trace contains `example failure` and exit code 2.
+5. Open **Logs** to filter the emitted records by producer, level, kind, or
    context, then open a record to inspect its details.
 
 ## Reversible diagnostic walkthrough
@@ -37,6 +38,14 @@ the diagnostic.
 
 ## Noninteractive checks
 
+After the repository-level `pnpm build`, run the same public commands directly
+from the example package:
+
 ```bash
-pnpm --filter @agent-bundle-example/hooks-and-scripts check
+cd examples/hooks-and-scripts
+pnpm validate
+pnpm build
+pnpm dev
 ```
+
+Use `pnpm check` for the noninteractive validation-and-build pair.
