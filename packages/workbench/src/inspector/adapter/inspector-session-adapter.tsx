@@ -126,6 +126,7 @@ export const agentBundleInspectorTheme = createTheme({
 });
 
 const operationError = (reason: unknown): string => reason instanceof Error ? reason.message : 'The Inspector operation failed.';
+const unsupportedLogLevelMessage = 'Log-level changes are unavailable because this session does not support logging/setLevel.';
 
 export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', model, onExportTrace }: InspectorSessionAdapterProps) => {
   const bindingKey = inspectorSessionBindingKey(model.binding);
@@ -145,7 +146,7 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => new Set());
   const [protocolCleared, setProtocolCleared] = useState(false);
   const [loggingCleared, setLoggingCleared] = useState(false);
-  const [loggingDiagnostic, setLoggingDiagnostic] = useState('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
+  const [loggingDiagnostic, setLoggingDiagnostic] = useState(unsupportedLogLevelMessage);
   const [sortDirection, setSortDirection] = useState<SortDirection>('oldest-first');
   const [compact, setCompact] = useState(false);
 
@@ -166,7 +167,7 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
     setPinnedIds(new Set());
     setProtocolCleared(false);
     setLoggingCleared(false);
-    setLoggingDiagnostic('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
+    setLoggingDiagnostic(unsupportedLogLevelMessage);
   }, [bindingKey]);
 
   const protocolEntries = useMemo(() => inspectorProtocolEntries(model.timeline.entries), [model.timeline.entries]);
@@ -302,7 +303,7 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
           entries={displayedLogs}
           onClear={() => setLoggingCleared(true)}
           onExport={() => onExportTrace?.(model.timeline.entries)}
-          onSetLevel={() => setLoggingDiagnostic('Log-level changes remain unavailable because this W13 session does not expose logging/setLevel.')}
+          onSetLevel={() => setLoggingDiagnostic(unsupportedLogLevelMessage)}
           onSortChange={setSortDirection}
           onUiChange={setLogsUi}
           sortDirection={sortDirection}

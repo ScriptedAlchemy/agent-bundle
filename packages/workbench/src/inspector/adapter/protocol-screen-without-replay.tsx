@@ -33,7 +33,7 @@ const matchesSearch = (entry: InspectorProtocolEntry, search: string): boolean =
   search.length === 0 || JSON.stringify(entry.message).toLowerCase().includes(search.toLowerCase());
 
 /**
- * W13 exposes a raw transport timeline but no replay-capable invocation binding.
+ * The embedded Inspector exposes a raw transport timeline but no replay-capable invocation binding.
  * This narrow Protocol presentation retains every frame while intentionally
  * omitting the vendored Replay action, which has no supported implementation.
  */
