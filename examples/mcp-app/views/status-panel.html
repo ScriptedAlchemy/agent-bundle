@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Service status</title>
+    <style>
+      :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; padding: 20px; }
+      main { border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 12px; padding: 18px; }
+      .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; opacity: .65; text-transform: uppercase; }
+      .status { align-items: center; display: flex; gap: 10px; margin: 14px 0; }
+      .dot { background: #22c55e; border-radius: 999px; height: 10px; width: 10px; }
+      button { border: 1px solid currentColor; border-radius: 8px; cursor: pointer; padding: 8px 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">MCP App example</div>
+      <h1 id="service">No service selected</h1>
+      <div class="status"><span class="dot"></span><strong id="status">unknown</strong></div>
+      <button id="toggle-details" type="button">Toggle details</button>
+      <p id="details" hidden>The result arrived through the official MCP Apps bridge.</p>
+    </main>
+  </body>
+</html>

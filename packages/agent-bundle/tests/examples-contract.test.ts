@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
-import { build, inspect, listHooks, simulateHook, validate } from '../src/api.ts';
+import { build, inspect, invokeMcp, listHooks, listMcp, runEvals, simulateHook, validate } from '../src/api.ts';
 
 const execFile = promisify(executeFile);
 const examplesRoot = join(process.cwd(), 'examples');
@@ -46,6 +46,52 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     ), 'utf8')).resolves.toContain('# Release report');
   } finally {
     await rm(output, { force: true, recursive: true });
+  }
+});
+
+it('invokes the MCP App example and exposes its official App resource', async () => {
+  const root = join(examplesRoot, 'mcp-app');
+  const stateRoot = join(root, '.agent-bundle');
+  const output = join(stateRoot, 'example-contract');
+  await rm(stateRoot, { force: true, recursive: true });
+
+  try {
+    await build({ output, root });
+    await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
+    await expect(listMcp({
+      artifact: output,
+      root,
+      server: 'status',
+      target: 'portable',
+    })).resolves.toMatchObject({ tools: [{ name: 'show-status' }] });
+    await expect(invokeMcp({
+      artifact: output,
+      input: { service: 'compiler' },
+      root,
+      server: 'status',
+      target: 'portable',
+      tool: 'show-status',
+    })).resolves.toMatchObject({
+      result: {
+        _meta: { ui: { resourceUri: 'ui://mcp-app-example/status.html' } },
+        content: [{ text: 'compiler is healthy', type: 'text' }],
+        structuredContent: { service: 'compiler', status: 'healthy' },
+      },
+    });
+    await expect(runEvals({
+      artifact: output,
+      caseIds: ['status-is-healthy'],
+      root,
+      trials: 1,
+    })).resolves.toMatchObject({
+      run: {
+        harness: 'deterministic',
+        summary: { cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 },
+      },
+      trials: [{ caseId: 'status-is-healthy', host: 'portable', outcome: 'pass' }],
+    });
+  } finally {
+    await rm(stateRoot, { force: true, recursive: true });
   }
 });
 
