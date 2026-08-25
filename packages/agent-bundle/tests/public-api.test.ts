@@ -27,6 +27,7 @@ import type {
   TargetMcpRuntimeContract,
 } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
+import { agentBundleNodeModules, workspaceNodeModules } from './helpers/workspace-paths.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
 
 interface PackageManifest {
@@ -236,19 +237,19 @@ it('keeps bundled config extension types in emitted root declarations', async ()
     const emittedPackageRoot = join(consumerRoot, 'node_modules', 'agent-bundle');
     await mkdir(emittedPackageRoot, { recursive: true });
     await symlink(
-      join(workspaceRoot, 'node_modules', '@modelcontextprotocol'),
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
       join(consumerRoot, 'node_modules', '@modelcontextprotocol'),
       'dir',
     );
     await symlink(
-      join(workspaceRoot, 'node_modules', '@types'),
+      join(workspaceNodeModules, '@types'),
       join(consumerRoot, 'node_modules', '@types'),
       'dir',
     );
     // The adapter validator factory types its ajv engine, so the emitted
     // declaration graph resolves ajv exactly as installed consumers do.
     await symlink(
-      join(workspaceRoot, 'node_modules', 'ajv'),
+      join(agentBundleNodeModules, 'ajv'),
       join(consumerRoot, 'node_modules', 'ajv'),
       'dir',
     );

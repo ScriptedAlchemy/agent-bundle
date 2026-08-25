@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
@@ -43,10 +43,12 @@ export const copyExample = async (name: ExampleName): Promise<{ readonly release
   const temporaryParent = join(workspaceRoot, '.agent-bundle');
   await mkdir(temporaryParent, { recursive: true });
   const root = await mkdtemp(join(temporaryParent, `${name}-e2e-`));
-  await cp(exampleRoot(name), root, {
+  const exampleSource = exampleRoot(name);
+  await cp(exampleSource, root, {
     filter: (source) => !['.agent-bundle', 'dist', 'node_modules'].includes(basename(source)),
     recursive: true,
   });
+  await symlink(join(exampleSource, 'node_modules'), join(root, 'node_modules'), 'dir');
   return { release: () => rm(root, { force: true, recursive: true }), root };
 };
 

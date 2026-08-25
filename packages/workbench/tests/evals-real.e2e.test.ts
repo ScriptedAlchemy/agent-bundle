@@ -14,6 +14,7 @@ import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/t
 import { seedEvalProject, writeEvalSuite } from '../../agent-bundle/tests/support/eval-project.ts';
 import { readFinalizedEvalRun } from '../src/evals/evals-page.tsx';
 import { closeServer } from './support/http.ts';
+import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
 import { buildWorkbench, e2e, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
 
 const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
@@ -145,11 +146,7 @@ const mountedEvalClientScopeFixture = async (): Promise<{ readonly close: () => 
       },
       plugins: [pluginReact()],
       resolve: {
-        alias: {
-          react: join(workspaceRoot, 'node_modules', 'react'),
-          'react-dom': join(workspaceRoot, 'node_modules', 'react-dom'),
-          'react-dom/client': join(workspaceRoot, 'node_modules', 'react-dom', 'client.js'),
-        },
+        alias: workbenchBrowserAliases,
       },
       source: {
         define: { 'process.env.NODE_ENV': JSON.stringify('production') },

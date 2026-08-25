@@ -3,10 +3,11 @@ import { join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
 
+import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { buildWorkbench, e2e, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
 
 const browserTimeout = 8_000;
 
@@ -55,8 +56,8 @@ const appFixtureHtml = [
 const writeRealAppProject = async (root: string): Promise<void> => {
   await Promise.all([
     mkdir(join(root, 'src'), { recursive: true }),
-    symlink(join(workspaceRoot, 'node_modules', '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
-    symlink(join(workspaceRoot, 'node_modules', 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
+    symlink(join(agentBundleNodeModules, '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
+    symlink(join(workbenchNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
   ]);
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
@@ -97,7 +98,7 @@ const writeBundledAppProject = async (root: string): Promise<void> => {
   await Promise.all([
     mkdir(join(root, 'src'), { recursive: true }),
     mkdir(join(root, 'views'), { recursive: true }),
-    symlink(join(workspaceRoot, 'node_modules', '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
+    symlink(join(agentBundleNodeModules, '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
   ]);
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { expect } from '@rstest/playwright';
 import type { Page } from 'playwright';
 
+import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
 import { ArtifactService } from '../../agent-bundle/src/dev/artifacts/artifact-service.ts';
 import { EpochStore } from '../../agent-bundle/src/dev/epoch-store.ts';
 import { ProjectEventHub, startForegroundServer } from '../../agent-bundle/src/dev/index.ts';
@@ -13,7 +14,7 @@ import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { buildWorkbench, e2e, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
 
 const browserTimeout = 5_000;
 
@@ -50,8 +51,8 @@ const startFrozenEpochServer = async (root: string) => {
 const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
   await Promise.all([
     mkdir(join(root, 'src'), { recursive: true }),
-    symlink(join(workspaceRoot, 'node_modules', '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
-    symlink(join(workspaceRoot, 'node_modules', 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
+    symlink(join(agentBundleNodeModules, '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
+    symlink(join(workbenchNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
   ]);
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),

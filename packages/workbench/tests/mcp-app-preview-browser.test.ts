@@ -9,6 +9,8 @@ import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { chromium } from 'playwright';
 
+import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const previewComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-app-preview.tsx');
 
@@ -47,10 +49,7 @@ const mountedPreviewFixture = async () => {
       },
       plugins: [pluginReact()],
       resolve: {
-        alias: {
-          react: join(workspaceRoot, 'node_modules', 'react'),
-          'react-dom/client': join(workspaceRoot, 'node_modules', 'react-dom', 'client.js'),
-        },
+        alias: workbenchBrowserAliases,
       },
       source: {
         define: { 'process.env.NODE_ENV': JSON.stringify('production') },

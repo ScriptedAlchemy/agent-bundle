@@ -9,6 +9,7 @@ import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
 import { closeServer } from './support/http.ts';
+import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
 
 const workspaceRoot = process.cwd();
 const comparisonsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'comparisons', 'comparisons-page.tsx');
@@ -70,11 +71,7 @@ const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Prom
       },
       plugins: [pluginReact()],
       resolve: {
-        alias: {
-          react: join(workspaceRoot, 'node_modules', 'react'),
-          'react-dom': join(workspaceRoot, 'node_modules', 'react-dom'),
-          'react-dom/client': join(workspaceRoot, 'node_modules', 'react-dom', 'client.js'),
-        },
+        alias: workbenchBrowserAliases,
       },
       source: {
         define: { 'process.env.NODE_ENV': JSON.stringify('production') },
