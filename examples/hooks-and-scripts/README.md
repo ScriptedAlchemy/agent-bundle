@@ -6,19 +6,23 @@ From the repository root, launch this example with:
 pnpm example:hooks
 ```
 
-The example is credential-free. It provides a real session-start Hook and two
-scripts so the Workbench can show canonical Hook simulation, successful and
-failed script traces, and live Logs.
+The example is credential-free. It models a release preparation session with a
+session-start Hook, a manifest-backed packaging check, and a risk-register
+check so the Workbench can show canonical Hook simulation, successful and
+blocking script traces, and live Logs.
 
 ## Workbench walkthrough
 
 1. Open **Hooks**, select the Codex `sessionStart` binding, enter a canonical
-   event with `"source": "workbench"`, and run the simulation. The result adds
-   `example session from workbench` and continues the session.
+   event with `"source": "workbench"`, and run the simulation. The result
+   explains that release preparation is active and directs developers to both
+   release checks before it continues the session.
 2. Press **Replay saved simulation** to rerun the exact epoch-bound Hook input.
-3. Open **Playground** and run `succeed`. Its trace contains stdout, stderr, and
-   a zero exit code.
-4. Run `fail`. Its trace contains `example failure` and exit code 2.
+3. Open **Playground** and run `verify-release`. It reads
+   `release/release-manifest.json`, confirms the changelog and three required
+   artifacts, and reports that release 2.4.0 is ready for packaging.
+4. Run `detect-risk`. It reads `release/risk-register.json`, reports the open
+   high-severity risk `REL-204`, and exits with code 2 to block packaging.
 5. Open **Logs** to filter the emitted records by producer, level, kind, or
    context, then open a record to inspect its details.
 

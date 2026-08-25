@@ -139,19 +139,21 @@ it('invokes the MCP App example and exposes its official App resource', async ()
   }
 });
 
-it('simulates the Hooks example and executes both scripts', async () => {
+it('simulates the Hooks example and executes release checks', async () => {
   const root = join(examplesRoot, 'hooks-and-scripts');
   const output = join(root, '.agent-bundle', 'example-contract');
   await rm(output, { force: true, recursive: true });
 
   try {
-    await build({ output, root });
+    const built = await build({ output, root });
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
+    const artifactCatalog = built.build.compiledEntries.map(({ name }) => name);
+    expect(artifactCatalog).toEqual(expect.arrayContaining(['verify-release', 'detect-risk']));
     const hooks = await listHooks({ artifact: output, root });
     expect(hooks).toHaveLength(2);
     const hook = hooks.find(({ target }) => target === 'codex');
     expect(hook).toBeDefined();
-    await expect(simulateHook({
+    const result = await simulateHook({
       artifact: output,
       hook: hook!.id,
       input: {
@@ -162,19 +164,22 @@ it('simulates the Hooks example and executes both scripts', async () => {
       },
       root,
       target: hook!.target,
-    })).resolves.toEqual({ additionalContext: 'example session from workbench', outcome: 'continue' });
-    await expect(execFile(process.execPath, [
-      join(output, 'portable', 'scripts', 'succeed.mjs'),
-    ], { cwd: root })).resolves.toMatchObject({
-      stderr: 'example warning\n',
-      stdout: 'example success\n',
     });
-    await expect(execFile(process.execPath, [
-      join(output, 'portable', 'scripts', 'fail.mjs'),
-    ], { cwd: root })).rejects.toMatchObject({
-      code: 2,
-      stderr: 'example failure\n',
-    });
+    expect(result.additionalContext).toContain('release preparation');
+    const verify = await execFile(process.execPath, [
+      join(output, 'portable', 'scripts', 'verify-release.mjs'),
+    ], { cwd: root });
+    expect(verify.stdout).toContain('Release 2.4.0 is ready for packaging.');
+    const blocker = await execFile(process.execPath, [
+      join(output, 'portable', 'scripts', 'detect-risk.mjs'),
+    ], { cwd: root }).then(
+      () => {
+        throw new Error('Expected detect-risk to block release packaging.');
+      },
+      (error: unknown) => error as { readonly code: number; readonly stderr: string },
+    );
+    expect(blocker.stderr).toContain('REL-204');
+    expect(blocker.code).toBe(2);
   } finally {
     await rm(output, { force: true, recursive: true });
   }

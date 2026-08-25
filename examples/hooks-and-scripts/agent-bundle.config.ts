@@ -10,8 +10,11 @@ export default defineConfig({
     version: '1.0.0',
   },
   scripts: {
-    fail: './src/scripts/fail.ts',
-    succeed: './src/scripts/succeed.ts',
+    'detect-risk': {
+      entry: './src/scripts/detect-risk.ts',
+      targets: ['portable'],
+    },
+    'verify-release': './src/scripts/verify-release.ts',
   },
   targets: ['portable', 'codex', 'claude'],
 });
