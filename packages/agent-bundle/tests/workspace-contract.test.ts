@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -8,8 +8,7 @@ import { expect, it } from '@rstest/core';
 const execFile = promisify(executeFile);
 
 it('selects product packages through the pinned pnpm workspace', async () => {
-  const { stdout } = await execFile('corepack', [
-    'pnpm',
+  const { stdout } = await execFile('pnpm', [
     '--recursive',
     '--depth',
     '-1',
@@ -55,10 +54,24 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   const rootManifest = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as {
     readonly scripts?: Readonly<Record<string, string>>;
   };
+  const agentBundleManifest = JSON.parse(
+    await readFile(join(process.cwd(), 'packages/agent-bundle/package.json'), 'utf8'),
+  ) as {
+    readonly scripts?: Readonly<Record<string, string>>;
+  };
   expect(rootManifest.scripts).toMatchObject({
-    'example:hooks': 'pnpm --filter @agent-bundle-example/hooks-and-scripts dev',
-    'example:mcp-app': 'pnpm --filter @agent-bundle-example/mcp-app dev',
-    'example:skills': 'pnpm --filter @agent-bundle-example/skills-starter dev',
-    'examples:check': "pnpm --filter './examples/*' --workspace-concurrency=1 check",
+    build: 'pnpm --filter agent-bundle build',
+    'example:hooks': 'pnpm build && pnpm --filter @agent-bundle-example/hooks-and-scripts dev',
+    'example:mcp-app': 'pnpm build && pnpm --filter @agent-bundle-example/mcp-app dev',
+    'example:skills': 'pnpm build && pnpm --filter @agent-bundle-example/skills-starter dev',
+    'examples:check': "pnpm build && pnpm --filter './examples/*' --workspace-concurrency=1 check",
   });
+  expect(rootManifest.scripts).not.toHaveProperty('build:workbench');
+  expect(agentBundleManifest.scripts).toEqual({
+    build: 'pnpm build:workbench && rslib build',
+    'build:workbench': 'pnpm --filter agent-bundle-workbench build',
+  });
+
+  await expect(access(join(process.cwd(), 'packages/agent-bundle/rslib.config.ts'))).resolves.toBeUndefined();
+  await expect(access(join(process.cwd(), 'rslib.config.ts'))).rejects.toMatchObject({ code: 'ENOENT' });
 });

@@ -17,6 +17,12 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
   },
   output: {
     assetPrefix: '/',
+    copy: [
+      { from: resolve(import.meta.dirname, 'THIRD_PARTY_NOTICES'), to: 'THIRD_PARTY_NOTICES', toType: 'file' },
+      { from: resolve(sourceRoot, 'inspector', 'UPSTREAM.json'), to: 'src/inspector/UPSTREAM.json', toType: 'file' },
+      { from: resolve(sourceRoot, 'inspector', 'LICENSE.inspector'), to: 'src/inspector/LICENSE.inspector', toType: 'file' },
+      { from: resolve(sourceRoot, 'inspector', 'PATCHES.md'), to: 'src/inspector/PATCHES.md', toType: 'file' },
+    ],
     distPath: {
       root: 'dist',
     },
@@ -28,6 +34,7 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
     },
   },
   plugins: [pluginReact()],
+  root: import.meta.dirname,
   resolve: {
     alias: {
       '@inspector/core/json/xMcpHeader.js': resolve(vendorRoot, 'core', 'json', 'xMcpHeader.ts'),

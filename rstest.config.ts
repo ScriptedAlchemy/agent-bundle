@@ -1,8 +1,9 @@
 import { defineConfig } from '@rstest/core';
-import { withRslibConfig } from '@rstest/adapter-rslib';
+
+import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 export default defineConfig({
-  extends: withRslibConfig(),
+  extends: withAgentBundleRslibConfig(),
   include: [
     'packages/**/tests/**/*.test.ts',
     'packages/workbench/src/inspector/vendor/clients/web/src/utils/inspectorTabs.test.ts',

@@ -58,8 +58,9 @@ const readPackageManifest = async (): Promise<PackageManifest> =>
   ) as PackageManifest;
 
 it('keeps package output filenames stable', async () => {
-  const config = (await import('../../../rslib.config.ts')).default;
+  const config = (await import('../rslib.config.ts')).default;
   expect(config).toMatchObject({ output: { filenameHash: false } });
+  expect(config.output).not.toHaveProperty('externals');
 });
 
 it('preserves a synchronous config and exposes opaque path tokens', () => {
