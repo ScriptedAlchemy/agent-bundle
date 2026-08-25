@@ -202,6 +202,14 @@ export const mcpPageServerCatalogFor = (
   return Object.freeze({ epochId, options: frozenMcpPageServerOptionsFor(inspection.runtime.mcpServers) });
 };
 
+/** Settles a current failed inspection without retaining suggestions from a previous artifact epoch. */
+export const mcpPageEmptyServerCatalogFor = (
+  epochId: string,
+  signal: Pick<AbortSignal, 'aborted'>,
+): McpPageServerCatalog | undefined => signal.aborted
+  ? undefined
+  : Object.freeze({ epochId, options: noMcpPageServerOptions });
+
 const sameMcpPageBinding = (left: McpPageBinding, right: McpPageBinding): boolean =>
   left.epochId === right.epochId
   && left.serverName === right.serverName
@@ -228,6 +236,19 @@ export const mcpPageBindingFor = (
       : mcpPageCatalogServerNameFor(binding.serverName, targetServerOptions),
     target,
   });
+};
+
+/** Rejects submit-time races unless the form still matches a ready catalog binding. */
+export const mcpPageOpenBindingFor = (
+  binding: McpPageBinding,
+  options: McpPageBindingOptions,
+): McpSessionBinding | undefined => {
+  if (options.serverCatalogState !== 'ready' || options.sessionPhase !== 'idle') return undefined;
+  const canonical = mcpPageBindingFor(binding, options);
+  if (!sameMcpPageBinding(binding, canonical) || canonical.epochId.length === 0 || canonical.serverName.length === 0 || canonical.target.length === 0) {
+    return undefined;
+  }
+  return Object.freeze({ epochId: canonical.epochId, serverName: canonical.serverName, target: canonical.target });
 };
 
 export const createMcpPageActionTracker = (): McpPageActionTracker => {
@@ -282,12 +303,13 @@ export const mcpPageSessionControls = (
   phase: McpBrowserSessionModel['phase'],
   pending: readonly string[],
   hasReset: boolean,
+  serverCatalogState: McpPageServerCatalogState = 'ready',
 ): McpPageSessionControls => {
   const isPending = (action: string): boolean => pending.includes(action);
   const terminal = phase === 'closed' || phase === 'error';
   return {
     close: !terminal && !isPending('close') && (phase === 'opening' || phase === 'ready' || phase === 'restarting' || isPending('open') || isPending('restart')),
-    open: phase === 'idle' && !isPending('open'),
+    open: phase === 'idle' && serverCatalogState === 'ready' && !isPending('open'),
     recovery: terminal ? hasReset ? 'available' : 'unavailable' : 'none',
     restart: phase === 'ready' && !isPending('restart'),
   };
@@ -634,7 +656,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const selectedTool = tools.find((item) => item.name === toolName) ?? tools[0];
   const selectedPrompt = prompts.find((item) => item.name === promptName) ?? prompts[0];
   const active = Object.values(model.activeRequests);
-  const controls = mcpPageSessionControls(model.phase, pendingActions, onResetSession !== undefined);
+  const controls = mcpPageSessionControls(model.phase, pendingActions, onResetSession !== undefined, serverCatalogState);
   const isPending = (action: string): boolean => pendingActions.includes(action);
   const rawTrace = model.conciseTrace;
   const config = model.config;
@@ -684,15 +706,24 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
           : <button disabled type="button">New MCP session unavailable</button>}
       </div> : <form className="mcp-page-binding" onSubmit={(event) => {
         event.preventDefault();
+        if (!controls.open) return;
         const form = event.currentTarget;
         if (!form.reportValidity()) return;
+        const openBinding = mcpPageOpenBindingFor(binding, {
+          epochId: initialBinding?.epochId ?? binding.epochId,
+          serverCatalogState,
+          serverOptions,
+          sessionPhase: model.phase,
+          targetOptions,
+        });
+        if (openBinding === undefined) return;
         const parsedTimeoutMs = Number(timeoutMs);
         if (!Number.isFinite(parsedTimeoutMs) || parsedTimeoutMs <= 0) {
           setTimeoutError('Session timeout must be a positive finite number.');
           return;
         }
         setTimeoutError(undefined);
-        run('open', () => controller.open({ epochId, serverName, target }, parsedTimeoutMs));
+        run('open', () => controller.open(openBinding, parsedTimeoutMs));
       }}>
         <label htmlFor="mcp-epoch">Artifact epoch
           <select disabled={!controls.open} id="mcp-epoch" onChange={(event) => setBinding((current) => Object.freeze({ ...current, epochId: event.currentTarget.value }))} required value={epochId}>
@@ -749,7 +780,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
           {timeoutError === undefined ? undefined : <span id="mcp-session-timeout-error" role="alert">{timeoutError}</span>}
         </label>
         <div className="mcp-page-actions">
-          {controls.open ? <button type="submit">Open MCP session</button> : undefined}
+          <button disabled={!controls.open} type="submit">Open MCP session</button>
           <button disabled={!controls.restart} onClick={() => run('restart', async () => {
             await closeAppPreview();
             return controller.restart();

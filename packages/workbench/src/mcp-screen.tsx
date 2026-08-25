@@ -6,7 +6,7 @@ import type { ForegroundSessionAuthority } from './foreground-session.ts';
 import type { ArtifactClient } from './artifacts/artifact-client.ts';
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
 import type { McpAppClient } from './mcp/mcp-app-client.ts';
-import { McpPage, mcpPageServerCatalogFor, type McpPageServerCatalog } from './mcp/mcp-page.tsx';
+import { McpPage, mcpPageEmptyServerCatalogFor, mcpPageServerCatalogFor, type McpPageServerCatalog } from './mcp/mcp-page.tsx';
 import { mcpProtocolTraceDownload, type McpDownload } from './mcp/mcp-protocol-trace.ts';
 import { McpRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
@@ -59,7 +59,8 @@ export const McpScreen = ({ appPreviewClient, artifactClient, connectionError, c
       const catalog = mcpPageServerCatalogFor(epochId, inspection, controller.signal);
       if (catalog !== undefined) setServerCatalog(catalog);
     }).catch(() => {
-      // An unavailable inspection leaves the editable server field available without stale catalog suggestions.
+      const catalog = mcpPageEmptyServerCatalogFor(epochId, controller.signal);
+      if (catalog !== undefined) setServerCatalog(catalog);
     });
     return () => controller.abort();
   }, [activeEpoch?.id, artifactClient]);
