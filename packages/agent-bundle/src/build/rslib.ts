@@ -1,6 +1,7 @@
 // Rslib re-exports its own rspack; installing @rspack/core separately risks
 // version conflicts (https://rslib.rs/api/javascript-api/core).
 import { createRslib, rspack } from '@rslib/core';
+import { readFile, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,6 +28,26 @@ interface RslibDependencies {
 }
 
 const entryAnchor = fileURLToPath(import.meta.url);
+
+const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> => {
+  const manifest = JSON.parse(await readFile(resolve(cwd, 'package.json'), 'utf8')) as Record<string, unknown>;
+  const names = new Set<string>();
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+    const dependencies = manifest[field];
+    if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)) continue;
+    for (const name of Object.keys(dependencies)) names.add(name);
+  }
+  const roots = await Promise.all([...names].map(async (name) => {
+    if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/iu.test(name)) return undefined;
+    try {
+      return await realpath(resolve(cwd, 'node_modules', ...name.split('/')));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+  }));
+  return Object.freeze(roots.filter((root): root is string => root !== undefined));
+};
 
 const assertExecutableConfig = (
   entries: readonly RslibEntry[],
@@ -63,6 +84,7 @@ export const buildWithRslib = async (options: {
   if (options.entries.length === 0) {
     return Object.freeze([]);
   }
+  const dependencyRoots = await declaredDependencyRoots(options.cwd);
 
   const rslib = await (dependencies.createRslib ?? createRslib)({
     cwd: options.cwd,
@@ -104,6 +126,11 @@ export const buildWithRslib = async (options: {
           tools: {
             rspack: (config) => {
               config.output.asyncChunks = false;
+              // Keep workspace-package modules anchored beneath the consuming
+              // project's node_modules path. Their code is bundled like any
+              // other dependency, while provenance remains limited to authored
+              // project inputs instead of following pnpm symlinks outside it.
+              config.resolve.symlinks = false;
               if (hasVirtualModules) {
                 config.resolve.alias = {
                   ...config.resolve.alias,
@@ -131,7 +158,7 @@ export const buildWithRslib = async (options: {
         path: entry.outputRelativePath,
         sourceInputs: entry.sourceInputs,
       })),
-      ignoredSourcePaths: [entryAnchor, resolve(options.outputRoot, '.agent-bundle-virtual')],
+      ignoredSourcePaths: [entryAnchor, resolve(options.outputRoot, '.agent-bundle-virtual'), ...dependencyRoots],
       projectRoot: options.cwd,
       stats: result.stats,
     });

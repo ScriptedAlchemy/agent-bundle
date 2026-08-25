@@ -194,7 +194,7 @@ Portable artifacts contain portable plugin, skills, MCP, and App-resource files.
 
 ## Public examples
 
-The repository includes three credential-free public example workspaces. Each
+The repository includes credential-free public example workspaces. Each
 uses only the public `agent-bundle` CLI and package exports, exactly as an
 external project would. The Workbench is a desktop product; these walkthroughs
 and its acceptance suite use a 1440×900 desktop viewport.
@@ -204,6 +204,7 @@ and its acceptance suite use a 1440×900 desktop viewport.
 | [Skills Starter](examples/skills-starter) | author a release-review Skill and deterministic evidence | `pnpm example:skills` |
 | [Hooks and Scripts](examples/hooks-and-scripts) | simulate a Hook and inspect successful and blocking script traces | `pnpm example:hooks` |
 | [MCP App](examples/mcp-app) | exercise a degraded service result in an interactive App and deterministic eval | `pnpm example:mcp-app` |
+| [Audiobook Curator](examples/audiobook-curator) | inspect, safely prepare, and audit local audiobook media through Claude or Codex | `pnpm example:audiobook` |
 
 Run these commands from the repository root. The filtered package command runs
 inside the selected example, so `agent-bundle` infers that example directory as
