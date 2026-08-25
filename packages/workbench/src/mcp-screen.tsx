@@ -110,6 +110,7 @@ export const McpScreen = ({ appPreviewClient, connectionError, controller, model
           onDownloadConfig={downloadMcpFile}
           onDownloadTrace={downloadMcpFile}
           onResetSession={onResetSession}
+          presentationActive={presentation === 'playground'}
           targetOptions={targetOptions}
         />
       </section>

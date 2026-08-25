@@ -45,6 +45,8 @@ export interface McpPageController {
 }
 
 export interface McpPageProps {
+  /** Whether this presentation is visible and may own a live App preview. */
+  readonly presentationActive?: boolean;
   /** Credential-owning foreground client; it is never passed to the sandbox frame. */
   readonly appPreviewClient?: McpAppPreviewClient;
   readonly controller: McpPageController;
@@ -386,7 +388,7 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   </section>;
 };
 
-export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onResetSession, targetOptions }: McpPageProps) => {
+export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onResetSession, presentationActive = true, targetOptions }: McpPageProps) => {
   const [model, setModel] = useState(() => controller.model);
   const [epochId, setEpochId] = useState(initialBinding?.epochId ?? '');
   const [target, setTarget] = useState(initialBinding?.target ?? '');
@@ -432,7 +434,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const setActiveAppPreviewController = useCallback((next: McpAppPreviewController | undefined): void => {
     appPreviewController.current = next;
   }, []);
-  const closeCurrentAppPreview = (): Promise<void> => {
+  const closeCurrentAppPreview = useCallback((): Promise<void> => {
     if (appPreviewClosePromise.current !== undefined) return appPreviewClosePromise.current;
     const current = appPreviewController.current;
     appPreviewController.current = undefined;
@@ -445,11 +447,11 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     });
     appPreviewClosePromise.current = close;
     return close;
-  };
-  const closeAppPreview = (): Promise<void> => {
+  }, []);
+  const closeAppPreview = useCallback((): Promise<void> => {
     appPreviewOpenGeneration.current += 1;
     return closeCurrentAppPreview();
-  };
+  }, [closeCurrentAppPreview]);
   const openAppPreview = (source: McpPageAppPreviewSource, profile = appPreviewProfile): void => {
     const generation = ++appPreviewOpenGeneration.current;
     setAppPreviewBusy(true);
@@ -464,7 +466,10 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     if (appPreview !== undefined && (appPreview.sessionId !== model.sessionId || model.phase === 'closed' || model.phase === 'error')) {
       void closeAppPreview();
     }
-  }, [appPreview?.sessionId, model.phase, model.sessionId]);
+  }, [appPreview?.sessionId, closeAppPreview, model.phase, model.sessionId]);
+  useEffect(() => {
+    if (!presentationActive) void closeAppPreview();
+  }, [closeAppPreview, presentationActive]);
 
   const nextRequestId = (): string => {
     requestNumber.current += 1;

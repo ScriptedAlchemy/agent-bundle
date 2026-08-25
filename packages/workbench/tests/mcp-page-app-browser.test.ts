@@ -102,8 +102,10 @@ const mountedPageFixture = async () => {
     '  async restart() { controllerEvents.push({ type: \'restart\' }); return model; },',
     '  subscribe(listener) { listeners.add(listener); listener(model); return () => listeners.delete(listener); },',
     '};',
-    "createRoot(document.getElementById('root')).render(React.createElement(McpPage, { appPreviewClient: appClient, controller, epochOptions: ['epoch-1'], targetOptions: ['portable'] }));",
-    "globalThis.__mcpPageAppFixture = { stats: () => ({ closes: structuredClone(closes), controllerEvents: structuredClone(controllerEvents), creates: structuredClone(creates), messages: structuredClone(messages), sandboxOrigin }), terminateAndClickClose: (phase) => { model = { ...model, phase }; emit(); [...document.querySelectorAll('button')].find((button) => button.textContent === 'Close App preview')?.click(); } };",
+    "const rootView = createRoot(document.getElementById('root'));",
+    "const renderPage = (presentationActive = true) => rootView.render(React.createElement(McpPage, { appPreviewClient: appClient, controller, epochOptions: ['epoch-1'], presentationActive, targetOptions: ['portable'] }));",
+    "renderPage();",
+    "globalThis.__mcpPageAppFixture = { setActive: (active) => renderPage(active), stats: () => ({ closes: structuredClone(closes), controllerEvents: structuredClone(controllerEvents), creates: structuredClone(creates), messages: structuredClone(messages), sandboxOrigin }), terminateAndClickClose: (phase) => { model = { ...model, phase }; emit(); [...document.querySelectorAll('button')].find((button) => button.textContent === 'Close App preview')?.click(); } };",
   ].join('\n'));
   const rsbuild = await createRsbuild({
     config: {
@@ -195,6 +197,15 @@ describe('MCP App page browser integration', () => {
         'ui/initialize', 'ui/notifications/initialized', 'tools/call', 'resources/read', 'ui/request-display-mode', 'notifications/message',
       ]));
 
+      await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { setActive(active: boolean): void } }).__mcpPageAppFixture.setActive(false));
+      await page.waitForFunction(() => document.querySelector('iframe[title="MCP App preview: weather"]') === null);
+      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { closes: readonly unknown[] } } }).__mcpPageAppFixture.stats().closes.length === 1);
+      await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { setActive(active: boolean): void } }).__mcpPageAppFixture.setActive(true));
+      expect(await page.getByText('Select a completed tool call below to create an App preview.').count()).toBe(1);
+
+      await page.getByRole('button', { name: 'Open App preview for weather-call' }).click();
+      await frame.waitFor();
+
       await page.selectOption('#mcp-app-profile', 'chatgpt');
       await page.waitForFunction(() => {
         const fixture = (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { creates: readonly { readonly request: { readonly previewProfile: string } }[]; readonly messages: readonly { readonly bindingId: string; readonly message: { readonly method?: string } }[] } } }).__mcpPageAppFixture;
@@ -233,7 +244,7 @@ describe('MCP App page browser integration', () => {
         readonly closes: readonly unknown[];
         readonly creates: readonly { readonly request: Readonly<Record<string, unknown>> }[];
       };
-      expect(final.closes).toHaveLength(6);
+      expect(final.closes).toHaveLength(7);
       expect(final.creates.every(({ request }) => !Object.hasOwn(request, 'toolMetadata') && !Object.hasOwn(request, 'resourceUri'))).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
