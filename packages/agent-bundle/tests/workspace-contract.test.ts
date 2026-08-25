@@ -41,7 +41,24 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   await Promise.all(examples.map(async ({ path }) => {
     const manifest = JSON.parse(await readFile(join(path, 'package.json'), 'utf8')) as {
       readonly devDependencies?: Readonly<Record<string, string>>;
+      readonly scripts?: Readonly<Record<string, string>>;
     };
     expect(manifest.devDependencies?.['agent-bundle']).toBe('workspace:*');
+    expect(manifest.scripts).toEqual({
+      build: 'agent-bundle build --json',
+      check: 'pnpm validate && pnpm build',
+      dev: 'agent-bundle dev',
+      validate: 'agent-bundle validate --json',
+    });
   }));
+
+  const rootManifest = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as {
+    readonly scripts?: Readonly<Record<string, string>>;
+  };
+  expect(rootManifest.scripts).toMatchObject({
+    'example:hooks': 'pnpm --filter @agent-bundle-example/hooks-and-scripts dev',
+    'example:mcp-app': 'pnpm --filter @agent-bundle-example/mcp-app dev',
+    'example:skills': 'pnpm --filter @agent-bundle-example/skills-starter dev',
+    'examples:check': "pnpm --filter './examples/*' --workspace-concurrency=1 check",
+  });
 });

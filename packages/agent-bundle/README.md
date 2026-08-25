@@ -4,7 +4,7 @@ Compile a typed Agent Bundle configuration into portable, Codex, and Claude Code
 
 ```sh
 npm install --save-dev agent-bundle
-agent-bundle build --root . --output artifact
+agent-bundle build --output artifact
 ```
 
 Top-level `scripts` is a record of stable output names to an entry path or `{ entry, targets? }`. JavaScript/TypeScript entries bundle to `scripts/<name>.mjs`; `.sh`, `.bash`, and `.py` entries copy byte-for-byte while preserving source modes. The generated `agent-bundle.manifest.json` records file digests for stable artifact validation.
@@ -104,7 +104,7 @@ Contributor UI HMR is separate from a published workbench: start it only with a 
 server, for example
 
 ```sh
-AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 npm run dev --workspace agent-bundle-workbench
+AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 pnpm --filter agent-bundle-workbench dev
 ```
 
 `packages/workbench/scripts/dev.mjs` requires that proxy URL. Published `agent-bundle dev` serves
@@ -159,10 +159,10 @@ least `0.147.0`:
 
 ```sh
 claude --version
-agent-bundle eval --root . --harness claude --trials 1
+agent-bundle eval --harness claude --trials 1
 
 codex --version
-agent-bundle eval --root . --harness codex --trials 1
+agent-bundle eval --harness codex --trials 1
 ```
 
 Each Codex trial sets a temporary `CODEX_HOME` and copies only the installed CLI's opaque
@@ -174,8 +174,8 @@ interactive sign-in, the manually dispatched trusted self-hosted CI workflow run
 installed-tarball smoke with its existing subscription session and no workflow secrets:
 
 ```sh
-npm run test:packed:native:claude
-npm run test:packed:native:codex
+pnpm test:packed:native:claude
+pnpm test:packed:native:codex
 ```
 
 Each command builds and installs one production-only tarball, removes provider API-key and
@@ -202,11 +202,15 @@ the published package.
 
 ## Contributor delivery and release gates
 
-Run the complete local delivery gate with `npm run check && npm run check:release`.
-`npm run check:release` is release-only: its exact package-script components are
-`npm run pack:dry-run`, `npm run audit:release`, and `npm run test:packed`, and it does not replace
-`npm run check`.
-`npm run test:spot-check` is the fast end-to-end confidence gate: it builds, validates, and runs
+The public examples live at [`../../examples`](../../examples). They are private
+pnpm workspaces and use only public package exports. Start with Skills Starter,
+then Hooks and Scripts, then the interactive MCP App.
+
+Run the complete local delivery gate with `pnpm check && pnpm check:release`.
+`pnpm check:release` is release-only: its exact package-script components are
+`pnpm pack:dry-run`, `pnpm audit:release`, and `pnpm test:packed`, and it does not replace
+`pnpm check`.
+`pnpm test:spot-check` is the fast end-to-end confidence gate: it builds, validates, and runs
 one deterministic eval against the checked-in micro fixture through the real CLI, with no native
 host and no opt-in environment gate. Native Claude/Codex smokes stay intentionally opt-in and
 skipped in ordinary CI.

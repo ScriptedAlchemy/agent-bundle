@@ -126,7 +126,7 @@ history, a rendered App preview, trace entries, and a completed eval.
 
 Each example exposes the same local scripts:
 
-- `dev`: launch `agent-bundle dev --root .`;
+- `dev`: launch `agent-bundle dev` from the example root;
 - `validate`: validate the authored project;
 - `build`: compile its artifacts;
 - `check`: run validation and build without opening a browser.

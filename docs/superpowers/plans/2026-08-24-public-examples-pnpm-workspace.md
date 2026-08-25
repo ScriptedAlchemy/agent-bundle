@@ -273,10 +273,10 @@ Create `examples/skills-starter/package.json`:
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "agent-bundle build --root . --json",
+    "build": "agent-bundle build --json",
     "check": "pnpm validate && pnpm build",
-    "dev": "agent-bundle dev --root .",
-    "validate": "agent-bundle validate --root . --json"
+    "dev": "agent-bundle dev",
+    "validate": "agent-bundle validate --json"
   },
   "devDependencies": {
     "agent-bundle": "workspace:*"

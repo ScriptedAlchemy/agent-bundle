@@ -32,6 +32,7 @@ jobs:
           key: pnpm-${{ runner.os }}-22.19-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-22.19-
       - run: pnpm install --frozen-lockfile
+      - run: pnpm examples:check
       - run: pnpm test:spot-check
 
   verify:
