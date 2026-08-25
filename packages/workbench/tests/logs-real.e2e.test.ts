@@ -45,10 +45,9 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
     await page.goto(`${server.url}#logs`);
     await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.logs-entries > li')).not.toHaveCount(0, { timeout: browserTimeout });
-    const reconnectedCount = await page.locator('.logs-entries > li').count();
-    expect(reconnectedCount).toBeGreaterThanOrEqual(replayCount);
-    const sequences = await page.locator('.logs-entry-sequence').allTextContents();
-    expect(new Set(sequences).size).toBe(reconnectedCount);
+    const reconnectedSequences = await page.locator('.logs-entries > li').evaluateAll((rows) => rows.map((row) => row.querySelector('.logs-entry-sequence')?.textContent));
+    expect(reconnectedSequences.length).toBeGreaterThanOrEqual(replayCount);
+    expect(new Set(reconnectedSequences).size).toBe(reconnectedSequences.length);
 
     const unauthenticated = await page.evaluate(async () => {
       const response = await fetch('/api/logs/replay');
