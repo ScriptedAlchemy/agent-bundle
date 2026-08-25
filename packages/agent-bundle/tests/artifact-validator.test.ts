@@ -503,6 +503,53 @@ it('rejects a rehashed file outside a declared target emitted layout', async () 
   }
 });
 
+it('accepts a manifested target asset emitted by the core build', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    {
+      contents: '{"version":"1.0.0"}\n',
+      kind: 'copy',
+      path: 'custom/assets/release/release-manifest.json',
+    },
+  ], true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects malformed and unmanifested target asset paths', async () => {
+  const malformedRoot = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: 'not an asset path\n', kind: 'copy', path: 'custom/assets' },
+  ], true, [customManifestTarget]);
+  const unmanifestedRoot = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+
+  try {
+    await mkdir(join(unmanifestedRoot, 'custom', 'assets', 'release'), { recursive: true });
+    await writeFile(join(unmanifestedRoot, 'custom', 'assets', 'release', 'unmanifested.json'), '{}\n');
+
+    const [malformedDiagnostics, unmanifestedDiagnostics] = await Promise.all([
+      validateArtifact({ artifactRoot: malformedRoot, registry: customRegistry() }),
+      validateArtifact({ artifactRoot: unmanifestedRoot, registry: customRegistry() }),
+    ]);
+
+    expect(malformedDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'custom/assets', target: customTarget }),
+    ]));
+    expect(unmanifestedDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(malformedRoot, { force: true, recursive: true });
+    await rm(unmanifestedRoot, { force: true, recursive: true });
+  }
+});
+
 it('rejects an artifact symlink even when the manifest remains self-consistent', async () => {
   const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
   const root = await writeArtifact(files, true, [customManifestTarget]);

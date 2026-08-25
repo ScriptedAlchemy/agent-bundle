@@ -397,6 +397,17 @@ const isSkillArtifactPath = (relativePath: string, skills: string | undefined): 
   return layout === skills && name !== undefined && resource !== undefined;
 };
 
+const isSafeAssetPathSegment = (segment: string): boolean =>
+  segment.length > 0 &&
+  segment !== '.' &&
+  segment !== '..' &&
+  !segment.includes('\\');
+
+const isTargetAssetPath = (relativePath: string): boolean => {
+  const [layout, ...segments] = relativePath.split('/');
+  return layout === 'assets' && segments.length > 0 && segments.every(isSafeAssetPathSegment);
+};
+
 const isTargetArtifactPath = (
   path: string,
   target: string,
@@ -413,6 +424,7 @@ const isTargetArtifactPath = (
     isDirectOutputLayoutPath(relativePath, layout.mcpApps) ||
     isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||
     isDirectOutputLayoutPath(relativePath, layout.scripts) ||
+    isTargetAssetPath(relativePath) ||
     isSkillArtifactPath(relativePath, layout.skills) ||
     relativePath === hookContract?.manifestPath ||
     relativePath === mcpRuntime?.manifestPath ||
