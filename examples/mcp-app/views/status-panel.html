@@ -11,6 +11,9 @@
       .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; opacity: .65; text-transform: uppercase; }
       .status { align-items: center; display: flex; gap: 10px; margin: 14px 0; }
       .dot { background: #22c55e; border-radius: 999px; height: 10px; width: 10px; }
+      .checks { display: grid; gap: 8px; list-style: none; margin: 18px 0; padding: 0; }
+      .checks li { align-items: center; border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent); display: flex; justify-content: space-between; padding-top: 8px; }
+      .checks strong { text-transform: capitalize; }
       button { border: 1px solid currentColor; border-radius: 8px; cursor: pointer; padding: 8px 12px; }
     </style>
   </head>
@@ -19,6 +22,8 @@
       <div class="eyebrow">MCP App example</div>
       <h1 id="service">No service selected</h1>
       <div class="status"><span class="dot"></span><strong id="status">unknown</strong></div>
+      <p id="summary">Invoke the readiness tool to inspect a service.</p>
+      <ul aria-label="Service checks" class="checks" id="checks"></ul>
       <button id="toggle-details" type="button">Toggle details</button>
       <p id="details" hidden>The result arrived through the official MCP Apps bridge.</p>
     </main>

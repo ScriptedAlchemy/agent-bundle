@@ -93,14 +93,15 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
   }
 });
 
-it('invokes the MCP App example and exposes its official App resource', async () => {
+it('publishes the MCP App example service readiness across targets and returns degraded check details', async () => {
   const root = join(examplesRoot, 'mcp-app');
   const stateRoot = join(root, '.agent-bundle');
   const output = join(stateRoot, 'example-contract');
   await rm(stateRoot, { force: true, recursive: true });
 
   try {
-    await build({ output, root });
+    const built = await build({ output, root });
+    const inspected = await inspect({ root });
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
     await expect(listMcp({
       artifact: output,
@@ -110,7 +111,7 @@ it('invokes the MCP App example and exposes its official App resource', async ()
     })).resolves.toMatchObject({ tools: [{ name: 'show-status' }] });
     await expect(invokeMcp({
       artifact: output,
-      input: { service: 'compiler' },
+      input: { service: 'payments-api' },
       root,
       server: 'status',
       target: 'portable',
@@ -118,10 +119,51 @@ it('invokes the MCP App example and exposes its official App resource', async ()
     })).resolves.toMatchObject({
       result: {
         _meta: { ui: { resourceUri: 'ui://mcp-app-example/status.html' } },
-        content: [{ text: 'compiler is healthy', type: 'text' }],
-        structuredContent: { service: 'compiler', status: 'healthy' },
+        content: [{ text: 'Payment latency is above the release threshold.', type: 'text' }],
+        structuredContent: {
+          checks: [
+            { label: 'Availability', status: 'passing' },
+            { label: 'P95 latency', status: 'failing' },
+          ],
+          service: 'payments-api',
+          status: 'degraded',
+          summary: 'Payment latency is above the release threshold.',
+        },
       },
     });
+    expect(inspected.model).toMatchObject({
+      hooks: [{ event: 'sessionStart', targets: ['claude', 'codex'] }],
+      mcpApps: [{ name: 'status', targets: ['portable'] }],
+      mcpServers: [{ name: 'status', targets: ['claude', 'codex', 'portable'] }],
+      scripts: [{ name: 'check-service-fixture', targets: ['claude', 'codex', 'portable'] }],
+      skills: [{ name: 'service-readiness', targets: ['portable', 'codex', 'claude'] }],
+      targets: [{ name: 'portable' }, { name: 'codex' }, { name: 'claude' }],
+    });
+    for (const target of ['portable', 'codex', 'claude'] as const) {
+      await expect(readFile(join(output, target, 'skills', 'service-readiness', 'SKILL.md'), 'utf8'))
+        .resolves.toContain('# Service readiness');
+      await expect(readFile(join(output, target, 'skills', 'service-readiness', 'references', 'status-policy.md'), 'utf8'))
+        .resolves.toContain('# Service status policy');
+      await expect(readFile(join(output, target, 'skills', 'service-readiness', 'assets', 'readiness-report.md'), 'utf8'))
+        .resolves.toContain('# Service readiness report');
+      await expect(readFile(join(output, target, 'scripts', 'check-service-fixture.mjs'), 'utf8'))
+        .resolves.toContain('Compiler fixture is healthy.');
+    }
+    const fixtureCheck = await execFile(process.execPath, [
+      join(output, 'portable', 'scripts', 'check-service-fixture.mjs'),
+    ], { cwd: root });
+    expect(fixtureCheck.stdout).toBe('Compiler fixture is healthy.\n');
+    await expect(readFile(join(output, 'portable', 'mcp-apps', 'status.html'), 'utf8'))
+      .resolves.toContain('aria-label="Service checks"');
+    expect(built.build.compiledMcpApps).toMatchObject([{ name: 'status', target: 'portable' }]);
+    expect(built.build.compiledMcpEntries.map(({ target }) => target).sort()).toEqual(['claude', 'codex', 'portable']);
+    await Promise.all(built.build.compiledMcpEntries.map(({ output: mcpOutput }) =>
+      expect(readFile(mcpOutput, 'utf8')).resolves.toContain('payments-api'),
+    ));
+    expect(built.build.compiledHooks.map(({ target }) => target).sort()).toEqual(['claude', 'codex']);
+    await Promise.all(built.build.compiledHooks.map(({ output: hookOutput }) =>
+      expect(readFile(hookOutput, 'utf8')).resolves.toContain('Service readiness session'),
+    ));
     await expect(runEvals({
       artifact: output,
       caseIds: ['status-is-healthy'],
@@ -132,12 +174,17 @@ it('invokes the MCP App example and exposes its official App resource', async ()
         harness: 'deterministic',
         summary: { cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 },
       },
-      trials: [{ caseId: 'status-is-healthy', host: 'portable', outcome: 'pass' }],
+      trials: [{
+        caseId: 'status-is-healthy',
+        host: 'portable',
+        outcome: 'pass',
+        provenance: { invocation: { mode: 'explicit', skill: 'service-readiness' } },
+      }],
     });
   } finally {
     await rm(stateRoot, { force: true, recursive: true });
   }
-});
+}, 30_000);
 
 it('simulates the Hooks example and executes release checks', async () => {
   const root = join(examplesRoot, 'hooks-and-scripts');

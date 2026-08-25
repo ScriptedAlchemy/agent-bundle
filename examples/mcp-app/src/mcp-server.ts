@@ -8,6 +8,27 @@ if (app === undefined) throw new Error('Expected the status MCP App.');
 
 const server = new McpServer({ name: 'mcp-app-example', version: '1.0.0' });
 
+const serviceCatalog = Object.freeze({
+  compiler: Object.freeze({
+    checks: Object.freeze([
+      Object.freeze({ label: 'Availability', status: 'passing' }),
+      Object.freeze({ label: 'Build queue', status: 'passing' }),
+    ]),
+    service: 'compiler',
+    status: 'healthy',
+    summary: 'Compiler service is ready for release.',
+  }),
+  'payments-api': Object.freeze({
+    checks: Object.freeze([
+      Object.freeze({ label: 'Availability', status: 'passing' }),
+      Object.freeze({ label: 'P95 latency', status: 'failing' }),
+    ]),
+    service: 'payments-api',
+    status: 'degraded',
+    summary: 'Payment latency is above the release threshold.',
+  }),
+});
+
 server.registerResource(app.name, app.resourceUri, {
   _meta: { ui: { resourceUri: app.resourceUri } },
   mimeType: app.mimeType,
@@ -18,11 +39,14 @@ server.registerResource(app.name, app.resourceUri, {
 server.registerTool('show-status', {
   _meta: { ui: { resourceUri: app.resourceUri } },
   description: 'Show the health of one example service.',
-  inputSchema: z.object({ service: z.string() }),
-}, async ({ service }) => ({
-  _meta: { ui: { resourceUri: app.resourceUri } },
-  content: [{ text: `${service} is healthy`, type: 'text' }],
-  structuredContent: { service, status: 'healthy' },
-}));
+  inputSchema: z.object({ service: z.enum(['compiler', 'payments-api']) }),
+}, async ({ service }) => {
+  const result = serviceCatalog[service];
+  return {
+    _meta: { ui: { resourceUri: app.resourceUri } },
+    content: [{ text: result.summary, type: 'text' }],
+    structuredContent: result,
+  };
+});
 
 await server.connect(new StdioServerTransport());

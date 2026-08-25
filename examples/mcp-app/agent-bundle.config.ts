@@ -1,6 +1,9 @@
 import { defineConfig } from 'agent-bundle';
 
 export default defineConfig({
+  hooks: {
+    sessionStart: { handler: './src/hooks/session-start.ts' },
+  },
   mcp: {
     servers: {
       status: {
@@ -17,9 +20,13 @@ export default defineConfig({
     },
   },
   plugin: {
-    description: 'An interactive MCP App plus deterministic evaluation.',
+    description: 'A unified service-readiness assistant with MCP, Skills, Hooks, scripts, and evaluation.',
     name: 'mcp-app-example',
     version: '1.0.0',
   },
-  targets: ['portable'],
+  scripts: {
+    'check-service-fixture': './src/scripts/check-service-fixture.ts',
+  },
+  skills: ['skills/service-readiness'],
+  targets: ['portable', 'codex', 'claude'],
 });
