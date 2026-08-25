@@ -83,7 +83,7 @@ e2e('treats an unsupported Inspector hash as the overview without opening an MCP
 
     await page.goto(`${server.url}#inspector`);
     await expect(page).toHaveURL(/#inspector$/u, { timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveCount(0);
     expect(sessionPosts).toBe(0);

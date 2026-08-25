@@ -48,7 +48,7 @@ it('copies stable prebuilt workbench assets and exact Inspector provenance into 
   await buildPackage();
 
   await expect(access(join(packageRoot, 'dist', 'workbench', 'index.html'))).resolves.toBeUndefined();
-  await expect(readFile(join(packageRoot, 'dist', 'workbench', 'static', 'js', 'index.js'), 'utf8')).resolves.toContain('Project overview');
+  await expect(readFile(join(packageRoot, 'dist', 'workbench', 'static', 'js', 'index.js'), 'utf8')).resolves.toContain('Bundle dashboard');
   await expect(readFile(join(packageRoot, 'dist', 'workbench', 'THIRD_PARTY_NOTICES'), 'utf8')).resolves.toContain('MCP Inspector');
   await Promise.all(inspectorProvenanceFiles.map(async (file) => {
     await expect(readFile(join(packageRoot, 'dist', 'workbench', 'src', 'inspector', file), 'utf8')).resolves.toBe(

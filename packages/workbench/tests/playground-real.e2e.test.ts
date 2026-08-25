@@ -213,7 +213,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     const rebuilt = await rebuildCompleted;
     const rebuiltStatus = await rebuilt.json() as { readonly status: { readonly artifact: { readonly activeEpoch?: { readonly id: string } } } };
     expect(rebuiltStatus.status.artifact.activeEpoch?.id).not.toBe(pinnedEpoch);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('link', { name: 'Playground', exact: true }).click();
     await expect(page.getByText(pinnedEpoch, { exact: true })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('button', { name: 'Cancel run' }).click();

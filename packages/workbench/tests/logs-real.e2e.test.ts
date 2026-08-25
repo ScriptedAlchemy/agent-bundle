@@ -41,7 +41,7 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
     await page.locator('#logs-producer').selectOption('');
     const replayCount = await page.locator('.logs-entries > li').count();
     await page.goto(`${server.url}#overview`);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.goto(`${server.url}#logs`);
     await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.logs-entries > li')).not.toHaveCount(0, { timeout: browserTimeout });
