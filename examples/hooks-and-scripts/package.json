@@ -1,0 +1,14 @@
+{
+  "name": "@agent-bundle-example/hooks-and-scripts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "agent-bundle build --root . --json",
+    "check": "pnpm validate && pnpm build",
+    "dev": "agent-bundle dev --root .",
+    "validate": "agent-bundle validate --root . --json"
+  },
+  "devDependencies": {
+    "agent-bundle": "workspace:*"
+  }
+}

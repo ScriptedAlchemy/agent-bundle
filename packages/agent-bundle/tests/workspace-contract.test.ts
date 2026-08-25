@@ -28,6 +28,7 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   const packages = documents.flat();
 
   expect(packages.map(({ name }) => name).sort()).toEqual([
+    '@agent-bundle-example/hooks-and-scripts',
     '@agent-bundle-example/skills-starter',
     'agent-bundle',
     'agent-bundle-workbench',
