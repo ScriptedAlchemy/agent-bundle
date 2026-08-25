@@ -2,7 +2,7 @@ import { appendFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { requestFlightRender } from '../flight/request-render.js';
-import { lowerHookResult } from '../runtime/lower-hook.js';
+import { lowerHookResult } from '@agent-bundle/rsc-runtime';
 import { resolveImplicitRuntimeStateFile } from '../runtime/state-file.js';
 import { normalizeClaudeHook, normalizeCodexHook } from './normalize.js';
 

@@ -89,6 +89,9 @@ importers:
 
   examples/rsc-agent-runtime:
     dependencies:
+      '@agent-bundle/rsc-runtime':
+        specifier: workspace:*
+        version: link:../../packages/rsc-runtime
       '@modelcontextprotocol/ext-apps':
         specifier: 1.7.5
         version: 1.7.5(@modelcontextprotocol/sdk@1.30.0(supports-color@7.2.0)(zod@4.4.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.4.3)

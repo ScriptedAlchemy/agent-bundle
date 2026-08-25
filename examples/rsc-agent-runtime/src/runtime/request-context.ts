@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { createRscRequestContext } from '@agent-bundle/rsc-runtime';
 
 import type { CanonicalPostToolUse, RuntimeSnapshot } from './contracts.js';
 
@@ -7,20 +7,11 @@ export interface RenderContext {
   snapshot: RuntimeSnapshot;
 }
 
-const renderContext = new AsyncLocalStorage<RenderContext>();
-
-const getRenderContext = (): RenderContext => {
-  const context = renderContext.getStore();
-  if (context === undefined) {
-    throw new Error('RSC runtime hook used outside a render request');
-  }
-
-  return context;
-};
+const renderContext = createRscRequestContext<RenderContext>('RSC runtime hook');
 
 export const withRenderContext = <T>(context: RenderContext, operation: () => T): T =>
   renderContext.run(context, operation);
 
-export const useEdit = (): CanonicalPostToolUse => getRenderContext().edit;
+export const useEdit = (): CanonicalPostToolUse => renderContext.use().edit;
 
-export const useRuntimeSnapshot = (): RuntimeSnapshot => getRenderContext().snapshot;
+export const useRuntimeSnapshot = (): RuntimeSnapshot => renderContext.use().snapshot;

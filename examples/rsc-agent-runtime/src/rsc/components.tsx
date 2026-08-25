@@ -1,7 +1,6 @@
 import { basename } from 'node:path';
 
-import { Hook } from '../runtime/elements.js';
-import { Mcp } from '../runtime/elements.js';
+import { Hook, Mcp } from '@agent-bundle/rsc-runtime';
 import type { RuntimeSnapshot } from '../runtime/contracts.js';
 import { useEdit, useRuntimeSnapshot } from '../runtime/request-context.js';
 
