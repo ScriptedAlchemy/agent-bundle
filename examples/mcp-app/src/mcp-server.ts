@@ -3,21 +3,15 @@ import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import apps from 'agent-bundle/mcp-apps';
 import { z } from 'zod';
 
+import { healthyCompilerStatus } from './compiler-status-contract.ts';
+
 const app = apps[0];
 if (app === undefined) throw new Error('Expected the status MCP App.');
 
 const server = new McpServer({ name: 'mcp-app-example', version: '1.0.0' });
 
 const serviceCatalog = Object.freeze({
-  compiler: Object.freeze({
-    checks: Object.freeze([
-      Object.freeze({ label: 'Availability', status: 'passing' }),
-      Object.freeze({ label: 'Build queue', status: 'passing' }),
-    ]),
-    service: 'compiler',
-    status: 'healthy',
-    summary: 'Compiler service is ready for release.',
-  }),
+  compiler: healthyCompilerStatus,
   'payments-api': Object.freeze({
     checks: Object.freeze([
       Object.freeze({ label: 'Availability', status: 'passing' }),

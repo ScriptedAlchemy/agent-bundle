@@ -1,5 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
-import { readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -153,6 +154,29 @@ it('publishes the MCP App example service readiness across targets and returns d
       join(output, 'portable', 'scripts', 'check-service-fixture.mjs'),
     ], { cwd: root });
     expect(fixtureCheck.stdout).toBe('Compiler fixture is healthy.\n');
+    const invalidFixtureRoot = await mkdtemp(join(tmpdir(), 'mcp-app-invalid-fixture-'));
+    try {
+      const invalidFixturePath = join(invalidFixtureRoot, 'evals', 'fixtures', 'status');
+      await mkdir(invalidFixturePath, { recursive: true });
+      await writeFile(join(invalidFixturePath, 'result.json'), JSON.stringify({
+        checks: [],
+        service: 'compiler',
+        status: 'healthy',
+        summary: 'A stale summary.',
+      }));
+      const invalidFixtureCheck = await execFile(process.execPath, [
+        join(output, 'portable', 'scripts', 'check-service-fixture.mjs'),
+      ], { cwd: invalidFixtureRoot }).then(
+        () => {
+          throw new Error('Expected an incomplete compiler fixture to fail.');
+        },
+        (error: unknown) => error as { readonly code: number; readonly stderr: string },
+      );
+      expect(invalidFixtureCheck.code).toBe(1);
+      expect(invalidFixtureCheck.stderr).toContain('compiler fixture must contain the exact healthy compiler status');
+    } finally {
+      await rm(invalidFixtureRoot, { force: true, recursive: true });
+    }
     await expect(readFile(join(output, 'portable', 'mcp-apps', 'status.html'), 'utf8'))
       .resolves.toContain('aria-label="Service checks"');
     expect(built.build.compiledMcpApps).toMatchObject([{ name: 'status', target: 'portable' }]);
