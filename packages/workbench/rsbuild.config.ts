@@ -45,7 +45,6 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
   },
   source: {
     entry: {
-      'inspector-closure': resolve(sourceRoot, 'inspector-closure.tsx'),
       index: resolve(sourceRoot, 'main.tsx'),
     },
   },
