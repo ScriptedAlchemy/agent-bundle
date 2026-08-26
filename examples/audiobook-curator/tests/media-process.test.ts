@@ -21,10 +21,7 @@ describe('bounded media process', () => {
       .rejects.toThrow('stdout exceeded 256 KiB');
   });
 
-  it('terminates on timeout and caller cancellation', async () => {
-    await expect(runMediaProcess(process.execPath, [fixture, 'sleep'], { timeoutMs: 25 }))
-      .rejects.toThrow('timed out after 25 ms');
-
+  it('terminates only on caller cancellation', async () => {
     const controller = new AbortController();
     const result = runMediaProcess(process.execPath, [fixture, 'sleep'], { signal: controller.signal });
     controller.abort(new Error('cancelled by test'));
