@@ -52,6 +52,9 @@ describe('audiobook curator RSC application', () => {
     expect(Object.keys(application.config.scripts ?? {})).toEqual(['audiobook-curator']);
     expect(Object.keys(application.config.mcp?.servers ?? {})).toEqual(['curator']);
     expect(application.operations.map((operation) => operation.cli?.name)).toEqual([
+      'audible-search',
+      'audible-select',
+      'audible-cache',
       'inspect',
       'inventory',
       'library-audit',
@@ -61,6 +64,9 @@ describe('audiobook curator RSC application', () => {
       'audit',
     ]);
     expect(application.operations.map((operation) => operation.mcp?.name)).toEqual([
+      'search_audible',
+      'select_audible_edition',
+      'cache_audible_edition',
       'inspect_sources',
       'inventory_sources',
       'audit_library',

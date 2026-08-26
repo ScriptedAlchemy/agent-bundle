@@ -28,6 +28,9 @@ const operations = (): CuratorToolOperations => ({
 describe('audiobook curator MCP tools', () => {
   it('derives the current tool catalog from the shared application', () => {
     expect(curatorToolNames).toEqual([
+      'search_audible',
+      'select_audible_edition',
+      'cache_audible_edition',
       'inspect_sources',
       'inventory_sources',
       'audit_library',

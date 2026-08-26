@@ -2,11 +2,15 @@ import { Mcp, lowerMcpResult } from '@agent-bundle/rsc-runtime';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import React from 'react';
 
+import type { AudibleCacheReceipt, AudibleSearchReceipt, AudibleSelectionReceipt } from './audible.ts';
 import type { AuditReceipt, InspectionReceipt, PrepareReceipt } from './curator-core.ts';
 import type { ConvertReceipt } from './conversion.ts';
 import type { InventoryReceipt, LibraryAuditReceipt, SelectionReceipt } from './library.ts';
 
 export type CuratorReceipt =
+  | AudibleCacheReceipt
+  | AudibleSearchReceipt
+  | AudibleSelectionReceipt
   | AuditReceipt
   | ConvertReceipt
   | InspectionReceipt
@@ -17,6 +21,12 @@ export type CuratorReceipt =
 
 const summary = (receipt: CuratorReceipt): string => {
   switch (receipt.operation) {
+    case 'audible-search':
+      return `Ranked ${receipt.candidates.length} Audible candidates across reviewed regions; human selection is required.`;
+    case 'audible-select':
+      return `Recorded human-reviewed Audible candidate ${receipt.candidateNumber}.`;
+    case 'audible-cache':
+      return `Cached Audible ${receipt.region}/${receipt.asin} product evidence${receipt.chapters === undefined ? ' without chapter metadata' : ' with chapter metadata'}.`;
     case 'inspect':
       return `Inspected ${receipt.files.length} audio files (${receipt.totalBytes} bytes).`;
     case 'prepare':
