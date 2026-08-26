@@ -26,8 +26,15 @@ const operations = (): CuratorToolOperations => ({
 });
 
 describe('audiobook curator MCP tools', () => {
-  it('exposes exactly three phase-oriented tools', () => {
-    expect(curatorToolNames).toEqual(['inspect_sources', 'prepare_audiobook', 'audit_audiobook']);
+  it('derives the current tool catalog from the shared application', () => {
+    expect(curatorToolNames).toEqual([
+      'inspect_sources',
+      'inventory_sources',
+      'audit_library',
+      'select_sources',
+      'prepare_audiobook',
+      'audit_audiobook',
+    ]);
     expect(createCuratorTools({ operations: operations() }).map(({ name }) => name)).toEqual(curatorToolNames);
   });
 

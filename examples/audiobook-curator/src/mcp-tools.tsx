@@ -11,6 +11,9 @@ export type CuratorToolOperations = AudiobookCuratorOperations;
 
 export const curatorToolNames = Object.freeze([
   'inspect_sources',
+  'inventory_sources',
+  'audit_library',
+  'select_sources',
   'prepare_audiobook',
   'audit_audiobook',
 ] as const);

@@ -21,6 +21,15 @@ import {
   type PrepareInput,
   type PrepareReceipt,
 } from './curator-core.ts';
+import { readJson, writeReceipt } from './foundation.ts';
+import {
+  auditLibrary,
+  createInventory,
+  selectInventorySources,
+  type InventoryReceipt,
+  type LibraryAuditReceipt,
+  type SelectionReceipt,
+} from './library.ts';
 import { CuratorResult } from './result.tsx';
 
 export interface AudiobookCuratorOperations {
@@ -29,13 +38,41 @@ export interface AudiobookCuratorOperations {
     input: { readonly maxFiles?: number; readonly root: string },
     options: RscOperationContext,
   ) => Promise<InspectionReceipt>;
+  readonly inventory?: (
+    input: { readonly report?: string; readonly source: string; readonly strict?: boolean },
+    options: RscOperationContext,
+  ) => Promise<InventoryReceipt>;
+  readonly libraryAudit?: (
+    input: { readonly concurrency?: number; readonly report?: string; readonly sources: readonly string[]; readonly strict?: boolean },
+    options: RscOperationContext,
+  ) => Promise<LibraryAuditReceipt>;
   readonly prepare: (input: PrepareInput, options: RscOperationContext) => Promise<PrepareReceipt>;
+  readonly select?: (
+    input: { readonly inventory: string; readonly report?: string },
+    options: RscOperationContext,
+  ) => Promise<SelectionReceipt>;
 }
 
-const defaultOperations: AudiobookCuratorOperations = {
+const defaultOperations: Required<AudiobookCuratorOperations> = {
   audit: (input, options) => auditAudiobook(input, options),
   inspect: (input, options) => inspectSources(input, options),
+  inventory: async (input, options) => {
+    const receipt = await createInventory(input, options);
+    if (input.report !== undefined) await writeReceipt(input.report, receipt, [input.source]);
+    return receipt;
+  },
+  libraryAudit: async (input, options) => {
+    const receipt = await auditLibrary(input, options);
+    if (input.report !== undefined) await writeReceipt(input.report, receipt, input.sources);
+    return receipt;
+  },
   prepare: (input, options) => prepareAudiobook(input, options),
+  select: async (input) => {
+    const inventory = inventoryResultSchema.parse(await readJson(input.inventory));
+    const receipt = selectInventorySources(inventory, input.inventory);
+    if (input.report !== undefined) await writeReceipt(input.report, receipt, [input.inventory]);
+    return receipt;
+  },
 };
 
 const pathSchema = z.string().min(1).max(4096);
@@ -89,6 +126,16 @@ const auditResultSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/u),
   source: pathSchema,
 }).strict();
+const parityReceiptSchema = <T extends { readonly generatedAt: string; readonly mutation: boolean; readonly operation: string }>(
+  operation: T['operation'],
+): z.ZodType<T> => z.object({
+  generatedAt: z.string().min(1),
+  mutation: z.boolean(),
+  operation: z.literal(operation),
+}).catchall(z.json()) as unknown as z.ZodType<T>;
+const inventoryResultSchema = parityReceiptSchema<InventoryReceipt>('inventory');
+const libraryResultSchema = parityReceiptSchema<LibraryAuditReceipt>('library-audit');
+const selectionResultSchema = parityReceiptSchema<SelectionReceipt>('quality-selection');
 
 const optionValue = (args: readonly string[], option: string): string | undefined => {
   const index = args.indexOf(option);
@@ -130,7 +177,13 @@ const onePath = (args: readonly string[], valued: ReadonlySet<string>, command: 
   return positional[0]!;
 };
 
-const createOperations = (operations: AudiobookCuratorOperations) => Object.freeze([
+const requiredOption = (args: readonly string[], option: string, command: string): string => {
+  const value = optionValue(args, option);
+  if (value === undefined) throw new Error(`${command} requires ${option}.`);
+  return value;
+};
+
+const createOperations = (operations: Required<AudiobookCuratorOperations>) => Object.freeze([
   defineOperation({
     cli: {
       name: 'inspect',
@@ -157,6 +210,98 @@ const createOperations = (operations: AudiobookCuratorOperations) => Object.free
     },
     render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: inspectResultSchema,
+  }),
+  defineOperation({
+    cli: {
+      exitCode: (receipt) => receipt.exitCode,
+      name: 'inventory',
+      parse: (args) => {
+        const valued = new Set(['--report']);
+        assertOptions(args, new Set(['--strict']), valued);
+        return {
+          report: requiredOption(args, '--report', 'inventory'),
+          source: onePath(args, valued, 'inventory'),
+          ...(args.includes('--strict') ? { strict: true } : {}),
+        };
+      },
+      summary: 'Probe source audio without changing it.',
+      usage: 'inventory <source> --report FILE [--strict]',
+    },
+    execute: operations.inventory,
+    id: 'inventory',
+    inputSchema: z.object({ report: pathSchema.optional(), source: pathSchema, strict: z.boolean().optional() }).strict(),
+    mcp: {
+      description: 'Inventory source audio with retained per-file probe evidence.',
+      name: 'inventory_sources',
+      readOnly: false,
+      server: 'curator',
+    },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: inventoryResultSchema,
+  }),
+  defineOperation({
+    cli: {
+      exitCode: (receipt) => receipt.exitCode,
+      name: 'library-audit',
+      parse: (args) => {
+        const valued = new Set(['--concurrency', '--report']);
+        assertOptions(args, new Set(['--strict']), valued);
+        const concurrency = optionValue(args, '--concurrency');
+        const sources = positionalArguments(args, valued);
+        if (sources.length === 0) throw new Error('library-audit requires at least one source path.');
+        return {
+          ...(concurrency === undefined ? {} : { concurrency: Number(concurrency) }),
+          report: requiredOption(args, '--report', 'library-audit'),
+          sources,
+          ...(args.includes('--strict') ? { strict: true } : {}),
+        };
+      },
+      summary: 'Audit metadata, artwork, chapters, duplicate candidates, and multipart groups.',
+      usage: 'library-audit <sources...> --report FILE [--concurrency N] [--strict]',
+    },
+    execute: operations.libraryAudit,
+    id: 'library-audit',
+    inputSchema: z.object({
+      concurrency: z.number().int().min(1).max(8).optional(),
+      report: pathSchema.optional(),
+      sources: z.array(pathSchema).min(1).max(64),
+      strict: z.boolean().optional(),
+    }).strict(),
+    mcp: {
+      description: 'Audit audiobook library metadata, duplicates, and multipart evidence without deletion advice.',
+      name: 'audit_library',
+      readOnly: false,
+      server: 'curator',
+    },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: libraryResultSchema,
+  }),
+  defineOperation({
+    cli: {
+      name: 'select',
+      parse: (args) => {
+        const valued = new Set(['--inventory', '--report']);
+        assertOptions(args, new Set(), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('select accepts only named options.');
+        return {
+          inventory: requiredOption(args, '--inventory', 'select'),
+          report: requiredOption(args, '--report', 'select'),
+        };
+      },
+      summary: 'Choose the strongest source among normalized collisions.',
+      usage: 'select --inventory FILE --report FILE',
+    },
+    execute: operations.select,
+    id: 'select',
+    inputSchema: z.object({ inventory: pathSchema, report: pathSchema.optional() }).strict(),
+    mcp: {
+      description: 'Select strongest source encodings while retaining alternates and duration review evidence.',
+      name: 'select_sources',
+      readOnly: false,
+      server: 'curator',
+    },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: selectionResultSchema,
   }),
   defineOperation({
     cli: {
@@ -219,7 +364,7 @@ const createOperations = (operations: AudiobookCuratorOperations) => Object.free
 export const createAudiobookCuratorApplication = (
   options: { readonly operations?: AudiobookCuratorOperations } = {},
 ) => {
-  const definitions = createOperations(options.operations ?? defaultOperations);
+  const definitions = createOperations({ ...defaultOperations, ...options.operations });
   return defineRscAgentBundle(
     <AgentBundle
       description="Plan-first audiobook inventory, preparation, and integrity audit."

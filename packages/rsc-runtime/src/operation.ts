@@ -6,7 +6,7 @@ export interface RscOperationContext {
 }
 
 export interface RscCliDefinition<TInput, TResult> {
-  readonly exitCode?: (result: TResult) => 0 | 2;
+  readonly exitCode?: (result: TResult) => 0 | 1 | 2;
   readonly name: string;
   readonly parse: (argv: readonly string[]) => TInput;
   readonly summary: string;
@@ -14,8 +14,11 @@ export interface RscCliDefinition<TInput, TResult> {
 }
 
 export interface RscMcpDefinition {
+  readonly destructive?: boolean;
   readonly description: string;
+  readonly idempotent?: boolean;
   readonly name: string;
+  readonly openWorld?: boolean;
   readonly readOnly: boolean;
   readonly server: string;
 }
@@ -31,7 +34,7 @@ export interface RscOperationInput<TInput, TResult> {
 }
 
 export interface RscCliOperation {
-  readonly exitCode: (result: unknown) => 0 | 2;
+  readonly exitCode: (result: unknown) => 0 | 1 | 2;
   readonly name: string;
   readonly parse: (argv: readonly string[]) => unknown;
   readonly summary: string;
@@ -76,8 +79,11 @@ export const defineOperation = <TInput, TResult>(
   const mcp = input.mcp === undefined
     ? undefined
     : Object.freeze<RscMcpDefinition>({
+        ...(input.mcp.destructive === undefined ? {} : { destructive: input.mcp.destructive }),
         description: requireText(input.mcp.description, `Operation ${id} MCP description`),
+        ...(input.mcp.idempotent === undefined ? {} : { idempotent: input.mcp.idempotent }),
         name: requireName(input.mcp.name, `Operation ${id} MCP name`),
+        ...(input.mcp.openWorld === undefined ? {} : { openWorld: input.mcp.openWorld }),
         readOnly: input.mcp.readOnly,
         server: requireName(input.mcp.server, `Operation ${id} MCP server`),
       });

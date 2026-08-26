@@ -17,8 +17,9 @@ export const createRscMcpServer = (
     if (operation.mcp?.server !== serverName) continue;
     server.registerTool(operation.mcp.name, {
       annotations: {
-        destructiveHint: !operation.mcp.readOnly,
-        idempotentHint: operation.mcp.readOnly,
+        destructiveHint: operation.mcp.destructive ?? false,
+        idempotentHint: operation.mcp.idempotent ?? operation.mcp.readOnly,
+        openWorldHint: operation.mcp.openWorld ?? false,
         readOnlyHint: operation.mcp.readOnly,
       },
       description: operation.mcp.description,

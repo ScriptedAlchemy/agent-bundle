@@ -3,8 +3,15 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import React from 'react';
 
 import type { AuditReceipt, InspectionReceipt, PrepareReceipt } from './curator-core.ts';
+import type { InventoryReceipt, LibraryAuditReceipt, SelectionReceipt } from './library.ts';
 
-export type CuratorReceipt = AuditReceipt | InspectionReceipt | PrepareReceipt;
+export type CuratorReceipt =
+  | AuditReceipt
+  | InspectionReceipt
+  | InventoryReceipt
+  | LibraryAuditReceipt
+  | PrepareReceipt
+  | SelectionReceipt;
 
 const summary = (receipt: CuratorReceipt): string => {
   switch (receipt.operation) {
@@ -16,6 +23,12 @@ const summary = (receipt: CuratorReceipt): string => {
         : `Planned audiobook output at ${receipt.output}; no media was changed.`;
     case 'audit':
       return `Audited ${receipt.bytes} bytes with SHA-256 ${receipt.sha256}.`;
+    case 'inventory':
+      return `Inventoried ${receipt.summary.files} media files with ${receipt.summary.errors} retained errors.`;
+    case 'library-audit':
+      return `Audited ${receipt.summary.files} library media files and found ${receipt.duplicateCandidates.length} duplicate candidate groups.`;
+    case 'quality-selection':
+      return `Selected ${receipt.selections.length} source groups; ${receipt.selections.filter((selection) => selection.reviewRequired).length} require review.`;
   }
 };
 

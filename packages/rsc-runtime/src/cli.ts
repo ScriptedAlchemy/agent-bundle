@@ -17,7 +17,7 @@ export const runRscCli = async (
   application: Readonly<RscAgentBundleApplication>,
   argv: readonly string[],
   options: RscCliOptions = {},
-): Promise<0 | 2> => {
+): Promise<0 | 1 | 2> => {
   const write = options.write ?? ((value: string) => process.stdout.write(value));
   const [commandName, ...commandArguments] = argv;
   if (commandName === undefined || commandName === '--help' || commandName === '-h') {

@@ -16,7 +16,7 @@ export interface CliOptions {
 export const runCli = (
   argv: readonly string[],
   options: CliOptions = {},
-): Promise<0 | 2> => runRscCli(
+): Promise<0 | 1 | 2> => runRscCli(
   createAudiobookCuratorApplication({ ...(options.operations === undefined ? {} : { operations: options.operations }) }),
   argv,
   {
