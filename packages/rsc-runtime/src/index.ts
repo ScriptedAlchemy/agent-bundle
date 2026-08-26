@@ -11,3 +11,4 @@ export { lowerMcpResult } from './lower-mcp.js';
 export type { JsonValue } from './lower-mcp.js';
 export { createRscRequestContext } from './request-context.js';
 export type { RscRequestContext } from './request-context.js';
+export * from './plugin.js';

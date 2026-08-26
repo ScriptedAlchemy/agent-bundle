@@ -260,6 +260,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(supports-color@7.2.0)(zod@4.4.3)
+      '@modelcontextprotocol/server':
+        specifier: 2.0.0
+        version: 2.0.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@rslib/core':
         specifier: 0.23.2
@@ -270,6 +276,9 @@ importers:
       '@types/react':
         specifier: 19.2.18
         version: 19.2.18
+      agent-bundle:
+        specifier: workspace:*
+        version: link:../agent-bundle
       react:
         specifier: 19.2.8
         version: 19.2.8
