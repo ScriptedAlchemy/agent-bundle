@@ -318,7 +318,7 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
       chunkSeconds: z.number().int().min(1).max(86_400).optional(), file: pathSchema, receipt: pathSchema.optional(),
       region: z.enum(audibleRegions).optional(), sampleUrl: z.url().optional(), verbose: z.boolean().optional(),
     }).strict(),
-    mcp: { description: 'Compare a bounded Audible sample with local audio through an optional Audiolocate Python capability.', name: 'verify_audible_sample', readOnly: false, server: 'curator' },
+    mcp: { description: 'Compare a bounded Audible sample with local audio through an optional Audiolocate Python capability.', name: 'verify_audible_sample', openWorld: true, readOnly: false, server: 'curator' },
     render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: acousticResultSchema,
   }),
@@ -354,7 +354,7 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
       chunkSeconds: z.number().int().min(1).max(86_400).optional(), file: pathSchema, receipt: pathSchema.optional(),
       top: z.number().int().min(1).max(10).optional(), verbose: z.boolean().optional(),
     }).strict(),
-    mcp: { description: 'Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default.', name: 'identify_audible_sample', readOnly: false, server: 'curator' },
+    mcp: { description: 'Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default.', name: 'identify_audible_sample', openWorld: true, readOnly: false, server: 'curator' },
     render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: acousticIdentifyResultSchema,
   }),
@@ -425,7 +425,7 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
       language: z.string().min(1).max(64).optional(), narrator: z.string().max(512).optional(), product: pathSchema,
       receipt: pathSchema.optional(), title: z.string().max(1024).optional(), year: z.string().max(64).optional(),
     }).strict(),
-    mcp: { description: 'Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream.', name: 'apply_audiobook_metadata', readOnly: false, server: 'curator' },
+    mcp: { description: 'Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream.', destructive: true, name: 'apply_audiobook_metadata', readOnly: false, server: 'curator' },
     render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: metadataResultSchema,
   }),
@@ -449,7 +449,7 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
     execute: operations.applyChapters,
     id: 'apply-chapters',
     inputSchema: z.object({ apply: z.boolean().optional(), chapters: pathSchema, file: pathSchema, receipt: pathSchema.optional() }).strict(),
-    mcp: { description: 'Plan or explicitly apply verified chapter rows while preserving all non-chapter media state.', name: 'apply_audiobook_chapters', readOnly: false, server: 'curator' },
+    mcp: { description: 'Plan or explicitly apply verified chapter rows while preserving all non-chapter media state.', destructive: true, name: 'apply_audiobook_chapters', readOnly: false, server: 'curator' },
     render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: chaptersResultSchema,
   }),
@@ -487,7 +487,7 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
       narrator: z.string().min(1).max(512).optional(), regions: z.array(audibleCandidateSchema.shape.region).min(1).max(10).optional(),
       report: pathSchema.optional(), title: z.string().min(1).max(1024),
     }).strict(),
-    mcp: { description: 'Search Audible regions and return ranked identity evidence requiring human review.', name: 'search_audible', readOnly: false, server: 'curator' },
+    mcp: { description: 'Search Audible regions and return ranked identity evidence requiring human review.', name: 'search_audible', openWorld: true, readOnly: false, server: 'curator' },
     render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: audibleSearchResultSchema,
   }),
@@ -540,7 +540,7 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
       asin: z.string().min(1).max(64), attempts: z.number().int().min(1).max(10).optional(), cacheDirectory: pathSchema,
       receipt: pathSchema.optional(), region: audibleCandidateSchema.shape.region.optional(),
     }).strict(),
-    mcp: { description: 'Cache a reviewed Audible edition and retained source evidence.', name: 'cache_audible_edition', readOnly: false, server: 'curator' },
+    mcp: { description: 'Cache a reviewed Audible edition and retained source evidence.', name: 'cache_audible_edition', openWorld: true, readOnly: false, server: 'curator' },
     render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: audibleCacheResultSchema,
   }),
@@ -711,6 +711,7 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
     }).strict(),
     mcp: {
       description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
+      destructive: true,
       name: 'convert_audiobook',
       readOnly: false,
       server: 'curator',
@@ -742,6 +743,7 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
     inputSchema: prepareInputSchema,
     mcp: {
       description: 'Plan an M4B output, or apply the plan only when apply is explicitly true.',
+      destructive: true,
       name: 'prepare_audiobook',
       readOnly: false,
       server: 'curator',
@@ -773,7 +775,7 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
     mcp: {
       description: 'Validate chapter structure, optional conversion mapping, file/audio hashes, probe facts, and optional full decode.',
       name: 'audit_audiobook',
-      readOnly: true,
+      readOnly: false,
       server: 'curator',
     },
     render: (receipt) => <CuratorResult receipt={receipt} />,
@@ -787,7 +789,7 @@ export const createAudiobookCuratorApplication = (
   const definitions = createOperations({ ...defaultOperations, ...options.operations });
   return defineRscAgentBundle(
     <AgentBundle
-      description="Plan-first audiobook inventory, preparation, and integrity audit."
+      description="Complete plan-first audiobook inventory, matching, conversion, repair, and integrity audit."
       marketplace
       name="audiobook-curator"
       node="22.19.0"

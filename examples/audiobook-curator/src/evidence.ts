@@ -1,4 +1,5 @@
 import { lstat, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import {
@@ -188,7 +189,7 @@ const sampleMatch = async (
   if (sampleUrl === undefined || sampleUrl === '') throw new CuratorError('Audible candidate has no sample URL');
   const bytes = await boundedRequest(http, sampleUrl, attempts, true, dependencies.signal);
   if (!Buffer.isBuffer(bytes)) throw new CuratorError('Audible sample response is not binary.');
-  const work = await mkdtemp(join(dirname(resolve(input.file)), '.audiobook-curator-acoustic-'));
+  const work = await mkdtemp(join(tmpdir(), 'audiobook-curator-acoustic-'));
   const sample = join(work, 'sample.mp3');
   try {
     await writeFile(sample, bytes, { mode: 0o600 });
@@ -326,7 +327,7 @@ export const verifyWithWhisper = async (
   const windowSeconds = Math.max(1, input.windowSeconds ?? 35);
   const minimumChars = Math.max(1, input.minimumChars ?? 80);
   const process = dependencies.process ?? runMediaProcess;
-  const work = await mkdtemp(join(dirname(file), '.audiobook-curator-whisper-'));
+  const work = await mkdtemp(join(tmpdir(), 'audiobook-curator-whisper-'));
   const windows: WhisperWindow[] = [];
   try {
     for (const [offset, fraction] of whisperSamplingFractions(maximumWindows).entries()) {

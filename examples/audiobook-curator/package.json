@@ -2,7 +2,7 @@
   "name": "@agent-bundle-example/audiobook-curator",
   "version": "1.0.0",
   "private": true,
-  "description": "A safe TypeScript audiobook inventory, preparation, and audit CLI plus Agent Bundle example.",
+  "description": "A complete RSC-authored Claude and Codex audiobook-curation plugin, CLI, Skill, and MCP server.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
