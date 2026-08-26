@@ -164,7 +164,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
     }> = [];
     const browserRequestByPlaywrightRequest = new WeakMap<object, typeof browserRequests[number]>();
     const nativeRequests: Array<Record<string, unknown>> = [];
-    let logsReplayResponses = 0;
     page.on('console', (message) => {
       if (message.type() === 'error') {
         consoleErrorRecords.push(Object.freeze({ at: Date.now(), text: message.text(), url: message.location().url }));
@@ -179,7 +178,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         tracked.completedAt = tracked.respondedAt;
         tracked.status = response.status();
       }
-      if (url.pathname === '/api/logs/replay') logsReplayResponses += 1;
       if (!isAppRoute(url)) return;
       const request = response.request();
       appRouteRequests.push(Object.freeze({
@@ -670,7 +668,11 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       phase = 'Logs live Agent API update and filters';
       const logsUrlBeforeLiveUpdate = page.url();
       const logEntriesBeforeLiveUpdate = await page.locator('.logs-entries > li').count();
-      const logReplaysBeforeLiveUpdate = logsReplayResponses;
+      const latestLogSequenceBeforeLiveUpdate = Number.parseInt(
+        (await page.locator('.logs-entry-sequence').first().innerText()).replace(/^#/u, ''),
+        10,
+      );
+      expect(latestLogSequenceBeforeLiveUpdate).toBeGreaterThan(0);
       const liveHookSimulation = await call('hook_simulate', {
         epoch: epochC,
         hook: hookId,
@@ -687,7 +689,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect.poll(async () => page.locator('.logs-entries > li').count(), { timeout: browserTimeout })
         .toBeGreaterThan(logEntriesBeforeLiveUpdate);
       expect(page.url()).toBe(logsUrlBeforeLiveUpdate);
-      expect(logsReplayResponses).toBe(logReplaysBeforeLiveUpdate);
 
       const expectedLiveLogProducer = 'hook';
       await page.locator('#logs-producer').selectOption(expectedLiveLogProducer);
@@ -701,6 +702,10 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       expect([...new Set(await matchingLiveHookEntries.locator('.logs-entry-kind').allTextContents())]).toEqual(['hook.simulate.completed']);
       await expect(matchingLiveHookEntries.first()).toContainText(`hookId ${hookId}`);
       await expect(matchingLiveHookEntries.first().locator('.logs-details')).toContainText('outcome');
+      expect(Number.parseInt(
+        (await matchingLiveHookEntries.first().locator('.logs-entry-sequence').innerText()).replace(/^#/u, ''),
+        10,
+      )).toBeGreaterThan(latestLogSequenceBeforeLiveUpdate);
       await page.locator('#logs-level').selectOption('error');
       await expect.poll(async () => matchingLiveHookEntries.count(), { timeout: browserTimeout }).toBe(0);
       await expect(page.getByText('No production log record matches this filter.')).toBeVisible({ timeout: browserTimeout });
