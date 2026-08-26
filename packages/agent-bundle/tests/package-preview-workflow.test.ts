@@ -44,7 +44,7 @@ it('publishes one locked package preview for pull requests', async () => {
   expect(steps[1]?.with).toEqual({ cache: true, install: false, runtime: 'node@22.19.0' });
   expect(packageJson.devDependencies?.['pkg-pr-new']).toBe('0.0.88');
   expect(packageJson.scripts?.['preview:publish']).toBe(
-    "pkg-pr-new publish --previewVersion --no-compact --no-template './packages/agent-bundle'",
+    "pkg-pr-new publish --previewVersion --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime'",
   );
   expect(workflow).not.toMatch(/pull_request_target|secrets\.|\b(?:corepack|npx)\b/u);
 });
