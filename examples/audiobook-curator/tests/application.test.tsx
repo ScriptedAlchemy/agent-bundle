@@ -8,12 +8,20 @@ import { runCli } from '../src/cli.js';
 
 const operations = (): AudiobookCuratorOperations => ({
   audit: async (input) => ({
+    audioSha256: 'b'.repeat(64),
     bytes: 12,
-    fullDecode: input.fullDecode ?? false,
+    chapterIssues: [],
+    chapters: [],
+    exitCode: 0,
+    file: input.file,
+    fullDecode: input.fullDecode === true ? 'verified' : 'not-requested',
+    generatedAt: '2026-08-26T00:00:00.000Z',
+    mutation: false,
     operation: 'audit',
     probe: { codec: 'aac', durationSeconds: 12, format: 'mov', tags: {} },
     sha256: 'a'.repeat(64),
-    source: input.source,
+    sourceChapterMapping: { issues: [], status: 'not-requested' },
+    status: 'verified',
   }),
   convert: async (input) => ({
     apply: input.apply ?? false,
@@ -117,6 +125,6 @@ describe('audiobook curator RSC application', () => {
 
     output.length = 0;
     await expect(runCli(['audit', '--help'], { operations: operations(), write: (value) => output.push(value) })).resolves.toBe(0);
-    expect(output.join('')).toContain('Probe and hash one audiobook');
+    expect(output.join('')).toContain('Validate metadata, chapters');
   });
 });

@@ -8,12 +8,20 @@ import {
 
 const operations = (): CuratorToolOperations => ({
   audit: async (input) => ({
+    audioSha256: 'b'.repeat(64),
     bytes: 12,
-    fullDecode: input.fullDecode ?? false,
+    chapterIssues: [],
+    chapters: [],
+    exitCode: 0,
+    file: input.file,
+    fullDecode: input.fullDecode === true ? 'verified' : 'not-requested',
+    generatedAt: '2026-08-26T00:00:00.000Z',
+    mutation: false,
     operation: 'audit',
     probe: { codec: 'aac', durationSeconds: 12, format: 'mov', tags: {} },
     sha256: 'a'.repeat(64),
-    source: input.source,
+    sourceChapterMapping: { issues: [], status: 'not-requested' },
+    status: 'verified',
   }),
   inspect: async (input) => ({ files: [], operation: 'inspect', root: input.root, totalBytes: 0 }),
   prepare: async (input) => ({

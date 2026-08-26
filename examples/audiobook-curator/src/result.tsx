@@ -3,7 +3,8 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import React from 'react';
 
 import type { AudibleCacheReceipt, AudibleSearchReceipt, AudibleSelectionReceipt } from './audible.ts';
-import type { AuditReceipt, InspectionReceipt, PrepareReceipt } from './curator-core.ts';
+import type { InspectionReceipt, PrepareReceipt } from './curator-core.ts';
+import type { IntegrityAuditReceipt } from './integrity-audit.ts';
 import type { ConvertReceipt } from './conversion.ts';
 import type { InventoryReceipt, LibraryAuditReceipt, SelectionReceipt } from './library.ts';
 import type { ChapterReceipt, MetadataReceipt } from './media-mutation.ts';
@@ -18,7 +19,7 @@ export type CuratorReceipt =
   | ChapterReceipt
   | MetadataReceipt
   | WhisperReceipt
-  | AuditReceipt
+  | IntegrityAuditReceipt
   | ConvertReceipt
   | InspectionReceipt
   | InventoryReceipt
@@ -51,7 +52,7 @@ const summary = (receipt: CuratorReceipt): string => {
         ? `Prepared audiobook output at ${receipt.output}.`
         : `Planned audiobook output at ${receipt.output}; no media was changed.`;
     case 'audit':
-      return `Audited ${receipt.bytes} bytes with SHA-256 ${receipt.sha256}.`;
+      return `Audited ${receipt.bytes} bytes with SHA-256 ${receipt.sha256}; status is ${receipt.status}.`;
     case 'inventory':
       return `Inventoried ${receipt.summary.files} media files with ${receipt.summary.errors} retained errors.`;
     case 'library-audit':

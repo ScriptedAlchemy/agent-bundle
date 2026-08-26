@@ -100,6 +100,12 @@ export {
   qualityScore,
   selectInventorySources,
 } from './library.js';
+export { auditAudiobookIntegrity } from './integrity-audit.js';
+export type {
+  IntegrityAuditDependencies,
+  IntegrityAuditInput,
+  IntegrityAuditReceipt,
+} from './integrity-audit.js';
 export type {
   InventoryReceipt,
   LibraryAuditFile,

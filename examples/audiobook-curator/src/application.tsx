@@ -23,15 +23,17 @@ import {
   type AudibleRegion,
 } from './audible.ts';
 import {
-  auditAudiobook,
   inspectSources,
   prepareAudiobook,
-  type AuditInput,
-  type AuditReceipt,
   type InspectionReceipt,
   type PrepareInput,
   type PrepareReceipt,
 } from './curator-core.ts';
+import {
+  auditAudiobookIntegrity,
+  type IntegrityAuditInput,
+  type IntegrityAuditReceipt,
+} from './integrity-audit.ts';
 import { convertAudiobook, type ConvertInput, type ConvertReceipt } from './conversion.ts';
 import { readJson, writeReceipt } from './foundation.ts';
 import {
@@ -74,7 +76,7 @@ export interface AudiobookCuratorOperations {
     input: { readonly candidate: number; readonly candidates: string; readonly note?: string; readonly receipt?: string },
     options: RscOperationContext,
   ) => Promise<AudibleSelectionReceipt>;
-  readonly audit: (input: AuditInput, options: RscOperationContext) => Promise<AuditReceipt>;
+  readonly audit: (input: IntegrityAuditInput, options: RscOperationContext) => Promise<IntegrityAuditReceipt>;
   readonly applyChapters?: (input: ChapterInput, options: RscOperationContext) => Promise<ChapterReceipt>;
   readonly applyMetadata?: (input: MetadataInput, options: RscOperationContext) => Promise<MetadataReceipt>;
   readonly convert?: (input: ConvertInput, options: RscOperationContext) => Promise<ConvertReceipt>;
@@ -123,7 +125,7 @@ const defaultOperations: Required<AudiobookCuratorOperations> = {
   },
   applyChapters: (input, options) => applyAudiobookChapters(input, options),
   applyMetadata: (input, options) => applyAudiobookMetadata(input, options),
-  audit: (input, options) => auditAudiobook(input, options),
+  audit: (input, options) => auditAudiobookIntegrity(input, options),
   convert: (input, options) => convertAudiobook(input, options),
   inspect: (input, options) => inspectSources(input, options),
   inventory: async (input, options) => {
@@ -186,18 +188,6 @@ const prepareResultSchema = z.object({
   probe: probeSchema,
   source: pathSchema,
 }).strict();
-const auditInputSchema = z.object({
-  fullDecode: z.boolean().optional(),
-  source: pathSchema,
-}).strict();
-const auditResultSchema = z.object({
-  bytes: z.number().int().nonnegative(),
-  fullDecode: z.boolean(),
-  operation: z.literal('audit'),
-  probe: probeSchema,
-  sha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  source: pathSchema,
-}).strict();
 const parityReceiptSchema = <T extends { readonly generatedAt: string; readonly mutation: boolean; readonly operation: string }>(
   operation: T['operation'],
 ): z.ZodType<T> => z.object({
@@ -230,6 +220,7 @@ const chaptersResultSchema = parityReceiptSchema<ChapterReceipt>('apply-chapters
 const acousticResultSchema = parityReceiptSchema<AcousticReceipt>('audiolocate');
 const acousticIdentifyResultSchema = parityReceiptSchema<AcousticIdentifyReceipt>('acoustic-identify');
 const whisperResultSchema = parityReceiptSchema<WhisperReceipt>('whisper-identity');
+const auditResultSchema = parityReceiptSchema<IntegrityAuditReceipt>('audit');
 
 const optionValue = (args: readonly string[], option: string): string | undefined => {
   const index = args.indexOf(option);
@@ -760,22 +751,27 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
   }),
   defineOperation({
     cli: {
+      exitCode: (receipt) => receipt.exitCode,
       name: 'audit',
       parse: (args) => {
-        assertOptions(args, new Set(['--full-decode']), new Set());
+        const valued = new Set(['--conversion-receipt', '--file', '--receipt']);
+        assertOptions(args, new Set(['--full-decode']), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('audit accepts only named options.');
         return {
+          ...(optionValue(args, '--conversion-receipt') === undefined ? {} : { conversionReceipt: optionValue(args, '--conversion-receipt') }),
+          file: requiredOption(args, '--file', 'audit'),
           ...(args.includes('--full-decode') ? { fullDecode: true } : {}),
-          source: onePath(args, new Set(), 'audit'),
+          receipt: requiredOption(args, '--receipt', 'audit'),
         };
       },
-      summary: 'Probe and hash one audiobook, optionally decoding the complete audio stream.',
-      usage: 'audit [--full-decode] <source>',
+      summary: 'Validate metadata, chapters, source mapping, hashes, and optional complete decode.',
+      usage: 'audit --file FILE --receipt FILE [--conversion-receipt FILE] [--full-decode]',
     },
     execute: operations.audit,
     id: 'audit',
-    inputSchema: auditInputSchema,
+    inputSchema: z.object({ conversionReceipt: pathSchema.optional(), file: pathSchema, fullDecode: z.boolean().optional(), receipt: pathSchema.optional() }).strict(),
     mcp: {
-      description: 'Probe and hash one audiobook, with optional full audio decode.',
+      description: 'Validate chapter structure, optional conversion mapping, file/audio hashes, probe facts, and optional full decode.',
       name: 'audit_audiobook',
       readOnly: true,
       server: 'curator',

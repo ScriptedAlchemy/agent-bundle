@@ -3,7 +3,12 @@ import { describe, expect, it } from '@rstest/core';
 import { runCli, type CuratorOperations } from '../src/cli.js';
 
 const operations = (): CuratorOperations => ({
-  audit: async (input) => ({ fullDecode: input.fullDecode ?? false, operation: 'audit', source: input.source }),
+  audit: async (input) => ({
+    audioSha256: 'b'.repeat(64), bytes: 12, chapterIssues: [], chapters: [], exitCode: 0, file: input.file,
+    fullDecode: input.fullDecode === true ? 'verified' : 'not-requested', generatedAt: '2026-08-26T00:00:00.000Z',
+    mutation: false, operation: 'audit', probe: { bytes: 12, chapters: 0, codec: 'aac', durationSeconds: 12, extension: '.m4b', path: input.file, relativePath: 'book.m4b', sampleRate: 44_100, tags: {} },
+    sha256: 'a'.repeat(64), sourceChapterMapping: { issues: [], status: 'not-requested' }, status: 'verified',
+  }),
   inspect: async (input) => ({ files: [], operation: 'inspect', root: input.root, totalBytes: 0 }),
   prepare: async (input) => ({
     applied: input.apply ?? false,
