@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
@@ -50,19 +50,34 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
   try {
     await page.goto(`${server.url}#skills`);
     await waitForSettledWorkbench(page);
-    await expect(page.getByRole('heading', { name: 'release-review', exact: true })).toBeVisible({ timeout: browserTimeout });
-    for (const unavailable of ['Hooks', 'MCP playground', 'Playground']) {
-      await expect(page.getByRole('link', { name: unavailable, exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'dependency-upgrade', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.skill-tree-item')).toHaveCount(3, { timeout: browserTimeout });
+    for (const skill of ['dependency-upgrade', 'incident-triage', 'release-review']) {
+      await page.getByRole('button', { name: new RegExp(skill, 'u') }).click();
+      await expect(page.getByRole('heading', { name: skill, exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByLabel('Eval coverage')).toContainText('Indirect 1', { timeout: browserTimeout });
+      await expect(page.getByLabel('Resource tree').getByRole('link')).not.toHaveCount(0, { timeout: browserTimeout });
     }
+    for (const unavailable of ['Hooks', 'MCP playground', 'Playground']) {
+      await expect(page.getByRole('link', { name: unavailable, exact: true })).toHaveCount(0, { timeout: browserTimeout });
+    }
+    await page.getByRole('button', { name: /release-review/u }).click();
+    await expect(page.getByRole('heading', { name: 'release-review', exact: true })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('tab', { name: 'Markdown' }).click();
     await expect(page.locator('.skill-source')).toContainText('Release review', { timeout: browserTimeout });
+    await page.getByRole('tab', { name: 'Generated' }).click();
+    await page.getByLabel('Target').selectOption('codex');
+    await expect(page.locator('.skill-translation-note')).toHaveText(
+      'This target keeps the authored instructions unchanged. Agent Bundle only changes the codex package layout.',
+      { timeout: browserTimeout },
+    );
     await captureExampleState(page, 'skills-starter', 'skills-populated');
 
     await page.goto(`${server.url}#hooks`);
     await waitForSettledWorkbench(page);
-    await expect(page).toHaveURL(new URL('#overview', server.url).href);
+    await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
 
     await page.getByRole('link', { name: 'Artifacts' }).click();
     await waitForSettledWorkbench(page);
@@ -74,6 +89,88 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     await writeExampleReport();
   } finally {
     await server.close();
+  }
+});
+
+e2e('reveals, retains, repairs, and removes capabilities without reloading Chrome', { timeout: 120_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await copyExample('skills-starter');
+  const configPath = join(project.root, 'agent-bundle.config.ts');
+  const hookSource = join(project.root, 'src', 'hooks', 'session-start.ts');
+  const originalConfig = await readFile(configPath, 'utf8');
+  const healthyHook = `export default () => ({\n  additionalContext: 'Review the current operational evidence before changing production.',\n  outcome: 'continue' as const,\n});\n`;
+  const hookConfig = originalConfig.replace(
+    '  plugin:',
+    "  hooks: { sessionStart: { handler: './src/hooks/session-start.ts' } },\n  plugin:",
+  );
+  await mkdir(join(project.root, 'src', 'hooks'), { recursive: true });
+  await writeFile(hookSource, healthyHook);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  const ledger = createExampleErrorLedger(page, server.url);
+  const rebuildFromCurrentPage = async (): Promise<void> => {
+    const status = await page.evaluate(async () => {
+      const sessionResponse = await fetch('/api/project/session');
+      const session = await sessionResponse.json() as { readonly token: string };
+      const response = await fetch('/api/project/rebuild', {
+        body: JSON.stringify({ paths: [] }),
+        headers: { 'content-type': 'application/json', 'x-agent-bundle-session': session.token },
+        method: 'POST',
+      });
+      return response.status;
+    });
+    expect(status).toBe(200);
+  };
+  try {
+    await page.goto(`${server.url}#hooks`);
+    await waitForSettledWorkbench(page);
+    await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Playground', exact: true })).toHaveCount(0, { timeout: browserTimeout });
+
+    await writeFile(configPath, hookConfig);
+    await rebuildFromCurrentPage();
+    await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Playground', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await page.getByRole('link', { name: 'Hooks', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
+    await captureExampleState(page, 'skills-starter', 'capability-revealed');
+
+    await writeFile(hookSource, 'export default () => ({\n');
+    await rebuildFromCurrentPage();
+    await page.getByRole('link', { name: 'Overview', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: /Diagnostics \([1-9]/u })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Last good build', { timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Playground', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await captureExampleState(page, 'skills-starter', 'capability-stale');
+
+    await writeFile(hookSource, healthyHook);
+    await rebuildFromCurrentPage();
+    await expect(page.getByRole('heading', { name: 'Diagnostics (0)' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
+    await captureExampleState(page, 'skills-starter', 'capability-repaired');
+
+    await page.getByRole('link', { name: 'Hooks', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
+    await writeFile(configPath, originalConfig);
+    await rebuildFromCurrentPage();
+    await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Playground', exact: true })).toHaveCount(0, { timeout: browserTimeout });
+    await captureExampleState(page, 'skills-starter', 'capability-removed');
+    await expectHealthyExamplePage(ledger);
+    await writeExampleReport();
+  } finally {
+    await server.close();
+    await project.release();
   }
 });
 
@@ -155,10 +252,9 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await page.getByRole('button', { name: 'Rebuild' }).click();
     await failedRebuild;
     await expect(page.getByRole('heading', { name: /Diagnostics \([1-9]/u })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.epoch-row--stale')).toContainText('Last good artifact epoch', { timeout: browserTimeout });
-    await expect(page.locator('#overview .status-text')).toHaveText('failed', { timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Last good build', { timeout: browserTimeout });
     await page.waitForTimeout(500);
-    await expect(page.locator('#overview .status-text')).toHaveText('failed', { timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Last good build', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-stale');
 
     await writeFile(hookSource, healthyHook);
@@ -166,10 +262,9 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await page.getByRole('button', { name: 'Rebuild' }).click();
     await repaired;
     await expect(page.getByRole('heading', { name: 'Diagnostics (0)' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.epoch-row--active')).toContainText('Current artifact epoch', { timeout: browserTimeout });
-    await expect(page.locator('#overview .status-text')).toHaveText('idle', { timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
     await page.waitForTimeout(500);
-    await expect(page.locator('#overview .status-text')).toHaveText('idle', { timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-repaired');
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();
@@ -193,11 +288,11 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await page.goto(`${server.url}#overview`);
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByText('Author once, exercise host-ready behavior, and evaluate durable evidence.', { exact: true })).toBeVisible({ timeout: browserTimeout });
-    for (const stage of ['Author', 'Build', 'Exercise', 'Evaluate']) {
-      await expect(page.getByRole('heading', { name: stage, exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('See what this bundle publishes, try supported workflows, and rebuild after source changes.', { exact: true })).toBeVisible({ timeout: browserTimeout });
+    for (const capability of ['1 Skill', '2 Hooks', '3 scripts', '3 MCP servers', '1 Eval suite', '3 generated targets']) {
+      await expect(page.getByLabel('Bundle capabilities').getByText(capability, { exact: true })).toBeVisible({ timeout: browserTimeout });
     }
-    await expect(page.getByRole('heading', { name: /^[1-4]\.\s/u })).toHaveCount(0, { timeout: browserTimeout });
+    await expect(page.getByLabel('Recommended next actions').getByRole('link')).toHaveCount(3, { timeout: browserTimeout });
     await captureExampleState(page, 'mcp-app', 'overview-dashboard');
 
     await page.getByRole('link', { name: 'Skills', exact: true }).click();

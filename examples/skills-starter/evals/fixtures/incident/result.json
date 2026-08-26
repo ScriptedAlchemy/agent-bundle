@@ -1,0 +1,8 @@
+{
+  "evidence": [
+    "Checkout error rate increased after deploy 2026.08.25.3.",
+    "Disabling the new payment retry path restored successful checkouts."
+  ],
+  "outcome": "ready",
+  "rollbackOrStopCondition": "Re-enable the retry path only after the canary remains below 1% errors for 30 minutes."
+}

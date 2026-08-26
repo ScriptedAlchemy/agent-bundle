@@ -1411,10 +1411,14 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     });
     await page.goto(server.url);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-    for (const name of ['Normalization summary', 'Artifact epoch', 'Generated targets', 'Diagnostics (0)', 'Next action']) {
+    for (const name of ['Build health', 'Diagnostics (0)']) {
       await expect(page.getByRole('heading', { name })).toBeVisible({ timeout: browserTimeout });
     }
-    await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
+    await page.getByText('Inspect build details', { exact: true }).click();
+    for (const name of ['Source and build state', 'Published build', 'Generated targets']) {
+      await expect(page.getByRole('heading', { name })).toBeVisible({ timeout: browserTimeout });
+    }
+    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
 
     await page.getByRole('link', { name: 'Skills' }).click();
     await expect(page.locator('#skills .skills-page-heading > div > h1')).toHaveText('Skills', { timeout: browserTimeout });
@@ -1468,7 +1472,7 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     await response;
     expect(rebuildPosts).toBe(1);
     await expect(rebuild).toBeEnabled({ timeout: browserTimeout });
-    await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
 
     await page.setViewportSize({ height: 844, width: 390 });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
@@ -1632,7 +1636,7 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
     await expect.poll(() => failedStatusRequests, { timeout: browserTimeout }).toBe(1);
     await expect(page.getByRole('status')).toContainText('Foreground server unavailable', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
     expect(pageErrors).toEqual([]);
   } finally {
     await server.close();

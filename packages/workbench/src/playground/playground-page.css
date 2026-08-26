@@ -8,6 +8,11 @@
 .playground-controls textarea { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; font: 13px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace; max-width: 100%; min-height: 120px; padding: 11px; width: 640px; }
 .playground-controls textarea[aria-invalid="true"] { border-color: #c01d26; }
 .playground-controls > p[role="alert"] { color: #b31b23; font-size: 13px; margin: 0; }
+.playground-advanced-input { border: 1px solid #d4dce7; border-radius: 6px; margin-top: 12px; width: min(100%, 680px); }
+.playground-advanced-input summary { color: #38516f; cursor: pointer; font-size: 13px; font-weight: 700; padding: 11px 13px; }
+.playground-advanced-input[open] summary { border-bottom: 1px solid #d4dce7; }
+.playground-advanced-input label { display: block; margin: 13px; }
+.playground-advanced-input textarea { border-width: 1px 0 0; border-radius: 0 0 6px 6px; margin: 0; width: 100%; }
 .playground-note { color: #4f5866; font-size: 13px; margin: 0; }
 .playground-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
 .playground-actions button { background: #0b5bd3; border: 1px solid #06459e; border-radius: 4px; color: #fff; cursor: pointer; font-weight: 700; min-height: 43px; padding: 0 22px; }

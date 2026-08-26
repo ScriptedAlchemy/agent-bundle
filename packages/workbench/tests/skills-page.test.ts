@@ -7,7 +7,7 @@ import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { SkillClient } from '../src/skill-client.ts';
-import { SkillDocumentPanel, SkillsPage, SkillTree } from '../src/skills-page.tsx';
+import { SkillDocumentPanel, skillGenerationSummaryFor, SkillsPage, SkillTree } from '../src/skills-page.tsx';
 
 const document = {
   base: { kind: 'source' as const, skillId: 'skill:review' },
@@ -51,12 +51,27 @@ it('renders independent document and view selectors for the generated Markdown d
   expect(markup).toContain('aria-label="Skill document"');
   expect(markup).toContain('aria-label="Document view"');
   expect(markup).toContain('Generated for portable');
-  expect(markup).toContain('Generated · epoch-01/portable');
+  expect(markup).toContain('Generated for portable');
+  expect(markup).not.toContain('Generated · epoch-01/portable');
+  expect(markup).toContain('Document details');
+  expect(markup).toContain('Build ID');
+  expect(markup).toContain('epoch-01');
   expect(markup).toContain('Generated review instructions');
   expect(markup).toContain('# Generated review');
   expect(markup).not.toContain('Reviews changes');
   expect(markup).toContain('Resource tree');
   expect(markup).toContain('/api/skills/epochs/epoch-01/portable/skill%3Areview/resources/portable-guide.md');
+});
+
+it('describes identical and adapted host output without implying a transformation', () => {
+  expect(skillGenerationSummaryFor(document, { ...generatedDocument, markdown: document.markdown }, 'portable')).toEqual({
+    kind: 'identical',
+    message: 'This target keeps the authored instructions unchanged. Agent Bundle only changes the portable package layout.',
+  });
+  expect(skillGenerationSummaryFor(document, generatedDocument, 'claude')).toEqual({
+    kind: 'modified',
+    message: 'Generated output differs from the authored Skill for claude. Review the generated document before shipping.',
+  });
 });
 
 it('renders source raw Markdown from the selected source document', () => {
@@ -71,6 +86,23 @@ it('renders source raw Markdown from the selected source document', () => {
   expect(markup).toContain('Authored SKILL.md');
   expect(markup).toContain('---\nname: review');
   expect(markup).toContain('/api/skills/source/skill%3Areview/resources/guide.md');
+});
+
+it('explains when generated output intentionally matches the authored Skill', () => {
+  const markup = renderToStaticMarkup(createElement(SkillDocumentPanel, {
+    document: 'generated',
+    onDocumentChange: () => undefined,
+    onTargetChange: () => undefined,
+    onViewChange: () => undefined,
+    selected: generatedDocument,
+    target: 'portable',
+    targetNames: ['portable'],
+    translationSummary: 'Unchanged for portable — this target ships the authored Skill document as written.',
+    view: 'rendered',
+  }));
+
+  expect(markup).toContain('Unchanged for portable');
+  expect(markup).toContain('ships the authored Skill document as written');
 });
 
 it('explains the authored, generated, resource, and eval-coverage views', () => {

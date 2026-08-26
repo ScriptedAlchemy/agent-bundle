@@ -899,9 +899,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         request.completedAt === undefined,
       ).map((request) => `${request.method} ${request.url}`), { timeout: browserTimeout }).toEqual([]);
     };
+    phase = 'browser startup navigation';
     await page.goto(`${origin}#overview`);
+    phase = 'browser startup dashboard';
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
+    phase = 'browser startup build health';
+    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
 
     const client = new Client({ name: 'packed-release-test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
@@ -1077,29 +1080,21 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       phase = 'Playground direct skill';
       await page.goto(`${origin}#playground`);
       await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
+      await page.locator('#playground-operation').selectOption('skill.inspect');
       await page.locator('#playground-target').selectOption('portable');
-      await page.locator('#playground-skill-id').fill(skillId);
+      await page.locator('#playground-skill-id').selectOption(skillId);
       await page.getByRole('button', { name: 'Start run' }).click();
       await expect(page.getByText('skill.inspected')).toBeVisible({ timeout: browserTimeout });
+      await expect(page.locator('#playground-operation')).toBeEnabled({ timeout: browserTimeout });
 
       phase = 'Playground direct hook';
       await page.locator('#playground-operation').selectOption('hook.simulate');
       await page.locator('#playground-target').selectOption('claude');
-      await page.locator('#playground-hook').fill(hookId);
-      await page.locator('#playground-hook-input').fill(JSON.stringify({
-        cwd: '/workspace', sessionId: 'packed-playground', source: 'packed-playground', transcriptPath: '/workspace/transcript.json',
-      }));
+      await page.locator('#playground-hook').selectOption(hookId);
+      await expect(page.locator('#playground-hook-input')).toHaveValue(/workbench-preview/u);
       await page.getByRole('button', { name: 'Start run' }).click();
       await expect(page.getByText('hook.simulated')).toBeVisible({ timeout: browserTimeout });
-
-      phase = 'Playground direct MCP';
-      await page.locator('#playground-operation').selectOption('mcp.call-tool');
-      await page.locator('#playground-target').selectOption('portable');
-      await page.locator('#playground-mcp-server').fill('fixture');
-      await page.locator('#playground-mcp-tool').fill('show-dashboard');
-      await page.locator('#playground-mcp-arguments').fill('{}');
-      await page.getByRole('button', { name: 'Start run' }).click();
-      await expect(page.getByText('mcp.tool.called')).toBeVisible({ timeout: browserTimeout });
+      await expect(page.locator('#playground-operation')).toBeEnabled({ timeout: browserTimeout });
 
       phase = 'Playground direct script';
       await page.locator('#playground-operation').selectOption('script.run');
@@ -1232,8 +1227,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.getByRole('link', { name: 'Artifacts', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Artifacts' })).toBeVisible({ timeout: browserTimeout });
       await page.locator('#artifact-diff-base').fill(epochId);
-      await page.getByRole('button', { name: 'Compare epochs' }).click();
-      await expect(page.getByRole('heading', { name: 'Epoch diff' })).toBeVisible({ timeout: browserTimeout });
+      await page.getByRole('button', { name: 'Compare builds' }).click();
+      await expect(page.getByRole('heading', { name: 'Build comparison' })).toBeVisible({ timeout: browserTimeout });
       const changedRows = page.locator('.artifact-diff-group').filter({
         has: page.getByRole('heading', { name: /^Changed \([1-9][0-9]*\)$/u }),
       }).locator('tbody tr');

@@ -70,16 +70,24 @@ const replay = (nextSession: PlaygroundSession, events: readonly PlaygroundTrace
   cursor: { afterSequence: events.at(-1)?.sequence ?? 0 }, events, session: nextSession,
 });
 
-it('chooses the first target and its first catalog script without replacing valid explicit choices', () => {
+it('chooses the first runnable catalog operation without replacing valid explicit choices', () => {
   const { playgroundSelectionFor } = playgroundPage as typeof playgroundPage & {
     readonly playgroundSelectionFor: (input: {
+      readonly hook: string;
       readonly operation: 'native.prompt' | 'skill.inspect' | 'hook.simulate' | 'mcp.call-tool' | 'script.run';
       readonly operationIsImplicit: boolean;
       readonly scriptId: string;
+      readonly skillId: string;
       readonly target: string;
-    }, targets: readonly { readonly digest: string; readonly name: string }[], scripts: readonly { readonly id: string; readonly name: string; readonly target: string }[]) => {
+    }, targets: readonly { readonly digest: string; readonly name: string }[], catalog: {
+      readonly hooks: readonly { readonly event: string; readonly id: string; readonly name: string; readonly target: string }[];
+      readonly scripts: readonly { readonly id: string; readonly name: string; readonly target: string }[];
+      readonly skills: readonly { readonly id: string; readonly name: string; readonly targets?: readonly string[] }[];
+    }) => {
+      readonly hook: string;
       readonly operation: string;
       readonly scriptId: string;
+      readonly skillId: string;
       readonly target: string;
     };
   };
@@ -94,27 +102,38 @@ it('chooses the first target and its first catalog script without replacing vali
   ] as const;
 
   expect(playgroundSelectionFor).toBeTypeOf('function');
-  expect(playgroundSelectionFor({ operation: 'skill.inspect', operationIsImplicit: true, scriptId: '', target: '' }, targets, scripts)).toEqual({
-    operation: 'script.run', scriptId: 'script:zeta', target: 'codex',
+  const catalog = {
+    hooks: [{ event: 'sessionStart', id: 'hook:start', name: 'session-start', target: 'portable' }],
+    scripts,
+    skills: [{ id: 'skill:review', name: 'review', targets: ['portable'] }],
+  } as const;
+
+  expect(playgroundSelectionFor({ hook: '', operation: 'skill.inspect', operationIsImplicit: true, scriptId: '', skillId: '', target: '' }, targets, catalog)).toEqual({
+    hook: '', operation: 'script.run', scriptId: 'script:zeta', skillId: '', target: 'codex',
   });
-  expect(playgroundSelectionFor({ operation: 'skill.inspect', operationIsImplicit: false, scriptId: 'script:other', target: 'portable' }, targets, scripts)).toEqual({
-    operation: 'skill.inspect', scriptId: 'script:other', target: 'portable',
+  expect(playgroundSelectionFor({ hook: '', operation: 'skill.inspect', operationIsImplicit: false, scriptId: 'script:other', skillId: 'skill:review', target: 'portable' }, targets, catalog)).toEqual({
+    hook: 'hook:start', operation: 'skill.inspect', scriptId: 'script:other', skillId: 'skill:review', target: 'portable',
   });
 });
 
-it('renders typed server-owned operation drafts including a catalog-selected script capability', () => {
+it('renders only catalog-backed operation drafts with named choices and no raw identifiers', () => {
   const client = new PlaygroundClient({ foreground: foreground(async () => { throw new Error('Static rendering issues no request.'); }) });
   const markup = renderToStaticMarkup(createElement(PlaygroundPage, {
     client, epoch, onRunChange: () => undefined, run: undefined, targets: [{ digest: 'portable', name: 'portable' }],
-    scripts: [{ id: 'script:review', name: 'review', target: 'portable' }],
+    hooks: [{ event: 'sessionStart', id: 'hook:start', name: 'session-start', target: 'portable' }],
+    scripts: [{ id: 'script:review', name: 'Verify release', target: 'portable' }],
+    skills: [{ id: 'skill:review', name: 'Release review', targets: ['portable'] }],
   } as unknown as Parameters<typeof PlaygroundPage>[0]));
 
-  expect(markup).toContain('Start run');
+  expect(markup).toContain('Run script');
   expect(markup).toContain('Skill inspection');
   expect(markup).toContain('Hook simulation');
-  expect(markup).toContain('MCP tool call');
   expect(markup).toContain('Script execution');
-  expect(markup).toContain('Native host prompt');
+  expect(markup).toContain('Verify release');
+  expect(markup).not.toContain('MCP tool call');
+  expect(markup).not.toContain('playground-mcp-server');
+  expect(markup).not.toContain('playground-skill-id" type="text');
+  expect(markup).not.toContain('playground-hook" type="text');
   expect(markup).not.toContain('Script execution is unavailable');
   for (const forbidden of ['playground-fixture', 'playground-task', 'playground-invocation', 'playground-outcome', 'playground-epoch']) {
     expect(markup).not.toContain(forbidden);
@@ -143,7 +162,7 @@ it('renders a compact catalog-backed native prompt grid with no browser executio
     'playground-native-target', 'playground-native-host', 'playground-native-case', 'playground-native-fixture',
     'playground-native-model-pin', 'playground-native-prompt',
   ]) expect(markup).toContain(control);
-  expect(markup).toContain('Catalog epoch: epoch-current');
+  expect(markup).toContain('Catalog build: epoch-current');
   expect(markup).toContain('Sonnet — authored pin');
   for (const forbidden of ['playground-native-command', 'playground-native-cwd', 'playground-native-env', 'playground-native-model-value', 'playground-native-path']) {
     expect(markup).not.toContain(forbidden);

@@ -8,29 +8,35 @@ pnpm example:skills
 
 The command validates and builds the project, starts the foreground development
 server, and opens the Agent Bundle Workbench. No API key or native host login is
-required. The release-readiness eval is deterministic and reads only its
-checked-in fixture.
+required. Both eval suites are deterministic and read only checked-in fixtures.
 
 ## What is authored
 
-- `agent-bundle.config.ts` declares the plugin, its Skill, and portable, Codex,
+- `agent-bundle.config.ts` declares the plugin, its three Skills, and portable, Codex,
   and Claude targets.
+- `skills/incident-triage/SKILL.md` guides a production incident from first
+  signal through containment, evidence collection, and a handoff-ready update.
+- `skills/dependency-upgrade/SKILL.md` plans dependency upgrades with API,
+  runtime, rollout, and rollback checks.
 - `skills/release-review/SKILL.md` defines the evidence, severity, workflow,
   and final-report requirements for an explicit release review.
-- `references/checklist.md` and `references/release-policy.md` provide the
-  checklist and verdict policy loaded only when needed.
-- `assets/report-template.md` is the reusable readiness report template.
+- Each Skill links its own `references/` checklist or runbook and reusable
+  `assets/` handoff or planning template.
 - `evals/release-readiness.eval.ts` defines the deterministic
   `release-artifact-is-ready` case and its checked-in evidence fixture.
+- `evals/engineering-operations.eval.ts` directly exercises the incident and
+  dependency-upgrade Skills with evidence and rollback/stop conditions.
 
 ## Workbench walkthrough
 
-1. **Overview** opens on the Bundle dashboard. Its ordered Author, Build,
-   Exercise, and Evaluate stages link to the pages where the corresponding
-   evidence lives; the status below them is the current artifact epoch.
-2. **Skills** defaults to `release-review`. Compare the authored `SKILL.md`,
-   linked checklist and policy resources, and the generated target document;
-   the page also marks the explicit deterministic eval coverage.
+1. **Overview** opens on the Bundle dashboard. It summarizes the three Skills,
+   generated targets, build health, and the next useful actions.
+2. **Skills** lists `dependency-upgrade`, `incident-triage`, and
+   `release-review`. Browse their linked checklists and report templates. Switch
+   between Source and Generated to see whether a target copied or adapted the
+   authored document. Every Skill shows its deterministic outcome-eval coverage;
+   it is labeled indirect because the deterministic harness cannot observe host
+   Skill activation.
 3. **Artifacts** defaults to the Claude target. Change the target to compare
    the portable, Codex, and Claude output trees and their provenance.
 4. **Evals** defaults to the `release-readiness` suite. Run its deterministic
@@ -39,7 +45,7 @@ checked-in fixture.
 5. To practice repair, make a reversible policy edit, press **Rebuild**, and
    wait for the failed or idle result rather than a Building state. Restore the
    checked-in policy and rebuild. The prior eval becomes stale for the changed
-   epoch; rerun `release-readiness` to record current, repaired evidence.
+   build; rerun `release-readiness` to record current, repaired evidence.
 
 ## Noninteractive checks
 

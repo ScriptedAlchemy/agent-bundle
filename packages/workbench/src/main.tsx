@@ -3,11 +3,13 @@ import { createRoot } from 'react-dom/client';
 import { MantineProvider } from '@mantine/core';
 
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
+import type { ArtifactInspection } from '../../agent-bundle/src/contracts/artifacts.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { PlaygroundRun } from '../../agent-bundle/src/contracts/playground.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
 import type { NativePlaygroundCatalog } from '../../agent-bundle/src/contracts/playground.ts';
+import type { SkillDocumentTree } from '../../agent-bundle/src/contracts/skills.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
 import { ComparisonClient } from './comparisons/comparison-client.ts';
@@ -48,7 +50,6 @@ import {
   PlaygroundPage,
   createPlaygroundCatalogLifecycle,
   playgroundScriptsForEpoch,
-  type PlaygroundScriptCatalog,
 } from './playground/playground-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { BundleWorkflow } from './overview-page.tsx';
@@ -548,22 +549,22 @@ const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, pages, r
   <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, pages, playgroundClient, run, runtimeDiagnostic, status }: {
-  readonly artifactClient: ArtifactClient;
+const PlaygroundScreen = ({ connectionError, inspection, onNavigate, onRunChange, pages, playgroundClient, run, runtimeDiagnostic, skillTree, status }: {
   readonly connectionError?: string;
+  readonly inspection: ArtifactInspection;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly pages: ReadonlySet<WorkbenchPage>;
   readonly playgroundClient: PlaygroundClient;
   readonly run: PlaygroundRun | undefined;
   readonly runtimeDiagnostic: string | undefined;
+  readonly skillTree: SkillDocumentTree;
   readonly status: ProjectStatus;
 }) => {
   const epoch = activeEpochFor(status);
   const [nativeCatalog, setNativeCatalog] = useState<NativePlaygroundCatalog>();
   const [nativeCatalogError, setNativeCatalogError] = useState<string>();
   const [nativeCatalogLoading, setNativeCatalogLoading] = useState(false);
-  const [scriptCatalog, setScriptCatalog] = useState<PlaygroundScriptCatalog>();
   const catalogLifecycle = useRef(createPlaygroundCatalogLifecycle());
   const catalogClient = useRef(playgroundClient);
   const clientReplaced = catalogClient.current !== playgroundClient;
@@ -572,7 +573,7 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
     catalogLifecycle.current.invalidate();
   }
   const visibleNativeCatalog = !clientReplaced && nativeCatalog?.epochId === epoch?.id ? nativeCatalog : undefined;
-  const scripts = playgroundScriptsForEpoch(scriptCatalog, epoch?.id);
+  const scripts = playgroundScriptsForEpoch({ epochId: inspection.epochId, scripts: inspection.runtime.scripts }, epoch?.id);
 
   useEffect(() => {
     const requestedEpochId = epoch?.id;
@@ -591,21 +592,6 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
     return () => lease.abort();
   }, [epoch?.id, playgroundClient]);
 
-  useEffect(() => {
-    let current = true;
-    if (epoch === undefined) {
-      setScriptCatalog(undefined);
-      return () => { current = false; };
-    }
-    setScriptCatalog({ epochId: epoch.id, scripts: [] });
-    void artifactClient.inspect(epoch.id).then((inspection) => {
-      if (current) setScriptCatalog({ epochId: epoch.id, scripts: inspection.runtime.scripts });
-    }).catch(() => {
-      if (current) setScriptCatalog({ epochId: epoch.id, scripts: [] });
-    });
-    return () => { current = false; };
-  }, [artifactClient, epoch?.id]);
-
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
     <PlaygroundPage
       catalog={visibleNativeCatalog}
@@ -613,9 +599,11 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
       catalogLoading={nativeCatalogLoading || (epoch !== undefined && visibleNativeCatalog === undefined && nativeCatalogError === undefined)}
       client={playgroundClient}
       epoch={playgroundEpochFor(status)}
+      hooks={inspection.runtime.hooks}
       onRunChange={onRunChange}
       run={run}
       scripts={scripts}
+      skills={skillTree.skills}
       targets={playgroundTargetsFor(status)}
     />
   </WorkbenchScreen>;
@@ -1416,14 +1404,15 @@ const Workbench = () => {
     }
     if (page === 'playground') {
       return withConnectionGate(<PlaygroundScreen
-        artifactClient={artifactClient.current}
         connectionError={connectionError}
+        inspection={capabilities!.inspection}
         onNavigate={navigate}
         onRunChange={setPlaygroundRun}
         pages={pages}
         playgroundClient={playgroundClient.current}
         run={playgroundRun}
         runtimeDiagnostic={runtimeError}
+        skillTree={capabilities!.skillTree}
         status={status}
       />);
     }

@@ -1,4 +1,5 @@
 import type { ArtifactInspection } from '../../agent-bundle/src/contracts/artifacts.ts';
+import type { SkillDocumentTree } from '../../agent-bundle/src/contracts/skills.ts';
 
 import type { ArtifactClient } from './artifacts/artifact-client.ts';
 import type { EvalClient } from './evals/eval-client.ts';
@@ -17,6 +18,7 @@ export interface WorkbenchCapabilities {
   }>;
   readonly inspection: ArtifactInspection;
   readonly pages: ReadonlySet<WorkbenchPage>;
+  readonly skillTree: SkillDocumentTree;
 }
 
 export interface WorkbenchCapabilityClients {
@@ -69,5 +71,5 @@ export const loadWorkbenchCapabilities = async ({
     skills: skillTree.skills.length,
     targets: inspection.targets.length,
   });
-  return Object.freeze({ buildId, counts, inspection, pages: pagesFor(counts) });
+  return Object.freeze({ buildId, counts, inspection, pages: pagesFor(counts), skillTree });
 };

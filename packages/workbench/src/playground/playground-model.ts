@@ -231,8 +231,8 @@ const nativeInvocationRowsFor = (session: PlaygroundSession): readonly Playgroun
 const identityRowsFor = (session: PlaygroundSession): readonly PlaygroundDetailRow[] => Object.freeze([
   row('Session', session.id),
   row('Session state', session.state),
-  row('Epoch', session.identity.epoch.id),
-  row('Epoch digest', session.identity.epoch.digest),
+  row('Build ID', session.identity.epoch.id),
+  row('Build digest', session.identity.epoch.digest),
   row('Fixture', session.identity.fixture.id),
   row('Fixture digest', session.identity.fixture.digest),
   row('Target', session.identity.target.name),
@@ -270,7 +270,7 @@ const summaryFor = (
   if (state === 'no-session' || session === undefined) {
     return `Start a run against the current build to record an ordered trace.`;
   }
-  const suffix = `epoch ${session.identity.epoch.id} with ${String(count)} recorded ${count === 1 ? 'event' : 'events'}.`;
+  const suffix = `build ${session.identity.epoch.id} with ${String(count)} recorded ${count === 1 ? 'event' : 'events'}.`;
   if (state === 'finalized') {
     return `Session ${session.id} is finalized on ${suffix}`;
   }

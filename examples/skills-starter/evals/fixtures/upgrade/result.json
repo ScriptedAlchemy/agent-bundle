@@ -1,0 +1,8 @@
+{
+  "evidence": [
+    "The packed consumer passes on every supported Node release.",
+    "The migration removes no public exports and the production build is clean."
+  ],
+  "outcome": "ready",
+  "rollbackOrStopCondition": "Revert the dependency commit if the canary reports a new startup or package-resolution error."
+}

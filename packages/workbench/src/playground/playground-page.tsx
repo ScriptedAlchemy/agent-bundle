@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 
+import type { ArtifactInspection, ArtifactInspectionScript } from '../../../agent-bundle/src/contracts/artifacts.ts';
+import type { ServedSkillDocument } from '../../../agent-bundle/src/contracts/skills.ts';
 import type {
   DraftEvalCase,
   PlaygroundEpochIdentity,
@@ -11,9 +13,9 @@ import type {
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/contracts/playground.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/contracts/playground.ts';
-import type { ArtifactInspectionScript } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/contracts/playground.ts';
 
+import { canonicalHookInputFor } from '../hooks/hooks-page.tsx';
 import { parseRawJsonRecord, serializeJsonRecord } from '../mcp/mcp-json-input.tsx';
 import { PlaygroundClientError, type PlaygroundClient } from './playground-client.ts';
 import {
@@ -34,6 +36,8 @@ export interface PlaygroundTraceViewProps {
 }
 
 type PlaygroundScriptCatalogEntry = Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>;
+type PlaygroundHookCatalogEntry = Pick<ArtifactInspection['runtime']['hooks'][number], 'event' | 'id' | 'name' | 'target'>;
+type PlaygroundSkillCatalogEntry = Pick<ServedSkillDocument, 'id' | 'name' | 'targets'>;
 
 export interface PlaygroundScriptCatalog {
   readonly epochId: string;
@@ -62,10 +66,12 @@ export interface PlaygroundPageProps {
   readonly client: PlaygroundClient;
   /** The active epoch is only used for admitting a new run; persisted sessions pin their own epoch. */
   readonly epoch: PlaygroundEpochIdentity | undefined;
+  readonly hooks: readonly PlaygroundHookCatalogEntry[];
   /** The shell retains the run/session identity across navigation and project rebuilds. */
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly run: PlaygroundRun | undefined;
   readonly scripts: readonly PlaygroundScriptCatalogEntry[];
+  readonly skills: readonly PlaygroundSkillCatalogEntry[];
   readonly targets: readonly PlaygroundTarget[];
 }
 
@@ -118,25 +124,71 @@ export const playgroundSelectedScriptId = (
 ): string => scripts.some((script) => script.id === scriptId && script.target === target) ? scriptId : '';
 
 export interface PlaygroundSelection {
+  readonly hook: string;
   readonly operation: PlaygroundOperation;
   readonly scriptId: string;
+  readonly skillId: string;
   readonly target: string;
 }
+
+interface PlaygroundCapabilityCatalog {
+  readonly hooks: readonly PlaygroundHookCatalogEntry[];
+  readonly nativeAvailable?: boolean;
+  readonly scripts: readonly PlaygroundScriptCatalogEntry[];
+  readonly skills: readonly PlaygroundSkillCatalogEntry[];
+}
+
+const playgroundHooksForTarget = (
+  hooks: readonly PlaygroundHookCatalogEntry[],
+  target: string,
+): readonly PlaygroundHookCatalogEntry[] => hooks.filter((hook) => hook.target === target);
+
+const playgroundSkillsForTarget = (
+  skills: readonly PlaygroundSkillCatalogEntry[],
+  target: string,
+): readonly PlaygroundSkillCatalogEntry[] => skills.filter((skill) => skill.targets === undefined || skill.targets.includes(target));
+
+const operationsForTarget = (
+  catalog: PlaygroundCapabilityCatalog,
+  target: string,
+): readonly PlaygroundOperation[] => Object.freeze([
+  ...(playgroundScriptsForTarget(catalog.scripts, target).length === 0 ? [] : ['script.run' as const]),
+  ...(playgroundHooksForTarget(catalog.hooks, target).length === 0 ? [] : ['hook.simulate' as const]),
+  ...(playgroundSkillsForTarget(catalog.skills, target).length === 0 ? [] : ['skill.inspect' as const]),
+  ...(catalog.nativeAvailable === true ? ['native.prompt' as const] : []),
+]);
+
+const operationsForCatalog = (
+  catalog: PlaygroundCapabilityCatalog,
+  targets: readonly PlaygroundTarget[],
+): readonly PlaygroundOperation[] => {
+  const available = new Set(targets.flatMap((target) => operationsForTarget(catalog, target.name)));
+  return Object.freeze((['script.run', 'hook.simulate', 'skill.inspect', 'native.prompt'] as const)
+    .filter((operation) => available.has(operation)));
+};
 
 /** Defaults only missing or stale catalog choices, keeping a user's valid selection intact. */
 export const playgroundSelectionFor = (
   input: Readonly<PlaygroundSelection & { readonly operationIsImplicit: boolean }> ,
   targets: readonly PlaygroundTarget[],
-  scripts: readonly PlaygroundScriptCatalogEntry[],
+  catalog: PlaygroundCapabilityCatalog,
 ): PlaygroundSelection => {
-  const target = targets.some((entry) => entry.name === input.target)
+  const operations = operationsForCatalog(catalog, targets);
+  const operation = input.operationIsImplicit || !operations.includes(input.operation)
+    ? operations[0] ?? 'skill.inspect'
+    : input.operation;
+  const target = targets.some((entry) => entry.name === input.target && operationsForTarget(catalog, entry.name).includes(operation))
     ? input.target
-    : targets[0]?.name ?? '';
-  const targetScripts = playgroundScriptsForTarget(scripts, target);
+    : targets.find((entry) => operationsForTarget(catalog, entry.name).includes(operation))?.name ?? targets[0]?.name ?? '';
+  const targetScripts = playgroundScriptsForTarget(catalog.scripts, target);
+  const targetHooks = playgroundHooksForTarget(catalog.hooks, target);
+  const targetSkills = playgroundSkillsForTarget(catalog.skills, target);
   const defaultScriptId = targetScripts[0]?.id ?? '';
   return Object.freeze({
-    operation: input.operationIsImplicit ? targetScripts.length > 0 ? 'script.run' : 'skill.inspect' : input.operation,
-    scriptId: playgroundSelectedScriptId(input.scriptId, scripts, target) || defaultScriptId,
+    hook: targetHooks.some((entry) => entry.id === input.hook) ? input.hook : targetHooks[0]?.id ?? '',
+    operation,
+    scriptId: playgroundSelectedScriptId(input.scriptId, catalog.scripts, target) || defaultScriptId,
+    skillId: targetSkills.some((entry) => entry.id === input.skillId) ? input.skillId : targetSkills[0]?.id ?? '',
     target,
   });
 };
@@ -429,7 +481,7 @@ export const observePlaygroundRun = async ({ client, onEvents, onSession, run, s
       }
       const next = await Promise.race([
         activeStream.done.then(() => 'stream-ended' as const),
-        wait(pollDelayMilliseconds, signal).then(() => 'poll' as const),
+        delay(pollDelayMilliseconds, signal).then(() => 'poll' as const),
       ]);
       if (!current()) return;
       const refreshed = await client.session(sessionId, signal);
@@ -445,7 +497,7 @@ export const observePlaygroundRun = async ({ client, onEvents, onSession, run, s
           throw new PlaygroundClientError('AB8043', 'Playground stream ended before the run reached a terminal state.');
         }
         reconnects += 1;
-        await wait(reconnectDelayMilliseconds * (2 ** (reconnects - 1)), signal);
+        await delay(reconnectDelayMilliseconds * (2 ** (reconnects - 1)), signal);
         if (!current()) return;
         activeStream = beginStream();
       }
@@ -520,7 +572,7 @@ export const PlaygroundNativePromptControls = ({
     : catalogError === undefined
       ? catalog === undefined
         ? 'Native host choices are unavailable for this build.'
-        : `Catalog epoch: ${catalog.epochId}`
+        : `Catalog build: ${catalog.epochId}`
       : `Native host choices could not be loaded: ${catalogError}`;
   return <div className="playground-native-workbench">
     <p className="playground-native-status" role="status">{status}</p>
@@ -592,7 +644,7 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
         {view.rows.map((entry) => <details className="playground-event-card" key={entry.key} open>
           <summary><span className="playground-event-sequence">#{entry.sequence}</span><strong>{entry.kind}</strong><span>{entry.summary}</span></summary>
           <div className="playground-event-meta">
-            <span>{entry.timestamp}</span><span>{entry.source}</span><span className="identifier" title={entry.epochDigest}>Epoch {entry.epochId}</span><span className="identifier">{entry.rawEventRef}</span>
+            <span>{entry.timestamp}</span><span>{entry.source}</span><span className="identifier" title={entry.epochDigest}>Build {entry.epochId}</span><span className="identifier">{entry.rawEventRef}</span>
             <label><input
               aria-label={`Select ${entry.rawEventRef} for the draft eval case`}
               checked={view.selectedRefs.includes(entry.rawEventRef)}
@@ -610,7 +662,10 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
  * Starts typed server-owned operations, then observes their durable session by
  * replay, live NDJSON stream, polling, and a final replay before stream close.
  */
-export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, client, epoch, onRunChange, run, scripts, targets }: PlaygroundPageProps) => {
+export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, client, epoch, hooks, onRunChange, run, scripts, skills, targets }: PlaygroundPageProps) => {
+  const initialSelection = playgroundSelectionFor({
+    hook: '', operation: 'skill.inspect', operationIsImplicit: true, scriptId: '', skillId: '', target: '',
+  }, targets, { hooks, nativeAvailable: catalog !== undefined && catalog.selections.length > 0, scripts, skills });
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [observationRevision, setObservationRevision] = useState(0);
@@ -618,18 +673,17 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const [error, setError] = useState<string>();
   const [events, setEvents] = useState<readonly PlaygroundTraceEvent[]>([]);
   const [exported, setExported] = useState<PlaygroundExport>();
-  const [hook, setHook] = useState('');
-  const [hookInput, setHookInput] = useState(() => serializeJsonRecord({}));
-  const [mcpArguments, setMcpArguments] = useState(() => serializeJsonRecord({}));
-  const [mcpServerName, setMcpServerName] = useState('');
-  const [mcpTool, setMcpTool] = useState('');
-  const [operation, setOperation] = useState<PlaygroundOperation>('skill.inspect');
-  const [scriptId, setScriptId] = useState('');
+  const [hook, setHook] = useState(initialSelection.hook);
+  const [hookInput, setHookInput] = useState(() => serializeJsonRecord(
+    canonicalHookInputFor(hooks.find((entry) => entry.id === initialSelection.hook)?.event ?? '') ?? {},
+  ));
+  const [operation, setOperation] = useState<PlaygroundOperation>(initialSelection.operation);
+  const [scriptId, setScriptId] = useState(initialSelection.scriptId);
   const [selectedRefs, setSelectedRefs] = useState<readonly string[]>([]);
-  const [skillId, setSkillId] = useState('');
+  const [skillId, setSkillId] = useState(initialSelection.skillId);
   const [nativePrompt, setNativePrompt] = useState('');
   const [nativeSelection, setNativeSelection] = useState<NativePlaygroundSelection>(emptyNativeSelection);
-  const [targetName, setTargetName] = useState('');
+  const [targetName, setTargetName] = useState(initialSelection.target);
   const operationIsImplicit = useRef(true);
   const cancelFlight = useRef(createPlaygroundCancelFlight());
   const cancelPresentation = useRef<Promise<void> | undefined>(undefined);
@@ -655,7 +709,6 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     cancelFlight.current.invalidate();
   }
   const hookInputObject = parseRawJsonRecord(hookInput);
-  const mcpArgumentsObject = parseRawJsonRecord(mcpArguments);
   const view = playgroundViewFor({
     epoch,
     events: clientReplaced ? [] : events,
@@ -667,13 +720,31 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const currentNativeSelection = nativeSelectionFor(catalog, nativeSelection);
   const targetScripts = playgroundScriptsForTarget(scripts, selectedTargetName);
   const selectedScriptId = playgroundSelectedScriptId(scriptId, scripts, selectedTargetName);
+  const targetHooks = playgroundHooksForTarget(hooks, selectedTargetName);
+  const selectedHook = targetHooks.find((entry) => entry.id === hook);
+  const targetSkills = playgroundSkillsForTarget(skills, selectedTargetName);
+  const selectedSkill = targetSkills.find((entry) => entry.id === skillId);
+  const capabilityCatalog = {
+    hooks,
+    nativeAvailable: catalog !== undefined && catalog.selections.length > 0,
+    scripts,
+    skills,
+  } as const;
+  const availableOperations = operationsForCatalog(capabilityCatalog, targets);
 
   useEffect(() => {
-    const next = playgroundSelectionFor({ operation, operationIsImplicit: operationIsImplicit.current, scriptId, target: targetName }, targets, scripts);
+    const next = playgroundSelectionFor({ hook, operation, operationIsImplicit: operationIsImplicit.current, scriptId, skillId, target: targetName }, targets, {
+      hooks,
+      nativeAvailable: catalog !== undefined && catalog.selections.length > 0,
+      scripts,
+      skills,
+    });
+    if (next.hook !== hook) setHook(next.hook);
     if (next.operation !== operation) setOperation(next.operation);
     if (next.scriptId !== scriptId) setScriptId(next.scriptId);
+    if (next.skillId !== skillId) setSkillId(next.skillId);
     if (next.target !== targetName) setTargetName(next.target);
-  }, [operation, scriptId, scripts, targetName, targets]);
+  }, [catalog, hook, hooks, operation, scriptId, scripts, skillId, skills, targetName, targets]);
 
   useEffect(() => {
     if (!clientResetPending.current) return;
@@ -757,23 +828,17 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     }
     if (selectedTargetName.length === 0) return undefined;
     if (operation === 'skill.inspect') {
-      return skillId.length === 0 ? undefined : { operation, skillId, target: selectedTargetName };
+      return selectedSkill === undefined ? undefined : { operation, skillId: selectedSkill.id, target: selectedTargetName };
     }
     if (operation === 'hook.simulate') {
-      return hook.length === 0 || hookInputObject === null
+      return selectedHook === undefined || hookInputObject === null
         ? undefined
-        : { hook, input: asJsonObject(hookInputObject), operation, target: selectedTargetName };
+        : { hook: selectedHook.id, input: asJsonObject(hookInputObject), operation, target: selectedTargetName };
     }
     if (operation === 'script.run') {
       return selectedScriptId.length === 0 ? undefined : { operation, scriptId: selectedScriptId, target: selectedTargetName };
     }
-    if (operation !== 'mcp.call-tool') return undefined;
-    return mcpServerName.length === 0 || mcpTool.length === 0 || mcpArgumentsObject === null
-      ? undefined
-      : {
-          arguments: asJsonObject(mcpArgumentsObject), operation, serverName: mcpServerName,
-          target: selectedTargetName, tool: mcpTool,
-        };
+    return undefined;
   };
 
   const start = async (): Promise<void> => {
@@ -868,13 +933,16 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
           <label htmlFor="playground-operation">Operation</label>
           <select disabled={controlsDisabled} id="playground-operation" onChange={(event) => {
             operationIsImplicit.current = false;
-            setOperation(event.currentTarget.value as PlaygroundOperation);
+            const nextOperation = event.currentTarget.value as PlaygroundOperation;
+            setOperation(nextOperation);
+            if (!operationsForTarget(capabilityCatalog, selectedTargetName).includes(nextOperation)) {
+              setTargetName(targets.find((target) => operationsForTarget(capabilityCatalog, target.name).includes(nextOperation))?.name ?? '');
+            }
           }} value={operation}>
-            <option value="skill.inspect">Skill inspection</option>
-            <option value="hook.simulate">Hook simulation</option>
-            <option value="mcp.call-tool">MCP tool call</option>
-            <option value="script.run">Script execution</option>
-            <option value="native.prompt">Native host prompt</option>
+            {availableOperations.includes('script.run') ? <option value="script.run">Script execution</option> : undefined}
+            {availableOperations.includes('hook.simulate') ? <option value="hook.simulate">Hook simulation</option> : undefined}
+            {availableOperations.includes('skill.inspect') ? <option value="skill.inspect">Skill inspection</option> : undefined}
+            {availableOperations.includes('native.prompt') ? <option value="native.prompt">Native host prompt</option> : undefined}
           </select>
           {operation === 'native.prompt'
             ? <PlaygroundNativePromptControls
@@ -910,29 +978,37 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
             />
             : <>
               <label htmlFor="playground-target">Target</label>
-              <select disabled={controlsDisabled || targets.length === 0} id="playground-target" onChange={(event) => setTargetName(event.currentTarget.value)} value={selectedTargetName}>
+              <select disabled={controlsDisabled || targets.length === 0} id="playground-target" onChange={(event) => {
+                const nextTarget = event.currentTarget.value;
+                setTargetName(nextTarget);
+                const targetOperations = operationsForTarget(capabilityCatalog, nextTarget);
+                if (!targetOperations.includes(operation)) setOperation(targetOperations[0] ?? operation);
+              }} value={selectedTargetName}>
                 <option value="">Select a built target</option>
                 {targets.map((target) => <option key={target.name} value={target.name}>{target.name}</option>)}
               </select>
               {operation !== 'skill.inspect' ? undefined : <>
-                <label htmlFor="playground-skill-id">Skill id</label>
-                <input disabled={controlsDisabled} id="playground-skill-id" onChange={(event) => setSkillId(event.currentTarget.value)} value={skillId} />
+                <label htmlFor="playground-skill-id">Skill</label>
+                <select disabled={controlsDisabled || targetSkills.length === 0} id="playground-skill-id" onChange={(event) => setSkillId(event.currentTarget.value)} value={selectedSkill?.id ?? ''}>
+                  {targetSkills.map((skill) => <option key={skill.id} value={skill.id}>{skill.name}</option>)}
+                </select>
               </>}
               {operation !== 'hook.simulate' ? undefined : <>
                 <label htmlFor="playground-hook">Hook</label>
-                <input disabled={controlsDisabled} id="playground-hook" onChange={(event) => setHook(event.currentTarget.value)} value={hook} />
-                <label htmlFor="playground-hook-input">Hook input (JSON)</label>
-                <textarea aria-describedby={hookInputObject === null ? 'playground-hook-input-error' : undefined} aria-invalid={hookInputObject === null ? true : undefined} disabled={controlsDisabled} id="playground-hook-input" onChange={(event) => setHookInput(event.currentTarget.value)} spellCheck={false} value={hookInput} />
-                {hookInputObject === null ? <p id="playground-hook-input-error" role="alert">{jsonDraftError}</p> : undefined}
-              </>}
-              {operation !== 'mcp.call-tool' ? undefined : <>
-                <label htmlFor="playground-mcp-server">MCP server</label>
-                <input disabled={controlsDisabled} id="playground-mcp-server" onChange={(event) => setMcpServerName(event.currentTarget.value)} value={mcpServerName} />
-                <label htmlFor="playground-mcp-tool">MCP tool</label>
-                <input disabled={controlsDisabled} id="playground-mcp-tool" onChange={(event) => setMcpTool(event.currentTarget.value)} value={mcpTool} />
-                <label htmlFor="playground-mcp-arguments">MCP arguments (JSON)</label>
-                <textarea aria-describedby={mcpArgumentsObject === null ? 'playground-mcp-arguments-error' : undefined} aria-invalid={mcpArgumentsObject === null ? true : undefined} disabled={controlsDisabled} id="playground-mcp-arguments" onChange={(event) => setMcpArguments(event.currentTarget.value)} spellCheck={false} value={mcpArguments} />
-                {mcpArgumentsObject === null ? <p id="playground-mcp-arguments-error" role="alert">{jsonDraftError}</p> : undefined}
+                <select disabled={controlsDisabled || targetHooks.length === 0} id="playground-hook" onChange={(event) => {
+                  const nextHook = hooks.find((entry) => entry.id === event.currentTarget.value);
+                  setHook(event.currentTarget.value);
+                  const defaultInput = canonicalHookInputFor(nextHook?.event ?? '');
+                  if (defaultInput !== undefined) setHookInput(serializeJsonRecord(defaultInput));
+                }} value={selectedHook?.id ?? ''}>
+                  {targetHooks.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+                </select>
+                <details className="playground-advanced-input">
+                  <summary>Edit canonical event JSON</summary>
+                  <label htmlFor="playground-hook-input">Hook input (JSON)</label>
+                  <textarea aria-describedby={hookInputObject === null ? 'playground-hook-input-error' : undefined} aria-invalid={hookInputObject === null ? true : undefined} disabled={controlsDisabled} id="playground-hook-input" onChange={(event) => setHookInput(event.currentTarget.value)} spellCheck={false} value={hookInput} />
+                  {hookInputObject === null ? <p id="playground-hook-input-error" role="alert">{jsonDraftError}</p> : undefined}
+                </details>
               </>}
               {operation !== 'script.run' ? undefined : <>
                 <label htmlFor="playground-script-id">Emitted script</label>
