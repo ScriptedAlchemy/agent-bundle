@@ -92,14 +92,33 @@ Regions: `us`, `uk`, `ca`, `au`, `fr`, `de`, `jp`, `it`, `in`, `es`.
 
 ## Real acceptance
 
-- [ ] Read-only ZeroFS inventory.
-- [ ] Read-only ZeroFS library audit.
-- [ ] Read-only selection and integrity audit.
-- [ ] Derived local-scratch conversion with source hashes unchanged.
-- [ ] Metadata/artwork/chapter verification on derived media.
-- [ ] Audible search/cache when the public endpoint is reachable.
-- [ ] Audiolocate real run or explicit unavailable evidence.
-- [ ] Whisper real run or explicit unavailable evidence.
-- [ ] Claude installed MCP catalog and representative invocation.
-- [ ] Codex installed MCP catalog and representative invocation.
-- [ ] Bundled script and globally linked CLI parity.
+- [x] Read-only ZeroFS inventory: one 35,713,765-byte AAC M4B was probed from
+  the mounted volume with all six chapters retained.
+- [x] Read-only ZeroFS library audit: the same bounded source completed with no
+  probe errors or source mutation.
+- [x] Read-only selection and integrity audit: selection retained its evidence;
+  the audit verified file/audio hashes and chapter structure.
+- [x] Derived local-scratch conversion with source hashes unchanged: single-M4B
+  stream copy published locally while the mounted source remained at SHA-256
+  `4846aa3370ae737b7c2b2e61dad55c05020d4043687c5ffdf2d9d8a825de8ffa`.
+- [x] Metadata/artwork/chapter verification on derived media: the live Audible
+  product and artwork were applied, source chapter rows were reapplied, every
+  encoded-audio hash stayed equal, and a complete decode passed.
+- [x] Audible search/cache: four live regions were ranked, the embedded
+  `B00QMSJC4O` edition was reviewed, and product/chapter/artwork evidence was
+  cached. Its longer catalog chapter document was correctly rejected for the
+  mounted recording.
+- [x] Audiolocate real run: the selected legacy Python environment processed the
+  public Audible sample, retained nine matches below its threshold, and returned
+  an honest inconclusive result rather than asserting identity.
+- [x] Whisper host check: `whisper-cli` and a model are not installed on this
+  host; the explicit unsupported boundary remains covered by the real process
+  adapter and distributed-window contract tests.
+- [x] Claude installed MCP catalog and representative invocation: the generated
+  user plugin connected and `inventory_sources` returned one AAC file with six
+  chapters.
+- [x] Codex installed MCP catalog and representative invocation: the generated
+  plugin's `audit_audiobook` returned verified status and the source SHA-256.
+- [x] Bundled script and globally linked CLI parity: both independently
+  inventoried the mounted source through the generated operation catalog. The
+  former Python wrapper remains preserved under a legacy backup name.
