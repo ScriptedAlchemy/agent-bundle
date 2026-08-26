@@ -345,6 +345,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect.poll(async () => page.locator('#hook-binding option').count(), { timeout: browserTimeout }).toBeGreaterThan(0);
       await page.locator('#hook-binding').selectOption({ index: 0 });
       phase = 'Hooks input';
+      await page.getByText('Advanced input', { exact: true }).click();
       await page.locator('#hook-canonical-input').fill(JSON.stringify({
         cwd: '/workspace', sessionId: 'packed-browser', source: 'packed-browser', transcriptPath: '/workspace/transcript.json',
       }));
