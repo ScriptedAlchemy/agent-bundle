@@ -63,6 +63,7 @@ it('orders hook options deterministically and keys them by target and hook', () 
   const options = hookOptionsFor(hooks);
 
   expect(options.map((option) => option.key)).toEqual(['claude/hook:session-start', 'claude/hook:stop']);
+  expect(options.map((option) => option.label)).toEqual(['Session start · Claude', 'Stop · Claude']);
   expect(options[0]).toMatchObject({ event: 'sessionStart', path: 'claude/hooks/session-start.mjs', timeout: 30 });
   expect(options[1]?.timeout).toBeUndefined();
   expect(Object.isFrozen(options)).toBe(true);
