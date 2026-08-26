@@ -291,25 +291,7 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
           >
             {view.hooks.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
           </select>
-          <fieldset className="hook-input-mode">
-            <legend>Canonical input mode</legend>
-            <label><input checked={inputMode === 'inline'} name="hook-input-mode" onChange={() => setInputMode('inline')} type="radio" value="inline" /> Inline JSON</label>
-            <label><input checked={inputMode === 'fixture'} name="hook-input-mode" onChange={() => setInputMode('fixture')} type="radio" value="fixture" /> Fixture JSON</label>
-          </fieldset>
-          <label htmlFor="hook-canonical-input">Canonical input (JSON)</label>
-          <textarea
-            aria-describedby={parsed === null ? 'hook-canonical-input-error' : undefined}
-            aria-invalid={parsed === null ? true : undefined}
-            disabled={busy}
-            id="hook-canonical-input"
-            onChange={(event) => {
-              draftIsDirty.current = true;
-              setDraft(event.currentTarget.value);
-            }}
-            spellCheck={false}
-            value={draft}
-          />
-          {parsed === null ? <p id="hook-canonical-input-error" role="alert">{draftError}</p> : undefined}
+          <p className="hook-input-guidance">Uses a safe starter event. Customize the payload only when testing a specific host event.</p>
           <div className="hook-actions">
             <button
               disabled={busy || parsed === null || view.selected === undefined}
@@ -322,6 +304,28 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
               Replay saved simulation
             </button>
           </div>
+          <details className="hook-advanced-input">
+            <summary>Advanced input</summary>
+            <fieldset className="hook-input-mode">
+              <legend>Canonical input mode</legend>
+              <label><input checked={inputMode === 'inline'} name="hook-input-mode" onChange={() => setInputMode('inline')} type="radio" value="inline" /> Inline JSON</label>
+              <label><input checked={inputMode === 'fixture'} name="hook-input-mode" onChange={() => setInputMode('fixture')} type="radio" value="fixture" /> Fixture JSON</label>
+            </fieldset>
+            <label htmlFor="hook-canonical-input">Canonical input (JSON)</label>
+            <textarea
+              aria-describedby={parsed === null ? 'hook-canonical-input-error' : undefined}
+              aria-invalid={parsed === null ? true : undefined}
+              disabled={busy}
+              id="hook-canonical-input"
+              onChange={(event) => {
+                draftIsDirty.current = true;
+                setDraft(event.currentTarget.value);
+              }}
+              spellCheck={false}
+              value={draft}
+            />
+            {parsed === null ? <p id="hook-canonical-input-error" role="alert">{draftError}</p> : undefined}
+          </details>
         </section>
         <HookSimulationView view={view} />
       </>}
