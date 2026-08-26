@@ -1549,7 +1549,7 @@ export const McpPage = (props: McpPageProps) => {
       <section aria-labelledby={`mcp-trace-tab-${traceTab}`} className="mcp-page-trace" id={tracePanelId} role="tabpanel" tabIndex={0}>
         {traceTab === 'raw'
           ? <McpProtocolEvidence ariaLabel={traceLabel} trace={rawTrace.map(traceValue)} />
-          : <><h3>{traceLabel}</h3>{traceEntries.length === 0 ? <p className="mcp-page-empty">No {traceLabel.toLowerCase()} entries yet.</p> : <ol>{traceEntries.map((entry, index) => <li key={'sequence' in entry ? entry.sequence : index}>
+          : <><h3>{traceLabel}</h3>{traceEntries.length === 0 ? <p className="mcp-page-empty">No {traceLabel.toLowerCase()} entries yet.</p> : <ol>{traceEntries.map((entry, index) => <li key={`${traceTab}-${'sequence' in entry ? entry.sequence : 'local'}-${index}`}>
             <pre><code>{display(traceValue(entry))}</code></pre>
           </li>)}</ol>}</>}
       </section>

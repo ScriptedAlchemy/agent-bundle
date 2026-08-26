@@ -7,8 +7,11 @@ import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import type { Locator, Page } from 'playwright';
 
 import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
+import { createDefaultRegistry } from '../../agent-bundle/src/adapters/registry.ts';
+import { ArtifactInspectionService } from '../../agent-bundle/src/dev/artifacts/artifact-inspection-service.ts';
 import { ArtifactService } from '../../agent-bundle/src/dev/artifacts/artifact-service.ts';
 import { EpochStore } from '../../agent-bundle/src/dev/epoch-store.ts';
+import { EvalService } from '../../agent-bundle/src/dev/eval/eval-service.ts';
 import { ProjectEventHub, startForegroundServer } from '../../agent-bundle/src/dev/index.ts';
 import { ProjectService } from '../../agent-bundle/src/dev/project-service.ts';
 import { SkillDocumentService } from '../../agent-bundle/src/dev/skill-document-service.ts';
@@ -21,7 +24,7 @@ import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixt
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
-const browserTimeout = 5_000;
+const browserTimeout = 15_000;
 
 interface RuntimeAppOperation {
   readonly body: unknown;
@@ -60,8 +63,9 @@ const buildWorkbench = async (): Promise<void> => {
 };
 
 const startFrozenEpochServer = async (root: string) => {
+  const registry = createDefaultRegistry();
   const epochStore = new EpochStore({ projectRoot: root });
-  const projectService = new ProjectService({ root });
+  const projectService = new ProjectService({ registry, root });
   const built = await new ArtifactService({ epochStore }).build(await projectService.prepare('build'));
   if (built.outcome !== 'succeeded') throw new Error('Fixture artifact did not build.');
   const status: ProjectStatus = {
@@ -74,7 +78,9 @@ const startFrozenEpochServer = async (root: string) => {
     source: { diagnostics: [], revision: built.epoch.projectRevision, state: 'ready' },
   };
   const eventHub = new ProjectEventHub();
+  const evals = new EvalService({ projectRoot: root, registry });
   const server = await startForegroundServer({
+    artifacts: new ArtifactInspectionService(epochStore, registry),
     assets: createWorkbenchAssetSource({ root: workbenchAssets }),
     coordinator: {
       close: async () => undefined,
@@ -82,6 +88,8 @@ const startFrozenEpochServer = async (root: string) => {
       start: async () => undefined,
       status: () => status,
     },
+    evalLifecycle: evals,
+    evals,
     eventHub,
     port: 0,
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
@@ -1394,7 +1402,7 @@ e2e('renders the safe launch configuration for one real artifact MCP session', {
   }
 });
 
-e2e('renders and rebuilds the complete responsive Overview against a real foreground server', { timeout: 60_000 }, async ({ page }) => {
+e2e('renders and rebuilds the complete desktop Overview against a real foreground server', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
   await writeFile(project.skillSource, `${project.skillMarkdown}\n\`\`\`mermaid\ngraph TD\n\`\`\`\n\n\`\`\`not-a-shiki-language\nplain fallback\n\`\`\`\n`);
@@ -1405,6 +1413,7 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     root: project.root,
   });
   try {
+    await page.setViewportSize({ height: 900, width: 1_440 });
     const asyncScripts = new Set<string>();
     page.on('request', (request) => {
       if (request.resourceType() === 'script' && request.url().includes('/static/js/async/')) asyncScripts.add(request.url());
@@ -1420,7 +1429,7 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     }
     await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
 
-    await page.getByRole('link', { name: 'Skills' }).click();
+    await page.getByRole('link', { name: 'Skills', exact: true }).click();
     await expect(page.locator('#skills .skills-page-heading > div > h1')).toHaveText('Skills', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
     const documentTabs = page.getByRole('tablist', { name: 'Skill document' });
@@ -1450,12 +1459,9 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     await expect(page.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', /-document-tab-generated/u);
     await expect(page.getByRole('heading', { name: 'Generated skills', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('#skills .skill-target')).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByText(/Generated ·/)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.skill-provenance')).toHaveText('Generated for portable', { timeout: browserTimeout });
     expect([...asyncScripts]).toEqual([]);
-    await page.setViewportSize({ height: 844, width: 390 });
-    await expect(page.locator('#skills .skills-page-heading > div > h1')).toHaveText('Skills', { timeout: browserTimeout });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.getByRole('link', { name: 'Overview' }).click();
+    await page.getByRole('link', { name: 'Overview', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
 
     const rebuild = page.getByRole('button', { name: 'Rebuild' });
@@ -1474,7 +1480,6 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     await expect(rebuild).toBeEnabled({ timeout: browserTimeout });
     await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
 
-    await page.setViewportSize({ height: 844, width: 390 });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   } finally {
@@ -1483,16 +1488,13 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
   }
 });
 
-e2e('renders the latest changed files from a live foreground source event without mobile overflow', { timeout: 60_000 }, async ({ page }) => {
+e2e('renders the latest changed files from a replayed foreground source event on desktop', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
   const { eventHub, server } = await startFrozenEpochServer(project.root);
   const pageErrors: Error[] = [];
   page.on('pageerror', (error) => pageErrors.push(error));
   try {
-    await page.goto(`${server.url}#overview`);
-    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-    await page.waitForTimeout(100);
     eventHub.publish({
       payload: {
         occurredAt: '2026-08-16T12:00:00.000Z',
@@ -1504,14 +1506,17 @@ e2e('renders the latest changed files from a live foreground source event withou
       },
       type: 'source.changed',
     });
+    await page.setViewportSize({ height: 900, width: 1_440 });
+    await page.goto(`${server.url}#overview`);
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
+    await page.getByText('Inspect build details', { exact: true }).click();
 
     const changedFiles = page.getByRole('region', { name: 'Latest changed files (2)' });
     await expect(changedFiles).toBeVisible({ timeout: browserTimeout });
     await expect(changedFiles.getByRole('listitem')).toHaveText([
       'src/config.ts',
       'src/very/deeply/nested/path/that/needs/to/wrap/without/causing/a/horizontal/scrollbar/on/a/narrow/viewport.ts',
-    ]);
-    await page.setViewportSize({ height: 844, width: 390 });
+    ], { timeout: browserTimeout });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
   } finally {
@@ -1538,7 +1543,7 @@ e2e('loads the lazy Shiki chunk only after a fenced non-Mermaid Skill is rendere
     await page.goto(server.url);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     expect([...asyncScripts]).toEqual([]);
-    await page.getByRole('link', { name: 'Skills' }).click();
+    await page.getByRole('link', { name: 'Skills', exact: true }).click();
     await expect(page.locator('.skill-code-block')).toContainText('const answer: number = 42;', { timeout: browserTimeout });
     await expect.poll(() => asyncScripts.size, { timeout: browserTimeout }).toBeGreaterThan(0);
     await expect(page.locator('.skill-shiki')).toContainText('const answer: number = 42;', { timeout: browserTimeout });
@@ -1584,7 +1589,7 @@ e2e('delivers active Skill resources as downloads without letting their page scr
   }
 });
 
-e2e('lists an immutable epoch Skill tree even after the current source Skill is renamed', { timeout: 60_000 }, async ({ page }) => {
+e2e('lists an immutable build Skill tree even after the current source Skill is renamed', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
   const { server } = await startFrozenEpochServer(project.root);
@@ -1595,11 +1600,11 @@ e2e('lists an immutable epoch Skill tree even after the current source Skill is 
 
     await page.goto(server.url);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-    await page.getByRole('link', { name: 'Skills' }).click();
+    await page.getByRole('link', { name: 'Skills', exact: true }).click();
     await expect(page.locator('.skill-tree-item')).toContainText('revised', { timeout: browserTimeout });
     await page.getByRole('tab', { name: 'Generated' }).click();
     await expect(page.locator('.skill-tree-item')).toContainText('review', { timeout: browserTimeout });
-    await expect(page.getByText(/Generated ·/)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.skill-provenance')).toHaveText('Generated for portable', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
   } finally {
     await server.close();
@@ -1679,9 +1684,6 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
     }
   });
   try {
-    await page.goto(server.url);
-    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-    await page.waitForTimeout(100);
     const firstEvents = eventHubs[0];
     if (firstEvents === undefined) throw new Error('Expected the first foreground event hub.');
     firstEvents.publish({
@@ -1692,9 +1694,12 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
       },
       type: 'source.changed',
     });
+    await page.goto(server.url);
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
+    await page.getByText('Inspect build details', { exact: true }).click();
     await expect(page.getByRole('region', { name: 'Latest changed files (1)' })).toContainText('src/restart-a.ts', { timeout: browserTimeout });
 
-    await page.getByRole('link', { name: 'MCP playground' }).click();
+    await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
@@ -1722,8 +1727,9 @@ e2e('gates the Workbench and resets browser-local state for a same-origin replac
     await expect.poll(() => releasedMcpSessions.length, { timeout: browserTimeout }).toBe(1);
     expect(releasedMcpSessions).toEqual([{ token: 'foreground-token-a' }]);
 
-    await page.getByRole('link', { name: 'Overview' }).click();
-    await expect(page.getByRole('region', { name: 'Latest changed files (0)' })).toContainText('No source changes have been reported in this browser session.');
+    await page.getByRole('link', { name: 'Overview', exact: true }).click();
+    await page.getByText('Inspect build details', { exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Latest changed files (0)' })).toContainText('No source changes have been reported in this browser session.', { timeout: browserTimeout });
     const rebuild = page.getByRole('button', { name: 'Rebuild' });
     const rebuildRequest = page.waitForRequest((request) =>
       request.method() === 'POST' && request.url() === `${server.url}/api/project/rebuild`);

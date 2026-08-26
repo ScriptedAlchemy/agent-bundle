@@ -172,6 +172,8 @@ it('renders the simulation and replay controls for an active epoch', () => {
   expect(markup).toContain('id="hook-canonical-input"');
   expect(markup).toContain('Run simulation');
   expect(markup).toContain('Replay saved simulation');
+  expect(markup).toContain('<details class="hook-advanced-input">');
+  expect(markup).toContain('<summary>Advanced input</summary>');
   expect(markup).toContain('name="hook-input-mode"');
   expect(markup).toContain('value="inline"');
   expect(markup).toContain('value="fixture"');

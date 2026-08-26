@@ -59,6 +59,11 @@ const noDiagnostics: readonly HookPlaygroundDiagnostic[] = Object.freeze([]);
 
 const row = (label: string, value: string): HookDetailRow => Object.freeze({ label, value });
 
+const readableHookLabel = (value: string): string => {
+  const words = value.replace(/([a-z\d])([A-Z])/gu, '$1 $2').replace(/[-_]+/gu, ' ').trim();
+  return `${words.charAt(0).toUpperCase()}${words.slice(1).toLowerCase()}`;
+};
+
 export const hookOptionKeyFor = (binding: HookPlaygroundBinding): string => `${binding.target}/${binding.hook}`;
 
 export const hookOptionsFor = (hooks: readonly HookPlaygroundHook[]): readonly HookOption[] => Object.freeze(
@@ -67,7 +72,7 @@ export const hookOptionsFor = (hooks: readonly HookPlaygroundHook[]): readonly H
       binding: Object.freeze({ epochId: entry.binding.epochId, hook: entry.binding.hook, target: entry.binding.target }),
       event: entry.hook.event,
       key: hookOptionKeyFor(entry.binding),
-      label: `${entry.hook.name} · ${entry.hook.event} · ${entry.binding.target}`,
+      label: `${readableHookLabel(entry.hook.event)} · ${readableHookLabel(entry.binding.target)}`,
       path: entry.hook.path,
       ...(entry.hook.timeout === undefined ? {} : { timeout: entry.hook.timeout }),
     }))
