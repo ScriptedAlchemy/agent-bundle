@@ -481,7 +481,7 @@ export const observePlaygroundRun = async ({ client, onEvents, onSession, run, s
       }
       const next = await Promise.race([
         activeStream.done.then(() => 'stream-ended' as const),
-        delay(pollDelayMilliseconds, signal).then(() => 'poll' as const),
+        wait(pollDelayMilliseconds, signal).then(() => 'poll' as const),
       ]);
       if (!current()) return;
       const refreshed = await client.session(sessionId, signal);
@@ -497,7 +497,7 @@ export const observePlaygroundRun = async ({ client, onEvents, onSession, run, s
           throw new PlaygroundClientError('AB8043', 'Playground stream ended before the run reached a terminal state.');
         }
         reconnects += 1;
-        await delay(reconnectDelayMilliseconds * (2 ** (reconnects - 1)), signal);
+        await wait(reconnectDelayMilliseconds * (2 ** (reconnects - 1)), signal);
         if (!current()) return;
         activeStream = beginStream();
       }
