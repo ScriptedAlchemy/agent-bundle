@@ -49,6 +49,13 @@ describe('Audible parity', () => {
       .toMatchObject({ score: 65, strictIdentityMatch: false, unabridged: false });
   });
 
+  it('omits unavailable facets instead of emitting non-JSON undefined values', () => {
+    const evidence = audibleCandidateEvidence({ title: 'Unknown' }, { title: 'Unknown' });
+    expect(evidence).not.toHaveProperty('durationDifferencePercent');
+    expect(evidence).not.toHaveProperty('language');
+    expect(JSON.parse(JSON.stringify(evidence))).toEqual(evidence);
+  });
+
   it('retains regional errors and requires a human choice', async () => {
     const http: CuratorHttpClient = async (url) => {
       if (url.includes('audible.co.uk')) throw new Error('regional outage');

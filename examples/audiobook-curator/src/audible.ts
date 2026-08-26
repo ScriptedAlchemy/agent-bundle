@@ -27,8 +27,8 @@ export interface AudibleQuery {
 
 export interface AudibleCandidateEvidence {
   readonly authorMatch: boolean;
-  readonly durationDifferencePercent: number | undefined;
-  readonly language: string | undefined;
+  readonly durationDifferencePercent?: number;
+  readonly language?: string;
   readonly languageMatch: boolean;
   readonly narratorMatch: boolean;
   readonly score: number;
@@ -133,8 +133,8 @@ export const audibleCandidateEvidence = (
   if (difference !== undefined) score += Math.max(-20, 20 - difference * 4);
   return Object.freeze({
     authorMatch,
-    durationDifferencePercent: difference,
-    language: language === '' ? undefined : language,
+    ...(difference === undefined ? {} : { durationDifferencePercent: difference }),
+    ...(language === '' ? {} : { language }),
     languageMatch,
     narratorMatch,
     score,
