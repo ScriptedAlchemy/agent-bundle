@@ -6,11 +6,14 @@ import type { AudibleCacheReceipt, AudibleSearchReceipt, AudibleSelectionReceipt
 import type { AuditReceipt, InspectionReceipt, PrepareReceipt } from './curator-core.ts';
 import type { ConvertReceipt } from './conversion.ts';
 import type { InventoryReceipt, LibraryAuditReceipt, SelectionReceipt } from './library.ts';
+import type { ChapterReceipt, MetadataReceipt } from './media-mutation.ts';
 
 export type CuratorReceipt =
   | AudibleCacheReceipt
   | AudibleSearchReceipt
   | AudibleSelectionReceipt
+  | ChapterReceipt
+  | MetadataReceipt
   | AuditReceipt
   | ConvertReceipt
   | InspectionReceipt
@@ -27,6 +30,10 @@ const summary = (receipt: CuratorReceipt): string => {
       return `Recorded human-reviewed Audible candidate ${receipt.candidateNumber}.`;
     case 'audible-cache':
       return `Cached Audible ${receipt.region}/${receipt.asin} product evidence${receipt.chapters === undefined ? ' without chapter metadata' : ' with chapter metadata'}.`;
+    case 'apply-metadata':
+      return receipt.status === 'planned' ? `Planned metadata for ${receipt.file}; audio remains unchanged.` : `Applied and verified metadata for ${receipt.file}.`;
+    case 'apply-chapters':
+      return receipt.status === 'planned' ? `Planned ${receipt.chapters.length} chapters for ${receipt.file}.` : `Applied and verified ${receipt.chapters.length} chapters for ${receipt.file}.`;
     case 'inspect':
       return `Inspected ${receipt.files.length} audio files (${receipt.totalBytes} bytes).`;
     case 'prepare':

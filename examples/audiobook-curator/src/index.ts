@@ -32,6 +32,19 @@ export type {
 } from './curator-core.js';
 export { runMediaProcess } from './media-process.js';
 export type { MediaProcess, MediaProcessOptions, MediaProcessResult } from './media-process.js';
+export {
+  applyAudiobookChapters,
+  applyAudiobookMetadata,
+  chapterRowsFromPayload,
+  cleanCatalogText,
+} from './media-mutation.js';
+export type {
+  ChapterInput,
+  ChapterReceipt,
+  MediaMutationDependencies,
+  MetadataInput,
+  MetadataReceipt,
+} from './media-mutation.js';
 export { audiobookCuratorApplication, createAudiobookCuratorApplication } from './application.js';
 export type { AudiobookCuratorOperations } from './application.js';
 export {

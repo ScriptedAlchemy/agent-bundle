@@ -43,6 +43,14 @@ import {
   type SelectionReceipt,
 } from './library.ts';
 import { CuratorResult } from './result.tsx';
+import {
+  applyAudiobookChapters,
+  applyAudiobookMetadata,
+  type ChapterInput,
+  type ChapterReceipt,
+  type MetadataInput,
+  type MetadataReceipt,
+} from './media-mutation.ts';
 
 export interface AudiobookCuratorOperations {
   readonly audibleCache?: (input: AudibleCacheInput, options: RscOperationContext) => Promise<AudibleCacheReceipt>;
@@ -52,6 +60,8 @@ export interface AudiobookCuratorOperations {
     options: RscOperationContext,
   ) => Promise<AudibleSelectionReceipt>;
   readonly audit: (input: AuditInput, options: RscOperationContext) => Promise<AuditReceipt>;
+  readonly applyChapters?: (input: ChapterInput, options: RscOperationContext) => Promise<ChapterReceipt>;
+  readonly applyMetadata?: (input: MetadataInput, options: RscOperationContext) => Promise<MetadataReceipt>;
   readonly convert?: (input: ConvertInput, options: RscOperationContext) => Promise<ConvertReceipt>;
   readonly inspect: (
     input: { readonly maxFiles?: number; readonly root: string },
@@ -85,6 +95,8 @@ const defaultOperations: Required<AudiobookCuratorOperations> = {
     if (input.receipt !== undefined) await writeReceipt(input.receipt, receipt, [input.candidates]);
     return receipt;
   },
+  applyChapters: (input, options) => applyAudiobookChapters(input, options),
+  applyMetadata: (input, options) => applyAudiobookMetadata(input, options),
   audit: (input, options) => auditAudiobook(input, options),
   convert: (input, options) => convertAudiobook(input, options),
   inspect: (input, options) => inspectSources(input, options),
@@ -186,6 +198,8 @@ const audibleSearchResultSchema: z.ZodType<AudibleSearchReceipt> = z.object({
 }).strict() as z.ZodType<AudibleSearchReceipt>;
 const audibleSelectResultSchema = parityReceiptSchema<AudibleSelectionReceipt>('audible-select');
 const audibleCacheResultSchema = parityReceiptSchema<AudibleCacheReceipt>('audible-cache');
+const metadataResultSchema = parityReceiptSchema<MetadataReceipt>('apply-metadata');
+const chaptersResultSchema = parityReceiptSchema<ChapterReceipt>('apply-chapters');
 
 const optionValue = (args: readonly string[], option: string): string | undefined => {
   const index = args.indexOf(option);
@@ -251,6 +265,64 @@ const audibleRegionList = (value: string): readonly AudibleRegion[] => value.spl
 });
 
 const createOperations = (operations: Required<AudiobookCuratorOperations>) => Object.freeze([
+  defineOperation({
+    cli: {
+      name: 'apply-metadata',
+      parse: (args) => {
+        const valued = new Set(['--artwork', '--author', '--file', '--language', '--narrator', '--product', '--receipt', '--title', '--year']);
+        assertOptions(args, new Set(['--apply']), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('apply-metadata accepts only named options.');
+        return {
+          ...(args.includes('--apply') ? { apply: true } : {}),
+          ...(optionValue(args, '--artwork') === undefined ? {} : { artwork: optionValue(args, '--artwork') }),
+          ...(optionValue(args, '--author') === undefined ? {} : { author: optionValue(args, '--author') }),
+          file: requiredOption(args, '--file', 'apply-metadata'),
+          ...(optionValue(args, '--language') === undefined ? {} : { language: optionValue(args, '--language') }),
+          ...(optionValue(args, '--narrator') === undefined ? {} : { narrator: optionValue(args, '--narrator') }),
+          product: requiredOption(args, '--product', 'apply-metadata'),
+          receipt: requiredOption(args, '--receipt', 'apply-metadata'),
+          ...(optionValue(args, '--title') === undefined ? {} : { title: optionValue(args, '--title') }),
+          ...(optionValue(args, '--year') === undefined ? {} : { year: optionValue(args, '--year') }),
+        };
+      },
+      summary: 'Plan or apply verified Audible metadata and artwork without changing encoded audio.',
+      usage: 'apply-metadata --file FILE --product FILE --receipt FILE [--artwork FILE] [--language CODE] [--apply]',
+    },
+    execute: operations.applyMetadata,
+    id: 'apply-metadata',
+    inputSchema: z.object({
+      apply: z.boolean().optional(), artwork: pathSchema.optional(), author: z.string().max(512).optional(), file: pathSchema,
+      language: z.string().min(1).max(64).optional(), narrator: z.string().max(512).optional(), product: pathSchema,
+      receipt: pathSchema.optional(), title: z.string().max(1024).optional(), year: z.string().max(64).optional(),
+    }).strict(),
+    mcp: { description: 'Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream.', name: 'apply_audiobook_metadata', readOnly: false, server: 'curator' },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: metadataResultSchema,
+  }),
+  defineOperation({
+    cli: {
+      name: 'apply-chapters',
+      parse: (args) => {
+        const valued = new Set(['--chapters', '--file', '--receipt']);
+        assertOptions(args, new Set(['--apply']), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('apply-chapters accepts only named options.');
+        return {
+          ...(args.includes('--apply') ? { apply: true } : {}),
+          chapters: requiredOption(args, '--chapters', 'apply-chapters'),
+          file: requiredOption(args, '--file', 'apply-chapters'),
+          receipt: requiredOption(args, '--receipt', 'apply-chapters'),
+        };
+      },
+      summary: 'Plan or apply verified generic or Audible chapter rows without changing encoded audio.',
+      usage: 'apply-chapters --file FILE --chapters FILE --receipt FILE [--apply]',
+    },
+    execute: operations.applyChapters,
+    id: 'apply-chapters',
+    inputSchema: z.object({ apply: z.boolean().optional(), chapters: pathSchema, file: pathSchema, receipt: pathSchema.optional() }).strict(),
+    mcp: { description: 'Plan or explicitly apply verified chapter rows while preserving all non-chapter media state.', name: 'apply_audiobook_chapters', readOnly: false, server: 'curator' },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: chaptersResultSchema,
+  }),
   defineOperation({
     cli: {
       exitCode: (receipt) => receipt.exitCode,
