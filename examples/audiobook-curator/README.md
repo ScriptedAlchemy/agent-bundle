@@ -26,9 +26,12 @@ Build and globally link the workspace package without a tarball:
 ```sh
 pnpm --filter @agent-bundle-example/audiobook-curator build:cli
 cd examples/audiobook-curator
-pnpm link --global
+ln -s "$(pwd)/bin/audiobook-curator.js" ~/.local/bin/audiobook-curator
 audiobook-curator --help
 ```
+
+Choose any writable directory already on `PATH` in place of `~/.local/bin`.
+This is a direct workspace link; it does not pack or install a tarball.
 
 `build:bundle` writes complete Claude and Codex outputs beneath `artifact/`,
 including each host's plugin metadata, Skill, bundled CLI script, and bundled MCP
