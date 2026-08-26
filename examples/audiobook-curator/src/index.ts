@@ -74,6 +74,25 @@ export {
   writeReceipt,
 } from './foundation.js';
 export {
+  identifyAudibleSample,
+  verifyAudibleSample,
+  verifyWithWhisper,
+  whisperSamplingFractions,
+  whisperText,
+} from './evidence.js';
+export type {
+  AcousticIdentifyInput,
+  AcousticIdentifyReceipt,
+  AcousticMatchOptions,
+  AcousticMatcher,
+  AcousticReceipt,
+  AcousticVerifyInput,
+  EvidenceDependencies,
+  WhisperInput,
+  WhisperReceipt,
+  WhisperWindow,
+} from './evidence.js';
+export {
   auditLibrary,
   createInventory,
   probeMediaDetails,

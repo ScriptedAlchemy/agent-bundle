@@ -10,6 +10,9 @@ import {
 export type CuratorToolOperations = AudiobookCuratorOperations;
 
 export const curatorToolNames = Object.freeze([
+  'verify_audible_sample',
+  'identify_audible_sample',
+  'verify_with_whisper',
   'apply_audiobook_metadata',
   'apply_audiobook_chapters',
   'search_audible',

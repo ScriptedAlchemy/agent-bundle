@@ -7,13 +7,17 @@ import type { AuditReceipt, InspectionReceipt, PrepareReceipt } from './curator-
 import type { ConvertReceipt } from './conversion.ts';
 import type { InventoryReceipt, LibraryAuditReceipt, SelectionReceipt } from './library.ts';
 import type { ChapterReceipt, MetadataReceipt } from './media-mutation.ts';
+import type { AcousticIdentifyReceipt, AcousticReceipt, WhisperReceipt } from './evidence.ts';
 
 export type CuratorReceipt =
+  | AcousticIdentifyReceipt
+  | AcousticReceipt
   | AudibleCacheReceipt
   | AudibleSearchReceipt
   | AudibleSelectionReceipt
   | ChapterReceipt
   | MetadataReceipt
+  | WhisperReceipt
   | AuditReceipt
   | ConvertReceipt
   | InspectionReceipt
@@ -24,6 +28,12 @@ export type CuratorReceipt =
 
 const summary = (receipt: CuratorReceipt): string => {
   switch (receipt.operation) {
+    case 'audiolocate':
+      return receipt.verifiedRecording ? `Audiolocate matched Audible ${receipt.asin} to the local recording.` : `Audiolocate did not match Audible ${receipt.asin}; review is required.`;
+    case 'acoustic-identify':
+      return receipt.verifiedRecording ? `Identified an acoustic match after ${receipt.attempts.length} candidate attempts.` : `No acoustic match after ${receipt.attempts.length} candidate attempts.`;
+    case 'whisper-identity':
+      return `Collected ${receipt.usableWindows} usable transcript windows; human identity review is required.`;
     case 'audible-search':
       return `Ranked ${receipt.candidates.length} Audible candidates across reviewed regions; human selection is required.`;
     case 'audible-select':

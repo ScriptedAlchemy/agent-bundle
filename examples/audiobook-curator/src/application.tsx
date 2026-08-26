@@ -44,6 +44,16 @@ import {
 } from './library.ts';
 import { CuratorResult } from './result.tsx';
 import {
+  identifyAudibleSample,
+  verifyAudibleSample,
+  verifyWithWhisper,
+  type AcousticIdentifyReceipt,
+  type AcousticReceipt,
+  type AcousticVerifyInput,
+  type WhisperInput,
+  type WhisperReceipt,
+} from './evidence.ts';
+import {
   applyAudiobookChapters,
   applyAudiobookMetadata,
   type ChapterInput,
@@ -53,6 +63,11 @@ import {
 } from './media-mutation.ts';
 
 export interface AudiobookCuratorOperations {
+  readonly acousticIdentify?: (
+    input: { readonly all?: boolean; readonly attempts?: number; readonly candidates: string; readonly chunkSeconds?: number; readonly file: string; readonly receipt?: string; readonly top?: number; readonly verbose?: boolean },
+    options: RscOperationContext,
+  ) => Promise<AcousticIdentifyReceipt>;
+  readonly acousticVerify?: (input: AcousticVerifyInput, options: RscOperationContext) => Promise<AcousticReceipt>;
   readonly audibleCache?: (input: AudibleCacheInput, options: RscOperationContext) => Promise<AudibleCacheReceipt>;
   readonly audibleSearch?: (input: AudibleSearchInput, options: RscOperationContext) => Promise<AudibleSearchReceipt>;
   readonly audibleSelect?: (
@@ -80,9 +95,20 @@ export interface AudiobookCuratorOperations {
     input: { readonly inventory: string; readonly report?: string },
     options: RscOperationContext,
   ) => Promise<SelectionReceipt>;
+  readonly whisperVerify?: (input: WhisperInput, options: RscOperationContext) => Promise<WhisperReceipt>;
 }
 
 const defaultOperations: Required<AudiobookCuratorOperations> = {
+  acousticIdentify: async (input, options) => {
+    const payload = await readJson(input.candidates);
+    const rows = z.object({ candidates: z.array(z.record(z.string(), z.unknown())).max(500) }).passthrough().parse(payload).candidates;
+    return identifyAudibleSample({
+      ...input,
+      candidates: rows,
+      candidatesReport: input.candidates,
+    }, options);
+  },
+  acousticVerify: (input, options) => verifyAudibleSample(input, options),
   audibleCache: (input, options) => cacheAudibleEdition(input, options),
   audibleSearch: (input, options) => searchAudible(input, options),
   audibleSelect: async (input) => {
@@ -117,6 +143,7 @@ const defaultOperations: Required<AudiobookCuratorOperations> = {
     if (input.report !== undefined) await writeReceipt(input.report, receipt, [input.inventory]);
     return receipt;
   },
+  whisperVerify: (input, options) => verifyWithWhisper(input, options),
 };
 
 const pathSchema = z.string().min(1).max(4096);
@@ -200,6 +227,9 @@ const audibleSelectResultSchema = parityReceiptSchema<AudibleSelectionReceipt>('
 const audibleCacheResultSchema = parityReceiptSchema<AudibleCacheReceipt>('audible-cache');
 const metadataResultSchema = parityReceiptSchema<MetadataReceipt>('apply-metadata');
 const chaptersResultSchema = parityReceiptSchema<ChapterReceipt>('apply-chapters');
+const acousticResultSchema = parityReceiptSchema<AcousticReceipt>('audiolocate');
+const acousticIdentifyResultSchema = parityReceiptSchema<AcousticIdentifyReceipt>('acoustic-identify');
+const whisperResultSchema = parityReceiptSchema<WhisperReceipt>('whisper-identity');
 
 const optionValue = (args: readonly string[], option: string): string | undefined => {
   const index = args.indexOf(option);
@@ -265,6 +295,115 @@ const audibleRegionList = (value: string): readonly AudibleRegion[] => value.spl
 });
 
 const createOperations = (operations: Required<AudiobookCuratorOperations>) => Object.freeze([
+  defineOperation({
+    cli: {
+      exitCode: (receipt) => receipt.exitCode,
+      name: 'acoustic-verify',
+      parse: (args) => {
+        const valued = new Set(['--asin', '--attempts', '--audiolocate-python', '--chunk-seconds', '--file', '--receipt', '--region', '--sample-url']);
+        assertOptions(args, new Set(['--verbose']), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('acoustic-verify accepts only named options.');
+        const attempts = optionValue(args, '--attempts');
+        const chunks = optionValue(args, '--chunk-seconds');
+        return {
+          asin: requiredOption(args, '--asin', 'acoustic-verify'),
+          ...(attempts === undefined ? {} : { attempts: Number(attempts) }),
+          ...(optionValue(args, '--audiolocate-python') === undefined ? {} : { audiolocatePython: optionValue(args, '--audiolocate-python') }),
+          ...(chunks === undefined ? {} : { chunkSeconds: Number(chunks) }),
+          file: requiredOption(args, '--file', 'acoustic-verify'),
+          receipt: requiredOption(args, '--receipt', 'acoustic-verify'),
+          ...(optionChoice(args, '--region', audibleRegions) === undefined ? {} : { region: optionChoice(args, '--region', audibleRegions) }),
+          ...(optionValue(args, '--sample-url') === undefined ? {} : { sampleUrl: optionValue(args, '--sample-url') }),
+          ...(args.includes('--verbose') ? { verbose: true } : {}),
+        };
+      },
+      summary: 'Compare one bounded Audible sample with local audio through optional Audiolocate.',
+      usage: 'acoustic-verify --file FILE --asin ASIN --region REGION --receipt FILE [--audiolocate-python PATH]',
+    },
+    execute: operations.acousticVerify,
+    id: 'acoustic-verify',
+    inputSchema: z.object({
+      asin: z.string().min(1).max(64), attempts: z.number().int().min(1).max(10).optional(), audiolocatePython: pathSchema.optional(),
+      chunkSeconds: z.number().int().min(1).max(86_400).optional(), file: pathSchema, receipt: pathSchema.optional(),
+      region: z.enum(audibleRegions).optional(), sampleUrl: z.url().optional(), verbose: z.boolean().optional(),
+    }).strict(),
+    mcp: { description: 'Compare a bounded Audible sample with local audio through an optional Audiolocate Python capability.', name: 'verify_audible_sample', readOnly: false, server: 'curator' },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: acousticResultSchema,
+  }),
+  defineOperation({
+    cli: {
+      exitCode: (receipt) => receipt.exitCode,
+      name: 'acoustic-identify',
+      parse: (args) => {
+        const valued = new Set(['--attempts', '--candidates', '--chunk-seconds', '--file', '--receipt', '--top']);
+        assertOptions(args, new Set(['--all', '--verbose']), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('acoustic-identify accepts only named options.');
+        const attempts = optionValue(args, '--attempts');
+        const chunks = optionValue(args, '--chunk-seconds');
+        const top = optionValue(args, '--top');
+        return {
+          ...(args.includes('--all') ? { all: true } : {}),
+          ...(attempts === undefined ? {} : { attempts: Number(attempts) }),
+          candidates: requiredOption(args, '--candidates', 'acoustic-identify'),
+          ...(chunks === undefined ? {} : { chunkSeconds: Number(chunks) }),
+          file: requiredOption(args, '--file', 'acoustic-identify'),
+          receipt: requiredOption(args, '--receipt', 'acoustic-identify'),
+          ...(top === undefined ? {} : { top: Number(top) }),
+          ...(args.includes('--verbose') ? { verbose: true } : {}),
+        };
+      },
+      summary: 'Try score-ranked, deduplicated Audible candidates and retain per-candidate evidence.',
+      usage: 'acoustic-identify --file FILE --candidates FILE --receipt FILE [--top N] [--all]',
+    },
+    execute: operations.acousticIdentify,
+    id: 'acoustic-identify',
+    inputSchema: z.object({
+      all: z.boolean().optional(), attempts: z.number().int().min(1).max(10).optional(), candidates: pathSchema,
+      chunkSeconds: z.number().int().min(1).max(86_400).optional(), file: pathSchema, receipt: pathSchema.optional(),
+      top: z.number().int().min(1).max(10).optional(), verbose: z.boolean().optional(),
+    }).strict(),
+    mcp: { description: 'Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default.', name: 'identify_audible_sample', readOnly: false, server: 'curator' },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: acousticIdentifyResultSchema,
+  }),
+  defineOperation({
+    cli: {
+      exitCode: (receipt) => receipt.exitCode,
+      name: 'whisper-verify',
+      parse: (args) => {
+        const valued = new Set(['--author', '--file', '--language', '--max-windows', '--minimum-chars', '--model', '--receipt', '--threads', '--title', '--whisper-cli', '--window-seconds']);
+        assertOptions(args, new Set(), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('whisper-verify accepts only named options.');
+        return {
+          ...(optionValue(args, '--author') === undefined ? {} : { author: optionValue(args, '--author') }),
+          file: requiredOption(args, '--file', 'whisper-verify'),
+          ...(optionValue(args, '--language') === undefined ? {} : { language: optionValue(args, '--language') }),
+          ...(optionValue(args, '--max-windows') === undefined ? {} : { maxWindows: Number(optionValue(args, '--max-windows')) }),
+          ...(optionValue(args, '--minimum-chars') === undefined ? {} : { minimumChars: Number(optionValue(args, '--minimum-chars')) }),
+          model: requiredOption(args, '--model', 'whisper-verify'),
+          receipt: requiredOption(args, '--receipt', 'whisper-verify'),
+          ...(optionValue(args, '--threads') === undefined ? {} : { threads: Number(optionValue(args, '--threads')) }),
+          ...(optionValue(args, '--title') === undefined ? {} : { title: optionValue(args, '--title') }),
+          ...(optionValue(args, '--whisper-cli') === undefined ? {} : { whisperCli: optionValue(args, '--whisper-cli') }),
+          ...(optionValue(args, '--window-seconds') === undefined ? {} : { windowSeconds: Number(optionValue(args, '--window-seconds')) }),
+        };
+      },
+      summary: 'Transcribe distributed audiobook windows for human language and identity review.',
+      usage: 'whisper-verify --file FILE --model FILE --receipt FILE [--language CODE] [--max-windows N]',
+    },
+    execute: operations.whisperVerify,
+    id: 'whisper-verify',
+    inputSchema: z.object({
+      author: z.string().max(512).optional(), file: pathSchema, language: z.string().min(1).max(64).optional(),
+      maxWindows: z.number().int().min(5).max(11).optional(), minimumChars: z.number().int().min(1).max(16_384).optional(),
+      model: pathSchema, receipt: pathSchema.optional(), threads: z.number().int().min(1).max(256).optional(), title: z.string().max(1024).optional(),
+      whisperCli: pathSchema.optional(), windowSeconds: z.number().int().min(1).max(3600).optional(),
+    }).strict(),
+    mcp: { description: 'Extract and transcribe distributed PCM windows for human language, story, and narrator review.', name: 'verify_with_whisper', readOnly: false, server: 'curator' },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: whisperResultSchema,
+  }),
   defineOperation({
     cli: {
       name: 'apply-metadata',
