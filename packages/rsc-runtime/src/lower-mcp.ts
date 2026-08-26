@@ -13,9 +13,12 @@ const mcpComponents = new Set<unknown>(Object.values(Mcp));
 const isMcpComponent = (value: unknown): value is ((props: Record<string, unknown>) => ReactElement) =>
   mcpComponents.has(value);
 
+const isServerComponent = (value: unknown): value is ((props: Record<string, unknown>) => ReactNode) =>
+  typeof value === 'function';
+
 const asMcpElement = (node: ReactNode): McpElement => {
   let element = node;
-  while (isValidElement(element) && isMcpComponent(element.type)) {
+  while (isValidElement(element) && (isMcpComponent(element.type) || isServerComponent(element.type))) {
     element = element.type(element.props as Record<string, unknown>);
   }
 

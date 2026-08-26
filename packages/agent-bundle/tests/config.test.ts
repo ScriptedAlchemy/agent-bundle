@@ -130,6 +130,38 @@ it('loads sync config objects from relative and absolute explicit paths', async 
   }
 });
 
+it('loads a TypeScript config that imports an authored TSX application tree', async () => {
+  const fixture = await createProjectFixture();
+  try {
+    await writeFile(
+      join(fixture.root, 'application.tsx'),
+      [
+        "import React from 'react';",
+        "export const application = <agent-bundle-app name=\"tsx-application\" />;",
+        '',
+      ].join('\n'),
+    );
+    await writeFile(
+      fixture.configPath,
+      [
+        "import { application } from './application.tsx';",
+        "export default { plugin: { name: application.props.name, version: '1.0.0' } };",
+        '',
+      ].join('\n'),
+    );
+
+    await expect(loadConfig({
+      command: 'build',
+      mode: 'production',
+      root: fixture.root,
+    })).resolves.toMatchObject({
+      config: { plugin: { name: 'tsx-application', version: '1.0.0' } },
+    });
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
 it('rejects external config paths before evaluating their modules', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-external-config-'));
   const root = join(parent, 'project');

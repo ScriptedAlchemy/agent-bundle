@@ -34,6 +34,19 @@ describe('@agent-bundle/rsc-runtime', () => {
     });
   });
 
+  it('resolves synchronous server components around MCP protocol elements', () => {
+    const Status = ({ value }: { readonly value: string }) => createElement(
+      Mcp.Result,
+      { structuredContent: { value } },
+      createElement(Mcp.Text, null, value),
+    );
+
+    expect(lowerMcpResult(createElement(Status, { value: 'ready' }))).toEqual({
+      content: [{ text: 'ready', type: 'text' }],
+      structuredContent: { value: 'ready' },
+    });
+  });
+
   it('isolates request context across concurrent work', async () => {
     const context = createRscRequestContext<string>('test request');
     const barrier = Promise.withResolvers<void>();
