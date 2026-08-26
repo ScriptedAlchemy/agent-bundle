@@ -14,6 +14,20 @@ export type { MediaProcess, MediaProcessOptions, MediaProcessResult } from './me
 export { audiobookCuratorApplication, createAudiobookCuratorApplication } from './application.js';
 export type { AudiobookCuratorOperations } from './application.js';
 export {
+  alacChunkCounts,
+  chapterMappingIssues,
+  chapterRows,
+  convertAudiobook,
+  resolveJobs,
+  uniformAudioProperties,
+} from './conversion.js';
+export type {
+  ChapterRow,
+  ConversionDependencies,
+  ConvertInput,
+  ConvertReceipt,
+} from './conversion.js';
+export {
   CuratorError,
   audioExtensions,
   audibleHosts,
@@ -28,6 +42,8 @@ export {
 export {
   auditLibrary,
   createInventory,
+  probeMediaDetails,
+  probeMediaRecord,
   qualityScore,
   selectInventorySources,
 } from './library.js';
@@ -36,6 +52,7 @@ export type {
   LibraryAuditFile,
   LibraryAuditReceipt,
   LibraryDependencies,
+  MediaDetails,
   MediaRecord,
   SelectionReceipt,
   SelectionRow,

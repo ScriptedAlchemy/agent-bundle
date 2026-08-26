@@ -14,6 +14,7 @@ export const curatorToolNames = Object.freeze([
   'inventory_sources',
   'audit_library',
   'select_sources',
+  'convert_audiobook',
   'prepare_audiobook',
   'audit_audiobook',
 ] as const);

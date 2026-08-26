@@ -7,7 +7,7 @@ import { runMediaProcess, type MediaProcess } from './media-process.ts';
 const maximumEntries = 65_536;
 const maximumFiles = 4096;
 
-type JsonRecord = Record<string, unknown>;
+export type MediaDetails = Record<string, unknown>;
 
 export interface MediaRecord {
   readonly artworkStreams?: number;
@@ -99,9 +99,9 @@ export interface LibraryDependencies {
   readonly signal?: AbortSignal;
 }
 
-const record = (value: unknown, label: string): JsonRecord => {
+const record = (value: unknown, label: string): MediaDetails => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error(`ffprobe returned invalid ${label}.`);
-  return value as JsonRecord;
+  return value as MediaDetails;
 };
 
 const number = (value: unknown): number => {
@@ -122,7 +122,7 @@ const tags = (value: unknown): Readonly<Record<string, string>> => {
   })));
 };
 
-const probe = async (path: string, dependencies: LibraryDependencies): Promise<JsonRecord> => {
+export const probeMediaDetails = async (path: string, dependencies: LibraryDependencies = {}): Promise<MediaDetails> => {
   const process = dependencies.process ?? runMediaProcess;
   const result = await process(dependencies.ffprobe ?? 'ffprobe', [
     '-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', '-show_chapters', path,
@@ -135,11 +135,15 @@ const probe = async (path: string, dependencies: LibraryDependencies): Promise<J
   }
 };
 
-const mediaRecord = async (path: string, root: string, dependencies: LibraryDependencies): Promise<MediaRecord> => {
+export const probeMediaRecord = async (
+  path: string,
+  root: string = dirname(resolve(path)),
+  dependencies: LibraryDependencies = {},
+): Promise<MediaRecord> => {
   dependencies.signal?.throwIfAborted();
   const before = await lstat(path);
   if (!before.isFile() || before.nlink !== 1) throw new Error(`Audiobook source must be one regular file: ${path}`);
-  const details = await probe(path, dependencies);
+  const details = await probeMediaDetails(path, dependencies);
   const streams = details.streams;
   if (!Array.isArray(streams) || streams.length > 256) throw new Error('ffprobe returned invalid streams.');
   const streamRows = streams.map((stream) => record(stream, 'stream'));
@@ -212,7 +216,7 @@ export const createInventory = async (
   for (const path of discovered.files) {
     dependencies.signal?.throwIfAborted();
     try {
-      files.push(await mediaRecord(path, discovered.root, dependencies));
+      files.push(await probeMediaRecord(path, discovered.root, dependencies));
     } catch (error) {
       errors.push(Object.freeze({ error: errorMessage(error), path }));
     }
@@ -254,7 +258,7 @@ const multipartIdentity = (path: string): { base: string; part: number; total: n
 
 const auditFile = async (path: string, root: string, dependencies: LibraryDependencies): Promise<LibraryAuditFile> => {
   try {
-    const media = await mediaRecord(path, root, dependencies);
+    const media = await probeMediaRecord(path, root, dependencies);
     const normalizedTags = Object.fromEntries(Object.entries(media.tags).map(([key, value]) => [key.toLowerCase(), value]));
     return Object.freeze({
       ...media,

@@ -21,6 +21,7 @@ import {
   type PrepareInput,
   type PrepareReceipt,
 } from './curator-core.ts';
+import { convertAudiobook, type ConvertInput, type ConvertReceipt } from './conversion.ts';
 import { readJson, writeReceipt } from './foundation.ts';
 import {
   auditLibrary,
@@ -34,6 +35,7 @@ import { CuratorResult } from './result.tsx';
 
 export interface AudiobookCuratorOperations {
   readonly audit: (input: AuditInput, options: RscOperationContext) => Promise<AuditReceipt>;
+  readonly convert?: (input: ConvertInput, options: RscOperationContext) => Promise<ConvertReceipt>;
   readonly inspect: (
     input: { readonly maxFiles?: number; readonly root: string },
     options: RscOperationContext,
@@ -55,6 +57,7 @@ export interface AudiobookCuratorOperations {
 
 const defaultOperations: Required<AudiobookCuratorOperations> = {
   audit: (input, options) => auditAudiobook(input, options),
+  convert: (input, options) => convertAudiobook(input, options),
   inspect: (input, options) => inspectSources(input, options),
   inventory: async (input, options) => {
     const receipt = await createInventory(input, options);
@@ -136,6 +139,7 @@ const parityReceiptSchema = <T extends { readonly generatedAt: string; readonly 
 const inventoryResultSchema = parityReceiptSchema<InventoryReceipt>('inventory');
 const libraryResultSchema = parityReceiptSchema<LibraryAuditReceipt>('library-audit');
 const selectionResultSchema = parityReceiptSchema<SelectionReceipt>('quality-selection');
+const convertResultSchema = parityReceiptSchema<ConvertReceipt>('convert');
 
 const optionValue = (args: readonly string[], option: string): string | undefined => {
   const index = args.indexOf(option);
@@ -181,6 +185,17 @@ const requiredOption = (args: readonly string[], option: string, command: string
   const value = optionValue(args, option);
   if (value === undefined) throw new Error(`${command} requires ${option}.`);
   return value;
+};
+
+const optionChoice = <T extends string>(
+  args: readonly string[],
+  option: string,
+  choices: readonly T[],
+): T | undefined => {
+  const value = optionValue(args, option);
+  if (value === undefined) return undefined;
+  if (!choices.includes(value as T)) throw new Error(`${option} must be one of: ${choices.join(', ')}.`);
+  return value as T;
 };
 
 const createOperations = (operations: Required<AudiobookCuratorOperations>) => Object.freeze([
@@ -302,6 +317,61 @@ const createOperations = (operations: Required<AudiobookCuratorOperations>) => O
     },
     render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: selectionResultSchema,
+  }),
+  defineOperation({
+    cli: {
+      name: 'convert',
+      parse: (args) => {
+        const valued = new Set([
+          '--artwork', '--audio-bitrate', '--audio-codec', '--author', '--engine', '--forge-aac-encoder',
+          '--forge-cli', '--jobs', '--language', '--narrator', '--output', '--receipt', '--selection', '--title', '--year',
+        ]);
+        assertOptions(args, new Set(['--apply', '--overwrite']), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('convert accepts only named options.');
+        const audioCodec = optionChoice(args, '--audio-codec', ['aac', 'alac'] as const);
+        const engine = optionChoice(args, '--engine', ['audiobook-forge', 'ffmpeg'] as const);
+        const jobs = optionValue(args, '--jobs');
+        return {
+          ...(args.includes('--apply') ? { apply: true } : {}),
+          ...(args.includes('--overwrite') ? { overwrite: true } : {}),
+          ...(optionValue(args, '--artwork') === undefined ? {} : { artwork: optionValue(args, '--artwork') }),
+          ...(optionValue(args, '--audio-bitrate') === undefined ? {} : { audioBitrate: optionValue(args, '--audio-bitrate') }),
+          ...(audioCodec === undefined ? {} : { audioCodec }),
+          author: requiredOption(args, '--author', 'convert'),
+          ...(engine === undefined ? {} : { engine }),
+          ...(optionValue(args, '--forge-aac-encoder') === undefined ? {} : { forgeAacEncoder: optionValue(args, '--forge-aac-encoder') }),
+          ...(optionValue(args, '--forge-cli') === undefined ? {} : { forgeCli: optionValue(args, '--forge-cli') }),
+          ...(jobs === undefined ? {} : { jobs: Number(jobs) }),
+          ...(optionValue(args, '--language') === undefined ? {} : { language: optionValue(args, '--language') }),
+          ...(optionValue(args, '--narrator') === undefined ? {} : { narrator: optionValue(args, '--narrator') }),
+          output: requiredOption(args, '--output', 'convert'),
+          receipt: requiredOption(args, '--receipt', 'convert'),
+          selection: requiredOption(args, '--selection', 'convert'),
+          title: requiredOption(args, '--title', 'convert'),
+          ...(optionValue(args, '--year') === undefined ? {} : { year: optionValue(args, '--year') }),
+        };
+      },
+      summary: 'Plan or apply a verified conversion to one chaptered M4B.',
+      usage: 'convert --selection FILE --output PATH --receipt FILE --title TITLE --author AUTHOR [--apply] [--overwrite]',
+    },
+    execute: operations.convert,
+    id: 'convert',
+    inputSchema: z.object({
+      apply: z.boolean().optional(), artwork: pathSchema.optional(), audioBitrate: z.string().min(2).max(32).optional(),
+      audioCodec: z.enum(['aac', 'alac']).optional(), author: z.string().min(1).max(512),
+      engine: z.enum(['audiobook-forge', 'ffmpeg']).optional(), forgeAacEncoder: z.string().min(1).max(128).optional(),
+      forgeCli: pathSchema.optional(), jobs: z.number().int().min(0).max(256).optional(), language: z.string().min(1).max(64).optional(),
+      narrator: z.string().min(1).max(512).optional(), output: pathSchema, overwrite: z.boolean().optional(), receipt: pathSchema.optional(),
+      selection: pathSchema, title: z.string().min(1).max(1024), year: z.string().min(1).max(64).optional(),
+    }).strict(),
+    mcp: {
+      description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
+      name: 'convert_audiobook',
+      readOnly: false,
+      server: 'curator',
+    },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: convertResultSchema,
   }),
   defineOperation({
     cli: {

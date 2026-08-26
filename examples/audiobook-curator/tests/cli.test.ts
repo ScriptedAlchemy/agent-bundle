@@ -36,7 +36,7 @@ describe('audiobook-curator CLI', () => {
   });
 
   it('rejects unknown commands and flags', async () => {
-    await expect(runCli(['convert', '/library'], { operations: operations(), write: () => undefined }))
+    await expect(runCli(['unknown', '/library'], { operations: operations(), write: () => undefined }))
       .rejects.toThrow('Unknown command');
     await expect(runCli(['audit', '/library', '--overwrite'], { operations: operations(), write: () => undefined }))
       .rejects.toThrow('Unknown option');
