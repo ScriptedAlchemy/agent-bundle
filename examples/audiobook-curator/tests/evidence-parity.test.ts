@@ -42,6 +42,23 @@ describe('optional identity evidence parity', () => {
     expect(receipt).toMatchObject({ exitCode: 0, operation: 'audiolocate', verifiedRecording: true });
   });
 
+  it('extracts the structured Audiolocate result after foreign progress logs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'curator-audiolocate-output-'));
+    roots.push(root);
+    const file = join(root, 'book.m4b');
+    await writeFile(file, 'book');
+    const process: MediaProcess = async () => ({
+      stderr: '',
+      stdout: '[load] Loading streams\n[compare] 50%\n__AGENT_BUNDLE_AUDIOLOCATE_RESULT__{"found":true}\n',
+    });
+    const receipt = await verifyAudibleSample({ asin: 'ASIN', file, sampleUrl: 'https://sample.example/book.mp3' }, {
+      audiolocatePython: 'python-test',
+      http: async () => Buffer.from('sample'),
+      process,
+    });
+    expect(receipt).toMatchObject({ exitCode: 0, verifiedRecording: true });
+  });
+
   it('deduplicates ranked ASINs and isolates candidate failures', async () => {
     const root = await mkdtemp(join(tmpdir(), 'curator-identify-'));
     roots.push(root);

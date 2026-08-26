@@ -147,15 +147,18 @@ const boundedRequest = async (
 };
 
 const pythonMatcher = (python: string, process: MediaProcess): AcousticMatcher => async (source, sample, options) => {
+  const resultMarker = '__AGENT_BUNDLE_AUDIOLOCATE_RESULT__';
   const script = [
     'import json,sys',
     'from audiolocate import StreamMatcher',
     'result=StreamMatcher().find_match_from_sources(sys.argv[1],sys.argv[2],chunk_seconds=int(sys.argv[3]),early_exit=True,verbose=sys.argv[4]=="1")',
-    'print(json.dumps(result))',
+    `print(${JSON.stringify(resultMarker)}+json.dumps(result))`,
   ].join(';');
   try {
     const result = await process(python, ['-c', script, source, sample, String(options.chunkSeconds), options.verbose ? '1' : '0'], { signal: options.signal });
-    return Object.freeze(object(JSON.parse(result.stdout)));
+    const line = result.stdout.split(/\r?\n/u).findLast((candidate) => candidate.startsWith(resultMarker));
+    if (line === undefined) throw new CuratorError('Audiolocate emitted no structured result.');
+    return Object.freeze(object(JSON.parse(line.slice(resultMarker.length))));
   } catch (error) {
     throw new CuratorError(`Audiolocate is optional; install it for ${python}, or inject an acoustic matcher. ${error instanceof Error ? error.message : ''}`.trim());
   }
