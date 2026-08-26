@@ -130,7 +130,7 @@ export const probeMediaDetails = async (path: string, dependencies: LibraryDepen
   try {
     return record(JSON.parse(result.stdout), 'result');
   } catch (error) {
-    if (error instanceof SyntaxError) throw new Error('ffprobe returned invalid JSON.');
+    if (error instanceof SyntaxError) throw new Error('ffprobe returned invalid JSON.', { cause: error });
     throw error;
   }
 };
@@ -241,8 +241,8 @@ export const createInventory = async (
 const multipartIdentity = (path: string): { base: string; part: number; total: number | null } | undefined => {
   const stem = basename(path, extname(path));
   const patterns = [
-    /^(.*?)[\s._\-(\[]+part\s*(\d+)\s*(?:of|\/)\s*(\d+)[\])\s._-]*$/iu,
-    /^(.*?)[\s._\-(\[]+(?:disc|disk|cd)\s*(\d+)[\])\s._-]*$/iu,
+    /^(.*?)[\s._\-([]+part\s*(\d+)\s*(?:of|\/)\s*(\d+)[\])\s._-]*$/iu,
+    /^(.*?)[\s._\-([]+(?:disc|disk|cd)\s*(\d+)[\])\s._-]*$/iu,
     /^(.*?)[\s._-]+ep(?:isode)?\s*(\d+)[\s._-]*$/iu,
   ];
   for (const pattern of patterns) {

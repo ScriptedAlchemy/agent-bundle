@@ -237,7 +237,9 @@ export const prepareAudiobook = async (
     try {
       await link(temporaryOutput, output);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Audiobook output already exists: ${output}`);
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error(`Audiobook output already exists: ${output}`, { cause: error });
+      }
       throw error;
     }
     const outputHandle = await open(output, 'r');

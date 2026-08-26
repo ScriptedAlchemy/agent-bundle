@@ -29,8 +29,11 @@ export const naturalCompare = (left: string, right: string): number => naturalCo
 
 export const safeFilename = (input: string): string => {
   const withoutApostrophes = input.normalize('NFKC').replaceAll(/[’']/gu, '');
-  const safe = withoutApostrophes
-    .replaceAll(/[\\/:*?"<>|\u0000-\u001f]/gu, ' - ')
+  const withoutControlCharacters = [...withoutApostrophes]
+    .map((character) => character.codePointAt(0)! <= 0x1f ? ' - ' : character)
+    .join('');
+  const safe = withoutControlCharacters
+    .replaceAll(/[\\/:*?"<>|]/gu, ' - ')
     .replaceAll(/\s+/gu, ' ')
     .replaceAll(/^[ .-]+|[ .-]+$/gu, '');
   return safe === '' ? 'Untitled Audiobook' : safe;
