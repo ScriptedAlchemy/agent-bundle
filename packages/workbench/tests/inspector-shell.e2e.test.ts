@@ -225,6 +225,7 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
 e2e('mounts the internal Inspector presentation from an explicit development-mode artifact', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench('development');
   const project = await createProjectFixture();
+  await writeInspectorProject(project.root);
   const server = await startDevServer({
     assets: createWorkbenchAssetSource({ root: workbenchAssets }),
     open: false,

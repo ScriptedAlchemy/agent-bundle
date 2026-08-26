@@ -74,7 +74,7 @@ const failureDiagnostics = (
   }
   return Object.freeze([Object.freeze({
     code: 'AB7100',
-    message: `Unable to compile artifact epoch: ${errorMessage(error)}`,
+    message: `Unable to compile the build: ${errorMessage(error)}`,
     severity: 'error' as const,
     sourcePath: configPath,
   })]);
@@ -136,7 +136,7 @@ const cleanupDiagnostic = (
   severity: Diagnostic['severity'],
 ): Diagnostic => Object.freeze({
   code: 'AB7100',
-  message: `Unable to clean up ${resource} after artifact epoch build: ${errorMessage(error)}`,
+  message: `Unable to clean up ${resource} after the build: ${errorMessage(error)}`,
   severity,
   sourcePath: configPath,
 });
