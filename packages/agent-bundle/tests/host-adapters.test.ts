@@ -293,6 +293,26 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
   await validateDocuments('claude', writeContents(plugin, 'claude'));
 });
 
+it('embeds the Claude plugin root in compiled MCP entry arguments', () => {
+  const compiled = {
+    ...plugin,
+    mcpServers: Object.freeze([Object.freeze({
+      ...plugin.mcpServers[0],
+      args: Object.freeze(['mcp/compiled-server.mjs']),
+      source: '/workspace/server.ts',
+    })]),
+  } satisfies NormalizedPlugin;
+  const entry = planEntries(compiled, 'claude').find((candidate) => candidate.relativePath === '.mcp.json');
+  expect(entry?.kind).toBe('write');
+  const document = JSON.parse(entry?.kind === 'write' ? entry.content : '{}') as {
+    mcpServers: Record<string, { args?: string[]; cwd?: string }>;
+  };
+  expect(document.mcpServers.stdio).toMatchObject({
+    args: ['${CLAUDE_PLUGIN_ROOT}/mcp/compiled-server.mjs'],
+  });
+  expect(document.mcpServers.stdio).not.toHaveProperty('cwd');
+});
+
 it.each(['codex', 'claude'] as const)(
   'rejects a hostile normalized legacy MCP transport without emitting %s MCP configuration',
   (target) => {

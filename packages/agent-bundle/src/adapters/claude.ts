@@ -142,12 +142,16 @@ const planMcpServer = (
           return [key, expandClaudeToken(value)];
         }));
     if (diagnostics.length > 0) return { diagnostics };
+    const args = server.args?.map(expandClaudeToken);
+    if (server.source !== undefined && server.cwd === pathTokens.pluginRoot && args?.[0] !== undefined) {
+      args[0] = `${hookContract.commandRoot}/${args[0]}`;
+    }
     return {
       diagnostics,
       value: {
-        ...(server.args === undefined ? {} : { args: server.args.map(expandClaudeToken) }),
+        ...(args === undefined ? {} : { args }),
         command: expandClaudeToken(server.command),
-        ...(server.cwd === undefined ? {} : { cwd: expandClaudeToken(server.cwd) }),
+        ...(server.cwd === undefined || server.source !== undefined ? {} : { cwd: expandClaudeToken(server.cwd) }),
         ...(env === undefined ? {} : { env }),
         type: 'stdio',
       },

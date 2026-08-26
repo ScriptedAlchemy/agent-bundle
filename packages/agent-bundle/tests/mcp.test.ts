@@ -612,9 +612,8 @@ it('bundles each local MCP entry once and maps every target manifest to that art
     expect(JSON.parse(claude)).toMatchObject({
       mcpServers: {
         'local server': {
-          args: [`mcp/${outputName}`, '--fixture'],
+          args: [`\${CLAUDE_PLUGIN_ROOT}/mcp/${outputName}`, '--fixture'],
           command: 'node',
-          cwd: '${CLAUDE_PLUGIN_ROOT}',
           env: { FIXTURE: 'local' },
           type: 'stdio',
         },
