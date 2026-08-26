@@ -5,7 +5,13 @@ import { runCli, type CuratorOperations } from '../src/cli.js';
 const operations = (): CuratorOperations => ({
   audit: async (input) => ({ fullDecode: input.fullDecode ?? false, operation: 'audit', source: input.source }),
   inspect: async (input) => ({ files: [], operation: 'inspect', root: input.root, totalBytes: 0 }),
-  prepare: async (input) => ({ applied: input.apply ?? false, operation: 'prepare', source: input.source }),
+  prepare: async (input) => ({
+    applied: input.apply ?? false,
+    operation: 'prepare',
+    output: `${input.outputRoot}/book.m4b`,
+    probe: { codec: 'mp3', durationSeconds: 12, format: 'mp3', tags: {} },
+    source: input.source,
+  }),
 });
 
 describe('audiobook-curator CLI', () => {

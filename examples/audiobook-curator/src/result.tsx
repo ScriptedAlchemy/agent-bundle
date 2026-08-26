@@ -2,7 +2,7 @@ import { Mcp, lowerMcpResult } from '@agent-bundle/rsc-runtime';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import React from 'react';
 
-import type { AuditReceipt, InspectionReceipt, PrepareReceipt } from './curator-core.js';
+import type { AuditReceipt, InspectionReceipt, PrepareReceipt } from './curator-core.ts';
 
 export type CuratorReceipt = AuditReceipt | InspectionReceipt | PrepareReceipt;
 
@@ -19,7 +19,7 @@ const summary = (receipt: CuratorReceipt): string => {
   }
 };
 
-const CuratorResult = ({ receipt }: { readonly receipt: CuratorReceipt }) => (
+export const CuratorResult = ({ receipt }: { readonly receipt: CuratorReceipt }) => (
   <Mcp.Result structuredContent={receipt}>
     <Mcp.Text>{summary(receipt)}</Mcp.Text>
   </Mcp.Result>

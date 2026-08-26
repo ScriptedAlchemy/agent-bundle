@@ -11,7 +11,7 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 
-import { runMediaProcess, type MediaProcess } from './media-process.js';
+import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
 const supportedExtensions = new Set(['.aac', '.flac', '.m4a', '.m4b', '.mp3', '.ogg', '.opus', '.wav']);
 const safeOutputName = /^[a-z0-9][a-z0-9._ -]{0,199}\.m4b$/iu;
