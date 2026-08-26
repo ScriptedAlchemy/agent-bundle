@@ -339,7 +339,7 @@ export const convertAudiobook = async (
       start = end;
     }
   }
-  const metadata = Object.freeze({
+  const metadata = Object.freeze(Object.fromEntries(Object.entries({
     album: input.title,
     album_artist: input.author,
     artist: input.author,
@@ -347,7 +347,7 @@ export const convertAudiobook = async (
     date: input.year,
     language: input.language,
     title: input.title,
-  });
+  }).filter((entry): entry is [string, string] => entry[1] !== undefined)));
   const segmentTranscode = engine === 'ffmpeg' && !preserveSingle && (jobs > 1 || (codec === 'alac' && paths.length > 1));
   const base = {
     apply: input.apply === true,
