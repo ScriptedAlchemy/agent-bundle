@@ -23,7 +23,7 @@
   },
   "scripts": {
     "build": "pnpm build:cli && pnpm build:bundle",
-    "build:bundle": "agent-bundle build --json",
+    "build:bundle": "agent-bundle build --json --output artifact",
     "build:cli": "rslib build",
     "check": "pnpm test && pnpm typecheck && pnpm build",
     "dev": "agent-bundle dev",

@@ -1,6 +1,7 @@
 import { defineConfig } from 'agent-bundle';
 
 export default defineConfig({
+  marketplace: true,
   mcp: {
     servers: {
       curator: {

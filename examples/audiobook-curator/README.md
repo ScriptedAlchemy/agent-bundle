@@ -7,6 +7,9 @@ installable `audiobook-curator` CLI backed by the same core.
 The product requires Node 22.19+, `ffprobe`, and `ffmpeg`. It does not use the
 older Python curator or any globally installed wrapper.
 
+Media operations have no wall-clock deadline. They run until completion or
+explicit caller cancellation; stdout and stderr remain memory-bounded.
+
 ## Workspace use
 
 ```sh
@@ -15,8 +18,9 @@ pnpm --filter @agent-bundle-example/audiobook-curator check
 pnpm --filter @agent-bundle-example/audiobook-curator dev
 ```
 
-The build writes Claude and Codex plugin artifacts beneath `dist/`. There are no
-hooks.
+The build keeps the installable CLI beneath `dist/` and writes the complete
+Claude and Codex plugin and marketplace artifacts beneath `artifact/`. There
+are no hooks and no example-owned host-packaging script.
 
 ## CLI
 

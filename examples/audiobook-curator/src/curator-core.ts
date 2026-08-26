@@ -106,7 +106,7 @@ const probeAudio = async (path: string, options: CuratorDependencies): Promise<A
   const selected = dependencies(options);
   const result = await selected.process(selected.ffprobe, [
     '-v', 'error', '-show_format', '-show_streams', '-of', 'json', path,
-  ], { signal: selected.signal, timeoutMs: 30_000 });
+  ], { signal: selected.signal });
   let value: unknown;
   try {
     value = JSON.parse(result.stdout);
@@ -231,7 +231,7 @@ export const prepareAudiobook = async (
   try {
     await selected.process(selected.ffmpeg, [
       '-nostdin', '-v', 'error', '-i', source, '-map_metadata', '0', '-vn', '-c:a', 'aac', '-b:a', '64k', temporaryOutput,
-    ], { signal: selected.signal, timeoutMs: 3_600_000 });
+    ], { signal: selected.signal });
     await regularFileSize(temporaryOutput);
     const outputProbe = await probeAudio(temporaryOutput, options);
     try {
@@ -288,7 +288,7 @@ export const auditAudiobook = async (
     const selected = dependencies(options);
     await selected.process(selected.ffmpeg, [
       '-nostdin', '-v', 'error', '-i', source, '-map', '0:a:0', '-f', 'null', '-',
-    ], { signal: selected.signal, timeoutMs: 3_600_000 });
+    ], { signal: selected.signal });
   }
   return Object.freeze({ ...hashed, fullDecode: input.fullDecode === true, operation: 'audit', probe, source });
 };

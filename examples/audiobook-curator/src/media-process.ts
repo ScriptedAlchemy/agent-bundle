@@ -28,8 +28,8 @@ const processEnvironment = (): NodeJS.ProcessEnv => {
 
 export const runMediaProcess: MediaProcess = async (executable, args, options = {}) => {
   if (options.signal?.aborted === true) throw options.signal.reason;
-  const timeoutMs = options.timeoutMs ?? 120_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 3_600_000) {
+  const timeoutMs = options.timeoutMs;
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 3_600_000)) {
     throw new Error('Media process timeout must be between 1 ms and 1 hour.');
   }
 
@@ -66,14 +66,16 @@ export const runMediaProcess: MediaProcess = async (executable, args, options = 
       options.signal?.reason instanceof Error ? options.signal.reason : new Error('Media process aborted.'),
     );
     options.signal?.addEventListener('abort', abort, { once: true });
-    const timer = setTimeout(() => terminate(new Error(`Media process timed out after ${timeoutMs} ms.`)), timeoutMs);
-    timer.unref();
+    const timer = timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => terminate(new Error(`Media process timed out after ${timeoutMs} ms.`)), timeoutMs);
+    timer?.unref();
 
     child.once('error', (error) => {
       failure ??= error;
     });
     child.once('close', (code, signal) => {
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
       options.signal?.removeEventListener('abort', abort);
       if (failure !== undefined) {
         rejectPromise(failure);
