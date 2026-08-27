@@ -132,13 +132,19 @@ const currentRunId = async (page) => {
 };
 
 const waitForNewGeneration = async (page, identity, before) => {
-  await page.waitForFunction(
-    ({ expected, selector }) => globalThis.document.querySelector(selector)?.getAttribute('data-runtime-generation') !== expected,
+  // Wait for a committed replacement generation and read it atomically from the
+  // predicate: the attribute can transiently blank or flap back to the last-good
+  // value while the provider remounts, so a separate re-read races.
+  const handle = await page.waitForFunction(
+    ({ expected, selector }) => {
+      const value = globalThis.document.querySelector(selector)?.getAttribute('data-runtime-generation');
+      return typeof value === 'string' && value !== '' && value !== expected ? value : false;
+    },
     { expected: before, selector: '[data-runtime-provider-session]' },
     { timeout: browserTimeout },
   );
-  const after = await identity.getAttribute('data-runtime-generation');
-  if (after === null || after === before) throw new Error('Runtime generation did not advance.');
+  const after = await handle.jsonValue();
+  if (typeof after !== 'string' || after === before) throw new Error('Runtime generation did not advance.');
   return after;
 };
 
