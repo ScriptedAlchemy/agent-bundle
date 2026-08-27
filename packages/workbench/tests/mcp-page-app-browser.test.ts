@@ -519,13 +519,15 @@ describe('MCP App page browser integration', () => {
       await page.selectOption('#mcp-app-profile', 'chatgpt');
       await page.waitForFunction(() => {
         const stats = (globalThis as McpPageAppFixtureGlobal).__mcpPageAppFixture.stats();
-        return stats.creates.some(({ request }) => request.previewProfile === 'chatgpt') && stats.messages.some(({ bindingId, message }) => bindingId === 'binding-2' && message.method === 'ui/notifications/initialized');
+        const createIndex = stats.creates.findIndex(({ request }) => request.previewProfile === 'chatgpt');
+        return createIndex >= 0 && stats.messages.some(({ bindingId, message }) => bindingId === `binding-${createIndex + 1}` && message.method === 'ui/notifications/initialized');
       });
       expect(await page.getByLabel('MCP App preview', { exact: true }).textContent()).toContain('chatgpt');
       await page.selectOption('#mcp-app-profile', 'claude');
       await page.waitForFunction(() => {
         const stats = (globalThis as McpPageAppFixtureGlobal).__mcpPageAppFixture.stats();
-        return stats.creates.some(({ request }) => request.previewProfile === 'claude') && stats.messages.some(({ bindingId, message }) => bindingId === 'binding-3' && message.method === 'ui/notifications/initialized');
+        const createIndex = stats.creates.findIndex(({ request }) => request.previewProfile === 'claude');
+        return createIndex >= 0 && stats.messages.some(({ bindingId, message }) => bindingId === `binding-${createIndex + 1}` && message.method === 'ui/notifications/initialized');
       });
       expect(await page.getByLabel('MCP App preview', { exact: true }).textContent()).toContain('claude');
 
