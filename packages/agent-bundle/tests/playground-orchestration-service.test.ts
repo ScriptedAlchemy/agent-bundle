@@ -566,7 +566,12 @@ it('exports and promotes the real durable response event reference from a native
     projectRevision: 'native-revision-digest',
     targetDigests: Object.freeze({ codex: 'native-target-digest' }),
   });
-  const reference = Object.freeze({ close: async () => undefined, epoch: nativeEpoch, root: '/epochs/native-durable' });
+  const operationCompleted = Promise.withResolvers<void>();
+  const reference = Object.freeze({
+    close: async () => { operationCompleted.resolve(); },
+    epoch: nativeEpoch,
+    root: '/epochs/native-durable',
+  });
   const service = new PlaygroundOrchestrationService({
     coordinator: { status: currentStatus },
     createRunId: () => 'run-native-durable',
@@ -593,7 +598,8 @@ it('exports and promotes the real durable response event reference from a native
       caseId: 'opaque-case-a', fixtureId: 'opaque-fixture-a', host: 'codex', modelPinId: 'opaque-model-a',
       operation: 'native.prompt', prompt: 'Review the fixture.', target: 'codex',
     });
-    await eventually(() => expect(trace.session(admitted.session.id)?.state).toBe('finalized'));
+    await operationCompleted.promise;
+    expect(trace.session(admitted.session.id)?.state).toBe('finalized');
     const exported = await service.export(admitted.session.id);
     const response = exported.events.find((event) => event.kind === 'native.response');
     expect(response).toMatchObject({ raw: { text: 'Safe native response.' }, rawEventRef: 'events.jsonl#2' });
