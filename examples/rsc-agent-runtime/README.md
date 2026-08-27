@@ -49,11 +49,11 @@ export function RenderTimeline({ snapshot }: { snapshot: { edits: unknown[]; sta
 From the repository root:
 
 ```bash
-npm run build -w @agent-bundle/rsc-agent-runtime-demo
-npm test -w @agent-bundle/rsc-agent-runtime-demo
-npm run typecheck -w @agent-bundle/rsc-agent-runtime-demo
-npm run capture:widget -w @agent-bundle/rsc-agent-runtime-demo -- --output /tmp/rsc-agent-runtime-widget.png
-npm run docs:runtime-topology
+pnpm --filter @agent-bundle/rsc-agent-runtime-demo build
+pnpm --filter @agent-bundle/rsc-agent-runtime-demo test
+pnpm --filter @agent-bundle/rsc-agent-runtime-demo typecheck
+pnpm --filter @agent-bundle/rsc-agent-runtime-demo capture:widget -- --output /tmp/rsc-agent-runtime-widget.png
+pnpm docs:runtime-topology
 ```
 
 For contributor Workbench/HMR evidence, use the repository fixture rather than
@@ -72,7 +72,7 @@ node packages/workbench/scripts/capture-runtime-playground.mjs \
 
 The published Agent Bundle library is built with Rslib. This example's separate
 production RSC/runtime artifacts are built by its explicit Rsbuild production
-command (`npm run build -w @agent-bundle/rsc-agent-runtime-demo`); its provider
+command (`pnpm --filter @agent-bundle/rsc-agent-runtime-demo build`); its provider
 uses a separate long-lived Rsbuild development/HMR session only when an
 `agent-bundle dev` project opts into `dev.runtime.provider`. Installing
 `agent-bundle` alone does not install or activate this example provider. See
@@ -82,7 +82,7 @@ for the full ownership boundary.
 The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and two self-contained native plugin artifacts under `dist/plugins`. It runs `package:hosts` automatically; it can also be run directly:
 
 ```bash
-npm run package:hosts -w @agent-bundle/rsc-agent-runtime-demo
+pnpm --filter @agent-bundle/rsc-agent-runtime-demo package:hosts
 ```
 
 To exercise one hook manually, give it an explicit state file and native Claude-shaped JSON:
@@ -138,7 +138,7 @@ Ordinary CI runs a deterministic micro-eval against the built production
 artifacts on every push and pull request:
 
 ```bash
-npm run eval:spot
+pnpm eval:spot
 ```
 
 It builds this example, replays one native-shaped Claude `PostToolUse` event
@@ -163,9 +163,9 @@ environment, first make the package artifacts, then run each selected terminal
 host explicitly:
 
 ```bash
-npm run build -w @agent-bundle/rsc-agent-runtime-demo
-npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host claude
-npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host codex
+pnpm --filter @agent-bundle/rsc-agent-runtime-demo build
+pnpm --filter @agent-bundle/rsc-agent-runtime-demo eval:hosts -- --host claude
+pnpm --filter @agent-bundle/rsc-agent-runtime-demo eval:hosts -- --host codex
 ```
 
 The evaluator requires exactly Claude Code `2.1.232` and Codex CLI `0.147.0`, creates a temporary Git workspace, and emits one sanitized schema-v2 JSON evidence document. Attach that stdout document as tracked evidence before

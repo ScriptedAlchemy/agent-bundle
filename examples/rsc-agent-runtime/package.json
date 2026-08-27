@@ -3,11 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "rsbuild build --mode production && npm run package:hosts",
+    "build": "rsbuild build --mode production && pnpm package:hosts",
     "package:hosts": "node scripts/package-hosts.mjs",
     "test": "rstest --config rstest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check": "npm run build && npm test && npm run typecheck",
+    "check": "pnpm build && pnpm test && pnpm typecheck",
     "eval:hosts": "node scripts/eval-hosts.mjs",
     "capture:widget": "node scripts/capture-widget.mjs"
   },

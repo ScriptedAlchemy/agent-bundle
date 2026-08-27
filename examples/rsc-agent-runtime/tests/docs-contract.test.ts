@@ -28,8 +28,8 @@ test('requires attached native evidence before documenting Claude or Codex obser
   expect(source).toMatch(/Real Claude Code and Codex CLI runs are\s+intentionally skip-gated out of ordinary CI and default test runs/u);
   expect(source).toMatch(/No attached tracked\s+schema-v2 native-evidence artifact exists in this repository snapshot/u);
   expect(source).toMatch(/profiles are local compatibility simulations, and deterministic evaluator tests are not native certification/u);
-  expect(source).toContain('npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host claude');
-  expect(source).toContain('npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host codex');
+  expect(source).toContain('pnpm --filter @agent-bundle/rsc-agent-runtime-demo eval:hosts -- --host claude');
+  expect(source).toContain('pnpm --filter @agent-bundle/rsc-agent-runtime-demo eval:hosts -- --host codex');
   expect(source).toContain('schema-v2 JSON evidence document');
   expect(source).toContain('MCP App iframe evidence is unavailable from either terminal CLI');
   expect(source).not.toContain('Claude fully proves hook→MCP/RSC shared behavior');
@@ -42,7 +42,7 @@ test('documents the ordinary-CI micro-eval spot-check', async () => {
   const source = await readme();
 
   expect(source).toContain('### CI micro-eval spot-check');
-  expect(source).toContain('npm run eval:spot');
+  expect(source).toContain('pnpm eval:spot');
   expect(source).toMatch(/contacts\s+no real host and needs no credentials/u);
 });
 
@@ -51,7 +51,7 @@ test('declares a shell-independent production build', async () => {
     readonly scripts?: Readonly<Record<string, string>>;
   };
 
-  expect(manifest.scripts?.build).toBe('rsbuild build --mode production && npm run package:hosts');
+  expect(manifest.scripts?.build).toBe('rsbuild build --mode production && pnpm package:hosts');
 });
 
 test('derives the native evaluator root from decoded module URLs', async () => {
