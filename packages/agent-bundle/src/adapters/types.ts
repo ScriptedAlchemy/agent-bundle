@@ -2,6 +2,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { stableJson } from '../core/digest.ts';
 import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import {
   pathTokens,
@@ -85,6 +86,137 @@ export const schemaDescriptorsFrom = (
 export const hasPathToken = (value: string): boolean =>
   value.includes(pathTokens.pluginRoot) || value.includes(pathTokens.pluginData) || value.includes(pathTokens.workspaceRoot);
 
+export interface StandardPluginArtifactsInput {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly hookDocument?: Record<string, unknown>;
+  readonly hookDocumentValid: boolean;
+  readonly hookEntries: readonly TargetHookEntry[];
+  readonly hookManifestPath: string;
+  readonly isSelected: (targets: readonly string[]) => boolean;
+  readonly marketplace?: Record<string, unknown>;
+  readonly marketplaceRelativePath: string;
+  readonly marketplaceValid: boolean;
+  readonly mcp?: Record<string, unknown>;
+  readonly mcpValid: boolean;
+  readonly model: NormalizedPlugin;
+  readonly plugin: Record<string, unknown>;
+  readonly pluginRelativePath: string;
+  readonly targetName: string;
+}
+
+/**
+ * Common plugin.json / .mcp.json / hooks / marketplace / skills / assets emission tail
+ * shared by every plugin-shaped target adapter (Claude, Codex). Entry order, the
+ * `sourceInputs` spread order, and freeze semantics are load-bearing for artifact
+ * provenance, so callers must not reorder fields when adopting this helper.
+ */
+export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput): TargetArtifactPlan => {
+  const {
+    diagnostics,
+    hookDocument,
+    hookDocumentValid,
+    hookEntries,
+    hookManifestPath,
+    isSelected,
+    marketplace,
+    marketplaceRelativePath,
+    marketplaceValid,
+    mcp,
+    mcpValid,
+    model,
+    plugin,
+    pluginRelativePath,
+    targetName,
+  } = input;
+
+  const targetSourceInputs = model.targets
+    .filter((target) => target.name === targetName)
+    .map((target) => target.provenance.sourcePath);
+  const mcpSourceInputs = model.mcpServers
+    .filter((server) => isSelected(server.targets))
+    .map((server) => server.provenance.sourcePath);
+  const hookSourceInputs = model.hooks
+    .filter((hook) => isSelected(hook.targets))
+    .map((hook) => hook.provenance.sourcePath);
+  const nativeHookSourceInputs = model.nativeHooks
+    ?.filter((hook) => hook.target === targetName)
+    .flatMap((hook) => [hook.provenance.sourcePath, hook.source]) ?? [];
+  const skillSourceInputs = model.skills
+    .filter((skill) => isSelected(skill.targets))
+    .map((skill) => skill.source);
+
+  const entries: TargetArtifactEntry[] = [{
+    content: `${stableJson(plugin)}\n`,
+    kind: 'write',
+    relativePath: pluginRelativePath,
+    sourceInputs: sourceInputs(
+      model.metadata.provenance.sourcePath,
+      ...targetSourceInputs,
+      ...mcpSourceInputs,
+      ...hookSourceInputs,
+      ...nativeHookSourceInputs,
+      ...skillSourceInputs,
+    ),
+  }];
+  if (mcp !== undefined && mcpValid) {
+    entries.push({
+      content: `${stableJson(mcp)}\n`,
+      kind: 'write',
+      relativePath: '.mcp.json',
+      sourceInputs: sourceInputs(...targetSourceInputs, ...mcpSourceInputs),
+    });
+  }
+  if (hookDocument !== undefined && hookDocumentValid) {
+    entries.push({
+      content: `${stableJson(hookDocument)}\n`,
+      kind: 'write',
+      relativePath: hookManifestPath,
+      sourceInputs: sourceInputs(
+        ...targetSourceInputs,
+        ...hookSourceInputs,
+        ...nativeHookSourceInputs,
+      ),
+    });
+  }
+  if (marketplace !== undefined && marketplaceValid) {
+    entries.push({
+      content: `${stableJson(marketplace)}\n`,
+      kind: 'write',
+      relativePath: marketplaceRelativePath,
+      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
+    });
+  }
+  for (const skill of model.skills) {
+    if (!isSelected(skill.targets)) continue;
+    for (const resource of skill.resources) {
+      entries.push({
+        bytes: resource.bytes,
+        kind: 'copy',
+        relativePath: `skills/${skill.name}/${resource.relativePath}`,
+        source: resource.source,
+        sourceInputs: sourceInputs(skill.source, resource.source),
+      });
+    }
+  }
+
+  for (const asset of model.assets ?? []) {
+    if (!isSelected(asset.targets)) continue;
+    entries.push({
+      bytes: asset.bytes,
+      kind: 'copy',
+      relativePath: `assets/${asset.relativePath}`,
+      source: asset.source,
+      sourceInputs: sourceInputs(asset.source),
+    });
+  }
+
+  return Object.freeze({
+    diagnostics: Object.freeze(diagnostics),
+    entries: sortedEntries(entries),
+    hookEntries: hookDocumentValid ? hookEntries : Object.freeze([]),
+  });
+};
+
 export interface TargetAdapterMetadata {
   readonly adapterRevision: string;
   readonly capabilityRevision: string;
@@ -141,6 +273,19 @@ export interface TargetArtifactLayout {
   readonly scripts?: TargetArtifactOutputLayout;
   readonly skills?: string;
 }
+
+/**
+ * Direct-file artifact layout shared by every plugin-shaped target adapter
+ * (Claude, Codex): hook wrappers, MCP apps/entries, scripts, and skills all
+ * land in the same target-agnostic directories with the same suffix policy.
+ */
+export const standardArtifactLayout: TargetArtifactLayout = Object.freeze({
+  hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
+  mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
+  mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
+  scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.bash', '.mjs', '.py', '.sh']), directory: 'scripts' }),
+  skills: 'skills',
+});
 
 interface JsonSchemaValidator {
   (document: unknown): boolean;
