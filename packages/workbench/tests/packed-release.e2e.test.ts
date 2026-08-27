@@ -1653,6 +1653,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
+      await waitForBrowserRequestsAfter(mobileNavigationRequestIndex);
 
       phase = 'foreground outage ledger quiet fence';
       const requestFailuresBeforeQuietFence = browserRequests.filter((request) => request.error !== undefined);
