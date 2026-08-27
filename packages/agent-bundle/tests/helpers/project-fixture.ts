@@ -27,7 +27,7 @@ export interface ProjectFixtureOptions {
 
 const sourceEntryPoint = resolve(
   process.cwd(),
-  'packages/agent-bundle/src/index.ts',
+  'packages/agent-bundle/src/core/types.ts',
 );
 
 export const createProjectFixture = async (
