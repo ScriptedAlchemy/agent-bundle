@@ -10,7 +10,7 @@ import {
   ScriptPlaygroundService,
   type ResolvedPlaygroundScript,
 } from '../src/dev/playground/script-playground-service.ts';
-import { eventuallyPasses } from './support/eventually.ts';
+import { deferred, eventuallyPasses } from './support/eventually.ts';
 
 const script: ResolvedPlaygroundScript = Object.freeze({
   interpreter: Object.freeze({ args: Object.freeze([]), command: process.execPath }),
@@ -27,12 +27,6 @@ const temporaryScript = async (source: string): Promise<Readonly<{ readonly clos
 
 const eventually = (assertion: () => Promise<void> | void): Promise<void> =>
   eventuallyPasses(assertion, { attempts: 50, delayMs: 10 });
-
-const deferred = <Value,>() => {
-  let resolvePromise!: (value: Value) => void;
-  const promise = new Promise<Value>((resolve) => { resolvePromise = resolve; });
-  return Object.freeze({ promise, resolve: resolvePromise });
-};
 
 it('runs a server-resolved emitted script with stdout, stderr, and a nonzero exit', async () => {
   const emitted = await temporaryScript([

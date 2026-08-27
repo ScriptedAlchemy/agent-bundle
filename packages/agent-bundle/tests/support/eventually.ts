@@ -44,3 +44,28 @@ export const eventuallyPasses = async (
   }
   throw failure;
 };
+
+/** Reads a `ReadableStreamDefaultReader` to completion and decodes the accumulated bytes as UTF-8 text. */
+export const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
+  const decoder = new TextDecoder();
+  let output = '';
+  while (true) {
+    const next = await reader.read();
+    if (next.done) return output;
+    output += decoder.decode(next.value, { stream: true });
+  }
+};
+
+/**
+ * Creates a promise together with its own resolve/reject callbacks.
+ *
+ * Defaults to `void` so a bare rendezvous can be written as `deferred()` and settled with `resolve()`.
+ */
+export const deferred = <Value = void>(): Readonly<{
+  promise: Promise<Value>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: Value) => void;
+}> => {
+  const { promise, reject, resolve } = Promise.withResolvers<Value>();
+  return Object.freeze({ promise, reject, resolve });
+};

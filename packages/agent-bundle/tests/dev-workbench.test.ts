@@ -17,17 +17,7 @@ import {
 } from '../src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
-import { within } from './support/eventually.ts';
-
-const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
-  const decoder = new TextDecoder();
-  let output = '';
-  while (true) {
-    const next = await reader.read();
-    if (next.done) return output;
-    output += decoder.decode(next.value, { stream: true });
-  }
-};
+import { readToEnd, within } from './support/eventually.ts';
 
 const writeMcpProject = async (root: string): Promise<void> => {
   await Promise.all([

@@ -15,7 +15,7 @@ import {
 } from '../src/dev/playground/playground-store.ts';
 import { withGlobalDurabilityValue } from './support/durability.ts';
 import { errnoFailure } from './support/errors.ts';
-import { eventuallyPasses } from './support/eventually.ts';
+import { deferred, eventuallyPasses } from './support/eventually.ts';
 
 interface SessionIndex {
   readonly kind: 'agent-bundle-playground-session-index';
@@ -71,15 +71,6 @@ const withDurabilityTestPlatform = <T>(platform: NodeJS.Platform, operation: () 
 
 const eventually = (assertion: () => void, attempts = 100): Promise<void> =>
   eventuallyPasses(assertion, { attempts, delayMs: 1 });
-
-const deferred = <T = void>(): Readonly<{
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-}> => {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
-  return Object.freeze({ promise, resolve });
-};
 
 const sessionInput = (task = 'Explain the current workspace state.') => Object.freeze({
   epoch: Object.freeze({ digest: 'epoch-sha256', id: 'epoch-7' }),

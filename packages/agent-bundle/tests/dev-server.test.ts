@@ -17,7 +17,7 @@ import {
 } from '../src/dev/index.ts';
 import { ArtifactInspectionServiceError } from '../src/dev/artifacts/artifact-inspection-service.ts';
 import type { McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
-import { eventually, within } from './support/eventually.ts';
+import { eventually, readToEnd, within } from './support/eventually.ts';
 
 const status = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -159,16 +159,6 @@ const openLiveStream = (url: string): Readonly<{
       });
     },
   });
-};
-
-const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
-  const decoder = new TextDecoder();
-  let output = '';
-  while (true) {
-    const next = await reader.read();
-    if (next.done) return output;
-    output += decoder.decode(next.value, { stream: true });
-  }
 };
 
 it('serves typed project status and supplied prebuilt assets after starting the coordinator', async () => {

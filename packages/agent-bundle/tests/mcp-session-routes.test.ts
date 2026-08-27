@@ -1,6 +1,6 @@
 
 import { expect, it } from '@rstest/core';
-import { within } from './support/eventually.ts';
+import { readToEnd, within } from './support/eventually.ts';
 
 import {
   McpSessionRoutes,
@@ -159,16 +159,6 @@ const readLines = async (response: Response, count: number): Promise<readonly un
   }
   await reader.cancel();
   return lines;
-};
-
-const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
-  const decoder = new TextDecoder();
-  let output = '';
-  while (true) {
-    const next = await reader.read();
-    if (next.done) return output;
-    output += decoder.decode(next.value, { stream: true });
-  }
 };
 
 it('admits one positive session timeout with the immutable session snapshot', async () => {
