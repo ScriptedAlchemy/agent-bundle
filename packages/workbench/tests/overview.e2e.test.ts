@@ -1624,7 +1624,9 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
   const pageErrors: Error[] = [];
   page.on('pageerror', (error) => pageErrors.push(error));
   try {
+    const eventsConnected = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/project/events' && response.ok());
     await page.goto(server.url);
+    await eventsConnected;
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     let failedStatusRequests = 0;
     await page.route('**/api/project/status', async (route) => {
