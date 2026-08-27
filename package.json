@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json",
     "check": "pnpm build && pnpm test:unit && pnpm test:integration:run && pnpm lint && pnpm typecheck",
     "docs:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md",
-    "eval:spot": "pnpm --filter @agent-bundle/rsc-agent-runtime-demo build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec rstest run tests/micro-eval.spot.test.ts --config rstest.config.ts",
+    "eval:spot": "pnpm build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec rstest run tests/micro-eval.spot.test.ts --config rstest.config.ts",
     "check:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md --check",
     "test:spot-check": "rstest --config rstest.config.ts packages/agent-bundle/tests/micro-eval-spot-check.test.ts",
     "test:examples:browser": "rstest --config rstest.config.ts packages/workbench/tests/examples-real.e2e.test.ts",
