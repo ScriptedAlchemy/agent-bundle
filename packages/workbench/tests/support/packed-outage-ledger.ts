@@ -150,7 +150,7 @@ const isKnownPreOutageClientCancellation = (request: NetworkLedgerEntry): boolea
     (request.path === '/api/logs/replay' && request.status !== undefined && request.status >= 200 && request.status < 300)
   );
 
-const hasCanonicalAfterCursor = (url: URL): boolean => {
+export const hasCanonicalAfterCursor = (url: URL): boolean => {
   const parameters = [...url.searchParams.entries()];
   if (parameters.length !== 1 || parameters[0]![0] !== 'after') return false;
   const after = parameters[0]![1];
