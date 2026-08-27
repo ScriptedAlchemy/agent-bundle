@@ -108,6 +108,9 @@ const copyExample = async (): Promise<CopiedExample> => {
     recursive: true,
   });
   await symlink(workspaceNodeModules, join(workspaceRoot, 'node_modules'), 'dir');
+  // The example's direct dependencies (zod, @agent-bundle/rsc-runtime) live in its
+  // own node_modules, not the workspace root's hoisted set, so the copy needs both.
+  await symlink(join(exampleRoot, 'node_modules'), join(projectRoot, 'node_modules'), 'dir');
   await symlink(join(exampleRoot, '../../packages'), join(workspaceRoot, 'packages'), 'dir');
   await symlink(join(exampleRoot, '../../tsconfig.json'), join(workspaceRoot, 'tsconfig.json'));
   await symlink(join(exampleRoot, '../../tsconfig.base.json'), join(workspaceRoot, 'tsconfig.base.json'));
