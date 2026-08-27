@@ -23,8 +23,13 @@ export interface OutageLedger {
   readonly outageStartedAt: number;
   readonly postRecovery?: Readonly<{
     readonly freshMcpSession: Readonly<{ readonly closeCompletedAt: number; readonly closeStartedAt: number; readonly id: string; readonly openedAt: number }>;
-    /** Windows in which the test itself navigated between routes, cancelling in-flight page requests. */
-    readonly navigation: readonly Readonly<{ readonly leftAt: number; readonly openedAt: number }>[];
+    /** Exact page-owned requests cancelled when the test deliberately navigated away. */
+    readonly navigation: readonly Readonly<{
+      readonly leftAt: number;
+      readonly openedAt: number;
+      readonly respondedStream?: true;
+      readonly url: string;
+    }>[];
   }>;
   readonly recoveredAt: number;
   readonly requests: readonly NetworkLedgerEntry[];
@@ -72,7 +77,7 @@ export const postRecoveryCancellationFixture = (): OutageLedger => {
     postRecovery: Object.freeze({
       freshMcpSession: Object.freeze({ closeCompletedAt: 1_321, closeStartedAt: 1_320, id: freshMcpSessionId, openedAt: 1_310 }),
       navigation: Object.freeze([
-        Object.freeze({ leftAt: 1_345, openedAt: 1_330 }),
+        Object.freeze({ leftAt: 1_340, openedAt: 1_330, url: hooksUrl }),
       ]),
     }),
     requests: Object.freeze([
@@ -217,26 +222,32 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
         `fresh B MCP stream cancellation is not action-induced: ${JSON.stringify(failure)}`,
       );
     }
-    // Route changes cancel whatever the departing page still had in flight: pending API
-    // reads and open live streams. Within a recorded navigation window those aborts are
-    // action-induced; their shape is still validated and every other failure still rejects.
-    const navigationFailures = postRecoveryFailures.filter((request) =>
-      !freshMcpStreamFailures.includes(request) &&
-      postRecovery.navigation.some((navigation) => {
-        const failedAt = ledgerFailureAt(request);
-        return failedAt >= navigation.openedAt && failedAt <= navigation.leftAt;
-      }),
-    );
-    for (const failure of navigationFailures) {
-      assertOutageLedger(
-        failure.origin === ledger.origin && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED' &&
-        failure.path.startsWith('/api/') && (
-          (failure.respondedAt === undefined && failure.status === undefined) ||
-          (failure.respondedAt !== undefined && failure.respondedAt <= ledgerFailureAt(failure) &&
-            failure.status !== undefined && failure.status >= 200 && failure.status < 300)
-        ),
-        `navigation cancellation is not an action-induced pending request or live stream: ${JSON.stringify(failure)}`,
+    const navigationFailures: NetworkLedgerEntry[] = [];
+    for (const navigation of postRecovery.navigation) {
+      const failures = postRecoveryFailures.filter((request) =>
+        request.url === navigation.url && request.at >= navigation.openedAt && request.at < navigation.leftAt &&
+        ledgerFailureAt(request) >= navigation.leftAt,
       );
+      assertOutageLedger(failures.length <= 1,
+        `multiple action-induced navigation cancellations: ${JSON.stringify({ failures, navigation })}`);
+      for (const failure of failures) {
+        let validResponse = failure.respondedAt === undefined && failure.status === undefined;
+        if (navigation.respondedStream === true) {
+          let url: URL;
+          try { url = new URL(failure.url); }
+          catch { throw new Error(`Foreground outage ledger rejected: responded navigation stream URL is invalid: ${JSON.stringify(failure)}`); }
+          validResponse = failure.path === '/api/logs/stream' && url.origin === ledger.origin &&
+            url.pathname === '/api/logs/stream' && hasCanonicalAfterCursor(url) &&
+            failure.respondedAt !== undefined && failure.respondedAt >= failure.at &&
+            failure.respondedAt <= ledgerFailureAt(failure) && failure.status !== undefined &&
+            failure.status >= 200 && failure.status < 300;
+        }
+        assertOutageLedger(
+          failure.origin === ledger.origin && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED' && validResponse,
+          `navigation cancellation did not match its exact pending-or-stream response contract: ${JSON.stringify({ failure, navigation })}`,
+        );
+      }
+      navigationFailures.push(...failures);
     }
     const recognizedPostRecoveryFailures = [...freshMcpStreamFailures, ...navigationFailures];
     assertOutageLedger(recognizedPostRecoveryFailures.length === postRecoveryFailures.length,

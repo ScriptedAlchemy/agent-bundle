@@ -181,11 +181,23 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   });
   const navigationLiveStreamCancellation = Object.freeze({
     ...validPostRecovery,
+    postRecovery: Object.freeze({
+      ...validPostRecovery.postRecovery!,
+      navigation: Object.freeze([
+        ...validPostRecovery.postRecovery!.navigation,
+        Object.freeze({
+          leftAt: 1_350,
+          openedAt: 1_345,
+          respondedStream: true as const,
+          url: `${valid.origin}/api/logs/stream?after=32`,
+        }),
+      ]),
+    }),
     requests: Object.freeze([
       ...validPostRecovery.requests,
       ledgerRequest({
-        at: 1_331, completedAt: 1_340, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/logs/stream',
-        respondedAt: 1_332, status: 200, url: `${valid.origin}/api/logs/stream?after=32`,
+        at: 1_345, completedAt: 1_351, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/logs/stream',
+        respondedAt: 1_346, status: 200, url: `${valid.origin}/api/logs/stream?after=32`,
       }),
     ]),
   });
@@ -195,6 +207,15 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       ...validPostRecovery.requests,
       ledgerRequest({ at: 1_335, completedAt: 1_336, error: 'net::ERR_ABORTED', method: 'POST', path: '/api/playground/runs' }),
     ]),
+  });
+  const navigationCancellationBeforeDeparture = Object.freeze({
+    ...validPostRecovery,
+    postRecovery: Object.freeze({
+      ...validPostRecovery.postRecovery!,
+      navigation: Object.freeze(validPostRecovery.postRecovery!.navigation.map((navigation) =>
+        Object.freeze({ ...navigation, leftAt: 1_345 }),
+      )),
+    }),
   });
   const malformedLedgers = [duplicateConsole, crossOriginConsole, missingCleanup];
 
@@ -220,4 +241,5 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(unknownOutageStreamTermination)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(unknownPostRecoveryCancellation)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(navigationNonGetCancellation)).toThrow(/Foreground outage ledger rejected/u);
+  expect(() => validateOutageLedger(navigationCancellationBeforeDeparture)).toThrow(/Foreground outage ledger rejected/u);
 });
