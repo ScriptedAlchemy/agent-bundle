@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { execFile as executeFile } from 'node:child_process';
 import {
   access,
@@ -19,6 +18,8 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
+
+import { sha256Hex } from '../src/core/digest.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -52,7 +53,7 @@ const artifactDigest = async (root: string): Promise<readonly FileDigest[]> => {
       return [{
         bytes: contents.byteLength,
         path: relative(root, path),
-        sha256: createHash('sha256').update(contents).digest('hex'),
+        sha256: sha256Hex(contents),
       }];
     }));
     return collected.flat();

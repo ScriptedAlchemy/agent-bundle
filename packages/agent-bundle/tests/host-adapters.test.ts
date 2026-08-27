@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +8,7 @@ import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
+import { sha256Hex } from '../src/core/digest.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
@@ -155,7 +155,7 @@ it('pins host help, capabilities, and every schema snapshot to the supported CLI
     expect(help).not.toMatch(/(?:\/home\/|logged in|credential state|session id)/i);
     for (const [name, hash] of Object.entries(expected.hashes)) {
       const schema = await readFile(new URL(name, schemaRoot));
-      expect(createHash('sha256').update(schema).digest('hex')).toBe(hash);
+      expect(sha256Hex(schema)).toBe(hash);
       expect(provenance.schemas[name]?.sha256).toBe(hash);
     }
   }

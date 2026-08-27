@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 import { expect, it } from '@rstest/core';
 
+import { sha256Hex } from '../src/core/digest.ts';
 import {
   agentSkillsSchemaRevision,
   validateAgentSkillsFrontmatter,
@@ -71,7 +71,7 @@ it('pins the schema and provenance to immutable upstream source artifacts', asyn
     url: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/skills-ref/src/skills_ref/validator.py',
   });
   expect(schema.byteLength).toBe(provenance.derivedSchema.bytes);
-  expect(createHash('sha256').update(schema).digest('hex')).toBe(provenance.derivedSchema.sha256);
+  expect(sha256Hex(schema)).toBe(provenance.derivedSchema.sha256);
 });
 
 it('validates entirely offline without calling fetch', () => {

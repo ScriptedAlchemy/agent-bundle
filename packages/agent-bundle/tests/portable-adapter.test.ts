@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { expect, it } from '@rstest/core';
 
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { portableAdapter } from '../src/adapters/portable.ts';
+import { sha256Hex } from '../src/core/digest.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 
@@ -442,7 +442,7 @@ it('ships the pinned schema snapshots recorded in provenance', async () => {
     'plugin.schema.json': '0a4aad95ce337878ad38802ebf0daa3fde76abe3f65400c86bcbb1ec0b3ab883',
   })) {
     const content = await readFile(new URL(name, schemaRoot));
-    expect(createHash('sha256').update(content).digest('hex')).toBe(expectedHash);
+    expect(sha256Hex(content)).toBe(expectedHash);
     expect(provenance.schemas[name]?.sha256).toBe(expectedHash);
   }
 });
