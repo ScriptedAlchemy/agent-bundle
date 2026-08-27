@@ -11,14 +11,9 @@ import type {
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/contracts/playground.ts';
 import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord, nonemptyString, parseStrictResponseJson } from '../client-helpers.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
 import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
-
-export interface PlaygroundClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
-}
 
 export interface PlaygroundStreamOptions {
   readonly afterSequence?: number;
@@ -252,7 +247,7 @@ const traceEventFrame = (bytes: Uint8Array): PlaygroundTraceEvent => {
 export class PlaygroundClient {
   readonly #transport: ForegroundTransport;
 
-  constructor(options: PlaygroundClientOptions = {}) {
+  constructor(options: WorkbenchClientOptions = {}) {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new PlaygroundClientError(code, message),
       fallbackCode: 'AB8043',

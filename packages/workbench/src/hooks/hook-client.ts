@@ -9,14 +9,9 @@ import type {
 import { z } from 'zod';
 
 import { CodedClientError } from '../client-helpers.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
 
 export type HookSimulationResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation;
-
-export interface HookClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
-}
 
 export interface HookSimulationOptions {
   readonly epochId: string;
@@ -184,7 +179,7 @@ const simulationResult = (value: unknown): HookSimulationResult => {
 export class HookClient {
   readonly #transport: ForegroundTransport;
 
-  constructor(options: HookClientOptions = {}) {
+  constructor(options: WorkbenchClientOptions = {}) {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new HookClientError(code, message),
       fallbackCode: 'AB8033',

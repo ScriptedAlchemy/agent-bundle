@@ -10,7 +10,7 @@ import type {
 } from '../../../agent-bundle/src/contracts/eval.ts';
 import type { JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
 import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, decodeDiagnosticError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
-import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { awaitWithAbort, ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
 import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
 import {
   nonnegativeIntegerSchema,
@@ -18,11 +18,6 @@ import {
   provenanceIdentifierSchema,
   safeIntegerSchema,
 } from '../schema-atoms.ts';
-
-export interface EvalClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
-}
 
 export type EvalHarness = 'claude' | 'codex' | 'deterministic';
 
@@ -323,7 +318,7 @@ const filenameFor = (value: string | null): string | undefined => {
 export class EvalClient {
   readonly #transport: ForegroundTransport;
 
-  constructor(options: EvalClientOptions = {}) {
+  constructor(options: WorkbenchClientOptions = {}) {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new EvalClientError(code, message),
       fallbackCode: 'AB8073',

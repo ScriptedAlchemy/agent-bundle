@@ -1,5 +1,5 @@
 import { CodedClientError, isRecord } from '../client-helpers.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
 import { mapStrictJsonReason, snapshotStrictJsonValue } from '../strict-json.ts';
 
 export type McpAppJsonPrimitive = null | boolean | number | string;
@@ -69,11 +69,6 @@ export interface McpAppRouteMessages {
 export interface McpAppRouteClose {
   readonly lifecycle: McpAppBridgeLifecycle;
   readonly message?: McpAppJsonValue;
-}
-
-export interface McpAppClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
 }
 
 const maximumPathSegmentLength = 4_096;
@@ -220,7 +215,7 @@ const validRequestId = (value: unknown): value is McpAppRequestId =>
 export class McpAppClient {
   readonly #transport: ForegroundTransport;
 
-  constructor(options: McpAppClientOptions = {}) {
+  constructor(options: WorkbenchClientOptions = {}) {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new McpAppClientError(code, message),
       fallbackCode: 'AB8019',

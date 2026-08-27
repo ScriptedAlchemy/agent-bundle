@@ -6,7 +6,7 @@ import {
   type EvalComparison,
 } from '../../../agent-bundle/src/contracts/eval.ts';
 import { CodedClientError } from '../client-helpers.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
 import {
   nonnegativeIntegerSchema,
@@ -16,11 +16,6 @@ import {
   safeIntegerSchema,
   safeNumberSchema,
 } from '../schema-atoms.ts';
-
-export interface ComparisonClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
-}
 
 export interface ComparisonRequest {
   readonly base: string;
@@ -152,7 +147,7 @@ const comparisonResult = (value: unknown): EvalComparison => {
 export class ComparisonClient {
   readonly #transport: ForegroundTransport;
 
-  constructor(options: ComparisonClientOptions = {}) {
+  constructor(options: WorkbenchClientOptions = {}) {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new ComparisonClientError(code, message),
       fallbackCode: 'AB8083',

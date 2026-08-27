@@ -42,6 +42,13 @@ export interface ForegroundTransportOptions {
   readonly label: string;
 }
 
+/** Construction options shared by every Workbench route client. */
+export interface WorkbenchClientOptions {
+  /** The Workbench-wide authority that owns foreground credential refresh. */
+  readonly authority?: ForegroundSessionAuthority;
+  readonly fetch?: typeof fetch;
+}
+
 export interface ForegroundSessionAuthorityOptions {
   /** Overrides the browser origin only when an embedding host provides the capability boundary. */
   readonly browserOrigin?: string;

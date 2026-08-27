@@ -1,5 +1,5 @@
 import { CodedClientError, isRecord } from '../client-helpers.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
 import { mapStrictJsonReason, snapshotStrictJsonValue } from '../strict-json.ts';
 
 export type McpRouteTarget = 'claude' | 'codex' | 'portable';
@@ -41,11 +41,6 @@ export type McpRouteOperation =
   | Readonly<{ readonly arguments?: Readonly<Record<string, string>>; readonly name: string; readonly operation: 'prompts/get' }>
   | Readonly<{ readonly operation: 'resources/read'; readonly uri: string }>
   | Readonly<{ readonly arguments: Readonly<Record<string, unknown>>; readonly name: string; readonly operation: 'tools/call'; readonly requestId?: string }>;
-
-export interface McpRouteClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
-}
 
 const isTarget = (value: unknown): value is McpRouteTarget =>
   value === 'claude' || value === 'codex' || value === 'portable';
@@ -125,7 +120,7 @@ const encode = (value: string): string => encodeURIComponent(value);
 export class McpRouteClient {
   readonly #transport: ForegroundTransport;
 
-  constructor(options: McpRouteClientOptions = {}) {
+  constructor(options: WorkbenchClientOptions = {}) {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new McpRouteClientError(code, message),
       fallbackCode: 'AB8019',

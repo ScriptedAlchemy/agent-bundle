@@ -1,13 +1,8 @@
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import { CodedClientError, hasAllowedKeys, isDiagnostic, isRecord } from '../client-helpers.ts';
-import { ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
-
-export interface ArtifactClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
-}
 
 const noDiagnostics: readonly Diagnostic[] = Object.freeze([]);
 
@@ -137,7 +132,7 @@ const diffBody = (value: unknown): ArtifactEpochDiff => {
 export class ArtifactClient {
   readonly #transport: ForegroundTransport;
 
-  constructor(options: ArtifactClientOptions = {}) {
+  constructor(options: WorkbenchClientOptions = {}) {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message, body) => new ArtifactClientError(code, message, failureDiagnostics(body)),
       fallbackCode: 'AB8063',

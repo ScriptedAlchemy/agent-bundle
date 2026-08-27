@@ -8,13 +8,8 @@ import { devLogKinds, devLogLevels, devLogProducers, hasControlOrSeparators } fr
 import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
 import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys as hasExactKeys, isRecord } from '../client-helpers.ts';
-import { awaitWithAbort, ForegroundSessionAuthority, ForegroundTransport } from '../foreground-session.ts';
+import { awaitWithAbort, ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
 import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
-
-export interface LogClientOptions {
-  readonly authority?: ForegroundSessionAuthority;
-  readonly fetch?: typeof fetch;
-}
 
 export type LogStream = NdjsonStream;
 
@@ -131,7 +126,7 @@ const diagnosticFor = (value: unknown): LogClientError => {
 export class LogClient {
   readonly #transport: ForegroundTransport;
 
-  constructor(options: LogClientOptions = {}) {
+  constructor(options: WorkbenchClientOptions = {}) {
     this.#transport = new ForegroundTransport({
       errorFor: (code, message) => new LogClientError(code, message),
       fallbackCode: 'AB8093',
