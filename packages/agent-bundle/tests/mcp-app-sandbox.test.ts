@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { connect } from 'node:net';
+import { connect, createServer } from 'node:net';
 
 import { expect, it } from '@rstest/core';
 
@@ -32,15 +32,22 @@ const rpcNotification = (method: string, params: Record<string, unknown> = {}) =
 });
 
 it('serves one immutable, different-origin shell and no MCP or session route', async () => {
-  const proxy = await createMcpAppSandboxProxy({
-    hostOrigin: 'http://127.0.0.1:43123',
-    maxMessageBytes: 1_024,
-    maxQueuedMessages: 1,
-    port: 0,
-  });
+  const host = createServer();
+  host.listen({ host: '127.0.0.1', port: 0 });
+  await once(host, 'listening');
+  const address = host.address();
+  if (address === null || typeof address === 'string') throw new Error('The MCP App sandbox test host did not receive a TCP address.');
+  const hostOrigin = `http://127.0.0.1:${address.port}`;
+  let proxy: Awaited<ReturnType<typeof createMcpAppSandboxProxy>> | undefined;
 
   try {
-    expect(proxy.origin).not.toBe('http://127.0.0.1:43123');
+    proxy = await createMcpAppSandboxProxy({
+      hostOrigin,
+      maxMessageBytes: 1_024,
+      maxQueuedMessages: 1,
+      port: 0,
+    });
+    expect(proxy.origin).not.toBe(hostOrigin);
     expect(proxy.url).toBe(`${proxy.origin}/`);
     expect(proxy.relay).toEqual(relay);
 
@@ -56,7 +63,8 @@ it('serves one immutable, different-origin shell and no MCP or session route', a
     expect(root.headers.get('permissions-policy')).toBeNull();
     expect(forbidden.status).toBe(404);
   } finally {
-    await proxy.close();
+    await proxy?.close();
+    await new Promise<void>((resolve, reject) => host.close((error) => error === undefined ? resolve() : reject(error)));
   }
 });
 
