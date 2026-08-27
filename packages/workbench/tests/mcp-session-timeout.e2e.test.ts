@@ -4,10 +4,7 @@ import { join } from 'node:path';
 import { expect } from '@rstest/playwright';
 
 import { agentBundleNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
-import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
-import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
-import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, withWorkbenchProjectServer } from './support/workbench-e2e.ts';
 
 const browserTimeout = 8_000;
 
@@ -41,20 +38,8 @@ const writeTimeoutProject = async (root: string): Promise<void> => {
 };
 
 e2e('opens one browser MCP session with an immutable timeout', { timeout: 90_000 }, async ({ page }) => {
-  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  let testFailure: unknown;
-  let cleanupFailure: unknown;
-  try {
-    await buildWorkbench();
-    project = await createProjectFixture();
-    await writeTimeoutProject(project.root);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
+  await buildWorkbench();
+  await withWorkbenchProjectServer(async (server) => {
     const artifact = server.status().artifact;
     if (artifact.state !== 'active') throw new Error('Expected a generated fixture artifact epoch.');
     const foregroundOrigin = server.url;
@@ -93,14 +78,5 @@ e2e('opens one browser MCP session with an immutable timeout', { timeout: 90_000
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
-  } catch (error) {
-    testFailure = error;
-  } finally {
-    const serverCleanup = await Promise.allSettled(server === undefined ? [] : [server.close()]);
-    const projectCleanup = await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
-    const failedCleanup = [...serverCleanup, ...projectCleanup].find((result) => result.status === 'rejected');
-    if (failedCleanup?.status === 'rejected') cleanupFailure = failedCleanup.reason;
-  }
-  if (testFailure !== undefined) throw testFailure;
-  if (cleanupFailure !== undefined) throw cleanupFailure;
+  }, { setup: (project) => writeTimeoutProject(project.root) });
 });

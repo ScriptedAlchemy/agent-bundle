@@ -4,10 +4,7 @@ import { join } from 'node:path';
 import { expect } from '@rstest/playwright';
 
 import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
-import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
-import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
-import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { e2e, execFile, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
+import { e2e, execFile, withWorkbenchProjectServer, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
 
 const browserTimeout = 5_000;
 
@@ -68,14 +65,7 @@ const writeInspectorProject = async (root: string): Promise<void> => {
 
 e2e('canonicalizes legacy routes, preserves browser history, and rejects Inspector routes', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  const server = await startDevServer({
-    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-    open: false,
-    port: 0,
-    root: project.root,
-  });
-  try {
+  await withWorkbenchProjectServer(async (server) => {
     const pageErrors: Error[] = [];
     let sessionPosts = 0;
     page.on('pageerror', (error) => pageErrors.push(error));
@@ -109,23 +99,12 @@ e2e('canonicalizes legacy routes, preserves browser history, and rejects Inspect
     await expect(page).toHaveURL(/#\/overview$/u, { timeout: browserTimeout });
     expect(sessionPosts).toBe(0);
     expect(pageErrors).toEqual([]);
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  });
 });
 
 e2e('shares one real session between the MCP Playground and Inspector presentations', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  await writeInspectorProject(project.root);
-  const server = await startDevServer({
-    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-    open: false,
-    port: 0,
-    root: project.root,
-  });
-  try {
+  await withWorkbenchProjectServer(async (server) => {
     const pageErrors: Error[] = [];
     let sessionPosts = 0;
     page.on('pageerror', (error) => pageErrors.push(error));
@@ -240,23 +219,12 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     expect(sessionPosts).toBe(1);
     expect(await page.evaluate(() => window.history.length)).toBe(presentationHistoryLength);
     expect(pageErrors).toEqual([]);
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  }, { setup: (project) => writeInspectorProject(project.root) });
 });
 
 e2e('mounts the internal Inspector presentation from an explicit development-mode artifact', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench('development');
-  const project = await createProjectFixture();
-  await writeInspectorProject(project.root);
-  const server = await startDevServer({
-    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-    open: false,
-    port: 0,
-    root: project.root,
-  });
-  try {
+  await withWorkbenchProjectServer(async (server) => {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
     await page.goto(`${server.url}#/mcp`);
@@ -267,8 +235,5 @@ e2e('mounts the internal Inspector presentation from an explicit development-mod
     await expect(page.getByText('Negotiated protocol: Not negotiated')).toBeVisible({ timeout: browserTimeout });
     await expect(await readFile(join(workbenchAssets, 'static', 'js', 'lib-react.js'), 'utf8')).toContain('react.development.js');
     expect(pageErrors).toEqual([]);
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  }, { setup: (project) => writeInspectorProject(project.root) });
 });

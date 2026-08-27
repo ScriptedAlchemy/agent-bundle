@@ -2,23 +2,13 @@ import { writeFile } from 'node:fs/promises';
 
 import { expect } from '@rstest/playwright';
 
-import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
-import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
-import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, withWorkbenchProjectServer } from './support/workbench-e2e.ts';
 
 const browserTimeout = 12_000;
 
 e2e('shows real producer logs with replay, filters, redaction, responsive layout, and no browser errors', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  const server = await startDevServer({
-    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-    open: false,
-    port: 0,
-    root: project.root,
-  });
-  try {
+  await withWorkbenchProjectServer(async (server, project) => {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
     const replayed = page.waitForResponse((response) => {
@@ -61,8 +51,5 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  });
 });

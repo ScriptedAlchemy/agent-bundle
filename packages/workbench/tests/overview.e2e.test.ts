@@ -17,7 +17,7 @@ import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, withWorkbenchProjectServer, withWorkbenchServer, workbenchAssets } from './support/workbench-e2e.ts';
 
 const browserTimeout = 15_000;
 
@@ -55,6 +55,8 @@ const startFrozenEpochServer = async (root: string) => {
   });
   return { eventHub, server };
 };
+
+type FrozenEpochServer = Awaited<ReturnType<typeof startFrozenEpochServer>>;
 
 const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
   await Promise.all([
@@ -116,19 +118,7 @@ const expectSafeLaunchConfiguration = async (page: Page, { command, compiledEntr
 
 e2e('opens one real epoch MCP session and keeps its playground operations responsive', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
-  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  let cleanupFailure: unknown;
-  let testFailure: unknown;
-  try {
-    project = await createProjectFixture();
-    await writeMcpPlaygroundProject(project.root);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
+  await withWorkbenchProjectServer(async (server, project) => {
     const foregroundOrigin = server.url;
     const artifact = server.status().artifact;
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
@@ -249,31 +239,12 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
-  } catch (error) {
-    testFailure = error;
-  } finally {
-    const serverCleanup = await Promise.allSettled(server === undefined ? [] : [server.close()]);
-    const projectCleanup = await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
-    const failedCleanup = [...serverCleanup, ...projectCleanup].find((result) => result.status === 'rejected');
-    if (failedCleanup?.status === 'rejected') cleanupFailure = failedCleanup.reason;
-  }
-  if (testFailure !== undefined) throw testFailure;
-  if (cleanupFailure !== undefined) throw cleanupFailure;
+  }, { setup: (project) => writeMcpPlaygroundProject(project.root) });
 });
 
 e2e('renders the safe launch configuration for one real artifact MCP session', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
-  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  try {
-    project = await createProjectFixture();
-    await writeMcpPlaygroundProject(project.root);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
+  await withWorkbenchProjectServer(async (server, project) => {
     const foregroundOrigin = server.url;
     const artifact = server.status().artifact;
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
@@ -305,23 +276,12 @@ e2e('renders the safe launch configuration for one real artifact MCP session', {
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
-  } finally {
-    await Promise.allSettled(server === undefined ? [] : [server.close()]);
-    await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
-  }
+  }, { setup: (project) => writeMcpPlaygroundProject(project.root) });
 });
 
 e2e('renders and rebuilds the complete desktop Overview against a real foreground server', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  await writeFile(project.skillSource, `${project.skillMarkdown}\n\`\`\`mermaid\ngraph TD\n\`\`\`\n\n\`\`\`not-a-shiki-language\nplain fallback\n\`\`\`\n`);
-  const server = await startDevServer({
-    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-    open: false,
-    port: 0,
-    root: project.root,
-  });
-  try {
+  await withWorkbenchProjectServer(async (server) => {
     await page.setViewportSize({ height: 900, width: 1_440 });
     const asyncScripts = new Set<string>();
     page.on('request', (request) => {
@@ -391,19 +351,21 @@ e2e('renders and rebuilds the complete desktop Overview against a real foregroun
 
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  }, {
+    setup: (project) => writeFile(project.skillSource, `${project.skillMarkdown}\n\`\`\`mermaid\ngraph TD\n\`\`\`\n\n\`\`\`not-a-shiki-language\nplain fallback\n\`\`\`\n`),
+  });
 });
 
 e2e('renders the latest changed files from a replayed foreground source event on desktop', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  const { eventHub, server } = await startFrozenEpochServer(project.root);
-  const pageErrors: Error[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error));
-  try {
+  await withWorkbenchServer({
+    close: (result: FrozenEpochServer) => result.server.close(),
+    createProject: createProjectFixture,
+    dispose: (project) => removeProjectFixture(project.root),
+    start: (project) => startFrozenEpochServer(project.root),
+  }, async ({ eventHub, server }: FrozenEpochServer) => {
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
     eventHub.publish({
       payload: {
         occurredAt: '2026-08-16T12:00:00.000Z',
@@ -428,23 +390,12 @@ e2e('renders the latest changed files from a replayed foreground source event on
     ], { timeout: browserTimeout });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  });
 });
 
 e2e('loads the lazy Shiki chunk only after a fenced non-Mermaid Skill is rendered', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  await writeFile(project.skillSource, `${project.skillMarkdown}\n\`\`\`ts\nconst answer: number = 42;\n\`\`\`\n`);
-  const server = await startDevServer({
-    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-    open: false,
-    port: 0,
-    root: project.root,
-  });
-  try {
+  await withWorkbenchProjectServer(async (server) => {
     const asyncScripts = new Set<string>();
     page.on('request', (request) => {
       if (request.resourceType() === 'script' && request.url().includes('/static/js/async/')) asyncScripts.add(request.url());
@@ -456,29 +407,12 @@ e2e('loads the lazy Shiki chunk only after a fenced non-Mermaid Skill is rendere
     await expect(page.locator('.skill-code-block')).toContainText('const answer: number = 42;', { timeout: browserTimeout });
     await expect.poll(() => asyncScripts.size, { timeout: browserTimeout }).toBeGreaterThan(0);
     await expect(page.locator('.skill-shiki')).toContainText('const answer: number = 42;', { timeout: browserTimeout });
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  }, { setup: (project) => writeFile(project.skillSource, `${project.skillMarkdown}\n\`\`\`ts\nconst answer: number = 42;\n\`\`\`\n`) });
 });
 
 e2e('delivers active Skill resources as downloads without letting their page script access the foreground session', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  await writeFile(join(project.skillDir, 'assets', 'probe.html'), [
-    '<script>',
-    'window.__skillResourceExecuted = true;',
-    "fetch('/api/project/session');",
-    '</script>',
-    '',
-  ].join('\n'));
-  const server = await startDevServer({
-    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-    open: false,
-    port: 0,
-    root: project.root,
-  });
-  try {
+  await withWorkbenchProjectServer(async (server) => {
     await page.goto(server.url);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     let protectedRequests = 0;
@@ -492,17 +426,25 @@ e2e('delivers active Skill resources as downloads without letting their page scr
     expect(attachment.suggestedFilename()).toBe('probe.html');
     expect(protectedRequests).toBe(0);
     expect(await page.evaluate(() => (globalThis as { readonly __skillResourceExecuted?: boolean }).__skillResourceExecuted)).toBeUndefined();
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  }, {
+    setup: (project) => writeFile(join(project.skillDir, 'assets', 'probe.html'), [
+      '<script>',
+      'window.__skillResourceExecuted = true;',
+      "fetch('/api/project/session');",
+      '</script>',
+      '',
+    ].join('\n')),
+  });
 });
 
 e2e('lists an immutable build Skill tree even after the current source Skill is renamed', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  const { server } = await startFrozenEpochServer(project.root);
-  try {
+  await withWorkbenchServer({
+    close: (result: FrozenEpochServer) => result.server.close(),
+    createProject: createProjectFixture,
+    dispose: (project) => removeProjectFixture(project.root),
+    start: (project) => startFrozenEpochServer(project.root),
+  }, async ({ server }: FrozenEpochServer, project) => {
     const renamed = join(project.root, 'skills', 'revised');
     await rename(project.skillDir, renamed);
     await writeFile(join(renamed, 'SKILL.md'), project.skillMarkdown.replace('name: review', 'name: revised'));
@@ -515,24 +457,14 @@ e2e('lists an immutable build Skill tree even after the current source Skill is 
     await expect(page.locator('.skill-tree-item')).toContainText('review', { timeout: browserTimeout });
     await expect(page.locator('.skill-provenance')).toHaveText('Generated for portable', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  });
 });
 
 e2e('retains the Overview and marks the foreground connection unavailable after an event refresh fails', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  const server = await startDevServer({
-    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-    open: false,
-    port: 0,
-    root: project.root,
-  });
-  const pageErrors: Error[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error));
-  try {
+  await withWorkbenchProjectServer(async (server) => {
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
     await page.goto(server.url);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.route('**/api/project/status', (route) => route.fulfill({
@@ -547,10 +479,7 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
     expect(pageErrors).toEqual([]);
-  } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
-  }
+  });
 });
 
 e2e('gates the Workbench and resets browser-local state for a same-origin replacement foreground generation', { timeout: 120_000 }, async ({ page }) => {

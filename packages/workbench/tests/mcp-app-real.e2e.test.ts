@@ -7,7 +7,7 @@ import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, withWorkbenchProjectServer, workbenchAssets } from './support/workbench-e2e.ts';
 
 const browserTimeout = 8_000;
 
@@ -324,23 +324,11 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
 });
 
 e2e('renders a compiler-bundled App template through the canonical sandbox URL', { timeout: 90_000 }, async ({ page }) => {
-  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  let testFailure: unknown;
-  let cleanupFailure: unknown;
+  await buildWorkbench();
   const consoleErrors: string[] = [];
   const pageErrors: Error[] = [];
   const appRequests: Array<{ readonly method: string; readonly path: string }> = [];
-  try {
-    await buildWorkbench();
-    project = await createProjectFixture();
-    await writeBundledAppProject(project.root);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
+  await withWorkbenchProjectServer(async (server) => {
     const foregroundOrigin = server.url;
     page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(message.text());
@@ -385,14 +373,5 @@ e2e('renders a compiler-bundled App template through the canonical sandbox URL',
     await expect(outerFrame).toBeHidden({ timeout: browserTimeout });
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);
-  } catch (error) {
-    testFailure = error;
-  } finally {
-    const serverCleanup = await Promise.allSettled(server === undefined ? [] : [server.close()]);
-    const projectCleanup = await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
-    const failedCleanup = [...serverCleanup, ...projectCleanup].find((result) => result.status === 'rejected');
-    if (failedCleanup?.status === 'rejected') cleanupFailure = failedCleanup.reason;
-  }
-  if (testFailure !== undefined) throw testFailure;
-  if (cleanupFailure !== undefined) throw cleanupFailure;
+  }, { setup: (project) => writeBundledAppProject(project.root) });
 });

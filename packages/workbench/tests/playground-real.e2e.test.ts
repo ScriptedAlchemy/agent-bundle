@@ -4,11 +4,8 @@ import { join } from 'node:path';
 import { expect } from '@rstest/playwright';
 
 import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
-import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
-import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
-import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { writeFakeClaude, type FakeClaudeBehavior } from './support/packed-release-harness.ts';
-import { buildWorkbench, e2e, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, withWorkbenchProjectServer, workspaceRoot } from './support/workbench-e2e.ts';
 
 const browserTimeout = 8_000;
 const nativePathFallback = '/usr/bin:/bin';
@@ -133,17 +130,7 @@ interface PlaygroundAdmission {
 
 e2e('executes server-owned Playground operations with pinned traces, export, promotion, and cancellation', { timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
-  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  try {
-    project = await createProjectFixture();
-    await writePlaygroundProject(project.root);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
+  await withWorkbenchProjectServer(async (server) => {
     const runBodies: unknown[] = [];
     const consoleErrors: string[] = [];
     const pageErrors: Error[] = [];
@@ -152,7 +139,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     });
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('request', (request) => {
-      if (request.url() === `${server!.url}/api/playground/runs` && request.method() === 'POST') {
+      if (request.url() === `${server.url}/api/playground/runs` && request.method() === 'POST') {
         runBodies.push(JSON.parse(request.postData() ?? 'null'));
       }
     });
@@ -171,7 +158,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     await page.locator('#playground-target').selectOption('claude');
 
     const waitForRun = (): Promise<{ readonly run: { readonly id: string; readonly session: { readonly identity: { readonly epoch: { readonly id: string } } } } }> =>
-      page.waitForResponse(runRequest(server!.url)).then(async (response) => response.json());
+      page.waitForResponse(runRequest(server.url)).then(async (response) => response.json());
 
     await page.locator('#playground-skill-id').selectOption('skill:review');
     const skillStarted = waitForRun();
@@ -200,7 +187,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
 
     await page.getByRole('link', { name: 'Overview' }).click();
     const rebuildCompleted = page.waitForResponse((response) =>
-      response.url() === `${server!.url}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
+      response.url() === `${server.url}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
     );
     await page.getByRole('button', { name: /Rebuild/u }).click();
     const rebuilt = await rebuildCompleted;
@@ -262,29 +249,13 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);
-  } finally {
-    await Promise.allSettled(server === undefined ? [] : [server.close()]);
-    await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
-  }
+  }, { setup: (project) => writePlaygroundProject(project.root) });
 });
 
 e2e('executes catalog-admitted native prompts through the real host harness', { timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
   const priorPath = process.env.PATH;
-  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  try {
-    project = await createProjectFixture();
-    await writePlaygroundProject(project.root);
-    const fakeHostDirectory = await writeFakeClaude(project.root, playgroundClaudeBehavior);
-    process.env.PATH = `${fakeHostDirectory}:${nativePathFallback}`;
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
-
+  await withWorkbenchProjectServer(async (server) => {
     const nativeRequests: Array<Record<string, unknown>> = [];
     let nativeAdmissionA: PlaygroundAdmission | undefined;
     let nativeAdmissionB: PlaygroundAdmission | undefined;
@@ -295,7 +266,7 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
     });
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('request', (request) => {
-      if (request.url() !== `${server!.url}/api/playground/runs` || request.method() !== 'POST') return;
+      if (request.url() !== `${server.url}/api/playground/runs` || request.method() !== 'POST') return;
       const body = JSON.parse(request.postData() ?? 'null') as unknown;
       if (typeof body === 'object' && body !== null && (body as { readonly operation?: unknown }).operation === 'native.prompt') {
         nativeRequests.push(body as Record<string, unknown>);
@@ -350,12 +321,12 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
 
     await phase('catalog admission on epoch A', async () => {
       mark('open Playground');
-      await page.goto(`${server!.url}#/playground`);
+      await page.goto(`${server.url}#/playground`);
       mark('wait for Playground heading');
       await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
       await selectNativePrompt('Gate native Playground run until cancellation.');
       mark('click native start');
-      const admitted = page.waitForResponse(runRequest(server!.url));
+      const admitted = page.waitForResponse(runRequest(server.url));
       await page.getByRole('button', { name: 'Start native prompt' }).click();
       nativeAdmissionA = await (await admitted).json() as PlaygroundAdmission;
       mark('wait for native host started evidence');
@@ -373,7 +344,7 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
     await phase('rebuild B and cancel the admitted epoch-A native run', async () => {
       await page.getByRole('link', { name: 'Overview' }).click();
       const rebuildCompleted = page.waitForResponse((response) =>
-        response.url() === `${server!.url}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
+        response.url() === `${server.url}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
       );
       await page.getByRole('button', { name: /Rebuild/u }).click();
       const rebuilt = await rebuildCompleted;
@@ -392,7 +363,7 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
     await phase('complete a rebuilt catalog-native prompt and retain normalized evidence', async () => {
       await selectNativePrompt('Complete the native Playground fixture.');
       mark('click completed native prompt');
-      const admitted = page.waitForResponse(runRequest(server!.url));
+      const admitted = page.waitForResponse(runRequest(server.url));
       await page.getByRole('button', { name: 'Start native prompt' }).click();
       nativeAdmissionB = await (await admitted).json() as PlaygroundAdmission;
       mark('wait for normalized native evidence');
@@ -420,7 +391,7 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
       const nativeResponseRef = /^Select (events\.jsonl#\d+) for the draft eval case$/u.exec(nativeResponseLabel ?? '')?.[1];
       if (nativeResponseRef === undefined) throw new Error('The persisted native response card did not expose one raw event reference.');
       const exportedResponse = page.waitForResponse((response) =>
-        response.url() === `${server!.url}/api/playground/sessions/${encodeURIComponent(completedNativeSession.id)}/export` &&
+        response.url() === `${server.url}/api/playground/sessions/${encodeURIComponent(completedNativeSession.id)}/export` &&
         response.request().method() === 'GET',
       );
       await page.getByRole('button', { name: 'Export trace' }).click();
@@ -439,7 +410,7 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
       await expect(exportSection).toContainText(nativeResponseRef);
       await nativeResponseCheckbox.check();
       const draftResponse = page.waitForResponse((response) =>
-        response.url() === `${server!.url}/api/playground/sessions/${encodeURIComponent(completedNativeSession.id)}/draft-eval` &&
+        response.url() === `${server.url}/api/playground/sessions/${encodeURIComponent(completedNativeSession.id)}/draft-eval` &&
         response.request().method() === 'POST',
       );
       await page.getByRole('button', { name: 'Promote to draft eval case' }).click();
@@ -482,10 +453,15 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);
-  } finally {
-    await Promise.allSettled(server === undefined ? [] : [server.close()]);
-    if (priorPath === undefined) delete process.env.PATH;
-    else process.env.PATH = priorPath;
-    await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
-  }
+  }, {
+    setup: async (project) => {
+      await writePlaygroundProject(project.root);
+      const fakeHostDirectory = await writeFakeClaude(project.root, playgroundClaudeBehavior);
+      process.env.PATH = `${fakeHostDirectory}:${nativePathFallback}`;
+    },
+    teardown: [() => {
+      if (priorPath === undefined) delete process.env.PATH;
+      else process.env.PATH = priorPath;
+    }],
+  });
 });
