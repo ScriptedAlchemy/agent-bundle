@@ -403,8 +403,39 @@ const Overview = ({ capabilities, changedFiles, client, connectionError, onNavig
         <div className="page-content">
           <BundleWorkflow capabilities={capabilities} onNavigate={onNavigate} />
 
+          <section aria-labelledby="build-health-heading" className="build-health section">
+            <div>
+              <h2 id="build-health-heading">Build health</h2>
+              <div className="build-health-state">
+                <StateMark state={overview.epoch.state} />
+                <div><strong>{overview.epoch.summary}</strong><p>{overview.nextAction.summary}</p></div>
+              </div>
+            </div>
+            <button disabled={rebuilding} onClick={() => void rebuild()} type="button">
+              {rebuilding ? 'Rebuilding…' : overview.nextAction.label}
+            </button>
+          </section>
+          {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
+
+          <section aria-labelledby="diagnostics-heading" className="section">
+            <h2 id="diagnostics-heading">Diagnostics ({overview.diagnostics.length})</h2>
+            {overview.diagnostics.length === 0 ? <p className="empty-row">No source or latest-build diagnostics.</p> : (
+              <div className="table-wrap"><table>
+                <thead><tr><th>Severity</th><th>Code</th><th>Message</th><th>Source</th></tr></thead>
+                <tbody>{overview.diagnostics.map((diagnostic, index) => <tr key={`${diagnostic.code}-${index}`}>
+                  <td><span className={`severity severity--${diagnostic.severity}`}>{diagnostic.severity}</span></td>
+                  <td className="identifier">{diagnostic.code}</td>
+                  <td>{diagnostic.message}</td>
+                  <td className="identifier">{sourceFor(diagnostic)}</td>
+                </tr>)}</tbody>
+              </table></div>
+            )}
+          </section>
+
+          <details className="build-details">
+            <summary>Inspect build details</summary>
           <section aria-labelledby="normalization-heading" className="section">
-            <h2 id="normalization-heading">Normalization summary</h2>
+            <h2 id="normalization-heading">Source and build state</h2>
             <dl className="definition-row">
               <div><dt>Source state</dt><dd><StateMark state={overview.normalization.state} />{overview.normalization.label}</dd></div>
               <div><dt>Source revision</dt><dd className="identifier">{overview.normalization.revision ?? 'Not available'}</dd></div>
@@ -413,7 +444,7 @@ const Overview = ({ capabilities, changedFiles, client, connectionError, onNavig
           </section>
 
           <section aria-labelledby="epoch-heading" className="section">
-            <h2 id="epoch-heading">Artifact epoch</h2>
+            <h2 id="epoch-heading">Published build</h2>
             <div className={`epoch-row epoch-row--${overview.epoch.state}`}>
               <div className="epoch-state"><StateMark state={overview.epoch.state} /><strong>{stateLabel(overview.epoch.state)}</strong></div>
               <div><span>State</span><strong>{overview.epoch.summary}</strong></div>
@@ -436,21 +467,6 @@ const Overview = ({ capabilities, changedFiles, client, connectionError, onNavig
             )}
           </section>
 
-          <section aria-labelledby="diagnostics-heading" className="section">
-            <h2 id="diagnostics-heading">Diagnostics ({overview.diagnostics.length})</h2>
-            {overview.diagnostics.length === 0 ? <p className="empty-row">No source or latest-build diagnostics.</p> : (
-              <div className="table-wrap"><table>
-                <thead><tr><th>Severity</th><th>Code</th><th>Message</th><th>Source</th></tr></thead>
-                <tbody>{overview.diagnostics.map((diagnostic, index) => <tr key={`${diagnostic.code}-${index}`}>
-                  <td><span className={`severity severity--${diagnostic.severity}`}>{diagnostic.severity}</span></td>
-                  <td className="identifier">{diagnostic.code}</td>
-                  <td>{diagnostic.message}</td>
-                  <td className="identifier">{sourceFor(diagnostic)}</td>
-                </tr>)}</tbody>
-              </table></div>
-            )}
-          </section>
-
           <section aria-labelledby="changed-files-heading" className="section">
             <h2 id="changed-files-heading">Latest changed files ({overview.changedFiles.length})</h2>
             {overview.changedFiles.length === 0 ? <p className="empty-row">No source changes have been reported in this browser session.</p> : (
@@ -459,14 +475,7 @@ const Overview = ({ capabilities, changedFiles, client, connectionError, onNavig
               </ul>
             )}
           </section>
-
-          <section aria-labelledby="action-heading" className="next-action">
-            <div><h2 id="action-heading">Next action</h2><p>{overview.nextAction.summary}</p></div>
-            <button disabled={rebuilding} onClick={() => void rebuild()} type="button">
-              {rebuilding ? 'Rebuilding…' : overview.nextAction.label}
-            </button>
-          </section>
-          {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
+          </details>
         </div>
       </main>
     </div>
@@ -1206,7 +1215,6 @@ const Workbench = () => {
       }
       setRuntimeCapability('available');
       setRuntimeError(undefined);
-      if (window.location.hash === '#runtime') navigate('runtime');
       if (bootstrap.status.activeVector === undefined && bootstrap.status.state !== 'failed' && bootstrap.status.state !== 'closed') {
         scheduleRuntimeBootstrap();
       } else {

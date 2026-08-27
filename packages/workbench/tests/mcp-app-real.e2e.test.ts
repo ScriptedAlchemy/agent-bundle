@@ -1309,7 +1309,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(destinationAcknowledgement()?.message).toEqual({ id: destinationTeardownId, jsonrpc: '2.0', result: {} });
     await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === destinationDeletePath), { timeout: 15_000 }).toHaveLength(1);
     const destinationDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === destinationDeletePath);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
     expect(runtimeCreates()).toHaveLength(2);
     await page.evaluate(() => { window.location.hash = '#runtime'; });
