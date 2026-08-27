@@ -639,12 +639,39 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       expect(string(nativeRequestC.epochId, 'epoch-C native request epoch id')).toBe(epochC);
 
       phase = 'Logs after rebuilds';
-      const logsReplay = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/logs/replay');
+      // The Logs page may abort and re-issue its replay fetch while settling;
+      // an aborted response's body is discarded by the browser, so collect
+      // every replay response and read the newest one with a readable body.
+      const logsReplayResponses: Awaited<ReturnType<typeof page.waitForResponse>>[] = [];
+      const collectLogsReplay = (response: (typeof logsReplayResponses)[number]): void => {
+        if (new URL(response.url()).pathname === '/api/logs/replay') logsReplayResponses.push(response);
+      };
+      page.on('response', collectLogsReplay);
       await page.getByRole('link', { name: 'Logs', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
-      const logsReplayResponse = await logsReplay;
-      if (!logsReplayResponse.ok()) throw new Error(`The packed Logs replay route returned HTTP ${logsReplayResponse.status()}: ${await logsReplayResponse.text()}`);
-      const logsReplayPayload = record(record(await logsReplayResponse.json(), 'packed Logs replay').replay, 'packed Logs replay result');
+      let logsReplayDocument: unknown;
+      const logsReplayDeadline = Date.now() + browserTimeout;
+      let logsReplayFailure = 'no /api/logs/replay response arrived';
+      while (logsReplayDocument === undefined) {
+        const candidate = logsReplayResponses.pop();
+        if (candidate !== undefined) {
+          if (!candidate.ok()) {
+            throw new Error(`The packed Logs replay route returned HTTP ${candidate.status()}: ${await candidate.text().catch(() => '')}`);
+          }
+          try {
+            logsReplayDocument = await candidate.json();
+          } catch (error) {
+            logsReplayFailure = `the replay response body was already discarded: ${error instanceof Error ? error.message : String(error)}`;
+          }
+          continue;
+        }
+        if (Date.now() >= logsReplayDeadline) {
+          throw new Error(`The packed Logs replay body was never readable: ${logsReplayFailure}`);
+        }
+        await new Promise((resolvePromise) => { setTimeout(resolvePromise, 100); });
+      }
+      page.off('response', collectLogsReplay);
+      const logsReplayPayload = record(record(logsReplayDocument, 'packed Logs replay').replay, 'packed Logs replay result');
       const logRecords = logsReplayPayload.records;
       if (!Array.isArray(logRecords) || logRecords.length === 0) {
         throw new Error(`The packed Logs replay is empty after B/C rebuilds: ${JSON.stringify(logRecords)}`);
