@@ -128,7 +128,6 @@ const syntheticAdapter: TargetAdapter = Object.freeze({
   mcpRuntime: syntheticMcpRuntime,
   name: syntheticTarget,
   plan: syntheticPlan,
-  validateModel: (model: NormalizedPlugin) => [...syntheticPlan(model).diagnostics],
 });
 
 const readyInspection = async (options: Parameters<typeof inspect>[0]) => {
@@ -256,47 +255,49 @@ it('deduplicates identical adapter diagnostics without collapsing distinct stabl
     ...overrides,
   });
   const pairs = [
-    { expected: 1, name: 'identical', plan: diagnostic('custom.adapter.identical'), validate: diagnostic('custom.adapter.identical') },
+    { expected: 1, first: diagnostic('custom.adapter.identical'), name: 'identical', second: diagnostic('custom.adapter.identical') },
     {
       expected: 2,
       name: 'source path',
-      plan: diagnostic('custom.adapter.source-path', { sourcePath: 'generated.config.ts' }),
-      validate: diagnostic('custom.adapter.source-path'),
+      first: diagnostic('custom.adapter.source-path'),
+      second: diagnostic('custom.adapter.source-path', { sourcePath: 'generated.config.ts' }),
     },
     {
       expected: 2,
       name: 'generated path',
-      plan: diagnostic('custom.adapter.generated-path', { generatedPath: 'generated/b.json' }),
-      validate: diagnostic('custom.adapter.generated-path'),
+      first: diagnostic('custom.adapter.generated-path'),
+      second: diagnostic('custom.adapter.generated-path', { generatedPath: 'generated/b.json' }),
     },
     {
       expected: 2,
       name: 'severity',
-      plan: diagnostic('custom.adapter.severity', { severity: 'warning' }),
-      validate: diagnostic('custom.adapter.severity'),
+      first: diagnostic('custom.adapter.severity'),
+      second: diagnostic('custom.adapter.severity', { severity: 'warning' }),
     },
     {
       expected: 2,
       name: 'target',
-      plan: diagnostic('custom.adapter.target', { target: 'synthetic-plan' }),
-      validate: diagnostic('custom.adapter.target'),
+      first: diagnostic('custom.adapter.target'),
+      second: diagnostic('custom.adapter.target', { target: 'synthetic-plan' }),
     },
     {
       expected: 2,
       name: 'recovery',
-      plan: diagnostic('custom.adapter.recovery', { recovery: 'Repair this plan-specific diagnostic.' }),
-      validate: diagnostic('custom.adapter.recovery'),
+      first: diagnostic('custom.adapter.recovery'),
+      second: diagnostic('custom.adapter.recovery', { recovery: 'Repair this plan-specific diagnostic.' }),
     },
   ] as const;
-  const validationOnly = diagnostic('custom.adapter.validation-only');
   const planOnly = diagnostic('custom.adapter.plan-only');
   const adapter: TargetAdapter = Object.freeze({
     ...syntheticAdapter,
     plan: () => Object.freeze({
-      diagnostics: Object.freeze([planOnly, ...pairs.map((pair) => pair.plan)]),
+      diagnostics: Object.freeze([
+        planOnly,
+        planOnly,
+        ...pairs.flatMap((pair) => [pair.first, pair.second]),
+      ]),
       entries: Object.freeze([]),
     }),
-    validateModel: () => [validationOnly, ...pairs.map((pair) => pair.validate)],
   });
   const registry = new TargetRegistry().register(adapter, { default: true });
   try {
@@ -311,10 +312,8 @@ it('deduplicates identical adapter diagnostics without collapsing distinct stabl
 
     const prepared = await new ProjectService({ registry, root }).prepare('inspect');
     const expected = [
-      validationOnly,
-      ...pairs.map((pair) => pair.validate),
       planOnly,
-      ...pairs.filter((pair) => pair.expected === 2).map((pair) => pair.plan),
+      ...pairs.flatMap((pair) => pair.expected === 1 ? [pair.first] : [pair.first, pair.second]),
     ];
 
     expect(prepared.diagnostics).toEqual(expected);
@@ -384,59 +383,52 @@ const hostileAdapterError = (): object => {
   return error;
 };
 
-it.each(['validateModel', 'plan'] as const)(
-  'contains a throwing adapter %s as a reusable preparation diagnostic',
-  async (phase) => {
-    const root = await createProject();
-    let throwFromAdapter = true;
-    const adapter: TargetAdapter = Object.freeze({
-      ...syntheticAdapter,
-      plan: (model: NormalizedPlugin) => {
-        if (phase === 'plan' && throwFromAdapter) throw hostileAdapterError();
-        return syntheticPlan(model);
-      },
-      validateModel: () => {
-        if (phase === 'validateModel' && throwFromAdapter) throw hostileAdapterError();
-        return [];
-      },
+it('contains a throwing adapter plan as a reusable preparation diagnostic', async () => {
+  const root = await createProject();
+  let throwFromAdapter = true;
+  const adapter: TargetAdapter = Object.freeze({
+    ...syntheticAdapter,
+    plan: (model: NormalizedPlugin) => {
+      if (throwFromAdapter) throw hostileAdapterError();
+      return syntheticPlan(model);
+    },
+  });
+  const registry = new TargetRegistry().register(adapter, { default: true });
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'hostile-adapter', version: '1.0.0' },",
+      "  synthetic: { enabled: true },",
+      "  targets: ['synthetic'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const service = new ProjectService({ registry, root });
+    const invalid = await service.prepare('inspect');
+
+    expect(invalid).toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: 'Unable to validate normalized project.',
+        recovery: expect.any(String),
+      })],
+      source: { state: 'invalid' },
     });
-    const registry = new TargetRegistry().register(adapter, { default: true });
-    try {
-      await writeFile(join(root, 'agent-bundle.config.ts'), [
-        'export default {',
-        "  plugin: { name: 'hostile-adapter', version: '1.0.0' },",
-        "  synthetic: { enabled: true },",
-        "  targets: ['synthetic'],",
-        '};',
-        '',
-      ].join('\n'));
+    expect(JSON.stringify(invalid)).not.toContain('hostile adapter error was stringified');
+    expect(invalid.model).toBeUndefined();
+    expect(invalid.projectContext).toBeUndefined();
+    expect(Object.isFrozen(invalid)).toBe(true);
+    expect(Object.isFrozen(invalid.diagnostics)).toBe(true);
 
-      const service = new ProjectService({ registry, root });
-      const invalid = await service.prepare('inspect');
-
-      expect(invalid).toMatchObject({
-        diagnostics: [expect.objectContaining({
-          code: 'AB7001',
-          message: 'Unable to validate normalized project.',
-          recovery: expect.any(String),
-        })],
-        source: { state: 'invalid' },
-      });
-      expect(JSON.stringify(invalid)).not.toContain('hostile adapter error was stringified');
-      expect(invalid.model).toBeUndefined();
-      expect(invalid.projectContext).toBeUndefined();
-      expect(Object.isFrozen(invalid)).toBe(true);
-      expect(Object.isFrozen(invalid.diagnostics)).toBe(true);
-
-      throwFromAdapter = false;
-      const recovered = await service.prepare('inspect');
-      expect(recovered.source.state).toBe('ready');
-      expect(recovered.model?.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
-    } finally {
-      await rm(join(root, '..'), { force: true, recursive: true });
-    }
-  },
-);
+    throwFromAdapter = false;
+    const recovered = await service.prepare('inspect');
+    expect(recovered.source.state).toBe('ready');
+    expect(recovered.model?.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
 
 it('contains an adapter planner that fails after preparation during inspect', async () => {
   const root = await createProject();
@@ -448,7 +440,6 @@ it('contains an adapter planner that fails after preparation during inspect', as
       if (planCalls > 1) throw hostileAdapterError();
       return syntheticPlan(model);
     },
-    validateModel: () => [],
   });
   const registry = new TargetRegistry().register(adapter, { default: true });
   try {

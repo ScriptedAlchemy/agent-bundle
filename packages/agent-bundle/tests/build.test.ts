@@ -482,7 +482,6 @@ it('rejects an adapter artifact with no provenance inputs before replacing a pri
         sourceInputs: [],
       }],
     }),
-    validateModel: () => [],
   };
 
   try {
@@ -530,7 +529,6 @@ it('rejects hook entries stamped for a target other than their selected adapter'
         virtualSource: 'export default undefined;\n',
       }],
     }),
-    validateModel: () => [],
   };
 
   try {
@@ -561,7 +559,11 @@ it('rejects target validation errors before writing a passed manifest or replaci
     metadata: testAdapterMetadata,
     name: 'portable',
     plan: () => ({
-      diagnostics: [],
+      diagnostics: [{
+        code: 'AB9999',
+        message: 'Target validation rejected this model.',
+        severity: 'error',
+      }],
       entries: [{
         content: '{"target":"portable"}\n',
         kind: 'write',
@@ -569,11 +571,6 @@ it('rejects target validation errors before writing a passed manifest or replaci
         sourceInputs: [join(project.root, 'agent-bundle.config.ts')],
       }],
     }),
-    validateModel: () => [{
-      code: 'AB9999',
-      message: 'Target validation rejected this model.',
-      severity: 'error',
-    }],
   };
 
   try {
@@ -781,7 +778,6 @@ it('rejects duplicate planned destinations before replacing an existing artifact
         { content: 'second\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] },
       ],
     }),
-    validateModel: () => [],
   };
   const registry = new TargetRegistry().register(duplicateAdapter, { default: true });
 
@@ -814,7 +810,6 @@ it('rejects an escaped target name before it can write outside the staging artif
       diagnostics: [],
       entries: [{ content: 'escaped\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] }],
     }),
-    validateModel: () => [],
   };
 
   try {
@@ -919,7 +914,6 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
         { content: 'second\n', kind: 'write', relativePath: 'dir/../same.txt', sourceInputs: [] },
       ],
     }),
-    validateModel: () => [],
   };
   const scriptCollisionAdapter: TargetAdapter = {
     capabilities: {},
@@ -931,7 +925,6 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
         { content: 'adapter output\n', kind: 'write', relativePath: 'scripts/greeting.mjs', sourceInputs: [] },
       ],
     }),
-    validateModel: () => [],
   };
 
   try {

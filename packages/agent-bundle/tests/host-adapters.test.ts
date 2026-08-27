@@ -310,19 +310,18 @@ it.each(['codex', 'claude'] as const)(
     const adapter = createDefaultRegistry().get(target);
     const plan = adapter.plan(model);
 
-    expect(adapter.validateModel(model)).toEqual([{
+    expect(plan.diagnostics).toEqual([{
       code: 'AB4339',
       message: 'MCP server "events" uses unsupported transport "sse".',
       severity: 'error',
       sourcePath: '/workspace/agent-bundle.config.ts',
     }]);
-    expect(plan.diagnostics).toEqual(adapter.validateModel(model));
     expect(plan.entries.some((entry) => entry.relativePath === '.mcp.json')).toBe(false);
   },
 );
 
 it.each(['codex', 'claude'] as const)(
-  'snapshots a changing MCP transport once for direct %s planning and validation',
+  'snapshots a changing MCP transport once per direct %s plan',
   (target) => {
     const alternatingServer = () => {
       let reads = 0;
@@ -354,7 +353,7 @@ it.each(['codex', 'claude'] as const)(
       mcpServers: { events: { command: 'node', type: 'stdio' } },
     });
     expect(planned.reads()).toBe(1);
-    expect(adapter.validateModel({ ...plugin, mcpServers: [validated.server] })).toEqual([]);
+    expect(adapter.plan({ ...plugin, mcpServers: [validated.server] }).diagnostics).toEqual([]);
     expect(validated.reads()).toBe(1);
   },
 );
@@ -378,7 +377,6 @@ it.each(['codex', 'claude'] as const)(
     const model = { ...plugin, mcpServers: [server] };
 
     expect(adapter.plan(model).diagnostics).toEqual([expect.objectContaining({ code: 'AB4339' })]);
-    expect(adapter.validateModel(model)).toEqual([expect.objectContaining({ code: 'AB4339' })]);
   },
 );
 

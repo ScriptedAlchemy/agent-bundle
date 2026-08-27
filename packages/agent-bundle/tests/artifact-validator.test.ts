@@ -141,7 +141,6 @@ const coherenceRegistry = (): TargetRegistry => new TargetRegistry().register({
   metadata: coherenceMetadata,
   name: coherenceTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const hookCoherenceTarget = 'hooked';
@@ -174,7 +173,6 @@ const hookCoherenceRegistry = (): TargetRegistry => new TargetRegistry().registe
   metadata: hookCoherenceMetadata,
   name: hookCoherenceTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const validateCustomDocument: TargetArtifactDocumentValidator = (document) =>
@@ -195,7 +193,6 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
   metadata: customMetadata,
   name: customTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const targetFromRegistry = (registry: TargetRegistry, name: string): ArtifactManifest['targets'][number] => {

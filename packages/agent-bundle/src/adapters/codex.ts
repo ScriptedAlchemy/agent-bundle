@@ -426,5 +426,4 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   name: codexName,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.codex?.nativeHooks,
   plan,
-  validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],
 });

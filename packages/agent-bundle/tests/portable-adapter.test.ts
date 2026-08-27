@@ -69,7 +69,6 @@ it('rejects duplicate adapter config-extension keys and freezes the registry sna
     metadata: testAdapterMetadata,
     name,
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   });
   const registry = new TargetRegistry().register(adapter('first'));
   const extensions = (registry as unknown as {
@@ -207,17 +206,16 @@ it('rejects a hostile normalized legacy MCP transport without emitting an MCP do
   const adapter = createDefaultRegistry().get('portable');
   const plan = adapter.plan(model);
 
-  expect(adapter.validateModel(model)).toEqual([{
+  expect(plan.diagnostics).toEqual([{
     code: 'AB4339',
     message: 'MCP server "events" uses unsupported transport "sse".',
     severity: 'error',
     sourcePath: '/workspace/agent-bundle.config.ts',
   }]);
-  expect(plan.diagnostics).toEqual(adapter.validateModel(model));
   expect(plan.entries.some((entry) => entry.relativePath === 'mcp.json')).toBe(false);
 });
 
-it('snapshots a changing MCP transport once for direct portable planning and validation', () => {
+it('snapshots a changing MCP transport once per portable plan', () => {
   const alternatingServer = () => {
     let reads = 0;
     const server = {
@@ -248,7 +246,7 @@ it('snapshots a changing MCP transport once for direct portable planning and val
     mcpServers: { events: { command: 'node', type: 'stdio' } },
   });
   expect(planned.reads()).toBe(1);
-  expect(adapter.validateModel({ ...plugin(), mcpServers: [validated.server] })).toEqual([]);
+  expect(adapter.plan({ ...plugin(), mcpServers: [validated.server] }).diagnostics).toEqual([]);
   expect(validated.reads()).toBe(1);
 });
 
@@ -269,7 +267,6 @@ it('contains an unreadable proxy transport as a portable model diagnostic', () =
   const model = { ...plugin(), mcpServers: [server] };
 
   expect(adapter.plan(model).diagnostics).toEqual([expect.objectContaining({ code: 'AB4339' })]);
-  expect(adapter.validateModel(model)).toEqual([expect.objectContaining({ code: 'AB4339' })]);
 });
 
 it('preserves a valid MCP server named __proto__', () => {

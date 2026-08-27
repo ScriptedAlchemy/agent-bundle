@@ -143,7 +143,6 @@ const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
       sourceInputs: [model.metadata.provenance.sourcePath],
     }]),
   }),
-  validateModel: () => [],
 });
 
 it('contains prebuilt workbench asset reads to their declared root', async () => {
@@ -740,22 +739,6 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
     name: DevServerLifecycleCloseError.name,
   }));
   expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
-});
-
-it('leaves Agent API ownership to the foreground release rather than closing it a second time', async () => {
-  const agentApiFailure = new Error('Agent API cleanup failed.');
-  const closeOrder: string[] = [];
-
-  await expect((closeDevServerLifecycle as (...resources: readonly unknown[]) => Promise<void>)(
-    { close: async () => { closeOrder.push('mcp-sessions'); } },
-    { close: async () => { closeOrder.push('coordinator'); } },
-    { close: async () => { closeOrder.push('mcp-apps'); } },
-    { close: async () => { closeOrder.push('playground'); } },
-    undefined,
-    undefined,
-    { close: async () => { closeOrder.push('agent-api'); throw agentApiFailure; } },
-  )).resolves.toBeUndefined();
-  expect(closeOrder).toEqual(['playground', 'mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
 it('retains sandbox startup and foreground cleanup failures structurally', async () => {

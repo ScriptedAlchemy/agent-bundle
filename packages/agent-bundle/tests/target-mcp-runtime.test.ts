@@ -264,14 +264,12 @@ it('rejects contradictory MCP capability and runtime registrations atomically', 
     metadata,
     name: 'existing',
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   });
   const adapter = (name: string): TargetAdapter => ({
     capabilities: { mcp: true },
     metadata,
     name,
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   });
 
   expect(() => registry.register(adapter('missing-runtime'))).toThrow('mcp capability without an MCP runtime contract');
@@ -325,7 +323,6 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
         { content: 'export {};\n', kind: 'write', relativePath: 'scripts/resource.mjs', sourceInputs: [configPath] },
       ],
     }),
-    validateModel: () => [],
   };
   const registry = new TargetRegistry().register(adapter, { default: true });
 

@@ -453,7 +453,6 @@ export class ProjectService {
       for (const target of model.targets) {
         if (!registry.has(target.name)) continue;
         const adapter = registry.get(target.name);
-        diagnostics.push(...adapter.validateModel(model));
         diagnostics.push(...adapter.plan(model).diagnostics);
       }
     } catch {

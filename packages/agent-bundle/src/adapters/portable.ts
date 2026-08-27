@@ -313,5 +313,4 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   mcpRuntime,
   name: portableName,
   plan,
-  validateModel: (model: NormalizedPlugin) => plan(model).diagnostics.slice(),
 });

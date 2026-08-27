@@ -646,7 +646,6 @@ it('bundles each local MCP entry once and maps every target manifest to that art
           sourceInputs: [],
         }],
       }),
-      validateModel: () => [],
     }, { default: true });
     await expect(build({
       model: { ...model, targets: model.targets.filter(({ name }) => name === 'portable') },

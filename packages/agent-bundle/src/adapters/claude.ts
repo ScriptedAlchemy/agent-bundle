@@ -336,5 +336,4 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   name: claudeName,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.claude?.nativeHooks,
   plan,
-  validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],
 });

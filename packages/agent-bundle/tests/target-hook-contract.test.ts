@@ -196,7 +196,6 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
         hookEntries: generated.hookEntries,
       };
     },
-    validateModel: () => [],
   };
 
   try {

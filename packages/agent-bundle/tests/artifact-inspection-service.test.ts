@@ -46,7 +46,6 @@ const scriptRegistry = (): TargetRegistry => new TargetRegistry().register({
   metadata: fixtureMetadata,
   name: fixtureTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const runtimeRegistry = (
@@ -80,7 +79,6 @@ const runtimeRegistry = (
   metadata: fixtureMetadata,
   name: fixtureTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const mutatingRuntimeRegistry = (calls: { reads: number; resolutions: number }): TargetRegistry => runtimeRegistry(Object.freeze({

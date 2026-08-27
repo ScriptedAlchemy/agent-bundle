@@ -33,7 +33,6 @@ const adapter = (name: string, metadata: unknown = validMetadata(), extension?: 
   metadata: metadata as never,
   name,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 });
 
 const registryMetadata = (registry: TargetRegistry, name: string) =>
@@ -248,7 +247,6 @@ it('rejects malformed metadata atomically and preserves existing collision behav
     capabilities: {},
     name: 'missing-metadata',
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   } as never)).toThrow();
   expect(registry.names()).toEqual(['existing']);
   expect(() => registryMetadata(registry, 'missing')).toThrow('Unknown target adapter "missing"');

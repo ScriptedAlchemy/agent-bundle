@@ -301,7 +301,6 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
     },
     name: 'synthetic',
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   };
   try {
     await Promise.all([

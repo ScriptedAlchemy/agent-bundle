@@ -207,5 +207,4 @@ export interface TargetAdapter {
   readonly name: string;
   nativeHookSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   plan(model: NormalizedPlugin): TargetArtifactPlan;
-  validateModel(model: NormalizedPlugin): Diagnostic[];
 }
