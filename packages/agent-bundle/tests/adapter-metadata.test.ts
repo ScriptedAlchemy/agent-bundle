@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { expect, it } from '@rstest/core';
 
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
-import { sha256 } from './support/sha256.ts';
+import { sha256Hex } from '../src/core/digest.ts';
 
 const validMetadata = () => ({
   adapterRevision: '1.0.0',
@@ -150,7 +150,7 @@ it('rehashes every declared capability and schema snapshot against its pinned pr
       readonly [key: string]: unknown;
     };
 
-    expect(metadata.capabilitySha256).toBe(sha256(capability));
+    expect(metadata.capabilitySha256).toBe(sha256Hex(capability));
     expect(metadata.observedVersion).toBe(capabilityTable.observedCliVersion ?? capabilityTable.observedSpecificationVersion);
     expect(metadata.observedVersion).toBe(provenance[versionKey]);
     expect(metadata.schemas.map((schema) => schema.name)).toEqual(
@@ -160,7 +160,7 @@ it('rehashes every declared capability and schema snapshot against its pinned pr
     for (const schema of metadata.schemas) {
       const fileName = `${schema.name}.schema.json`;
       const content = await readFile(new URL(`../src/adapters/schemas/${target}/${fileName}`, import.meta.url));
-      expect(schema.sha256).toBe(sha256(content));
+      expect(schema.sha256).toBe(sha256Hex(content));
       expect(schema.sha256).toBe(provenance.schemas[fileName]?.sha256);
       expect(schema.revision).toBe(metadata.observedVersion);
     }

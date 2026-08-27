@@ -285,6 +285,8 @@ export class McpSessionController {
   #generation = 0;
   #lifecycle: ControllerLifecycle = { phase: 'idle' };
   #model = createMcpBrowserSessionModel('mcp-session-controller');
+  #history: readonly McpBrowserSessionInvocation[] = [];
+  #historyOf: McpBrowserSessionModel | undefined;
   #requests = new Map<string, ActiveRequest>();
   #session: McpRouteSession | undefined;
   #transport: McpSessionControllerTransport | undefined;
@@ -303,8 +305,17 @@ export class McpSessionController {
     });
   }
 
+  /**
+   * Derived per model rather than per read: the model is replaced wholesale on
+   * every update, and one render reads this several times. Caching on model
+   * identity also keeps the array stable so consumers can skip re-rendering.
+   */
   get history(): readonly McpBrowserSessionInvocation[] {
-    return invocationHistoryFor(this.#model);
+    if (this.#historyOf !== this.#model) {
+      this.#history = invocationHistoryFor(this.#model);
+      this.#historyOf = this.#model;
+    }
+    return this.#history;
   }
 
   get model(): McpBrowserSessionModel {

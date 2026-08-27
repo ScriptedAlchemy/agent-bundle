@@ -10,11 +10,12 @@ import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build } from './support/build.ts';
+import { loadedProject } from './support/loaded-project.ts';
 import { listArtifactFiles } from '../src/build/emit.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import { digest } from '../src/core/digest.ts';
-import type { LoadedConfig } from '../src/config/load.ts';
-import type { AgentBundleConfig, CanonicalHookEvent, NormalizationTargetRegistry } from '../src/core/types.ts';
+
+import type { CanonicalHookEvent, NormalizationTargetRegistry } from '../src/core/types.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import {
   HookPlaygroundService,
@@ -30,17 +31,6 @@ const registry: NormalizationTargetRegistry = {
   has: (name) => ['portable', 'codex', 'claude'].includes(name),
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
-
-const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
-  config,
-  configPath: join(root, 'agent-bundle.config.ts'),
-  context: {
-    command: 'build',
-    mode: 'production',
-    projectRoot: root,
-    selectedTargets: [],
-  },
-});
 
 const epochFor = (
   root: string,

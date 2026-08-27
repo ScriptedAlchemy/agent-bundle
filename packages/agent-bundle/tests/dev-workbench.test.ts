@@ -17,6 +17,7 @@ import {
 } from '../src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { within } from './support/eventually.ts';
 
 const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
   const decoder = new TextDecoder();
@@ -27,13 +28,6 @@ const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promi
     output += decoder.decode(next.value, { stream: true });
   }
 };
-
-const within = async <Value>(promise: Promise<Value>, milliseconds: number): Promise<Value> => Promise.race([
-  promise,
-  new Promise<Value>((_resolvePromise, rejectPromise) => {
-    setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
-  }),
-]);
 
 const writeMcpProject = async (root: string): Promise<void> => {
   await Promise.all([

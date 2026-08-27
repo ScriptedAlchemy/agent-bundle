@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import { errorMessage as messageFrom, isRecord } from '../client-helpers.ts';
@@ -648,10 +648,16 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     run(`invoke:${operation}`, () => controller.invoke({ id: requestId, operation, request }));
   };
 
-  const tools = catalogItems(model.catalogs.tools, 'Tool');
-  const prompts = catalogItems(model.catalogs.prompts, 'Prompt');
-  const resources = catalogItems(model.catalogs.resources, 'Resource');
-  const resourceTemplates = catalogItems(model.catalogs.resourceTemplates, 'Resource template');
+  // Catalogs change only on a server-initiated list refresh, while this page
+  // re-renders on every protocol frame. Projecting per render would reallocate
+  // every item and hand children a new identity each time.
+  const tools = useMemo(() => catalogItems(model.catalogs.tools, 'Tool'), [model.catalogs.tools]);
+  const prompts = useMemo(() => catalogItems(model.catalogs.prompts, 'Prompt'), [model.catalogs.prompts]);
+  const resources = useMemo(() => catalogItems(model.catalogs.resources, 'Resource'), [model.catalogs.resources]);
+  const resourceTemplates = useMemo(
+    () => catalogItems(model.catalogs.resourceTemplates, 'Resource template'),
+    [model.catalogs.resourceTemplates],
+  );
   const selectedTool = tools.find((item) => item.name === toolName) ?? tools[0];
   const selectedPrompt = prompts.find((item) => item.name === promptName) ?? prompts[0];
   const active = Object.values(model.activeRequests);

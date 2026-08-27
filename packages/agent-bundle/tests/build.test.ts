@@ -13,7 +13,7 @@ import type { TargetAdapter } from '../src/adapters/types.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
-import { sha256 } from './support/sha256.ts';
+import { sha256Hex } from '../src/core/digest.ts';
 
 interface TestProject {
   readonly localModulePath: string;
@@ -94,7 +94,7 @@ const treeDigest = async (
       bytes: contents.byteLength,
       mode: metadata.mode & 0o777,
       path: path.replaceAll('\\', '/'),
-      sha256: sha256(contents),
+      sha256: sha256Hex(contents),
     });
   }
 
@@ -366,7 +366,7 @@ it('low-level build writes and returns the exact canonical manifest for a config
         kind: 'copy',
         mode: 0o751,
         path: resource.path,
-        sha256: sha256(contents),
+        sha256: sha256Hex(contents),
         sourceInputs: expect.arrayContaining([
           resource.path.replace('portable/', ''),
           'skills/review/SKILL.md',

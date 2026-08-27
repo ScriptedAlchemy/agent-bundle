@@ -13,7 +13,7 @@ import { ProjectService } from '../src/dev/project-service.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
-import { sha256 } from './support/sha256.ts';
+import { sha256Hex } from '../src/core/digest.ts';
 
 const createProject = async (): Promise<string> => (await createProjectFixture({
   config: [
@@ -90,7 +90,7 @@ it('publishes one validated prepared project as an immutable epoch and removes i
     expect(result.epoch.configDigest).toBe(prepared.projectContext?.configDigest);
     expect(result.epoch.modelDigest).toBe(prepared.projectContext?.modelDigest);
     expect(result.epoch.projectRevision).toBe(prepared.projectContext?.revision);
-    expect(result.epoch.configDigest).toBe(sha256(await readFile(join(root, 'agent-bundle.config.ts'))));
+    expect(result.epoch.configDigest).toBe(sha256Hex(await readFile(join(root, 'agent-bundle.config.ts'))));
     expect(result.epoch.targetDigests.portable).toMatch(/^[a-f0-9]{64}$/);
     expect(result.epoch.manifestPath).toBe(
       join(root, '.agent-bundle', 'epochs', 'epoch-one', 'agent-bundle.manifest.json'),

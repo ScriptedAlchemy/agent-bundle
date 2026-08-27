@@ -10,14 +10,15 @@ import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
-import type { LoadedConfig } from '../src/config/load.ts';
+
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import { McpAppBindingService, type McpAppSessionAuthority } from '../src/dev/mcp-apps/mcp-app-binding-service.ts';
 import { mcpAppClientCapabilities, McpSession, McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
-import { pathTokens, type AgentBundleConfig, type NormalizationTargetRegistry } from '../src/core/types.ts';
+import { pathTokens, type NormalizationTargetRegistry } from '../src/core/types.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 import { mcpCatalogStub, stdioTransportStub } from './support/mcp-client-stub.ts';
+import { loadedProject } from './support/loaded-project.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -31,17 +32,6 @@ const runtimeFor = (target: string) => {
   if (runtime === undefined) throw new Error(`Expected MCP runtime for ${JSON.stringify(target)}.`);
   return runtime;
 };
-
-const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
-  config,
-  configPath: join(root, 'agent-bundle.config.ts'),
-  context: {
-    command: 'build',
-    mode: 'production',
-    projectRoot: root,
-    selectedTargets: [],
-  },
-});
 
 const epochFor = (
   root: string,

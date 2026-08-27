@@ -18,8 +18,9 @@ import {
   type AgentBundleMcpServer,
   type NormalizationTargetRegistry,
 } from '../src/core/types.ts';
-import type { LoadedConfig } from '../src/config/load.ts';
+
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { loadedProject } from './support/loaded-project.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -34,17 +35,6 @@ const testAdapterMetadata = Object.freeze({
   capabilitySha256: '0'.repeat(64),
   observedVersion: 'test',
   schemas: Object.freeze([]),
-});
-
-const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
-  config,
-  configPath: join(root, 'agent-bundle.config.ts'),
-  context: {
-    command: 'build',
-    mode: 'production',
-    projectRoot: root,
-    selectedTargets: [],
-  },
 });
 
 it('rejects legacy MCP SSE source declarations with one AB4317 diagnostic', () => {

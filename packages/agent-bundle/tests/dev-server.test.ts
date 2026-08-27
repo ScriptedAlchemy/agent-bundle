@@ -17,7 +17,7 @@ import {
 } from '../src/dev/index.ts';
 import { ArtifactInspectionServiceError } from '../src/dev/artifacts/artifact-inspection-service.ts';
 import type { McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
-import { eventually } from './support/eventually.ts';
+import { eventually, within } from './support/eventually.ts';
 
 const status = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -160,13 +160,6 @@ const openLiveStream = (url: string): Readonly<{
     },
   });
 };
-
-const within = async <T>(promise: Promise<T>, milliseconds: number): Promise<T> => Promise.race([
-  promise,
-  new Promise<T>((_resolvePromise, rejectPromise) => {
-    setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
-  }),
-]);
 
 const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
   const decoder = new TextDecoder();

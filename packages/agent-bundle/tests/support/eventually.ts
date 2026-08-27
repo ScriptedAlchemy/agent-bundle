@@ -1,3 +1,23 @@
+/**
+ * Rejects if `promise` has not settled within `milliseconds`.
+ *
+ * The timer is always cleared: leaving it armed keeps the event loop alive for
+ * the full timeout after the promise settles, which stalls suite shutdown.
+ */
+export const within = async <Value>(promise: Promise<Value>, milliseconds = 1_000): Promise<Value> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolvePromise, rejectPromise) => {
+        timeout = setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+};
+
 /** Polls a synchronous predicate until it holds or the timeout elapses. */
 export const eventually = async (predicate: () => boolean, milliseconds = 250): Promise<void> => {
   const deadline = Date.now() + milliseconds;

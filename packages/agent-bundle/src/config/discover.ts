@@ -107,7 +107,7 @@ export const discoverProject = async (
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
     skills: await Promise.all(
-      skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot)),
+      skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules)),
     ),
   };
 };

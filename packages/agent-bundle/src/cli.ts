@@ -3,18 +3,20 @@ import { Command, CommanderError } from 'commander';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import {
+/**
+ * Type-only: the product surface reaches the CLI through `await import('./api.ts')`
+ * inside each action. A static import would load Rsbuild, Rslib, Rslint, the MCP
+ * SDK, chokidar and ajv before argv is even parsed, so `--version`, `--help` and
+ * an argv error would each pay the full graph for nothing.
+ */
+import type {
   build,
   compareEvals,
   inspect,
-  invokeMcp,
-  listHooks,
-  listMcp,
   runEvals,
-  simulateHook,
   startDevServer,
   validate,
-  type ProjectOptions,
+  ProjectOptions,
 } from './api.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import { stableJson } from './core/digest.ts';
@@ -311,7 +313,8 @@ export const runCli = async (
     .option('--open', 'Open the workbench after the foreground server starts')
     .option('--no-open', 'Do not open the workbench after the foreground server starts');
   devCommand.action(async (options: DevCommandOptions) => {
-    const session = await (dependencies.startDevServer ?? startDevServer)({
+    const { startDevServer: start } = await import('./api.ts');
+    const session = await (dependencies.startDevServer ?? start)({
       ...(options.agentApi === undefined ? {} : { agentApi: options.agentApi }),
       open: options.open === true,
       ...(options.port === undefined ? {} : { port: options.port }),
@@ -325,6 +328,7 @@ export const runCli = async (
     program.command('build').description('Build a validated Agent Bundle artifact'),
   ).option('--output <path>', 'Artifact output path relative to --root');
   buildCommand.action(async (options: BuildCommandOptions) => {
+    const { build } = await import('./api.ts');
     const result = await build({ ...projectOptions(options), output: options.output });
     if (options.json === true) writeMachine(stdout, result);
     else writeHumanBuild(stdout, result);
@@ -334,6 +338,7 @@ export const runCli = async (
     program.command('validate').description('Validate project source or one artifact'),
   ).option('--artifact <path>', 'Validate exactly this built artifact');
   validateCommand.action(async (options: SourceCommandOptions & { readonly artifact?: string }) => {
+    const { validate } = await import('./api.ts');
     const result = await validate({ ...projectOptions(options), artifact: options.artifact });
     if (result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
       throw new DiagnosticError(result.diagnostics);
@@ -351,6 +356,7 @@ export const runCli = async (
     .option('--suite <suite>', 'Eval suite name to run (repeatable)', collect, [])
     .option('--trials <count>', 'Run this many trials of every selected case', trialCount);
   evalCommand.action(async (options: EvalCommandOptions) => {
+    const { runEvals } = await import('./api.ts');
     const result = await runEvals({
       ...projectOptions(options),
       ...(options.artifact === undefined ? {} : { artifact: options.artifact }),
@@ -373,6 +379,7 @@ export const runCli = async (
     .argument('<candidate>', 'Candidate eval run id');
   evalCompareCommand.action(async (baseline: string, candidate: string) => {
     const sourceOptions = evalCommand.opts<EvalCommandOptions>();
+    const { compareEvals } = await import('./api.ts');
     const result = await compareEvals({
       ...projectOptions(sourceOptions),
       baseRunId: baseline,
@@ -391,6 +398,7 @@ export const runCli = async (
     if (options.hooks === true && options.skills === true) {
       throw new TypeError('Choose at most one inspect focus.');
     }
+    const { inspect } = await import('./api.ts');
     const result = await inspect({
       ...inspectProjectOptions(options),
       ...(options.hooks === true ? { focus: 'hooks' as const } : {}),
@@ -408,6 +416,7 @@ export const runCli = async (
     true,
   ).requiredOption('--server <server>', 'MCP server name');
   mcpListCommand.action(async (options: ArtifactCommandOptions & { readonly server: string; readonly target: string }) => {
+    const { listMcp } = await import('./api.ts');
     const result = await listMcp({
       ...artifactOptions(options),
       server: options.server,
@@ -430,6 +439,7 @@ export const runCli = async (
     readonly target: string;
     readonly tool: string;
   }) => {
+    const { invokeMcp } = await import('./api.ts');
     const result = await invokeMcp({
       ...artifactOptions(options),
       input: await parseJsonObject(options),
@@ -446,6 +456,7 @@ export const runCli = async (
     hooksCommand.command('list').description('List hooks from one artifact'),
   );
   hooksListCommand.action(async (options: ArtifactCommandOptions) => {
+    const { listHooks } = await import('./api.ts');
     const result = await listHooks({ ...artifactOptions(options), target: options.target });
     if (options.json === true) writeMachine(stdout, result);
     else stdout.write(`Listed ${result.length} hook(s)${options.target === undefined ? '' : ` from ${options.target}`}\n`);
@@ -462,6 +473,7 @@ export const runCli = async (
     readonly hook: string;
     readonly target: string;
   }) => {
+    const { simulateHook } = await import('./api.ts');
     const result = await simulateHook({
       ...artifactOptions(options),
       hook: options.hook,

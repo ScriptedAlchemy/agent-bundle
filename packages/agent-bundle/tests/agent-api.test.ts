@@ -21,6 +21,7 @@ import { ForegroundServerCloseError, ProjectEventHub, startForegroundServer } fr
 import type { ProjectStatus } from '../src/dev/types.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject } from './support/eval-project.ts';
+import { within } from './support/eventually.ts';
 
 const projectStatus = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -119,20 +120,6 @@ const deferred = <Value>(): Readonly<{
     reject = rejectPromise;
   });
   return Object.freeze({ promise, reject, resolve });
-};
-
-const within = async <Value>(promise: Promise<Value>, timeoutMs = 1_000): Promise<Value> => {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, rejectPromise) => {
-        timeout = setTimeout(() => rejectPromise(new Error('Timed out waiting for the requested operation.')), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout);
-  }
 };
 
 it('uses the official stateless MCP handler to expose the fixed ordered tool set', async () => {
