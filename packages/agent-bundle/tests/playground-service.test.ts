@@ -637,6 +637,62 @@ it('serializes two contenders recovering the same stale owner without unlinking 
   }
 });
 
+it('reports contention, not corruption, while the winning owner lock is still unwritten', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'unwritten-owner-lock';
+  const winner = new PlaygroundStore({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
+  const contender = new PlaygroundStore({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
+  const contenderRead = deferred();
+  const releaseWinnerWrite = deferred();
+  let held = false;
+  let attempt: ReturnType<PlaygroundStore['reopen']> | undefined;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId });
+    await fixture.service.finalize(sessionId, { status: 'passed' });
+    await fixture.service.close();
+    const root = await objectRoot(fixture.storageRoot, sessionId);
+    const metadataPath = join(root, 'session.json');
+    const metadata = JSON.parse(await readFile(metadataPath, 'utf8')) as Record<string, unknown>;
+    delete metadata.outcome;
+    metadata.state = 'open';
+    await writeFile(metadataPath, `${JSON.stringify(metadata)}\n`, 'utf8');
+
+    // O_EXCL publishes the lock path before its contents land. Hold the winner
+    // in that window and prove a reader there sees contention, not corruption.
+    await withDurabilityTestHook(async (phase) => {
+      if (phase === 'before-file-write:owner' && !held) {
+        held = true;
+        contenderRead.resolve();
+        await releaseWinnerWrite.promise;
+      }
+    }, async () => {
+      attempt = winner.reopen(sessionId);
+      await contenderRead.promise;
+      expect(await readFile(join(root, '.owner.lock'), 'utf8')).toBe('');
+      await expect(contender.reopen(sessionId))
+        .rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_OWNED' });
+      releaseWinnerWrite.resolve();
+      await attempt;
+    });
+  } finally {
+    releaseWinnerWrite.resolve();
+    await Promise.allSettled([
+      ...(attempt === undefined ? [] : [attempt]),
+      winner.close(),
+      contender.close(),
+      fixture.close(),
+    ]);
+  }
+});
+
 it('fails closed on bounded provider credential values before identity, raw events, outcomes, or drafts persist them', async () => {
   const fixture = await createFixture();
   const credential = 'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789';

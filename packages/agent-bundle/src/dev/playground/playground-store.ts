@@ -655,7 +655,7 @@ export class PlaygroundStore {
     try {
       await this.#assertObjectDirectory(root, objectId);
       const owner = await this.#readOwnerLock(root);
-      if (!sameOwner(owner, { pid: process.pid, token })) {
+      if (owner === undefined || !sameOwner(owner, { pid: process.pid, token })) {
         throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} object ownership changed during admission.`);
       }
     } catch (error) {
@@ -751,7 +751,7 @@ export class PlaygroundStore {
           await writeNewPinnedFile(path, `${JSON.stringify(document)}\n`, {
             afterFsync: () => { createdAndSynced = true; },
             beforeFsync: () => { runDurabilityTestHook('before-file-fsync:owner', path); },
-            beforeWrite: () => { runDurabilityTestHook('before-file-write:owner', path); },
+            beforeWrite: () => runAsyncDurabilityTestHook('before-file-write:owner', path),
             invalid: () => serviceError('PLAYGROUND_ROOT_INVALID', 'Playground owner lock could not be created safely.'),
           });
           this.#syncDirectory(root, 'owner-lock-create');
@@ -778,6 +778,7 @@ export class PlaygroundStore {
           try {
             await runAsyncDurabilityTestHook('before-owner-lock-recovery', path);
             const owner = await this.#readOwnerLock(root);
+            if (owner === undefined) return;
             if (isProcessAlive(owner.pid)) {
               throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} is owned by another foreground service.`);
             }
@@ -802,7 +803,15 @@ export class PlaygroundStore {
     }
   }
 
-  async #readOwnerLock(root: string): Promise<OwnerLock> {
+  /**
+   * Reads the owner lock, or reports `undefined` when the lock path exists but
+   * its contents have not landed yet.
+   *
+   * `writeNewPinnedFile` publishes the path with O_EXCL and only then writes,
+   * so a contender can open the winner's lock while it is still zero bytes.
+   * That window is the ownership race resolving, not a corrupt store.
+   */
+  async #readOwnerLock(root: string): Promise<OwnerLock | undefined> {
     let document: string;
     try {
       document = await this.#readMutableFile(root, ownerLockName);
@@ -810,7 +819,7 @@ export class PlaygroundStore {
       if (isErrno(error, 'ENOENT')) throw error;
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is malformed.');
     }
-    return parseOwnerLockDocument(document);
+    return document === '' ? undefined : parseOwnerLockDocument(document);
   }
 
   async #removeJustCreatedOwnerLock(root: string, token: string): Promise<void> {
