@@ -1,0 +1,628 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Collapse,
+  Divider,
+  Group,
+  ScrollArea,
+  Stack,
+  Table,
+  Text,
+  Tooltip,
+} from "@mantine/core";
+import { RiErrorWarningLine } from "react-icons/ri";
+import type { FetchRequestEntry } from "@inspector/core/mcp/types.js";
+import { isLongLivedStreamResponse } from "@inspector/core/mcp/fetchTracking.js";
+import { ContentViewer } from "../../elements/ContentViewer/ContentViewer";
+import { CopyButton } from "../../elements/CopyButton/CopyButton";
+import { ExpandToggle } from "../../elements/ExpandToggle/ExpandToggle";
+import { MethodBadge } from "../../elements/MethodBadge/MethodBadge";
+import { CategoryBadge } from "../../elements/CategoryBadge/CategoryBadge";
+import { maskSecretsInBody } from "../../../utils/maskSecrets";
+import { useValueChange } from "../../../hooks/useValueChange";
+import {
+  oauthNetworkPhase,
+  oauthNetworkPhaseLabel,
+} from "../../../utils/oauthNetworkPhase";
+import {
+  checkHeaderConsistency,
+  decodeMcpParamValue,
+  isCancellationAbort,
+  isMcpHeader,
+  type HeaderConsistency,
+} from "../../../utils/mcpNetworkHeaders";
+
+export interface NetworkEntryProps {
+  entry: FetchRequestEntry;
+  isListExpanded: boolean;
+  /**
+   * Compact two-line header for the narrow monitoring sidebar (#1616): line 1 is
+   * time + method + category + duration + status; line 2 is the URL in a
+   * horizontal scroll area with the expand toggle on the right.
+   */
+  embedded?: boolean;
+  /**
+   * When true, this entry was targeted by a "reveal in Network" jump (from a
+   * correlated Protocol error): it scrolls itself into view and force-expands
+   * once, then calls {@link onRevealComplete} so the one-shot signal clears.
+   */
+  revealed?: boolean;
+  onRevealComplete?: () => void;
+}
+
+const EntryContainer = Card.withProps({
+  withBorder: true,
+  padding: "md",
+  variant: "inset",
+});
+
+const HeaderRow = Group.withProps({
+  justify: "space-between",
+  wrap: "nowrap",
+});
+
+const TimestampText = Text.withProps({
+  size: "sm",
+  c: "dimmed",
+  ff: "monospace",
+});
+
+const UrlText = Text.withProps({
+  size: "sm",
+  fw: 500,
+  truncate: "end",
+});
+
+// Compact-header URL: never wraps, so a long URL scrolls horizontally inside its
+// ScrollArea instead of wrapping to many lines.
+const UrlScroll = Text.withProps({
+  size: "sm",
+  fw: 500,
+  variant: "nowrap",
+});
+
+// Left / right clusters for a compact header line (mirrors ProtocolEntry).
+const HeaderCluster = Group.withProps({
+  gap: "sm",
+  wrap: "nowrap",
+  miw: 0,
+});
+
+const ControlsCluster = Group.withProps({
+  gap: "sm",
+  wrap: "nowrap",
+});
+
+const DurationText = Text.withProps({
+  size: "sm",
+  c: "dimmed",
+});
+
+// Muted note for empty/placeholder states (no headers, empty body, uncaptured
+// stream) and the secrets-hidden status line.
+const DimmedNote = Text.withProps({
+  size: "xs",
+  c: "dimmed",
+});
+
+// Heading above each expanded-detail section (Request/Response Headers/Body).
+const SectionLabel = Text.withProps({
+  size: "sm",
+  fw: 500,
+});
+
+// Cap is in JS string `.length` units (UTF-16 code units), not bytes — for
+// multi-byte content the wire size is larger, but the limit's purpose is
+// to keep the DOM from drowning in a single Code block so character count
+// is the right unit.
+const MAX_INLINE_BODY_CHARS = 100_000;
+
+function formatDuration(ms: number): string {
+  return `${ms}ms`;
+}
+
+function formatTimestamp(date: Date): string {
+  return date.toISOString();
+}
+
+// Time-only (HH:MM:SS, UTC) for the compact column header, where the full ISO
+// string would eat most of the narrow line-1 width (#1616).
+function formatTimestampCompact(date: Date): string {
+  return date.toISOString().slice(11, 19);
+}
+
+function statusColor(entry: FetchRequestEntry): string {
+  // A cancelled request surfaces as a connection abort under the modern
+  // transport; render it neutrally rather than as a hard error (SEP-2575).
+  if (isCancellationAbort(entry)) return "gray";
+  if (entry.error) return "red";
+  const status = entry.responseStatus;
+  if (status === undefined) return "gray";
+  if (status >= 500) return "red";
+  if (status >= 400) return "orange";
+  if (status >= 300) return "yellow";
+  if (status >= 200) return "green";
+  return "gray";
+}
+
+function statusLabel(entry: FetchRequestEntry): string {
+  if (isCancellationAbort(entry)) return "Cancelled";
+  if (entry.error) return "Error";
+  if (entry.responseStatus === undefined) return "Pending";
+  return entry.responseStatusText
+    ? `${entry.responseStatus} ${entry.responseStatusText}`
+    : `${entry.responseStatus}`;
+}
+
+function isLongLivedStream(entry: FetchRequestEntry): boolean {
+  return isLongLivedStreamResponse(
+    entry.method,
+    entry.responseHeaders?.["content-type"],
+  );
+}
+
+// Header-table cell text. A modern MCP-mirrored header name gets a violet accent
+// so the spec headers (Mcp-Method / Mcp-Name / Mcp-Param-* / MCP-Protocol-Version)
+// stand out from ordinary ones; a value that disagrees with the request body is
+// shown in the danger colour.
+const HeaderNameText = Text.withProps({
+  size: "xs",
+  ff: "monospace",
+  fw: 500,
+});
+
+const McpHeaderNameText = Text.withProps({
+  size: "xs",
+  ff: "monospace",
+  fw: 600,
+  c: "var(--inspector-mcp-header-accent)",
+});
+
+const HeaderValueText = Text.withProps({
+  size: "xs",
+  ff: "monospace",
+  variant: "monoBreak",
+});
+
+const MismatchValueText = Text.withProps({
+  size: "xs",
+  ff: "monospace",
+  variant: "monoBreak",
+  c: "var(--inspector-danger-text)",
+});
+
+const MismatchMarker = Text.withProps({
+  component: "span",
+  // role="img" makes the aria-label permitted on the span (it wraps a decorative
+  // icon) and announces the mismatch to assistive tech.
+  role: "img",
+  c: "var(--inspector-danger-text)",
+});
+
+// The decoded value plus its optional base64 / mismatch markers, on one line.
+const ValueCellRow = Group.withProps({
+  gap: "xs",
+  wrap: "nowrap",
+  align: "center",
+});
+
+// Tooltip for a base64 sentinel value or a header/body mismatch.
+const SentinelTooltip = Tooltip.withProps({
+  withArrow: true,
+  multiline: true,
+  w: 280,
+});
+
+const Base64Badge = Badge.withProps({
+  size: "xs",
+  color: "gray",
+  variant: "light",
+});
+
+const HeadersGrid = Table.withProps({
+  striped: true,
+  withColumnBorders: true,
+  fz: "xs",
+});
+
+// OAuth flow-phase chip for an `auth`-category request.
+const PhaseBadge = Badge.withProps({
+  color: "violet",
+  variant: "light",
+});
+
+// Compact-header URL row: copy button, horizontal URL scroll, expand toggle.
+const CompactUrlRow = Group.withProps({
+  gap: "xs",
+  wrap: "nowrap",
+  justify: "space-between",
+});
+
+const UrlScrollArea = ScrollArea.withProps({
+  scrollbarSize: 6,
+  flex: 1,
+  miw: 0,
+  // The URL scrolls horizontally but has no focusable child, so make the
+  // viewport itself keyboard-scrollable (WCAG SC 2.1.1). Scrollbar auto-hides
+  // via the `type="scroll"` theme default.
+  viewportProps: { tabIndex: 0 },
+});
+
+// Wide-header left cluster: timestamp + badges + URL, shrinking to truncate.
+const WideHeaderCluster = Group.withProps({
+  gap: "sm",
+  wrap: "nowrap",
+  miw: 0,
+  flex: 1,
+});
+
+// Trailing expand-toggle row in the wide layout.
+const ToggleRow = Group.withProps({
+  gap: "xs",
+  justify: "flex-end",
+});
+
+const MonoSpan = Text.withProps({
+  span: true,
+  ff: "monospace",
+});
+
+const ErrorText = Text.withProps({
+  size: "xs",
+  ff: "monospace",
+  c: "red",
+});
+
+function HeaderValueCell({
+  name,
+  value,
+  consistency,
+}: {
+  name: string;
+  value: string;
+  consistency?: HeaderConsistency;
+}) {
+  // Only modern MCP headers carry sentinel-encoded values; a plain header is
+  // shown verbatim (never re-interpreted as base64).
+  const decoded = isMcpHeader(name)
+    ? decodeMcpParamValue(value)
+    : { value, encoded: false, raw: value };
+  const mismatch = consistency !== undefined && !consistency.ok;
+
+  return (
+    <ValueCellRow>
+      {mismatch ? (
+        <MismatchValueText>{decoded.value}</MismatchValueText>
+      ) : (
+        <HeaderValueText>{decoded.value}</HeaderValueText>
+      )}
+      {decoded.encoded && (
+        <SentinelTooltip label={`base64 sentinel — raw: ${decoded.raw}`}>
+          <Base64Badge>base64</Base64Badge>
+        </SentinelTooltip>
+      )}
+      {mismatch && (
+        <SentinelTooltip label={`Expected: ${consistency.expected}`}>
+          <MismatchMarker
+            aria-label={`Header does not match body; expected ${consistency.expected}`}
+          >
+            <RiErrorWarningLine />
+          </MismatchMarker>
+        </SentinelTooltip>
+      )}
+    </ValueCellRow>
+  );
+}
+
+function HeadersTable({
+  headers,
+  consistency,
+}: {
+  headers: Record<string, string>;
+  /** Header/body cross-checks (request side only) to flag mismatches. */
+  consistency?: HeaderConsistency[];
+}) {
+  const rows = Object.entries(headers);
+  if (rows.length === 0) {
+    return <DimmedNote>(none)</DimmedNote>;
+  }
+  const byHeader = new Map((consistency ?? []).map((row) => [row.header, row]));
+  return (
+    <HeadersGrid>
+      <Table.Tbody>
+        {rows.map(([name, value]) => (
+          <Table.Tr key={name}>
+            <Table.Td>
+              {isMcpHeader(name) ? (
+                <McpHeaderNameText>{name}</McpHeaderNameText>
+              ) : (
+                <HeaderNameText>{name}</HeaderNameText>
+              )}
+            </Table.Td>
+            <Table.Td>
+              <HeaderValueCell
+                name={name}
+                value={value}
+                consistency={byHeader.get(name.toLowerCase())}
+              />
+            </Table.Td>
+          </Table.Tr>
+        ))}
+      </Table.Tbody>
+    </HeadersGrid>
+  );
+}
+
+const CancellationAlert = Alert.withProps({
+  variant: "light",
+  color: "gray",
+  title: "Request cancelled",
+  icon: <RiErrorWarningLine />,
+});
+
+const RevealButton = Button.withProps({
+  variant: "subtle",
+  size: "compact-xs",
+});
+
+function BodyPreview({
+  body,
+  contentType,
+}: {
+  body: string;
+  contentType?: string;
+}) {
+  // Reveal state for masked secrets. Hooks run before any early return so the
+  // order stays stable across the too-large / has-secrets branches. The reveal
+  // state resets when the body or its content-type changes because callers key
+  // `<BodyPreview>` by both (remounting on swap), so a previously-revealed view
+  // never persists across a content (or masking) change.
+  const [revealed, setRevealed] = useState(false);
+
+  const tooLarge = body.length > MAX_INLINE_BODY_CHARS;
+
+  // OAuth responses (token exchange, DCR) and the token request carry
+  // bearer-grade secrets. Mask them by default and gate the raw values behind
+  // an explicit reveal so they aren't exposed at a glance during a
+  // screen-share. The entry's content-type scopes which parser runs (so a
+  // plaintext/HTML error body is never guessed at). Bodies without secrets
+  // render as-is with no toggle.
+  //
+  // Memoized so a Reveal/Hide click (a re-render) doesn't re-parse and re-walk
+  // the body; the cost is paid once per mount, and the `key={…}` remount on
+  // body/content-type change re-runs it. Skipped for too-large bodies so we
+  // never parse something we won't display (the hook must run unconditionally,
+  // hence the in-memo guard rather than an early return above it).
+  const { masked, hasSecrets } = useMemo(
+    () =>
+      tooLarge
+        ? { masked: body, hasSecrets: false }
+        : maskSecretsInBody(body, contentType),
+    [tooLarge, body, contentType],
+  );
+
+  if (tooLarge) {
+    return (
+      <DimmedNote>
+        Body too large to preview ({body.length} characters)
+      </DimmedNote>
+    );
+  }
+
+  if (!hasSecrets) {
+    return <ContentViewer block={{ type: "text", text: body }} copyable />;
+  }
+
+  const shown = revealed ? body : masked;
+  return (
+    <Stack gap="xs">
+      <Group gap="xs">
+        <DimmedNote aria-live="polite">
+          {revealed ? "Secrets revealed" : "Secrets hidden"}
+        </DimmedNote>
+        <RevealButton
+          onClick={() => setRevealed((v) => !v)}
+          aria-label={
+            revealed ? "Hide secrets in body" : "Reveal secrets in body"
+          }
+        >
+          {revealed ? "Hide" : "Reveal"}
+        </RevealButton>
+      </Group>
+      <ContentViewer block={{ type: "text", text: shown }} copyable />
+    </Stack>
+  );
+}
+
+export function NetworkEntry({
+  entry,
+  isListExpanded,
+  embedded = false,
+  revealed = false,
+  onRevealComplete,
+}: NetworkEntryProps) {
+  // Seeded from both sources so an entry that mounts already targeted by
+  // "Reveal in Network" starts open — the render-time syncs below only fire on
+  // a *change*, so neither of them covers the first render.
+  const [isExpanded, setIsExpanded] = useState(isListExpanded || revealed);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // The list-level Expand/Collapse toggle is authoritative: each time the
+  // parent changes `isListExpanded`, every entry snaps to that state and
+  // any per-entry override is intentionally discarded. Mirrors
+  // ProtocolEntry; do not change without aligning both.
+  useValueChange(isListExpanded, setIsExpanded);
+
+  // "Reveal in Network" one-shot, part 1: force the targeted entry open. This
+  // is deliberately ordered *after* the list sync above, so that if both change
+  // in the same render the reveal wins.
+  useValueChange(revealed, (nextRevealed) => {
+    if (nextRevealed) setIsExpanded(true);
+  });
+
+  // "Reveal in Network" one-shot, part 2: scroll the entry into view, then
+  // clear the signal. The scroll runs in a rAF so it lands after
+  // `useScrollMemory`'s layout-effect restore (which would otherwise fight it)
+  // and after the force-expand above has grown the row. `onRevealComplete`
+  // clears the parent's `revealId`, which flips `revealed` back to false and re-
+  // runs this effect's cleanup — so it must fire *inside* the rAF, after the
+  // scroll, otherwise the cleanup's `cancelAnimationFrame` would race and could
+  // cancel the very frame doing the scroll.
+  useEffect(() => {
+    if (!revealed) return;
+    const raf = requestAnimationFrame(() => {
+      rootRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      onRevealComplete?.();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [revealed, onRevealComplete]);
+
+  // OAuth flow phase for `auth`-category requests (discovery / registration /
+  // authorize / token), so the Network tab labels the auth conversation.
+  const oauthPhase =
+    entry.category === "auth" ? oauthNetworkPhase(entry.url) : undefined;
+  const phaseBadge = oauthPhase ? (
+    <PhaseBadge>{oauthNetworkPhaseLabel(oauthPhase)}</PhaseBadge>
+  ) : null;
+
+  // Request header/body cross-checks so a mirrored-header mismatch is visible
+  // before the server rejects it. (Protocol errors like -32020 are surfaced
+  // distinctly in the Protocol tab, not here — the Network tab stays focused on
+  // the HTTP transaction.)
+  const headerConsistency = useMemo(
+    () => checkHeaderConsistency(entry),
+    [entry],
+  );
+  const aborted = isCancellationAbort(entry);
+
+  const metaBadges = (
+    <>
+      {entry.duration != null && (
+        <DurationText>{formatDuration(entry.duration)}</DurationText>
+      )}
+      {isLongLivedStream(entry) && <Badge color="orange">SSE</Badge>}
+      <Badge color={statusColor(entry)} variant="status">
+        {statusLabel(entry)}
+      </Badge>
+    </>
+  );
+  const expandToggle = (
+    <ExpandToggle
+      expanded={isExpanded}
+      onToggle={() => setIsExpanded((v) => !v)}
+    />
+  );
+
+  return (
+    <EntryContainer ref={rootRef}>
+      <Stack gap="sm">
+        {embedded ? (
+          // Compact two-line header for the narrow column.
+          <Stack gap="xs">
+            <HeaderRow>
+              <HeaderCluster>
+                <TimestampText>
+                  {formatTimestampCompact(entry.timestamp)}
+                </TimestampText>
+                <MethodBadge method={entry.method} />
+                <CategoryBadge category={entry.category} />
+                {phaseBadge}
+              </HeaderCluster>
+              <ControlsCluster>{metaBadges}</ControlsCluster>
+            </HeaderRow>
+            <CompactUrlRow>
+              <CopyButton value={entry.url} />
+              <UrlScrollArea>
+                <UrlScroll>{entry.url}</UrlScroll>
+              </UrlScrollArea>
+              {expandToggle}
+            </CompactUrlRow>
+          </Stack>
+        ) : (
+          <>
+            <HeaderRow>
+              <WideHeaderCluster>
+                <TimestampText>
+                  {formatTimestamp(entry.timestamp)}
+                </TimestampText>
+                <MethodBadge method={entry.method} />
+                <CategoryBadge category={entry.category} />
+                {phaseBadge}
+                <CopyButton value={entry.url} />
+                <UrlText>{entry.url}</UrlText>
+              </WideHeaderCluster>
+              <ControlsCluster>{metaBadges}</ControlsCluster>
+            </HeaderRow>
+
+            <ToggleRow>{expandToggle}</ToggleRow>
+          </>
+        )}
+
+        <Collapse in={isExpanded}>
+          <Stack gap="sm">
+            <Divider />
+            {aborted && (
+              <CancellationAlert>
+                <Text size="xs">
+                  Cancellation appears as a connection abort — the modern
+                  transport aborts the request stream instead of sending a{" "}
+                  <MonoSpan>notifications/cancelled</MonoSpan> frame (SEP-2575).
+                </Text>
+              </CancellationAlert>
+            )}
+            <Stack gap="xs">
+              <SectionLabel>Request Headers</SectionLabel>
+              <HeadersTable
+                headers={entry.requestHeaders}
+                consistency={headerConsistency}
+              />
+            </Stack>
+            {entry.requestBody && (
+              <Stack gap="xs">
+                <SectionLabel>Request Body</SectionLabel>
+                <BodyPreview
+                  key={`${entry.requestHeaders["content-type"] ?? ""}|${entry.requestBody}`}
+                  body={entry.requestBody}
+                  contentType={entry.requestHeaders["content-type"]}
+                />
+              </Stack>
+            )}
+            {entry.responseHeaders && (
+              <Stack gap="xs">
+                <SectionLabel>Response Headers</SectionLabel>
+                <HeadersTable headers={entry.responseHeaders} />
+              </Stack>
+            )}
+            {entry.responseStatus !== undefined && (
+              <Stack gap="xs">
+                <SectionLabel>Response Body</SectionLabel>
+                {entry.responseBody ? (
+                  <BodyPreview
+                    key={`${entry.responseHeaders?.["content-type"] ?? ""}|${entry.responseBody}`}
+                    body={entry.responseBody}
+                    contentType={entry.responseHeaders?.["content-type"]}
+                  />
+                ) : (
+                  <DimmedNote>
+                    {isLongLivedStream(entry)
+                      ? "Long-lived stream — body not captured"
+                      : "(empty)"}
+                  </DimmedNote>
+                )}
+              </Stack>
+            )}
+            {entry.error && (
+              <Stack gap="xs">
+                <SectionLabel c="red">Error</SectionLabel>
+                <ErrorText>{entry.error}</ErrorText>
+              </Stack>
+            )}
+          </Stack>
+        </Collapse>
+      </Stack>
+    </EntryContainer>
+  );
+}

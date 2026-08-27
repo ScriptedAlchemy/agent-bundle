@@ -1,0 +1,18 @@
+{
+  "marketplace": {
+    "interface": {
+      "required": ["displayName"]
+    }
+  },
+  "observedCliVersion": "0.147.0",
+  "plugin": {
+    "interface": {
+      "required": [
+        "displayName",
+        "developerName",
+        "capabilities",
+        "defaultPrompt"
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+version: 2.1.232
+
+$ claude plugin --help
+Usage: claude plugin|plugins [options] [command]
+
+Manage Claude Code plugins
+
+Commands:
+  details [options] <name>             Show a plugin's component inventory and projected token cost
+  install|i [options] <plugin>         Install a plugin from available marketplaces
+  marketplace                          Manage Claude Code marketplaces
+  validate [options] <path>            Validate a plugin or marketplace manifest
+
+$ claude mcp add --help
+Usage: claude mcp add [options] <name> <commandOrUrl> [args...]
+
+Add an MCP server to Claude Code.
+
+Examples:
+  claude mcp add --transport http sentry https://mcp.sentry.dev/mcp
+  claude mcp add my-server -e API_KEY=xxx -- npx my-mcp-server
+
+Options:
+  -e, --env <env...>           Set environment variables
+  -H, --header <header...>     Set WebSocket headers
+  -t, --transport <transport>  Transport type (stdio, sse, http). Defaults to stdio if not specified.

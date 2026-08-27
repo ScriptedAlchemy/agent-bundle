@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000000"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"The task matches skills/release-notes, so read its instructions first."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"cat skills/release-notes/SKILL.md","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"cat skills/release-notes/SKILL.md","aggregated_output":"name: release-notes\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"project","tool":"status","status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Drafted the release notes."}}
+{"type":"turn.completed","usage":{"cached_input_tokens":0,"input_tokens":0,"output_tokens":0}}

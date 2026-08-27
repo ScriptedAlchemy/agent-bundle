@@ -1,0 +1,36 @@
+{
+  "name": "agent-bundle-workbench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "rsbuild build",
+    "dev": "node scripts/dev.mjs",
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@mantine/core": "9.5.1",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "papaparse": "5.6.0",
+    "pino": "10.3.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-icons": "5.7.0",
+    "react-markdown": "10.1.0",
+    "react-router": "7.18.2",
+    "react-syntax-highlighter": "16.1.1",
+    "remark-gfm": "4.0.1",
+    "shiki": "4.4.3",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "2.1.13",
+    "@rsbuild/plugin-react": "2.1.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4"
+  }
+}

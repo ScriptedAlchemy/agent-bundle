@@ -1,0 +1,54 @@
+{
+  "host": "codex",
+  "executable": "codex",
+  "minimumVersion": "0.147.0",
+  "temporaryHomeEnvironment": "CODEX_HOME",
+  "probes": {
+    "version": { "args": ["--version"] },
+    "help": [
+      {
+        "id": "root",
+        "args": ["--help"],
+        "output": "help.txt",
+        "requiredCommands": ["exec", "plugin"]
+      },
+      {
+        "id": "exec",
+        "args": ["exec", "--help"],
+        "output": "exec-help.txt",
+        "requiredOptions": ["--ephemeral", "--json"]
+      },
+      {
+        "id": "plugin",
+        "args": ["plugin", "--help"],
+        "output": "plugin-help.txt",
+        "requiredCommands": ["add", "list", "marketplace"]
+      },
+      {
+        "id": "plugin-add",
+        "args": ["plugin", "add", "--help"],
+        "output": "plugin-add-help.txt"
+      },
+      {
+        "id": "plugin-list",
+        "args": ["plugin", "list", "--help"],
+        "output": "plugin-list-help.txt",
+        "requiredOptions": ["--json"]
+      },
+      {
+        "id": "marketplace",
+        "args": ["plugin", "marketplace", "--help"],
+        "output": "marketplace-help.txt",
+        "requiredCommands": ["add", "list"]
+      }
+    ],
+    "status": { "args": ["plugin", "list", "--json"] }
+  },
+  "commandShapes": {
+    "marketplaceAdd": ["plugin", "marketplace", "add", "<marketplace-path>"],
+    "pluginAdd": ["plugin", "add", "<plugin>@<marketplace>"],
+    "pluginList": ["plugin", "list", "--json"],
+    "ephemeralExecution": ["exec", "--ephemeral", "--json", "<task-input>"]
+  },
+  "eventEnvelopeFiles": ["stream-events.jsonl"]
+}

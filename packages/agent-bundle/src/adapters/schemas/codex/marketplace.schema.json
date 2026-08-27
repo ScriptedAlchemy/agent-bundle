@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/codex/0.147.0/marketplace.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "interface": {
+      "additionalProperties": false,
+      "properties": { "displayName": { "minLength": 1, "type": "string" } },
+      "required": ["displayName"],
+      "type": "object"
+    },
+    "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+    "plugins": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "category": { "minLength": 1, "type": "string" },
+          "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+          "policy": {
+            "additionalProperties": false,
+            "properties": {
+              "authentication": { "enum": ["ON_INSTALL", "ON_USE"], "type": "string" },
+              "installation": { "enum": ["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"], "type": "string" }
+            },
+            "required": ["installation", "authentication"],
+            "type": "object"
+          },
+          "source": {
+            "additionalProperties": false,
+            "properties": {
+              "path": { "pattern": "^\\./", "type": "string" },
+              "source": { "const": "local", "type": "string" }
+            },
+            "required": ["source", "path"],
+            "type": "object"
+          }
+        },
+        "required": ["name", "source", "policy", "category"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": ["name", "interface", "plugins"],
+  "type": "object"
+}

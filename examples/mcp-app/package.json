@@ -1,0 +1,17 @@
+{
+  "name": "@agent-bundle-example/mcp-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "agent-bundle build --json",
+    "check": "pnpm validate && pnpm build",
+    "dev": "agent-bundle dev",
+    "validate": "agent-bundle validate --json"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/server": "2.0.0",
+    "agent-bundle": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

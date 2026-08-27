@@ -1,0 +1,28 @@
+{
+  "observedCliVersion": "2.1.232",
+  "retrievedAt": "2026-08-14",
+  "schemaSource": "https://docs.anthropic.com/en/docs/claude-code/plugins",
+  "schemas": {
+    "hooks.schema.json": {
+      "bytes": 1108,
+      "sha256": "a122f0e3b83f8222186bfac6965795b75f8f50716c6d76b105864ac1a578306a",
+      "url": "https://code.claude.com/docs/en/hooks"
+    },
+    "marketplace.schema.json": {
+      "bytes": 1210,
+      "sha256": "eba6a3ab555d40926168adecf381f449d64f1b6a5635a53e67d730dd57d5faf7",
+      "url": "https://docs.anthropic.com/en/docs/claude-code/plugins"
+    },
+    "mcp.schema.json": {
+      "bytes": 1279,
+      "sha256": "5c885bb78328a0f47e2bd769de653c6c9f4479ac79eba0dbcd4d4fdc011b4d17",
+      "url": "https://docs.anthropic.com/en/docs/claude-code/mcp"
+    },
+    "plugin.schema.json": {
+      "bytes": 804,
+      "sha256": "55f81e2b772afcdb4f9439b5ea09f0584257175d4ed953a0104261f1114d37cc",
+      "url": "https://docs.anthropic.com/en/docs/claude-code/plugins"
+    }
+  },
+  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Package builds do not download schemas or invoke host-side validators."
+}

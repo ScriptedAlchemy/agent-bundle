@@ -1,0 +1,8 @@
+Usage: codex [OPTIONS] [PROMPT]
+
+Commands:
+  exec       Run Codex non-interactively
+  plugin     Manage Codex plugins
+
+Options:
+  --version  Print version information

@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast end-to-end confidence gate: builds, validates, and deterministically evals the
+  # checked-in micro fixture through the real CLI. Never skip-gated and needs no native host.
+  spot-check:
+    name: Micro-eval spot-check (Node 22.19)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v1
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm examples:check
+      - run: pnpm test:spot-check
+
+  verify:
+    name: Verify (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['22.19.0', '24', '26']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v1
+        with:
+          cache: true
+          install: false
+          runtime: node@${{ matrix.node-version }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chrome
+      # Build first: checked-in suites and API tests import the package's built type
+      # declarations, so typecheck requires dist (same order as `pnpm check`).
+      - run: pnpm build
+      - name: Package lint (publint)
+        run: pnpm lint:package
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  release-gates:
+    name: Release gates (Node 22.19)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v1
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chrome
+      - run: pnpm check:release
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    name: Dependency review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v4

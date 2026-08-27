@@ -1,0 +1,702 @@
+import { randomUUID } from 'node:crypto';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo, Socket } from 'node:net';
+import { basename } from 'node:path';
+
+import { validateOriginHeader } from '@modelcontextprotocol/server';
+
+import { CodedError } from '../core/errors.ts';
+import { ArtifactRoutes, type ArtifactRouteService } from './artifacts/artifact-routes.ts';
+import type { AgentApi } from './agent-api.ts';
+import { DevLogRoutes } from './logs/dev-log-routes.ts';
+import type { DevLogService } from './logs/dev-log-service.ts';
+import { EvalRoutes, type EvalRouteService } from './eval/eval-routes.ts';
+import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
+import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playground/hook-playground-routes.ts';
+import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
+import { McpSessionRoutes } from './mcp-session/mcp-session-routes.ts';
+import type { McpSessionService } from './mcp-session/mcp-session-service.ts';
+import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/playground-routes.ts';
+import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
+import {
+  decodedOpaqueSegment,
+  diagnostic,
+  isJsonRequest,
+  isRequestDiagnostic,
+  rawPathname,
+  readBody,
+  requestError,
+  responseDiagnostic as writeResponseDiagnostic,
+  responseJson,
+  singleHeader,
+  type RequestDiagnostic,
+} from './http.ts';
+import { createBackpressuredWriter, encodedFrame, writeKeepAliveStreamHead } from './route-streams.ts';
+import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
+
+const instanceIdLengthLimit = 128;
+const loopbackHosts = new Set(['127.0.0.1', '::1']);
+const sseQueueByteLimit = 256 * 1024;
+
+export type ForegroundServerErrorCode = 'AB8000';
+
+/** Configuration errors that prevent a foreground server from starting. */
+export class ForegroundServerError extends CodedError<ForegroundServerErrorCode> {
+  constructor(code: ForegroundServerErrorCode, message: string) {
+    super('ForegroundServerError', code, message);
+  }
+}
+
+export interface ForegroundServerCloseFailure {
+  readonly error: unknown;
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'playground' | 'server';
+}
+
+export interface ForegroundServerStartFailure {
+  readonly error: unknown;
+  readonly resource: 'cleanup' | 'start';
+}
+
+/** Reports all releases that failed after every foreground resource was asked to close. */
+export class ForegroundServerCloseError extends Error {
+  readonly failures: readonly ForegroundServerCloseFailure[];
+
+  constructor(failures: readonly ForegroundServerCloseFailure[]) {
+    super('Foreground server could not close every resource.');
+    this.name = 'ForegroundServerCloseError';
+    this.failures = Object.freeze([...failures]);
+  }
+}
+
+/** Preserves a failed startup and every release failure needed to unwind it. */
+export class ForegroundServerStartError extends Error {
+  readonly failures: readonly ForegroundServerStartFailure[];
+
+  constructor(failures: readonly ForegroundServerStartFailure[]) {
+    super('Foreground server could not start cleanly.');
+    this.name = 'ForegroundServerStartError';
+    this.failures = Object.freeze([...failures]);
+  }
+}
+
+/** The small coordinator surface required by foreground HTTP routes. */
+export interface ForegroundCoordinator {
+  close(): Promise<void>;
+  rebuild(invalidation: Invalidation): Promise<unknown>;
+  start(): Promise<unknown>;
+  status(): ProjectStatus;
+}
+
+export interface WorkbenchAsset {
+  readonly body: string | Uint8Array;
+  readonly contentType: string;
+}
+
+/** W10 supplies prebuilt workbench files through this transport-neutral lookup. */
+export interface WorkbenchAssetSource {
+  read(path: string): Promise<WorkbenchAsset | undefined>;
+}
+
+export interface ForegroundServerOptions {
+  /** Optional agent-facing MCP endpoint, mounted only at /mcp. */
+  readonly agentApi?: AgentApi;
+  /** Read-only inspection over published epochs; the browser names an id, never a path. */
+  readonly artifacts?: ArtifactRouteService;
+  readonly assets?: WorkbenchAssetSource;
+  readonly coordinator: ForegroundCoordinator;
+  /** Bounded producer-wide diagnostics; routes expose only redacted snapshots. */
+  readonly logs?: DevLogService;
+  /** Deterministic and native eval runs; the browser names discovered suites, never a path or command. */
+  readonly evals?: EvalRouteService;
+  /** The project-owned Eval service is closed only after foreground Eval routes have drained. */
+  readonly evalLifecycle?: Readonly<{ close(): Promise<void> }>;
+  readonly eventHub: ProjectEventHub;
+  readonly host?: string;
+  /** Injectable only to make restart-recovery contracts deterministic. */
+  readonly instanceId?: string;
+  /** Already-bound MCP App previews, never executable data supplied by a browser request. */
+  readonly mcpAppPreviews?: McpAppRoutePreviewService;
+  /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
+  readonly hookPlayground?: HookPlaygroundRouteService;
+  /** Persistent MCP sessions are supplied by the workbench service, never by browser input. */
+  readonly mcpSessions?: McpSessionService;
+  readonly now?: () => Date;
+  /** Durable playground trace store; the browser never selects its storage root or project identity. */
+  readonly playground?: PlaygroundRouteService;
+  /** Native Playground runs drain after their routes close and before Eval or epochs are released. */
+  readonly playgroundLifecycle?: Readonly<{ close(): Promise<void> }>;
+  readonly port?: number;
+  /** Read-only Skill document/resource service for the workbench. */
+  readonly skillDocuments?: SkillDocumentService;
+  /** Injectable only to make integration contracts deterministic. */
+  readonly sessionToken?: string;
+}
+
+type SkillRoute =
+  | Readonly<{ readonly kind: 'source-tree' }>
+  | Readonly<{ readonly kind: 'source-document'; readonly skillId: string }>
+  | Readonly<{ readonly kind: 'source-resource'; readonly skillId: string; readonly resource: readonly string[] }>
+  | Readonly<{ readonly epochId: string; readonly kind: 'generated-tree'; readonly target: string }>
+  | Readonly<{ readonly epochId: string; readonly kind: 'generated-document'; readonly skillId: string; readonly target: string }>
+  | Readonly<{ readonly epochId: string; readonly kind: 'generated-resource'; readonly resource: readonly string[]; readonly skillId: string; readonly target: string }>;
+
+/** Route groups may attach structured diagnostics that are the answer, not an internal detail. */
+const attachedDiagnostics = (value: RequestDiagnostic): readonly unknown[] | undefined => {
+  const diagnostics = (value as Partial<{ readonly diagnostics: unknown }>).diagnostics;
+  return Array.isArray(diagnostics) ? diagnostics : undefined;
+};
+
+const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void =>
+  writeResponseDiagnostic(response, value, attachedDiagnostics(value));
+
+const attachmentHeader = (relativePath: string): string =>
+  `attachment; filename*=UTF-8''${encodeURIComponent(basename(relativePath)).replaceAll("'", '%27')}`;
+
+const decodedAssetPath = (requestTarget: string | undefined): string => {
+  const pathname = requestTarget?.split(/[?#]/u, 1)[0];
+  if (pathname === undefined || !pathname.startsWith('/')) {
+    throw requestError(diagnostic('AB8005', 'Asset path is not valid.', 400));
+  }
+  if (pathname === '/') return 'index.html';
+  return pathname.slice(1).split('/').map((part) =>
+    decodedOpaqueSegment(part, { code: 'AB8005', message: 'Asset path is not valid.' }),
+  ).join('/');
+};
+
+const decodedSkillSegment = (segment: string): string =>
+  decodedOpaqueSegment(segment, { code: 'AB8012', message: 'Skill route path is not valid.' });
+
+const skillRoute = (requestTarget: string | undefined): SkillRoute | undefined => {
+  const pathname = rawPathname(requestTarget);
+  if (pathname !== '/api/skills' && !pathname.startsWith('/api/skills/')) return undefined;
+  const parts = pathname.split('/');
+  if (parts[0] !== '' || parts[1] !== 'api' || parts[2] !== 'skills') {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  const segments = parts.slice(3).map(decodedSkillSegment);
+  if (segments.length === 1 && segments[0] === 'source') return Object.freeze({ kind: 'source-tree' });
+  if (segments[0] === 'source') {
+    const skillId = segments[1];
+    if (skillId === undefined) throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+    if (segments.length === 2) return Object.freeze({ kind: 'source-document', skillId });
+    if (segments[2] === 'resources' && segments.length > 3) {
+      return Object.freeze({ kind: 'source-resource', resource: Object.freeze(segments.slice(3)), skillId });
+    }
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  if (segments[0] !== 'epochs') {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  const [_, epochId, target, skillId, resourceMarker, ...resource] = segments;
+  if (epochId === undefined || target === undefined) {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  if (segments.length === 3) return Object.freeze({ epochId, kind: 'generated-tree', target });
+  if (skillId === undefined) throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  if (segments.length === 4) return Object.freeze({ epochId, kind: 'generated-document', skillId, target });
+  if (resourceMarker === 'resources' && resource.length > 0) {
+    return Object.freeze({ epochId, kind: 'generated-resource', resource: Object.freeze(resource), skillId, target });
+  }
+  throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+};
+
+const manualInvalidation = (body: string, now: () => Date): Invalidation => {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
+  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw requestError(diagnostic('AB8002', 'Request body may contain only an optional paths array.', 400));
+  }
+  const fields = Object.keys(value);
+  if (fields.some((field) => field !== 'paths')) {
+    throw requestError(diagnostic('AB8002', 'Request body may contain only an optional paths array.', 400));
+  }
+  const paths = (value as { readonly paths?: unknown }).paths ?? [];
+  if (!Array.isArray(paths) || paths.some((path) => !isProjectRelativePath(path))) {
+    throw requestError(diagnostic('AB8002', 'Request body may contain only an optional paths array.', 400));
+  }
+  return Object.freeze({
+    occurredAt: now().toISOString(),
+    paths: Object.freeze([...new Set(paths)].sort((left, right) => left.localeCompare(right))),
+    reason: 'manual',
+  });
+};
+
+const isProjectRelativePath = (value: unknown): value is string => {
+  if (typeof value !== 'string' || value.length === 0 || value.includes('\\') || value.includes('\0')) return false;
+  return value.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
+};
+
+const eventFrame = (event: ProjectEventMessage): string =>
+  encodedFrame(event, () => {
+    const id = event.type === 'replay.gap' ? '' : `id: ${event.sequence}\n`;
+    return `${id}event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  });
+
+const afterSequence = (request: IncomingMessage, latestSequence: number): number => {
+  const header = singleHeader(request.headers['last-event-id']);
+  if (header === undefined || header.length === 0) return 0;
+  if (!/^(0|[1-9]\d*)$/u.test(header)) {
+    throw requestError(diagnostic('AB8006', 'Last-Event-ID must be a non-negative integer.', 400));
+  }
+  const sequence = Number(header);
+  if (!Number.isSafeInteger(sequence) || sequence > latestSequence) {
+    throw requestError(diagnostic('AB8006', 'Last-Event-ID must not be ahead of the project event stream.', 400));
+  }
+  return sequence;
+};
+
+const closeServer = (server: Server): Promise<void> => new Promise((resolvePromise, rejectPromise) => {
+  server.close((error) => error === undefined || (error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING'
+    ? resolvePromise()
+    : rejectPromise(error));
+});
+
+const closedError = (): Error => new Error('Foreground server is closed.');
+
+const requestHostMatches = (request: IncomingMessage, origin: string): boolean => {
+  const host = singleHeader(request.headers.host);
+  if (host === undefined) return false;
+  try {
+    const requested = new URL(`http://${host}`);
+    const expected = new URL(origin);
+    return requested.username.length === 0 && requested.password.length === 0 &&
+      requested.pathname === '/' && requested.search.length === 0 && requested.hash.length === 0 &&
+      requested.hostname === expected.hostname && requested.port === expected.port;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * A foreground-only HTTP transport. It starts no executable selected by the
+ * browser: product work stays in the injected coordinator.
+ */
+export class ForegroundServer {
+  readonly #agentApi: AgentApi | undefined;
+  readonly #artifactRoutes: ArtifactRoutes;
+  readonly #assets: WorkbenchAssetSource | undefined;
+  readonly #coordinator: ForegroundCoordinator;
+  readonly #devLogRoutes: DevLogRoutes;
+  readonly #evalLifecycle: Readonly<{ close(): Promise<void> }> | undefined;
+  readonly #evalRoutes: EvalRoutes;
+  readonly #eventHub: ProjectEventHub;
+  readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
+  readonly #host: string;
+  readonly #mcpAppRoutes: McpAppRoutes;
+  readonly #mcpSessionRoutes: McpSessionRoutes;
+  readonly #now: () => Date;
+  readonly #playgroundLifecycle: Readonly<{ close(): Promise<void> }> | undefined;
+  readonly #playgroundRoutes: PlaygroundRoutes;
+  readonly #port: number;
+  readonly #server: Server;
+  readonly #skillDocuments: SkillDocumentService | undefined;
+  readonly #sockets = new Set<Socket>();
+  readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
+  #closePromise: Promise<void> | undefined;
+  #closing = false;
+  #listenStarted = false;
+  #releasePromise: Promise<readonly ForegroundServerCloseFailure[]> | undefined;
+  #startPromise: Promise<void> | undefined;
+  #url: string | undefined;
+
+  constructor(options: ForegroundServerOptions) {
+    const host = options.host ?? '127.0.0.1';
+    if (!loopbackHosts.has(host)) {
+      throw new ForegroundServerError('AB8000', 'Foreground servers may bind only to 127.0.0.1 or ::1.');
+    }
+    const port = options.port ?? 0;
+    if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
+      throw new ForegroundServerError('AB8000', 'Foreground server port must be a safe TCP port number.');
+    }
+    const instanceId = options.instanceId ?? randomUUID();
+    if (
+      instanceId.length === 0 || instanceId.length > instanceIdLengthLimit ||
+      instanceId.trim() !== instanceId
+    ) {
+      throw new ForegroundServerError('AB8000', 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.');
+    }
+
+    this.#agentApi = options.agentApi;
+    this.#assets = options.assets;
+    this.#coordinator = options.coordinator;
+    this.#evalLifecycle = options.evalLifecycle;
+    this.#eventHub = options.eventHub;
+    this.#host = host;
+    this.instanceId = instanceId;
+    this.#now = options.now ?? (() => new Date());
+    this.#playgroundLifecycle = options.playgroundLifecycle;
+    this.#port = port;
+    this.#skillDocuments = options.skillDocuments;
+    this.sessionToken = options.sessionToken ?? randomUUID();
+    this.#mcpAppRoutes = new McpAppRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.mcpAppPreviews === undefined ? {} : { service: options.mcpAppPreviews }),
+    });
+    this.#mcpSessionRoutes = new McpSessionRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.mcpSessions === undefined ? {} : { service: options.mcpSessions }),
+    });
+    this.#hookPlaygroundRoutes = new HookPlaygroundRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.hookPlayground === undefined ? {} : { service: options.hookPlayground }),
+    });
+    this.#playgroundRoutes = new PlaygroundRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.playground === undefined ? {} : { service: options.playground }),
+    });
+    this.#artifactRoutes = new ArtifactRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.artifacts === undefined ? {} : { service: options.artifacts }),
+    });
+    this.#evalRoutes = new EvalRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.evals === undefined ? {} : { service: options.evals }),
+    });
+    this.#devLogRoutes = new DevLogRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.logs === undefined ? {} : { service: options.logs }),
+    });
+    this.#server = createServer((request, response) => {
+      void this.#handle(request, response).catch((error: unknown) => {
+        responseDiagnostic(
+          response,
+          isRequestDiagnostic(error)
+            ? error
+            : diagnostic('AB8007', 'Request could not be completed.', 500),
+        );
+      });
+    });
+    this.#server.on('connection', (socket: Socket) => {
+      this.#sockets.add(socket);
+      socket.once('close', () => this.#sockets.delete(socket));
+    });
+  }
+
+  /** Identity for this foreground server process, disclosed solely through same-origin bootstrap. */
+  readonly instanceId: string;
+
+  /** Browser-only capability, disclosed solely through same-origin bootstrap. */
+  readonly sessionToken: string;
+
+  get url(): string {
+    if (this.#url === undefined) throw new Error('Foreground server has not started.');
+    return this.#url;
+  }
+
+  async start(): Promise<void> {
+    if (this.#startPromise !== undefined) return this.#startPromise;
+    if (this.#closing) throw closedError();
+    this.#startPromise = this.#start();
+    return this.#startPromise;
+  }
+
+  /**
+   * Releasing a resource can re-enter shutdown: a cancelled hook simulation runs
+   * its abort callback synchronously, and that callback may close this server. The
+   * single outcome is therefore published before any resource is asked to release,
+   * so every nested, concurrent, and repeated caller receives the identical promise
+   * and no resource is released twice.
+   */
+  close(): Promise<void> {
+    const closing = this.#closePromise;
+    if (closing !== undefined) return closing;
+    this.#closing = true;
+    const published = Promise.withResolvers<void>();
+    this.#closePromise = published.promise;
+    try {
+      this.#close().then(published.resolve, published.reject);
+    } catch (error) {
+      published.reject(error);
+    }
+    return published.promise;
+  }
+
+  async #start(): Promise<void> {
+    try {
+      await this.#coordinator.start();
+      this.#assertOpen();
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        const fail = (error: Error) => {
+          this.#server.off('listening', succeed);
+          rejectPromise(error);
+        };
+        const succeed = () => {
+          this.#server.off('error', fail);
+          resolvePromise();
+        };
+        this.#server.once('error', fail);
+        this.#server.once('listening', succeed);
+        this.#listenStarted = true;
+        this.#server.listen({ host: this.#host, port: this.#port });
+      });
+      this.#assertOpen();
+      const address = this.#server.address();
+      if (address === null || typeof address === 'string') {
+        throw new Error('Foreground server did not report a TCP address.');
+      }
+      this.#url = `http://${addressToHost(address)}:${address.port}`;
+    } catch (error) {
+      if (this.#closePromise !== undefined) throw error;
+      this.#closing = true;
+      const cleanupFailures = await this.#releaseResources();
+      if (cleanupFailures.length > 0) {
+        throw new ForegroundServerStartError([
+          Object.freeze({ error, resource: 'start' }),
+          Object.freeze({ error: new ForegroundServerCloseError(cleanupFailures), resource: 'cleanup' }),
+        ]);
+      }
+      throw error;
+    }
+  }
+
+  #assertOpen(): void {
+    if (this.#closing) throw closedError();
+  }
+
+  async #close(): Promise<void> {
+    const startup = this.#startPromise;
+    const failures = await this.#releaseResources();
+    await startup?.catch(() => undefined);
+    if (failures.length > 0) throw new ForegroundServerCloseError(failures);
+  }
+
+  /** Published before the first release for the same reason close() is. */
+  #releaseResources(): Promise<readonly ForegroundServerCloseFailure[]> {
+    const releasing = this.#releasePromise;
+    if (releasing !== undefined) return releasing;
+    const published = Promise.withResolvers<readonly ForegroundServerCloseFailure[]>();
+    this.#releasePromise = published.promise;
+    try {
+      this.#release().then(published.resolve, published.reject);
+    } catch (error) {
+      published.reject(error);
+    }
+    return published.promise;
+  }
+
+  async #release(): Promise<readonly ForegroundServerCloseFailure[]> {
+    this.#mcpAppRoutes.close();
+    this.#mcpSessionRoutes.close();
+    // Cancelled hook simulations own wrapper processes and clones, so their
+    // drain is released alongside the other resources and awaited with them.
+    const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
+    this.#playgroundRoutes.close();
+    // The route admission gate is closed before native work starts draining.
+    // Its runner can retain an epoch reference while final evidence is written,
+    // so Eval and the coordinator must remain available until it settles.
+    const releasePlayground = this.#playgroundLifecycle?.close() ?? Promise.resolve();
+    this.#artifactRoutes.close();
+    const releaseEvals = this.#evalRoutes.close();
+    const releaseLogs = this.#devLogRoutes.close();
+    // The Agent API owns admissions over every shared foreground service. It
+    // must publish closure and drain active handlers before those services or
+    // the epoch-owning coordinator begin their own shutdown.
+    const [agentApi] = await Promise.allSettled([this.#agentApi?.close() ?? Promise.resolve()]);
+    const releaseServer = this.#listenStarted
+      ? (() => {
+          this.#listenStarted = false;
+          for (const subscription of this.#streamSubscriptions) subscription.unsubscribe();
+          this.#streamSubscriptions.clear();
+          for (const socket of this.#sockets) socket.destroy();
+          return closeServer(this.#server);
+        })()
+      : Promise.resolve();
+    const [playground] = await Promise.allSettled([releasePlayground]);
+    const [evalRoutes] = await Promise.allSettled([releaseEvals]);
+    const [evalService] = await Promise.allSettled([this.#evalLifecycle?.close() ?? Promise.resolve()]);
+    const [server, coordinator, hookPlayground, logs] = await Promise.allSettled([
+      releaseServer,
+      this.#coordinator.close(),
+      releaseHookPlayground,
+      releaseLogs,
+    ]);
+    const failures: ForegroundServerCloseFailure[] = [];
+    if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
+    if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
+    if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
+    if (evalRoutes.status === 'rejected') failures.push(Object.freeze({ error: evalRoutes.reason, resource: 'eval-routes' }));
+    if (evalService.status === 'rejected') failures.push(Object.freeze({ error: evalService.reason, resource: 'eval-service' }));
+    if (playground.status === 'rejected') failures.push(Object.freeze({ error: playground.reason, resource: 'playground' }));
+    if (hookPlayground.status === 'rejected') {
+      failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
+    }
+    if (logs.status === 'rejected') failures.push(Object.freeze({ error: logs.reason, resource: 'logs' }));
+    return Object.freeze(failures);
+  }
+
+  async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (!requestHostMatches(request, this.url)) {
+      throw requestError(diagnostic('AB8008', 'Request host is not this foreground server.', 400));
+    }
+    const pathname = new URL(request.url ?? '/', this.url).pathname;
+    const method = request.method ?? 'GET';
+    if (pathname === '/mcp') {
+      if (this.#agentApi === undefined) return responseDiagnostic(response, diagnostic('AB8007', 'Route was not found.', 404));
+      this.#assertAgentApiOrigin(request);
+      return this.#agentApi.handle(request, response);
+    }
+    if (await this.#mcpAppRoutes.handle(request, response)) return;
+    if (await this.#mcpSessionRoutes.handle(request, response)) return;
+    if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
+    if (await this.#playgroundRoutes.handle(request, response)) return;
+    if (await this.#artifactRoutes.handle(request, response)) return;
+    if (await this.#evalRoutes.handle(request, response)) return;
+    if (await this.#devLogRoutes.handle(request, response)) return;
+    const route = skillRoute(request.url);
+    if (route !== undefined) return this.#serveSkill(route, response, method);
+    if (pathname === '/api/project/status') {
+      if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      return responseJson(response, { status: this.#coordinator.status() });
+    }
+    if (pathname === '/api/project/session') {
+      if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      this.#assertSessionBootstrapOrigin(request);
+      return responseJson(response, { instanceId: this.instanceId, origin: this.url, token: this.sessionToken });
+    }
+    if (pathname === '/api/project/rebuild') {
+      if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      this.#assertMutationSession(request);
+      if (!isJsonRequest(request)) {
+        return responseDiagnostic(response, diagnostic('AB8009', 'Request body must use application/json.', 415));
+      }
+      await this.#coordinator.rebuild(manualInvalidation(await readBody(request), this.#now));
+      return responseJson(response, { status: this.#coordinator.status() });
+    }
+    if (pathname === '/api/project/events') {
+      if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      return this.#streamEvents(request, response);
+    }
+    return this.#serveAsset(request, response, method);
+  }
+
+  async #serveSkill(route: SkillRoute, response: ServerResponse, method: string): Promise<void> {
+    const service = this.#skillDocuments;
+    if (service === undefined) {
+      return responseDiagnostic(response, diagnostic('AB8011', 'Skill workbench service is not available.', 404));
+    }
+    const resource = route.kind === 'source-resource' || route.kind === 'generated-resource';
+    if (method !== 'GET' && (!resource || method !== 'HEAD')) {
+      return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+    }
+    try {
+      if (route.kind === 'source-tree') return responseJson(response, await service.sourceTree());
+      if (route.kind === 'source-document') return responseJson(response, { document: await service.source(route.skillId) });
+      if (route.kind === 'generated-tree') {
+        return responseJson(response, await service.generatedTree(route.epochId, route.target));
+      }
+      if (route.kind === 'generated-document') {
+        return responseJson(response, { document: await service.generated(route.epochId, route.target, route.skillId) });
+      }
+      const value = route.kind === 'source-resource'
+        ? await service.sourceResource(route.skillId, route.resource)
+        : await service.generatedResource(route.epochId, route.target, route.skillId, route.resource);
+      const headers: Record<string, string> = {
+        'content-length': String(value.body.byteLength),
+        'content-type': value.contentType,
+        'x-content-type-options': 'nosniff',
+      };
+      if (value.contentDisposition === 'attachment') {
+        headers['content-disposition'] = attachmentHeader(value.relativePath);
+      }
+      response.writeHead(200, headers);
+      response.end(method === 'HEAD' ? undefined : value.body);
+    } catch (error) {
+      if (error instanceof SkillDocumentError) {
+        return responseDiagnostic(response, diagnostic(error.code, error.message, 404));
+      }
+      throw error;
+    }
+  }
+
+  #assertSessionBootstrapOrigin(request: IncomingMessage): void {
+    const origin = singleHeader(request.headers.origin);
+    if (origin === this.url) return;
+    if (origin === undefined && singleHeader(request.headers['sec-fetch-site']) === 'same-origin') return;
+    throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
+  }
+
+  /** Codex MCP clients may omit Origin; browsers with one must be this exact foreground origin. */
+  #assertAgentApiOrigin(request: IncomingMessage): void {
+    const origin = singleHeader(request.headers.origin);
+    if (origin === undefined) return;
+    const allowedOrigin = new URL(this.url).hostname;
+    if (!validateOriginHeader(origin, [allowedOrigin]).ok || origin !== this.url) {
+      throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
+    }
+  }
+
+  #assertMutationSession(request: IncomingMessage): void {
+    const origin = singleHeader(request.headers.origin);
+    if (origin !== this.url && (origin !== undefined || singleHeader(request.headers['sec-fetch-site']) !== 'same-origin')) {
+      throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
+    }
+    if (singleHeader(request.headers['x-agent-bundle-session']) !== this.sessionToken) {
+      throw requestError(diagnostic('AB8004', 'A valid same-session token is required.', 403));
+    }
+  }
+
+  #streamEvents(request: IncomingMessage, response: ServerResponse): void {
+    const sequence = afterSequence(request, this.#eventHub.latestSequence);
+    writeKeepAliveStreamHead(response, {
+      cacheControl: 'no-cache',
+      contentType: 'text/event-stream; charset=utf-8',
+    });
+    const stream = { subscription: undefined as ProjectEventSubscription | undefined };
+    const writer = createBackpressuredWriter(response, {
+      byteLimit: sseQueueByteLimit,
+      countInFlightBytes: true,
+    });
+    const unsubscribe = () => {
+      stream.subscription?.unsubscribe();
+      if (stream.subscription !== undefined) this.#streamSubscriptions.delete(stream.subscription);
+      writer.markClosed();
+    };
+    const closeStream = () => {
+      writer.markClosed();
+      unsubscribe();
+    };
+    const closeSlowStream = () => {
+      closeStream();
+      response.destroy();
+    };
+    const deliver = (frame: string) => {
+      if (writer.enqueue(frame) === 'overflow') closeSlowStream();
+    };
+    const subscription = this.#eventHub.subscribe({ afterSequence: sequence }, (event) => {
+      deliver(eventFrame(event));
+    });
+    stream.subscription = subscription;
+    if (writer.closed || request.destroyed || response.destroyed) {
+      closeStream();
+      return;
+    }
+    this.#streamSubscriptions.add(subscription);
+    request.once('close', closeStream);
+    response.once('close', closeStream);
+  }
+
+  async #serveAsset(request: IncomingMessage, response: ServerResponse, method: string): Promise<void> {
+    if (method !== 'GET' && method !== 'HEAD') {
+      return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+    }
+    const path = decodedAssetPath(request.url);
+    const asset = await this.#assets?.read(path);
+    if (asset === undefined) return responseDiagnostic(response, diagnostic('AB8007', 'Route was not found.', 404));
+    response.writeHead(200, { 'content-type': asset.contentType });
+    response.end(method === 'HEAD' ? undefined : asset.body);
+  }
+}
+
+const addressToHost = (address: AddressInfo): string => address.family === 'IPv6'
+  ? `[${address.address}]`
+  : address.address;
+
+export const startForegroundServer = async (options: ForegroundServerOptions): Promise<ForegroundServer> => {
+  const server = new ForegroundServer(options);
+  await server.start();
+  return server;
+};

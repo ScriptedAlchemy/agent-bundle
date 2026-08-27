@@ -1,0 +1,395 @@
+import type { Diagnostic } from '../core/diagnostics.ts';
+import type { ProjectContext } from '../core/project-context.ts';
+
+export type JsonPrimitive = boolean | null | number | string;
+export type JsonArray = readonly JsonValue[];
+export type JsonObject = Readonly<{ readonly [key: string]: JsonValue }>;
+export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
+
+export interface DiagnosticSummary {
+  readonly errors: number;
+  readonly infos: number;
+  readonly warnings: number;
+}
+
+/** A fully emitted and validated immutable artifact publication. */
+export interface ArtifactEpoch {
+  readonly configDigest: string;
+  readonly createdAt: string;
+  readonly diagnostics: DiagnosticSummary;
+  readonly id: string;
+  readonly manifestPath: string;
+  readonly modelDigest: string;
+  readonly projectRevision: string;
+  readonly targetDigests: Readonly<Record<string, string>>;
+}
+
+/** A source input referenced directly by an emitted artifact file. */
+export interface ArtifactInspectionSourceInput {
+  readonly path: string;
+  readonly sha256: string;
+}
+
+/** Manifested artifact file facts, without the file contents. */
+export interface ArtifactInspectionFile {
+  readonly bytes: number;
+  readonly kind: 'bundle' | 'copy' | 'generated';
+  readonly mode?: number;
+  readonly path: string;
+  readonly sha256: string;
+  readonly sourceInputs: readonly ArtifactInspectionSourceInput[];
+}
+
+export interface ArtifactInspectionFileNode {
+  readonly file: ArtifactInspectionFile;
+  readonly kind: 'file';
+  readonly name: string;
+  readonly path: string;
+}
+
+export interface ArtifactInspectionDirectoryNode {
+  readonly children: readonly ArtifactInspectionTreeNode[];
+  readonly kind: 'directory';
+  readonly name: string;
+  readonly path: string;
+}
+
+/** One immutable tree node within a declared artifact target. */
+export type ArtifactInspectionTreeNode = ArtifactInspectionDirectoryNode | ArtifactInspectionFileNode;
+
+export interface ArtifactInspectionTarget {
+  readonly name: string;
+  readonly tree: ArtifactInspectionDirectoryNode;
+}
+
+/** Direct declared provenance for one emitted output path. */
+export interface ArtifactInspectionProvenance {
+  readonly outputPath: string;
+  readonly sourceInputs: readonly ArtifactInspectionSourceInput[];
+}
+
+export interface ArtifactInspectionHook {
+  readonly event: string;
+  readonly file: ArtifactInspectionFile;
+  readonly id: string;
+  readonly name: string;
+  readonly path: string;
+  readonly target: string;
+  readonly timeout?: number;
+}
+
+/** Non-secret runtime facts for one strict modern MCP server declaration. */
+export interface ArtifactInspectionMcpServer {
+  readonly entryPaths: readonly string[];
+  readonly kind: 'stdio' | 'streamable-http';
+  readonly manifestPath: string;
+  readonly name: string;
+  readonly target: string;
+}
+
+export interface ArtifactInspectionScript {
+  readonly file: ArtifactInspectionFile;
+  readonly id: string;
+  readonly name: string;
+  readonly target: string;
+}
+
+export interface ArtifactInspectionRuntime {
+  readonly executables: readonly ArtifactInspectionFile[];
+  readonly hooks: readonly ArtifactInspectionHook[];
+  readonly mcpServers: readonly ArtifactInspectionMcpServer[];
+  readonly scripts: readonly ArtifactInspectionScript[];
+}
+
+/** Detached facts from one strictly validated, published Artifact Manifest epoch. */
+export interface ArtifactInspection {
+  readonly epochId: string;
+  readonly files: readonly ArtifactInspectionFile[];
+  readonly project: ProjectContext;
+  readonly provenance: readonly ArtifactInspectionProvenance[];
+  readonly runtime: ArtifactInspectionRuntime;
+  readonly targets: readonly ArtifactInspectionTarget[];
+}
+
+export interface ArtifactEpochAddedFile {
+  readonly after: ArtifactInspectionFile;
+  readonly path: string;
+}
+
+export interface ArtifactEpochRemovedFile {
+  readonly before: ArtifactInspectionFile;
+  readonly path: string;
+}
+
+export interface ArtifactEpochChangedFile {
+  readonly after: ArtifactInspectionFile;
+  readonly before: ArtifactInspectionFile;
+  readonly path: string;
+}
+
+export interface ArtifactEpochUnchangedFile {
+  readonly after: ArtifactInspectionFile;
+  readonly before: ArtifactInspectionFile;
+  readonly path: string;
+}
+
+/** Stable facts-only difference between two exact published artifact epochs. */
+export interface ArtifactEpochDiff {
+  readonly added: readonly ArtifactEpochAddedFile[];
+  readonly baseEpochId: string;
+  readonly candidateEpochId: string;
+  readonly changed: readonly ArtifactEpochChangedFile[];
+  readonly removed: readonly ArtifactEpochRemovedFile[];
+  readonly unchanged: readonly ArtifactEpochUnchangedFile[];
+}
+
+export type SourceState = 'unknown' | 'ready' | 'invalid';
+
+export interface SourceStatus {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly revision?: string;
+  readonly state: SourceState;
+}
+
+export interface RunningBuildAttempt {
+  readonly completedAt?: never;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly id: string;
+  readonly outcome: 'running';
+  readonly result?: never;
+  readonly sourceRevision: string;
+  readonly startedAt: string;
+}
+
+export interface SucceededBuildAttempt {
+  readonly completedAt: string;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly id: string;
+  readonly outcome: 'succeeded';
+  readonly result: Readonly<{ readonly epoch: ArtifactEpoch }>;
+  readonly sourceRevision: string;
+  readonly startedAt: string;
+}
+
+export interface FailedBuildAttempt {
+  readonly completedAt: string;
+  readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
+  readonly id: string;
+  readonly outcome: 'failed';
+  readonly result?: never;
+  readonly sourceRevision: string;
+  readonly startedAt: string;
+}
+
+export type BuildAttempt =
+  | RunningBuildAttempt
+  | SucceededBuildAttempt
+  | FailedBuildAttempt;
+export type BuildAttemptOutcome = BuildAttempt['outcome'];
+export type CompletedBuildAttempt = Exclude<BuildAttempt, RunningBuildAttempt>;
+
+export type BuildStatus =
+  | Readonly<{
+      readonly lastAttempt?: CompletedBuildAttempt;
+      readonly state: 'idle';
+    }>
+  | Readonly<{
+      readonly activeAttempt: RunningBuildAttempt;
+      readonly lastAttempt?: CompletedBuildAttempt;
+      readonly state: 'building';
+    }>
+  | Readonly<{
+      readonly lastAttempt: FailedBuildAttempt;
+      readonly state: 'failed';
+    }>;
+
+export type BuildState = BuildStatus['state'];
+
+export type ArtifactStatus =
+  | Readonly<{
+      readonly activeEpoch?: never;
+      readonly currentSourceRevision?: string;
+      readonly state: 'missing';
+    }>
+  | Readonly<{
+      readonly activeEpoch: ArtifactEpoch;
+      readonly currentSourceRevision: string;
+      readonly state: 'active';
+    }>
+  | Readonly<{
+      /** Last fully published epoch, retained while the source is newer. */
+      readonly activeEpoch: ArtifactEpoch;
+      readonly currentSourceRevision: string;
+      readonly state: 'stale';
+    }>;
+
+export type ActiveArtifactStatus = Extract<ArtifactStatus, { state: 'active' }>;
+export type StaleArtifactStatus = Extract<ArtifactStatus, { state: 'stale' }>;
+export type ArtifactState = ArtifactStatus['state'];
+
+export interface ProjectStatus {
+  readonly artifact: ArtifactStatus;
+  readonly build: BuildStatus;
+  readonly source: SourceStatus;
+}
+
+export type InvalidationReason = 'initial' | 'manual' | 'source-change';
+
+/** A debounced batch of source paths which requires project work to be reconsidered. */
+export interface Invalidation {
+  readonly occurredAt: string;
+  readonly paths: readonly string[];
+  readonly reason: InvalidationReason;
+}
+
+export interface RuntimeEvent {
+  readonly details?: JsonObject;
+  readonly sessionId: string;
+  readonly type: string;
+}
+
+export interface ProjectEventPayloadMap {
+  readonly 'artifact.available': ActiveArtifactStatus;
+  readonly 'artifact.status': ArtifactStatus;
+  readonly 'build.failed': FailedBuildAttempt;
+  readonly 'build.started': RunningBuildAttempt;
+  readonly invalidation: Invalidation;
+  readonly 'runtime.event': RuntimeEvent;
+  readonly 'source.changed': Invalidation;
+  readonly 'source.status': SourceStatus;
+}
+
+export type ProjectEventType = keyof ProjectEventPayloadMap;
+type EpochScopedProjectEventType = 'artifact.available' | 'runtime.event';
+
+type ProjectEventFor<TType extends ProjectEventType> = TType extends ProjectEventType
+  ? Readonly<{
+      readonly occurredAt: string;
+      readonly payload: ProjectEventPayloadMap[TType];
+      readonly sequence: number;
+      readonly type: TType;
+    }> &
+      (TType extends EpochScopedProjectEventType
+        ? Readonly<{ readonly epochId: string }>
+        : Readonly<{ readonly epochId?: string }>)
+  : never;
+
+/** Stable envelope for each published project event. */
+export type ProjectEvent = {
+  readonly [TType in ProjectEventType]: ProjectEventFor<TType>;
+}[ProjectEventType];
+
+export type ProjectEventOf<TType extends ProjectEventType> = ProjectEventFor<TType>;
+
+export interface ProjectReplayGap {
+  readonly earliestAvailableSequence: number;
+  readonly latestDroppedSequence: number;
+  readonly requestedAfterSequence: number;
+  readonly type: 'replay.gap';
+}
+
+export type ProjectEventMessage = ProjectEvent | ProjectReplayGap;
+
+const invalidJson = (reason: string): never => {
+  throw new TypeError(`Project event payload must be JSON: ${reason}`);
+};
+
+const freezeJson = (value: unknown, seen: WeakSet<object>): JsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : invalidJson('numbers must be finite');
+  }
+
+  if (typeof value !== 'object') {
+    return invalidJson(`unsupported ${typeof value} value`);
+  }
+
+  if (seen.has(value)) {
+    return invalidJson('cyclic or repeated references are not supported');
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') {
+        return invalidJson('arrays cannot contain non-index properties');
+      }
+
+      if (key === 'length') {
+        continue;
+      }
+
+      if (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length) {
+        return invalidJson('arrays cannot contain out-of-range index properties');
+      }
+    }
+
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !('value' in descriptor)) {
+        return invalidJson('arrays cannot contain holes or accessors');
+      }
+      freezeJson(descriptor.value, seen);
+    }
+
+    return Object.freeze(value) as JsonArray;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return invalidJson('objects must have a plain-object prototype');
+  }
+
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') {
+      return invalidJson('objects cannot contain symbol properties');
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !('value' in descriptor)) {
+      return invalidJson('objects cannot contain accessors');
+    }
+    freezeJson(descriptor.value, seen);
+  }
+
+  return Object.freeze(value) as JsonObject;
+};
+
+/**
+ * Validates a strict JSON tree and freezes every reachable array and object.
+ *
+ * Deliberately separate from core `snapshotStrictJsonValue`: this variant
+ * freezes the caller's value IN PLACE (identity-preserving, observable to
+ * ProjectEventHub.publish callers that keep a reference) instead of returning
+ * a detached copy, and it rejects repeated references, not just cycles.
+ */
+export const freezeJsonValue = (value: unknown): JsonValue =>
+  freezeJson(value, new WeakSet<object>());
+
+const freezeStructured = <T>(value: T, seen = new WeakSet<object>()): T => {
+  if (value === null || typeof value !== 'object' || seen.has(value)) {
+    return value;
+  }
+
+  seen.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    freezeStructured((value as Record<PropertyKey, unknown>)[key], seen);
+  }
+
+  return Object.freeze(value);
+};
+
+export const freezeArtifactEpoch = (epoch: ArtifactEpoch): ArtifactEpoch =>
+  freezeStructured(epoch);
+
+export const freezeProjectStatus = (status: ProjectStatus): ProjectStatus =>
+  freezeStructured(status);
+
+export const freezeInvalidation = (invalidation: Invalidation): Invalidation =>
+  freezeStructured(invalidation);
+
+export const freezeProjectEvent = (event: ProjectEvent): ProjectEvent =>
+  freezeStructured(event);

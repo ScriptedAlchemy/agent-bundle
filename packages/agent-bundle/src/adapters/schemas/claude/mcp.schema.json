@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/claude/2.1.232/mcp.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "mcpServers": {
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "args": { "items": { "type": "string" }, "type": "array" },
+              "command": { "minLength": 1, "type": "string" },
+              "cwd": { "minLength": 1, "type": "string" },
+              "env": { "additionalProperties": { "type": "string" }, "type": "object" },
+              "type": { "const": "stdio" }
+            },
+            "required": ["type", "command"],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "headers": { "additionalProperties": { "type": "string" }, "type": "object" },
+              "type": { "enum": ["http", "sse"], "type": "string" },
+              "url": { "format": "uri", "type": "string" }
+            },
+            "required": ["type", "url"],
+            "type": "object"
+          }
+        ]
+      },
+      "type": "object"
+    }
+  },
+  "required": ["mcpServers"],
+  "type": "object"
+}

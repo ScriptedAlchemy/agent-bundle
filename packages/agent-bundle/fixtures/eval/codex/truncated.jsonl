@@ -1,0 +1,3 @@
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000006"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"cat skills/release-notes/SKILL.md","status":"in_progress"}}

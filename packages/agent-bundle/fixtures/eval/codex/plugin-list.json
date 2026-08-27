@@ -1,0 +1,15 @@
+{
+  "available": [],
+  "installed": [
+    {
+      "authPolicy": "ON_INSTALL",
+      "enabled": true,
+      "installPolicy": "AVAILABLE",
+      "installed": true,
+      "marketplaceName": "agent-bundle-eval-marketplace",
+      "name": "agent-bundle-eval",
+      "pluginId": "agent-bundle-eval@agent-bundle-eval-marketplace",
+      "version": "local"
+    }
+  ]
+}

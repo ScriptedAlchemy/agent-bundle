@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000002"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Answered directly without reading any packaged instructions."}}
+{"type":"turn.completed","usage":{"cached_input_tokens":0,"input_tokens":0,"output_tokens":0}}

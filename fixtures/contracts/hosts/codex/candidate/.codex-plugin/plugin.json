@@ -1,0 +1,16 @@
+{
+  "author": { "name": "agent-bundle" },
+  "description": "A bounded Codex native-contract smoke candidate.",
+  "interface": {
+    "capabilities": ["skills"],
+    "category": "Productivity",
+    "defaultPrompt": ["Help me use the Agent Bundle Codex smoke candidate."],
+    "developerName": "agent-bundle",
+    "displayName": "Agent Bundle Codex Smoke",
+    "longDescription": "A bounded Codex native-contract smoke candidate.",
+    "shortDescription": "A bounded Codex native-contract smoke candidate."
+  },
+  "name": "agent-bundle-codex-smoke",
+  "skills": "./skills/",
+  "version": "0.0.1"
+}

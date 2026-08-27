@@ -1,0 +1,12 @@
+{
+  "interface": { "displayName": "Agent Bundle Eval Marketplace" },
+  "name": "agent-bundle-eval-marketplace",
+  "plugins": [
+    {
+      "category": "Productivity",
+      "name": "agent-bundle-eval",
+      "policy": { "authentication": "ON_INSTALL", "installation": "AVAILABLE" },
+      "source": { "path": "./", "source": "local" }
+    }
+  ]
+}

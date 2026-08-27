@@ -1,0 +1,25 @@
+name: Package preview
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: package-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish pkg.pr.new preview
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v1
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm preview:publish

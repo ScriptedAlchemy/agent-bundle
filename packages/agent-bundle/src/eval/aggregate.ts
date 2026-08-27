@@ -1,0 +1,122 @@
+import type { EvalRunSummary, EvalTrialRecord } from './run-store.ts';
+import type { EvalAssertionKind, EvalAssertionOutcome } from './types.ts';
+
+export interface EvalAssertionAggregate {
+  readonly assertionId: string;
+  readonly fail: number;
+  readonly inconclusive: number;
+  readonly kind: EvalAssertionKind;
+  readonly pass: number;
+}
+
+export interface EvalCaseAggregate {
+  readonly assertions: readonly EvalAssertionAggregate[];
+  readonly caseDigest: string;
+  readonly caseId: string;
+  readonly fail: number;
+  readonly fixtureDigest: string;
+  readonly harnessFailures: number;
+  readonly host: string;
+  readonly inconclusive: number;
+  readonly model: string;
+  readonly outcome: EvalAssertionOutcome;
+  readonly pass: number;
+  readonly targetDigest: string;
+  readonly trials: number;
+}
+
+interface AssertionTally {
+  fail: number;
+  inconclusive: number;
+  kind: EvalAssertionKind;
+  pass: number;
+}
+
+/** Only fully aligned trials share an aggregate; any mismatch stays its own row. */
+const alignmentKey = (trial: EvalTrialRecord): string => [
+  trial.caseId,
+  trial.host,
+  trial.model,
+  trial.caseDigest,
+  trial.fixtureDigest,
+  trial.targetDigest,
+].join('\u0000');
+
+const aggregateOutcome = (fail: number, inconclusive: number): EvalAssertionOutcome => {
+  if (fail > 0) return 'fail';
+  return inconclusive > 0 ? 'inconclusive' : 'pass';
+};
+
+export const aggregateEvalTrials = (
+  trials: readonly EvalTrialRecord[],
+): readonly EvalCaseAggregate[] => {
+  const groups = new Map<string, EvalTrialRecord[]>();
+  for (const trial of trials) {
+    const key = alignmentKey(trial);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [trial]);
+    else group.push(trial);
+  }
+
+  const aggregates = [...groups.values()].map((group) => {
+    const first = group[0];
+    if (first === undefined) throw new RangeError('An aggregation group is never empty.');
+    const assertions = new Map<string, AssertionTally>();
+    let fail = 0;
+    let harnessFailures = 0;
+    let inconclusive = 0;
+    let pass = 0;
+    for (const trial of group) {
+      if (trial.outcome === 'fail') fail += 1;
+      else if (trial.outcome === 'inconclusive') inconclusive += 1;
+      else pass += 1;
+      if (trial.harnessFailure !== undefined) harnessFailures += 1;
+      for (const assertion of trial.assertions) {
+        const tally = assertions.get(assertion.assertionId)
+          ?? { fail: 0, inconclusive: 0, kind: assertion.kind, pass: 0 };
+        tally[assertion.outcome] += 1;
+        assertions.set(assertion.assertionId, tally);
+      }
+    }
+    return Object.freeze({
+      assertions: Object.freeze([...assertions.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([assertionId, tally]) => Object.freeze({
+          assertionId,
+          fail: tally.fail,
+          inconclusive: tally.inconclusive,
+          kind: tally.kind,
+          pass: tally.pass,
+        }))),
+      caseDigest: first.caseDigest,
+      caseId: first.caseId,
+      fail,
+      fixtureDigest: first.fixtureDigest,
+      harnessFailures,
+      host: first.host,
+      inconclusive,
+      model: first.model,
+      outcome: aggregateOutcome(fail, inconclusive),
+      pass,
+      targetDigest: first.targetDigest,
+      trials: group.length,
+    });
+  });
+
+  return Object.freeze(aggregates.sort((left, right) =>
+    left.caseId.localeCompare(right.caseId) ||
+    left.host.localeCompare(right.host) ||
+    left.model.localeCompare(right.model) ||
+    left.fixtureDigest.localeCompare(right.fixtureDigest) ||
+    left.targetDigest.localeCompare(right.targetDigest)));
+};
+
+export const summarizeEvalRun = (
+  aggregates: readonly EvalCaseAggregate[],
+): EvalRunSummary => Object.freeze({
+  cases: new Set(aggregates.map((aggregate) => aggregate.caseId)).size,
+  fail: aggregates.reduce((total, aggregate) => total + aggregate.fail, 0),
+  inconclusive: aggregates.reduce((total, aggregate) => total + aggregate.inconclusive, 0),
+  pass: aggregates.reduce((total, aggregate) => total + aggregate.pass, 0),
+  trials: aggregates.reduce((total, aggregate) => total + aggregate.trials, 0),
+});

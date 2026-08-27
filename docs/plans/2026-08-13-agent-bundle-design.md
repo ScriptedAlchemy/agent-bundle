@@ -1,6 +1,6 @@
 # Agent Bundle design
 
-**Status:** Approved foundation; developer workbench extension under review
+**Status:** Approved and implemented foundation; developer-workbench delivery is verified by the repository CI gates
 
 **Date:** 2026-08-13
 
@@ -389,6 +389,15 @@ dist/
 There is no runtime framework, daemon, shared adapter package, or dependency on the
 `agent-bundle` executable in the generated plugin.
 
+Under the hood, each executable is its own Rslib library environment. Rslib receives a real packaged
+entry anchor, while a lib-scoped Rspack `VirtualModulesPlugin` supplies the generated host wrapper that
+imports the author's handler. This works with Rslib's entry validation, lets the built-in SWC pipeline
+compile TypeScript and JavaScript, and avoids temporary generated source files. Chunk splitting and
+async chunks are disabled for these environments, so every hook remains one self-contained `.mjs`
+asset. Agent Bundle still owns resource discovery, schema validation, collision checks, executable
+modes, manifest hashing, and atomic publication; those artifact semantics are intentionally not
+delegated to bundler copy plugins or loaders.
+
 ### Host-specific hooks
 
 Host-native escape hatches remain explicit:
@@ -444,16 +453,46 @@ dependency that cannot be bundled is a build error in the first release; authors
 reference an explicitly prebuilt command through the existing MCP/script input escape hatch.
 
 `pathTokens` is exported from the main package and produces opaque token strings that the
-compiler resolves per target at build time. Token availability is a per-target capability:
-Claude resolves plugin root and plugin data to `${CLAUDE_PLUGIN_ROOT}` and
-`${CLAUDE_PLUGIN_DATA}`, Codex to its equivalent plugin environment variables, while portable
-`mcp.json` (Agent Plugins 1.0.0) resolves `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in `args`, `env`,
-and `cwd`, but not in `command`. A token with no portable equivalent, such as workspace root, is
-a build error for the portable target unless the server is explicitly limited to host targets.
+compiler resolves per target at build time. Token availability is a per-target and per-component
+capability. Claude resolves `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, and
+`${CLAUDE_PROJECT_DIR}` in its documented MCP fields. Portable `mcp.json` (Agent Plugins 1.0.0)
+resolves `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in `args`, `env`, and `cwd`, but not in `command`.
+Codex exposes `PLUGIN_ROOT` and `PLUGIN_DATA` to plugin hook processes, but Codex CLI 0.147.0's
+native `.mcp.json` loader does not interpolate those variables; native Codex MCP output therefore
+uses contained relative paths where possible and rejects token uses that cannot be represented
+honestly. An unavailable token is a build error unless the server is limited to capable targets.
 This is the honest-portability rule applied to paths.
 
 Remote HTTP MCP definitions are copied into native manifests without bundling a local server.
 No MCP process is launched during `build` or `validate`.
+
+MCP Apps are the portable UI contract. They remain ordinary MCP tools and `ui://` resources, not a
+separate server kind. New integrations use `_meta.ui.resourceUri`,
+`text/html;profile=mcp-app`, and the `ui/*` JSON-RPC bridge over `postMessage`. The OpenAI
+`_meta["openai/outputTemplate"]` field remains transparent author-owned protocol data, but Agent
+Bundle neither synthesizes it nor uses it as the portable source of truth. Optional `window.openai`
+features are capability-detected by the View; the compiler never branches on a host product name.
+A tool must still return useful text or
+structured data when its host cannot render the View, including terminal clients such as Codex and
+Claude Code.
+
+An optional MCP App declaration associates a local MCP server with a browser View entry and an
+explicit, versioned `ui://` resource URI. Agent Bundle builds each View through the public Rsbuild
+JavaScript API in browser mode before compiling the owning server. The production View is one
+self-contained HTML document: scripts, styles, and imported static assets are inlined; split and
+async chunks are disabled; filename hashing is disabled; and any unexpected additional output is
+a build error. This uses Rsbuild's standard asset pipeline and React plugin when TSX is selected;
+it does not run a nested compiler from a custom loader.
+
+The resulting HTML, URI, MIME type, and declared resource metadata are exposed to the server entry
+through a compiler-owned virtual module. Server code registers them directly with the current
+split MCP v2 server API. Agent Bundle does not add the legacy monolithic SDK merely to call helper
+functions that normalize deprecated metadata, and it does not parse registrations or rewrite tool
+metadata. The generated server remains the protocol source of truth: the workbench
+discovers the tool metadata, calls
+`resources/read` for the exact `ui://` URI, and receives the same structured content and result
+metadata as ChatGPT or Claude. The pinned MCP Apps SDK version and its provenance are recorded and
+covered by compatibility fixtures rather than copied into private bridge or schema code.
 
 ## Build engine
 
@@ -474,6 +513,11 @@ only after real integrations demonstrate which hooks and model operations are st
 
 The implementation should use public Rslib/Rsbuild plugin and JavaScript APIs. It should not
 patch process globals, depend on private compiler objects, or reproduce Rslib's CLI parsing.
+
+All shipped production outputs use stable, unhashed filenames. Rslib/Rsbuild/Rspack filename
+hashing is disabled for the package, generated executables, and prebuilt workbench assets; content
+integrity and rebuild identity remain represented by the compiler manifest's SHA-256 values rather
+than being duplicated in filenames.
 
 Rslib's CLI supports `--watch`, but Agent Bundle development observes more than the JavaScript
 module graph: configuration, skill Markdown, references, copied assets, marketplace metadata,
