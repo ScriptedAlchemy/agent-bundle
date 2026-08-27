@@ -9,6 +9,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
+
+import { dependencyRoot, workbenchNodeModules } from './support/workbench-browser-modules.ts';
 import { chromium } from 'playwright';
 
 import {
@@ -142,9 +144,9 @@ const mountedSecureRendererFixture = async () => {
           '@inspector/core/mcp/fetchTracking.js': join(vendorRoot, 'core', 'mcp', 'fetchTracking.ts'),
           '@inspector/core/mcp/types.js': join(vendorRoot, 'core', 'mcp', 'types.ts'),
           '@inspector/core': join(vendorRoot, 'core'),
-          '@mantine/core': join(workspaceRoot, 'node_modules', '@mantine', 'core', 'esm', 'index.mjs'),
-          react: join(workspaceRoot, 'node_modules', 'react'),
-          'react-dom/client': join(workspaceRoot, 'node_modules', 'react-dom', 'client.js'),
+          '@mantine/core': join(workbenchNodeModules, '@mantine', 'core', 'esm', 'index.mjs'),
+          react: dependencyRoot('react'),
+          'react-dom/client': join(dependencyRoot('react-dom'), 'client.js'),
         },
       },
       source: {

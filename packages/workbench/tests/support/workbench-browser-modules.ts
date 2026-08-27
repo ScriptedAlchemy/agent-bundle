@@ -5,7 +5,9 @@ const workbenchRoot = join(import.meta.dirname, '..', '..');
 const vendorRoot = join(workbenchRoot, 'src', 'inspector', 'vendor');
 const requireFromWorkbench = createRequire(join(workbenchRoot, 'package.json'));
 
-const dependencyRoot = (name: string): string => dirname(requireFromWorkbench.resolve(`${name}/package.json`));
+export const workbenchNodeModules = join(workbenchRoot, 'node_modules');
+
+export const dependencyRoot = (name: string): string => dirname(requireFromWorkbench.resolve(`${name}/package.json`));
 
 export const workbenchBrowserAliases = {
   '@inspector/core/json/xMcpHeader.js': join(vendorRoot, 'core', 'json', 'xMcpHeader.ts'),
