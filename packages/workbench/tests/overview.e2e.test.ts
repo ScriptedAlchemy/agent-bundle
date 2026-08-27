@@ -1638,7 +1638,7 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
       });
     });
 
-    await page.getByRole('button', { name: 'Rebuild' }).click();
+    await writeFile(join(project.skillDir, 'SKILL.md'), `${project.skillMarkdown}\n\nThe source refresh failure fixture changed.\n`);
 
     await expect.poll(() => failedStatusRequests, { timeout: browserTimeout }).toBe(1);
     await expect(page.getByRole('status')).toContainText('Foreground server unavailable', { timeout: browserTimeout });
