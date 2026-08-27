@@ -506,6 +506,8 @@ const capture = async (outputs) => {
 
     const editedServer = originals[0].replace('Shared state now contains', 'Live runtime state now contains');
     if (editedServer === originals[0]) throw new Error('Capture fixture server source did not contain the expected HMR literal.');
+    const repairedServer = editedServer.replace('Live runtime state now contains', 'Recovered runtime state now contains');
+    if (repairedServer === editedServer) throw new Error('Capture fixture server source did not contain the expected repair literal.');
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
     const historyBeforeHmr = await history.count();
     const runIdsBeforeHmr = await runtimeRunIds(page);
@@ -555,7 +557,7 @@ const capture = async (outputs) => {
     const compileErrorLayout = await captureCompileErrorLayout(page, compactRunGeneration);
     await screenshot(page, outputs.compileError);
 
-    await writeFile(fixture.serverComponentSource, editedServer, 'utf8');
+    await writeFile(fixture.serverComponentSource, repairedServer, 'utf8');
     const generationRecovered = await waitForNewGeneration(page, identity, lastGoodGenerationDuringError);
     await page.waitForFunction(
       ({ expected, selector }) => globalThis.document.querySelectorAll(selector).length > expected,
