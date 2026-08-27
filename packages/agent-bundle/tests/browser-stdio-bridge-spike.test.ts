@@ -8,9 +8,10 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
-import type { LoadedConfig } from '../src/config/load.ts';
+import { loadedProject } from './support/loaded-project.ts';
+
 import { normalizeProject } from '../src/config/normalize.ts';
-import type { AgentBundleConfig } from '../src/core/types.ts';
+
 import { resolveMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
 import { readTargetMcpServer } from '../src/services/mcp-runtime.ts';
 
@@ -36,17 +37,6 @@ interface GeneratedStdioServer {
 const fixture = JSON.parse(
   await readFile(new URL('../fixtures/contracts/mcp-bridge/protocol-frames.json', import.meta.url), 'utf8'),
 ) as BridgeFixture;
-
-const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
-  config,
-  configPath: join(root, 'agent-bundle.config.ts'),
-  context: {
-    command: 'build',
-    mode: 'production',
-    projectRoot: root,
-    selectedTargets: [],
-  },
-});
 
 const frame = (
   direction: ProtocolFrame['direction'],

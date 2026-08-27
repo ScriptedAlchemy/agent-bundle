@@ -1,3 +1,23 @@
+/**
+ * Rejects if `promise` has not settled within `milliseconds`.
+ *
+ * The timer is always cleared: leaving it armed keeps the event loop alive for
+ * the full timeout after the promise settles, which stalls suite shutdown.
+ */
+export const within = async <Value>(promise: Promise<Value>, milliseconds = 1_000): Promise<Value> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolvePromise, rejectPromise) => {
+        timeout = setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+};
+
 /** Polls a synchronous predicate until it holds or the timeout elapses. */
 export const eventually = async (predicate: () => boolean, milliseconds = 250): Promise<void> => {
   const deadline = Date.now() + milliseconds;
@@ -23,4 +43,29 @@ export const eventuallyPasses = async (
     }
   }
   throw failure;
+};
+
+/** Reads a `ReadableStreamDefaultReader` to completion and decodes the accumulated bytes as UTF-8 text. */
+export const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
+  const decoder = new TextDecoder();
+  let output = '';
+  while (true) {
+    const next = await reader.read();
+    if (next.done) return output;
+    output += decoder.decode(next.value, { stream: true });
+  }
+};
+
+/**
+ * Creates a promise together with its own resolve/reject callbacks.
+ *
+ * Defaults to `void` so a bare rendezvous can be written as `deferred()` and settled with `resolve()`.
+ */
+export const deferred = <Value = void>(): Readonly<{
+  promise: Promise<Value>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: Value) => void;
+}> => {
+  const { promise, reject, resolve } = Promise.withResolvers<Value>();
+  return Object.freeze({ promise, reject, resolve });
 };

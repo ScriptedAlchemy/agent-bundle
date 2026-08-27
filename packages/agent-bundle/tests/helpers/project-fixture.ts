@@ -118,5 +118,5 @@ export const createProjectFixture = async (
 };
 
 export const removeProjectFixture = async (root: string): Promise<void> => {
-  await rm(root, { force: true, recursive: true });
+  await rm(root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
 };

@@ -74,6 +74,7 @@ export const PlaygroundScreen = ({ connectionError, inspection, onNavigate, onRu
       client={playgroundClient}
       epoch={playgroundEpochFor(status)}
       hooks={inspection.runtime.hooks}
+      mcpServers={inspection.runtime.mcpServers}
       onRunChange={onRunChange}
       run={run}
       scripts={scripts}

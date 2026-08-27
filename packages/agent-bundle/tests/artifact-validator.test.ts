@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -17,12 +16,12 @@ import {
 } from '../src/adapters/types.ts';
 import { assembleArtifactManifest, type ArtifactManifest } from '../src/build/manifest.ts';
 import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
-import { digest } from '../src/core/digest.ts';
+import { digest, sha256Hex } from '../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { createMcpPathTokenResolver } from '../src/services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../src/services/mcp-runtime.ts';
 
-const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
+const hash = (value: string): string => sha256Hex(value);
 
 const createFifo = async (path: string): Promise<void> => new Promise((resolvePromise, reject) => {
   execFile('mkfifo', [path], (error) => {
@@ -141,7 +140,6 @@ const coherenceRegistry = (): TargetRegistry => new TargetRegistry().register({
   metadata: coherenceMetadata,
   name: coherenceTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const hookCoherenceTarget = 'hooked';
@@ -174,7 +172,6 @@ const hookCoherenceRegistry = (): TargetRegistry => new TargetRegistry().registe
   metadata: hookCoherenceMetadata,
   name: hookCoherenceTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const validateCustomDocument: TargetArtifactDocumentValidator = (document) =>
@@ -196,7 +193,6 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
   metadata: customMetadata,
   name: customTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const targetFromRegistry = (registry: TargetRegistry, name: string): ArtifactManifest['targets'][number] => {

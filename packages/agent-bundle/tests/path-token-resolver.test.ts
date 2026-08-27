@@ -6,24 +6,14 @@ import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
-import type { LoadedConfig } from '../src/config/load.ts';
+import { loadedProject } from './support/loaded-project.ts';
+
 import { normalizeProject } from '../src/config/normalize.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
-import { pathTokens, type AgentBundleConfig } from '../src/core/types.ts';
+import { pathTokens } from '../src/core/types.ts';
 import { createMcpPathTokenResolver, resolveMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
 import type { TargetMcpRuntimeContract } from '../src/services/mcp-runtime.ts';
 import { McpService } from '../src/services/mcp-service.ts';
-
-const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
-  config,
-  configPath: join(root, 'agent-bundle.config.ts'),
-  context: {
-    command: 'build',
-    mode: 'production',
-    projectRoot: root,
-    selectedTargets: [],
-  },
-});
 
 interface ResolutionFixture {
   readonly cases: readonly {

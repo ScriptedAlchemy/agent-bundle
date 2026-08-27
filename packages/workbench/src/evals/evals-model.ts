@@ -15,6 +15,7 @@ import type {
   EvalTrialUsage,
 } from '../../../agent-bundle/src/contracts/eval.ts';
 import type { EvalRunStart } from './eval-client.ts';
+import { jsonEquivalent } from '../client-helpers.ts';
 
 export type EvalPageState = 'empty' | 'loading' | 'ran' | 'ready';
 
@@ -347,18 +348,6 @@ export const evalTrialRowsFor = (
   targetDigest: trial.targetDigest,
   ...(trial.usage === undefined ? {} : { usage: Object.freeze({ ...trial.usage }) }),
 })));
-
-const jsonEquivalent = (left: unknown, right: unknown): boolean => {
-  if (left === right) return true;
-  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((entry, index) => jsonEquivalent(entry, right[index]));
-  }
-  const leftEntries = Object.entries(left).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
-  const rightEntries = Object.entries(right).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
-  return leftEntries.length === rightEntries.length && leftEntries.every(([key, entry], index) =>
-    key === rightEntries[index]?.[0] && jsonEquivalent(entry, rightEntries[index]?.[1]));
-};
 
 const eventsEquivalent = (left: EvalRunEvent, right: EvalRunEvent): boolean =>
   left.sequence === right.sequence && left.kind === right.kind &&

@@ -188,14 +188,31 @@ const isProgressEntry = (entry: McpBrowserSessionTimelineEntry): entry is Extrac
 const isInvocationEntry = (entry: McpBrowserSessionTimelineEntry): entry is McpBrowserSessionInvocationTimelineEntry =>
   'type' in entry && entry.type === 'invocation';
 
-const withViews = (model: Omit<McpBrowserSessionModel, 'conciseTrace' | 'logs' | 'progress'>): McpBrowserSessionModel => {
-  const entries = model.timeline.entries;
-  return Object.freeze({
-    ...model,
-    conciseTrace: Object.freeze([...entries]),
+/**
+ * Derived trace views, cached on the timeline they came from. Every event type
+ * funnels through `withViews`, but the timeline is replaced only when a trace
+ * entry arrives, so phase and request updates reuse the previous scan instead
+ * of re-filtering the whole timeline.
+ */
+const derivedViews = new WeakMap<object, Pick<McpBrowserSessionModel, 'logs' | 'progress'>>();
+
+const viewsFor = (
+  entries: readonly McpBrowserSessionTimelineEntry[],
+): Pick<McpBrowserSessionModel, 'logs' | 'progress'> => {
+  const cached = derivedViews.get(entries);
+  if (cached !== undefined) return cached;
+  const views = Object.freeze({
     logs: Object.freeze(entries.filter(isLoggingEntry)),
     progress: Object.freeze(entries.filter(isProgressEntry)),
   });
+  derivedViews.set(entries, views);
+  return views;
+};
+
+const withViews = (model: Omit<McpBrowserSessionModel, 'conciseTrace' | 'logs' | 'progress'>): McpBrowserSessionModel => {
+  const entries = model.timeline.entries;
+  // `entries` is already frozen, so the concise trace can alias it directly.
+  return Object.freeze({ ...model, conciseTrace: entries, ...viewsFor(entries) });
 };
 
 const update = (

@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -10,11 +8,13 @@ import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build } from './support/build.ts';
+import { loadedProject } from './support/loaded-project.ts';
+import { runNodeScript } from './support/run-node-script.ts';
 import { listArtifactFiles } from '../src/build/emit.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
-import { digest } from '../src/core/digest.ts';
-import type { LoadedConfig } from '../src/config/load.ts';
-import type { AgentBundleConfig, CanonicalHookEvent, NormalizationTargetRegistry } from '../src/core/types.ts';
+import { digest, sha256Hex } from '../src/core/digest.ts';
+
+import type { CanonicalHookEvent, NormalizationTargetRegistry } from '../src/core/types.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import {
   HookPlaygroundService,
@@ -30,17 +30,6 @@ const registry: NormalizationTargetRegistry = {
   has: (name) => ['portable', 'codex', 'claude'].includes(name),
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
-
-const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
-  config,
-  configPath: join(root, 'agent-bundle.config.ts'),
-  context: {
-    command: 'build',
-    mode: 'production',
-    projectRoot: root,
-    selectedTargets: [],
-  },
-});
 
 const epochFor = (
   root: string,
@@ -102,24 +91,8 @@ class CopyFailureEpochStore extends EpochStore {
   }
 }
 
-const runNativeHook = async (
-  wrapper: string,
-  input: Record<string, unknown>,
-): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> =>
-  new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [wrapper], { stdio: ['pipe', 'pipe', 'pipe'] });
-    let stderr = '';
-    let stdout = '';
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.once('error', reject);
-    child.once('close', (code) => resolvePromise({ code, stderr, stdout }));
-    child.stdin.end(JSON.stringify(input));
-  });
+const runNativeHook = async (wrapper: string, input: Record<string, unknown>) =>
+  runNodeScript({ args: [wrapper], input: JSON.stringify(input) });
 
 const publishHookEpoch = async (
   root: string,
@@ -301,7 +274,6 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
     },
     name: 'synthetic',
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   };
   try {
     await Promise.all([
@@ -618,7 +590,7 @@ it('isolates malicious relative writes from the referenced epoch and rejects coo
     const manifestEntry = manifest.files.find((entry) => entry.path === wrapperPath);
     if (manifestEntry === undefined) throw new Error('Expected wrapper manifest entry.');
     manifestEntry.bytes = Buffer.byteLength(tamperedWrapper);
-    manifestEntry.sha256 = createHash('sha256').update(tamperedWrapper).digest('hex');
+    manifestEntry.sha256 = sha256Hex(tamperedWrapper);
     await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
     await expect(service.simulate(request)).rejects.toThrow(/stored digest/i);
   } finally {

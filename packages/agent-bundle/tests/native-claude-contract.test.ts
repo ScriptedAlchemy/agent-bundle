@@ -96,12 +96,14 @@ it('runs strict validation before the subscription-backed stream command and ret
   expect(harness).toBeDefined();
 
   const calls: unknown[] = [];
+  const homeDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-contract-home-'));
   const report = await harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
     enabled: true,
     environment: { ANTHROPIC_API_KEY: 'must-not-reach-child', PATH: '/usr/bin' },
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'Use the agent-bundle-native-smoke Skill and reply exactly: CLAUDE_NATIVE_SMOKE_OK.',
     run: async (request: unknown) => {
@@ -123,6 +125,7 @@ it('runs strict validation before the subscription-backed stream command and ret
         };
     },
   });
+  await rm(homeDirectory, { force: true, recursive: true });
 
   expect(report).toEqual({
     diagnostics: [],

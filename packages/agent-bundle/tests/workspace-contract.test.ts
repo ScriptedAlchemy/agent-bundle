@@ -29,10 +29,12 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   const packages = documents.flat();
 
   expect(packages.map(({ name }) => name).sort()).toEqual([
+    '@agent-bundle-example/audiobook-curator',
     '@agent-bundle-example/hooks-and-scripts',
     '@agent-bundle-example/mcp-app',
     '@agent-bundle-example/skills-starter',
     '@agent-bundle/rsc-agent-runtime-demo',
+    '@agent-bundle/rsc-runtime',
     'agent-bundle',
     'agent-bundle-workbench',
     'agent-bundle-workspace',
@@ -46,6 +48,19 @@ it('selects product packages through the pinned pnpm workspace', async () => {
       readonly scripts?: Readonly<Record<string, string>>;
     };
     expect(manifest.devDependencies?.['agent-bundle']).toBe('workspace:*');
+    if (path.endsWith('/audiobook-curator')) {
+      expect(manifest.scripts).toEqual({
+        build: 'pnpm build:cli && pnpm build:bundle',
+        'build:bundle': 'agent-bundle build --json --output artifact',
+        'build:cli': 'rslib build',
+        check: 'pnpm test && pnpm typecheck && pnpm build',
+        dev: 'agent-bundle dev',
+        test: 'rstest tests',
+        typecheck: 'tsc -p tsconfig.build.json --noEmit',
+        validate: 'agent-bundle validate --json',
+      });
+      return;
+    }
     expect(manifest.scripts).toEqual({
       build: 'agent-bundle build --json',
       check: 'pnpm validate && pnpm build',
@@ -71,7 +86,7 @@ it('selects product packages through the pinned pnpm workspace', async () => {
     'playwright-core': '1.62.1',
   });
   expect(rootManifest.scripts).toMatchObject({
-    build: 'pnpm --filter agent-bundle build',
+    build: 'pnpm --filter @agent-bundle/rsc-runtime build && pnpm --filter agent-bundle build',
     check: 'pnpm build && pnpm test:unit && pnpm test:integration:run && pnpm lint && pnpm typecheck',
     'example:hooks': 'pnpm build && pnpm --filter @agent-bundle-example/hooks-and-scripts dev',
     'example:mcp-app': 'pnpm build && pnpm --filter @agent-bundle-example/mcp-app dev',

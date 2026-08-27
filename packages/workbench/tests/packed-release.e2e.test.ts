@@ -1302,12 +1302,42 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       expect(string(nativeRequestC.epochId, 'epoch-C native request epoch id')).toBe(epochC);
 
       phase = 'Logs after rebuilds';
-      const logsReplay = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/logs/replay');
+      type ReplayResponse = Awaited<ReturnType<typeof page.waitForResponse>>;
+      const logsReplayResponses: ReplayResponse[] = [];
+      let logsReplayWaiter: ReturnType<typeof Promise.withResolvers<ReplayResponse>> | undefined;
+      const collectLogsReplay = (response: ReplayResponse): void => {
+        if (new URL(response.url()).pathname !== '/api/logs/replay') return;
+        if (logsReplayWaiter !== undefined) {
+          logsReplayWaiter.resolve(response);
+          logsReplayWaiter = undefined;
+        } else {
+          logsReplayResponses.push(response);
+        }
+      };
+      const nextLogsReplay = (): Promise<ReplayResponse> => {
+        const response = logsReplayResponses.shift();
+        if (response !== undefined) return Promise.resolve(response);
+        logsReplayWaiter = Promise.withResolvers<ReplayResponse>();
+        return logsReplayWaiter.promise;
+      };
+      page.on('response', collectLogsReplay);
       await page.getByRole('link', { name: 'Logs', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
-      const logsReplayResponse = await logsReplay;
-      if (!logsReplayResponse.ok()) throw new Error(`The packed Logs replay route returned HTTP ${logsReplayResponse.status()}: ${await logsReplayResponse.text()}`);
-      const logsReplayPayload = record(record(await logsReplayResponse.json(), 'packed Logs replay').replay, 'packed Logs replay result');
+      let logsReplayDocument: unknown;
+      while (logsReplayDocument === undefined) {
+        const candidate = await nextLogsReplay();
+        if (!candidate.ok()) {
+          throw new Error(`The packed Logs replay route returned HTTP ${candidate.status()}: ${await candidate.text().catch(() => '')}`);
+        }
+        try {
+          logsReplayDocument = await candidate.json();
+        } catch {
+          // The Logs page may abort an old replay while settling. Wait for the
+          // newest response whose body remains readable.
+        }
+      }
+      page.off('response', collectLogsReplay);
+      const logsReplayPayload = record(record(logsReplayDocument, 'packed Logs replay').replay, 'packed Logs replay result');
       const logRecords = logsReplayPayload.records;
       if (!Array.isArray(logRecords) || logRecords.length === 0) {
         throw new Error(`The packed Logs replay is empty after B/C rebuilds: ${JSON.stringify(logRecords)}`);

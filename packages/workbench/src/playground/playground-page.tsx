@@ -37,6 +37,7 @@ export interface PlaygroundTraceViewProps {
 
 type PlaygroundScriptCatalogEntry = Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>;
 type PlaygroundHookCatalogEntry = Pick<ArtifactInspection['runtime']['hooks'][number], 'event' | 'id' | 'name' | 'target'>;
+type PlaygroundMcpServerCatalogEntry = Pick<ArtifactInspection['runtime']['mcpServers'][number], 'name' | 'target'>;
 type PlaygroundSkillCatalogEntry = Pick<ServedSkillDocument, 'id' | 'name' | 'targets'>;
 
 export interface PlaygroundScriptCatalog {
@@ -67,6 +68,7 @@ export interface PlaygroundPageProps {
   /** The active epoch is only used for admitting a new run; persisted sessions pin their own epoch. */
   readonly epoch: PlaygroundEpochIdentity | undefined;
   readonly hooks: readonly PlaygroundHookCatalogEntry[];
+  readonly mcpServers: readonly PlaygroundMcpServerCatalogEntry[];
   /** The shell retains the run/session identity across navigation and project rebuilds. */
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly run: PlaygroundRun | undefined;
@@ -133,6 +135,7 @@ export interface PlaygroundSelection {
 
 interface PlaygroundCapabilityCatalog {
   readonly hooks: readonly PlaygroundHookCatalogEntry[];
+  readonly mcpServers: readonly PlaygroundMcpServerCatalogEntry[];
   readonly nativeAvailable?: boolean;
   readonly scripts: readonly PlaygroundScriptCatalogEntry[];
   readonly skills: readonly PlaygroundSkillCatalogEntry[];
@@ -148,6 +151,11 @@ const playgroundSkillsForTarget = (
   target: string,
 ): readonly PlaygroundSkillCatalogEntry[] => skills.filter((skill) => skill.targets === undefined || skill.targets.includes(target));
 
+const playgroundMcpServersForTarget = (
+  servers: readonly PlaygroundMcpServerCatalogEntry[],
+  target: string,
+): readonly PlaygroundMcpServerCatalogEntry[] => servers.filter((server) => server.target === target);
+
 const operationsForTarget = (
   catalog: PlaygroundCapabilityCatalog,
   target: string,
@@ -155,6 +163,7 @@ const operationsForTarget = (
   ...(playgroundScriptsForTarget(catalog.scripts, target).length === 0 ? [] : ['script.run' as const]),
   ...(playgroundHooksForTarget(catalog.hooks, target).length === 0 ? [] : ['hook.simulate' as const]),
   ...(playgroundSkillsForTarget(catalog.skills, target).length === 0 ? [] : ['skill.inspect' as const]),
+  ...(playgroundMcpServersForTarget(catalog.mcpServers, target).length === 0 ? [] : ['mcp.call-tool' as const]),
   ...(catalog.nativeAvailable === true ? ['native.prompt' as const] : []),
 ]);
 
@@ -163,7 +172,7 @@ const operationsForCatalog = (
   targets: readonly PlaygroundTarget[],
 ): readonly PlaygroundOperation[] => {
   const available = new Set(targets.flatMap((target) => operationsForTarget(catalog, target.name)));
-  return Object.freeze((['script.run', 'hook.simulate', 'skill.inspect', 'native.prompt'] as const)
+  return Object.freeze((['script.run', 'hook.simulate', 'skill.inspect', 'mcp.call-tool', 'native.prompt'] as const)
     .filter((operation) => available.has(operation)));
 };
 
@@ -662,10 +671,10 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
  * Starts typed server-owned operations, then observes their durable session by
  * replay, live NDJSON stream, polling, and a final replay before stream close.
  */
-export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, client, epoch, hooks, onRunChange, run, scripts, skills, targets }: PlaygroundPageProps) => {
+export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, client, epoch, hooks, mcpServers, onRunChange, run, scripts, skills, targets }: PlaygroundPageProps) => {
   const initialSelection = playgroundSelectionFor({
     hook: '', operation: 'skill.inspect', operationIsImplicit: true, scriptId: '', skillId: '', target: '',
-  }, targets, { hooks, nativeAvailable: catalog !== undefined && catalog.selections.length > 0, scripts, skills });
+  }, targets, { hooks, mcpServers, nativeAvailable: catalog !== undefined && catalog.selections.length > 0, scripts, skills });
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [observationRevision, setObservationRevision] = useState(0);
@@ -677,6 +686,9 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const [hookInput, setHookInput] = useState(() => serializeJsonRecord(
     canonicalHookInputFor(hooks.find((entry) => entry.id === initialSelection.hook)?.event ?? '') ?? {},
   ));
+  const [mcpArguments, setMcpArguments] = useState(() => serializeJsonRecord({}));
+  const [mcpServerName, setMcpServerName] = useState('');
+  const [mcpTool, setMcpTool] = useState('');
   const [operation, setOperation] = useState<PlaygroundOperation>(initialSelection.operation);
   const [scriptId, setScriptId] = useState(initialSelection.scriptId);
   const [selectedRefs, setSelectedRefs] = useState<readonly string[]>([]);
@@ -709,6 +721,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     cancelFlight.current.invalidate();
   }
   const hookInputObject = parseRawJsonRecord(hookInput);
+  const mcpArgumentsObject = parseRawJsonRecord(mcpArguments);
   const view = playgroundViewFor({
     epoch,
     events: clientReplaced ? [] : events,
@@ -722,10 +735,15 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const selectedScriptId = playgroundSelectedScriptId(scriptId, scripts, selectedTargetName);
   const targetHooks = playgroundHooksForTarget(hooks, selectedTargetName);
   const selectedHook = targetHooks.find((entry) => entry.id === hook);
+  const targetMcpServers = playgroundMcpServersForTarget(mcpServers, selectedTargetName);
+  const selectedMcpServerName = targetMcpServers.some((server) => server.name === mcpServerName)
+    ? mcpServerName
+    : targetMcpServers[0]?.name ?? '';
   const targetSkills = playgroundSkillsForTarget(skills, selectedTargetName);
   const selectedSkill = targetSkills.find((entry) => entry.id === skillId);
   const capabilityCatalog = {
     hooks,
+    mcpServers,
     nativeAvailable: catalog !== undefined && catalog.selections.length > 0,
     scripts,
     skills,
@@ -735,6 +753,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   useEffect(() => {
     const next = playgroundSelectionFor({ hook, operation, operationIsImplicit: operationIsImplicit.current, scriptId, skillId, target: targetName }, targets, {
       hooks,
+      mcpServers,
       nativeAvailable: catalog !== undefined && catalog.selections.length > 0,
       scripts,
       skills,
@@ -744,7 +763,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     if (next.scriptId !== scriptId) setScriptId(next.scriptId);
     if (next.skillId !== skillId) setSkillId(next.skillId);
     if (next.target !== targetName) setTargetName(next.target);
-  }, [catalog, hook, hooks, operation, scriptId, scripts, skillId, skills, targetName, targets]);
+  }, [catalog, hook, hooks, mcpServers, operation, scriptId, scripts, skillId, skills, targetName, targets]);
 
   useEffect(() => {
     if (!clientResetPending.current) return;
@@ -837,6 +856,14 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     }
     if (operation === 'script.run') {
       return selectedScriptId.length === 0 ? undefined : { operation, scriptId: selectedScriptId, target: selectedTargetName };
+    }
+    if (operation === 'mcp.call-tool') {
+      return selectedMcpServerName.length === 0 || mcpTool.length === 0 || mcpArgumentsObject === null
+        ? undefined
+        : {
+            arguments: asJsonObject(mcpArgumentsObject), operation, serverName: selectedMcpServerName,
+            target: selectedTargetName, tool: mcpTool,
+          };
     }
     return undefined;
   };
@@ -942,6 +969,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
             {availableOperations.includes('script.run') ? <option value="script.run">Script execution</option> : undefined}
             {availableOperations.includes('hook.simulate') ? <option value="hook.simulate">Hook simulation</option> : undefined}
             {availableOperations.includes('skill.inspect') ? <option value="skill.inspect">Skill inspection</option> : undefined}
+            {availableOperations.includes('mcp.call-tool') ? <option value="mcp.call-tool">MCP tool call</option> : undefined}
             {availableOperations.includes('native.prompt') ? <option value="native.prompt">Native host prompt</option> : undefined}
           </select>
           {operation === 'native.prompt'
@@ -1009,6 +1037,17 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
                   <textarea aria-describedby={hookInputObject === null ? 'playground-hook-input-error' : undefined} aria-invalid={hookInputObject === null ? true : undefined} disabled={controlsDisabled} id="playground-hook-input" onChange={(event) => setHookInput(event.currentTarget.value)} spellCheck={false} value={hookInput} />
                   {hookInputObject === null ? <p id="playground-hook-input-error" role="alert">{jsonDraftError}</p> : undefined}
                 </details>
+              </>}
+              {operation !== 'mcp.call-tool' ? undefined : <>
+                <label htmlFor="playground-mcp-server">MCP server</label>
+                <select disabled={controlsDisabled || targetMcpServers.length === 0} id="playground-mcp-server" onChange={(event) => setMcpServerName(event.currentTarget.value)} value={selectedMcpServerName}>
+                  {targetMcpServers.map((server) => <option key={server.name} value={server.name}>{server.name}</option>)}
+                </select>
+                <label htmlFor="playground-mcp-tool">MCP tool</label>
+                <input disabled={controlsDisabled} id="playground-mcp-tool" onChange={(event) => setMcpTool(event.currentTarget.value)} value={mcpTool} />
+                <label htmlFor="playground-mcp-arguments">MCP arguments (JSON)</label>
+                <textarea aria-describedby={mcpArgumentsObject === null ? 'playground-mcp-arguments-error' : undefined} aria-invalid={mcpArgumentsObject === null ? true : undefined} disabled={controlsDisabled} id="playground-mcp-arguments" onChange={(event) => setMcpArguments(event.currentTarget.value)} spellCheck={false} value={mcpArguments} />
+                {mcpArgumentsObject === null ? <p id="playground-mcp-arguments-error" role="alert">{jsonDraftError}</p> : undefined}
               </>}
               {operation !== 'script.run' ? undefined : <>
                 <label htmlFor="playground-script-id">Emitted script</label>

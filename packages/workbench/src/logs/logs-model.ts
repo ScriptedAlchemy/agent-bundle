@@ -1,4 +1,5 @@
 import type { DevLogRecord, DevLogReplayGap } from '../../../agent-bundle/src/contracts/dev-logs.ts';
+import { jsonEquivalent } from '../client-helpers.ts';
 
 export interface LogsViewOptions {
   readonly context: string | undefined;
@@ -29,17 +30,6 @@ export interface DevLogRecordMerge {
   readonly discardedThroughSequence?: number;
   readonly records: readonly DevLogRecord[];
 }
-
-const jsonEquivalent = (left: unknown, right: unknown): boolean => {
-  if (left === right) return true;
-  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((entry, index) => jsonEquivalent(entry, right[index]));
-  }
-  const leftEntries = Object.entries(left).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
-  const rightEntries = Object.entries(right).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
-  return leftEntries.length === rightEntries.length && leftEntries.every(([key, value], index) => key === rightEntries[index]?.[0] && jsonEquivalent(value, rightEntries[index]?.[1]));
-};
 
 const recordsEquivalent = (left: DevLogRecord, right: DevLogRecord): boolean =>
   left.sequence === right.sequence && left.producer === right.producer && left.level === right.level &&

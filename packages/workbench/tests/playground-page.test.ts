@@ -81,6 +81,7 @@ it('chooses the first runnable catalog operation without replacing valid explici
       readonly target: string;
     }, targets: readonly { readonly digest: string; readonly name: string }[], catalog: {
       readonly hooks: readonly { readonly event: string; readonly id: string; readonly name: string; readonly target: string }[];
+      readonly mcpServers: readonly { readonly name: string; readonly target: string }[];
       readonly scripts: readonly { readonly id: string; readonly name: string; readonly target: string }[];
       readonly skills: readonly { readonly id: string; readonly name: string; readonly targets?: readonly string[] }[];
     }) => {
@@ -104,6 +105,7 @@ it('chooses the first runnable catalog operation without replacing valid explici
   expect(playgroundSelectionFor).toBeTypeOf('function');
   const catalog = {
     hooks: [{ event: 'sessionStart', id: 'hook:start', name: 'session-start', target: 'portable' }],
+    mcpServers: [],
     scripts,
     skills: [{ id: 'skill:review', name: 'review', targets: ['portable'] }],
   } as const;
@@ -116,11 +118,12 @@ it('chooses the first runnable catalog operation without replacing valid explici
   });
 });
 
-it('renders only catalog-backed operation drafts with named choices and no raw identifiers', () => {
+it('renders only catalog-backed operation drafts with named choices', () => {
   const client = new PlaygroundClient({ foreground: foreground(async () => { throw new Error('Static rendering issues no request.'); }) });
   const markup = renderToStaticMarkup(createElement(PlaygroundPage, {
     client, epoch, onRunChange: () => undefined, run: undefined, targets: [{ digest: 'portable', name: 'portable' }],
     hooks: [{ event: 'sessionStart', id: 'hook:start', name: 'session-start', target: 'portable' }],
+    mcpServers: [{ name: 'fixture', target: 'portable' }],
     scripts: [{ id: 'script:review', name: 'Verify release', target: 'portable' }],
     skills: [{ id: 'skill:review', name: 'Release review', targets: ['portable'] }],
   } as unknown as Parameters<typeof PlaygroundPage>[0]));
@@ -130,8 +133,7 @@ it('renders only catalog-backed operation drafts with named choices and no raw i
   expect(markup).toContain('Hook simulation');
   expect(markup).toContain('Script execution');
   expect(markup).toContain('Verify release');
-  expect(markup).not.toContain('MCP tool call');
-  expect(markup).not.toContain('playground-mcp-server');
+  expect(markup).toContain('MCP tool call');
   expect(markup).not.toContain('playground-skill-id" type="text');
   expect(markup).not.toContain('playground-hook" type="text');
   expect(markup).not.toContain('Script execution is unavailable');

@@ -552,13 +552,34 @@ const invalidPreparedProject = (options: {
 export class ProjectService {
   readonly #options: ProjectServiceOptions;
   readonly #registry: TargetRegistry;
+  /** One in-flight preparation per command, shared by concurrent callers. */
+  readonly #preparing = new Map<ProjectCommand, Promise<PreparedProject>>();
 
   constructor(options: ProjectServiceOptions) {
     this.#options = Object.freeze({ ...options });
     this.#registry = options.registry ?? createDefaultRegistry();
   }
 
+  /**
+   * Preparation walks and hashes the whole project tree, so a burst of
+   * concurrent callers — opening one Skill page issues a tree request plus one
+   * request per embedded resource — would otherwise repeat that walk per
+   * request. Concurrent callers share one preparation; the entry is dropped as
+   * soon as it settles, so a later call still observes changed source.
+   */
   async prepare(command: ProjectCommand): Promise<PreparedProject> {
+    const pending = this.#preparing.get(command);
+    if (pending !== undefined) return pending;
+    const preparing = this.#prepare(command);
+    this.#preparing.set(command, preparing);
+    try {
+      return await preparing;
+    } finally {
+      this.#preparing.delete(command);
+    }
+  }
+
+  async #prepare(command: ProjectCommand): Promise<PreparedProject> {
     const requestedRoot = resolve(this.#options.root);
     const registry = this.#registry;
     const requestedConfigPath = resolve(requestedRoot, this.#options.configPath ?? 'agent-bundle.config.ts');
@@ -696,7 +717,6 @@ export class ProjectService {
       for (const target of model.targets) {
         if (!registry.has(target.name)) continue;
         const adapter = registry.get(target.name);
-        diagnostics.push(...adapter.validateModel(model));
         diagnostics.push(...adapter.plan(model).diagnostics);
       }
     } catch {

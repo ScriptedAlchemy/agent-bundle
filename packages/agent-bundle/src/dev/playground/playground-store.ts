@@ -1117,7 +1117,7 @@ export class PlaygroundService {
     await this.#assertObjectDirectory(admission.root, admission.objectId);
     if (admission.ownerToken === undefined) return;
     const owner = await this.#readOwnerLock(admission.root);
-    if (owner.token !== admission.ownerToken) {
+    if (owner === undefined || owner.token !== admission.ownerToken) {
       throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(admission.sessionId)} object ownership changed before cleanup.`);
     }
   }
@@ -1157,7 +1157,7 @@ export class PlaygroundService {
     }
     if (admission.ownerToken === undefined) return;
     const owner = await this.#readOwnerLock(quarantine);
-    if (owner.token !== admission.ownerToken) {
+    if (owner === undefined || owner.token !== admission.ownerToken) {
       throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(admission.sessionId)} quarantine ownership changed before cleanup.`);
     }
   }
@@ -1461,7 +1461,7 @@ export class PlaygroundService {
     try {
       await this.#assertObjectDirectory(root, objectId);
       const owner = await this.#readOwnerLock(root);
-      if (!sameOwner(owner, { pid: process.pid, token })) {
+      if (owner === undefined || !sameOwner(owner, { pid: process.pid, token })) {
         throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} object ownership changed during admission.`);
       }
     } catch (error) {
@@ -1617,7 +1617,7 @@ export class PlaygroundService {
           if (!stat.isFile() || stat.nlink !== 1) {
             throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground owner lock could not be created safely.');
           }
-          runDurabilityTestHook('before-file-write:owner', path);
+          await runAsyncDurabilityTestHook('before-file-write:owner', path);
           await handle.writeFile(`${JSON.stringify(document)}\n`, 'utf8');
           runDurabilityTestHook('before-file-fsync:owner', path);
           await handle.sync();
@@ -1647,6 +1647,7 @@ export class PlaygroundService {
         try {
           await runAsyncDurabilityTestHook('before-owner-lock-recovery', path);
           const owner = await this.#readOwnerLock(root);
+          if (owner === undefined) return;
           if (!this.#ownerIsStale(owner)) {
             throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} is owned by another foreground service.`);
           }
@@ -1670,7 +1671,12 @@ export class PlaygroundService {
     }
   }
 
-  async #readOwnerLock(root: string): Promise<OwnerLock> {
+  /**
+   * A competing exclusive create publishes the path before its first write.
+   * An empty lock therefore means acquisition is still in flight, not that
+   * persisted storage is corrupt.
+   */
+  async #readOwnerLock(root: string): Promise<OwnerLock | undefined> {
     let document: string;
     try {
       document = await this.#readMutableFile(root, ownerLockName);
@@ -1678,7 +1684,7 @@ export class PlaygroundService {
       if (isErrno(error, 'ENOENT')) throw error;
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is malformed.');
     }
-    return parseOwnerLockDocument(document);
+    return document === '' ? undefined : parseOwnerLockDocument(document);
   }
 
   async #removeJustCreatedOwnerLock(root: string, token: string): Promise<void> {

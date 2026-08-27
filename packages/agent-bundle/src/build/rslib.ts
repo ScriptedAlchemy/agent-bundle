@@ -5,6 +5,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { isErrno } from '../core/errors.ts';
 import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
 
 export interface RslibVirtualModule {
@@ -30,7 +31,14 @@ interface RslibDependencies {
 const entryAnchor = fileURLToPath(import.meta.url);
 
 const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> => {
-  const manifest = JSON.parse(await readFile(resolve(cwd, 'package.json'), 'utf8')) as Record<string, unknown>;
+  let bytes: string;
+  try {
+    bytes = await readFile(resolve(cwd, 'package.json'), 'utf8');
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return Object.freeze([]);
+    throw error;
+  }
+  const manifest = JSON.parse(bytes) as Record<string, unknown>;
   const names = new Set<string>();
   for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
     const dependencies = manifest[field];
@@ -126,11 +134,6 @@ export const buildWithRslib = async (options: {
           tools: {
             rspack: (config) => {
               config.output.asyncChunks = false;
-              // Keep workspace-package modules anchored beneath the consuming
-              // project's node_modules path. Their code is bundled like any
-              // other dependency, while provenance remains limited to authored
-              // project inputs instead of following pnpm symlinks outside it.
-              config.resolve.symlinks = false;
               if (hasVirtualModules) {
                 config.resolve.alias = {
                   ...config.resolve.alias,

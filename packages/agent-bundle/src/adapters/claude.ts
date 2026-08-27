@@ -1,5 +1,4 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
-import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
@@ -35,12 +34,11 @@ import {
   createAdapterValidator,
   hasPathToken,
   schemaDescriptorsFrom,
-  sortedEntries,
-  sourceInputs,
+  standardArtifactLayout,
+  standardPluginArtifactPlan,
   validateJsonSchemaDocument,
   validateModernMcpDocument,
   type TargetAdapter,
-  type TargetArtifactEntry,
   type TargetArtifactPlan,
 } from './types.ts';
 
@@ -231,104 +229,28 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
   }
 
-  const targetSourceInputs = model.targets
-    .filter((target) => target.name === claudeName)
-    .map((target) => target.provenance.sourcePath);
-  const mcpSourceInputs = model.mcpServers
-    .filter((server) => selectedForClaude(server.targets))
-    .map((server) => server.provenance.sourcePath);
-  const hookSourceInputs = model.hooks
-    .filter((hook) => selectedForClaude(hook.targets))
-    .map((hook) => hook.provenance.sourcePath);
-  const nativeHookSourceInputs = model.nativeHooks
-    ?.filter((hook) => hook.target === claudeName)
-    .flatMap((hook) => [hook.provenance.sourcePath, hook.source]) ?? [];
-  const skillSourceInputs = model.skills
-    .filter((skill) => selectedForClaude(skill.targets))
-    .map((skill) => skill.source);
-
-  const entries: TargetArtifactEntry[] = [{
-    content: `${stableJson(plugin)}\n`,
-    kind: 'write',
-    relativePath: '.claude-plugin/plugin.json',
-    sourceInputs: sourceInputs(
-      model.metadata.provenance.sourcePath,
-      ...targetSourceInputs,
-      ...mcpSourceInputs,
-      ...hookSourceInputs,
-      ...nativeHookSourceInputs,
-      ...skillSourceInputs,
-    ),
-  }];
-  if (mcp !== undefined && mcpValid) {
-    entries.push({
-      content: `${stableJson(mcp)}\n`,
-      kind: 'write',
-      relativePath: '.mcp.json',
-      sourceInputs: sourceInputs(...targetSourceInputs, ...mcpSourceInputs),
-    });
-  }
-  if (hookDocument !== undefined && hookDocumentValid) {
-    entries.push({
-      content: `${stableJson(hookDocument)}\n`,
-      kind: 'write',
-      relativePath: hookContract.manifestPath,
-      sourceInputs: sourceInputs(
-        ...targetSourceInputs,
-        ...hookSourceInputs,
-        ...nativeHookSourceInputs,
-      ),
-    });
-  }
-  if (marketplace !== undefined && marketplaceValid) {
-    entries.push({
-      content: `${stableJson(marketplace)}\n`,
-      kind: 'write',
-      relativePath: '.claude-plugin/marketplace.json',
-      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
-    });
-  }
-  for (const skill of model.skills) {
-    if (!selectedForClaude(skill.targets)) continue;
-    for (const resource of skill.resources) {
-      entries.push({
-        bytes: resource.bytes,
-        kind: 'copy',
-        relativePath: `skills/${skill.name}/${resource.relativePath}`,
-        source: resource.source,
-        sourceInputs: sourceInputs(skill.source, resource.source),
-      });
-    }
-  }
-
-  for (const asset of model.assets ?? []) {
-    if (!selectedForClaude(asset.targets)) continue;
-    entries.push({
-      bytes: asset.bytes,
-      kind: 'copy',
-      relativePath: `assets/${asset.relativePath}`,
-      source: asset.source,
-      sourceInputs: sourceInputs(asset.source),
-    });
-  }
-
-  return Object.freeze({
-    diagnostics: Object.freeze(diagnostics),
-    entries: sortedEntries(entries),
-    hookEntries: hookDocumentValid ? generatedHooks.hookEntries : Object.freeze([]),
+  return standardPluginArtifactPlan({
+    diagnostics,
+    hookDocument,
+    hookDocumentValid,
+    hookEntries: generatedHooks.hookEntries,
+    hookManifestPath: hookContract.manifestPath,
+    isSelected: selectedForClaude,
+    marketplace,
+    marketplaceRelativePath: '.claude-plugin/marketplace.json',
+    marketplaceValid,
+    mcp,
+    mcpValid,
+    model,
+    plugin,
+    pluginRelativePath: '.claude-plugin/plugin.json',
+    targetName: claudeName,
   });
 };
 
 export const claudeAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
-  artifactLayout: Object.freeze({
-    assets: 'assets',
-    hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
-    mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
-    mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
-    scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.bash', '.mjs', '.py', '.sh']), directory: 'scripts' }),
-    skills: 'skills',
-  }),
+  artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
     marketplace: true,
     hooks: true,
@@ -342,5 +264,4 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   name: claudeName,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.claude?.nativeHooks,
   plan,
-  validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],
 });

@@ -18,8 +18,9 @@ import {
   type AgentBundleMcpServer,
   type NormalizationTargetRegistry,
 } from '../src/core/types.ts';
-import type { LoadedConfig } from '../src/config/load.ts';
-import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+
+import { agentBundleNodeModules, workbenchNodeModules } from './helpers/workspace-paths.ts';
+import { loadedProject } from './support/loaded-project.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -34,17 +35,6 @@ const testAdapterMetadata = Object.freeze({
   capabilitySha256: '0'.repeat(64),
   observedVersion: 'test',
   schemas: Object.freeze([]),
-});
-
-const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
-  config,
-  configPath: join(root, 'agent-bundle.config.ts'),
-  context: {
-    command: 'build',
-    mode: 'production',
-    projectRoot: root,
-    selectedTargets: [],
-  },
 });
 
 it('rejects legacy MCP SSE source declarations with one AB4317 diagnostic', () => {
@@ -645,7 +635,6 @@ it('bundles each local MCP entry once and maps every target manifest to that art
           sourceInputs: [],
         }],
       }),
-      validateModel: () => [],
     }, { default: true });
     await expect(build({
       model: { ...model, targets: model.targets.filter(({ name }) => name === 'portable') },
@@ -683,7 +672,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
     await mkdir(join(root, 'src'), { recursive: true });
     await mkdir(join(root, 'views'), { recursive: true });
     await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
-    await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), 'dir');
+    await symlink(workbenchNodeModules, join(root, 'node_modules'), 'dir');
     await writeFile(join(root, 'src', 'server.ts'), [
       "import apps from 'agent-bundle/mcp-apps';",
       'export const bundledApps = apps;',

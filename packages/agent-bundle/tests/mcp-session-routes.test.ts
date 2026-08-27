@@ -1,5 +1,6 @@
 
 import { expect, it } from '@rstest/core';
+import { readToEnd, within } from './support/eventually.ts';
 
 import {
   McpSessionRoutes,
@@ -158,23 +159,6 @@ const readLines = async (response: Response, count: number): Promise<readonly un
   }
   await reader.cancel();
   return lines;
-};
-
-const within = async <T>(promise: Promise<T>, milliseconds: number): Promise<T> => Promise.race([
-  promise,
-  new Promise<T>((_resolvePromise, rejectPromise) => {
-    setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
-  }),
-]);
-
-const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
-  const decoder = new TextDecoder();
-  let output = '';
-  while (true) {
-    const next = await reader.read();
-    if (next.done) return output;
-    output += decoder.decode(next.value, { stream: true });
-  }
 };
 
 it('admits one positive session timeout with the immutable session snapshot', async () => {

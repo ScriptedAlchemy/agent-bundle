@@ -221,6 +221,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     await hookStarted;
     await expect(page.locator('#playground-operation')).toBeEnabled({ timeout: browserTimeout });
 
+    await page.locator('#playground-operation').selectOption('mcp.call-tool');
     await page.locator('#playground-mcp-tool').fill('wait');
     await page.locator('#playground-mcp-arguments').fill('{}');
     const waitingStarted = waitForRun();
@@ -275,7 +276,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     await expect(page.getByRole('heading', { name: /Draft eval case/u })).toBeVisible({ timeout: browserTimeout });
 
     expect(runBodies).toHaveLength(5);
-    expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:wait', target: 'claude' });
+    expect(runBodies).toContainEqual({ arguments: {}, operation: 'mcp.call-tool', serverName: 'fixture', target: 'claude', tool: 'wait' });
     expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:review', target: 'claude' });
     expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:large', target: 'claude' });
     for (const body of runBodies) {

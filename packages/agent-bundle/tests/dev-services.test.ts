@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
@@ -9,7 +8,7 @@ import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { containedPathComponents } from '../src/dev/project-service.ts';
 import { validate } from '../src/api.ts';
-import { digest } from '../src/core/digest.ts';
+import { digest, sha256Hex } from '../src/core/digest.ts';
 import {
   DiagnosticService,
   createProjectContext,
@@ -424,7 +423,7 @@ it('retains the resolved configuration path in the prepared project', async () =
       join(root, 'agent-bundle.config.ts'),
     );
     expect(prepared.projectContext?.configDigest).toBe(
-      createHash('sha256').update(await readFile(join(root, 'agent-bundle.config.ts'))).digest('hex'),
+      sha256Hex(await readFile(join(root, 'agent-bundle.config.ts'))),
     );
     expect(prepared.projectContext?.sourceInputs).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'agent-bundle.config.ts' }),

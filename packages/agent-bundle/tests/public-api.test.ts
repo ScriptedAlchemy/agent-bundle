@@ -209,7 +209,6 @@ it('exposes advanced adapter registry and contract types only from the advanced 
     },
     name: 'advanced-synthetic',
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   } satisfies TargetAdapter;
   const registry = new TargetRegistry().register(adapter, { default: true });
 

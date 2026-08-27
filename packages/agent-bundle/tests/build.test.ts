@@ -14,7 +14,7 @@ import type { TargetAdapter } from '../src/adapters/types.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
-import { sha256 } from './support/sha256.ts';
+import { sha256Hex } from '../src/core/digest.ts';
 
 interface TestProject {
   readonly assetPath: string;
@@ -96,7 +96,7 @@ const treeDigest = async (
       bytes: contents.byteLength,
       mode: metadata.mode & 0o777,
       path: path.replaceAll('\\', '/'),
-      sha256: sha256(contents),
+      sha256: sha256Hex(contents),
     });
   }
 
@@ -401,7 +401,7 @@ it('low-level build writes and returns the exact canonical manifest for a config
         kind: 'copy',
         mode: 0o751,
         path: resource.path,
-        sha256: sha256(contents),
+        sha256: sha256Hex(contents),
         sourceInputs: expect.arrayContaining([
           resource.path.replace('portable/', ''),
           'skills/review/SKILL.md',
@@ -544,7 +544,6 @@ it('rejects an adapter artifact with no provenance inputs before replacing a pri
         sourceInputs: [],
       }],
     }),
-    validateModel: () => [],
   };
 
   try {
@@ -592,7 +591,6 @@ it('rejects hook entries stamped for a target other than their selected adapter'
         virtualSource: 'export default undefined;\n',
       }],
     }),
-    validateModel: () => [],
   };
 
   try {
@@ -623,7 +621,11 @@ it('rejects target validation errors before writing a passed manifest or replaci
     metadata: testAdapterMetadata,
     name: 'portable',
     plan: () => ({
-      diagnostics: [],
+      diagnostics: [{
+        code: 'AB9999',
+        message: 'Target validation rejected this model.',
+        severity: 'error',
+      }],
       entries: [{
         content: '{"target":"portable"}\n',
         kind: 'write',
@@ -631,11 +633,6 @@ it('rejects target validation errors before writing a passed manifest or replaci
         sourceInputs: [join(project.root, 'agent-bundle.config.ts')],
       }],
     }),
-    validateModel: () => [{
-      code: 'AB9999',
-      message: 'Target validation rejected this model.',
-      severity: 'error',
-    }],
   };
 
   try {
@@ -844,7 +841,6 @@ it('rejects duplicate planned destinations before replacing an existing artifact
       ],
       hookEntries: [],
     }),
-    validateModel: () => [],
   };
   const registry = new TargetRegistry().register(duplicateAdapter, { default: true });
 
@@ -878,7 +874,6 @@ it('rejects an escaped target name before it can write outside the staging artif
       entries: [{ content: 'escaped\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] }],
       hookEntries: [],
     }),
-    validateModel: () => [],
   };
 
   try {
@@ -984,7 +979,6 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
       ],
       hookEntries: [],
     }),
-    validateModel: () => [],
   };
   const scriptCollisionAdapter: TargetAdapter = {
     capabilities: {},
@@ -997,7 +991,6 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
       ],
       hookEntries: [],
     }),
-    validateModel: () => [],
   };
 
   try {

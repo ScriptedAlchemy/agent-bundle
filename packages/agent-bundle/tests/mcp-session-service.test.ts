@@ -10,13 +10,15 @@ import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
-import type { LoadedConfig } from '../src/config/load.ts';
+
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import { McpAppBindingService, type McpAppSessionAuthority } from '../src/dev/mcp-apps/mcp-app-binding-service.ts';
 import { mcpAppClientCapabilities, McpSession, McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
-import { pathTokens, type AgentBundleConfig, type NormalizationTargetRegistry } from '../src/core/types.ts';
+import { pathTokens, type NormalizationTargetRegistry } from '../src/core/types.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { mcpCatalogStub, stdioTransportStub } from './support/mcp-client-stub.ts';
+import { loadedProject } from './support/loaded-project.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -30,17 +32,6 @@ const runtimeFor = (target: string) => {
   if (runtime === undefined) throw new Error(`Expected MCP runtime for ${JSON.stringify(target)}.`);
   return runtime;
 };
-
-const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
-  config,
-  configPath: join(root, 'agent-bundle.config.ts'),
-  context: {
-    command: 'build',
-    mode: 'production',
-    projectRoot: root,
-    selectedTargets: [],
-  },
-});
 
 const epochFor = (
   root: string,
@@ -335,7 +326,7 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
           return { contents: [] };
         },
       }),
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -490,18 +481,11 @@ it('closes an in-flight open instead of returning an untracked epoch-pinning ses
         connectionStarted?.();
         await connectionBlocked;
       },
-      getPrompt: async () => ({ messages: [] }),
-      getServerCapabilities: () => undefined,
-      getServerVersion: () => undefined,
-      listPrompts: async () => ({ prompts: [] }),
-      listResources: async () => ({ resources: [] }),
-      listResourceTemplates: async () => ({ resourceTemplates: [] }),
-      listTools: async () => ({ tools: [] }),
-      readResource: async () => ({ contents: [] }),
+      ...mcpCatalogStub(),
     };
     const service = new McpSessionService({
       createClient: () => client,
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -567,16 +551,9 @@ it('retains a rejected cleanup from an opening drained during service close', as
           connectionStarted?.();
           await connectionBlocked;
         },
-        getPrompt: async () => ({ messages: [] }),
-        getServerCapabilities: () => undefined,
-        getServerVersion: () => undefined,
-        listPrompts: async () => ({ prompts: [] }),
-        listResources: async () => ({ resources: [] }),
-        listResourceTemplates: async () => ({ resourceTemplates: [] }),
-        listTools: async () => ({ tools: [] }),
-        readResource: async () => ({ contents: [] }),
+        ...mcpCatalogStub(),
       }),
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -649,17 +626,10 @@ it('orders opening cleanup failures before active session cleanup failures durin
               await openingConnectionBlocked;
             }
           },
-          getPrompt: async () => ({ messages: [] }),
-          getServerCapabilities: () => undefined,
-          getServerVersion: () => undefined,
-          listPrompts: async () => ({ prompts: [] }),
-          listResources: async () => ({ resources: [] }),
-          listResourceTemplates: async () => ({ resourceTemplates: [] }),
-          listTools: async () => ({ tools: [] }),
-          readResource: async () => ({ contents: [] }),
+          ...mcpCatalogStub(),
         };
       },
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -716,17 +686,10 @@ it('waits for every session cleanup and retains every close failure', async () =
             throw delayedFailure;
           },
           connect: async () => undefined,
-          getPrompt: async () => ({ messages: [] }),
-          getServerCapabilities: () => undefined,
-          getServerVersion: () => undefined,
-          listPrompts: async () => ({ prompts: [] }),
-          listResources: async () => ({ resources: [] }),
-          listResourceTemplates: async () => ({ resourceTemplates: [] }),
-          listTools: async () => ({ tools: [] }),
-          readResource: async () => ({ contents: [] }),
+          ...mcpCatalogStub(),
         };
       },
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -795,19 +758,12 @@ it('closes a replacement client when restart races with session shutdown', async
               await replacementBlocked;
             }
           },
-          getPrompt: async () => ({ messages: [] }),
-          getServerCapabilities: () => undefined,
-          getServerVersion: () => undefined,
-          listPrompts: async () => ({ prompts: [] }),
-          listResources: async () => ({ resources: [] }),
-          listResourceTemplates: async () => ({ resourceTemplates: [] }),
-          listTools: async () => ({ tools: [] }),
-          readResource: async () => ({ contents: [] }),
+          ...mcpCatalogStub(),
         };
         clients.push({ close: client.close, closes: () => closes });
         return client;
       },
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -840,16 +796,9 @@ it('rejects an already-aborted tool call without invoking the MCP SDK', async ()
         },
         close: async () => undefined,
         connect: async () => undefined,
-        getPrompt: async () => ({ messages: [] }),
-        getServerCapabilities: () => undefined,
-        getServerVersion: () => undefined,
-        listPrompts: async () => ({ prompts: [] }),
-        listResources: async () => ({ resources: [] }),
-        listResourceTemplates: async () => ({ resourceTemplates: [] }),
-        listTools: async () => ({ tools: [] }),
-        readResource: async () => ({ contents: [] }),
+        ...mcpCatalogStub(),
       }),
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -885,14 +834,7 @@ it('bounds frame and event retention with an explicit replay overflow cursor', a
             });
           }
         },
-        getPrompt: async () => ({ messages: [] }),
-        getServerCapabilities: () => undefined,
-        getServerVersion: () => undefined,
-        listPrompts: async () => ({ prompts: [] }),
-        listResources: async () => ({ resources: [] }),
-        listResourceTemplates: async () => ({ resourceTemplates: [] }),
-        listTools: async () => ({ tools: [] }),
-        readResource: async () => ({ contents: [] }),
+        ...mcpCatalogStub(),
       }),
       createStdioTransport: () => {
         const transport = { close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null };
@@ -950,16 +892,9 @@ it('delivers replay and reentrant live trace entries in one monotonic order', as
         callTool: async () => ({ content: [] }),
         close: async () => undefined,
         connect: async () => undefined,
-        getPrompt: async () => ({ messages: [] }),
-        getServerCapabilities: () => undefined,
-        getServerVersion: () => undefined,
-        listPrompts: async () => ({ prompts: [] }),
-        listResources: async () => ({ resources: [] }),
-        listResourceTemplates: async () => ({ resourceTemplates: [] }),
-        listTools: async () => ({ tools: [] }),
-        readResource: async () => ({ contents: [] }),
+        ...mcpCatalogStub(),
       }),
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -1007,14 +942,7 @@ it('fails and closes the session as soon as stderr exceeds its output bound', as
           clientCloses += 1;
         },
         connect: async () => undefined,
-        getPrompt: async () => ({ messages: [] }),
-        getServerCapabilities: () => undefined,
-        getServerVersion: () => undefined,
-        listPrompts: async () => ({ prompts: [] }),
-        listResources: async () => ({ resources: [] }),
-        listResourceTemplates: async () => ({ resourceTemplates: [] }),
-        listTools: async () => ({ tools: [] }),
-        readResource: async () => ({ contents: [] }),
+        ...mcpCatalogStub(),
       }),
       createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr }) as never,
       epochStore,
@@ -1041,14 +969,7 @@ it('opens a generated streamable HTTP server through its modern transport', asyn
         callTool: async () => ({ content: [] }),
         close: async () => undefined,
         connect: async () => undefined,
-        getPrompt: async () => ({ messages: [] }),
-        getServerCapabilities: () => undefined,
-        getServerVersion: () => undefined,
-        listPrompts: async () => ({ prompts: [] }),
-        listResources: async () => ({ resources: [] }),
-        listResourceTemplates: async () => ({ resourceTemplates: [] }),
-        listTools: async () => ({ tools: [] }),
-        readResource: async () => ({ contents: [] }),
+        ...mcpCatalogStub(),
       }),
       createStreamableHttpTransport: (url, options) => {
         http.push({ ...options, url: url.href });
@@ -1376,7 +1297,7 @@ it('exposes one opaque, epoch-bound session handle with a bounded ordered wire t
         listTools: async () => ({ tools: [] }),
         readResource: async () => ({ contents: [] }),
       }),
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -1487,7 +1408,7 @@ it('leases immutable canonical MCP App data without closing the control-owned se
         listTools: async () => ({ tools: [visibleTool, hiddenTool, defaultTool] }),
         readResource: async ({ uri }) => ({ contents: [{ text: uri, type: 'text' }] }),
       }),
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -1585,7 +1506,7 @@ it('synchronously invalidates App leases when the control session closes during 
         },
         readResource: async () => ({ contents: [] }),
       }),
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -1675,7 +1596,7 @@ it('revokes App authority before a direct session close drains its client and in
         },
         readResource: async () => ({ contents: [] }),
       }),
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       epochStore,
       projectRoot: root,
     });
@@ -1735,16 +1656,9 @@ it('shares one close promise when a synchronous close observer re-enters shutdow
           clientCloses += 1;
         },
         connect: async () => undefined,
-        getPrompt: async () => ({ messages: [] }),
-        getServerCapabilities: () => undefined,
-        getServerVersion: () => undefined,
-        listPrompts: async () => ({ prompts: [] }),
-        listResources: async () => ({ resources: [] }),
-        listResourceTemplates: async () => ({ resourceTemplates: [] }),
-        listTools: async () => ({ tools: [] }),
-        readResource: async () => ({ contents: [] }),
+        ...mcpCatalogStub(),
       }),
-      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStdioTransport: () => stdioTransportStub() as never,
       createStreamableHttpTransport: () => ({}) as never,
       epochReference: {
         close: async () => {

@@ -12,6 +12,7 @@ import {
   type McpAppPreviewBindingAuthority,
   type McpAppPreviewToolAuthority,
 } from '../src/dev/mcp-apps/mcp-app-preview-service.ts';
+import { deferred } from './support/eventually.ts';
 
 const originalInput: McpAppJsonValue = { city: 'Paris' };
 const originalResult: McpAppJsonValue = { content: [{ text: 'Sunny', type: 'text' }] };
@@ -70,14 +71,6 @@ const resourceResponse = (mimeType = 'text/html;profile=mcp-app'): McpAppJsonVal
     uri: 'ui://weather/forecast.html',
   }],
 });
-
-const deferred = <Value>() => {
-  let resolve: (value: Value) => void = () => undefined;
-  const promise = new Promise<Value>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-};
 
 const authorityFor = (options: {
   readonly closeBinding?: () => Promise<boolean>;

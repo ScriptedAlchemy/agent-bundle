@@ -36,6 +36,7 @@ export interface RuntimePlaygroundFixtureOptions {
 }
 
 const buildWorkbench = async (): Promise<void> => {
+  if (process.env['AGENT_BUNDLE_WORKBENCH_PREBUILT'] === '1') return;
   const { RSTEST: _rstest, ...environment } = process.env;
   await execFile('pnpm', ['--filter', 'agent-bundle-workbench', 'build'], {
     cwd: workspaceRoot,
@@ -61,6 +62,7 @@ export const startRuntimePlaygroundFixture = async (
       recursive: true,
     });
     await Promise.all([
+      symlink(join(runtimeExample, 'node_modules'), join(root, 'node_modules'), 'dir'),
       symlink(join(workspaceRoot, 'node_modules'), join(fixtureWorkspace, 'node_modules'), 'dir'),
       symlink(join(workspaceRoot, 'packages'), join(fixtureWorkspace, 'packages'), 'dir'),
       // Copy the inheriting root configs: the RSC build resolves their relative extends

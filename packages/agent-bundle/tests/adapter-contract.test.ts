@@ -51,7 +51,6 @@ it('delegates selected native hook sources through registered adapters', async (
       return extension?.nativeHooks;
     },
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   };
   const registry = new TargetRegistry().register(adapter, { default: true });
   (adapter as { nativeHookSource?: TargetAdapter['nativeHookSource'] }).nativeHookSource = () => undefined;
@@ -99,7 +98,6 @@ it('rejects malformed native hook source contributions atomically', () => {
     metadata,
     name: 'existing',
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   });
 
   expect(() => registry.register({
@@ -108,7 +106,6 @@ it('rejects malformed native hook source contributions atomically', () => {
     name: 'invalid',
     nativeHookSource: true,
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   } as unknown as TargetAdapter)).toThrow('native hook source');
   expect(registry.names()).toEqual(['existing']);
 });
@@ -119,14 +116,12 @@ it('rejects contradictory hook capability and contract registrations atomically'
     metadata,
     name: 'existing',
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   });
   const adapter = (name: string): TargetAdapter => ({
     capabilities: { hooks: true },
     metadata,
     name,
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   });
 
   expect(() => registry.register(adapter('missing-contract'))).toThrow('hooks capability without a hook contract');
@@ -150,7 +145,6 @@ it('normalizes malformed native hook source values into diagnostics without skip
       name: 'invalid',
       nativeHookSource: () => null as never,
       plan: () => ({ diagnostics: [], entries: [] }),
-      validateModel: () => [],
     })
     .register({
       capabilities: { hooks: true },
@@ -159,7 +153,6 @@ it('normalizes malformed native hook source values into diagnostics without skip
       name: 'valid',
       nativeHookSource: () => './valid-hooks.json',
       plan: () => ({ diagnostics: [], entries: [] }),
-      validateModel: () => [],
     });
 
   await writeFile(source, '{"hooks":{}}\n');
@@ -203,7 +196,6 @@ it('normalizes thrown native hook sources into diagnostics', async () => {
       throw new Error('callback failure');
     },
     plan: () => ({ diagnostics: [], entries: [] }),
-    validateModel: () => [],
   });
   const loaded: LoadedConfig = {
     config: {

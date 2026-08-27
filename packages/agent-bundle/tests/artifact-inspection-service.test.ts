@@ -14,7 +14,7 @@ import { EpochStore } from '../src/dev/epoch-store.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { createTargetMcpRuntime, type TargetMcpRuntimeContract } from '../src/services/mcp-runtime.ts';
-import { sha256 } from './support/sha256.ts';
+import { sha256Hex } from '../src/core/digest.ts';
 
 interface FixtureFile {
   readonly contents: string;
@@ -46,7 +46,6 @@ const scriptRegistry = (): TargetRegistry => new TargetRegistry().register({
   metadata: fixtureMetadata,
   name: fixtureTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const runtimeRegistry = (
@@ -80,7 +79,6 @@ const runtimeRegistry = (
   metadata: fixtureMetadata,
   name: fixtureTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
-  validateModel: () => [],
 } satisfies TargetAdapter);
 
 const mutatingRuntimeRegistry = (calls: { reads: number; resolutions: number }): TargetRegistry => runtimeRegistry(Object.freeze({
@@ -174,7 +172,7 @@ const manifestFor = (
         kind: file.kind,
         ...(file.mode === undefined ? {} : { mode: file.mode }),
         path: file.path,
-        sha256: sha256(file.contents),
+        sha256: sha256Hex(file.contents),
         sourceInputs: [...(file.sourceInputs ?? [configPath])],
       }))
       .sort((left, right) => left.path.localeCompare(right.path)),
@@ -204,7 +202,7 @@ const epochFor = (root: string, id: string): ArtifactEpoch => Object.freeze({
   manifestPath: join(root, '.agent-bundle', 'epochs', id, 'agent-bundle.manifest.json'),
   modelDigest: 'd'.repeat(64),
   projectRevision: digest({ inputs: fixtureInputs }),
-  targetDigests: Object.freeze({ [fixtureTarget]: sha256(id) }),
+  targetDigests: Object.freeze({ [fixtureTarget]: sha256Hex(id) }),
 });
 
 const publish = async (options: {

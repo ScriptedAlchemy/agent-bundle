@@ -99,11 +99,13 @@ const malformedFrontmatter = (source: string, error: unknown): Diagnostic => ({
 export const parseSkill = async (
   skillDir: string,
   projectRoot?: string,
+  /** Reuses the caller's compiled ignore rules; discovery parses many skills under one root. */
+  projectIgnoreRules?: Ignore,
 ): Promise<SkillDocument> => {
   const dir = resolve(skillDir);
   const source = join(dir, 'SKILL.md');
   const root = projectRoot === undefined ? await findProjectRoot(dir) : resolve(projectRoot);
-  const rules = await readProjectIgnoreRules(root);
+  const rules = projectIgnoreRules ?? await readProjectIgnoreRules(root);
   const resources = await resourceList(dir, root, rules);
 
   let markdown: string;

@@ -1,5 +1,5 @@
 import { cp, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -10,6 +10,7 @@ import { expect, it, rs } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
+import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
 import { buildWithRslib } from '../src/build/rslib.ts';
 import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
@@ -70,51 +71,15 @@ it('serializes hook index targets by tuple order without sentinel concatenation'
   }
 });
 
-const runPublishedHook = async (wrapper: string, input: string): Promise<{ readonly code: number | null; readonly stderr: string }> =>
-  new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [wrapper], { stdio: ['pipe', 'ignore', 'pipe'] });
-    let stderr = '';
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.once('error', reject);
-    child.once('close', (code) => resolvePromise({ code, stderr }));
-    child.stdin.end(input);
-  });
+const runPublishedHook = async (wrapper: string, input: string) => runNodeScript({ args: [wrapper], input });
 
-const runNativeHook = async (wrapper: string, input: Record<string, unknown>): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> =>
-  new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [wrapper], { stdio: ['pipe', 'pipe', 'pipe'] });
-    let stderr = '';
-    let stdout = '';
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.once('error', reject);
-    child.once('close', (code) => resolvePromise({ code, stderr, stdout }));
-    child.stdin.end(JSON.stringify(input));
-  });
+const runNativeHook = async (wrapper: string, input: Record<string, unknown>) =>
+  runNodeScript({ args: [wrapper], input: JSON.stringify(input) });
 
-const importPublishedHook = async (wrapper: string): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> =>
-  new Promise((resolvePromise, reject) => {
-    const child = spawn(
-      process.execPath,
-      ['--input-type=module', '--eval', `await import(${JSON.stringify(pathToFileURL(wrapper).href)}); process.exit(0);`],
-      { cwd: dirname(wrapper), stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    let stderr = '';
-    let stdout = '';
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.once('error', reject);
-    child.once('close', (code) => resolvePromise({ code, stderr, stdout }));
+const importPublishedHook = async (wrapper: string) =>
+  runNodeScript({
+    args: ['--input-type=module', '--eval', `await import(${JSON.stringify(pathToFileURL(wrapper).href)}); process.exit(0);`],
+    cwd: dirname(wrapper),
   });
 
 it('closes the Rslib build result after building a virtual hook entry', async () => {
@@ -914,16 +879,19 @@ it('rejects malformed native hook input, exports, and handler results concisely'
     await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'valid-00000001.mjs'), '{not json')).resolves.toEqual({
       code: 1,
       stderr: 'Agent Bundle hook error: stdin must contain exactly one JSON value\n',
+      stdout: '',
     });
     await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'export-00000002.mjs'), '{}')).resolves.toEqual({
       code: 1,
       stderr: 'Agent Bundle hook error: default export must be a function\n',
+      stdout: '',
     });
     await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'result-00000003.mjs'), JSON.stringify({
       cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
     }))).resolves.toEqual({
       code: 1,
       stderr: 'Agent Bundle hook error: handler must return void or a result object\n',
+      stdout: '',
     });
   } finally {
     await rm(root, { force: true, recursive: true });

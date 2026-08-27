@@ -717,10 +717,17 @@ it('admits a native run before its gated trial completes and records one cancell
     const beforeCancellation = await evals.events(admission.run.id, 0);
     expect(beforeCancellation.events.map((event) => event.kind)).toEqual(['run.started', 'trial.started']);
 
+    const cancellationObserved = Promise.withResolvers<void>();
+    const subscription = await evals.subscribeEvents(admission.run.id, 2);
+    subscription.activate((event) => {
+      if (event.kind === 'run.cancelling') cancellationObserved.resolve();
+    });
     const first = evals.cancel(admission.run.id);
     const second = evals.cancel(admission.run.id);
     let cancelled = false;
     void first.then(() => { cancelled = true; });
+    await cancellationObserved.promise;
+    subscription.close();
     const cancelling = await evals.events(admission.run.id, 0);
     expect(cancelling.events.map((event) => event.kind)).toEqual(['run.started', 'trial.started', 'run.cancelling']);
     try {

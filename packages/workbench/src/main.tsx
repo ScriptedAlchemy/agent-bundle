@@ -600,6 +600,7 @@ const PlaygroundScreen = ({ connectionError, inspection, onNavigate, onRunChange
       client={playgroundClient}
       epoch={playgroundEpochFor(status)}
       hooks={inspection.runtime.hooks}
+      mcpServers={inspection.runtime.mcpServers}
       onRunChange={onRunChange}
       run={run}
       scripts={scripts}
@@ -930,10 +931,12 @@ const Workbench = () => {
     ...capabilityPages,
     ...(runtimeAvailable ? ['runtime' as const] : []),
   ])), [capabilityPages, runtimeAvailable]);
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
   const routesReady = status !== undefined && (buildId === undefined || capabilities !== undefined);
 
   const commitNavigation = useCallback((next: WorkbenchPage): void => {
-    const available = pages.has(next) ? next : 'overview';
+    const available = pagesRef.current.has(next) ? next : 'overview';
     if (available !== 'runtime') {
       handoffCoordinator.current?.cancel();
       mcpPreviewDeparture.current?.cancel();
@@ -942,7 +945,7 @@ const Workbench = () => {
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (available === 'mcp') setMcpPresentation('playground');
     setPage(available);
-  }, [pages]);
+  }, []);
 
   if (mcpPreviewDeparture.current === undefined) {
     mcpPreviewDeparture.current = new McpPreviewDepartureCoordinator({

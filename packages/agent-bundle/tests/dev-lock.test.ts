@@ -141,24 +141,55 @@ it('recovers an abandoned recovery gate and serializes eight stale-lock contende
   }
 });
 
-it('rejects a versioned current lock instead of accepting an obsolete record shape', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent bundle versioned dev lock '));
-
-  try {
-    await mkdir(join(root, '.agent-bundle'), { recursive: true });
-    await writeFile(
-      lockPathFor(root),
+const CORRUPT_CURRENT_LOCK_CASES = [
+  [
+    'rejects a versioned current lock instead of accepting an obsolete record shape',
+    'agent bundle versioned dev lock ',
+    (root: string) =>
       `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"obsolete-owner","pid":2147483647,"projectRoot":${JSON.stringify(root)},"version":1}\n`,
-    );
+  ],
+  [
+    'rejects duplicate keys in a current lock record',
+    'agent bundle duplicate lock key ',
+    (root: string) =>
+      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"first-owner","nonce":"second-owner","pid":2147483647,"projectRoot":${JSON.stringify(root)}}\n`,
+  ],
+  [
+    'rejects noncanonical current lock serialization',
+    'agent bundle noncanonical lock ',
+    (root: string) =>
+      ` {"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":2147483647,"projectRoot":${JSON.stringify(root)}}\n`,
+  ],
+  [
+    'rejects a current lock belonging to a different project root',
+    'agent bundle mismatched lock root ',
+    () => '{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":2147483647,"projectRoot":"/different-project"}\n',
+  ],
+  [
+    'rejects a current lock with a noncanonical timestamp',
+    'agent bundle noncanonical lock timestamp ',
+    (root: string) =>
+      `{"createdAt":"2026-08-14T11:59:00Z","nonce":"stale-owner","pid":2147483647,"projectRoot":${JSON.stringify(root)}}\n`,
+  ],
+] as const;
 
-    await expect(acquireDevLock({
-      probeProcess: () => false,
-      projectRoot: root,
-    })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
+for (const [label, tmpPrefix, corruptPayload] of CORRUPT_CURRENT_LOCK_CASES) {
+  it(label, async () => {
+    const root = await mkdtemp(join(tmpdir(), tmpPrefix));
+
+    try {
+      await mkdir(join(root, '.agent-bundle'), { recursive: true });
+      await writeFile(lockPathFor(root), corruptPayload(root));
+
+      await expect(acquireDevLock({
+        probeProcess: () => false,
+        projectRoot: root,
+      })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+}
 
 it('rejects a versioned recovery gate instead of accepting an obsolete record shape', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle versioned dev lock recovery '));
@@ -261,82 +292,6 @@ it('rejects a symlinked agent-bundle directory without writing outside the proje
   } finally {
     await rm(root, { force: true, recursive: true });
     await rm(outside, { force: true, recursive: true });
-  }
-});
-
-it('rejects duplicate keys in a current lock record', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent bundle duplicate lock key '));
-
-  try {
-    await mkdir(join(root, '.agent-bundle'), { recursive: true });
-    await writeFile(
-      lockPathFor(root),
-      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"first-owner","nonce":"second-owner","pid":2147483647,"projectRoot":${JSON.stringify(root)}}\n`,
-    );
-
-    await expect(acquireDevLock({
-      probeProcess: () => false,
-      projectRoot: root,
-    })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-it('rejects noncanonical current lock serialization', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent bundle noncanonical lock '));
-
-  try {
-    await mkdir(join(root, '.agent-bundle'), { recursive: true });
-    await writeFile(
-      lockPathFor(root),
-      ` {"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":2147483647,"projectRoot":${JSON.stringify(root)}}\n`,
-    );
-
-    await expect(acquireDevLock({
-      probeProcess: () => false,
-      projectRoot: root,
-    })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-it('rejects a current lock belonging to a different project root', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent bundle mismatched lock root '));
-
-  try {
-    await mkdir(join(root, '.agent-bundle'), { recursive: true });
-    await writeFile(
-      lockPathFor(root),
-      '{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":2147483647,"projectRoot":"/different-project"}\n',
-    );
-
-    await expect(acquireDevLock({
-      probeProcess: () => false,
-      projectRoot: root,
-    })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-it('rejects a current lock with a noncanonical timestamp', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent bundle noncanonical lock timestamp '));
-
-  try {
-    await mkdir(join(root, '.agent-bundle'), { recursive: true });
-    await writeFile(
-      lockPathFor(root),
-      `{"createdAt":"2026-08-14T11:59:00Z","nonce":"stale-owner","pid":2147483647,"projectRoot":${JSON.stringify(root)}}\n`,
-    );
-
-    await expect(acquireDevLock({
-      probeProcess: () => false,
-      projectRoot: root,
-    })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
-  } finally {
-    await rm(root, { force: true, recursive: true });
   }
 });
 
