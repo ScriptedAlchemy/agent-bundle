@@ -172,6 +172,7 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     const activatedStateVersion = initialActiveVector.stateVersion + 2;
     const activatedEditNoun = activatedStateVersion === 1 ? 'edit' : 'edits';
     const activatedHookText = `Recorded fixture-claude-post-tool-use.txt from claude. Live runtime state now contains ${activatedStateVersion} ${activatedEditNoun}.`;
+    const repairedHookText = `Recorded fixture-claude-post-tool-use.txt from claude. Repaired runtime state now contains ${activatedStateVersion} ${activatedEditNoun}.`;
     await surface.selectOption('hook.claude');
     const profile = page.getByLabel('Runtime profile');
     await profile.selectOption('portable');
@@ -330,15 +331,19 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     );
     await expect(selectedHistory).toHaveAttribute('aria-pressed', 'true', { timeout: browserTimeout });
 
-    await writeFile(fixture.serverComponentSource, editedSource);
-    expect(await readFile(fixture.serverComponentSource, 'utf8')).toBe(editedSource);
+    const repairedHookSource = editedSource.replace('Live runtime state now contains', 'Repaired runtime state now contains');
+    const repairedSource = repairedHookSource.replace('Live runtime state contains', 'Repaired runtime state contains');
+    expect(repairedHookSource).not.toBe(editedSource);
+    expect(repairedSource).not.toBe(repairedHookSource);
+    await writeFile(fixture.serverComponentSource, repairedSource);
+    expect(await readFile(fixture.serverComponentSource, 'utf8')).toBe(repairedSource);
     await expect.poll(async () => identity.getAttribute('data-runtime-generation'), { timeout: browserTimeout })
       .not.toBe(sourceBuildFailed['data-runtime-generation']);
     await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(historyBeforeSourceBuildFailure + 1);
     await expect(sourceBuildDiagnostic).toContainText('No provider diagnostics.');
     await history.locator('button[aria-pressed="false"]').first().click();
     await expect(page.locator('[aria-label="Runtime output stage"] .runtime-stage-output--agent code')).toContainText(
-      activatedHookText,
+      repairedHookText,
     );
     await expect(surface).toHaveValue('hook.claude');
     await expect(raw).toHaveValue('{"repair":');
@@ -377,7 +382,7 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     await expect(identity).toHaveAttribute('data-runtime-source-revision', statusAfterHmr.vector.sourceRevision);
     expect(statusAfterHmr.vector.stateStoreId).toBe(statusBeforeHmr.vector.stateStoreId);
     expect(statusAfterHmr.vector.stateVersion).toBe(activatedStateVersion);
-    expectRuntimeStatusEvidence(statusAfterHmr, providerStatusAfterHmr.status.activeVector, 'Live runtime state contains');
+    expectRuntimeStatusEvidence(statusAfterHmr, providerStatusAfterHmr.status.activeVector, 'Repaired runtime state contains');
     expect(statusAfterHmr.result.state).toMatchObject({
       identity: {
         stateStoreId: initialActiveVector.stateStoreId,

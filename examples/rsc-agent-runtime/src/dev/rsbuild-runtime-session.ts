@@ -640,6 +640,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #failureTail: Promise<void> = Promise.resolve();
   #hmrReady = false;
   #latestAttemptSequence = 0;
+  #latestSupersedingAttemptSequence = 0;
   #latestPreparedRuntime: DevRuntimePreparedProject;
   #latestRscCohortRevision = 0;
   #invocationReservations = 0;
@@ -2186,6 +2187,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       barrier.settle();
       return undefined;
     }
+    this.#latestSupersedingAttemptSequence = Math.max(this.#latestSupersedingAttemptSequence, barrier.sequence);
     const cohortRevision = ++this.#latestRscCohortRevision;
     const preparedRuntime = this.#latestPreparedRuntime;
     barrier.settle();
@@ -2242,6 +2244,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   ): Promise<void> {
     if (this.#failedAttempts.has(attemptId)) return;
     this.#failedAttempts.add(attemptId);
+    this.#latestSupersedingAttemptSequence = Math.max(this.#latestSupersedingAttemptSequence, this.#sequenceFor(attemptId));
     const barrier = this.#attempts.get(attemptId);
     barrier?.settle();
     const candidate = barrier?.candidate ?? this.#candidatesByAttempt.get(attemptId);
@@ -2262,7 +2265,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     let waitedSequence = -1;
     return Object.freeze({
       check: () => !this.#closed &&
-        waitedSequence === this.#latestAttemptSequence &&
+        waitedSequence === this.#latestSupersedingAttemptSequence &&
         ![...this.#attempts.values()].some((attempt) => attempt.sequence > this.#sequenceFor(snapshot.attemptId)) &&
         snapshot.rscCohortRevision === this.#latestRscCohortRevision &&
         snapshot.preparedRuntime.sourceRevision === this.#latestPreparedRuntime.sourceRevision,
@@ -2271,7 +2274,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           const sequence = this.#sequenceFor(snapshot.attemptId);
           const pending = [...this.#attempts.values()].filter((attempt) => attempt.sequence > sequence);
           if (pending.length === 0) {
-            waitedSequence = this.#latestAttemptSequence;
+            waitedSequence = this.#latestSupersedingAttemptSequence;
             return;
           }
           await Promise.all(pending.map((attempt) => attempt.settled));
