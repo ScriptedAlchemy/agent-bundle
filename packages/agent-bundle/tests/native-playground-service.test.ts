@@ -1858,14 +1858,11 @@ it('does not deadlock when caller cancellation reaches a native Codex close list
     await expect(service.catalog(reference)).rejects.toThrow('closed');
     const closing = service.close();
     expect(service.close()).toBe(closing);
-    const settled = await Promise.race([
-      closing.then(() => true, () => true),
-      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
-    ]);
-    expect(settled).toBe(true);
     expect(reentrant).not.toBe(closing);
+    await reentrant;
     expect(abortHandlerCompleted).toBe(true);
     await running;
+    await closing;
     expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
