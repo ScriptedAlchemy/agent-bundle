@@ -231,7 +231,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       }
     });
     phase = 'browser startup navigation';
-    await page.goto(`${origin}#overview`);
+    await page.goto(`${origin}#/overview`);
     phase = 'browser startup dashboard';
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     phase = 'browser startup build health';
@@ -325,16 +325,16 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         .toEqual(expect.objectContaining({ outcome: 'continue' }));
 
       phase = 'Skills and Artifacts pages';
-      await page.goto(`${origin}#skills`);
-      await expect(page.getByRole('heading', { name: 'Skills' })).toBeVisible({ timeout: browserTimeout });
+      await page.goto(`${origin}#/skills`);
+      await expect(page.getByRole('heading', { name: 'Skills', exact: true })).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
-      await page.goto(`${origin}#artifacts`);
+      await page.goto(`${origin}#/artifacts`);
       await expect(page.getByRole('heading', { name: 'Artifacts' })).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByRole('heading', { name: 'Artifact tree' })).toBeVisible({ timeout: browserTimeout });
 
       phase = 'Hooks page simulation';
       const hookListing = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/hooks');
-      await page.goto(`${origin}#hooks`);
+      await page.goto(`${origin}#/hooks`);
       phase = 'Hooks page heading';
       await expect(page.getByRole('heading', { name: 'Hooks' })).toBeVisible({ timeout: browserTimeout });
       phase = 'Hooks catalog';
@@ -359,7 +359,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await expect(page.getByRole('heading', { name: 'Canonical result' })).toBeVisible({ timeout: browserTimeout });
 
       phase = 'MCP, Inspector, and App pages';
-      await page.goto(`${origin}#mcp`);
+      await page.goto(`${origin}#/mcp`);
       await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
       await page.locator('#mcp-target').selectOption('portable');
       await page.locator('#mcp-server-name').fill('fixture');
@@ -397,21 +397,21 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         const url = new URL(response.url());
         return response.request().method() === 'GET' && url.pathname === '/api/logs/replay' && url.search === '?after=0';
       });
-      await page.goto(`${origin}#logs`);
+      await page.goto(`${origin}#/logs`);
       phase = 'Logs page heading';
       await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
       expect((await initialLogsReplay).ok()).toBe(true);
-      await page.goto(`${origin}#evals`);
+      await page.goto(`${origin}#/evals`);
       phase = 'Evals page heading';
       await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
       phase = 'Evals suite catalog';
       await expect(page.getByLabel('Suite')).toContainText('packed-deterministic', { timeout: browserTimeout });
-      await page.goto(`${origin}#comparisons`);
+      await page.goto(`${origin}#/comparisons`);
       phase = 'Comparisons page heading';
       await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
 
       phase = 'Playground direct skill';
-      await page.goto(`${origin}#playground`);
+      await page.goto(`${origin}#/playground`);
       await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
       await page.locator('#playground-operation').selectOption('skill.inspect');
       await page.locator('#playground-target').selectOption('portable');
@@ -814,7 +814,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
 
       phase = 'foreground restart/reconnect';
       const comparisonsHashBeforeRestart = new URL(page.url()).hash;
-      expect(comparisonsHashBeforeRestart).toBe('#comparisons');
+      expect(comparisonsHashBeforeRestart).toBe('#/comparisons');
       if (child === undefined) throw new Error('The packed dev server child was not created.');
       const stoppedChild = child;
       if (stoppedChild.pid !== undefined) {
@@ -907,7 +907,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const routePassStartedAt = Date.now();
       for (const route of mobileRoutes) {
         await page.getByRole('link', { name: route.label, exact: true }).click();
-        await expect(page.getByRole('heading', { name: route.heading })).toBeVisible({ timeout: browserTimeout });
+        await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({ timeout: browserTimeout });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       }
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();

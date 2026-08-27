@@ -66,7 +66,7 @@ const writeInspectorProject = async (root: string): Promise<void> => {
   ]);
 };
 
-e2e('treats an unsupported Inspector hash as the overview without opening an MCP session', { timeout: 60_000 }, async ({ page }) => {
+e2e('canonicalizes legacy routes, preserves browser history, and rejects Inspector routes', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
   const server = await startDevServer({
@@ -83,11 +83,30 @@ e2e('treats an unsupported Inspector hash as the overview without opening an MCP
       if (request.url() === `${server.url}/api/mcp/sessions` && request.method() === 'POST') sessionPosts += 1;
     });
 
-    await page.goto(`${server.url}#inspector`);
-    await expect(page).toHaveURL(/#inspector$/u, { timeout: browserTimeout });
+    await page.goto(`${server.url}#/inspector`);
+    await expect(page).toHaveURL(/#\/overview$/u, { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveCount(0);
+
+    await page.goto(`${server.url}#logs`);
+    await expect(page).toHaveURL(/#\/logs$/u, { timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Logs' })).toHaveAttribute('aria-current', 'page');
+
+    await page.getByRole('link', { name: 'Artifacts', exact: true }).click();
+    await expect(page).toHaveURL(/#\/artifacts$/u, { timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Artifacts', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await page.goBack();
+    await expect(page).toHaveURL(/#\/logs$/u, { timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Logs' })).toHaveAttribute('aria-current', 'page');
+    await page.goForward();
+    await expect(page).toHaveURL(/#\/artifacts$/u, { timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Artifacts' })).toHaveAttribute('aria-current', 'page');
+
+    await page.goto(`${server.url}#inspector`);
+    await expect(page).toHaveURL(/#\/overview$/u, { timeout: browserTimeout });
     expect(sessionPosts).toBe(0);
     expect(pageErrors).toEqual([]);
   } finally {
@@ -114,7 +133,7 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
       if (request.url() === `${server.url}/api/mcp/sessions` && request.method() === 'POST') sessionPosts += 1;
     });
 
-    await page.goto(`${server.url}#mcp`);
+    await page.goto(`${server.url}#/mcp`);
     const playgroundTab = page.getByRole('tab', { name: 'Playground' });
     const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
     const presentationHistoryLength = await page.evaluate(() => window.history.length);
@@ -140,7 +159,12 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
     await inspectorTab.click();
-    await expect(page).toHaveURL(/#mcp$/u);
+    await expect(page).toHaveURL(/#\/mcp$/u);
+    await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
+
+    await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
+    await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
+    await inspectorTab.click();
     await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
 
     const inspector = page.locator('#mcp-inspector-presentation');
@@ -235,7 +259,7 @@ e2e('mounts the internal Inspector presentation from an explicit development-mod
   try {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${server.url}#mcp`);
+    await page.goto(`${server.url}#/mcp`);
     const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
     await inspectorTab.click();
     await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');

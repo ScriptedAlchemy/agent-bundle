@@ -2,11 +2,11 @@ import { cp, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { canonicalHookEventFor, type TargetHookContract } from '../../adapters/hook-contract.ts';
+import type { TargetHookContract } from '../../adapters/hook-contract.ts';
 import { createDefaultRegistry, TargetRegistry } from '../../adapters/registry.ts';
 import type { ArtifactHook } from '../../build/hook-index.ts';
 import { listArtifactFiles } from '../../build/emit.ts';
-import type { CanonicalHookEvent } from '../../core/types.ts';
+import { canonicalHookEventFor, type CanonicalHookEvent } from '../../core/types.ts';
 import { digest } from '../../core/digest.ts';
 import { isErrno } from '../../core/errors.ts';
 import { isRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';

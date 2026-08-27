@@ -1,4 +1,5 @@
 import React, { type ReactNode } from 'react';
+import { NavLink } from 'react-router';
 
 export type WorkbenchPage = 'artifacts' | 'comparisons' | 'evals' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'skills';
 
@@ -6,6 +7,7 @@ interface NavigationItem {
   readonly glyph: string;
   readonly label: string;
   readonly page: WorkbenchPage;
+  readonly path: string;
 }
 
 interface NavigationGroup {
@@ -13,43 +15,54 @@ interface NavigationGroup {
   readonly label: string;
 }
 
+export const workbenchRoutes: Readonly<Record<WorkbenchPage, NavigationItem>> = Object.freeze({
+  artifacts: Object.freeze({ glyph: '▤', label: 'Artifacts', page: 'artifacts', path: '/artifacts' }),
+  comparisons: Object.freeze({ glyph: '⇄', label: 'Comparisons', page: 'comparisons', path: '/comparisons' }),
+  evals: Object.freeze({ glyph: '✓', label: 'Evals', page: 'evals', path: '/evals' }),
+  hooks: Object.freeze({ glyph: '⌥', label: 'Hooks', page: 'hooks', path: '/hooks' }),
+  logs: Object.freeze({ glyph: '≡', label: 'Logs', page: 'logs', path: '/logs' }),
+  mcp: Object.freeze({ glyph: '⌁', label: 'MCP playground', page: 'mcp', path: '/mcp' }),
+  overview: Object.freeze({ glyph: '⊞', label: 'Overview', page: 'overview', path: '/overview' }),
+  playground: Object.freeze({ glyph: '◇', label: 'Playground', page: 'playground', path: '/playground' }),
+  skills: Object.freeze({ glyph: '⌘', label: 'Skills', page: 'skills', path: '/skills' }),
+});
+
 const navigationGroups: readonly NavigationGroup[] = [
-  { items: [{ glyph: '⊞', label: 'Overview', page: 'overview' }], label: 'Build' },
+  { items: [workbenchRoutes.overview], label: 'Build' },
   {
     items: [
-      { glyph: '⌘', label: 'Skills', page: 'skills' },
-      { glyph: '⌥', label: 'Hooks', page: 'hooks' },
-      { glyph: '◇', label: 'Playground', page: 'playground' },
-      { glyph: '⌁', label: 'MCP playground', page: 'mcp' },
+      workbenchRoutes.skills,
+      workbenchRoutes.hooks,
+      workbenchRoutes.playground,
+      workbenchRoutes.mcp,
     ],
     label: 'Capabilities',
   },
   {
     items: [
-      { glyph: '✓', label: 'Evals', page: 'evals' },
-      { glyph: '⇄', label: 'Comparisons', page: 'comparisons' },
+      workbenchRoutes.evals,
+      workbenchRoutes.comparisons,
     ],
     label: 'Quality',
   },
   {
     items: [
-      { glyph: '▤', label: 'Artifacts', page: 'artifacts' },
-      { glyph: '≡', label: 'Logs', page: 'logs' },
+      workbenchRoutes.artifacts,
+      workbenchRoutes.logs,
     ],
     label: 'Inspect',
   },
 ];
 
-const navigationItems = navigationGroups.flatMap((group) => group.items);
+export const workbenchRouteEntries = Object.freeze(Object.values(workbenchRoutes));
+export const workbenchPages: ReadonlySet<WorkbenchPage> = new Set(workbenchRouteEntries.map((route) => route.page));
 
-const workbenchPages: ReadonlySet<WorkbenchPage> = new Set(navigationItems.map((item) => item.page));
+export const workbenchPathFor = (page: WorkbenchPage): string => workbenchRoutes[page].path;
 
-export const pageForHash = (
-  hash = globalThis.window?.location.hash ?? '',
-  pages: ReadonlySet<WorkbenchPage> = workbenchPages,
-): WorkbenchPage => {
+export const legacyPathForHash = (hash: string): string | undefined => {
+  if (hash.length <= 1 || hash.startsWith('#/')) return undefined;
   const page = hash.slice(1);
-  return workbenchPages.has(page as WorkbenchPage) && pages.has(page as WorkbenchPage) ? page as WorkbenchPage : 'overview';
+  return Object.hasOwn(workbenchRoutes, page) ? workbenchPathFor(page as WorkbenchPage) : workbenchPathFor('overview');
 };
 
 export const Topbar = ({ connectionError }: { readonly connectionError?: string }) => <header className="topbar">
@@ -60,9 +73,7 @@ export const Topbar = ({ connectionError }: { readonly connectionError?: string 
   </span>
 </header>;
 
-export const Navigation = ({ onNavigate, page, pages }: {
-  readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly page: WorkbenchPage;
+export const Navigation = ({ pages }: {
   readonly pages: ReadonlySet<WorkbenchPage>;
 }) => <nav className="rail" aria-label="Workbench navigation">
   <div className="brand">Agent Bundle</div>
@@ -71,31 +82,28 @@ export const Navigation = ({ onNavigate, page, pages }: {
     return items.length === 0 ? undefined : <div className="nav-group" key={group.label}>
       <span className="nav-group-label">{group.label}</span>
       {items.map((item) => (
-        <a
+        <NavLink
           key={item.page}
-          aria-current={page === item.page ? 'page' : undefined}
-          className={page === item.page ? 'nav-item nav-item--active' : 'nav-item'}
-          href={`#${item.page}`}
-          onClick={(event) => { event.preventDefault(); onNavigate(item.page); }}
+          className={({ isActive }) => isActive ? 'nav-item nav-item--active' : 'nav-item'}
+          to={item.path}
         >
           <span aria-hidden="true" className="nav-glyph">{item.glyph}</span>
           {item.label}
-        </a>
+        </NavLink>
       ))}
     </div>;
   })}
 </nav>;
 
-export const WorkbenchScreen = ({ children, connectionError, onNavigate, page, pages }: {
+export const WorkbenchScreen = ({ children, connectionError, page, pages }: {
   readonly children: ReactNode;
   readonly connectionError?: string;
-  readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
   readonly pages: ReadonlySet<WorkbenchPage>;
 }) => <div className="workbench-shell">
-  <Navigation onNavigate={onNavigate} page={page} pages={pages} />
-  <main className="canvas" id={page}>
-    <Topbar connectionError={connectionError} />
-    {children}
-  </main>
-</div>;
+    <Navigation pages={pages} />
+    <main className="canvas" id={page}>
+      <Topbar connectionError={connectionError} />
+      {children}
+    </main>
+  </div>;

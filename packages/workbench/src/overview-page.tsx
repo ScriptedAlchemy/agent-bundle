@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router';
 
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
@@ -6,7 +7,7 @@ import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts'
 import { bundleSummaryFor, overviewFor } from './overview-model.ts';
 import type { ProjectClient } from './project-client.ts';
 import type { WorkbenchCapabilities } from './workbench-capabilities.ts';
-import { Navigation, Topbar, type WorkbenchPage } from './workbench-screen.tsx';
+import { WorkbenchScreen, workbenchPathFor, type WorkbenchPage } from './workbench-screen.tsx';
 
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
@@ -39,10 +40,8 @@ const actionFor: Readonly<Partial<Record<WorkbenchPage, Readonly<{ label: string
   skills: { label: 'Review authored Skills', summary: 'Inspect authored instructions and generated host output.' },
 });
 
-/** A capability-aware entry point; authoritative build state remains below. */
-export const BundleWorkflow = ({ capabilities, onNavigate }: {
+export const BundleWorkflow = ({ capabilities }: {
   readonly capabilities?: Pick<WorkbenchCapabilities, 'counts' | 'pages'>;
-  readonly onNavigate: (page: WorkbenchPage) => void;
 }) => {
   const summary = capabilities === undefined
     ? { capabilityLabels: ['No published capabilities yet', '0 generated targets'], nextPages: ['artifacts'] as const }
@@ -58,26 +57,24 @@ export const BundleWorkflow = ({ capabilities, onNavigate }: {
     <div aria-label="Recommended next actions" className="dashboard-actions">
       {summary.nextPages.map((page) => {
         const action = actionFor[page];
-        return action === undefined ? undefined : <a
+        return action === undefined ? undefined : <Link
           className="action-link"
-          href={`#${page}`}
           key={page}
-          onClick={(event) => { event.preventDefault(); onNavigate(page); }}
+          to={workbenchPathFor(page)}
         >
           <strong>{action.label}</strong>
           <span>{action.summary}</span>
-        </a>;
+        </Link>;
       })}
     </div>
   </section>;
 };
 
-export const Overview = ({ capabilities, changedFiles, client, connectionError, onNavigate, pages, status, onStatus }: {
+export const Overview = ({ capabilities, changedFiles, client, connectionError, pages, status, onStatus }: {
   readonly capabilities?: WorkbenchCapabilities;
   readonly changedFiles: readonly string[];
   readonly client: ProjectClient;
   readonly connectionError?: string;
-  readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onStatus: (status: ProjectStatus) => void;
   readonly pages: ReadonlySet<WorkbenchPage>;
   readonly status: ProjectStatus;
@@ -99,12 +96,9 @@ export const Overview = ({ capabilities, changedFiles, client, connectionError, 
   };
 
   return (
-    <div className="workbench-shell">
-      <Navigation onNavigate={onNavigate} page="overview" pages={pages} />
-      <main className="canvas" id="overview">
-        <Topbar connectionError={connectionError} />
+    <WorkbenchScreen connectionError={connectionError} page="overview" pages={pages}>
         <div className="page-content">
-          <BundleWorkflow capabilities={capabilities} onNavigate={onNavigate} />
+          <BundleWorkflow capabilities={capabilities} />
 
           <section aria-labelledby="build-health-heading" className="build-health section">
             <div>
@@ -180,7 +174,6 @@ export const Overview = ({ capabilities, changedFiles, client, connectionError, 
             </section>
           </details>
         </div>
-      </main>
-    </div>
+    </WorkbenchScreen>
   );
 };

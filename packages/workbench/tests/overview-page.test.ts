@@ -1,5 +1,6 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router';
 
 import { expect, it } from '@rstest/core';
 
@@ -12,7 +13,7 @@ const capabilities: Pick<WorkbenchCapabilities, 'counts' | 'pages'> = {
 };
 
 it('introduces the bundle dashboard as a plain-language capability summary', () => {
-  const markup = renderToStaticMarkup(createElement(BundleWorkflow, { capabilities, onNavigate: () => undefined }));
+  const markup = renderToStaticMarkup(createElement(MemoryRouter, undefined, createElement(BundleWorkflow, { capabilities })));
 
   expect(markup).toContain('Bundle dashboard');
   expect(markup).toContain('See what this bundle publishes, try supported workflows, and rebuild after source changes.');
@@ -22,7 +23,7 @@ it('introduces the bundle dashboard as a plain-language capability summary', () 
 });
 
 it('offers only unique actions supported by the current bundle', () => {
-  const markup = renderToStaticMarkup(createElement(BundleWorkflow, { capabilities, onNavigate: () => undefined }));
+  const markup = renderToStaticMarkup(createElement(MemoryRouter, undefined, createElement(BundleWorkflow, { capabilities })));
 
   expect(markup.match(/>Review authored Skills</gu)).toHaveLength(1);
   expect(markup.match(/>Run evaluations</gu)).toHaveLength(1);

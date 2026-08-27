@@ -189,7 +189,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
       appRequests.push({ body: requestBody(request.postData()), path: requestUrl.pathname });
     });
 
-    await page.goto(`${foregroundOrigin}#mcp`);
+    await page.goto(`${foregroundOrigin}#/mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
@@ -353,7 +353,7 @@ e2e('renders a compiler-bundled App template through the canonical sandbox URL',
       }
     });
 
-    await page.goto(`${foregroundOrigin}#mcp`);
+    await page.goto(`${foregroundOrigin}#/mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');

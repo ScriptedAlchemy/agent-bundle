@@ -1,9 +1,8 @@
 import { errorMessage as messageFrom } from './client-helpers.ts';
 import { useEffect, useState } from 'react';
 
-import type { PlaygroundRun } from '../../agent-bundle/src/contracts/playground.ts';
+import type { NativePlaygroundCatalog, PlaygroundRun } from '../../agent-bundle/src/contracts/playground.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
-import type { NativePlaygroundCatalog } from '../../agent-bundle/src/contracts/playground.ts';
 
 import type { ArtifactInspection } from '../../agent-bundle/src/contracts/artifacts.ts';
 import type { SkillDocumentTree } from '../../agent-bundle/src/contracts/skills.ts';
@@ -30,10 +29,9 @@ const playgroundTargetsFor = (status: ProjectStatus) => {
     : Object.entries(epoch.targetDigests).map(([name, digest]) => ({ digest, name }));
 };
 
-export const PlaygroundScreen = ({ connectionError, inspection, onNavigate, onRunChange, pages, playgroundClient, run, skillTree, status }: {
+export const PlaygroundScreen = ({ connectionError, inspection, onRunChange, pages, playgroundClient, run, skillTree, status }: {
   readonly connectionError?: string;
   readonly inspection: ArtifactInspection;
-  readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly pages: ReadonlySet<WorkbenchPage>;
   readonly playgroundClient: PlaygroundClient;
@@ -66,7 +64,7 @@ export const PlaygroundScreen = ({ connectionError, inspection, onNavigate, onRu
     return () => controller.abort();
   }, [epoch?.id, playgroundClient]);
 
-  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground" pages={pages}>
+  return <WorkbenchScreen connectionError={connectionError} page="playground" pages={pages}>
     <PlaygroundPage
       catalog={visibleNativeCatalog}
       catalogError={nativeCatalogError}

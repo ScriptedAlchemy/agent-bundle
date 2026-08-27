@@ -2,10 +2,12 @@ import { isAbortError, errorMessage as messageFrom } from '../client-helpers.ts'
 import React, { useEffect, useRef, useState } from 'react';
 
 import type {
+  CanonicalHookEvent,
   HookPlaygroundBinding,
   HookPlaygroundHook,
   HookPlaygroundReplay,
 } from '../../../agent-bundle/src/contracts/hooks.ts';
+import { canonicalHookEventFor } from '../../../agent-bundle/src/contracts/hooks.ts';
 
 import {
   parseRawJsonRecord,
@@ -31,8 +33,6 @@ export interface HooksPageProps {
 }
 
 const draftError = 'Canonical hook input must be a JSON object.';
-
-type CanonicalHookEvent = HookPlaygroundHook['hook']['event'];
 
 const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, ImmutableJsonRecord>> = Object.freeze({
   afterTool: Object.freeze({
@@ -67,12 +67,12 @@ const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, ImmutableJsonReco
   }),
 });
 
-/** Provides one event-shaped document that can run a generated Hook without host-contract guesswork. */
 export const canonicalHookInput = (event: CanonicalHookEvent): ImmutableJsonRecord => canonicalHookInputs[event];
 
-/** Returns a runnable example only for the canonical Hook events understood by the Workbench. */
-export const canonicalHookInputFor = (event: string): ImmutableJsonRecord | undefined =>
-  Object.hasOwn(canonicalHookInputs, event) ? canonicalHookInputs[event as CanonicalHookEvent] : undefined;
+export const canonicalHookInputFor = (event: string): ImmutableJsonRecord | undefined => {
+  const canonicalEvent = canonicalHookEventFor(event);
+  return canonicalEvent === undefined ? undefined : canonicalHookInputs[canonicalEvent];
+};
 
 const errorMessage = (reason: unknown): string => messageFrom(reason, 'The hook playground request could not be completed.');
 
@@ -200,7 +200,8 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
 
   useEffect(() => {
     if (view.selected === undefined || draftIsDirty.current) return;
-    setDraft(serializeJsonRecord(canonicalHookInput(view.selected.event as CanonicalHookEvent)));
+    const input = canonicalHookInputFor(view.selected.event);
+    if (input !== undefined) setDraft(serializeJsonRecord(input));
   }, [view.selected?.event]);
 
   useEffect(() => {

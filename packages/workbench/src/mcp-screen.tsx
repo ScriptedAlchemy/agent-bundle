@@ -30,13 +30,12 @@ const downloadMcpFile = ({ blob, filename }: McpDownload): void => {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 };
 
-export const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, model, onNavigate, onResetSession, pages, presentation, setPresentation, status }: {
+export const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, model, onResetSession, pages, presentation, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly model: ReturnType<typeof createMcpController>['model'];
-  readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onResetSession: () => void;
   readonly pages: ReadonlySet<WorkbenchPage>;
   readonly presentation: McpPresentation;
@@ -85,7 +84,7 @@ export const McpScreen = ({ appPreviewClient, artifactClient, connectionError, c
       model: { ...model, timeline: { ...model.timeline, entries } },
     }));
   };
-  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" pages={pages}>
+  return <WorkbenchScreen connectionError={connectionError} page="mcp" pages={pages}>
     <div className="mcp-content">
       <div aria-label="MCP presentation" className="mcp-presentation-tabs" role="tablist">
         <button

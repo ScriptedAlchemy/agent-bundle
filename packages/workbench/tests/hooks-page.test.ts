@@ -4,14 +4,19 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from '@rstest/core';
 
 import type {
+  CanonicalHookEvent,
   HookPlaygroundDiagnosticResult,
   HookPlaygroundHook,
   HookPlaygroundSimulation,
-} from '../../agent-bundle/src/dev/playground/hook-playground-service.ts';
+} from '../../agent-bundle/src/contracts/hooks.ts';
 import { HookClient } from '../src/hooks/hook-client.ts';
-import * as hooksPage from '../src/hooks/hooks-page.tsx';
-import { HookRequestLifecycle, HookSimulationView, HooksPage, runHookReplay, runHookSimulation } from '../src/hooks/hooks-page.tsx';
+import { canonicalHookInput, canonicalHookInputFor, HookRequestLifecycle, HookSimulationView, HooksPage, runHookReplay, runHookSimulation } from '../src/hooks/hooks-page.tsx';
 import { hookPlaygroundViewFor } from '../src/hooks/hooks-model.ts';
+
+type CanonicalInputUsesCanonicalEvent = Parameters<typeof canonicalHookInput>[0] extends CanonicalHookEvent
+  ? CanonicalHookEvent extends Parameters<typeof canonicalHookInput>[0] ? true : false
+  : false;
+const canonicalInputUsesCanonicalEvent: CanonicalInputUsesCanonicalEvent = true;
 
 const hooks: readonly HookPlaygroundHook[] = [{
   binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
@@ -59,11 +64,7 @@ const response = (body: unknown): Response => new Response(JSON.stringify(body),
 });
 
 it('provides event-shaped canonical documents for each Hook event', () => {
-  const { canonicalHookInput } = hooksPage as typeof hooksPage & {
-    readonly canonicalHookInput: (event: 'afterTool' | 'beforeTool' | 'sessionStart' | 'stop') => Readonly<Record<string, unknown>>;
-  };
-
-  expect(canonicalHookInput).toBeTypeOf('function');
+  expect(canonicalInputUsesCanonicalEvent).toBe(true);
   expect(canonicalHookInput('sessionStart')).toEqual({
     cwd: '/workspace',
     sessionId: 'workbench-preview',
@@ -94,6 +95,7 @@ it('provides event-shaped canonical documents for each Hook event', () => {
     stopHookActive: false,
     transcriptPath: '/workspace/transcript.json',
   });
+  expect(canonicalHookInputFor('future-event')).toBeUndefined();
 });
 
 it('renders the canonical intent, host mapping, and native trace of a simulation', () => {

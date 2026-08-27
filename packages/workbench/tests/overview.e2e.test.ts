@@ -142,7 +142,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${foregroundOrigin}#mcp`);
+    await page.goto(`${foregroundOrigin}#/mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
@@ -287,7 +287,7 @@ e2e('renders the safe launch configuration for one real artifact MCP session', {
     if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${foregroundOrigin}#mcp`);
+    await page.goto(`${foregroundOrigin}#/mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
@@ -416,7 +416,7 @@ e2e('renders the latest changed files from a replayed foreground source event on
       type: 'source.changed',
     });
     await page.setViewportSize({ height: 900, width: 1_440 });
-    await page.goto(`${server.url}#overview`);
+    await page.goto(`${server.url}#/overview`);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.getByText('Inspect build details', { exact: true }).click();
 

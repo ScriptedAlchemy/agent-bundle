@@ -19,7 +19,7 @@ e2e('contains the mounted Artifacts page and its table at desktop and 390px widt
   try {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${server.url}#artifacts`);
+    await page.goto(`${server.url}#/artifacts`);
     await expect(page.getByRole('heading', { name: 'Artifacts' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.artifact-table').first()).toBeVisible({ timeout: browserTimeout });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

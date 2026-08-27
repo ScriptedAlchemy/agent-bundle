@@ -159,7 +159,7 @@ const operationsForCatalog = (
 
 /** Defaults only missing or stale catalog choices, keeping a user's valid selection intact. */
 export const playgroundSelectionFor = (
-  input: Readonly<PlaygroundSelection & { readonly operationIsImplicit: boolean }> ,
+  input: Readonly<PlaygroundSelection & { readonly operationIsImplicit: boolean }>,
   targets: readonly PlaygroundTarget[],
   catalog: PlaygroundCapabilityCatalog,
 ): PlaygroundSelection => {

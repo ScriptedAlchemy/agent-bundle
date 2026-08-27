@@ -1,6 +1,7 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
+import { canonicalHookEvents } from '../core/types.ts';
 import type {
   CanonicalHookEvent,
   CanonicalHookTool,
@@ -141,16 +142,6 @@ const nativeHookInputFields = Object.freeze([
 const defined = (value: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 
-const canonicalEventOrder: readonly CanonicalHookEvent[] = [
-  'sessionStart',
-  'beforeTool',
-  'afterTool',
-  'stop',
-];
-
-export const canonicalHookEventFor = (event: string): CanonicalHookEvent | undefined =>
-  canonicalEventOrder.find((candidate) => candidate === event);
-
 export const encodeNativeHookPlaygroundInput = (
   input: Readonly<Record<string, unknown>>,
   nativeEvent: string,
@@ -259,7 +250,7 @@ export const mergeHookDocuments = (
   };
 };
 
-const eventIndex = new Map(canonicalEventOrder.map((event, index) => [event, index]));
+const eventIndex = new Map(canonicalHookEvents.map((event, index) => [event, index]));
 
 export const generatedHookCommand = (contract: TargetHookContract, relativePath: string): string =>
   `node "${contract.commandRoot}/${relativePath}"`;

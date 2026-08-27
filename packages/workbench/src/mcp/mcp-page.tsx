@@ -167,7 +167,6 @@ const frozenMcpPageServerOptionsFor = (options: readonly McpPageServerOption[]):
   options.map((option) => Object.freeze({ name: option.name, target: option.target })),
 );
 
-/** Keeps only the immutable artifact servers that the selected generated target can start. */
 export const mcpPageServerOptionsFor = (
   options: readonly McpPageServerOption[],
   target: string,

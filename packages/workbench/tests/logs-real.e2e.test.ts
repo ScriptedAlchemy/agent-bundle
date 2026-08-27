@@ -25,7 +25,7 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
       const url = new URL(response.url());
       return url.origin === server.url && url.pathname === '/api/logs/replay' && url.searchParams.get('after') === '0' && response.ok();
     });
-    await page.goto(`${server.url}#logs`);
+    await page.goto(`${server.url}#/logs`);
     await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
     const replay = await (await replayed).json() as { readonly replay: Readonly<{ readonly records: readonly unknown[] }> };
     expect(replay.replay.records.length).toBeGreaterThan(0);
@@ -40,9 +40,9 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
     await expect(page.locator('.logs-entry-source').first()).toHaveText('project', { timeout: browserTimeout });
     await page.locator('#logs-producer').selectOption('');
     const replayCount = await page.locator('.logs-entries > li').count();
-    await page.goto(`${server.url}#overview`);
+    await page.goto(`${server.url}#/overview`);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-    await page.goto(`${server.url}#logs`);
+    await page.goto(`${server.url}#/logs`);
     await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.logs-entries > li')).not.toHaveCount(0, { timeout: browserTimeout });
     const reconnectedSequences = await page.locator('.logs-entries > li').evaluateAll((rows) => rows.map((row) => row.querySelector('.logs-entry-sequence')?.textContent));

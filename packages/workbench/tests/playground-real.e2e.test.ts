@@ -157,7 +157,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
       }
     });
 
-    await page.goto(`${server.url}#hooks`);
+    await page.goto(`${server.url}#/hooks`);
     await expect(page.getByRole('heading', { name: 'Hooks' })).toBeVisible({ timeout: browserTimeout });
     const hookOption = page.locator('#hook-binding option').first();
     await expect(hookOption).toBeAttached({ timeout: browserTimeout });
@@ -165,7 +165,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     if (hookKey === null || !hookKey.startsWith('claude/')) throw new Error('Expected the fixture to publish one selectable Claude Hook binding.');
     const hookId = hookKey.slice('claude/'.length);
 
-    await page.goto(`${server.url}#playground`);
+    await page.goto(`${server.url}#/playground`);
     await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#playground-operation').selectOption('skill.inspect');
     await page.locator('#playground-target').selectOption('claude');
@@ -350,7 +350,7 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
 
     await phase('catalog admission on epoch A', async () => {
       mark('open Playground');
-      await page.goto(`${server!.url}#playground`);
+      await page.goto(`${server!.url}#/playground`);
       mark('wait for Playground heading');
       await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
       await selectNativePrompt('Gate native Playground run until cancellation.');

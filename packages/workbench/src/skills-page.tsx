@@ -148,7 +148,6 @@ export const skillGenerationSummaryFor = (
     message: `Generated output differs from the authored Skill for ${target}. Review the generated document before shipping.`,
   });
 
-/** The selected served Skill document and its rendered or raw Markdown view. */
 export const SkillDocumentPanel = ({
   document,
   evalCoverage,
