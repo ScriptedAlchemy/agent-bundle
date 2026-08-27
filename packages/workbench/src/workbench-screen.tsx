@@ -55,7 +55,6 @@ const navigationGroups: readonly NavigationGroup[] = [
 ];
 
 export const workbenchRouteEntries = Object.freeze(Object.values(workbenchRoutes));
-export const workbenchPages: ReadonlySet<WorkbenchPage> = new Set(workbenchRouteEntries.map((route) => route.page));
 
 export const workbenchPathFor = (page: WorkbenchPage): string => workbenchRoutes[page].path;
 

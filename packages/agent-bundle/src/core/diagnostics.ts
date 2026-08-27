@@ -10,7 +10,6 @@ export interface Diagnostic {
   recovery?: string;
 }
 
-const diagnosticRequiredKeys = ['code', 'message', 'severity'] as const;
 const diagnosticOptionalKeys = ['generatedPath', 'recovery', 'sourcePath', 'target'] as const;
 
 const isSeverity = (value: unknown): value is DiagnosticSeverity =>
@@ -26,35 +25,6 @@ export const isDiagnostic = (value: unknown): value is Diagnostic =>
     const optional = (value as Readonly<Record<string, unknown>>)[key];
     return optional === undefined || typeof optional === 'string';
   });
-
-export interface DecodeDiagnosticOptions {
-  /** Reject values carrying keys outside the Diagnostic contract. */
-  readonly strict?: boolean;
-}
-
-/** Decodes one wire diagnostic into a frozen normalized copy, or undefined when malformed. */
-export const decodeDiagnostic = (
-  value: unknown,
-  options: DecodeDiagnosticOptions = {},
-): Diagnostic | undefined => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const record = value as Readonly<Record<string, unknown>>;
-  if (!isDiagnostic(value)) return undefined;
-  if (options.strict === true) {
-    const allowed: readonly string[] = [...diagnosticRequiredKeys, ...diagnosticOptionalKeys];
-    if (!Object.keys(record).every((key) => allowed.includes(key))) return undefined;
-    if (diagnosticOptionalKeys.some((key) => Object.hasOwn(record, key) && record[key] === undefined)) return undefined;
-  }
-  return Object.freeze({
-    code: value.code,
-    ...(value.generatedPath === undefined ? {} : { generatedPath: value.generatedPath }),
-    message: value.message,
-    ...(value.recovery === undefined ? {} : { recovery: value.recovery }),
-    severity: value.severity,
-    ...(value.sourcePath === undefined ? {} : { sourcePath: value.sourcePath }),
-    ...(value.target === undefined ? {} : { target: value.target }),
-  });
-};
 
 const diagnosticIdentity = (diagnostic: Diagnostic): string => JSON.stringify([
   diagnostic.code,
