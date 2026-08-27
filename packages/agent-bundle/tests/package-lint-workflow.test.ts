@@ -23,10 +23,12 @@ it('runs publint explicitly in CI and the local release audit', async () => {
   };
   const parsed = parseYaml(workflow) as {
     readonly jobs?: {
+      readonly 'rsc-runtime-micro-eval'?: { readonly steps?: readonly WorkflowStep[] };
       readonly verify?: { readonly steps?: readonly WorkflowStep[] };
     };
   };
   const steps = parsed.jobs?.verify?.steps ?? [];
+  const rscSteps = parsed.jobs?.['rsc-runtime-micro-eval']?.steps ?? [];
   const packageLintIndex = steps.findIndex((step) => step.run === 'pnpm lint:package');
   const setup = steps.find((step) => step.uses === 'pnpm/setup@v1');
 
@@ -36,5 +38,12 @@ it('runs publint explicitly in CI and the local release audit', async () => {
   expect(packageLintIndex).toBeGreaterThan(0);
   expect(steps[packageLintIndex]).toEqual({ name: 'Package lint (publint)', run: 'pnpm lint:package' });
   expect(steps[packageLintIndex - 1]?.run).toBe('pnpm build');
+  expect(rscSteps.map((step) => step.uses ?? step.run)).toEqual([
+    'actions/checkout@v7',
+    'pnpm/setup@v1',
+    'pnpm install --frozen-lockfile',
+    'pnpm eval:spot',
+  ]);
+  expect(rscSteps[1]?.with).toEqual({ cache: true, install: false, runtime: 'node@22.19.0' });
   expect(workflow).not.toMatch(/\bcorepack\b/u);
 });

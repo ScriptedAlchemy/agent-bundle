@@ -86,8 +86,9 @@ it('selects product packages through the pinned pnpm workspace', async () => {
     'playwright-core': '1.62.1',
   });
   expect(rootManifest.scripts).toMatchObject({
-    build: 'pnpm --filter @agent-bundle/rsc-runtime build && pnpm --filter agent-bundle build',
+    build: 'pnpm --filter agent-bundle build && pnpm --filter @agent-bundle/rsc-runtime build',
     check: 'pnpm build && pnpm test:unit && pnpm test:integration:run && pnpm lint && pnpm typecheck',
+    'eval:spot': 'pnpm --filter @agent-bundle/rsc-agent-runtime-demo build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec rstest run tests/micro-eval.spot.test.ts --config rstest.config.ts',
     'example:hooks': 'pnpm build && pnpm --filter @agent-bundle-example/hooks-and-scripts dev',
     'example:mcp-app': 'pnpm build && pnpm --filter @agent-bundle-example/mcp-app dev',
     'example:skills': 'pnpm build && pnpm --filter @agent-bundle-example/skills-starter dev',
