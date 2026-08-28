@@ -132,7 +132,16 @@ it('lays both host manifests over one shared bundle root', () => {
   const cursorMcp = JSON.parse(documents['.cursor-plugin/mcp.json']!) as { readonly mcpServers: Record<string, { readonly args: readonly string[] }> };
   expect(cursorMcp.mcpServers['status']!.args[0]).toBe('${CURSOR_PLUGIN_ROOT}/mcp/server.mjs');
   expect(cursorMcp.mcpServers['status']).not.toHaveProperty('type');
-  expect(JSON.parse(documents['hooks/hooks-cursor.json']!)).toEqual({ hooks: {}, version: 1 });
+  expect(JSON.parse(documents['hooks/hooks-cursor.json']!)).toEqual({
+    hooks: {
+      postToolUse: [{
+        command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/record-write.cursor.mjs"',
+        matcher: '^Write$',
+      }],
+      sessionStart: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/session-start.cursor.mjs"' }],
+    },
+    version: 1,
+  });
 });
 
 it('emits each shared surface exactly once with no duplicate artifact paths', () => {
@@ -144,7 +153,9 @@ it('emits each shared surface exactly once with no duplicate artifact paths', ()
 
   const hookEntries = plan.hookEntries ?? [];
   expect(hookEntries.map((entry) => entry.relativePath).sort()).toEqual([
+    'hooks/record-write.cursor.mjs',
     'hooks/record-write.mjs',
+    'hooks/session-start.cursor.mjs',
     'hooks/session-start.mjs',
   ]);
   expect(new Set(hookEntries.map((entry) => entry.target))).toEqual(new Set(['plugin']));
@@ -245,6 +256,16 @@ it('builds the unified bundle root on disk with a compiled universal hook wrappe
       code: 0,
       stdout: expect.stringContaining('host:codex'),
     });
+    // The Cursor wrapper speaks Cursor's own envelope: session ids over
+    // conversation fields in, snake_case additional_context out.
+    const cursorWrapper = join(bundleRoot, 'hooks', 'session-start.cursor.mjs');
+    const cursorInput = JSON.stringify({
+      composer_mode: 'agent', conversation_id: 'conv-1', cursor_version: '2.4.1', hook_event_name: 'sessionStart',
+      is_background_agent: false, session_id: 'conv-1', transcript_path: null, workspace_roots: ['/workspace'],
+    });
+    const cursorRun = await runNodeScript({ args: [cursorWrapper], input: cursorInput });
+    expect(cursorRun.code).toBe(0);
+    expect(JSON.parse(cursorRun.stdout) as Record<string, unknown>).toEqual({ additional_context: 'host:cursor' });
     const manifest = JSON.parse(await readFile(join(outputRoot, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly files: readonly { readonly path: string }[];
       readonly targets: readonly { readonly name: string }[];
@@ -256,6 +277,7 @@ it('builds the unified bundle root on disk with a compiled universal hook wrappe
       'plugin/.cursor-plugin/plugin.json',
       'plugin/AGENTS.md',
       'plugin/hooks/hooks-cursor.json',
+      'plugin/hooks/session-start.cursor.mjs',
       'plugin/skills/review/SKILL.md',
     ]));
   } finally {

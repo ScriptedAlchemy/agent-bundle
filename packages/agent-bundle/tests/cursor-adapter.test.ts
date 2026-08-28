@@ -74,8 +74,8 @@ it('registers cursor as a first-class target with pinned schema validation', () 
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(registry.supports('cursor', 'mcp')).toBe(true);
   expect(registry.supports('cursor', 'skills')).toBe(true);
-  expect(registry.supports('cursor', 'hooks')).toBe(false);
-  expect(registry.hookContract('cursor')).toBeUndefined();
+  expect(registry.supports('cursor', 'hooks')).toBe(true);
+  expect(registry.hookContract('cursor')?.commandRoot).toBe('${CURSOR_PLUGIN_ROOT}');
   expect(registry.artifactValidation('cursor').documents).toEqual([
     { path: '.cursor-plugin/plugin.json', required: true, schema: 'plugin' },
     { path: 'hooks/hooks.json', required: false, schema: 'hooks' },
@@ -143,7 +143,64 @@ it('rejects the plugin-data token and omits the failed server from the document'
   expect(manifest).not.toHaveProperty('mcpServers');
 });
 
-it('never emits hooks and drops hooks scoped to other targets from the plan', () => {
+it('lowers cursor-targeted hooks into the flat versioned document with dedicated wrappers', () => {
+  const model = plugin();
+  const plan = cursorAdapter.plan({
+    ...model,
+    hooks: [
+      {
+        event: 'sessionStart',
+        id: 'hook:session-start',
+        name: 'session-start',
+        provenance: { kind: 'config', sourcePath: configPath },
+        source: '/workspace/src/hooks/session-start.ts',
+        targets: ['cursor'],
+        tools: [],
+      },
+      {
+        event: 'afterTool',
+        id: 'hook:record-write',
+        name: 'record-write',
+        provenance: { kind: 'config', sourcePath: configPath },
+        source: '/workspace/src/hooks/record-write.ts',
+        targets: ['cursor'],
+        timeout: 30,
+        tools: ['file.write'],
+      },
+    ],
+  });
+  expect(plan.diagnostics).toEqual([]);
+
+  const documents = Object.fromEntries(plan.entries
+    .filter((entry): entry is Extract<typeof entry, { readonly kind: 'write' }> => entry.kind === 'write')
+    .map((entry) => [entry.relativePath, entry.content]));
+  expect(JSON.parse(documents['hooks/hooks.json']!)).toEqual({
+    hooks: {
+      postToolUse: [{
+        command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/record-write.mjs"',
+        matcher: '^Write$',
+        timeout: 30,
+      }],
+      sessionStart: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/session-start.mjs"' }],
+    },
+    version: 1,
+  });
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({ hooks: './hooks/hooks.json' });
+
+  const wrappers = plan.hookEntries ?? [];
+  expect(wrappers.map((entry) => entry.relativePath).sort()).toEqual([
+    'hooks/record-write.mjs',
+    'hooks/session-start.mjs',
+  ]);
+  const sessionWrapper = wrappers.find((entry) => entry.relativePath === 'hooks/session-start.mjs');
+  expect(sessionWrapper?.virtualSource).toContain('const target = "cursor";');
+  expect(sessionWrapper?.virtualSource).toContain('decodeCursorNative');
+  expect(sessionWrapper?.virtualSource).toContain('additional_context');
+  const toolWrapper = wrappers.find((entry) => entry.relativePath === 'hooks/record-write.mjs');
+  expect(toolWrapper?.virtualSource).toContain('tool_output');
+});
+
+it('drops hooks scoped to other targets from the plan', () => {
   const model = plugin();
   const plan = cursorAdapter.plan({
     ...model,
