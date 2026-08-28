@@ -30,7 +30,7 @@ it('runs publint explicitly in CI and the local release audit', async () => {
   const steps = parsed.jobs?.verify?.steps ?? [];
   const rscSteps = parsed.jobs?.['rsc-runtime-micro-eval']?.steps ?? [];
   const packageLintIndex = steps.findIndex((step) => step.run === 'pnpm lint:package');
-  const setup = steps.find((step) => step.uses === 'pnpm/setup@v1');
+  const setup = steps.find((step) => step.uses === 'pnpm/setup@v2');
 
   expect(packageJson.scripts?.['lint:package']).toBe('publint packages/agent-bundle');
   expect(packageJson.scripts?.['audit:release']).toMatch(/^pnpm lint:package && /u);
@@ -40,7 +40,7 @@ it('runs publint explicitly in CI and the local release audit', async () => {
   expect(steps[packageLintIndex - 1]?.run).toBe('pnpm build');
   expect(rscSteps.map((step) => step.uses ?? step.run)).toEqual([
     'actions/checkout@v7',
-    'pnpm/setup@v1',
+    'pnpm/setup@v2',
     'pnpm install --frozen-lockfile',
     'pnpm eval:spot',
   ]);
