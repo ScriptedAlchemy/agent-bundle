@@ -299,13 +299,25 @@ const collectClosure = async ({ aliases, dependencies, entries, publicImports, r
   return { externalImports, files, imports };
 };
 
+// The vendored core links as a workspace package through this manifest. It is
+// workspace-owned rather than upstream source, so it stays out of the closure
+// (like package-manager state) and survives a resync.
+const workspaceLinkManifest = 'core/package.json';
+
 const listFiles = async (root, prefix = '') => {
   const entries = await readdir(join(root, prefix), { withFileTypes: true });
   const paths = [];
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    // The vendored core links as a workspace package, so an install can leave
+    // package-manager state inside the snapshot; only sources join the closure.
+    if (entry.name === 'node_modules') continue;
     const path = join(prefix, entry.name);
     if (entry.isDirectory()) paths.push(...(await listFiles(root, path)));
-    else if (entry.isFile()) paths.push(normalizeRelativePath(path, 'vendored file'));
+    else if (entry.isFile()) {
+      const relativePath = normalizeRelativePath(path, 'vendored file');
+      if (relativePath === workspaceLinkManifest) continue;
+      paths.push(relativePath);
+    }
   }
   return paths;
 };
@@ -482,6 +494,8 @@ const syncSnapshot = async (options) => {
       : await readFile(fallbackLicensePath);
     const patches = await patchRecords(join(output, 'patches'));
 
+    const linkManifestPath = join(output, 'vendor', workspaceLinkManifest);
+    const linkManifest = (await exists(linkManifestPath)) ? await readFile(linkManifestPath) : undefined;
     await rm(join(output, 'vendor'), { force: true, recursive: true });
     await mkdir(join(output, 'vendor'), { recursive: true });
     for (const [path] of [...closure.files].sort(([left], [right]) => left.localeCompare(right))) {
@@ -489,6 +503,10 @@ const syncSnapshot = async (options) => {
       const targetPath = join(output, 'vendor', path);
       await mkdir(dirname(targetPath), { recursive: true });
       await copyFile(sourcePath, targetPath);
+    }
+    if (linkManifest !== undefined) {
+      await mkdir(dirname(linkManifestPath), { recursive: true });
+      await writeFile(linkManifestPath, linkManifest);
     }
     await applyPatches({ output, patches });
 

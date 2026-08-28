@@ -294,6 +294,37 @@ it('verifies the checked-in Inspector snapshot provenance and patches', async ()
   });
 });
 
+it('keeps the workspace link manifest out of the vendored closure and across resyncs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-inspector-link-'));
+  const source = join(root, 'source');
+  const output = join(root, 'inspector');
+  await mkdir(join(source, 'src'), { recursive: true });
+  await Promise.all([
+    writeFile(join(source, 'LICENSE'), 'MIT fixture license\n'),
+    writeFile(join(source, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/client': '2.0.0' },
+      name: 'inspector-fixture',
+      version: '2.2.0',
+    }, null, 2)),
+    writeFile(join(source, 'src', 'entry.tsx'), "export const inspectorFixture = 'Inspector';\n"),
+  ]);
+  const commit = await commitFixtureSource(source);
+  const syncArguments = [
+    '--source', source, '--out', output, '--commit', commit, '--entry', 'src/entry.tsx',
+    '--dependency', 'react', '--mcp-sdk-version', '2.0.0', '--version', '2.2.0',
+  ];
+  await expect(sync(syncArguments)).resolves.toMatchObject({ stderr: '' });
+
+  const linkManifest = '{"name":"@inspector/core","private":true}\n';
+  await mkdir(join(output, 'vendor', 'core'), { recursive: true });
+  await writeFile(join(output, 'vendor', 'core', 'package.json'), linkManifest);
+  await expect(sync(['--verify', '--out', output])).resolves.toMatchObject({ stderr: '' });
+  await expect(sync(syncArguments)).resolves.toMatchObject({ stderr: '' });
+  await expect(readFile(join(output, 'vendor', 'core', 'package.json'), 'utf8')).resolves.toBe(linkManifest);
+  const manifest = JSON.parse(await readFile(join(output, 'UPSTREAM.json'), 'utf8')) as UpstreamManifest;
+  expect(manifest.files.map((file) => file.path)).not.toContain('core/package.json');
+});
+
 it('keeps Inspector network sync behind an explicit maintainer command', async () => {
   const packageJson = JSON.parse(await readFile(join(workspaceRoot, 'package.json'), 'utf8')) as {
     readonly scripts: Readonly<Record<string, string>>;
