@@ -4,3 +4,5 @@ packages:
 allowBuilds:
   '@google/genai': false
   protobufjs: false
+minimumReleaseAgeExclude:
+  - '@rsbuild/core@2.2.1'
