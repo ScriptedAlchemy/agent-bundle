@@ -14,7 +14,7 @@ import {
   waitForSettledWorkbench,
   writeExampleReport,
 } from './support/example-acceptance.ts';
-import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 15_000;
 
@@ -48,7 +48,7 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
-    await page.goto(`${server.url}#skills`);
+    await page.goto(workbenchUrl(server.url, 'skills'));
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'dependency-upgrade', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.skill-tree-item')).toHaveCount(3, { timeout: browserTimeout });
@@ -73,7 +73,7 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     );
     await captureExampleState(page, 'skills-starter', 'skills-populated');
 
-    await page.goto(`${server.url}#hooks`);
+    await page.goto(workbenchUrl(server.url, 'hooks'));
     await waitForSettledWorkbench(page);
     await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
@@ -126,7 +126,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     expect(status).toBe(200);
   };
   try {
-    await page.goto(`${server.url}#hooks`);
+    await page.goto(workbenchUrl(server.url, 'hooks'));
     await waitForSettledWorkbench(page);
     await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
@@ -187,7 +187,7 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
-    await page.goto(`${server.url}#hooks`);
+    await page.goto(workbenchUrl(server.url, 'hooks'));
     await waitForSettledWorkbench(page);
     await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
     const canonicalHookDraft = JSON.stringify({
@@ -285,7 +285,7 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
-    await page.goto(`${server.url}#overview`);
+    await page.goto(workbenchUrl(server.url, 'overview'));
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('See what this bundle publishes, try supported workflows, and rebuild after source changes.', { exact: true })).toBeVisible({ timeout: browserTimeout });

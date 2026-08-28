@@ -11,6 +11,7 @@ import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { workbenchUrl } from './support/workbench-e2e.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
@@ -255,7 +256,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
       }).catch(() => undefined);
     });
 
-    await page.goto(`${foregroundOrigin}#mcp`);
+    await page.goto(workbenchUrl(foregroundOrigin, 'mcp'));
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
@@ -553,7 +554,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     }).catch(() => undefined);
   });
   try {
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
     const runtimeIdentity = page.locator('[data-runtime-provider-session]');
     const runtimeSurface = page.getByLabel('Runtime surface');
@@ -1430,7 +1431,7 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
     }).catch(() => undefined);
   });
   try {
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
     const runtimeIdentity = page.locator('[data-runtime-provider-session]');
     const runtimeSurface = page.getByLabel('Runtime surface');
@@ -1648,7 +1649,7 @@ e2e('renders a compiler-bundled App template through the canonical sandbox URL',
       }
     });
 
-    await page.goto(`${foregroundOrigin}#mcp`);
+    await page.goto(workbenchUrl(foregroundOrigin, 'mcp'));
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
