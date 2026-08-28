@@ -22,7 +22,14 @@ export interface InspectorLogEntry {
 export type InspectorRuntimeEvidenceInput =
   | Readonly<{ readonly kind: 'protocol'; readonly protocol?: DevRuntimeInspectionEnvelope['protocol']; readonly trace: readonly DevRuntimeTraceSpan[] }>
   | Readonly<{ readonly diagnostics: readonly DevRuntimeDiagnostic[]; readonly kind: 'diagnostics' }>
-  | Readonly<{ readonly kind: 'trace'; readonly trace: readonly DevRuntimeTraceSpan[] }>;
+  | Readonly<{
+    /** Span IDs whose details render expanded; meaningful only with onToggleSpan. */
+    readonly expandedSpanIds?: readonly string[];
+    readonly kind: 'trace';
+    /** Presentation-only expand/collapse callback; details always render when absent. */
+    readonly onToggleSpan?: (spanId: string) => void;
+    readonly trace: readonly DevRuntimeTraceSpan[];
+  }>;
 
 type FrameTraceEntry = McpSessionTraceEntry & Readonly<{
   readonly direction: 'client' | 'server';

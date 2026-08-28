@@ -475,6 +475,26 @@ export class RuntimeClient {
     }
   }
 
+  async readRunFlight(runId: string): Promise<Blob> {
+    this.#requireProvider();
+    try {
+      const response = await this.#foreground.protectedResponse(
+        `/api/runtime/runs/${opaqueSegment(runId, 'Runtime run ID')}/flight`,
+      );
+      const contentType = response.headers.get('content-type');
+      const declaredLength = response.headers.get('content-length');
+      if (contentType !== 'application/octet-stream' ||
+        (declaredLength !== null && (!/^(?:0|[1-9]\d*)$/u.test(declaredLength) || Number(declaredLength) > runtimeAssetLimit))) {
+        throw invalid('Runtime Flight response is not valid.');
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > runtimeAssetLimit) throw invalid('Runtime Flight payload exceeds the allowed size.');
+      return new Blob([bytes], { type: contentType });
+    } catch (error) {
+      throw runtimeError(error);
+    }
+  }
+
   async readAsset(request: DevRuntimeAssetRequest): Promise<Blob> {
     this.#requireProvider();
     if (request.path.length === 0) throw invalid('Runtime asset path is not valid.');

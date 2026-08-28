@@ -213,6 +213,7 @@ const runtimePlaygroundController = createRuntimePlaygroundController({
     bootstrap: async () => runtimeBootstrap,
     createRun: async () => run,
     readRun: async () => run,
+    readRunFlight: async () => new Blob(['flight'], { type: 'application/octet-stream' }),
     replayRun: async () => run,
     resetState: async () => state,
   },

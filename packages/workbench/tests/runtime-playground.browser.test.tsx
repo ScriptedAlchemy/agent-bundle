@@ -67,6 +67,23 @@ const run = (id: string): DevRuntimeRun => Object.freeze({
   vector,
 });
 
+const evidenceRun = (id: string): DevRuntimeRun => Object.freeze({
+  ...run(id),
+  result: Object.freeze({
+    agentVisible: Object.freeze({ city: 'London' }),
+    flight: Object.freeze({ bytes: 2, downloadPath: `/api/runtime/runs/${id}/flight`, preview: 'FL', truncated: false }),
+    state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'browser-state', stateVersion: 1 }) }),
+    trace: Object.freeze([Object.freeze({
+      details: Object.freeze({ step: 'render' }),
+      id: 'span-a',
+      phase: 'render',
+      startedAt: '2026-08-15T12:00:00.500Z',
+      status: 'succeeded' as const,
+    })]),
+    tree: Object.freeze([]),
+  }),
+}) as DevRuntimeRun;
+
 const profiles = Object.freeze([{
   claimsRealHostParity: false,
   evidence: 'simulated',
@@ -98,6 +115,7 @@ const client = (resetState: () => Promise<DevRuntimeStateIdentity>): RuntimePlay
   bootstrap: async () => bootstrap(),
   createRun: async (_request: DevRuntimeInvocationRequest) => run('created'),
   readRun: async (id) => run(id),
+  readRunFlight: async () => new Blob(['flight'], { type: 'application/octet-stream' }),
   replayRun: async (_request: DevRuntimeReplayRequest) => run('replayed'),
   resetState: async (_request: DevRuntimeStateResetRequest) => resetState(),
 });
@@ -158,6 +176,55 @@ test('mounts Runtime controls in a supported browser and fences reset interactio
     await expect.element(page.locator('.runtime-status')).toBeFocused();
     controller.dispatch({ tab: 'diagnostics', type: 'selection.tab' });
     await expect.element(page.locator('.runtime-status')).toBeFocused();
+  } finally {
+    controller.close();
+  }
+});
+
+test('downloads the selected Flight payload through the authenticated client and toggles trace span details', { timeout: 15_000 }, async () => {
+  const flightRequests: string[] = [];
+  let rejectDownload = true;
+  const controller = createRuntimePlaygroundController({
+    bootstrap: Object.freeze({
+      history: Object.freeze([evidenceRun('evidence')]),
+      kind: 'available' as const,
+      providerSessionId: vector.providerSessionId,
+      status,
+      surfaces: Object.freeze([surface]),
+    }),
+    client: {
+      ...client(async () => Object.freeze({ stateStoreId: 'browser-state', stateVersion: 2 })),
+      readRunFlight: async (id) => {
+        flightRequests.push(id);
+        if (rejectDownload) throw new Error('The Flight payload is unavailable.');
+        return new Blob(['FL'], { type: 'application/octet-stream' });
+      },
+    },
+    profiles,
+  });
+  try {
+    await render(<RuntimePlayground controller={controller} />);
+    await expect.element(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible();
+
+    await page.getByRole('tab', { name: 'Flight', exact: true }).click();
+    const download = page.getByRole('button', { name: 'Download Flight payload' });
+    await expect.element(download).toBeVisible();
+    await download.click();
+    await expect.element(page.locator('.runtime-request-error[role="alert"]')).toHaveText('The Flight payload is unavailable.');
+    rejectDownload = false;
+    await download.click();
+    await expect.element(page.locator('.runtime-request-error[role="alert"]')).not.toBeVisible();
+    expect(flightRequests).toEqual(['evidence', 'evidence']);
+
+    await page.getByRole('tab', { name: 'Diagnostics', exact: true }).click();
+    const toggle = page.getByRole('button', { name: 'Show span details' });
+    await expect.element(toggle).toBeVisible();
+    await expect.element(page.getByLabel('Runtime render trace')).not.toContainText('"step": "render"');
+    await toggle.click();
+    await expect.element(page.getByRole('button', { name: 'Hide span details' })).toHaveAttribute('aria-expanded', 'true');
+    await expect.element(page.getByLabel('Runtime render trace')).toContainText('"step": "render"');
+    await page.getByRole('button', { name: 'Hide span details' }).click();
+    await expect.element(page.getByLabel('Runtime render trace')).not.toContainText('"step": "render"');
   } finally {
     controller.close();
   }

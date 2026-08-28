@@ -5,8 +5,10 @@ import { InspectorRuntimeEvidence } from './inspector/adapter/inspector-session-
 import type { RuntimeInspectorTab } from './runtime-model.ts';
 
 export interface RuntimeInspectorProps {
+  readonly expandedTraceSpanIds?: readonly string[];
   readonly onDownloadFlight?: (run: DevRuntimeRun) => void;
   readonly onTabChange?: (tab: RuntimeInspectorTab) => void;
+  readonly onToggleTraceSpan?: (spanId: string) => void;
   readonly run?: DevRuntimeRun;
   readonly status?: DevRuntimeStatus;
   readonly surface?: DevRuntimeSurface;
@@ -46,7 +48,7 @@ const resultDiagnostics = (run: DevRuntimeRun | undefined, status: DevRuntimeSta
   ...(run?.status === 'failed' ? run.diagnostics : []),
 ];
 
-export const RuntimeInspector = ({ onDownloadFlight, onTabChange, run, status, surface, tab }: RuntimeInspectorProps): React.ReactNode => {
+export const RuntimeInspector = ({ expandedTraceSpanIds, onDownloadFlight, onTabChange, onToggleTraceSpan, run, status, surface, tab }: RuntimeInspectorProps): React.ReactNode => {
   const [internalTab, setInternalTab] = useState<RuntimeInspectorTab>('tree');
   const [treeExpanded, setTreeExpanded] = useState(true);
   const [showProps, setShowProps] = useState(false);
@@ -112,7 +114,7 @@ export const RuntimeInspector = ({ onDownloadFlight, onTabChange, run, status, s
         {selected === undefined ? <p>No state evidence is available.</p> : <dl className="runtime-inspector-state"><div><dt>State store</dt><dd>{selected.state.identity.stateStoreId}</dd></div><div><dt>State version</dt><dd>{selected.state.identity.stateVersion}</dd></div></dl>}
         {selected?.state.snapshot === undefined ? undefined : <pre><code>{display(selected.state.snapshot)}</code></pre>}
       </> : undefined}
-      {selectedTab === 'diagnostics' ? <><InspectorRuntimeEvidence evidence={{ diagnostics, kind: 'diagnostics' }} />{selected === undefined ? undefined : <InspectorRuntimeEvidence evidence={{ kind: 'trace', trace: selected.trace }} />}</> : undefined}
+      {selectedTab === 'diagnostics' ? <><InspectorRuntimeEvidence evidence={{ diagnostics, kind: 'diagnostics' }} />{selected === undefined ? undefined : <InspectorRuntimeEvidence evidence={{ expandedSpanIds: expandedTraceSpanIds, kind: 'trace', onToggleSpan: onToggleTraceSpan, trace: selected.trace }} />}</> : undefined}
     </section>
   </section>;
 };

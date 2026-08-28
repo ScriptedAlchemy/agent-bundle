@@ -92,6 +92,7 @@ const deferred = <Value>(): Deferred<Value> => {
 
 const runtimeFetch = (options: {
   readonly asset?: Response;
+  readonly flight?: Response;
   readonly runs?: readonly DevRuntimeRun[];
   readonly status?: DevRuntimeStatus | null;
 } = {}): { readonly fetch: typeof fetch; readonly requests: RecordedRequest[] } => {
@@ -108,6 +109,9 @@ const runtimeFetch = (options: {
       if (url === '/api/runtime/runs/run%20a') return json({ run: run('run a') });
       if (url === '/api/runtime/runs/run%20a/replay' && init?.method === 'POST') return json({ run: run('run-replayed') });
       if (url === '/api/runtime/state/reset' && init?.method === 'POST') return json({ state: { stateStoreId: 'state-a', stateVersion: 2 } });
+      if (url === '/api/runtime/runs/run%20a/flight' && init?.method === undefined) {
+        return options.flight ?? new Response(new Uint8Array([70, 76]), { headers: { 'content-type': 'application/octet-stream' } });
+      }
       if (url === '/api/runtime/assets/app-weather/assets/weather%20app.js?generation=generation%20a') {
         return options.asset ?? new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'application/javascript' } });
       }
@@ -373,8 +377,10 @@ it('uses the exact imported request bodies and encoded opaque runtime paths', as
   await client.replayRun({ expectedGenerationId: 'generation-a', mode: 'exact', runId: 'run a' });
   await client.resetState({ expectedGenerationId: 'generation-a', seed: { city: 'London' }, stateStoreId: 'state-a' });
   await expect(client.readAsset({ path: ['assets', 'weather app.js'], runtimeGenerationId: 'generation a', surfaceId: 'app-weather' })).resolves.toBeInstanceOf(Blob);
+  await expect(client.readRunFlight('run a')).resolves.toBeInstanceOf(Blob);
 
   expect(fixture.requests.map((request) => request.url)).toContain('/api/runtime/runs/run%20a');
+  expect(fixture.requests.map((request) => request.url)).toContain('/api/runtime/runs/run%20a/flight');
   expect(fixture.requests.map((request) => request.url)).toContain('/api/runtime/runs/run%20a/replay');
   expect(fixture.requests.map((request) => request.url)).toContain('/api/runtime/assets/app-weather/assets/weather%20app.js?generation=generation%20a');
   expect(fixture.requests.find((request) => request.url === '/api/runtime/runs')?.body).toBe(
@@ -438,6 +444,23 @@ it('rejects oversized, untyped, or unsupported protected assets', async () => {
       surfaceId: 'app-weather',
     })).rejects.toMatchObject({ code: 'AB8206' });
   }
+});
+
+it('rejects oversized or mistyped protected Flight payloads', async () => {
+  const oversized = new Response(new Uint8Array(4 * 1024 * 1024 + 1), { headers: { 'content-type': 'application/octet-stream' } });
+  const wrongType = new Response(new Uint8Array([1]), { headers: { 'content-type': 'application/json' } });
+  for (const flight of [oversized, wrongType]) {
+    const fixture = runtimeFetch({ flight });
+    const client = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));
+    await client.bootstrap();
+    await expect(client.readRunFlight('run a')).rejects.toMatchObject({ code: 'AB8206' });
+  }
+});
+
+it('rejects Flight reads before an authoritative provider bootstrap', async () => {
+  const fixture = runtimeFetch();
+  const client = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));
+  await expect(client.readRunFlight('run a')).rejects.toMatchObject({ code: 'AB8201' });
 });
 
 it('preserves own __proto__ keys as immutable prototype-inert JSON snapshots', async () => {

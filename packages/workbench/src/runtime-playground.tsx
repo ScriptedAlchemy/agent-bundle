@@ -31,6 +31,7 @@ export type RuntimePlaygroundClient = Readonly<{
   bootstrap(): Promise<RuntimeBootstrap>;
   createRun(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun>;
   readRun(runId: string): Promise<DevRuntimeRun>;
+  readRunFlight(runId: string): Promise<Blob>;
   replayRun(request: DevRuntimeReplayRequest): Promise<DevRuntimeRun>;
   resetState(request: DevRuntimeStateResetRequest): Promise<DevRuntimeStateIdentity>;
 }>;
@@ -38,6 +39,7 @@ export type RuntimePlaygroundClient = Readonly<{
 export interface RuntimePlaygroundController {
   close(): void;
   dispatch(action: RuntimeModelAction): void;
+  downloadRunFlight(runId: string): Promise<Blob>;
   readonly error: string | undefined;
   receive(event: ProjectEventMessage): Promise<void>;
   readonly model: RuntimeModel;
@@ -112,6 +114,11 @@ const isCorrelatedForegroundSuccess = (previous: RuntimeModel, action: RuntimeMo
 
 class RuntimePlaygroundControllerImpl implements RuntimePlaygroundController {
   readonly #client: RuntimePlaygroundClient;
+
+  async downloadRunFlight(runId: string): Promise<Blob> {
+    return this.#client.readRunFlight(runId);
+  }
+
   readonly #listeners = new Set<(model: RuntimeModel) => void>();
   #effectDrain: Promise<void> | undefined;
   #eventTail: Promise<void> = Promise.resolve();
@@ -423,6 +430,19 @@ const previousProviderOutput = (run: DevRuntimeRun): string => {
 const resetSeedLabel = (request: DevRuntimeStateResetRequest): string =>
   request.seed === undefined ? 'No fixture seed' : JSON.stringify(request.seed);
 
+const saveFlightPayload = (payload: Blob, filename: string): void => {
+  const url = URL.createObjectURL(payload);
+  try {
+    const anchor = globalThis.document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.rel = 'noopener';
+    anchor.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+};
+
 export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlaygroundLiveMcpPageAdapter, registerAppPreviewLifecycle, renderAppPreview }: RuntimePlaygroundProps): React.ReactNode => {
   const [model, setModel] = useState(controller.model);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -435,6 +455,7 @@ export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlay
   const resetEffectId = useRef<string | undefined>(undefined);
   const priorConfirmation = useRef(model.confirmation);
   const [confirmationPending, setConfirmationPending] = useState(false);
+  const [flightDownloadError, setFlightDownloadError] = useState<string | undefined>(undefined);
   const surface = selectedSurface(model);
   const run = selectedRun(model);
   const evidenceSurface = run === undefined ? surface : model.surfaces.find((entry) => entry.id === run.surfaceId) ?? surface;
@@ -628,7 +649,27 @@ export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlay
             status={model.status}
             surface={surface}
           />
-          <RuntimeInspector onTabChange={(tab) => controller.dispatch({ tab, type: 'selection.tab' })} run={run} status={model.status} surface={evidenceSurface} tab={model.selectedTab} />
+          {flightDownloadError === undefined ? undefined : <p className="runtime-request-error" role="alert">{flightDownloadError}</p>}
+          <RuntimeInspector
+            expandedTraceSpanIds={model.expandedTraceSpanIds}
+            onDownloadFlight={(flightRun) => {
+              void (async () => {
+                try {
+                  const payload = await controller.downloadRunFlight(flightRun.id);
+                  saveFlightPayload(payload, `runtime-run-${flightRun.id}.flight.bin`);
+                  setFlightDownloadError(undefined);
+                } catch (error) {
+                  setFlightDownloadError(error instanceof Error ? error.message : 'The Flight payload download failed.');
+                }
+              })();
+            }}
+            onTabChange={(tab) => controller.dispatch({ tab, type: 'selection.tab' })}
+            onToggleTraceSpan={(spanId) => controller.dispatch({ spanId, type: 'trace.toggle' })}
+            run={run}
+            status={model.status}
+            surface={evidenceSurface}
+            tab={model.selectedTab}
+          />
         </React.Suspense>
       </div>
     </div>
