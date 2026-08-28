@@ -13,7 +13,6 @@ import {
   hasCanonicalAfterCursor,
   validateOutageLedger,
   type ConsoleErrorRecord,
-  type NetworkLedgerEntry,
 } from './support/packed-outage-ledger.ts';
 
 const execFile = promisify((await import('node:child_process')).execFile);
@@ -1141,18 +1140,26 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       for (const route of mobileRoutes) {
         const openedAt = Date.now();
         leaveActiveMobileRoute(openedAt);
+        const logsStreamResponse = route.label === 'Logs'
+          ? page.waitForResponse((response) => {
+            const url = new URL(response.url());
+            return response.request().method() === 'GET' && url.origin === origin &&
+              url.pathname === '/api/logs/stream' && hasCanonicalAfterCursor(url);
+          }, { timeout: 0 })
+          : undefined;
         await page.getByRole('link', { name: route.label, exact: true }).click();
         await expect(page.getByRole('heading', { name: route.heading })).toBeVisible({ timeout: browserTimeout });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         const routeUrls = [...(postRecoveryNavigationUrls.get(route.label) ?? [])];
         if (route.label === 'Logs') {
-          const logsStreams = (): readonly NetworkLedgerEntry[] => browserRequests.slice(mobileNavigationRequestIndex).filter((request) => {
-            if (request.at < openedAt || request.method !== 'GET' || request.origin !== origin || request.path !== '/api/logs/stream') return false;
-            const url = new URL(request.url);
-            return url.origin === origin && url.pathname === '/api/logs/stream' && hasCanonicalAfterCursor(url);
-          });
-          await expect.poll(() => logsStreams().length, { timeout: browserTimeout }).toBe(1);
-          const streamUrl = logsStreams()[0]!.url;
+          const response = await logsStreamResponse;
+          if (response === undefined || !response.ok()) throw new Error('The Logs navigation stream did not return a successful response.');
+          const streamUrl = response.url();
+          const stream = browserRequestByPlaywrightRequest.get(response.request());
+          if (
+            stream === undefined || stream.at < openedAt || stream.respondedAt === undefined ||
+            stream.status !== response.status()
+          ) throw new Error('The Logs navigation stream response was not recorded in the network ledger.');
           respondedNavigationStreams.add(streamUrl);
           routeUrls.push(streamUrl);
         }
