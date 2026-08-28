@@ -121,7 +121,7 @@ it('lays both host manifests over one shared bundle root', () => {
   expect(documents['AGENTS.md']).toContain('Cursor / VS Code / GitHub Copilot');
 });
 
-it('emits each shared surface exactly once and suffixes host hook wrappers', () => {
+it('emits each shared surface exactly once with no duplicate artifact paths', () => {
   const plan = planBundle(bundleModel);
   const paths = plan.entries.map((entry) => entry.relativePath);
   expect(paths.filter((path) => path === 'skills/review/SKILL.md')).toHaveLength(1);
@@ -161,11 +161,10 @@ it('reports a bundle-target conflict instead of silently overwriting an entry', 
     ],
   };
   const plan = planBundle(model);
-  const conflict = expect.objectContaining({ code: 'plugin.artifact.conflict', severity: 'error' });
-  expect(plan.diagnostics).toEqual([conflict, conflict]);
+  expect(plan.diagnostics).toEqual([expect.objectContaining({ code: 'plugin.artifact.conflict', severity: 'error' })]);
 });
 
-it('builds the unified bundle root on disk with compiled per-host hook wrappers', async () => {
+it('builds the unified bundle root on disk with a compiled universal hook wrapper', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-plugin-bundle-'));
   const outputRoot = join(root, 'dist');
   const skillRoot = join(root, 'skills', 'review');

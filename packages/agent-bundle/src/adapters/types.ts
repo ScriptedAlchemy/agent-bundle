@@ -99,10 +99,13 @@ export interface StandardPluginArtifactsInput {
   readonly mcp?: Record<string, unknown>;
   /** Artifact-relative path for the MCP document; defaults to the plugin-root `.mcp.json` convention. */
   readonly mcpRelativePath?: string;
+  /**
+   * Emit the target-agnostic skill and asset copy entries; a composing target
+   * that lays two host plans into one root emits them from one side only.
+   */
+  readonly sharedCopyEntries?: boolean;
   readonly mcpValid: boolean;
   readonly model: NormalizedPlugin;
-  /** Host names whose native hooks feed this plan's provenance; defaults to the plan's own target name. */
-  readonly nativeHookTargetNames?: readonly string[];
   readonly plugin: Record<string, unknown>;
   readonly pluginRelativePath: string;
   readonly targetName: string;
@@ -142,9 +145,8 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
   const hookSourceInputs = model.hooks
     .filter((hook) => isSelected(hook.targets))
     .map((hook) => hook.provenance.sourcePath);
-  const nativeHookTargets = input.nativeHookTargetNames ?? [targetName];
   const nativeHookSourceInputs = model.nativeHooks
-    ?.filter((hook) => nativeHookTargets.includes(hook.target))
+    ?.filter((hook) => hook.target === targetName)
     .flatMap((hook) => [hook.provenance.sourcePath, hook.source]) ?? [];
   const skillSourceInputs = model.skills
     .filter((skill) => isSelected(skill.targets))
@@ -191,7 +193,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
       sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
     });
   }
-  for (const skill of model.skills) {
+  for (const skill of input.sharedCopyEntries === false ? [] : model.skills) {
     if (!isSelected(skill.targets)) continue;
     for (const resource of skill.resources) {
       entries.push({
@@ -204,7 +206,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
     }
   }
 
-  for (const asset of model.assets ?? []) {
+  for (const asset of input.sharedCopyEntries === false ? [] : model.assets ?? []) {
     if (!isSelected(asset.targets)) continue;
     entries.push({
       bytes: asset.bytes,

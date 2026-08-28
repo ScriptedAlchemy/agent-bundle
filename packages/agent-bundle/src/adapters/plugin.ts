@@ -1,8 +1,17 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import type { NormalizedPlugin } from '../core/types.ts';
+import { stableJson } from '../core/digest.ts';
+import type { NormalizedHook, NormalizedPlugin } from '../core/types.ts';
+import {
+  allMcpPathTokenFields,
+  createMcpPathTokenResolver,
+  standardMcpPathTokens,
+} from '../services/mcp-path-tokens.ts';
+import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import claudeCapabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
 import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
+import { claudeAdapter, claudeArtifactPaths, claudeHooksValidator, planClaudeArtifacts } from './claude.ts';
+import { codexAdapter, codexArtifactPaths, codexPluginDocumentValidator, planCodexArtifacts } from './codex.ts';
 import {
   encodeNativeHookPlaygroundInput,
   encodeNativeHookPlaygroundOutput,
@@ -12,30 +21,9 @@ import {
   type TargetHookContract,
 } from './hook-contract.ts';
 import {
-  allMcpPathTokenFields,
-  createMcpPathTokenResolver,
-  standardMcpPathTokens,
-} from '../services/mcp-path-tokens.ts';
-import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
-import { claudeAdapter, planClaudeArtifacts } from './claude.ts';
-import { codexAdapter, planCodexArtifacts } from './codex.ts';
-import claudeSchemaProvenance from './schemas/claude/PROVENANCE.json' with { type: 'json' };
-import claudeHooksSchema from './schemas/claude/hooks.schema.json' with { type: 'json' };
-import claudeMarketplaceSchema from './schemas/claude/marketplace.schema.json' with { type: 'json' };
-import claudeMcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
-import claudePluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
-import codexMarketplaceSchema from './schemas/codex/marketplace.schema.json' with { type: 'json' };
-import codexMcpSchema from './schemas/codex/mcp.schema.json' with { type: 'json' };
-import codexPluginSchema from './schemas/codex/plugin.schema.json' with { type: 'json' };
-import { stableJson } from '../core/digest.ts';
-import {
-  createAdapterValidator,
-  schemaDescriptorsFrom,
   sortedEntries,
   sourceInputs,
   standardArtifactLayout,
-  validateJsonSchemaDocument,
-  validateModernMcpDocument,
   type TargetAdapter,
   type TargetArtifactEntry,
   type TargetArtifactLayout,
@@ -57,20 +45,32 @@ const pluginName = 'plugin';
  * shell, and its hook envelope and output contract match Claude's - so one
  * Claude-format hook document plus one runtime-host-detecting wrapper per
  * hook serves both hosts. Per-host `nativeHooks` passthrough stays with the
- * host targets. A root Agent Plugins v1 manifest is deliberately not emitted:
- * Codex resolves it ahead of `.codex-plugin/plugin.json`, which would mask
- * this bundle's relocated MCP pointer.
+ * host targets.
+ *
+ * An Agent Plugins v1 root `plugin.json` is deliberately not emitted: Codex
+ * selects it ahead of `.codex-plugin/plugin.json` and, under that format,
+ * unconditionally disables plugin hooks and apps and forces MCP declarations
+ * into a root `mcp.json` - a silent regression for this bundle's hook and
+ * relocated-MCP surfaces.
  */
-const claudePaths = Object.freeze({
-  marketplace: '.claude-plugin/marketplace.json',
-  mcp: '.mcp.json',
-  plugin: '.claude-plugin/plugin.json',
-});
-const codexPaths = Object.freeze({
-  marketplace: '.agents/plugins/marketplace.json',
-  mcp: '.codex-plugin/mcp.json',
-  plugin: '.codex-plugin/plugin.json',
-});
+const codexBundleMcpPath = '.codex-plugin/mcp.json';
+
+/**
+ * Union matcher table for the shared hook document. Codex documents Edit and
+ * Write as apply_patch aliases and Claude never emits apply_patch, so the
+ * superset is safe on both; ^Read$ has no Codex tool and is inert there. The
+ * assertion keeps a future capability-table divergence from silently shipping
+ * one host's matcher to the other.
+ */
+const reconciledMatcherKeys = new Set(['file.read', 'file.write']);
+const claudeMatchers: Readonly<Record<string, string>> = claudeCapabilityTable.hooks.matchers;
+const codexMatchers: Readonly<Record<string, string>> = codexCapabilityTable.hooks.matchers;
+for (const key of new Set([...Object.keys(claudeMatchers), ...Object.keys(codexMatchers)])) {
+  if (reconciledMatcherKeys.has(key)) continue;
+  if (claudeMatchers[key] !== codexMatchers[key]) {
+    throw new Error(`Agent plugin bundle matcher table cannot reconcile diverged hook matcher ${JSON.stringify(key)}.`);
+  }
+}
 
 const bundleHookContract: TargetHookContract = Object.freeze({
   // ${CLAUDE_PLUGIN_ROOT} reaches both hosts: Claude substitutes its own
@@ -80,73 +80,50 @@ const bundleHookContract: TargetHookContract = Object.freeze({
   encodePlaygroundInput: encodeNativeHookPlaygroundInput,
   encodePlaygroundOutput: encodeNativeHookPlaygroundOutput,
   eventNames: claudeCapabilityTable.hooks.events,
-  manifestPath: 'hooks/hooks.json',
-  // Union matcher table: Codex documents Edit/Write as apply_patch aliases,
-  // and Claude never emits apply_patch, so the superset is safe on both;
-  // ^Read$ has no Codex tool and is inert there.
+  manifestPath: claudeArtifactPaths.hooksManifest,
   matchers: Object.freeze({
-    ...claudeCapabilityTable.hooks.matchers,
-    'file.write': codexCapabilityTable.hooks.matchers['file.write'],
+    ...claudeMatchers,
+    'file.write': codexMatchers['file.write']!,
   }),
   readNativeCommands: readStandardNativeHookCommands,
-  wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
+  wrapperPath: (hook: NormalizedHook) => `hooks/${hook.name}.mjs`,
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Universal'),
 } satisfies TargetHookContract);
 
-/**
- * The pinned Codex schema const-locks the manifest's `mcpServers` pointer to
- * its conventional root path. The field is a path pointer and the bundle
- * relocates the Codex MCP document into the manifest directory, so the
- * bundle's manifest validator accepts exactly the conventional path or the
- * bundle's relocated path - nothing wider.
- */
-const withRelocatedPointer = (
-  schema: Record<string, unknown>,
-  overrides: Readonly<Record<string, string>>,
-): Record<string, unknown> => {
-  const cloned = structuredClone(schema);
-  const properties = cloned['properties'] as Record<string, Record<string, unknown>>;
-  for (const [field, relocated] of Object.entries(overrides)) {
-    const canonical = properties[field]?.['const'];
-    if (typeof canonical !== 'string') throw new Error(`Pinned schema pointer ${field} is not a const string.`);
-    properties[field] = { enum: [canonical, relocated], type: 'string' };
-  }
-  return cloned;
+const prefixedSchemas = <Schema extends Readonly<{ readonly name: string }>>(
+  prefix: string,
+  schemas: readonly Schema[],
+  omit?: string,
+): readonly Schema[] =>
+  schemas.filter((schema) => schema.name !== omit)
+    .map((schema) => Object.freeze({ ...schema, name: `${prefix}-${schema.name}` }));
+
+const hostValidation = (adapter: TargetAdapter, name: string) => {
+  const validation = adapter.artifactValidation;
+  if (validation === undefined) throw new Error(`Agent plugin bundle requires the ${name} artifact validation contract.`);
+  return validation;
 };
-
-const codexBundlePluginSchema = withRelocatedPointer(codexPluginSchema, {
-  mcpServers: `./${codexPaths.mcp}`,
-});
-
-const validator = createAdapterValidator();
-const validateClaudePlugin = validator.compile(claudePluginSchema);
-const validateHooks = validator.compile(claudeHooksSchema);
-const validateClaudeMcp = validator.compile(claudeMcpSchema);
-const validateClaudeMarketplace = validator.compile(claudeMarketplaceSchema);
-const validateCodexPlugin = validator.compile(codexBundlePluginSchema);
-const validateCodexMcp = validator.compile(codexMcpSchema);
-const validateCodexMarketplace = validator.compile(codexMarketplaceSchema);
+const claudeValidation = hostValidation(claudeAdapter, 'Claude');
+const codexValidation = hostValidation(codexAdapter, 'Codex');
 
 const artifactValidation = Object.freeze({
   documents: Object.freeze([
     // One shared Claude-format hook document serves both hosts; the pinned
     // Codex hooks schema is byte-identical apart from its $id.
     Object.freeze({ path: bundleHookContract.manifestPath, required: false, schema: 'claude-hooks' }),
-    Object.freeze({ path: claudePaths.marketplace, required: false, schema: 'claude-marketplace' }),
-    Object.freeze({ path: claudePaths.mcp, required: false, schema: 'claude-mcp' }),
-    Object.freeze({ path: claudePaths.plugin, required: true, schema: 'claude-plugin' }),
-    Object.freeze({ path: codexPaths.marketplace, required: false, schema: 'codex-marketplace' }),
-    Object.freeze({ path: codexPaths.mcp, required: false, schema: 'codex-mcp' }),
-    Object.freeze({ path: codexPaths.plugin, required: true, schema: 'codex-plugin' }),
+    Object.freeze({ path: claudeArtifactPaths.marketplace, required: false, schema: 'claude-marketplace' }),
+    Object.freeze({ path: claudeArtifactPaths.mcp, required: false, schema: 'claude-mcp' }),
+    Object.freeze({ path: claudeArtifactPaths.plugin, required: true, schema: 'claude-plugin' }),
+    Object.freeze({ path: codexArtifactPaths.marketplace, required: false, schema: 'codex-marketplace' }),
+    Object.freeze({ path: codexBundleMcpPath, required: false, schema: 'codex-mcp' }),
+    Object.freeze({ path: codexArtifactPaths.plugin, required: true, schema: 'codex-plugin' }),
   ]),
   schemas: Object.freeze([
-    Object.freeze({ name: 'claude-hooks', validate: validateJsonSchemaDocument(validateHooks) }),
-    Object.freeze({ name: 'claude-marketplace', validate: validateJsonSchemaDocument(validateClaudeMarketplace) }),
-    Object.freeze({ name: 'claude-mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateClaudeMcp)) }),
-    Object.freeze({ name: 'claude-plugin', validate: validateJsonSchemaDocument(validateClaudePlugin) }),
-    Object.freeze({ name: 'codex-marketplace', validate: validateJsonSchemaDocument(validateCodexMarketplace) }),
-    Object.freeze({ name: 'codex-mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateCodexMcp)) }),
-    Object.freeze({ name: 'codex-plugin', validate: validateJsonSchemaDocument(validateCodexPlugin) }),
+    ...prefixedSchemas('claude', claudeValidation.schemas),
+    ...prefixedSchemas('codex', codexValidation.schemas, 'plugin').filter((schema) => schema.name !== 'codex-hooks'),
+    // The bundle's Codex manifest points at the relocated MCP document, so its
+    // validator widens the pinned pointer to that one relocation.
+    Object.freeze({ name: 'codex-plugin', validate: (document: unknown) => codexPluginDocumentValidator(codexBundleMcpPath)(document) }),
   ]),
 });
 
@@ -156,19 +133,16 @@ const metadata = Object.freeze({
   capabilitySha256: claudeAdapter.metadata.capabilitySha256,
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
-  // marketplace, MCP, and plugin documents, plus the one shared Claude-format
-  // hook document (the pinned Codex hooks schema differs only in its $id).
+  // documents, with one shared Claude-format hook schema (the pinned Codex
+  // hooks schema differs only in its $id).
   schemas: Object.freeze([
-    ...schemaDescriptorsFrom(claudeSchemaProvenance, claudeSchemaProvenance.observedCliVersion)
-      .map((schema) => Object.freeze({ ...schema, name: `claude-${schema.name}` })),
-    ...codexAdapter.metadata.schemas
-      .filter((schema) => schema.name !== 'hooks')
-      .map((schema) => Object.freeze({ ...schema, name: `codex-${schema.name}` })),
+    ...prefixedSchemas('claude', claudeAdapter.metadata.schemas),
+    ...prefixedSchemas('codex', codexAdapter.metadata.schemas, 'hooks'),
   ]),
 });
 
 const mcpRuntime = createTargetMcpRuntime({
-  manifestPath: claudePaths.mcp,
+  manifestPath: claudeArtifactPaths.mcp,
   remoteTypes: ['http'],
   validatedButNonModernRemoteTypes: ['sse'],
   resolveValue: createMcpPathTokenResolver({
@@ -192,7 +166,7 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
   skills: standardArtifactLayout.skills,
 });
 
-const { errorDiagnostic } = createTargetDiagnostics(pluginName, 'Agent plugin bundle');
+const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(pluginName, 'Agent plugin bundle');
 
 const agentsDocument = (model: NormalizedPlugin): string => {
   const description = model.metadata.description ?? model.metadata.name;
@@ -217,40 +191,43 @@ const agentsDocument = (model: NormalizedPlugin): string => {
     '- `.claude-plugin/` — Claude Code manifest and host documents.',
     '- `.codex-plugin/` — Codex manifest and host documents.',
     '- `.mcp.json` — Claude Code MCP configuration (plugin-root convention).',
-    '- `skills/` — agent skills (`SKILL.md` per skill), shared by every host.',
     '- `hooks/` — one `hooks.json` and one host-detecting wrapper per hook, shared by both hosts.',
+    '- `skills/` — agent skills (`SKILL.md` per skill), shared by every host.',
     '- `scripts/`, `mcp/`, `mcp-apps/`, `assets/` — compiled shared surfaces.',
     '',
   ].join('\n');
 };
 
+const identicalStrings = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
 const mergeEntries = (
   diagnostics: Diagnostic[],
-  sides: readonly (readonly TargetArtifactEntry[])[],
+  left: readonly TargetArtifactEntry[],
+  right: readonly TargetArtifactEntry[],
 ): TargetArtifactEntry[] => {
   const merged = new Map<string, TargetArtifactEntry>();
-  for (const entries of sides) {
-    for (const entry of entries) {
-      const existing = merged.get(entry.relativePath);
-      if (existing === undefined) {
-        merged.set(entry.relativePath, entry);
-        continue;
-      }
-      const identical = existing.kind === entry.kind && (
-        entry.kind === 'write'
-          ? existing.kind === 'write' && existing.content === entry.content
-          : existing.kind === 'copy' && existing.source === entry.source);
-      if (!identical) {
-        diagnostics.push(errorDiagnostic(
-          'plugin.artifact.conflict',
-          `Agent plugin bundle hosts emitted conflicting content for ${JSON.stringify(entry.relativePath)}.`,
-        ));
-        continue;
-      }
-      const combinedInputs = sourceInputs(...existing.sourceInputs, ...entry.sourceInputs);
-      if (combinedInputs.length !== existing.sourceInputs.length) {
-        merged.set(entry.relativePath, Object.freeze({ ...existing, sourceInputs: combinedInputs }));
-      }
+  for (const entry of [...left, ...right]) {
+    const existing = merged.get(entry.relativePath);
+    if (existing === undefined) {
+      merged.set(entry.relativePath, entry);
+      continue;
+    }
+    const identical = entry.kind === 'write'
+      ? existing.kind === 'write' && existing.content === entry.content
+      : existing.kind === 'copy' && existing.source === entry.source;
+    if (!identical) {
+      diagnostics.push(errorDiagnostic(
+        'plugin.artifact.conflict',
+        `Agent plugin bundle hosts emitted conflicting content for ${JSON.stringify(entry.relativePath)}.`,
+      ));
+      continue;
+    }
+    if (!identicalStrings(existing.sourceInputs, entry.sourceInputs)) {
+      merged.set(entry.relativePath, Object.freeze({
+        ...existing,
+        sourceInputs: sourceInputs(...existing.sourceInputs, ...entry.sourceInputs),
+      }));
     }
   }
   return [...merged.values()];
@@ -264,29 +241,27 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const generatedHooks = planHooks(model, pluginName, bundleHookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   const hookDocument = generatedHooks.document;
-  const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
-  if (hookDocument !== undefined && !hookDocumentValid) {
-    for (const issue of validateHooks.errors ?? []) {
-      diagnostics.push(errorDiagnostic('plugin.hooks.schema', `Agent plugin bundle hook document is invalid at ${issue.instancePath || '/'}: ${issue.message ?? 'schema validation failed'}.`));
-    }
+  const hookDocumentValid = hookDocument !== undefined && claudeHooksValidator(hookDocument);
+  if (hookDocument !== undefined) {
+    diagnostics.push(...schemaDiagnostics('hooks', hookDocumentValid, claudeHooksValidator.errors));
   }
 
   const claudeSide = planClaudeArtifacts(hookFreeModel, { targetName: pluginName });
   const codexSide = planCodexArtifacts(hookFreeModel, {
-    mcpRelativePath: codexPaths.mcp,
-    pluginDocumentValidator: validateCodexPlugin,
+    mcpRelativePath: codexBundleMcpPath,
+    sharedCopyEntries: false,
     targetName: pluginName,
   });
 
   diagnostics.push(...claudeSide.diagnostics, ...codexSide.diagnostics);
-  const entries = mergeEntries(diagnostics, [claudeSide.entries, codexSide.entries]);
+  const entries = mergeEntries(diagnostics, claudeSide.entries, codexSide.entries);
   const targetSourceInputs = model.targets
     .filter((target) => target.name === pluginName)
     .map((target) => target.provenance.sourcePath);
   if (hookDocument !== undefined && hookDocumentValid) {
     const hookSourceInputs = model.hooks
       .filter((hook) => hook.targets.includes(pluginName))
-      .flatMap((hook) => [hook.provenance.sourcePath, hook.source]);
+      .map((hook) => hook.provenance.sourcePath);
     entries.push({
       content: `${stableJson(hookDocument)}\n`,
       kind: 'write',
@@ -312,7 +287,7 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout,
   capabilities: Object.freeze({
-    marketplace: true,
+    marketplace: claudeAdapter.capabilities.marketplace === true && codexAdapter.capabilities.marketplace === true,
     hooks: claudeAdapter.capabilities.hooks === true && codexAdapter.capabilities.hooks === true,
     mcp: claudeAdapter.capabilities.mcp === true && codexAdapter.capabilities.mcp === true,
     skills: claudeAdapter.capabilities.skills === true && codexAdapter.capabilities.skills === true,

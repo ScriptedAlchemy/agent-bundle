@@ -53,11 +53,22 @@ declare module '../core/types.ts' {
 }
 
 const claudeName = 'claude';
+
+/** Claude Code's conventional artifact document paths, shared with the unified bundle adapter. */
+export const claudeArtifactPaths = Object.freeze({
+  hooksManifest: 'hooks/hooks.json',
+  marketplace: '.claude-plugin/marketplace.json',
+  mcp: '.mcp.json',
+  plugin: '.claude-plugin/plugin.json',
+});
 const validator = createAdapterValidator();
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 const validateHooks = validator.compile(hooksSchema);
+
+/** The pinned Claude hooks validator, shared with the unified bundle adapter. */
+export const claudeHooksValidator = validateHooks;
 const hookContract = Object.freeze({
   commandRoot: '${CLAUDE_PLUGIN_ROOT}',
   encodePlaygroundInput: encodeNativeHookPlaygroundInput,
@@ -245,19 +256,16 @@ export const planClaudeArtifacts = (
     hookManifestPath: hookContract.manifestPath,
     isSelected,
     marketplace,
-    marketplaceRelativePath: '.claude-plugin/marketplace.json',
+    marketplaceRelativePath: claudeArtifactPaths.marketplace,
     marketplaceValid,
     mcp,
     mcpValid,
     model,
-    nativeHookTargetNames: [claudeName],
     plugin,
-    pluginRelativePath: '.claude-plugin/plugin.json',
+    pluginRelativePath: claudeArtifactPaths.plugin,
     targetName,
   });
 };
-
-const plan = (model: NormalizedPlugin): TargetArtifactPlan => planClaudeArtifacts(model);
 
 export const claudeAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
@@ -274,5 +282,5 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   mcpRuntime,
   name: claudeName,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.claude?.nativeHooks,
-  plan,
+  plan: planClaudeArtifacts,
 });
