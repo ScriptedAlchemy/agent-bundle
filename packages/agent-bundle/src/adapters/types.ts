@@ -97,8 +97,12 @@ export interface StandardPluginArtifactsInput {
   readonly marketplaceRelativePath: string;
   readonly marketplaceValid: boolean;
   readonly mcp?: Record<string, unknown>;
+  /** Artifact-relative path for the MCP document; defaults to the plugin-root `.mcp.json` convention. */
+  readonly mcpRelativePath?: string;
   readonly mcpValid: boolean;
   readonly model: NormalizedPlugin;
+  /** Host names whose native hooks feed this plan's provenance; defaults to the plan's own target name. */
+  readonly nativeHookTargetNames?: readonly string[];
   readonly plugin: Record<string, unknown>;
   readonly pluginRelativePath: string;
   readonly targetName: string;
@@ -138,8 +142,9 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
   const hookSourceInputs = model.hooks
     .filter((hook) => isSelected(hook.targets))
     .map((hook) => hook.provenance.sourcePath);
+  const nativeHookTargets = input.nativeHookTargetNames ?? [targetName];
   const nativeHookSourceInputs = model.nativeHooks
-    ?.filter((hook) => hook.target === targetName)
+    ?.filter((hook) => nativeHookTargets.includes(hook.target))
     .flatMap((hook) => [hook.provenance.sourcePath, hook.source]) ?? [];
   const skillSourceInputs = model.skills
     .filter((skill) => isSelected(skill.targets))
@@ -162,7 +167,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
     entries.push({
       content: `${stableJson(mcp)}\n`,
       kind: 'write',
-      relativePath: '.mcp.json',
+      relativePath: input.mcpRelativePath ?? '.mcp.json',
       sourceInputs: sourceInputs(...targetSourceInputs, ...mcpSourceInputs),
     });
   }
@@ -271,6 +276,8 @@ export interface TargetArtifactLayout {
   readonly hookWrappers?: TargetArtifactOutputLayout;
   readonly mcpApps?: TargetArtifactOutputLayout;
   readonly mcpEntries?: TargetArtifactOutputLayout;
+  /** Adapter-owned plain documents at the artifact root (for example a generated AGENTS.md). */
+  readonly rootDocuments?: readonly string[];
   readonly scripts?: TargetArtifactOutputLayout;
   readonly skills?: string;
 }
