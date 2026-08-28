@@ -404,6 +404,9 @@ const isRecursiveArtifactPath = (relativePath: string, directory: string | undef
     segment.length > 0 && segment !== '.' && segment !== '..' && !segment.includes('\\'));
 };
 
+const isAdapterRootDocument = (relativePath: string, rootDocuments: readonly string[] | undefined): boolean =>
+  rootDocuments?.includes(relativePath) === true;
+
 const isTargetArtifactPath = (
   path: string,
   target: string,
@@ -422,7 +425,7 @@ const isTargetArtifactPath = (
     isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||
     isDirectOutputLayoutPath(relativePath, layout.scripts) ||
     isSkillArtifactPath(relativePath, layout.skills) ||
-    layout.rootDocuments?.includes(relativePath) === true ||
+    isAdapterRootDocument(relativePath, layout.rootDocuments) ||
     relativePath === hookContract?.manifestPath ||
     relativePath === mcpRuntime?.manifestPath ||
     registry.artifactValidation(target).documents.some((document) => document.path === relativePath);

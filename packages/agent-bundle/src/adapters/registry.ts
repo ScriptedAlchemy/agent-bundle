@@ -155,6 +155,18 @@ const snapshotOutputLayout = (value: unknown, field: string): TargetArtifactOutp
   });
 };
 
+const snapshotRootDocuments = (value: unknown): readonly string[] => {
+  const documents = dataArrayValues(value);
+  if (documents === undefined) throw new Error('Target adapter artifact layout root documents must be a data array.');
+  return Object.freeze(documents.map((document) => {
+    const name = requireNonempty(document, 'artifact layout root document');
+    if (!isSafeArtifactDirectory(name)) {
+      throw new Error('Target adapter artifact layout root documents must be safe single-segment names.');
+    }
+    return name;
+  }));
+};
+
 const snapshotArtifactLayout = (
   adapter: TargetAdapter,
   hookContract: TargetHookContract | undefined,
@@ -179,16 +191,7 @@ const snapshotArtifactLayout = (
   const skills = layout.skills === undefined
     ? undefined
     : requireNonempty(layout.skills, 'artifact layout skills namespace');
-  const rootDocumentValues = layout.rootDocuments === undefined ? undefined : dataArrayValues(layout.rootDocuments);
-  if (layout.rootDocuments !== undefined && rootDocumentValues === undefined) {
-    throw new Error('Target adapter artifact layout root documents must be a data array.');
-  }
-  const rootDocuments = rootDocumentValues === undefined
-    ? undefined
-    : Object.freeze(rootDocumentValues.map((document) => requireNonempty(document, 'artifact layout root document')));
-  if (rootDocuments?.some((document) => !isSafeArtifactDirectory(document))) {
-    throw new Error('Target adapter artifact layout root documents must be safe single-segment names.');
-  }
+  const rootDocuments = layout.rootDocuments === undefined ? undefined : snapshotRootDocuments(layout.rootDocuments);
 
   if (assets !== undefined && !isSafeArtifactDirectory(assets)) {
     throw new Error('Target adapter artifact layout assets namespace must be a safe single namespace.');
