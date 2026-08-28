@@ -107,7 +107,7 @@ const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Prom
   };
 };
 
-e2e('aborts and hides a stale comparison synchronously when its client is replaced', { timeout: 120_000 }, async ({ page }) => {
+e2e('aborts and hides a stale comparison synchronously when its client is replaced', { timeout: 45_000 }, async ({ page }) => {
   const fixture = await mountedComparisonsFixture();
   const pageErrors: Error[] = [];
   page.on('pageerror', (error) => pageErrors.push(error));
@@ -160,7 +160,7 @@ e2e('aborts and hides a stale comparison synchronously when its client is replac
   }
 });
 
-e2e('aborts an active comparison when only its Eval client is replaced', { timeout: 120_000 }, async ({ page }) => {
+e2e('aborts an active comparison when only its Eval client is replaced', { timeout: 45_000 }, async ({ page }) => {
   const fixture = await mountedComparisonsFixture();
   try {
     await page.goto(fixture.url);
