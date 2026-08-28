@@ -4,12 +4,45 @@
 
 It requires Node.js 22.19 or later.
 
-## Install and build
+## Quick start
 
-Install the package in the project that owns the plugin:
+Install the package in the project that owns the plugin, describe the plugin
+once, and compile it for every host you target:
 
 ```sh
 npm install --save-dev agent-bundle
+```
+
+```ts
+// agent-bundle.config.ts
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'my-plugin', version: '0.1.0', description: 'One bundle, every agent host.' },
+  targets: ['plugin'],
+  skills: ['skills/*'],
+  hooks: { sessionStart: { handler: './src/session-start.ts' } },
+  mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
+});
+```
+
+```sh
+agent-bundle dev --root .              # local workbench with live rebuilds
+agent-bundle build --root . --output dist
+```
+
+`targets: ['plugin']` emits one **agent plugin bundle** at `dist/plugin/` that
+installs into multiple hosts from the same root: `.claude-plugin/` (Claude
+Code), `.codex-plugin/` (Codex), and `.cursor-plugin/` (Cursor) manifests over
+shared `skills/`, `hooks/`, `mcp/`, `scripts/`, and `assets/` directories,
+plus a generated `AGENTS.md` install matrix. Hooks compile once into
+host-detecting wrappers that serve Claude Code and Codex; Cursor consumes the
+skills and MCP servers. Per-host artifacts remain available as `claude`,
+`codex`, and `portable` targets when a host-specific layout is required.
+
+## Install and build
+
+```sh
 agent-bundle dev --root .
 agent-bundle build --root . --output artifact
 ```
@@ -112,7 +145,7 @@ export default defineConfig({
     version: '1.0.0',
     description: 'Review helpers for an agent host.',
   },
-  targets: ['portable', 'codex', 'claude'],
+  targets: ['portable', 'codex', 'claude'], // or ['plugin'] for the unified multi-host bundle
   skills: ['skills/*'],
   scripts: {
     report: './src/report.ts',
