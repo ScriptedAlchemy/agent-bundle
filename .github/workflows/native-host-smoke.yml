@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         if: inputs.host == 'both' || inputs.host == matrix.host
-      - uses: pnpm/setup@v1
+      - uses: pnpm/setup@v2
         if: inputs.host == 'both' || inputs.host == matrix.host
         with:
           cache: true
