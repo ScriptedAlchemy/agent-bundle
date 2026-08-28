@@ -1,6 +1,6 @@
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { expect, test } from '@rstest/core';
 import type { createRsbuild, StartDevServerResult } from '@rsbuild/core';
@@ -98,25 +98,41 @@ const startContext = (input: Readonly<{
 const copyProviderExample = async (): Promise<CopiedExample> =>
   copyExample(exampleRoot, { linkPackages: true, prefix: 'rsc-agent-runtime-provider-' });
 
-const changeDefinition = async (projectRoot: string, replacement: string): Promise<void> => {
-  const path = join(projectRoot, 'src', 'definition.ts');
+/**
+ * Replaces source atomically through a same-directory rename. An in-place
+ * write is truncate-then-append, which a loaded watcher observes as two
+ * change events and compiles twice; the duplicate attempt supersedes the
+ * generation that ordinal-pinned assertions expect to commit.
+ */
+const replaceSource = async (path: string, replace: (source: string) => string): Promise<void> => {
   const source = await readFile(path, 'utf8');
-  await writeFile(path, source.replace('Read the current shared runtime state.', replacement));
+  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
+  await writeFile(temporary, replace(source));
+  await rename(temporary, path);
+};
+
+const changeDefinition = async (projectRoot: string, replacement: string): Promise<void> => {
+  await replaceSource(
+    join(projectRoot, 'src', 'definition.ts'),
+    (source) => source.replace('Read the current shared runtime state.', replacement),
+  );
 };
 
 const changeWorkerImplementation = async (projectRoot: string, marker: string): Promise<void> => {
-  const path = join(projectRoot, 'src', 'rsc', 'worker.tsx');
-  const source = await readFile(path, 'utf8');
-  await writeFile(path, source.replace(
-    /RSC worker received an invalid event(?: [^']*)?/u,
-    `RSC worker received an invalid event ${marker}`,
-  ));
+  await replaceSource(
+    join(projectRoot, 'src', 'rsc', 'worker.tsx'),
+    (source) => source.replace(
+      /RSC worker received an invalid event(?: [^']*)?/u,
+      `RSC worker received an invalid event ${marker}`,
+    ),
+  );
 };
 
 const introduceWorkerSyntaxError = async (projectRoot: string): Promise<void> => {
-  const path = join(projectRoot, 'src', 'rsc', 'worker.tsx');
-  const source = await readFile(path, 'utf8');
-  await writeFile(path, `${source}\nconst = ;\n`);
+  await replaceSource(
+    join(projectRoot, 'src', 'rsc', 'worker.tsx'),
+    (source) => `${source}\nconst = ;\n`,
+  );
 };
 
 test('captures the App compiler HMR credential only through the public Rsbuild environment hook', async () => {
