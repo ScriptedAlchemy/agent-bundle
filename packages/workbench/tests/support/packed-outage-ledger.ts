@@ -231,16 +231,18 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
       assertOutageLedger(failures.length <= 1,
         `multiple action-induced navigation cancellations: ${JSON.stringify({ failures, navigation })}`);
       for (const failure of failures) {
-        let validResponse = failure.respondedAt === undefined && failure.status === undefined;
+        const responseIsAbsent = failure.respondedAt === undefined && failure.status === undefined;
+        const responseIsSuccessful = failure.respondedAt !== undefined && failure.respondedAt >= failure.at &&
+          failure.respondedAt <= ledgerFailureAt(failure) && failure.status !== undefined &&
+          failure.status >= 200 && failure.status < 300;
+        let validResponse = responseIsAbsent || responseIsSuccessful;
         if (navigation.respondedStream === true) {
           let url: URL;
           try { url = new URL(failure.url); }
           catch { throw new Error(`Foreground outage ledger rejected: responded navigation stream URL is invalid: ${JSON.stringify(failure)}`); }
           validResponse = failure.path === '/api/logs/stream' && url.origin === ledger.origin &&
             url.pathname === '/api/logs/stream' && hasCanonicalAfterCursor(url) &&
-            failure.respondedAt !== undefined && failure.respondedAt >= failure.at &&
-            failure.respondedAt <= ledgerFailureAt(failure) && failure.status !== undefined &&
-            failure.status >= 200 && failure.status < 300;
+            responseIsSuccessful;
         }
         assertOutageLedger(
           failure.origin === ledger.origin && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED' && validResponse,

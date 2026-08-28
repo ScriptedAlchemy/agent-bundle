@@ -201,6 +201,27 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       }),
     ]),
   });
+  const navigationRespondedCatalogCancellation = Object.freeze({
+    ...validPostRecovery,
+    postRecovery: Object.freeze({
+      ...validPostRecovery.postRecovery!,
+      navigation: Object.freeze([
+        ...validPostRecovery.postRecovery!.navigation,
+        Object.freeze({
+          leftAt: 1_350,
+          openedAt: 1_345,
+          url: `${valid.origin}/api/playground/catalog?epochId=recovered-epoch`,
+        }),
+      ]),
+    }),
+    requests: Object.freeze([
+      ...validPostRecovery.requests,
+      ledgerRequest({
+        at: 1_345, completedAt: 1_351, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/playground/catalog',
+        respondedAt: 1_346, status: 200, url: `${valid.origin}/api/playground/catalog?epochId=recovered-epoch`,
+      }),
+    ]),
+  });
   const navigationNonGetCancellation = Object.freeze({
     ...validPostRecovery,
     requests: Object.freeze([
@@ -231,6 +252,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(knownPreOutageLogsReplayCancellation)).not.toThrow();
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
   expect(() => validateOutageLedger(navigationLiveStreamCancellation)).not.toThrow();
+  expect(() => validateOutageLedger(navigationRespondedCatalogCancellation)).not.toThrow();
   for (const malformed of malformedLedgers) expect(() => validateOutageLedger(malformed)).toThrow(/Foreground outage ledger rejected/u);
   for (const malformed of [
     resetWithAlteredQuery, resetWithResponse, resetWithUnknownSession, resetWithForeignOrigin, resetWithMismatchedConsoleUrl,
