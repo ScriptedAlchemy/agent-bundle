@@ -13,6 +13,10 @@ once, and compile it for every host you target:
 npm install --save-dev agent-bundle
 ```
 
+No version has been published to npm yet. Until the first release is cut,
+install the identical preview package CI publishes for every commit and pull
+request — see [Preview packages](docs/preview-packages.md).
+
 ```ts
 // agent-bundle.config.ts
 import { defineConfig } from 'agent-bundle/config';
@@ -61,6 +65,25 @@ The implemented commands are:
 - `agent-bundle eval` runs deterministic or native Claude/Codex eval suites and records a run.
 
 `inspect` is intentionally a source/config-plan command; run it before source removal. Artifact-only inspection is the validation contract (`validate --artifact`).
+
+## Install the built bundle into hosts
+
+The compiled `dist/plugin/` directory is the installable product, and its
+generated `AGENTS.md` repeats this install matrix next to the artifact:
+
+- **Claude Code** — add the directory (or its repository) as a plugin:
+  `claude plugin marketplace add <source>`.
+- **Codex** — `codex plugin marketplace add <source>`; the manifest is
+  `.codex-plugin/plugin.json`.
+- **Cursor** — clone (or symlink) the directory to
+  `~/.cursor/plugins/local/<name>`; the manifest is
+  `.cursor-plugin/plugin.json`.
+- **skills CLI** — `npx skills add <source> --skill <name>` consumes the
+  shared `skills/` directory directly.
+
+Per-host artifacts (`dist/claude/`, `dist/codex/`, `dist/portable/`) install
+the same way into their single host. Validate any artifact after the source
+project is gone with `agent-bundle validate --artifact <dir>`.
 
 `agent-bundle dev` is available without the RSC example. Installing
 `agent-bundle` does not install the example provider or React/RSC dependencies.
