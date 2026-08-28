@@ -18,9 +18,9 @@ import {
 } from '../rsbuild.config.js';
 import { createDevRuntimeProvider } from '../src/dev/provider.js';
 import { ResourceLedger, RsbuildRuntimeSession } from '../src/dev/rsbuild-runtime-session.js';
+import { copyExample, type CopiedExample } from './support/copy-example.ts';
 
 const exampleRoot = process.cwd();
-const workspaceNodeModules = join(exampleRoot, '../../node_modules');
 
 const waitFor = async (predicate: () => boolean): Promise<void> => {
   const deadline = Date.now() + 15_000;
@@ -95,27 +95,8 @@ const startContext = (input: Readonly<{
   storageRoot: input.storageRoot,
 });
 
-interface CopiedExample {
-  readonly projectRoot: string;
-  readonly workspaceRoot: string;
-}
-
-const copyExample = async (): Promise<CopiedExample> => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-provider-'));
-  const projectRoot = join(workspaceRoot, 'examples', 'rsc-agent-runtime');
-  await cp(exampleRoot, projectRoot, {
-    filter: (source) => !['.agent-bundle', 'dist', 'node_modules'].includes(source.split('/').at(-1) ?? ''),
-    recursive: true,
-  });
-  await symlink(workspaceNodeModules, join(workspaceRoot, 'node_modules'), 'dir');
-  // The example's direct dependencies (zod, @agent-bundle/rsc-runtime) live in its
-  // own node_modules, not the workspace root's hoisted set, so the copy needs both.
-  await symlink(join(exampleRoot, 'node_modules'), join(projectRoot, 'node_modules'), 'dir');
-  await symlink(join(exampleRoot, '../../packages'), join(workspaceRoot, 'packages'), 'dir');
-  await symlink(join(exampleRoot, '../../tsconfig.json'), join(workspaceRoot, 'tsconfig.json'));
-  await symlink(join(exampleRoot, '../../tsconfig.base.json'), join(workspaceRoot, 'tsconfig.base.json'));
-  return Object.freeze({ projectRoot, workspaceRoot });
-};
+const copyProviderExample = async (): Promise<CopiedExample> =>
+  copyExample(exampleRoot, { linkPackages: true, prefix: 'rsc-agent-runtime-provider-' });
 
 const changeDefinition = async (projectRoot: string, replacement: string): Promise<void> => {
   const path = join(projectRoot, 'src', 'definition.ts');
@@ -243,7 +224,7 @@ test('keeps compiler-App HMR out of the opaque browser child', () => {
 });
 
 test('declares an optional runtime while keeping Claude and Codex artifacts buildable', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const root = copied.projectRoot;
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root }).prepare('dev');
@@ -444,7 +425,7 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
 }, 30_000);
 
 test('resets state through the dynamically loaded copied provider', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-dynamic-reset');
   const controller = new AbortController();
   let session: Awaited<ReturnType<Awaited<ReturnType<typeof resolveDevRuntimeProvider>>['start']>> | undefined;
@@ -474,7 +455,7 @@ test('resets state through the dynamically loaded copied provider', async () => 
 }, 30_000);
 
 test('rejects an already-aborted provider start before creating a runtime session', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const controller = new AbortController();
@@ -623,7 +604,7 @@ test('aggregates owned resource closer failures', async () => {
 });
 
 test('records one failed event when capture and observer finalization both fail an attempt', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     await writeFile(join(copied.projectRoot, 'src', 'definition.ts'), 'export const runtimeDefinition: any = {};\n');
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
@@ -657,7 +638,7 @@ test('records one failed event when capture and observer finalization both fail 
 }, 30_000);
 
 test('keeps the active generation while publishing a source build diagnostic before its failed event', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   let session: RsbuildRuntimeSession | undefined;
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
@@ -706,7 +687,7 @@ test('keeps the active generation while publishing a source build diagnostic bef
 }, 60_000);
 
 test('drains a deferred generation pipeline before close without publishing late lifecycle events', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const reached = deferred<void>();
@@ -761,7 +742,7 @@ test('drains a deferred generation pipeline before close without publishing late
 }, 30_000);
 
 test('binds renamed and added App surfaces to the active generation assets without restoring removed surfaces', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const session = await RsbuildRuntimeSession.start(startContext({
@@ -829,7 +810,7 @@ test('binds renamed and added App surfaces to the active generation assets witho
 }, 30_000);
 
 test('rebinds current App surfaces across retained generations after a later configuration reconcile', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const session = await RsbuildRuntimeSession.start(startContext({
@@ -881,7 +862,7 @@ test('rebinds current App surfaces across retained generations after a later con
 }, 30_000);
 
 test('keeps the same MCP session and revision across an implementation-only generation', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const session = await RsbuildRuntimeSession.start(startContext({
@@ -924,7 +905,7 @@ test('keeps the same MCP session and revision across an implementation-only gene
 }, 30_000);
 
 test('restarts and relists an open MCP session after a warm-cache definition change', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const session = await RsbuildRuntimeSession.start(startContext({
@@ -962,7 +943,7 @@ test('restarts and relists an open MCP session after a warm-cache definition cha
 }, 30_000);
 
 test('uses the live registry authority after a transport-only runtime MCP reconciliation', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const session = await RsbuildRuntimeSession.start(startContext({
@@ -1093,7 +1074,7 @@ test('uses the live registry authority after a transport-only runtime MCP reconc
 }, 30_000);
 
 test('rejects MCP admission until a deferred public prepared-config restart has relisted', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const relistReached = deferred<void>();
@@ -1159,7 +1140,7 @@ test('rejects MCP admission until a deferred public prepared-config restart has 
 
 test('aborts stale activation transactions at both private preparation boundaries', async () => {
   for (const phase of ['store', 'registry'] as const) {
-    const copied = await copyExample();
+    const copied = await copyProviderExample();
     try {
       const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
       const reached = deferred<void>();
@@ -1234,7 +1215,7 @@ test('aborts stale activation transactions at both private preparation boundarie
 }, 60_000);
 
 test('commits a compiled generation across an equivalent prepared-runtime revision', { timeout: 0 }, async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const reached = deferred<void>();
@@ -1284,7 +1265,7 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
 });
 
 test('retains a leased inactive generation through pruning and prunes it after the read releases', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const enteredRead = deferred<void>();
@@ -1338,7 +1319,7 @@ test('retains a leased inactive generation through pruning and prunes it after t
 }, 60_000);
 
 test('aborts a deferred Rsbuild creation before starting its dev server', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const controller = new AbortController();
@@ -1375,7 +1356,7 @@ test('aborts a deferred Rsbuild creation before starting its dev server', async 
 });
 
 test('uses the bound Rsbuild dev-server context instead of a stale port-zero start result', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     let closeCalls = 0;
@@ -1427,7 +1408,7 @@ test('uses the bound Rsbuild dev-server context instead of a stale port-zero sta
 });
 
 test('waits for a late Rsbuild server closer after aborting startup', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const controller = new AbortController();
@@ -1478,7 +1459,7 @@ test('waits for a late Rsbuild server closer after aborting startup', async () =
 });
 
 test('closes a server returned immediately after startup abort', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const controller = new AbortController();
@@ -1509,7 +1490,7 @@ test('closes a server returned immediately after startup abort', async () => {
 });
 
 test('preserves an aborted startup cause with every acquired cleanup failure', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const controller = new AbortController();
@@ -1561,7 +1542,7 @@ test('preserves an aborted startup cause with every acquired cleanup failure', a
 });
 
 test('joins a late owned-runs cleanup after abort has already drained startup cleanup', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const controller = new AbortController();
@@ -1624,7 +1605,7 @@ test('joins a late owned-runs cleanup after abort has already drained startup cl
 });
 
 test('drains every live-session cleanup group once when independent closers reject', async () => {
-  const copied = await copyExample();
+  const copied = await copyProviderExample();
   const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-live-close-failures');
   const attempted: string[] = [];
   const secrets = new Map([

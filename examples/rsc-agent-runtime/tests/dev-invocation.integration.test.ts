@@ -6,6 +6,8 @@ import { join } from 'node:path';
 
 import { createRsbuild } from '@rsbuild/core';
 import { expect, test } from '@rstest/core';
+
+import { copyExample } from './support/copy-example.ts';
 import { createElement, type ReactNode } from 'react';
 
 import { ProjectService } from '../../../packages/agent-bundle/src/dev/index.ts';
@@ -25,23 +27,8 @@ const readChildOutput = (stream: NodeJS.ReadableStream): Promise<Buffer> =>
 const windowsTest = process.platform === 'win32' ? test : test.skip;
 
 const exampleRoot = process.cwd();
-const workspaceNodeModules = join(exampleRoot, '../../node_modules');
 
-const copyExample = async (): Promise<Readonly<{ readonly projectRoot: string; readonly workspaceRoot: string }>> => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invocation-copy-'));
-  const projectRoot = join(workspaceRoot, 'examples', 'rsc-agent-runtime');
-  await cp(exampleRoot, projectRoot, {
-    filter: (source) => !['.agent-bundle', 'dist', 'node_modules'].includes(source.split('/').at(-1) ?? ''),
-    recursive: true,
-  });
-  await symlink(workspaceNodeModules, join(workspaceRoot, 'node_modules'), 'dir');
-  // The example's direct dependencies (zod, @agent-bundle/rsc-runtime) live in its
-  // own node_modules, not the workspace root's hoisted set, so the copy needs both.
-  await symlink(join(exampleRoot, 'node_modules'), join(projectRoot, 'node_modules'), 'dir');
-  await symlink(join(exampleRoot, '../../tsconfig.json'), join(workspaceRoot, 'tsconfig.json'));
-  await symlink(join(exampleRoot, '../../tsconfig.base.json'), join(workspaceRoot, 'tsconfig.base.json'));
-  return Object.freeze({ projectRoot, workspaceRoot });
-};
+const copyInvocationExample = async () => copyExample(exampleRoot, { prefix: 'rsc-agent-runtime-invocation-copy-' });
 
 const startInvocation = (entry: string, request: Record<string, unknown>) => {
   const child = spawn(process.execPath, [entry], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
@@ -217,7 +204,7 @@ const assertJsonOnly = (value: unknown): void => {
 };
 
 test('lowers the hook state version from durable state when copied RSC output grammar changes', async () => {
-  const copied = await copyExample();
+  const copied = await copyInvocationExample();
   const compilerRoot = join(copied.workspaceRoot, 'compiler');
   const componentSource = join(copied.projectRoot, 'src', 'rsc', 'components.tsx');
   try {
@@ -1187,7 +1174,7 @@ require(${JSON.stringify(original)});
 }, 30_000);
 
 test('pins an overlapping g1 invocation while exact replay stays on g1 and latest replay advances to g2', async () => {
-  const copied = await copyExample();
+  const copied = await copyInvocationExample();
   const storageRoot = join(copied.workspaceRoot, 'runtime-storage');
   const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
   const session = await createDevRuntimeProvider().start({
@@ -1239,7 +1226,7 @@ setInterval(() => undefined, 1_000);
 }, 60_000);
 
 test('replays an exact historical surface after generation two removes it', async () => {
-  const copied = await copyExample();
+  const copied = await copyInvocationExample();
   const storageRoot = join(copied.workspaceRoot, 'runtime-storage');
   const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
   const session = await createDevRuntimeProvider().start({
@@ -1288,7 +1275,7 @@ test('replays an exact historical surface after generation two removes it', asyn
 }, 60_000);
 
 test('releases an exact historical lease when four active workers reject its admission', async () => {
-  const copied = await copyExample();
+  const copied = await copyInvocationExample();
   const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-exact-lease-capacity');
   const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
   const session = await createDevRuntimeProvider().start({
