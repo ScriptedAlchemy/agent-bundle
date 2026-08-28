@@ -653,7 +653,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const activeEpochFrom = (toolResult: Awaited<ReturnType<typeof client.callTool>>, label: string) => {
         const resultStatus = record(record(toolResult.structuredContent, `${label} result`).status, `${label} status`);
         const artifactStatus = record(resultStatus.artifact, `${label} artifact`);
-        return { artifactStatus, epochId: string(record(artifactStatus.activeEpoch, `${label} active epoch`).id, `${label} epoch id`) };
+        const activeEpoch = record(artifactStatus.activeEpoch, `${label} active epoch`);
+        return {
+          artifactStatus,
+          epochId: string(activeEpoch.id, `${label} epoch id`),
+          modelDigest: string(activeEpoch.modelDigest, `${label} model digest`),
+        };
       };
       const rebuildFromOverview = async (label: string): Promise<void> => {
         const rebuilt = page.waitForResponse((response) =>
@@ -769,12 +774,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await rebuildFromOverview('invalid epoch B');
       const staleStatus = activeEpochFrom(await call('project_status'), 'stale epoch B');
       expect(staleStatus.artifactStatus.state).toBe('stale');
-      expect(staleStatus.epochId).toBe(lastGoodEpochB);
+      expect(staleStatus.modelDigest).toBe(lastGoodEpochBStatus.modelDigest);
       const staleDiagnostics = await client.callTool({ name: 'diagnostics_list' });
       const staleDiagnosticRows = record(staleDiagnostics.structuredContent, 'stale diagnostics').diagnostics;
       expect(Array.isArray(staleDiagnosticRows)).toBe(true);
       expect(staleDiagnosticRows).not.toHaveLength(0);
-      await expectGeneratedSkill('stale epoch B', lastGoodEpochB, epochBMarker);
+      await expectGeneratedSkill('stale epoch B', staleStatus.epochId, epochBMarker);
 
       phase = 'repaired edit rebuild C';
       const epochCMarker = 'Epoch C repaired the packed review guidance.';
