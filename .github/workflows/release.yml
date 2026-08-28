@@ -25,7 +25,7 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: echo "enabled=${{ env.NPM_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
       - if: steps.gate.outputs.enabled == 'true'
-        uses: pnpm/setup@v1
+        uses: pnpm/setup@v2
         with:
           cache: true
           install: false
