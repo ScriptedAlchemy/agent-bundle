@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { runNodeScript } from './support/run-node-script.ts';
 import { build } from './support/build.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
@@ -12,7 +13,26 @@ const configPath = '/workspace/agent-bundle.config.ts';
 
 const bundleModel = Object.freeze({
   extensions: Object.freeze({}),
-  hooks: Object.freeze([]),
+  hooks: Object.freeze([
+    Object.freeze({
+      event: 'sessionStart' as const,
+      id: 'hook:session-start',
+      name: 'session-start',
+      provenance: Object.freeze({ kind: 'config' as const, sourcePath: configPath }),
+      source: '/workspace/src/hooks/session-start.ts',
+      targets: Object.freeze(['plugin']),
+      tools: Object.freeze([]),
+    }),
+    Object.freeze({
+      event: 'afterTool' as const,
+      id: 'hook:record-write',
+      name: 'record-write',
+      provenance: Object.freeze({ kind: 'config' as const, sourcePath: configPath }),
+      source: '/workspace/src/hooks/record-write.ts',
+      targets: Object.freeze(['plugin']),
+      tools: Object.freeze(['file.write' as const]),
+    }),
+  ]),
   marketplace: true as const,
   mcpServers: Object.freeze([
     Object.freeze({
@@ -87,6 +107,12 @@ it('lays both host manifests over one shared bundle root', () => {
   const codexMcp = JSON.parse(documents['.codex-plugin/mcp.json']!) as { readonly mcpServers: Record<string, { readonly args: readonly string[]; readonly cwd?: string }> };
   expect(codexMcp.mcpServers['status']!.args[0]).toBe('./mcp/server.mjs');
 
+  const hooks = documents['hooks/hooks.json']!;
+  expect(hooks).toContain('${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs');
+  expect(hooks).toContain('${CLAUDE_PLUGIN_ROOT}/hooks/record-write.mjs');
+  expect(hooks).toContain('apply_patch|Edit|Write');
+  expect(codexPlugin).not.toHaveProperty('hooks');
+
   expect(documents['.claude-plugin/marketplace.json']).toContain('bundle-example-marketplace');
   expect(documents['.agents/plugins/marketplace.json']).toContain('bundle-example-marketplace');
   expect(documents['AGENTS.md']).toContain('multi-host agent plugin bundle');
@@ -102,28 +128,19 @@ it('emits each shared surface exactly once and suffixes host hook wrappers', () 
   expect(paths.filter((path) => path === 'skills/review/references/guide.md')).toHaveLength(1);
   expect(new Set(paths).size).toBe(paths.length);
 
-  expect(plan.hookEntries).toEqual([]);
+  const hookEntries = plan.hookEntries ?? [];
+  expect(hookEntries.map((entry) => entry.relativePath).sort()).toEqual([
+    'hooks/record-write.mjs',
+    'hooks/session-start.mjs',
+  ]);
+  expect(new Set(hookEntries.map((entry) => entry.target))).toEqual(new Set(['plugin']));
 });
 
-it('rejects bundle-targeted hooks with a directive diagnostic', () => {
-  const model: NormalizedPlugin = {
-    ...bundleModel,
-    hooks: [{
-      event: 'sessionStart',
-      id: 'hook:session-start',
-      name: 'session-start',
-      provenance: { kind: 'config', sourcePath: configPath },
-      source: '/workspace/src/hooks/session-start.ts',
-      targets: ['plugin'],
-      tools: [],
-    }],
-  };
-  const plan = planBundle(model);
-  expect(plan.diagnostics).toEqual([expect.objectContaining({
-    code: 'plugin.hooks.unsupported',
-    severity: 'error',
-  })]);
-  expect(plan.entries.some((entry) => entry.relativePath.startsWith('hooks/'))).toBe(false);
+it('bakes runtime host detection into the universal wrapper source', () => {
+  const plan = planBundle(bundleModel);
+  const wrapper = (plan.hookEntries ?? []).find((entry) => entry.relativePath === 'hooks/session-start.mjs');
+  expect(wrapper?.virtualSource).toContain('process.env.PLUGIN_ROOT === undefined ? "claude" : "codex"');
+  expect(wrapper?.virtualSource).toContain('AGENT_BUNDLE_HOOK_HOST');
 });
 
 it('reports a bundle-target conflict instead of silently overwriting an entry', () => {
@@ -159,8 +176,16 @@ it('builds the unified bundle root on disk with compiled per-host hook wrappers'
     writeFile(join(skillRoot, 'SKILL.md'), skillMarkdown),
     writeFile(join(skillRoot, 'references', 'guide.md'), '# Guide\n'),
   ]);
+  const hookSource = join(root, 'src', 'hooks', 'session-start.ts');
+  await mkdir(join(root, 'src', 'hooks'), { recursive: true });
+  await writeFile(hookSource, "export default (event: unknown, context: { target: string }) => ({ additionalContext: `host:${context.target}`, outcome: 'continue' as const });\n");
   const model: NormalizedPlugin = {
     ...bundleModel,
+    hooks: [{
+      ...bundleModel.hooks[0]!,
+      provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+      source: hookSource,
+    }],
     mcpServers: [],
     metadata: {
       ...bundleModel.metadata,
@@ -188,6 +213,25 @@ it('builds the unified bundle root on disk with compiled per-host hook wrappers'
     await expect(readFile(join(bundleRoot, '.codex-plugin', 'plugin.json'), 'utf8')).resolves.toContain('./skills/');
     await expect(readFile(join(bundleRoot, 'AGENTS.md'), 'utf8')).resolves.toContain('multi-host agent plugin bundle');
     await expect(readFile(join(bundleRoot, 'skills', 'review', 'SKILL.md'), 'utf8')).resolves.toBe(skillMarkdown);
+    await expect(readFile(join(bundleRoot, 'hooks', 'hooks.json'), 'utf8')).resolves.toContain('${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs');
+    const wrapper = join(bundleRoot, 'hooks', 'session-start.mjs');
+    const nativeInput = JSON.stringify({
+      cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
+    });
+    // Codex documents exporting PLUGIN_ROOT into hook processes; Claude does not.
+    expect(process.env['PLUGIN_ROOT']).toBeUndefined();
+    await expect(runNodeScript({ args: [wrapper], env: { PLUGIN_ROOT: '/plugin' }, input: nativeInput })).resolves.toMatchObject({
+      code: 0,
+      stdout: expect.stringContaining('host:codex'),
+    });
+    await expect(runNodeScript({ args: [wrapper], input: nativeInput })).resolves.toMatchObject({
+      code: 0,
+      stdout: expect.stringContaining('host:claude'),
+    });
+    await expect(runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_HOOK_HOST: 'codex' }, input: nativeInput })).resolves.toMatchObject({
+      code: 0,
+      stdout: expect.stringContaining('host:codex'),
+    });
     const manifest = JSON.parse(await readFile(join(outputRoot, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly files: readonly { readonly path: string }[];
       readonly targets: readonly { readonly name: string }[];

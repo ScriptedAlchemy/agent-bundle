@@ -383,7 +383,7 @@ export const planHooks = (
 
 export const nativeHookWrapperSource = (
   entry: TargetHookWrapper,
-  codecName: 'Claude' | 'Codex',
+  codecName: 'Claude' | 'Codex' | 'Universal',
 ): string => {
   const nativeEvent = entry.nativeEvent;
   const decoderFields = nativeHookInputFields.map((field) =>
@@ -392,9 +392,21 @@ export const nativeHookWrapperSource = (
     .filter((field) => field.canonical !== 'hookEventName')
     .map((field) => `  ${field.native}: canonicalInput.${field.canonical},`);
 
+  // The universal codec serves one wrapper to every host: Codex documents
+  // exporting PLUGIN_ROOT into hook processes and Claude does not, so its
+  // presence discriminates the calling host at runtime; the simulation
+  // harness can pin a host explicitly through AGENT_BUNDLE_HOOK_HOST.
+  const targetSource = codecName === 'Universal'
+    ? [
+        'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
+        'const target = declaredHost === "claude" || declaredHost === "codex"',
+        '  ? declaredHost',
+        '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
+      ]
+    : [`const target = ${JSON.stringify(entry.target)};`];
   return [
     `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
-    `const target = ${JSON.stringify(entry.target)};`,
+    ...targetSource,
     `const canonicalEvent = ${JSON.stringify(entry.event)};`,
     `const nativeEvent = ${JSON.stringify(nativeEvent)};`,
     '',
