@@ -2,11 +2,13 @@ name: Package preview
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions: {}
 
 concurrency:
-  group: package-preview-${{ github.event.pull_request.number }}
+  group: package-preview-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
