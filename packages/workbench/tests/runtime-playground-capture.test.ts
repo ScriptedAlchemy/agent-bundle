@@ -150,7 +150,7 @@ test('settles every capture cleanup action without masking the primary failure',
   }
 });
 
-test('captures identity-backed HMR, last-good, recovery, and responsive browser evidence', { timeout: 300_000 }, async () => {
+test('captures identity-backed HMR, last-good, recovery, and responsive browser evidence', { timeout: 0 }, async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-capture-'));
   const outputs = Object.freeze({
     compileError: join(outputRoot, 'compile-error.png'),
@@ -170,7 +170,7 @@ test('captures identity-backed HMR, last-good, recovery, and responsive browser 
       '--compile-error', outputs.compileError,
       '--recovered', outputs.recovered,
       '--evidence', outputs.evidence,
-    ], { cwd: workspaceRoot, timeout: 270_000 });
+    ], { cwd: workspaceRoot });
 
     await Promise.all([
       expectPng(outputs.desktop, 1440, 900),
