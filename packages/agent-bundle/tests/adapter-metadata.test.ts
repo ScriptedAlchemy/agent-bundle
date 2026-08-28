@@ -127,6 +127,29 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
+  expect(registryMetadata(registry, 'cursor')).toEqual({
+    adapterRevision: '1.0.0',
+    capabilityRevision: '2026-08-28',
+    capabilitySha256: 'c9e916ce4caf1865f57078765c27f47a2d225796ac36c1b65ccadf6a5290c86e',
+    observedVersion: '2026-08-28',
+    schemas: [
+      {
+        name: 'hooks',
+        revision: '2026-08-28',
+        sha256: '106d76f79c8fa6600e09cd5bcf25ebf8d06015cde249c48c50fe8060d991e21d',
+      },
+      {
+        name: 'mcp',
+        revision: '2026-08-28',
+        sha256: 'ba5379d4dd3f3d7ff291f2a82a9a04b96b4be7c8dd8c106808a186cad3610764',
+      },
+      {
+        name: 'plugin',
+        revision: '2026-08-28',
+        sha256: 'ad5099d50f7f59913a5022b90acaf76e9c50e6d9c5058157a1eed55a842d9d61',
+      },
+    ],
+  });
 });
 
 it('rehashes every declared capability and schema snapshot against its pinned provenance', async () => {
@@ -135,6 +158,7 @@ it('rehashes every declared capability and schema snapshot against its pinned pr
     { capabilityFile: 'portable-1.0.0.json', provenanceFile: 'portable/PROVENANCE.json', target: 'portable', versionKey: 'version' },
     { capabilityFile: 'codex-0.147.0.json', provenanceFile: 'codex/PROVENANCE.json', target: 'codex', versionKey: 'observedCliVersion' },
     { capabilityFile: 'claude-2.1.250.json', provenanceFile: 'claude/PROVENANCE.json', target: 'claude', versionKey: 'observedCliVersion' },
+    { capabilityFile: 'cursor-2026-08-28.json', provenanceFile: 'cursor/PROVENANCE.json', target: 'cursor', versionKey: 'observedCliVersion' },
   ] as const;
 
   for (const { capabilityFile, provenanceFile, target, versionKey } of targets) {
