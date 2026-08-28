@@ -211,7 +211,7 @@ it.each(['codex', 'claude'] as const)('copies project assets selected for %s and
 
 it('plans byte-stable native Codex and Claude plugin trees from the same frozen model', async () => {
   const registry = createDefaultRegistry();
-  expect(registry.names()).toEqual(['portable', 'codex', 'claude']);
+  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'plugin']);
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(Object.isFrozen(plugin)).toBe(true);
 
