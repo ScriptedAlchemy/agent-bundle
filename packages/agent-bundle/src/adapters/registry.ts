@@ -9,6 +9,7 @@ import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
+import { pluginAdapter } from './plugin.ts';
 import type {
   TargetAdapter,
   TargetArtifactDocumentContract,
@@ -178,6 +179,16 @@ const snapshotArtifactLayout = (
   const skills = layout.skills === undefined
     ? undefined
     : requireNonempty(layout.skills, 'artifact layout skills namespace');
+  const rootDocumentValues = layout.rootDocuments === undefined ? undefined : dataArrayValues(layout.rootDocuments);
+  if (layout.rootDocuments !== undefined && rootDocumentValues === undefined) {
+    throw new Error('Target adapter artifact layout root documents must be a data array.');
+  }
+  const rootDocuments = rootDocumentValues === undefined
+    ? undefined
+    : Object.freeze(rootDocumentValues.map((document) => requireNonempty(document, 'artifact layout root document')));
+  if (rootDocuments?.some((document) => !isSafeArtifactDirectory(document))) {
+    throw new Error('Target adapter artifact layout root documents must be safe single-segment names.');
+  }
 
   if (assets !== undefined && !isSafeArtifactDirectory(assets)) {
     throw new Error('Target adapter artifact layout assets namespace must be a safe single namespace.');
@@ -199,6 +210,7 @@ const snapshotArtifactLayout = (
     ...(hookWrappers === undefined ? {} : { hookWrappers }),
     ...(mcpApps === undefined ? {} : { mcpApps }),
     ...(mcpEntries === undefined ? {} : { mcpEntries }),
+    ...(rootDocuments === undefined ? {} : { rootDocuments }),
     ...(scripts === undefined ? {} : { scripts }),
     ...(skills === undefined ? {} : { skills }),
   });
@@ -478,4 +490,5 @@ export const createDefaultRegistry = (): TargetRegistry =>
   new TargetRegistry()
     .register(portableAdapter, { default: true })
     .register(codexAdapter)
-    .register(claudeAdapter);
+    .register(claudeAdapter)
+    .register(pluginAdapter);

@@ -422,6 +422,7 @@ const isTargetArtifactPath = (
     isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||
     isDirectOutputLayoutPath(relativePath, layout.scripts) ||
     isSkillArtifactPath(relativePath, layout.skills) ||
+    layout.rootDocuments?.includes(relativePath) === true ||
     relativePath === hookContract?.manifestPath ||
     relativePath === mcpRuntime?.manifestPath ||
     registry.artifactValidation(target).documents.some((document) => document.path === relativePath);

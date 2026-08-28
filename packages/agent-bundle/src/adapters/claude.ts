@@ -109,8 +109,6 @@ const mcpRuntime = createTargetMcpRuntime({
 
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(claudeName, 'Claude');
 
-const selectedForClaude = (targets: readonly string[]): boolean => targets.includes(claudeName);
-
 const expandClaudeToken = (value: string): string => value
   .replaceAll(pathTokens.pluginRoot, '${CLAUDE_PLUGIN_ROOT}')
   .replaceAll(pathTokens.pluginData, '${CLAUDE_PLUGIN_DATA}')
@@ -182,11 +180,21 @@ const planMcpServer = (
   };
 };
 
-const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
+export interface ClaudeArtifactPlanOptions {
+  /** Target name used for selection and provenance; native hooks stay keyed to Claude. */
+  readonly targetName?: string;
+}
+
+export const planClaudeArtifacts = (
+  model: NormalizedPlugin,
+  options: ClaudeArtifactPlanOptions = {},
+): TargetArtifactPlan => {
+  const targetName = options.targetName ?? claudeName;
+  const isSelected = (targets: readonly string[]): boolean => targets.includes(targetName);
   const diagnostics: Diagnostic[] = [];
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
   for (const server of model.mcpServers) {
-    if (!selectedForClaude(server.targets)) continue;
+    if (!isSelected(server.targets)) continue;
     const serverPlan = planMcpServer(server);
     diagnostics.push(...serverPlan.diagnostics);
     if (serverPlan.value !== undefined) servers[server.name] = serverPlan.value;
@@ -194,7 +202,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
-  const generatedHooks = planHooks(model, claudeName, hookContract);
+  const generatedHooks = planHooks(model, targetName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
@@ -235,18 +243,21 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     hookDocumentValid,
     hookEntries: generatedHooks.hookEntries,
     hookManifestPath: hookContract.manifestPath,
-    isSelected: selectedForClaude,
+    isSelected,
     marketplace,
     marketplaceRelativePath: '.claude-plugin/marketplace.json',
     marketplaceValid,
     mcp,
     mcpValid,
     model,
+    nativeHookTargetNames: [claudeName],
     plugin,
     pluginRelativePath: '.claude-plugin/plugin.json',
-    targetName: claudeName,
+    targetName,
   });
 };
+
+const plan = (model: NormalizedPlugin): TargetArtifactPlan => planClaudeArtifacts(model);
 
 export const claudeAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
