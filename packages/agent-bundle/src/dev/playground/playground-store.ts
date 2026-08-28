@@ -280,6 +280,8 @@ const pendingIndexDirectoryName = '.pending';
 const sessionDocumentName = 'session.json';
 const eventDocumentName = 'events.jsonl';
 const ownerLockName = '.owner.lock';
+/** Settled sessions stay whole on disk, so memory retains only this many of them at a time. */
+const settledSessionRetention = 8;
 type DirectorySyncReason =
   | 'final-index-publication'
   | 'layout-index-entry'
@@ -778,57 +780,11 @@ export class PlaygroundService {
         this.#assertRecordUsable(existing);
         return snapshotSession(existing);
       }
-      const index = await this.#readIndex(id);
-      if (index === undefined) {
-        throw serviceError('PLAYGROUND_SESSION_NOT_FOUND', `Playground session ${JSON.stringify(id)} was not found.`);
-      }
-      const storageObjectId = index.objectId;
-      const root = this.#objectRoot(storageObjectId);
-      try {
-        await this.#assertObjectDirectory(root, storageObjectId);
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) {
-          throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(id)} has an index without a complete object.`);
-        }
-        throw error;
-      }
-      const document = await this.#readPersistedSession(root, id, storageObjectId);
-      const ownerToken = document.state === 'open' ? await this.#acquireOwner(root, id) : undefined;
-      let events: readonly PlaygroundTraceEvent[];
-      try {
-        events = await this.#readEvents(root);
-      } catch (error) {
-        if (ownerToken !== undefined) await this.#releaseOwner(root, ownerToken).catch(() => undefined);
-        throw error;
-      }
-      const record: SessionRecord = {
-        admissionFailed: false,
-        cleanupFailures: [...document.cleanupFailures],
-        createdAt: document.createdAt,
-        durability: undefined,
-        events: [...events],
-        id,
-        identity: document.identity,
-        nextSequence: events.length + 1,
-        outcome: document.outcome,
-        root,
-        state: document.state,
-        storageObjectId,
-        subscribers: new Set(),
-        queue: serialQueue(),
-        ownerToken,
-      };
-      try {
-        this.#assertAvailable();
-        this.#sessions.set(id, record);
-        return snapshotSession(record);
-      } catch (error) {
-        await this.#closeRecord(record).catch(() => undefined);
-        throw error;
-      }
+      return snapshotSession(await this.#loadRecord(id));
     });
   }
 
+  /** Settled sessions may be evicted from memory; `reopen` restores them from their durable object. */
   session(sessionId: string): PlaygroundSession | undefined {
     const record = this.#sessions.get(sessionId);
     if (record === undefined) return undefined;
@@ -838,7 +794,8 @@ export class PlaygroundService {
 
   async append(sessionId: string, input: PlaygroundEventInput): Promise<PlaygroundTraceEvent> {
     this.#assertAvailable();
-    const record = this.#requireUsableSession(sessionId);
+    const record = this.#retainedSession(sessionId) ?? await this.#restoreSession(sessionId);
+    this.#assertRecordUsable(record);
     const event = normalizeEventInput(input);
     return record.queue.run(async () => {
       if (record.state !== 'open') {
@@ -872,7 +829,7 @@ export class PlaygroundService {
 
   async finalize(sessionId: string, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession> {
     this.#assertAvailable();
-    const record = this.#requireSession(sessionId);
+    const record = this.#retainedSession(sessionId) ?? await this.#restoreSession(sessionId);
     const durable = normalizeOutcome(outcome);
     if (record.admissionFailed) this.#assertRecordUsable(record);
     if (record.durability === 'terminal-uncertain') {
@@ -890,7 +847,8 @@ export class PlaygroundService {
 
   async replay(sessionId: string, cursor?: PlaygroundReplayCursor): Promise<PlaygroundReplay> {
     this.#assertAvailable();
-    const record = this.#requireUsableSession(sessionId);
+    const record = this.#retainedSession(sessionId) ?? await this.#restoreSession(sessionId);
+    this.#assertRecordUsable(record);
     const afterSequence = normalizeCursor(cursor);
     return record.queue.run(async () => {
       const latest = record.nextSequence - 1;
@@ -907,7 +865,8 @@ export class PlaygroundService {
 
   async subscribe(sessionId: string, options: PlaygroundSubscribeOptions): Promise<PlaygroundSubscription> {
     this.#assertAvailable();
-    const record = this.#requireUsableSession(sessionId);
+    const record = this.#retainedSession(sessionId) ?? await this.#restoreSession(sessionId);
+    this.#assertRecordUsable(record);
     if (typeof options.onEvent !== 'function') {
       throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground subscription requires an event callback.');
     }
@@ -946,7 +905,8 @@ export class PlaygroundService {
 
   async promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase> {
     this.#assertAvailable();
-    const record = this.#requireUsableSession(sessionId);
+    const record = this.#retainedSession(sessionId) ?? await this.#restoreSession(sessionId);
+    this.#assertRecordUsable(record);
     return record.queue.run(async () => {
       if ((record.state !== 'finalized' && record.state !== 'closed') || record.outcome === undefined) {
         throw serviceError('PLAYGROUND_OUTCOME_REQUIRED', 'A durable playground outcome is required before promotion.');
@@ -966,7 +926,7 @@ export class PlaygroundService {
   }
 
   async closeSession(sessionId: string): Promise<void> {
-    const record = this.#requireSession(sessionId);
+    const record = this.#retainedSession(sessionId) ?? await this.#restoreSession(sessionId);
     await this.#closeRecord(record);
   }
 
@@ -1238,19 +1198,94 @@ export class PlaygroundService {
     }
   }
 
-  #requireSession(sessionId: string): SessionRecord {
+  /** Resolves without awaiting so retained records keep their synchronous queue ordering. */
+  #retainedSession(sessionId: string): SessionRecord | undefined {
+    return this.#sessions.get(safeSessionId(sessionId));
+  }
+
+  /** Reloads a session that memory retention evicted, under the admission discipline `reopen` uses. */
+  async #restoreSession(sessionId: string): Promise<SessionRecord> {
     const id = safeSessionId(sessionId);
-    const record = this.#sessions.get(id);
-    if (record === undefined) {
-      throw serviceError('PLAYGROUND_SESSION_NOT_FOUND', `Playground session ${JSON.stringify(id)} was not found; reopen it first if needed.`);
+    assertNoProviderCredentials(id);
+    return this.#admit(async () => {
+      await this.#ensureStore();
+      this.#assertAvailable();
+      return this.#sessions.get(id) ?? await this.#loadRecord(id);
+    });
+  }
+
+  async #loadRecord(id: string): Promise<SessionRecord> {
+    const index = await this.#readIndex(id);
+    if (index === undefined) {
+      throw serviceError('PLAYGROUND_SESSION_NOT_FOUND', `Playground session ${JSON.stringify(id)} was not found.`);
     }
+    const storageObjectId = index.objectId;
+    const root = this.#objectRoot(storageObjectId);
+    try {
+      await this.#assertObjectDirectory(root, storageObjectId);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(id)} has an index without a complete object.`);
+      }
+      throw error;
+    }
+    const document = await this.#readPersistedSession(root, id, storageObjectId);
+    const ownerToken = document.state === 'open' ? await this.#acquireOwner(root, id) : undefined;
+    let events: readonly PlaygroundTraceEvent[];
+    try {
+      events = await this.#readEvents(root);
+    } catch (error) {
+      if (ownerToken !== undefined) await this.#releaseOwner(root, ownerToken).catch(() => undefined);
+      throw error;
+    }
+    const record: SessionRecord = {
+      admissionFailed: false,
+      cleanupFailures: [...document.cleanupFailures],
+      createdAt: document.createdAt,
+      durability: undefined,
+      events: [...events],
+      id,
+      identity: document.identity,
+      nextSequence: events.length + 1,
+      outcome: document.outcome,
+      root,
+      state: document.state,
+      storageObjectId,
+      subscribers: new Set(),
+      queue: serialQueue(),
+      ownerToken,
+    };
+    try {
+      this.#assertAvailable();
+      this.#sessions.set(id, record);
+    } catch (error) {
+      await this.#closeRecord(record).catch(() => undefined);
+      throw error;
+    }
+    if (record.state !== 'open') this.#evictSettledSessions(record);
     return record;
   }
 
-  #requireUsableSession(sessionId: string): SessionRecord {
-    const record = this.#requireSession(sessionId);
-    this.#assertRecordUsable(record);
-    return record;
+  /** Settled records are whole on disk, so memory keeps only the newest retained window of them. */
+  #evictSettledSessions(retained: SessionRecord): void {
+    if (this.#closing) return;
+    let settled = 0;
+    for (const record of this.#sessions.values()) {
+      if (record.state !== 'open') settled += 1;
+    }
+    let excess = settled - settledSessionRetention;
+    if (excess <= 0) return;
+    for (const record of [...this.#sessions.values()]) {
+      if (excess <= 0) break;
+      if (record === retained
+        || record.state === 'open'
+        || record.subscribers.size !== 0
+        || record.ownerToken !== undefined) {
+        continue;
+      }
+      this.#sessions.delete(record.id);
+      excess -= 1;
+    }
   }
 
   #assertRecordUsable(record: SessionRecord): void {
@@ -1748,6 +1783,7 @@ export class PlaygroundService {
       }
       throw error;
     }
+    if (record.state !== 'open') this.#evictSettledSessions(record);
   }
 
   async #persistSession(record: SessionRecord, progress?: SessionPersistenceProgress): Promise<void> {

@@ -62,6 +62,8 @@ export interface PlaygroundRouteService {
   catalog?(options?: { readonly epochId?: string }): Promise<NativePlaygroundCatalog>;
   export(sessionId: string): Promise<PlaygroundExport>;
   promoteToDraftEval(sessionId: string, rawEventRefs: readonly string[]): Promise<DraftEvalCase>;
+  /** Restores a settled session evicted from memory from its durable record. */
+  reopen?(sessionId: string): Promise<PlaygroundSession>;
   replay(sessionId: string, cursor?: PlaygroundReplayCursor): Promise<PlaygroundReplay>;
   run(input: PlaygroundOperationRequest, options?: { readonly signal?: AbortSignal }): Promise<PlaygroundRun>;
   session(sessionId: string): PlaygroundSession | undefined;
@@ -310,7 +312,9 @@ export class PlaygroundRoutes {
     if (parsed.kind === 'session') {
       if (method === 'GET') {
         noQuery(request.url);
-        const session = service.session(parsed.id);
+        // A settled session may have been evicted from memory; reopen restores
+        // it from its durable record before reporting not-found.
+        const session = service.session(parsed.id) ?? await service.reopen?.(parsed.id).catch(() => undefined);
         if (session === undefined) throw requestError(serviceDiagnostics.PLAYGROUND_SESSION_NOT_FOUND);
         return responseJson(response, { session });
       }

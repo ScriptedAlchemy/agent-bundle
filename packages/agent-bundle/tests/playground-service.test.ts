@@ -2129,6 +2129,72 @@ it('rejects duplicate and extra persisted envelope keys before reopening', async
   }
 });
 
+const settleSession = async (service: PlaygroundService, sessionId: string): Promise<void> => {
+  await service.openSession({ ...sessionInput(), sessionId });
+  await service.append(sessionId, event('project', 'loaded', 'Project loaded.', { revision: sessionId }));
+  await service.append(sessionId, event('response', 'answered', 'Response produced.', { revision: sessionId }));
+  await service.finalize(sessionId, { status: 'passed' });
+  await service.closeSession(sessionId);
+};
+
+it('evicts the oldest settled sessions from memory while every by-id operation still reloads them whole', async () => {
+  const fixture = await createFixture();
+  try {
+    const retained = Array.from({ length: 12 }, (_, index) => `retention-${index}`);
+    for (const sessionId of retained) await settleSession(fixture.service, sessionId);
+
+    expect(fixture.service.session('retention-0')).toBeUndefined();
+    expect(fixture.service.session('retention-11')).toMatchObject({ id: 'retention-11', state: 'closed' });
+
+    const replay = await fixture.service.replay('retention-0');
+    expect(replay).toMatchObject({ cursor: { afterSequence: 2 }, session: { id: 'retention-0', state: 'closed' } });
+    expect(replay.events).toHaveLength(2);
+    expect(replay.events.map((traceEvent) => traceEvent.sequence)).toEqual([1, 2]);
+    expect(replay.events[0]).toMatchObject({ raw: { revision: 'retention-0' }, rawEventRef: 'events.jsonl#1', source: 'project' });
+    expect(replay.events[1]).toMatchObject({ raw: { revision: 'retention-0' }, rawEventRef: 'events.jsonl#2', source: 'response' });
+    expect(fixture.service.session('retention-0')).toMatchObject({ id: 'retention-0', state: 'closed' });
+
+    await expect(fixture.service.export('retention-1')).resolves.toMatchObject({ session: { id: 'retention-1', state: 'closed' } });
+    await expect(fixture.service.promoteToDraftEval('retention-1', [])).resolves.toMatchObject({ outcome: { status: 'passed' } });
+    await expect(fixture.service.append('retention-1', event('project', 'loaded', 'Project loaded.', { revision: 'late' })))
+      .rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_FINALIZED' });
+    await expect(fixture.service.finalize('retention-1', { status: 'passed' }))
+      .rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_FINALIZED' });
+    await expect(fixture.service.replay('absent-session')).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_NOT_FOUND' });
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('retains a settled session while a subscription is attached and evicts it after the subscription closes', async () => {
+  const fixture = await createFixture();
+  try {
+    await settleSession(fixture.service, 'subscribed-retention');
+    for (let index = 0; index < 10; index += 1) await settleSession(fixture.service, `retention-filler-${index}`);
+    expect(fixture.service.session('subscribed-retention')).toBeUndefined();
+
+    const delivered: number[] = [];
+    const subscription = await fixture.service.subscribe('subscribed-retention', {
+      afterSequence: 0,
+      onEvent: (traceEvent) => { delivered.push(traceEvent.sequence); },
+    });
+    await eventually(() => expect(delivered).toEqual([1, 2]));
+    expect(fixture.service.session('subscribed-retention')).toMatchObject({ id: 'subscribed-retention', state: 'closed' });
+
+    for (let index = 0; index < 10; index += 1) await settleSession(fixture.service, `retention-holder-${index}`);
+    expect(fixture.service.session('subscribed-retention')).toMatchObject({ id: 'subscribed-retention', state: 'closed' });
+
+    await subscription.close();
+    expect(subscription.closed).toBe(true);
+    await settleSession(fixture.service, 'retention-sweep');
+    expect(fixture.service.session('subscribed-retention')).toBeUndefined();
+    await expect(fixture.service.replay('subscribed-retention'))
+      .resolves.toMatchObject({ cursor: { afterSequence: 2 }, session: { id: 'subscribed-retention', state: 'closed' } });
+  } finally {
+    await fixture.close();
+  }
+});
+
 it('rejects empty and noncanonical owner tokens as corrupt', async () => {
   const fixture = await createFixture();
   const sessionId = 'strict-owner-token';
