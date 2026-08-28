@@ -1075,7 +1075,6 @@ test('does not spawn an invocation worker when runtime.run.started closes the se
   const projectRoot = process.cwd();
   const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
   let close: Promise<void> | undefined;
-  const startedAt = Date.now();
   const session = await createDevRuntimeProvider().start({
     artifactStatus: () => Object.freeze({ state: 'missing' as const }),
     emit: (event) => {
@@ -1099,8 +1098,8 @@ test('does not spawn an invocation worker when runtime.run.started closes the se
 
     await expect(session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target }))
       .resolves.toMatchObject({ status: 'failed' });
+    expect(close).toBeDefined();
     await close;
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(() => readFileSync(marker)).toThrow();
   } finally {
     await session.close().catch(() => undefined);

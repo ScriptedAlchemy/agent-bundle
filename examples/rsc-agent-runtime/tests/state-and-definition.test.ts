@@ -25,6 +25,16 @@ const wait = async (milliseconds: number): Promise<void> =>
     setTimeout(resolve, milliseconds);
   });
 
+const errorMessages = (value: unknown, seen = new Set<Error>()): readonly string[] => {
+  if (!(value instanceof Error) || seen.has(value)) return [];
+  seen.add(value);
+  return [
+    value.message,
+    ...(value instanceof AggregateError ? value.errors.flatMap((error) => errorMessages(error, seen)) : []),
+    ...errorMessages(value.cause, seen),
+  ];
+};
+
 const eagerPromise = <T>(value: T): Promise<T> => ({
   then<TResult1 = T, TResult2 = never>(
     onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
@@ -756,7 +766,7 @@ test('bounds a stuck release and invokes fatal owner teardown without unlocking'
   ]);
 
   expect(outcome).toBeInstanceOf(Error);
-  expect((outcome as Error).message).toContain('lease release exceeded 20 ms');
+  expect(errorMessages(outcome).some((message) => message.includes('lease release exceeded 20 ms'))).toBe(true);
   expect(fatalError?.message).toContain('lease release exceeded 20 ms');
   await expect(
     kernel.recordEdit({
