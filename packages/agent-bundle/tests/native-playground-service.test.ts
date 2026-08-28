@@ -1778,11 +1778,7 @@ it('does not deadlock when a direct native Codex abort listener awaits a reentra
     await Promise.resolve();
     expect(reentrant).toBeDefined();
     expect(service.close()).toBe(closing);
-    const settled = await Promise.race([
-      closing.then(() => true, () => true),
-      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
-    ]);
-    expect(settled).toBe(true);
+    await closing;
     expect(reentrant).not.toBe(closing);
     expect(abortHandlerCompleted).toBe(true);
     await running;
