@@ -9,6 +9,7 @@ import { rspack } from '@rslib/core';
 import { expect, it, rs } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
@@ -69,6 +70,58 @@ it('serializes hook index targets by tuple order without sentinel concatenation'
   } finally {
     await rm(root, { force: true, recursive: true });
   }
+});
+
+it('keeps the Claude and Codex native wrapper codecs byte-identical apart from identifiers and the target constant', () => {
+  const entry: TargetHookWrapper = {
+    event: 'beforeTool',
+    hook: {
+      event: 'beforeTool',
+      id: 'hook:before-tool:example:00000000',
+      name: 'example',
+      provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+      source: '/project/src/hooks/example.ts',
+      targets: ['claude', 'codex'],
+      tools: [],
+    },
+    nativeEvent: 'PreToolUse',
+    relativePath: 'hooks/example.mjs',
+    target: 'claude',
+  };
+
+  const stripCodecIdentifiers = (source: string): string => source
+    .replaceAll(/decode(?:Claude|Codex|Universal)Native/g, 'decodeNative')
+    .replaceAll(/encode(?:Claude|Codex|Universal)Native/g, 'encodeNative');
+
+  const withoutTargetConstant = (source: string): string => source
+    .split('\n')
+    .filter((line) => !line.startsWith('const target ='))
+    .join('\n');
+
+  const normalize = (source: string): string => stripCodecIdentifiers(withoutTargetConstant(source));
+
+  const claudeSource = nativeHookWrapperSource(entry, 'Claude');
+  const codexSource = nativeHookWrapperSource(entry, 'Codex');
+
+  expect(normalize(claudeSource)).toBe(normalize(codexSource));
+
+  const universalSource = nativeHookWrapperSource(entry, 'Universal');
+
+  expect(universalSource).toContain('process.env.PLUGIN_ROOT');
+  expect(universalSource).toContain('AGENT_BUNDLE_HOOK_HOST');
+
+  const hostDetectionLines = new Set([
+    'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
+    'const target = declaredHost === "claude" || declaredHost === "codex"',
+    '  ? declaredHost',
+    '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
+  ]);
+  const universalWithoutHostDetection = universalSource
+    .split('\n')
+    .filter((line) => !hostDetectionLines.has(line))
+    .join('\n');
+
+  expect(stripCodecIdentifiers(universalWithoutHostDetection)).toBe(normalize(claudeSource));
 });
 
 const runPublishedHook = async (wrapper: string, input: string) => runNodeScript({ args: [wrapper], input });

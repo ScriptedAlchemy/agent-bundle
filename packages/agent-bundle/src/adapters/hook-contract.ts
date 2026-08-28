@@ -381,6 +381,21 @@ export const planHooks = (
   });
 };
 
+/**
+ * Emits the published hook wrapper source for one target.
+ *
+ * Invariant: the `'Claude'` and `'Codex'` codec bodies must stay
+ * byte-identical apart from the codec token baked into identifier names
+ * (`decode${codecName}Native`/`encode${codecName}Native`) and the baked
+ * `const target = ...` line. Decode fields, output validation, output
+ * encoding, and exit behavior are shared and must not diverge between the
+ * two. This is what makes the `'Universal'` codec sound: it serves one
+ * wrapper body to every host, so any Claude/Codex divergence beyond those
+ * two spots would make the universal wrapper wrong for whichever host it
+ * was not modeled on. The 'keeps the Claude and Codex native wrapper codecs
+ * byte-identical...' test in tests/hooks.test.ts guards this invariant —
+ * update it alongside any deliberate change to the shared body.
+ */
 export const nativeHookWrapperSource = (
   entry: TargetHookWrapper,
   codecName: 'Claude' | 'Codex' | 'Universal',
@@ -395,7 +410,10 @@ export const nativeHookWrapperSource = (
   // The universal codec serves one wrapper to every host: Codex documents
   // exporting PLUGIN_ROOT into hook processes and Claude does not, so its
   // presence discriminates the calling host at runtime; the simulation
-  // harness can pin a host explicitly through AGENT_BUNDLE_HOOK_HOST.
+  // harness can pin a host explicitly through AGENT_BUNDLE_HOOK_HOST. This
+  // host-detection block is the only source difference the Universal codec
+  // is allowed from the shared Claude/Codex body below it (see the parity
+  // invariant documented on nativeHookWrapperSource above).
   const targetSource = codecName === 'Universal'
     ? [
         'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
