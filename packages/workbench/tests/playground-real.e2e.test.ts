@@ -9,6 +9,7 @@ import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { workbenchUrl } from './support/workbench-e2e.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -189,7 +190,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
       }
     });
 
-    await page.goto(`${server.url}#hooks`);
+    await page.goto(workbenchUrl(server.url, 'hooks'));
     await expect(page.getByRole('heading', { name: 'Hooks' })).toBeVisible({ timeout: browserTimeout });
     const hookOption = page.locator('#hook-binding option').first();
     await expect(hookOption).toBeAttached({ timeout: browserTimeout });
@@ -197,7 +198,7 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     if (hookKey === null || !hookKey.startsWith('claude/')) throw new Error('Expected the fixture to publish one selectable Claude Hook binding.');
     const hookId = hookKey.slice('claude/'.length);
 
-    await page.goto(`${server.url}#playground`);
+    await page.goto(workbenchUrl(server.url, 'playground'));
     await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#playground-operation').selectOption('skill.inspect');
     await page.locator('#playground-target').selectOption('claude');

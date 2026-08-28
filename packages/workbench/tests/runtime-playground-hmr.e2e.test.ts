@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 30_000;
 
@@ -131,7 +132,7 @@ e2e('activates an edited RSC generation and replays the selected hook without re
   let clientPage: Awaited<ReturnType<typeof context.newPage>> | undefined;
   let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
   try {
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     const runtimeSessionToken = await page.evaluate(async () => {
       const response = await fetch('/api/project/session', { credentials: 'same-origin' });

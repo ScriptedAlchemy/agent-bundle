@@ -5,7 +5,7 @@ import { expect } from '@rstest/playwright';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 12_000;
 
@@ -25,7 +25,7 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
       const url = new URL(response.url());
       return url.origin === server.url && url.pathname === '/api/logs/replay' && url.searchParams.get('after') === '0' && response.ok();
     });
-    await page.goto(`${server.url}#logs`);
+    await page.goto(workbenchUrl(server.url, 'logs'));
     await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
     const replay = await (await replayed).json() as { readonly replay: Readonly<{ readonly records: readonly unknown[] }> };
     expect(replay.replay.records.length).toBeGreaterThan(0);
@@ -40,9 +40,9 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
     await expect(page.locator('.logs-entry-source').first()).toHaveText('project', { timeout: browserTimeout });
     await page.locator('#logs-producer').selectOption('');
     const replayCount = await page.locator('.logs-entries > li').count();
-    await page.goto(`${server.url}#overview`);
+    await page.goto(workbenchUrl(server.url, 'overview'));
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-    await page.goto(`${server.url}#logs`);
+    await page.goto(workbenchUrl(server.url, 'logs'));
     await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
     const replayedSequences = await page.waitForFunction(
       ({ count, selector }) => {

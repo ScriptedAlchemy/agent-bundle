@@ -19,6 +19,13 @@ export const e2e = test.extend({
   } satisfies PlaywrightOptions,
 });
 
+/**
+ * Canonical Workbench route URL for browser navigation. The dedicated
+ * route-contract test (overview.e2e) keeps literal hash strings so this
+ * helper cannot make its assertions self-fulfilling.
+ */
+export const workbenchUrl = (origin: string, page: string): string => `${origin}#${page}`;
+
 let workbenchBuild: Promise<void> | undefined;
 
 export const buildWorkbench = (): Promise<void> => workbenchBuild ??= (async (): Promise<void> => {
