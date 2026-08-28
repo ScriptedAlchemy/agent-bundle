@@ -5,3 +5,6 @@ dist/
 coverage/
 *.log
 examples/audiobook-curator/artifact/
+
+# Aborted runtime-playground fixture workspaces
+.runtime-playground-*/
