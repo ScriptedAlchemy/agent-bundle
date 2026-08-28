@@ -11,10 +11,11 @@ import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
-const browserTimeout = 8_000;
+const browserTimeout = 8_000 * timeScale;
 const execFile = promisify(executeFile);
 
 const e2e = test.extend({
@@ -207,7 +208,7 @@ const requestBody = (body: string | null): unknown => {
   }
 };
 
-e2e('runs a generated SDK-v2 App through the real foreground session and separate-origin sandbox', { timeout: 90_000 }, async ({ page }) => {
+e2e('runs a generated SDK-v2 App through the real foreground session and separate-origin sandbox', { timeout: 90_000 * timeScale }, async ({ page }) => {
   let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   let testFailure: unknown;
@@ -1618,7 +1619,7 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
   }
 });
 
-e2e('renders a compiler-bundled App template through the canonical sandbox URL', { timeout: 90_000 }, async ({ page }) => {
+e2e('renders a compiler-bundled App template through the canonical sandbox URL', { timeout: 90_000 * timeScale }, async ({ page }) => {
   let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   let testFailure: unknown;

@@ -38,6 +38,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/packed-consumer.test.ts',
   'packages/agent-bundle/tests/packed-native-smoke.test.ts',
   'packages/agent-bundle/tests/path-token-resolver.test.ts',
+  'packages/agent-bundle/tests/plugin-bundle.test.ts',
   'packages/agent-bundle/tests/public-api.test.ts',
   'packages/agent-bundle/tests/release-audit.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',

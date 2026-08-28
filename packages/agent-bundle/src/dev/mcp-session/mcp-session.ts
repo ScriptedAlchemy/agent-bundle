@@ -49,7 +49,11 @@ import type {
   StdioTransport,
 } from './mcp-session-types.ts';
 
-const defaultTimeoutMs = 5_000;
+// A session request can legitimately sit behind an rsbuild compile or Chrome
+// startup on a two-core machine; a five-second ceiling manufactured request
+// timeouts there. Thirty seconds stays interactive while remaining well under
+// the MCP SDK's own sixty-second default.
+const defaultTimeoutMs = 30_000;
 const maxStderrBytes = 1_000_000;
 const maxRetainedEvents = 512;
 const maxRetainedFrames = 512;

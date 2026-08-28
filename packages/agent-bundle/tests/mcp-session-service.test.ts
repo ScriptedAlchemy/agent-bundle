@@ -332,7 +332,7 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
     });
 
     const defaultSession = await service.open({ epochId: 'epoch-timeout', serverName: 'fixture', target: 'portable' });
-    expect((defaultSession as unknown as { readonly timeoutMs?: number }).timeoutMs).toBe(5_000);
+    expect((defaultSession as unknown as { readonly timeoutMs?: number }).timeoutMs).toBe(30_000);
     await defaultSession.listTools();
     await defaultSession.close();
 
@@ -352,8 +352,8 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
     );
 
     expect(observed).toEqual([
-      ['connect', 5_000],
-      ['listTools', 5_000],
+      ['connect', 30_000],
+      ['listTools', 30_000],
       ['connect', 12_345],
       ['listTools', 12_345],
       ['listResources', 12_345],
