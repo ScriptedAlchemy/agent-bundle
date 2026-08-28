@@ -1196,6 +1196,10 @@ test('aborts stale activation transactions at both private preparation boundarie
           expect(session.mcpRegistry.snapshot()).toMatchObject({ runtimeGenerationId: firstGeneration });
           const reconciled = session.reconcilePreparedRuntime({
             ...prepared.devRuntime!,
+            apps: prepared.devRuntime!.apps.map((app) => ({
+              ...app,
+              source: './src/widget/App.tsx',
+            })),
             sourceRevision: `${prepared.devRuntime!.sourceRevision}-${phase}-superseding-prepared`,
           });
           allow.resolve();
@@ -1228,6 +1232,56 @@ test('aborts stale activation transactions at both private preparation boundarie
     }
   }
 }, 60_000);
+
+test('commits a compiled generation across an equivalent prepared-runtime revision', { timeout: 0 }, async () => {
+  const copied = await copyExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const reached = deferred<void>();
+    const allow = deferred<void>();
+    let armBarrier = false;
+    let held = false;
+    const session = await RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-equivalent-prepared-revision',
+      signal: new AbortController().signal,
+      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-equivalent-prepared-revision'),
+    }), {
+      afterActivationPrepare: async (input) => {
+        if (!armBarrier || held || input.phase !== 'store') return;
+        held = true;
+        reached.resolve();
+        await allow.promise;
+      },
+    });
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const firstGeneration = session.mcpRegistry.snapshot()!.runtimeGenerationId;
+      armBarrier = true;
+      await changeDefinition(copied.projectRoot, 'Read state after equivalent prepared revision.');
+      await reached.promise;
+      const reconciled = session.reconcilePreparedRuntime({
+        ...prepared.devRuntime!,
+        sourceRevision: `${prepared.devRuntime!.sourceRevision}-equivalent-prepared`,
+      });
+      allow.resolve();
+      await reconciled;
+
+      expect(session.mcpRegistry.snapshot()).toMatchObject({ runtimeGenerationId: 'generation-2' });
+      expect(session.status()).toMatchObject({
+        activeVector: { runtimeGenerationId: 'generation-2' },
+        diagnostics: [],
+        state: 'active',
+      });
+      expect(session.mcpRegistry.snapshot()!.runtimeGenerationId).not.toBe(firstGeneration);
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});
 
 test('retains a leased inactive generation through pruning and prunes it after the read releases', async () => {
   const copied = await copyExample();

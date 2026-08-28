@@ -529,6 +529,12 @@ const transportDigest = (prepared: DevRuntimePreparedProject): string => digestV
   })),
 });
 
+const preparedRuntimeAuthorityDigest = (prepared: DevRuntimePreparedProject): string => digestValue({
+  apps: prepared.apps,
+  provider: prepared.provider,
+  servers: prepared.servers,
+});
+
 const asJsonObject = (value: unknown): JsonObject => value as JsonObject;
 
 const descriptorsFor = (
@@ -2262,13 +2268,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   }
 
   #activationGuard(snapshot: RscRuntimeCapturedGenerationSnapshot): RuntimeGenerationActivationGuard<RscRuntimeGenerationMetadata> {
+    const preparedAuthorityDigest = preparedRuntimeAuthorityDigest(snapshot.preparedRuntime);
     let waitedSequence = -1;
     return Object.freeze({
       check: () => !this.#closed &&
         waitedSequence === this.#latestSupersedingAttemptSequence &&
         ![...this.#attempts.values()].some((attempt) => attempt.sequence > this.#sequenceFor(snapshot.attemptId)) &&
         snapshot.rscCohortRevision === this.#latestRscCohortRevision &&
-        snapshot.preparedRuntime.sourceRevision === this.#latestPreparedRuntime.sourceRevision,
+        preparedAuthorityDigest === preparedRuntimeAuthorityDigest(this.#latestPreparedRuntime),
       wait: async () => {
         while (!this.#closed) {
           const sequence = this.#sequenceFor(snapshot.attemptId);
