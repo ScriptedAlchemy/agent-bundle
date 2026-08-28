@@ -12,6 +12,8 @@ import type {
 export interface TargetHookWrapper {
   readonly event: CanonicalHookEvent;
   readonly hook: NormalizedHook;
+  /** False when this wrapper is a host-document variant of an indexed hook rather than its canonical entry. */
+  readonly indexed?: false;
   readonly nativeEvent: string;
   /** The computed native tool matcher, absent when the host applies the hook unconditionally. */
   readonly nativeMatcher?: string;
@@ -31,8 +33,22 @@ export type TargetNativeHookCommandsReadResult =
   | Readonly<{ readonly commands: readonly TargetNativeHookCommand[]; readonly status: 'found' }>
   | Readonly<{ readonly status: 'invalid' }>;
 
+export interface TargetHookDocumentEntryInput {
+  readonly command: string;
+  readonly matcher?: string;
+  readonly timeout?: number;
+}
+
 export interface TargetHookContract {
   readonly commandRoot: string;
+  /**
+   * Shapes one generated hook command into the host's per-event array entry.
+   * Defaults to the Claude/Codex grouped shape; Cursor's document keeps flat
+   * `{ command, matcher?, timeout? }` entries.
+   */
+  readonly documentEntry?: (input: TargetHookDocumentEntryInput) => Record<string, unknown>;
+  /** Wraps the per-event groups into the host's document root; defaults to `{ hooks }`. */
+  readonly documentEnvelope?: (hooks: Record<string, unknown[]>) => Record<string, unknown>;
   readonly encodePlaygroundInput: (
     input: Readonly<Record<string, unknown>>,
     nativeEvent: string,
@@ -43,6 +59,12 @@ export interface TargetHookContract {
     nativeEvent: string,
   ) => Readonly<Record<string, unknown>> | undefined;
   readonly eventNames: Readonly<Record<CanonicalHookEvent, string>>;
+  /**
+   * False when this contract plans host-document wrapper variants of hooks
+   * whose canonical wrappers another contract already indexes; the canonical
+   * hook index keeps exactly one entry per hook and target.
+   */
+  readonly indexedWrappers?: false;
   readonly manifestPath: string;
   readonly matchers: Readonly<Partial<Record<CanonicalHookTool, string>>>;
   readonly readNativeCommands?: (document: unknown) => TargetNativeHookCommandsReadResult;
@@ -124,6 +146,27 @@ export const readStandardNativeHookCommands = (document: unknown): TargetNativeH
   return Object.freeze({ commands: Object.freeze(commands), status: 'found' });
 };
 
+/** Enumerates commands from Cursor's flat `{ version, hooks: { event: [{ command }] } }` document. */
+export const readCursorNativeHookCommands = (document: unknown): TargetNativeHookCommandsReadResult => {
+  if (!isPlainDataRecord(document)) return Object.freeze({ status: 'invalid' });
+  const hooks = ownDataValue(document, 'hooks');
+  if (hooks === undefined || !hooks.found || !isPlainDataRecord(hooks.value)) return Object.freeze({ status: 'invalid' });
+  const commands: TargetNativeHookCommand[] = [];
+  for (const entries of Object.values(hooks.value)) {
+    const hooksForEvent = dataArrayValues(entries);
+    if (hooksForEvent === undefined) return Object.freeze({ status: 'invalid' });
+    for (const hook of hooksForEvent) {
+      if (!isPlainDataRecord(hook)) return Object.freeze({ status: 'invalid' });
+      const command = ownDataValue(hook, 'command');
+      if (command === undefined || !command.found || typeof command.value !== 'string') {
+        return Object.freeze({ status: 'invalid' });
+      }
+      commands.push(Object.freeze({ command: command.value }));
+    }
+  }
+  return Object.freeze({ commands: Object.freeze(commands), status: 'found' });
+};
+
 const nativeHookInputFields = Object.freeze([
   Object.freeze({ canonical: 'cwd', native: 'cwd' }),
   Object.freeze({ canonical: 'hookEventName', native: 'hook_event_name' }),
@@ -185,6 +228,179 @@ export const encodeNativeHookPlaygroundOutput = (
     ? undefined
     : { hookSpecificOutput: output };
 };
+
+/**
+ * Cursor's hook envelope differs from the shared Claude/Codex format: input
+ * carries `conversation_id` plus per-event fields (`tool_output` is a
+ * JSON-stringified record, `stop` carries `loop_count`/`status` instead of
+ * `stop_hook_active`/`last_assistant_message`), and output uses the
+ * documented per-event shapes (`additional_context`, `permission` with
+ * `user_message`/`agent_message`, `updated_input`, `followup_message`).
+ * Observed at https://cursor.com/docs/agent/hooks (2026-08-28) and against
+ * installed plugins that ship working Cursor hooks. A denied `stop` maps to
+ * `followup_message`, Cursor's loop-continuation channel. `additionalContext`
+ * from an allowed `beforeTool` handler has no Cursor output channel and is
+ * dropped; inject context from `afterTool` instead.
+ */
+export const encodeCursorPlaygroundInput = (
+  input: Readonly<Record<string, unknown>>,
+  nativeEvent: string,
+): Readonly<Record<string, unknown>> => defined({
+  conversation_id: input.sessionId,
+  cwd: input.cwd,
+  hook_event_name: nativeEvent,
+  ...(nativeEvent === 'stop'
+    ? { loop_count: input.stopHookActive === true ? 1 : 0, status: 'completed' }
+    : {}),
+  session_id: input.sessionId,
+  tool_input: input.toolInput,
+  tool_name: input.toolName,
+  ...(nativeEvent === 'postToolUse' && input.toolResponse !== undefined
+    ? { tool_output: JSON.stringify(input.toolResponse) }
+    : {}),
+  tool_use_id: input.toolUseId,
+  transcript_path: input.transcriptPath,
+});
+
+export const encodeCursorPlaygroundOutput = (
+  result: Readonly<Record<string, unknown>> | undefined,
+  canonicalEvent: CanonicalHookEvent,
+): Readonly<Record<string, unknown>> | undefined => {
+  if (result === undefined) return undefined;
+  if (canonicalEvent === 'stop') {
+    return result.outcome === 'deny' ? defined({ followup_message: result.reason }) : undefined;
+  }
+  if (canonicalEvent === 'beforeTool') {
+    if (result.outcome === 'deny') {
+      return defined({ agent_message: result.reason, permission: 'deny', user_message: result.reason });
+    }
+    return result.updatedInput === undefined
+      ? undefined
+      : { permission: 'allow', updated_input: result.updatedInput };
+  }
+  return result.additionalContext === undefined
+    ? undefined
+    : { additional_context: result.additionalContext };
+};
+
+/** Emits the published Cursor hook wrapper source; see encodeCursorPlaygroundInput for the envelope contract. */
+export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
+  `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
+  'const target = "cursor";',
+  `const canonicalEvent = ${JSON.stringify(entry.event)};`,
+  `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
+  '',
+  'const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);',
+  'const defined = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));',
+  'const fail = (message) => { throw new Error(`Agent Bundle hook error: ${message}`); };',
+  'const parsedToolOutput = (nativeInput) => {',
+  '  if (canonicalEvent !== "afterTool") return undefined;',
+  '  let parsed;',
+  '  try { parsed = JSON.parse(nativeInput.tool_output); } catch { fail("native tool_output must be a JSON string"); }',
+  '  if (!isRecord(parsed)) fail("native tool_output must encode an object");',
+  '  return parsed;',
+  '};',
+  'const decodeCursorNative = (nativeInput) => defined({',
+  '  cwd: nativeInput.cwd,',
+  '  hookEventName: nativeInput.hook_event_name,',
+  '  sessionId: nativeInput.session_id ?? nativeInput.conversation_id,',
+  '  stopHookActive: canonicalEvent === "stop" ? nativeInput.loop_count > 0 : undefined,',
+  '  toolInput: nativeInput.tool_input,',
+  '  toolName: nativeInput.tool_name,',
+  '  toolResponse: parsedToolOutput(nativeInput),',
+  '  toolUseId: nativeInput.tool_use_id,',
+  '  transcriptPath: nativeInput.transcript_path ?? undefined,',
+  '});',
+  'const encodeCursorNative = (canonicalInput) => defined({',
+  '  conversation_id: canonicalInput.sessionId,',
+  '  cwd: canonicalInput.cwd,',
+  '  hook_event_name: nativeEvent,',
+  '  ...(canonicalEvent === "stop" ? { loop_count: canonicalInput.stopHookActive === true ? 1 : 0, status: "completed" } : {}),',
+  '  session_id: canonicalInput.sessionId,',
+  '  tool_input: canonicalInput.toolInput,',
+  '  tool_name: canonicalInput.toolName,',
+  '  ...(canonicalEvent === "afterTool" && canonicalInput.toolResponse !== undefined ? { tool_output: JSON.stringify(canonicalInput.toolResponse) } : {}),',
+  '  tool_use_id: canonicalInput.toolUseId,',
+  '  transcript_path: canonicalInput.transcriptPath,',
+  '});',
+  'const validateResult = (result) => {',
+  '  if (result === undefined) return undefined;',
+  '  if (!isRecord(result)) fail("handler must return void or a result object");',
+  '  const allowed = new Set(["outcome", "reason", "updatedInput", "additionalContext"]);',
+  '  for (const key of Object.keys(result)) if (!allowed.has(key)) fail(`handler result has unsupported field ${key}`);',
+  '  if (result.outcome !== undefined && !["continue", "deny", "stop"].includes(result.outcome)) fail("handler result outcome is invalid");',
+  '  if (result.reason !== undefined && typeof result.reason !== "string") fail("handler result reason must be a string");',
+  '  if (result.additionalContext !== undefined && typeof result.additionalContext !== "string") fail("handler result additionalContext must be a string");',
+  '  if (result.updatedInput !== undefined && !isRecord(result.updatedInput)) fail("handler result updatedInput must be an object");',
+  '  if (result.reason !== undefined && !(result.outcome === "deny" && (canonicalEvent === "beforeTool" || canonicalEvent === "stop"))) fail("reason is only valid for a denied beforeTool or stop hook");',
+  '  if (result.outcome === "deny" && (canonicalEvent === "beforeTool" || canonicalEvent === "stop") && (typeof result.reason !== "string" || result.reason.trim().length === 0)) fail(`denied ${canonicalEvent} hook requires a nonempty reason`);',
+  '  if ((canonicalEvent === "sessionStart" || canonicalEvent === "afterTool") && (result.outcome === "deny" || result.outcome === "stop" || result.updatedInput !== undefined)) fail(`${canonicalEvent} cannot deny, stop, or replace input`);',
+  '  if (canonicalEvent === "beforeTool" && (result.outcome === "stop" || (result.outcome === "deny" && result.updatedInput !== undefined))) fail("beforeTool cannot stop or replace input while denying");',
+  '  if (canonicalEvent === "stop" && (result.outcome === "stop" || result.updatedInput !== undefined || result.additionalContext !== undefined)) fail("stop only accepts continue or deny with a reason");',
+  '  return result;',
+  '};',
+  'const encodeOutput = (result) => {',
+  '  if (result === undefined) return undefined;',
+  '  if (canonicalEvent === "stop") return result.outcome === "deny" ? defined({ followup_message: result.reason }) : undefined;',
+  '  if (canonicalEvent === "beforeTool") {',
+  '    if (result.outcome === "deny") return defined({ agent_message: result.reason, permission: "deny", user_message: result.reason });',
+  '    return result.updatedInput === undefined ? undefined : { permission: "allow", updated_input: result.updatedInput };',
+  '  }',
+  '  return result.additionalContext === undefined ? undefined : { additional_context: result.additionalContext };',
+  '};',
+  'const decodeOutput = (nativeOutput) => {',
+  '  if (nativeOutput === undefined) return undefined;',
+  '  if (canonicalEvent === "stop") return typeof nativeOutput.followup_message === "string" ? { outcome: "deny", reason: nativeOutput.followup_message } : undefined;',
+  '  if (canonicalEvent === "beforeTool") {',
+  '    if (nativeOutput.permission === "deny") return defined({ outcome: "deny", reason: nativeOutput.agent_message });',
+  '    return defined({ outcome: "continue", updatedInput: nativeOutput.updated_input });',
+  '  }',
+  '  return defined({ additionalContext: nativeOutput.additional_context, outcome: "continue" });',
+  '};',
+  'const requireString = (input, field) => {',
+  '  if (typeof input[field] !== "string") fail(`native ${field} must be a string`);',
+  '};',
+  'const validateNativeInput = (input) => {',
+  '  if (input.hook_event_name !== nativeEvent) fail(`native hook_event_name must equal ${nativeEvent}`);',
+  '  if (typeof input.session_id !== "string" && typeof input.conversation_id !== "string") fail("native session_id or conversation_id must be a string");',
+  '  if (input.transcript_path !== undefined && input.transcript_path !== null && typeof input.transcript_path !== "string") fail("native transcript_path must be a string or null");',
+  '  if (canonicalEvent === "sessionStart") return;',
+  '  if (canonicalEvent === "beforeTool" || canonicalEvent === "afterTool") {',
+  '    requireString(input, "tool_name");',
+  '    if (!isRecord(input.tool_input)) fail(`native ${nativeEvent} tool_input must be an object`);',
+  '    requireString(input, "tool_use_id");',
+  '    if (canonicalEvent === "afterTool") requireString(input, "tool_output");',
+  '    return;',
+  '  }',
+  '  if (typeof input.loop_count !== "number") fail("native stop loop_count must be a number");',
+  '  requireString(input, "status");',
+  '};',
+  'const run = async () => {',
+  '  const handler = Reflect.get(handlerModule, "default");',
+  '  if (typeof handler !== "function") fail("default export must be a function");',
+  '  let raw = "";',
+  '  for await (const chunk of process.stdin) raw += chunk;',
+  '  if (raw.trim().length === 0) fail("stdin must contain exactly one JSON value");',
+  '  let input;',
+  '  try { input = JSON.parse(raw); } catch { fail("stdin must contain exactly one JSON value"); }',
+  '  if (!isRecord(input)) fail("stdin JSON value must be an object");',
+  '  const simulation = process.env.AGENT_BUNDLE_HOOK_SIMULATION === "1";',
+  '  const nativeInput = simulation ? encodeCursorNative(input) : input;',
+  '  validateNativeInput(nativeInput);',
+  '  const event = decodeCursorNative(nativeInput);',
+  '  const result = validateResult(await handler(event, { nativeEvent, nativeInput, target }));',
+  '  const nativeOutput = encodeOutput(result);',
+  '  const output = simulation ? decodeOutput(nativeOutput) : nativeOutput;',
+  '  if (output !== undefined) process.stdout.write(JSON.stringify(output));',
+  '};',
+  'if (import.meta.main) {',
+  '  await run().catch((error) => {',
+  '    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\\n`);',
+  '    process.exitCode = 1;',
+  '  });',
+  '}',
+  '',
+].join('\n');
 
 export interface HookPlan {
   readonly diagnostics: readonly Diagnostic[];
@@ -353,19 +569,26 @@ export const planHooks = (
     if (diagnostics.length > diagnosticCount) continue;
     const relativePath = contract.wrapperPath(hook);
     const command = generatedHookCommand(contract, relativePath);
-    const hookCommand = {
+    const entryInput: TargetHookDocumentEntryInput = {
       command,
-      ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
-      type: 'command',
-    };
-    const group = {
-      hooks: [hookCommand],
       ...(matcher === undefined ? {} : { matcher }),
+      ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
     };
+    const group = contract.documentEntry === undefined
+      ? {
+          hooks: [{
+            command,
+            ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
+            type: 'command',
+          }],
+          ...(matcher === undefined ? {} : { matcher }),
+        }
+      : contract.documentEntry(entryInput);
     (groups[nativeEvent] ??= []).push(group);
     const wrapper: TargetHookWrapper = {
       event: hook.event,
       hook,
+      ...(contract.indexedWrappers === false ? { indexed: false as const } : {}),
       nativeEvent,
       ...(matcher === undefined ? {} : { nativeMatcher: matcher }),
       relativePath,
@@ -376,7 +599,9 @@ export const planHooks = (
 
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
-    ...(Object.keys(groups).length === 0 ? {} : { document: { hooks: groups } }),
+    ...(Object.keys(groups).length === 0
+      ? {}
+      : { document: contract.documentEnvelope === undefined ? { hooks: groups } : contract.documentEnvelope(groups) }),
     hookEntries: Object.freeze(hookEntries),
   });
 };

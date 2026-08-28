@@ -1,6 +1,7 @@
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 12_000;
 
@@ -28,13 +29,13 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     }
   });
   try {
-    await page.goto(`${fixture.url}#overview`);
+    await page.goto(workbenchUrl(fixture.url, 'overview'));
     await expect(page.getByRole('link', { exact: true, name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Inspector' })).toHaveCount(0, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Runtime' })).toBeVisible({ timeout: browserTimeout });
 
     for (const sibling of ['hooks', 'artifacts', 'playground', 'logs'] as const) {
-      await page.goto(`${fixture.url}#${sibling}`);
+      await page.goto(workbenchUrl(fixture.url, sibling));
       await expect(page.locator(`#${sibling}`)).toBeVisible({ timeout: browserTimeout });
       expect(
         await page.getByRole('link', { name: 'Runtime' }).count(),
@@ -42,15 +43,15 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
       ).toBe(1);
     }
 
-    await page.goto(`${fixture.url}#mcp`);
+    await page.goto(workbenchUrl(fixture.url, 'mcp'));
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
     await page.getByRole('tab', { name: 'Inspector' }).click();
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
-    await page.goto(`${fixture.url}#mcp`);
+    await page.goto(workbenchUrl(fixture.url, 'mcp'));
     await page.getByRole('tab', { name: 'Inspector' }).click();
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
@@ -59,7 +60,7 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
 
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });
     const runtimeIdentity = await page.evaluate(async () => {
@@ -101,11 +102,11 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(input).toHaveValue(/"limit": 2/);
     await input.fill('{"broken":');
     await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
-    await page.goto(`${fixture.url}#mcp`);
+    await page.goto(workbenchUrl(fixture.url, 'mcp'));
     await page.getByRole('tab', { name: 'Inspector' }).click();
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });
     await expect(input).toHaveValue('{"broken":');
@@ -190,7 +191,7 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     const stateTab = page.getByRole('tab', { name: 'State', exact: true });
     await stateTab.click();
     await expect(stateTab).toHaveAttribute('aria-selected', 'true');
-    await page.goto(`${fixture.url}#mcp`);
+    await page.goto(workbenchUrl(fixture.url, 'mcp'));
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
     expect(forbiddenRequests).toEqual([]);
@@ -206,7 +207,7 @@ e2e('keeps Runtime controls at least 40px tall and inside the 390px viewport wit
   page.on('pageerror', (error) => pageErrors.push(error));
   try {
     await page.setViewportSize({ height: 844, width: 390 });
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });
     await page.getByLabel('Runtime surface').selectOption('mcp.recent_edits');
@@ -379,7 +380,7 @@ e2e('resets the selected Claude fixture to its seed without replacing prior runt
     }
   });
   try {
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     const identity = page.locator('[data-runtime-provider-session]');
     await expect(identity).toHaveCount(1, { timeout: browserTimeout });
@@ -540,7 +541,7 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
   context.on('request', recordRequest);
   page.on('pageerror', (error) => pageErrors.push(error));
   try {
-    await page.goto(`${firstFixture.url}#runtime`);
+    await page.goto(workbenchUrl(firstFixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     const identity = page.locator('[data-runtime-provider-session]');
     await expect(identity).toHaveCount(1, { timeout: browserTimeout });
@@ -679,7 +680,7 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
 
     await firstFixture.close();
     secondFixture = await startRuntimePlaygroundFixture();
-    await page.goto(`${secondFixture.url}#runtime`);
+    await page.goto(workbenchUrl(secondFixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(identity).toHaveCount(1, { timeout: browserTimeout });
     await expect.poll(() => identity.getAttribute('data-runtime-provider-session'), { timeout: browserTimeout }).not.toBe(firstHistory.providerSessionId);

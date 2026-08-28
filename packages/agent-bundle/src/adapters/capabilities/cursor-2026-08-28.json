@@ -1,5 +1,21 @@
 {
   "host": "cursor",
+  "hooks": {
+    "config": "hooks/hooks.json",
+    "events": {
+      "afterTool": "postToolUse",
+      "beforeTool": "preToolUse",
+      "sessionStart": "sessionStart",
+      "stop": "stop"
+    },
+    "matchers": {
+      "agent": "^Task$",
+      "file.read": "^Read$",
+      "file.write": "^Write$",
+      "mcp": "^MCP:",
+      "shell": "^Shell$"
+    }
+  },
   "mcp": {
     "pathTokens": {
       "args": [

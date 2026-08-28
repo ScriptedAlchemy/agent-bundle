@@ -14,6 +14,15 @@ import {
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import capabilityTable from './capabilities/cursor-2026-08-28.json' with { type: 'json' };
+import {
+  cursorHookWrapperSource,
+  encodeCursorPlaygroundInput,
+  encodeCursorPlaygroundOutput,
+  planHooks,
+  readCursorNativeHookCommands,
+  type TargetHookContract,
+  type TargetHookDocumentEntryInput,
+} from './hook-contract.ts';
 import schemaProvenance from './schemas/cursor/PROVENANCE.json' with { type: 'json' };
 import hooksSchema from './schemas/cursor/hooks.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/cursor/mcp.schema.json' with { type: 'json' };
@@ -33,12 +42,10 @@ const cursorName = 'cursor';
 
 /**
  * Cursor's conventional artifact document paths, shared with the unified
- * bundle adapter. Cursor auto-discovers `mcp.json` at the plugin root (never
- * the Claude-convention `.mcp.json`); the manifest still carries an explicit
- * pointer so relocations stay impossible to configure apart. Hooks are not
- * emitted by any target until Cursor's hook stdin contract is pinned; the
- * hooks document is declared only so a hand-authored one validates against
- * the pinned schema.
+ * bundle adapter. Cursor auto-discovers `mcp.json` and `hooks/hooks.json` at
+ * the plugin root (never the Claude-convention `.mcp.json`); the manifest
+ * still carries explicit pointers so relocations stay impossible to
+ * configure apart.
  */
 export const cursorArtifactPaths = Object.freeze({
   hooks: 'hooks/hooks.json',
@@ -62,8 +69,41 @@ const cursorNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
 export const isValidCursorPluginName = (name: string): boolean =>
   cursorNamePattern.test(name) && name.length <= 64;
 
-/** The Cursor hooks document every target emits until the hook stdin contract is pinned. */
+/** The schema-collision guard the bundle emits when no hook lowers to Cursor. */
 export const emptyCursorHooksDocument = Object.freeze({ hooks: {}, version: 1 });
+
+const cursorHookDocumentEntry = (input: TargetHookDocumentEntryInput): Record<string, unknown> => ({ ...input });
+
+const cursorHookDocumentEnvelope = (hooks: Record<string, unknown[]>): Record<string, unknown> => ({ hooks, version: 1 });
+
+export interface CursorHookContractOptions {
+  /** See TargetHookContract.indexedWrappers; the bundle's Cursor wrappers are document variants. */
+  readonly indexedWrappers?: false;
+  readonly manifestPath: string;
+  readonly wrapperPath: TargetHookContract['wrapperPath'];
+}
+
+/**
+ * Cursor hook lowering, shared with the unified bundle adapter: flat
+ * `{ command, matcher?, timeout? }` entries under a `version: 1` envelope,
+ * `${CURSOR_PLUGIN_ROOT}` command interpolation, and the dedicated Cursor
+ * wrapper codec (Cursor's stdin/stdout envelope is not the shared
+ * Claude/Codex format; see cursorHookWrapperSource).
+ */
+export const createCursorHookContract = (options: CursorHookContractOptions): TargetHookContract => Object.freeze({
+  commandRoot: '${CURSOR_PLUGIN_ROOT}',
+  documentEntry: cursorHookDocumentEntry,
+  documentEnvelope: cursorHookDocumentEnvelope,
+  encodePlaygroundInput: encodeCursorPlaygroundInput,
+  encodePlaygroundOutput: (result, canonicalEvent) => encodeCursorPlaygroundOutput(result, canonicalEvent),
+  eventNames: capabilityTable.hooks.events,
+  ...(options.indexedWrappers === false ? { indexedWrappers: false as const } : {}),
+  manifestPath: options.manifestPath,
+  matchers: capabilityTable.hooks.matchers,
+  readNativeCommands: readCursorNativeHookCommands,
+  wrapperPath: options.wrapperPath,
+  wrapperSource: cursorHookWrapperSource,
+} satisfies TargetHookContract);
 
 /**
  * Cursor documents `${env:NAME}` / `${workspaceFolder}` interpolation and
@@ -164,9 +204,14 @@ export const cursorManifest = (
 const metadata = Object.freeze({
   adapterRevision: '1.0.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'c9e916ce4caf1865f57078765c27f47a2d225796ac36c1b65ccadf6a5290c86e',
+  capabilitySha256: 'b8990776721f3e2cf4707364812586a0043b8a1247899a47f256302739c00443',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
+});
+
+const hookContract = createCursorHookContract({
+  manifestPath: cursorArtifactPaths.hooks,
+  wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
 });
 
 const artifactValidation = Object.freeze({
@@ -229,7 +274,14 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
 
+  const generatedHooks = planHooks(model, cursorName, hookContract);
+  diagnostics.push(...generatedHooks.diagnostics);
+  const hookDocument = generatedHooks.document;
+  const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
+  if (hookDocument !== undefined) diagnostics.push(...schemaDiagnostics('hooks', hookDocumentValid, validateHooks.errors));
+
   const plugin = cursorManifest(model, {
+    ...(hookDocument !== undefined && hookDocumentValid ? { hooks: `./${cursorArtifactPaths.hooks}` } : {}),
     ...(mcp !== undefined && mcpValid ? { mcp: `./${cursorArtifactPaths.mcp}` } : {}),
     ...(model.skills.some((skill) => isSelected(skill.targets)) ? { skills: './skills/' } : {}),
   });
@@ -237,8 +289,9 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
 
   return standardPluginArtifactPlan({
     diagnostics,
-    hookDocumentValid: false,
-    hookEntries: [],
+    hookDocument,
+    hookDocumentValid,
+    hookEntries: generatedHooks.hookEntries,
     hookManifestPath: cursorArtifactPaths.hooks,
     isSelected,
     marketplaceRelativePath: '.cursor-plugin/marketplace.json',
@@ -255,17 +308,13 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
 
 export const cursorAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
-  artifactLayout: Object.freeze({
-    assets: standardArtifactLayout.assets,
-    mcpApps: standardArtifactLayout.mcpApps,
-    mcpEntries: standardArtifactLayout.mcpEntries,
-    scripts: standardArtifactLayout.scripts,
-    skills: standardArtifactLayout.skills,
-  }),
+  artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
+    hooks: true,
     mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
     skills: capabilityTable.plugin.skills,
   }),
+  hookContract,
   metadata,
   mcpRuntime,
   name: cursorName,

@@ -7,7 +7,7 @@ import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { e2e, execFile, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
+import { e2e, execFile, workbenchAssets, workspaceRoot, workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 5_000;
 
@@ -83,7 +83,7 @@ e2e('treats an unsupported Inspector hash as the overview without opening an MCP
       if (request.url() === `${server.url}/api/mcp/sessions` && request.method() === 'POST') sessionPosts += 1;
     });
 
-    await page.goto(`${server.url}#inspector`);
+    await page.goto(workbenchUrl(server.url, 'inspector'));
     await expect(page).toHaveURL(/#inspector$/u, { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
@@ -114,7 +114,7 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
       if (request.url() === `${server.url}/api/mcp/sessions` && request.method() === 'POST') sessionPosts += 1;
     });
 
-    await page.goto(`${server.url}#mcp`);
+    await page.goto(workbenchUrl(server.url, 'mcp'));
     const playgroundTab = page.getByRole('tab', { name: 'Playground' });
     const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
     const presentationHistoryLength = await page.evaluate(() => window.history.length);
@@ -246,7 +246,7 @@ e2e('mounts the internal Inspector presentation from an explicit development-mod
   try {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${server.url}#mcp`);
+    await page.goto(workbenchUrl(server.url, 'mcp'));
     const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
     await inspectorTab.click();
     await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
