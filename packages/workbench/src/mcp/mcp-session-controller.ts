@@ -257,7 +257,7 @@ const artifactBindingSnapshot = (value: unknown): McpRouteSessionBinding | undef
     if (
       typeof epochId.value !== 'string' || epochId.value.length === 0 ||
       typeof serverName.value !== 'string' || serverName.value.length === 0 ||
-      (target.value !== 'claude' && target.value !== 'codex' && target.value !== 'portable')
+      (target.value !== 'claude' && target.value !== 'codex' && target.value !== 'cursor' && target.value !== 'portable')
     ) return undefined;
     return Object.freeze({ epochId: epochId.value, serverName: serverName.value, target: target.value });
   } catch {

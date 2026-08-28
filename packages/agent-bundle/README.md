@@ -1,6 +1,6 @@
 # agent-bundle
 
-Compile a typed Agent Bundle configuration into portable, Codex, and Claude Code artifacts. Node.js 22.19 or later is required.
+Compile a typed Agent Bundle configuration into portable, Codex, Claude Code, and Cursor artifacts. Node.js 22.19 or later is required.
 
 ```sh
 npm install --save-dev agent-bundle

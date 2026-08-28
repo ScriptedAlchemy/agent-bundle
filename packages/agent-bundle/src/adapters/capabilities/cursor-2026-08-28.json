@@ -1,0 +1,30 @@
+{
+  "host": "cursor",
+  "mcp": {
+    "pathTokens": {
+      "args": [
+        "${CURSOR_PLUGIN_ROOT}",
+        "${workspaceFolder}"
+      ],
+      "env": [
+        "${CURSOR_PLUGIN_ROOT}",
+        "${workspaceFolder}"
+      ],
+      "headers": [
+        "${CURSOR_PLUGIN_ROOT}",
+        "${workspaceFolder}"
+      ],
+      "url": [
+        "${CURSOR_PLUGIN_ROOT}",
+        "${workspaceFolder}"
+      ]
+    },
+    "stdio": true,
+    "streamableHttp": true
+  },
+  "observedCliVersion": "2026-08-28",
+  "plugin": {
+    "manifest": ".cursor-plugin/plugin.json",
+    "skills": true
+  }
+}

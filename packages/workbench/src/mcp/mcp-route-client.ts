@@ -9,7 +9,7 @@ import type {
 } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 
-export type McpRouteTarget = 'claude' | 'codex' | 'portable';
+export type McpRouteTarget = 'claude' | 'codex' | 'cursor' | 'portable';
 
 export interface McpRouteSessionBinding {
   readonly epochId: string;
@@ -109,7 +109,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isTarget = (value: unknown): value is McpRouteTarget =>
-  value === 'claude' || value === 'codex' || value === 'portable';
+  value === 'claude' || value === 'codex' || value === 'cursor' || value === 'portable';
 
 const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;

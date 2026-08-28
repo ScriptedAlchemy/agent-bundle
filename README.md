@@ -1,6 +1,6 @@
 # agent-bundle
 
-`agent-bundle` compiles one Agent Bundle project into portable, Codex, and Claude Code artifacts. It discovers skills, validates a typed configuration, bundles local JavaScript/TypeScript entry points, and writes the host-specific metadata needed by each selected target.
+`agent-bundle` compiles one Agent Bundle project into portable, Codex, Claude Code, and Cursor artifacts. It discovers skills, validates a typed configuration, bundles local JavaScript/TypeScript entry points, and writes the host-specific metadata needed by each selected target.
 
 It requires Node.js 22.19 or later.
 
@@ -38,7 +38,8 @@ shared `skills/`, `hooks/`, `mcp/`, `scripts/`, and `assets/` directories,
 plus a generated `AGENTS.md` install matrix. Hooks compile once into
 host-detecting wrappers that serve Claude Code and Codex; Cursor consumes the
 skills and MCP servers. Per-host artifacts remain available as `claude`,
-`codex`, and `portable` targets when a host-specific layout is required.
+`codex`, `cursor`, and `portable` targets when a host-specific layout is
+required.
 
 ## Install and build
 
@@ -145,7 +146,7 @@ export default defineConfig({
     version: '1.0.0',
     description: 'Review helpers for an agent host.',
   },
-  targets: ['portable', 'codex', 'claude'], // or ['plugin'] for the unified multi-host bundle
+  targets: ['portable', 'codex', 'claude', 'cursor'], // or ['plugin'] for the unified multi-host bundle
   skills: ['skills/*'],
   scripts: {
     report: './src/report.ts',
@@ -219,11 +220,16 @@ artifact/
     .mcp.json
     scripts/<name>.mjs
     hooks/<name>.mjs
+  cursor/
+    .cursor-plugin/plugin.json
+    mcp.json
+    scripts/<name>.mjs
+    skills/<skill>/...
 ```
 
 `agent-bundle.manifest.json` records each emitted file's path, byte length, and SHA-256 digest. This allows `validate --artifact` and artifact operations to run after the source project is no longer present.
 
-Portable artifacts contain portable plugin, skills, MCP, and App-resource files. Codex and Claude artifacts contain their respective native metadata and generated hook wrappers. Terminal hosts can use normal MCP tools and resources; visual rendering of an MCP App depends on the host supporting the standard resource metadata.
+Portable artifacts contain portable plugin, skills, MCP, and App-resource files. Codex and Claude artifacts contain their respective native metadata and generated hook wrappers. Cursor artifacts contain the `.cursor-plugin/plugin.json` manifest, the auto-discovered `mcp.json` (Cursor's typeless server format), and shared skills, scripts, and assets; hooks stay Claude/Codex-only until Cursor's hook stdin contract is pinned. Terminal hosts can use normal MCP tools and resources; visual rendering of an MCP App depends on the host supporting the standard resource metadata.
 
 ## Public examples
 

@@ -1,7 +1,7 @@
 {
   "name": "agent-bundle",
   "version": "0.1.0",
-  "description": "Compile a typed Agent Bundle configuration into portable, Codex, and Claude Code artifacts.",
+  "description": "Compile a typed Agent Bundle configuration into portable, Codex, Claude Code, and Cursor artifacts.",
   "keywords": [
     "agent",
     "claude-code",
