@@ -166,9 +166,6 @@ examples/
     src/rsc/routes.tsx
     src/rsc/worker.tsx
     src/runtime/contracts.ts
-    src/runtime/elements.ts
-    src/runtime/lower-hook.ts
-    src/runtime/lower-mcp.ts
     src/runtime/request-context.ts
     src/runtime/state-file-core.ts
     src/runtime/state-file-test-support.ts
