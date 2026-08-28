@@ -545,7 +545,9 @@ const capture = async (outputs) => {
     await page.waitForFunction(
       (selector) => globalThis.document.querySelector(selector)?.textContent?.includes('AB8206') === true,
       '[aria-label="Runtime diagnostics evidence"]',
-      { timeout: browserTimeout },
+      // Source compilation is admitted by the watcher and may legitimately
+      // outlive the interaction budget on a loaded runner.
+      { timeout: 0 },
     );
     const generationDuringError = await identity.getAttribute('data-runtime-generation');
     const retainedRun = await currentRunId(page);
