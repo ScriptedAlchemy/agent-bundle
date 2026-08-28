@@ -1,0 +1,11 @@
+{
+  "name": "@inspector/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Vendored MCP Inspector core, linked so `@inspector/core/*` specifiers resolve through the package manager instead of per-config aliases.",
+  "type": "module",
+  "exports": {
+    "./*.js": "./*.ts",
+    "./*": "./*"
+  }
+}

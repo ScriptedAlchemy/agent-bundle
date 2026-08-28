@@ -1,5 +1,6 @@
 packages:
   - packages/*
+  - packages/workbench/src/inspector/vendor/core
   - examples/*
 allowBuilds:
   '@google/genai': false

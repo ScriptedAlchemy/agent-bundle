@@ -221,10 +221,14 @@ const runtimePlaygroundController = createRuntimePlaygroundController({
 });
 const runtimePlaygroundProps: RuntimePlaygroundProps = { controller: runtimePlaygroundController };
 
-it('compiles RuntimeClient against the exact provider wire contract', () => {
+it('compiles RuntimeClient against the exact provider wire contract', async () => {
   const foreground = new ForegroundRouteClient({ fetch: async () => Response.json(statusResponse) });
   const client: RuntimeClient = new RuntimeClient(foreground);
   const bootstrap: Promise<RuntimeBootstrap> = client.bootstrap();
+  // The stub answers every route with the status wrapper, so the fan-out
+  // rejects by design; handling it here keeps the rejection from racing the
+  // worker's post-file unhandled-error check.
+  await expect(bootstrap).rejects.toThrow('Runtime route returned an invalid surfaces wrapper.');
   const error: RuntimeClientError = new RuntimeClientError({ code: 'AB8204', message: 'Generation changed.', phase: 'provider-lifecycle' });
   const runtimeModel: RuntimeModel = createRuntimeModel({ bootstrap: runtimeBootstrap, profiles });
   const requested = reduceRuntimeModel(runtimeModel, { type: 'run.request' });

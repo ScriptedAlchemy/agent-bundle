@@ -43,10 +43,6 @@ export default defineConfig({
       plugins: [pluginReact()],
       resolve: {
         alias: {
-          '@inspector/core/json/xMcpHeader.js': resolve('packages/workbench/src/inspector/vendor/core/json/xMcpHeader.ts'),
-          '@inspector/core/mcp/fetchTracking.js': resolve('packages/workbench/src/inspector/vendor/core/mcp/fetchTracking.ts'),
-          '@inspector/core/mcp/types.js': resolve('packages/workbench/src/inspector/vendor/core/mcp/types.ts'),
-          '@inspector/core': resolve('packages/workbench/src/inspector/vendor/core'),
           react: browserReactRoot,
           'react-dom': browserReactDomRoot,
         },

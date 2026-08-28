@@ -10,10 +10,6 @@ export const workbenchNodeModules = join(workbenchRoot, 'node_modules');
 export const dependencyRoot = (name: string): string => dirname(requireFromWorkbench.resolve(`${name}/package.json`));
 
 export const workbenchBrowserAliases = {
-  '@inspector/core/json/xMcpHeader.js': join(vendorRoot, 'core', 'json', 'xMcpHeader.ts'),
-  '@inspector/core/mcp/fetchTracking.js': join(vendorRoot, 'core', 'mcp', 'fetchTracking.ts'),
-  '@inspector/core/mcp/types.js': join(vendorRoot, 'core', 'mcp', 'types.ts'),
-  '@inspector/core': join(vendorRoot, 'core'),
   // @mantine/core's exports map blocks package.json resolution, so its path
   // comes from the workbench package's own direct dependency directory.
   '@mantine/core': join(workbenchRoot, 'node_modules', '@mantine', 'core'),

@@ -328,6 +328,9 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
+      '@inspector/core':
+        specifier: workspace:*
+        version: link:src/inspector/vendor/core
       '@rsbuild/core':
         specifier: 2.2.1
         version: 2.2.1
@@ -340,6 +343,8 @@ importers:
       '@types/react-dom':
         specifier: 19.2.5
         version: 19.2.5(@types/react@19.2.18)
+
+  packages/workbench/src/inspector/vendor/core: {}
 
 packages:
 

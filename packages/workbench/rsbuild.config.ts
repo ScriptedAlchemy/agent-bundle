@@ -4,7 +4,6 @@ import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
 const sourceRoot = resolve(import.meta.dirname, 'src');
-const vendorRoot = resolve(sourceRoot, 'inspector', 'vendor');
 
 /**
  * The contributor dev process proxies to a separately started foreground
@@ -35,14 +34,6 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
   },
   plugins: [pluginReact()],
   root: import.meta.dirname,
-  resolve: {
-    alias: {
-      '@inspector/core/json/xMcpHeader.js': resolve(vendorRoot, 'core', 'json', 'xMcpHeader.ts'),
-      '@inspector/core/mcp/fetchTracking.js': resolve(vendorRoot, 'core', 'mcp', 'fetchTracking.ts'),
-      '@inspector/core/mcp/types.js': resolve(vendorRoot, 'core', 'mcp', 'types.ts'),
-      '@inspector/core': resolve(vendorRoot, 'core'),
-    },
-  },
   source: {
     entry: {
       index: resolve(sourceRoot, 'main.tsx'),

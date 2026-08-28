@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "rsc-agent-runtime": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./runtime/mcp/stdio.js"],
+      "cwd": "./"
+    }
+  }
+}
