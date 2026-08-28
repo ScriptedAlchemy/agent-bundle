@@ -13,6 +13,7 @@ import type {
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/contracts/playground.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/contracts/playground.ts';
+import { NATIVE_HOST_LABELS } from '../../../agent-bundle/src/contracts/playground.ts';
 import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/contracts/playground.ts';
 
 import { canonicalHookInputFor } from '../hooks/hooks-page.tsx';
@@ -595,7 +596,7 @@ export const PlaygroundNativePromptControls = ({
       <label htmlFor="playground-native-host">Host
         <select disabled={catalogDisabled || hosts.length === 0} id="playground-native-host" onChange={(event) => onHostChange(event.currentTarget.value as '' | NativePlaygroundHost)} value={selection.host}>
           <option value="">Select a native host</option>
-          {hosts.map((host) => <option key={host} value={host}>{host === 'claude' ? 'Claude' : 'Codex'}</option>)}
+          {hosts.map((host) => <option key={host} value={host}>{NATIVE_HOST_LABELS[host]}</option>)}
         </select>
       </label>
       <label htmlFor="playground-native-case">Case

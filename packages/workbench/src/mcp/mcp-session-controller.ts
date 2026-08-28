@@ -1,5 +1,6 @@
 import { Client, type JSONRPCMessage, type Transport, type TransportSendOptions } from '@modelcontextprotocol/client';
 
+import { isMcpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type {
   McpSessionBinding,
   McpSessionInspectorConfig,
@@ -257,7 +258,7 @@ const artifactBindingSnapshot = (value: unknown): McpRouteSessionBinding | undef
     if (
       typeof epochId.value !== 'string' || epochId.value.length === 0 ||
       typeof serverName.value !== 'string' || serverName.value.length === 0 ||
-      (target.value !== 'claude' && target.value !== 'codex' && target.value !== 'cursor' && target.value !== 'portable')
+      !isMcpSessionTarget(target.value)
     ) return undefined;
     return Object.freeze({ epochId: epochId.value, serverName: serverName.value, target: target.value });
   } catch {

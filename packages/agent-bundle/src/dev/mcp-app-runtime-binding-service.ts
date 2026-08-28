@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { cloneMcpAppFiniteJson, type McpAppJsonValue } from './mcp-app-metadata.ts';
+import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from './mcp-app-profile-descriptors.ts';
 import type { DevRuntimeMcpSessionView } from './runtime-provider.ts';
 import type {
   DevRuntimeMcpAppRunBinding,
@@ -10,7 +11,7 @@ import type {
   RuntimeVector,
 } from './runtime-protocol.ts';
 
-export type McpAppProfileId = 'portable' | 'chatgpt' | 'claude';
+export type { McpAppProfileId } from './mcp-app-profile-descriptors.ts';
 
 export interface McpAppStableSessionIdentity {
   readonly definitionDigest: string;
@@ -98,12 +99,6 @@ interface McpAppRuntimeBinding {
   readonly teardown: McpAppRuntimeBindingTeardown | undefined;
   unsubscribe: () => void;
 }
-
-const PROFILE_VERSIONS: Readonly<Record<McpAppProfileId, string>> = Object.freeze({
-  chatgpt: 'agent-bundle:chatgpt-sim:1',
-  claude: 'agent-bundle:claude-sim:1',
-  portable: 'agent-bundle:mcp-apps:2026-01-26',
-});
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -255,7 +250,7 @@ export class McpAppRuntimeBindingService {
         evidence: 'simulated' as const,
         id: randomUUID(),
         profileId,
-        profileVersion: PROFILE_VERSIONS[profileId],
+        profileVersion: MCP_APP_PROFILE_DESCRIPTORS[profileId].version,
         runVector: publicVector(privateRunVector),
       });
       entry = {

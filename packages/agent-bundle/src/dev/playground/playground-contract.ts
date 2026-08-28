@@ -1,3 +1,4 @@
+import type { NativePlaygroundHost } from './native-playground-types.ts';
 import type { PlaygroundJsonObject, PlaygroundSession } from './playground-store.ts';
 
 /** The only operation shapes a browser may request from Playground. */
@@ -9,7 +10,7 @@ export type PlaygroundOperationRequest =
       readonly caseId: string;
       readonly epochId?: string;
       readonly fixtureId: string;
-      readonly host: 'claude' | 'codex';
+      readonly host: NativePlaygroundHost;
       readonly modelPinId: string;
       readonly operation: 'native.prompt';
       readonly prompt: string;

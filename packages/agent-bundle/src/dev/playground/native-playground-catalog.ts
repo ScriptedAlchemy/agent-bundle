@@ -4,6 +4,7 @@ import { digest } from '../../core/digest.ts';
 import { isInsideOrEqual } from '../../core/paths.ts';
 import { hasExactOwnKeys, isJsonRecord as isRecord, type JsonValue } from '../../core/strict-json.ts';
 import type { EvalFixturePlan } from '../../eval/fixtures.ts';
+import { NATIVE_HOSTS } from '../../host-contracts/native-hosts.ts';
 import { normalizeEvalCase } from '../../eval/suite.ts';
 import type { EvalCase } from '../../eval/types.ts';
 import type { ArtifactEpoch } from '../types.ts';
@@ -53,7 +54,7 @@ export interface PersistedCatalogSnapshot {
   readonly selections: readonly PersistedCatalogSelection[];
 }
 
-export const nativePlaygroundHosts = new Set<NativePlaygroundHost>(['claude', 'codex']);
+export const nativePlaygroundHosts = new Set<NativePlaygroundHost>(NATIVE_HOSTS);
 export const maximumCatalogSelections = 256;
 export const maximumCatalogSnapshotBytes = 8 * 1_024 * 1_024;
 const maximumCatalogSnapshotNodes = 65_536;
