@@ -131,7 +131,7 @@ const currentRunId = async (page) => {
   return runId;
 };
 
-const waitForNewGeneration = async (page, identity, before) => {
+const waitForNewGeneration = async (page, before) => {
   // Wait for a committed replacement generation and read it atomically from the
   // predicate: the attribute can transiently blank or flap back to the last-good
   // value while the provider remounts, so a separate re-read races.
@@ -143,9 +143,8 @@ const waitForNewGeneration = async (page, identity, before) => {
     { expected: before, selector: '[data-runtime-provider-session]' },
     { timeout: 0 },
   );
-  const after = await handle.jsonValue();
-  if (typeof after !== 'string' || after === before) throw new Error('Runtime generation did not advance.');
-  return after;
+  // The predicate resolves only with a non-empty replacement string.
+  return await handle.jsonValue();
 };
 
 const runtimeAppFrame = async (page, bootstrapUrl) => {
@@ -512,7 +511,7 @@ const capture = async (outputs) => {
     const historyBeforeHmr = await history.count();
     const runIdsBeforeHmr = await runtimeRunIds(page);
     await writeFile(fixture.serverComponentSource, editedServer, 'utf8');
-    const generationAfter = await waitForNewGeneration(page, identity, generationBefore);
+    const generationAfter = await waitForNewGeneration(page, generationBefore);
     await page.waitForFunction(
       ({ expected, selector }) => globalThis.document.querySelectorAll(selector).length > expected,
       { expected: historyBeforeHmr, selector: '[aria-label="Runtime run history"] ol > li' },
@@ -560,7 +559,7 @@ const capture = async (outputs) => {
     await screenshot(page, outputs.compileError);
 
     await writeFile(fixture.serverComponentSource, repairedServer, 'utf8');
-    const generationRecovered = await waitForNewGeneration(page, identity, lastGoodGenerationDuringError);
+    const generationRecovered = await waitForNewGeneration(page, lastGoodGenerationDuringError);
     await page.waitForFunction(
       ({ expected, selector }) => globalThis.document.querySelectorAll(selector).length > expected,
       { expected: historyBeforeError, selector: '[aria-label="Runtime run history"] ol > li' },

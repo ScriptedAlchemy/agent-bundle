@@ -23,11 +23,12 @@ export type InspectorRuntimeEvidenceInput =
   | Readonly<{ readonly kind: 'protocol'; readonly protocol?: DevRuntimeInspectionEnvelope['protocol']; readonly trace: readonly DevRuntimeTraceSpan[] }>
   | Readonly<{ readonly diagnostics: readonly DevRuntimeDiagnostic[]; readonly kind: 'diagnostics' }>
   | Readonly<{
-    /** Span IDs whose details render expanded; meaningful only with onToggleSpan. */
-    readonly expandedSpanIds?: readonly string[];
+    /** Presentation-only span disclosure; details always render when absent. */
+    readonly expansion?: Readonly<{
+      readonly expandedIds: readonly string[];
+      readonly onToggle: (spanId: string) => void;
+    }>;
     readonly kind: 'trace';
-    /** Presentation-only expand/collapse callback; details always render when absent. */
-    readonly onToggleSpan?: (spanId: string) => void;
     readonly trace: readonly DevRuntimeTraceSpan[];
   }>;
 

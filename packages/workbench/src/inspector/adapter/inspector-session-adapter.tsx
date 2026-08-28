@@ -117,16 +117,16 @@ export const InspectorRuntimeEvidence = ({ evidence }: InspectorRuntimeEvidenceP
     <h3>Provider diagnostics</h3>
     {evidence.diagnostics.length === 0 ? <p>No provider diagnostics.</p> : <ol>{evidence.diagnostics.map((diagnostic, index) => <li key={`${diagnostic.code}-${index}`}><strong>{diagnostic.phase}</strong> <span>{diagnostic.severity}</span> <code>{diagnostic.code}</code> {diagnostic.message}</li>)}</ol>}
   </section>;
-  const expandedSpanIds = evidence.expandedSpanIds;
-  const onToggleSpan = evidence.onToggleSpan;
+  const expansion = evidence.expansion;
+  const expandedIds = expansion === undefined ? undefined : new Set(expansion.expandedIds);
   return <section aria-label="Runtime render trace" className="inspector-runtime-evidence">
     <h3>Render trace</h3>
     {evidence.trace.length === 0 ? <p>No render evidence yet.</p> : <ol>{evidence.trace.map((span) => {
-      const expanded = onToggleSpan === undefined || expandedSpanIds === undefined || expandedSpanIds.includes(span.id);
+      const expanded = expandedIds === undefined || expandedIds.has(span.id);
       return <li data-runtime-trace-parent={span.parentId} key={span.id}>
         <strong>{span.phase}</strong> <span>{span.status}</span>{span.durationMs === undefined ? undefined : <span>{span.durationMs} ms</span>}
-        {span.details === undefined || onToggleSpan === undefined ? undefined :
-          <button aria-expanded={expanded} onClick={() => onToggleSpan(span.id)} type="button">{expanded ? 'Hide span details' : 'Show span details'}</button>}
+        {span.details === undefined || expansion === undefined ? undefined :
+          <button aria-expanded={expanded} onClick={() => expansion.onToggle(span.id)} type="button">{expanded ? 'Hide span details' : 'Show span details'}</button>}
         {span.details === undefined || !expanded ? undefined : <pre>{JSON.stringify(span.details, null, 2)}</pre>}
       </li>;
     })}</ol>}

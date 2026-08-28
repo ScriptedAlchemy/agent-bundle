@@ -9,6 +9,7 @@ import type {
   DevRuntimeSurface,
 } from '../../agent-bundle/src/contracts/runtime.ts';
 import type { ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/contracts/runtime.ts';
+import { downloadBlob } from './client-helpers.ts';
 import { RuntimeClientError, type RuntimeBootstrap } from './runtime-client.ts';
 import { McpJsonInput, serializeJsonValue, type ImmutableJsonValue } from './mcp/mcp-json-input.tsx';
 import {
@@ -115,10 +116,6 @@ const isCorrelatedForegroundSuccess = (previous: RuntimeModel, action: RuntimeMo
 class RuntimePlaygroundControllerImpl implements RuntimePlaygroundController {
   readonly #client: RuntimePlaygroundClient;
 
-  async downloadRunFlight(runId: string): Promise<Blob> {
-    return this.#client.readRunFlight(runId);
-  }
-
   readonly #listeners = new Set<(model: RuntimeModel) => void>();
   #effectDrain: Promise<void> | undefined;
   #eventTail: Promise<void> = Promise.resolve();
@@ -137,6 +134,10 @@ class RuntimePlaygroundControllerImpl implements RuntimePlaygroundController {
 
   get model(): RuntimeModel {
     return this.#model;
+  }
+
+  downloadRunFlight(runId: string): Promise<Blob> {
+    return this.#client.readRunFlight(runId);
   }
 
   close(): void {
@@ -430,19 +431,6 @@ const previousProviderOutput = (run: DevRuntimeRun): string => {
 const resetSeedLabel = (request: DevRuntimeStateResetRequest): string =>
   request.seed === undefined ? 'No fixture seed' : JSON.stringify(request.seed);
 
-const saveFlightPayload = (payload: Blob, filename: string): void => {
-  const url = URL.createObjectURL(payload);
-  try {
-    const anchor = globalThis.document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    anchor.rel = 'noopener';
-    anchor.click();
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-};
-
 export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlaygroundLiveMcpPageAdapter, registerAppPreviewLifecycle, renderAppPreview }: RuntimePlaygroundProps): React.ReactNode => {
   const [model, setModel] = useState(controller.model);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -456,6 +444,15 @@ export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlay
   const priorConfirmation = useRef(model.confirmation);
   const [confirmationPending, setConfirmationPending] = useState(false);
   const [flightDownloadError, setFlightDownloadError] = useState<string | undefined>(undefined);
+  const downloadFlight = (flightRun: DevRuntimeRun): void => {
+    void controller.downloadRunFlight(flightRun.id).then(
+      (payload) => {
+        downloadBlob(payload, `runtime-run-${flightRun.id}.flight.bin`);
+        setFlightDownloadError(undefined);
+      },
+      (error: unknown) => setFlightDownloadError(errorMessage(error)),
+    );
+  };
   const surface = selectedSurface(model);
   const run = selectedRun(model);
   const evidenceSurface = run === undefined ? surface : model.surfaces.find((entry) => entry.id === run.surfaceId) ?? surface;
@@ -651,24 +648,16 @@ export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlay
           />
           {flightDownloadError === undefined ? undefined : <p className="runtime-request-error" role="alert">{flightDownloadError}</p>}
           <RuntimeInspector
-            expandedTraceSpanIds={model.expandedTraceSpanIds}
-            onDownloadFlight={(flightRun) => {
-              void (async () => {
-                try {
-                  const payload = await controller.downloadRunFlight(flightRun.id);
-                  saveFlightPayload(payload, `runtime-run-${flightRun.id}.flight.bin`);
-                  setFlightDownloadError(undefined);
-                } catch (error) {
-                  setFlightDownloadError(error instanceof Error ? error.message : 'The Flight payload download failed.');
-                }
-              })();
-            }}
+            onDownloadFlight={downloadFlight}
             onTabChange={(tab) => controller.dispatch({ tab, type: 'selection.tab' })}
-            onToggleTraceSpan={(spanId) => controller.dispatch({ spanId, type: 'trace.toggle' })}
             run={run}
             status={model.status}
             surface={evidenceSurface}
             tab={model.selectedTab}
+            traceExpansion={{
+              expandedIds: model.expandedTraceSpanIds,
+              onToggle: (spanId) => controller.dispatch({ spanId, type: 'trace.toggle' }),
+            }}
           />
         </React.Suspense>
       </div>

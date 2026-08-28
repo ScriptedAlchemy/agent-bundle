@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
-import { dependencyRoot } from './support/workbench-browser-modules.ts';
+import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
 import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
 import type { JsonValue } from '../../agent-bundle/src/dev/types.ts';
@@ -54,10 +54,7 @@ const mountedInputFixture = async (source: readonly string[]) => {
       },
       plugins: [pluginReact()],
       resolve: {
-        alias: {
-          react: dependencyRoot('react'),
-          'react-dom/client': join(dependencyRoot('react-dom'), 'client.js'),
-        },
+        alias: { ...workbenchBrowserAliases },
       },
       source: {
         define: { 'process.env.NODE_ENV': JSON.stringify('production') },

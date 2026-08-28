@@ -14,7 +14,13 @@ export const workbenchBrowserAliases = {
   '@inspector/core/mcp/fetchTracking.js': join(vendorRoot, 'core', 'mcp', 'fetchTracking.ts'),
   '@inspector/core/mcp/types.js': join(vendorRoot, 'core', 'mcp', 'types.ts'),
   '@inspector/core': join(vendorRoot, 'core'),
+  // @mantine/core's exports map blocks package.json resolution, so its path
+  // comes from the workbench package's own direct dependency directory.
   '@mantine/core': join(workbenchRoot, 'node_modules', '@mantine', 'core'),
   react: dependencyRoot('react'),
   'react-dom': dependencyRoot('react-dom'),
+  'react-dom/client': join(dependencyRoot('react-dom'), 'client.js'),
 };
+
+/** The @mantine/core browser ESM entry (exports-map blocked from require.resolve). */
+export const mantineEsmEntry = join(workbenchRoot, 'node_modules', '@mantine', 'core', 'esm', 'index.mjs');

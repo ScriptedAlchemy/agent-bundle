@@ -7,7 +7,7 @@ import { expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
-import { dependencyRoot } from './support/workbench-browser-modules.ts';
+import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
 import { chromium, type Locator } from 'playwright';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
@@ -60,10 +60,7 @@ const mountedConsentFixture = async () => {
       output: { assetPrefix: '/', distPath: { root: dist }, filename: { js: '[name].js' } },
       plugins: [pluginReact()],
       resolve: {
-        alias: {
-          react: dependencyRoot('react'),
-          'react-dom/client': join(dependencyRoot('react-dom'), 'client.js'),
-        },
+        alias: { ...workbenchBrowserAliases },
       },
       source: { define: { 'process.env.NODE_ENV': JSON.stringify('production') }, entry: { consent: entry } },
     },

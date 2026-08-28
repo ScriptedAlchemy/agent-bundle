@@ -10,7 +10,7 @@ import { describe, expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
-import { dependencyRoot, workbenchNodeModules } from './support/workbench-browser-modules.ts';
+import { mantineEsmEntry, workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
 import { chromium } from 'playwright';
 
 import {
@@ -87,7 +87,6 @@ const workbenchSource = join(workspaceRoot, 'packages', 'workbench', 'src');
 const secureRendererSource = join(workbenchSource, 'mcp', 'mcp-app-frame.tsx');
 const runtimeClientSource = join(workbenchSource, 'mcp', 'mcp-app-client.ts');
 const runtimeRouteClientSource = join(workbenchSource, 'mcp', 'mcp-route-client.ts');
-const vendorRoot = join(workbenchSource, 'inspector', 'vendor');
 
 const mountedSecureRendererFixture = async () => {
   const bootstrapRequests: string[] = [];
@@ -140,13 +139,8 @@ const mountedSecureRendererFixture = async () => {
       plugins: [pluginReact()],
       resolve: {
         alias: {
-          '@inspector/core/json/xMcpHeader.js': join(vendorRoot, 'core', 'json', 'xMcpHeader.ts'),
-          '@inspector/core/mcp/fetchTracking.js': join(vendorRoot, 'core', 'mcp', 'fetchTracking.ts'),
-          '@inspector/core/mcp/types.js': join(vendorRoot, 'core', 'mcp', 'types.ts'),
-          '@inspector/core': join(vendorRoot, 'core'),
-          '@mantine/core': join(workbenchNodeModules, '@mantine', 'core', 'esm', 'index.mjs'),
-          react: dependencyRoot('react'),
-          'react-dom/client': join(dependencyRoot('react-dom'), 'client.js'),
+          ...workbenchBrowserAliases,
+          '@mantine/core': mantineEsmEntry,
         },
       },
       source: {

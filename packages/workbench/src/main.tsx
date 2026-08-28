@@ -52,6 +52,7 @@ import {
   playgroundScriptsForEpoch,
 } from './playground/playground-page.tsx';
 import { overviewFor } from './overview-model.ts';
+import { downloadBlob } from './client-helpers.ts';
 import { BundleWorkflow } from './overview-page.tsx';
 import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
@@ -292,14 +293,7 @@ const RuntimeMcpHandoffButton = ({ authority, host }: { readonly authority: Runt
   return <button disabled={!host.canOpen(authority)} onClick={() => { host.open(authority); }} type="button">Open in MCP playground</button>;
 };
 
-const downloadMcpFile = ({ blob, filename }: McpDownload): void => {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.download = filename;
-  link.href = url;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-};
+const downloadMcpFile = ({ blob, filename }: McpDownload): void => downloadBlob(blob, filename);
 
 const StateMark = ({ state }: { readonly state: string }) => (
   <span aria-hidden="true" className={`state-mark state-mark--${state}`}>{

@@ -478,18 +478,12 @@ export class RuntimeClient {
   async readRunFlight(runId: string): Promise<Blob> {
     this.#requireProvider();
     try {
-      const response = await this.#foreground.protectedResponse(
+      return await this.#readBoundedBlob(
         `/api/runtime/runs/${opaqueSegment(runId, 'Runtime run ID')}/flight`,
+        (contentType) => contentType === 'application/octet-stream',
+        'Runtime Flight response is not valid.',
+        'Runtime Flight payload exceeds the allowed size.',
       );
-      const contentType = response.headers.get('content-type');
-      const declaredLength = response.headers.get('content-length');
-      if (contentType !== 'application/octet-stream' ||
-        (declaredLength !== null && (!/^(?:0|[1-9]\d*)$/u.test(declaredLength) || Number(declaredLength) > runtimeAssetLimit))) {
-        throw invalid('Runtime Flight response is not valid.');
-      }
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength > runtimeAssetLimit) throw invalid('Runtime Flight payload exceeds the allowed size.');
-      return new Blob([bytes], { type: contentType });
     } catch (error) {
       throw runtimeError(error);
     }
@@ -500,21 +494,33 @@ export class RuntimeClient {
     if (request.path.length === 0) throw invalid('Runtime asset path is not valid.');
     try {
       const path = request.path.map((segment) => opaqueSegment(segment, 'Runtime asset path segment')).join('/');
-      const response = await this.#foreground.protectedResponse(
+      return await this.#readBoundedBlob(
         `/api/runtime/assets/${opaqueSegment(request.surfaceId, 'Runtime surface ID')}/${path}?generation=${opaqueSegment(request.runtimeGenerationId, 'Runtime generation ID')}`,
+        (contentType) => runtimeAssetContentTypes.has(contentType),
+        'Runtime asset response is not valid.',
+        'Runtime asset exceeds the allowed size.',
       );
-      const contentType = response.headers.get('content-type');
-      const declaredLength = response.headers.get('content-length');
-      if (contentType === null || !runtimeAssetContentTypes.has(contentType) ||
-        (declaredLength !== null && (!/^(?:0|[1-9]\d*)$/u.test(declaredLength) || Number(declaredLength) > runtimeAssetLimit))) {
-        throw invalid('Runtime asset response is not valid.');
-      }
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength > runtimeAssetLimit) throw invalid('Runtime asset exceeds the allowed size.');
-      return new Blob([bytes], { type: contentType });
     } catch (error) {
       throw runtimeError(error);
     }
+  }
+
+  async #readBoundedBlob(
+    path: string,
+    allowedContentType: (contentType: string) => boolean,
+    invalidMessage: string,
+    oversizeMessage: string,
+  ): Promise<Blob> {
+    const response = await this.#foreground.protectedResponse(path);
+    const contentType = response.headers.get('content-type');
+    const declaredLength = response.headers.get('content-length');
+    if (contentType === null || !allowedContentType(contentType) ||
+      (declaredLength !== null && (!/^(?:0|[1-9]\d*)$/u.test(declaredLength) || Number(declaredLength) > runtimeAssetLimit))) {
+      throw invalid(invalidMessage);
+    }
+    const payload = await response.blob();
+    if (payload.size > runtimeAssetLimit) throw invalid(oversizeMessage);
+    return payload.type === contentType ? payload : new Blob([payload], { type: contentType });
   }
 
   async #readRun(path: string): Promise<DevRuntimeRun> {
