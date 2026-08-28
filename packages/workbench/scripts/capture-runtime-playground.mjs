@@ -132,18 +132,14 @@ const currentRunId = async (page) => {
 };
 
 const waitForNewGeneration = async (page, before) => {
-  // Wait for a committed replacement generation and read it atomically from the
-  // predicate: the attribute can transiently blank or flap back to the last-good
-  // value while the provider remounts, so a separate re-read races.
   const handle = await page.waitForFunction(
     ({ expected, selector }) => {
       const value = globalThis.document.querySelector(selector)?.getAttribute('data-runtime-generation');
       return typeof value === 'string' && value !== '' && value !== expected ? value : false;
     },
     { expected: before, selector: '[data-runtime-provider-session]' },
-    { timeout: 0 },
+    { timeout: browserTimeout },
   );
-  // The predicate resolves only with a non-empty replacement string.
   return await handle.jsonValue();
 };
 
@@ -537,16 +533,29 @@ const capture = async (outputs) => {
     }
     const lastGoodGenerationDuringError = compactRunGeneration;
     const historyBeforeError = await history.count();
-    await page.getByRole('tab', { name: 'Diagnostics', exact: true }).click();
+    const eventSequenceBeforeError = Number((await attributes(identity))['data-runtime-event-sequence']);
+    if (!Number.isFinite(eventSequenceBeforeError)) throw new Error('Runtime identity omitted its event sequence.');
     await writeFile(fixture.serverComponentSource, `${editedServer}\nconst = ;\n`, 'utf8');
+    await page.waitForFunction(
+      ({ expected, selector }) => Number(globalThis.document.querySelector(selector)?.getAttribute('data-runtime-event-sequence')) > expected,
+      { expected: eventSequenceBeforeError, selector: '[data-runtime-provider-session]' },
+      { timeout: browserTimeout },
+    );
+    await page.waitForFunction(
+      (selector) => {
+        const announcements = globalThis.document.querySelectorAll(selector);
+        return announcements[announcements.length - 1]?.textContent === 'Runtime generation failed. The last good result remains available.';
+      },
+      '.runtime-announcement[role="alert"]',
+      { timeout: browserTimeout },
+    );
+    await page.getByRole('tab', { name: 'Diagnostics', exact: true }).click();
     const diagnostics = page.getByLabel('Runtime diagnostics evidence');
     await diagnostics.waitFor({ state: 'visible', timeout: browserTimeout });
     await page.waitForFunction(
       (selector) => globalThis.document.querySelector(selector)?.textContent?.includes('AB8206') === true,
       '[aria-label="Runtime diagnostics evidence"]',
-      // Source compilation is admitted by the watcher and may legitimately
-      // outlive the interaction budget on a loaded runner.
-      { timeout: 0 },
+      { timeout: browserTimeout },
     );
     const generationDuringError = await identity.getAttribute('data-runtime-generation');
     const retainedRun = await currentRunId(page);
