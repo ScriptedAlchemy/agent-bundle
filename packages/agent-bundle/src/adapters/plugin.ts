@@ -1,3 +1,5 @@
+import type { ValidateFunction } from 'ajv/dist/2020.js';
+
 import { createTargetDiagnostics } from './diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
@@ -8,10 +10,16 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
+import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import { pathTokens, type NormalizedMcpServer } from '../core/types.ts';
 import claudeCapabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
 import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import { claudeAdapter, claudeArtifactPaths, claudeHooksValidator, planClaudeArtifacts } from './claude.ts';
 import { codexAdapter, codexArtifactPaths, codexPluginDocumentValidator, planCodexArtifacts } from './codex.ts';
+import cursorSchemaProvenance from './schemas/cursor/PROVENANCE.json' with { type: 'json' };
+import cursorHooksSchema from './schemas/cursor/hooks.schema.json' with { type: 'json' };
+import cursorMcpSchema from './schemas/cursor/mcp.schema.json' with { type: 'json' };
+import cursorPluginSchema from './schemas/cursor/plugin.schema.json' with { type: 'json' };
 import {
   encodeNativeHookPlaygroundInput,
   encodeNativeHookPlaygroundOutput,
@@ -21,9 +29,12 @@ import {
   type TargetHookContract,
 } from './hook-contract.ts';
 import {
+  createAdapterValidator,
+  schemaDescriptorsFrom,
   sortedEntries,
   sourceInputs,
   standardArtifactLayout,
+  validateJsonSchemaDocument,
   type TargetAdapter,
   type TargetArtifactEntry,
   type TargetArtifactLayout,
@@ -47,6 +58,14 @@ const pluginName = 'plugin';
  * hook serves both hosts. Per-host `nativeHooks` passthrough stays with the
  * host targets.
  *
+ * Cursor consumes the same root through `.cursor-plugin/plugin.json`: shared
+ * `skills/` as-is, an explicit pointer to a Cursor-format MCP document (its
+ * auto-discovery reads `mcp.json`, never the Claude-convention `.mcp.json`),
+ * and - because Cursor auto-discovers `hooks/hooks.json` with an incompatible
+ * schema - an explicit pointer to a Cursor-format hooks document. That
+ * document stays empty until Cursor's hook stdin contract is pinned; hooks
+ * currently serve Claude Code and Codex.
+ *
  * An Agent Plugins v1 root `plugin.json` is deliberately not emitted: Codex
  * selects it ahead of `.codex-plugin/plugin.json` and, under that format,
  * unconditionally disables plugin hooks and apps and forces MCP declarations
@@ -54,6 +73,23 @@ const pluginName = 'plugin';
  * relocated-MCP surfaces.
  */
 const codexBundleMcpPath = '.codex-plugin/mcp.json';
+const cursorPaths = Object.freeze({
+  hooks: 'hooks/hooks-cursor.json',
+  mcp: '.cursor-plugin/mcp.json',
+  plugin: '.cursor-plugin/plugin.json',
+});
+const cursorNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
+
+// Compiled lazily: the bundle target pays for its own validators only when a
+// plan or artifact validation actually runs.
+const cursorValidator = createAdapterValidator();
+const lazyCompiled = (schema: object): (() => ValidateFunction) => {
+  let compiled: ValidateFunction | undefined;
+  return () => compiled ??= cursorValidator.compile(schema);
+};
+const validateCursorPlugin = lazyCompiled(cursorPluginSchema);
+const validateCursorMcp = lazyCompiled(cursorMcpSchema);
+const validateCursorHooks = lazyCompiled(cursorHooksSchema);
 
 /**
  * Union matcher table for the shared hook document. Codex documents Edit and
@@ -117,6 +153,9 @@ const artifactValidation = Object.freeze({
     Object.freeze({ path: codexArtifactPaths.marketplace, required: false, schema: 'codex-marketplace' }),
     Object.freeze({ path: codexBundleMcpPath, required: false, schema: 'codex-mcp' }),
     Object.freeze({ path: codexArtifactPaths.plugin, required: true, schema: 'codex-plugin' }),
+    Object.freeze({ path: cursorPaths.hooks, required: false, schema: 'cursor-hooks' }),
+    Object.freeze({ path: cursorPaths.mcp, required: false, schema: 'cursor-mcp' }),
+    Object.freeze({ path: cursorPaths.plugin, required: false, schema: 'cursor-plugin' }),
   ]),
   schemas: Object.freeze([
     ...prefixedSchemas('claude', claudeValidation.schemas),
@@ -124,6 +163,9 @@ const artifactValidation = Object.freeze({
     // The bundle's Codex manifest points at the relocated MCP document, so its
     // validator widens the pinned pointer to that one relocation.
     Object.freeze({ name: 'codex-plugin', validate: (document: unknown) => codexPluginDocumentValidator(codexBundleMcpPath)(document) }),
+    Object.freeze({ name: 'cursor-hooks', validate: (document: unknown) => validateJsonSchemaDocument(validateCursorHooks())(document) }),
+    Object.freeze({ name: 'cursor-mcp', validate: (document: unknown) => validateJsonSchemaDocument(validateCursorMcp())(document) }),
+    Object.freeze({ name: 'cursor-plugin', validate: (document: unknown) => validateJsonSchemaDocument(validateCursorPlugin())(document) }),
   ]),
 });
 
@@ -138,6 +180,7 @@ const metadata = Object.freeze({
   schemas: Object.freeze([
     ...prefixedSchemas('claude', claudeAdapter.metadata.schemas),
     ...prefixedSchemas('codex', codexAdapter.metadata.schemas, 'hooks'),
+    ...prefixedSchemas('cursor', schemaDescriptorsFrom(cursorSchemaProvenance, cursorSchemaProvenance.observedCliVersion)),
   ]),
 });
 
@@ -183,15 +226,17 @@ const agentsDocument = (model: NormalizedPlugin): string => {
     '',
     '- **Claude Code**: add this directory (or its repository) as a plugin — `claude plugin marketplace add <source>`.',
     '- **Codex**: `codex plugin marketplace add <source>`; the manifest is `.codex-plugin/plugin.json`.',
-    '- **Cursor / VS Code / GitHub Copilot**: install the repository as an agent plugin, or consume `skills/` directly.',
+    '- **Cursor**: clone (or symlink) this directory to `~/.cursor/plugins/local/<name>`; the manifest is `.cursor-plugin/plugin.json`.',
+    '- **VS Code / GitHub Copilot**: install the repository as an agent plugin, or consume `skills/` directly.',
     '- **skills CLI**: `npx skills add <source> --skill <name>` reads the `skills/` directory.',
     '',
     '## Layout',
     '',
     '- `.claude-plugin/` — Claude Code manifest and host documents.',
     '- `.codex-plugin/` — Codex manifest and host documents.',
+    '- `.cursor-plugin/` — Cursor manifest and its MCP document.',
     '- `.mcp.json` — Claude Code MCP configuration (plugin-root convention).',
-    '- `hooks/` — one `hooks.json` and one host-detecting wrapper per hook, shared by both hosts.',
+    '- `hooks/` — one `hooks.json` and one host-detecting wrapper per hook (Claude Code and Codex; the Cursor hooks document stays empty until its contract is pinned).',
     '- `skills/` — agent skills (`SKILL.md` per skill), shared by every host.',
     '- `scripts/`, `mcp/`, `mcp-apps/`, `assets/` — compiled shared surfaces.',
     '',
@@ -233,6 +278,66 @@ const mergeEntries = (
   return [...merged.values()];
 };
 
+/**
+ * Cursor documents `${env:NAME}` / `${workspaceFolder}` interpolation and
+ * `${CURSOR_PLUGIN_ROOT}` for hook commands; the same root variable is the
+ * best-documented spelling for plugin-contained MCP entry paths.
+ */
+const expandCursorToken = (value: string): string => value
+  .replaceAll(pathTokens.pluginRoot, '${CURSOR_PLUGIN_ROOT}')
+  .replaceAll(pathTokens.workspaceRoot, '${workspaceFolder}');
+
+const planCursorMcpServer = (
+  server: NormalizedMcpServer,
+  diagnostics: Diagnostic[],
+): Record<string, unknown> | undefined => {
+  const transport = readMcpTransport(server);
+  const transportDiagnostic = unsupportedMcpTransportDiagnostic(server, transport);
+  if (transportDiagnostic !== undefined) {
+    diagnostics.push(transportDiagnostic);
+    return undefined;
+  }
+  const values = [server.command, ...(server.args ?? []), server.url, ...Object.values(server.env ?? {}), ...Object.values(server.headers ?? {})];
+  if (values.some((value) => value !== undefined && value.includes(pathTokens.pluginData))) {
+    diagnostics.push(errorDiagnostic(
+      'plugin.cursor.mcp.token',
+      `MCP server ${JSON.stringify(server.name)} uses a plugin-data path token with no documented Cursor equivalent.`,
+    ));
+    return undefined;
+  }
+  if (transport === 'stdio') {
+    if (server.command === undefined) {
+      diagnostics.push(errorDiagnostic('plugin.cursor.mcp.command', `MCP server ${JSON.stringify(server.name)} requires a command.`));
+      return undefined;
+    }
+    const args = server.args?.map(expandCursorToken);
+    if (server.source !== undefined && server.cwd === pathTokens.pluginRoot && args?.[0] !== undefined) {
+      args[0] = `\${CURSOR_PLUGIN_ROOT}/${args[0]}`;
+    }
+    const env = server.env === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(server.env).map(([key, value]) => [key, expandCursorToken(value)]));
+    return {
+      ...(args === undefined ? {} : { args }),
+      command: expandCursorToken(server.command),
+      ...(env === undefined ? {} : { env }),
+    };
+  }
+  if (server.url === undefined) {
+    diagnostics.push(errorDiagnostic('plugin.cursor.mcp.url', `MCP server ${JSON.stringify(server.name)} requires a URL.`));
+    return undefined;
+  }
+  const headers = server.headers === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(server.headers).map(([key, value]) => [key, expandCursorToken(value)]));
+  return {
+    ...(headers === undefined ? {} : { headers }),
+    url: expandCursorToken(server.url),
+  };
+};
+
+const emptyCursorHooksDocument = Object.freeze({ hooks: {}, version: 1 });
+
 const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const diagnostics: Diagnostic[] = [];
   // Host planners stay hook-free: the bundle lowers hooks once below, and
@@ -269,6 +374,66 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       sourceInputs: sourceInputs(...targetSourceInputs, ...hookSourceInputs),
     });
   }
+  const cursorServers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+  const mcpSourceInputs: string[] = [];
+  for (const server of model.mcpServers) {
+    if (!server.targets.includes(pluginName)) continue;
+    const lowered = planCursorMcpServer(server, diagnostics);
+    if (lowered !== undefined) {
+      cursorServers[server.name] = lowered;
+      mcpSourceInputs.push(server.provenance.sourcePath);
+    }
+  }
+  const cursorMcp = Object.keys(cursorServers).length === 0 ? undefined : { mcpServers: cursorServers };
+  const cursorMcpValid = cursorMcp !== undefined && validateCursorMcp()(cursorMcp);
+  if (cursorMcp !== undefined) diagnostics.push(...schemaDiagnostics('cursor-mcp', cursorMcpValid, validateCursorMcp().errors));
+
+  if (!cursorNamePattern.test(model.metadata.name) || model.metadata.name.length > 64) {
+    diagnostics.push(errorDiagnostic(
+      'plugin.cursor.name',
+      `Plugin name ${JSON.stringify(model.metadata.name)} is not a valid Cursor plugin name (lowercase kebab-case).`,
+    ));
+  } else {
+    const emitCursorHooks = hookDocument !== undefined && hookDocumentValid;
+    const cursorManifest = {
+      description: model.metadata.description ?? model.metadata.name,
+      displayName: model.metadata.name,
+      ...(emitCursorHooks ? { hooks: `./${cursorPaths.hooks}` } : {}),
+      ...(cursorMcp !== undefined && cursorMcpValid ? { mcpServers: `./${cursorPaths.mcp}` } : {}),
+      name: model.metadata.name,
+      ...(model.skills.some((skill) => skill.targets.includes(pluginName)) ? { skills: './skills/' } : {}),
+      version: model.metadata.version,
+    };
+    const cursorManifestValid = validateCursorPlugin()(cursorManifest);
+    diagnostics.push(...schemaDiagnostics('cursor-plugin', cursorManifestValid, validateCursorPlugin().errors));
+    if (cursorManifestValid) {
+      entries.push({
+        content: `${stableJson(cursorManifest)}\n`,
+        kind: 'write',
+        relativePath: cursorPaths.plugin,
+        sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
+      });
+      if (cursorMcp !== undefined && cursorMcpValid) {
+        entries.push({
+          content: `${stableJson(cursorMcp)}\n`,
+          kind: 'write',
+          relativePath: cursorPaths.mcp,
+          sourceInputs: sourceInputs(...targetSourceInputs, ...mcpSourceInputs),
+        });
+      }
+      if (emitCursorHooks) {
+        // Empty until Cursor's hook stdin contract is pinned; the explicit
+        // pointer keeps Cursor away from the Claude-format hooks/hooks.json.
+        entries.push({
+          content: `${stableJson(emptyCursorHooksDocument)}\n`,
+          kind: 'write',
+          relativePath: cursorPaths.hooks,
+          sourceInputs: sourceInputs(...targetSourceInputs),
+        });
+      }
+    }
+  }
+
   entries.push({
     content: agentsDocument(model),
     kind: 'write',
