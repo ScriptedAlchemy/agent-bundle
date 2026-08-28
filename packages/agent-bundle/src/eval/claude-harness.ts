@@ -9,6 +9,7 @@ import {
 } from '../host-contracts/native-claude-contract.ts';
 import { resolveEvalAssertions } from './assertions.ts';
 import {
+  claudeSemanticGraderContractRevision,
   claudeSemanticGraderId,
   runClaudeSemanticGrader,
   type ClaudeSemanticGraderRawOutput,
@@ -432,6 +433,7 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
       invocation: Object.freeze({ ...options.evalCase.invocation }),
       semanticGrader: options.configuredSemanticGrader !== undefined
         ? Object.freeze({
+          contractRevision: claudeSemanticGraderContractRevision,
           id: claudeSemanticGraderId,
           model: options.configuredSemanticGrader.model,
         })

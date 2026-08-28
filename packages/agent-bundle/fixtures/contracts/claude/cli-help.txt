@@ -1,4 +1,4 @@
-version: 2.1.232
+version: 2.1.250
 
 $ claude plugin --help
 Usage: claude plugin|plugins [options] [command]

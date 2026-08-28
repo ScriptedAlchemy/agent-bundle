@@ -1,9 +1,10 @@
 import { once } from 'node:events';
-import { connect } from 'node:net';
+import { connect, createServer } from 'node:net';
 
 import { expect, it } from '@rstest/core';
 
 import {
+  createMcpAppDocumentPolicySnapshot,
   createMcpAppSandboxBridge,
   createMcpAppSandboxFrame,
   createMcpAppSandboxProxy,
@@ -31,15 +32,22 @@ const rpcNotification = (method: string, params: Record<string, unknown> = {}) =
 });
 
 it('serves one immutable, different-origin shell and no MCP or session route', async () => {
-  const proxy = await createMcpAppSandboxProxy({
-    hostOrigin: 'http://127.0.0.1:43123',
-    maxMessageBytes: 1_024,
-    maxQueuedMessages: 1,
-    port: 0,
-  });
+  const host = createServer();
+  host.listen({ host: '127.0.0.1', port: 0 });
+  await once(host, 'listening');
+  const address = host.address();
+  if (address === null || typeof address === 'string') throw new Error('The MCP App sandbox test host did not receive a TCP address.');
+  const hostOrigin = `http://127.0.0.1:${address.port}`;
+  let proxy: Awaited<ReturnType<typeof createMcpAppSandboxProxy>> | undefined;
 
   try {
-    expect(proxy.origin).not.toBe('http://127.0.0.1:43123');
+    proxy = await createMcpAppSandboxProxy({
+      hostOrigin,
+      maxMessageBytes: 1_024,
+      maxQueuedMessages: 1,
+      port: 0,
+    });
+    expect(proxy.origin).not.toBe(hostOrigin);
     expect(proxy.url).toBe(`${proxy.origin}/`);
     expect(proxy.relay).toEqual(relay);
 
@@ -55,7 +63,8 @@ it('serves one immutable, different-origin shell and no MCP or session route', a
     expect(root.headers.get('permissions-policy')).toBeNull();
     expect(forbidden.status).toBe(404);
   } finally {
-    await proxy.close();
+    await proxy?.close();
+    await new Promise<void>((resolve, reject) => host.close((error) => error === undefined ? resolve() : reject(error)));
   }
 });
 
@@ -73,7 +82,85 @@ it('derives outer permissions from the declared and explicitly consented capabil
     contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src https://api.example.test; frame-src https://frames.example.test; img-src data: https://cdn.example.test; media-src https://cdn.example.test; font-src https://cdn.example.test; style-src 'unsafe-inline' https://cdn.example.test; script-src 'unsafe-inline' https://cdn.example.test",
     iframeAllow: 'camera',
     permissionsPolicy: 'camera=(self), clipboard-write=(), geolocation=(), microphone=()',
+    warnings: [
+      { code: 'csp-source-rejected', value: 'javascript:alert(1)' },
+      { code: 'csp-wildcard-rejected', value: '*' },
+    ],
   });
+});
+
+it('fails closed for unsafe CSP sources and freezes document grants into a revisioned policy', () => {
+  const csp = {
+    connectDomains: ['https://api.weather.example', '*', 'http://127.0.0.1:9000'],
+    frameDomains: [],
+    redirectDomains: [],
+    resourceDomains: [],
+  } as const;
+  const permissions = {
+    camera: {},
+    clipboardWrite: {},
+    geolocation: {},
+    microphone: {},
+  } as const;
+  const policy = deriveMcpAppSandboxPolicy({ csp, permissions }, {
+    permissions: { clipboardWrite: {} },
+  });
+
+  expect(policy.contentSecurityPolicy).toContain('connect-src https://api.weather.example');
+  expect(policy.permissionsPolicy).toBe(
+    'camera=(), clipboard-write=(self), geolocation=(), microphone=()',
+  );
+  expect(policy.warnings).toEqual([
+    { code: 'csp-wildcard-rejected', value: '*' },
+    { code: 'csp-source-rejected', value: 'http://127.0.0.1:9000' },
+  ]);
+
+  const snapshot = createMcpAppDocumentPolicySnapshot(2, { csp, permissions }, [{
+    authorizationId: 'authorization-1',
+    bindingId: 'binding-1',
+    capability: 'clipboard-write',
+    challengeId: 'challenge-1',
+    scope: 'document',
+  }]);
+  expect(snapshot).toEqual({
+    allow: 'clipboard-write',
+    approvedPermissions: { clipboardWrite: {} },
+    revision: 2,
+    warnings: policy.warnings,
+  });
+  expect(Object.isFrozen(snapshot)).toBe(true);
+  expect(Object.isFrozen(snapshot.approvedPermissions)).toBe(true);
+});
+
+it('rejects every noncanonical, local, and special CSP authority before the proxy receives it', () => {
+  const rejected = [
+    '*', 'https://*.weather.example', 'https://127.0.0.2', 'https://100.64.0.1', 'https://169.254.1.1', 'https://192.0.2.1',
+    'https://192.88.99.1', 'https://198.51.100.1', 'https://0.0.0.0', 'https://[::1]', 'https://[::ffff:7f00:1]',
+    'https://[64:ff9b::c000:201]', 'https://[2002:c000:0201::]', 'https://[2001:2::]', 'https://[2001:10::]',
+    'https://[3fff::1]', 'https://[5f00::1]', 'https://[fc00::1]', 'https://[fec0::1]', 'https://[fe80::1]', 'https://[ff00::1]',
+    'https://[2001:db8::1]', 'https://api.localhost',
+    'https://user:secret@api.example', 'https://api.example/path', 'https://api.example?query=1',
+  ];
+  const policy = deriveMcpAppSandboxPolicy({
+    // A known global-unicast address proves the table permits usable public
+    // IPv6 while every non-global and special range above remains denied.
+    csp: { connectDomains: ['https://api.example', 'https://[2606:4700:4700::1111]', ...rejected] },
+  });
+  expect(policy.contentSecurityPolicy).toContain('connect-src https://api.example https://[2606:4700:4700::1111]');
+  expect(policy.warnings).toEqual([
+    { code: 'csp-wildcard-rejected', value: '*' },
+    { code: 'csp-wildcard-rejected', value: 'https://*.weather.example' },
+    ...rejected.slice(2).map((value) => ({ code: 'csp-source-rejected' as const, value })),
+  ]);
+});
+
+it('retains only the exact server-authored HMR websocket path', () => {
+  const policy = deriveMcpAppSandboxPolicy({}, {}, {
+    origin: 'https://surface.example', provenance: 'compiler-internal', webSocketPath: '/rsbuild-hmr',
+  });
+  expect(policy.internalWebSocketUrl).toBe('wss://surface.example/rsbuild-hmr');
+  expect(policy.contentSecurityPolicy).toContain('connect-src wss://surface.example/rsbuild-hmr');
+  expect(policy.contentSecurityPolicy).not.toContain('wss://surface.example/other-hmr');
 });
 
 it('uses one proxy relay configuration in the fixed outer frame contract', () => {
@@ -140,9 +227,9 @@ it('enforces the JSON-RPC proxy lifecycle and holds host traffic until initializ
   expect(bridge.send(rpcNotification('ui/notifications/sandbox-invented'))).toBe(false);
   expect(sent).toEqual([{
     message: rpcNotification('ui/notifications/sandbox-resource-ready', {
-      csp: { connectDomains: ['https://api.example.test'] },
+      allow: 'camera',
+      contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src 'none'; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
       html: '<p>Hello</p>',
-      permissions: { camera: {} },
       sandbox: 'allow-scripts',
     }),
     targetOrigin: 'http://127.0.0.1:43124',
@@ -185,8 +272,9 @@ it('provides a valid built App resource without imposing the runtime message-siz
       sent.push(message);
     },
   };
+  const frame = frameFor();
   const bridge = createMcpAppSandboxBridge({
-    frame: frameFor(),
+    frame,
     proxyWindow,
   });
   const proxyReady = {
@@ -199,7 +287,11 @@ it('provides a valid built App resource without imposing the runtime message-siz
 
   expect(bridge.provideResource({ html })).toBe(true);
   expect(sent).toEqual([
-    rpcNotification('ui/notifications/sandbox-resource-ready', { html }),
+    rpcNotification('ui/notifications/sandbox-resource-ready', {
+      allow: frame.allow,
+      contentSecurityPolicy: frame.policy.contentSecurityPolicy,
+      html,
+    }),
   ]);
 });
 
@@ -223,6 +315,7 @@ it('uses an opaque child relay shell with real MCP Apps JSON-RPC notification me
     expect(shell).toContain("method.startsWith('ui/notifications/sandbox-')");
     expect(shell).toContain('configuration.maxMessageBytes');
     expect(shell).toContain("Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string'");
+    expect(shell).not.toContain('byteLength(message) > maxMessageBytes');
     expect(new URL(frame.src).hash).toContain('maxMessageBytes');
   } finally {
     await proxy.close();

@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,28 +14,38 @@ import { ProjectService } from '../src/dev/project-service.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
-import { sha256Hex } from '../src/core/digest.ts';
 
-const createProject = async (): Promise<string> => (await createProjectFixture({
-  config: [
-    'export default {',
-    "  plugin: { name: 'artifact-service-fixture', version: '1.0.0' },",
-    "  targets: ['portable'],",
-    '};',
-    '',
-  ].join('\n'),
-  files: {
-    'skills/review/SKILL.md': [
-      '---',
-      'name: review',
-      'description: Reviews changes',
-      '---',
-      'Review the changed files.',
-      '',
-    ].join('\n'),
-  },
-  prefix: 'agent-bundle-artifact-service-',
-})).root;
+const sha256 = (value: string | Uint8Array): string =>
+  createHash('sha256').update(value).digest('hex');
+
+const createProject = async (): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-service-'));
+  await mkdir(join(root, 'skills', 'review'), { recursive: true });
+  await Promise.all([
+    writeFile(
+      join(root, 'agent-bundle.config.ts'),
+      [
+        'export default {',
+        "  plugin: { name: 'artifact-service-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+    ),
+    writeFile(
+      join(root, 'skills', 'review', 'SKILL.md'),
+      [
+        '---',
+        'name: review',
+        'description: Reviews changes',
+        '---',
+        'Review the changed files.',
+        '',
+      ].join('\n'),
+    ),
+  ]);
+  return root;
+};
 
 class RejectingStagingCloseStore extends EpochStore {
   override async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {
@@ -90,7 +101,7 @@ it('publishes one validated prepared project as an immutable epoch and removes i
     expect(result.epoch.configDigest).toBe(prepared.projectContext?.configDigest);
     expect(result.epoch.modelDigest).toBe(prepared.projectContext?.modelDigest);
     expect(result.epoch.projectRevision).toBe(prepared.projectContext?.revision);
-    expect(result.epoch.configDigest).toBe(sha256Hex(await readFile(join(root, 'agent-bundle.config.ts'))));
+    expect(result.epoch.configDigest).toBe(sha256(await readFile(join(root, 'agent-bundle.config.ts'))));
     expect(result.epoch.targetDigests.portable).toMatch(/^[a-f0-9]{64}$/);
     expect(result.epoch.manifestPath).toBe(
       join(root, '.agent-bundle', 'epochs', 'epoch-one', 'agent-bundle.manifest.json'),
@@ -102,6 +113,60 @@ it('publishes one validated prepared project as an immutable epoch and removes i
       .resolves.toBe('{"epochId":"epoch-one","selections":[]}\n');
     expect(removedAttempts).toEqual([attemptRoot]);
     await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports active-metadata durability uncertainty as a committed build warning', async () => {
+  const root = await createProject();
+  const durabilityFailure = new Error('active metadata directory sync failed');
+  let failed = false;
+  try {
+    const controlledOpen: typeof open = async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      if (String(path) !== join(root, '.agent-bundle')) return handle;
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync') {
+            return async () => {
+              if (!failed) {
+                failed = true;
+                throw durabilityFailure;
+              }
+              await target.sync();
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+    const store = new EpochStore({
+      durabilityStorage: Object.freeze({ open: controlledOpen, remove: rm }),
+      projectRoot: root,
+    });
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const result = await new ArtifactService({
+      createEpochId: () => 'epoch-post-commit-durability',
+      epochStore: store,
+    }).build(prepared);
+
+    if (result.outcome === 'failed') {
+      throw new Error(result.diagnostics.map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`).join('\n'));
+    }
+    expect(failed).toBe(true);
+    expect(result.outcome).toBe('succeeded');
+    if (result.outcome !== 'succeeded') throw new Error('Committed epoch was reported as failed.');
+    expect(result.epoch.id).toBe('epoch-post-commit-durability');
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7102',
+        message: expect.stringContaining('active metadata durability could not be confirmed'),
+        severity: 'warning',
+      }),
+    ]));
+    await expect(store.readActiveEpoch()).resolves.toEqual(result.epoch);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

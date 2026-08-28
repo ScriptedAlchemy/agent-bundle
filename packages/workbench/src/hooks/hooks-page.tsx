@@ -2,12 +2,10 @@ import { isAbortError, errorMessage as messageFrom } from '../client-helpers.ts'
 import React, { useEffect, useRef, useState } from 'react';
 
 import type {
-  CanonicalHookEvent,
   HookPlaygroundBinding,
   HookPlaygroundHook,
   HookPlaygroundReplay,
 } from '../../../agent-bundle/src/contracts/hooks.ts';
-import { canonicalHookEventFor } from '../../../agent-bundle/src/contracts/hooks.ts';
 
 import {
   parseRawJsonRecord,
@@ -33,6 +31,8 @@ export interface HooksPageProps {
 }
 
 const draftError = 'Canonical hook input must be a JSON object.';
+
+type CanonicalHookEvent = HookPlaygroundHook['hook']['event'];
 
 const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, ImmutableJsonRecord>> = Object.freeze({
   afterTool: Object.freeze({
@@ -67,12 +67,12 @@ const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, ImmutableJsonReco
   }),
 });
 
+/** Provides one event-shaped document that can run a generated Hook without host-contract guesswork. */
 export const canonicalHookInput = (event: CanonicalHookEvent): ImmutableJsonRecord => canonicalHookInputs[event];
 
-export const canonicalHookInputFor = (event: string): ImmutableJsonRecord | undefined => {
-  const canonicalEvent = canonicalHookEventFor(event);
-  return canonicalEvent === undefined ? undefined : canonicalHookInputs[canonicalEvent];
-};
+/** Returns a runnable example only for the canonical Hook events understood by the Workbench. */
+export const canonicalHookInputFor = (event: string): ImmutableJsonRecord | undefined =>
+  Object.hasOwn(canonicalHookInputs, event) ? canonicalHookInputs[event as CanonicalHookEvent] : undefined;
 
 const errorMessage = (reason: unknown): string => messageFrom(reason, 'The hook playground request could not be completed.');
 
@@ -152,7 +152,7 @@ const JsonBlock = ({ empty, label, value }: {
   <h2>{label}</h2>
   {value === undefined
     ? <p className="empty-row">{empty}</p>
-    : <pre className="hook-json"><code>{serializeJsonRecord(value)}</code></pre>}
+    : <pre className="hook-json"><code>{serializeJsonRecord(value as ImmutableJsonRecord)}</code></pre>}
 </section>;
 
 /** The canonical intent, host mapping, and native codec trace of the latest hook run. */
@@ -200,8 +200,7 @@ export const HooksPage = ({ client, epochId }: HooksPageProps) => {
 
   useEffect(() => {
     if (view.selected === undefined || draftIsDirty.current) return;
-    const input = canonicalHookInputFor(view.selected.event);
-    if (input !== undefined) setDraft(serializeJsonRecord(input));
+    setDraft(serializeJsonRecord(canonicalHookInput(view.selected.event as CanonicalHookEvent)));
   }, [view.selected?.event]);
 
   useEffect(() => {

@@ -1,20 +1,21 @@
 import { z } from 'zod';
 
-import type {
-  ArtifactEpoch,
-  ArtifactStatus,
-  BuildAttempt,
-  BuildStatus,
-  Invalidation,
-  JsonObject,
-  JsonValue,
-  ProjectEventMessage,
-  ProjectStatus,
-  SourceStatus,
+import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
+import {
+  freezeJsonValue,
+  type ArtifactEpoch,
+  type ArtifactStatus,
+  type BuildAttempt,
+  type BuildStatus,
+  type Invalidation,
+  type ProjectEvent,
+  type ProjectEventOf,
+  type ProjectEventMessage,
+  type ProjectReplayGap,
+  type ProjectStatus,
+  type SourceStatus,
 } from '../../agent-bundle/src/contracts/project.ts';
-import { diagnosticSchema } from './client-helpers.ts';
-import { ForegroundSessionAuthority, type ForegroundSessionSnapshot, wait } from './foreground-session.ts';
-import { nonnegativeIntegerSchema, positiveIntegerSchema } from './schema-atoms.ts';
+import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp/mcp-route-client.ts';
 
 export interface EventSourceMessage {
   readonly data: string;
@@ -28,6 +29,7 @@ export interface EventSourceLike {
 
 export type EventSourceFactory = (url: string) => EventSourceLike;
 export type ProjectClientErrorListener = (reason: unknown) => void;
+export type ProjectEventListener = (event: ProjectEventMessage) => void;
 
 export interface ProjectActivitySnapshot {
   readonly changedFiles: readonly string[];
@@ -35,19 +37,39 @@ export interface ProjectActivitySnapshot {
 
 export type ProjectActivityListener = (activity: ProjectActivitySnapshot) => void;
 
+export type ProjectConnectionPhase = 'connected' | 'connecting' | 'unavailable';
+export interface ProjectConnectionState {
+  readonly generation?: number;
+  readonly instanceId?: string;
+  readonly state: ProjectConnectionPhase;
+}
+export type ProjectConnectionListener = (connection: ProjectConnectionState) => void;
+
 export interface ProjectClientOptions {
-  /** The Workbench-wide authority for the foreground server identity and credentials. */
-  readonly authority?: ForegroundSessionAuthority;
+  readonly beforeInstanceChange?: () => Promise<void>;
   readonly events?: EventSourceFactory;
   readonly fetch?: typeof fetch;
-  /** Injectable backoff so foreground recovery can be tested without wall-clock waits. */
+  /** Reuses Workbench's memory-only foreground authentication authority. */
+  readonly foreground?: ForegroundRouteClient;
   readonly retryDelay?: (milliseconds: number) => Promise<void>;
 }
 
+interface ProjectStatusResponse {
+  readonly status: ProjectStatus;
+}
+
+interface QueuedProjectEvent {
+  readonly event: ProjectEventMessage;
+  readonly sequence: number | undefined;
+}
+
 export class ProjectClientError extends Error {
-  constructor(message: string) {
+  readonly code: string | undefined;
+
+  constructor(message: string, code?: string) {
     super(message);
     this.name = 'ProjectClientError';
+    this.code = code;
   }
 }
 
@@ -64,13 +86,29 @@ const projectEventTypes = [
 ] as const;
 
 const browserEvents: EventSourceFactory = (url) => new EventSource(url);
-const retryDelay = (milliseconds: number): Promise<void> => wait(milliseconds);
+const retryDelay = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const retryDelayMilliseconds = 250;
 
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const hasExactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean =>
+  Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key));
+
+const diagnosticSchema: z.ZodType<Diagnostic> = z.strictObject({
+  code: z.string(),
+  generatedPath: z.string().optional(),
+  message: z.string(),
+  recovery: z.string().optional(),
+  severity: z.enum(['error', 'info', 'warning']),
+  sourcePath: z.string().optional(),
+  target: z.string().optional(),
+});
+
 const diagnosticSummarySchema = z.strictObject({
-  errors: nonnegativeIntegerSchema,
-  infos: nonnegativeIntegerSchema,
-  warnings: nonnegativeIntegerSchema,
+  errors: z.number().int().nonnegative(),
+  infos: z.number().int().nonnegative(),
+  warnings: z.number().int().nonnegative(),
 });
 
 const artifactEpochSchema: z.ZodType<ArtifactEpoch> = z.strictObject({
@@ -144,176 +182,157 @@ const buildStatusSchema: z.ZodType<BuildStatus> = z.discriminatedUnion('state', 
   }),
 ]);
 
-const missingArtifactSchema = z.strictObject({
-  currentSourceRevision: z.string().optional(),
-  state: z.literal('missing'),
-});
-
-const activeArtifactSchema = z.strictObject({
-  activeEpoch: artifactEpochSchema,
-  currentSourceRevision: z.string(),
-  state: z.literal('active'),
-});
-
-const staleArtifactSchema = z.strictObject({
-  activeEpoch: artifactEpochSchema,
-  currentSourceRevision: z.string(),
-  state: z.literal('stale'),
-});
-
 const artifactStatusSchema: z.ZodType<ArtifactStatus> = z.discriminatedUnion('state', [
-  activeArtifactSchema,
-  missingArtifactSchema,
-  staleArtifactSchema,
-]);
-
-const invalidationSchema: z.ZodType<Invalidation> = z.strictObject({
-  occurredAt: z.string(),
-  paths: z.array(z.string()),
-  reason: z.enum(['initial', 'manual', 'source-change']),
-});
-
-const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
-  z.boolean(),
-  z.null(),
-  z.number().finite(),
-  z.string(),
-  z.array(jsonValueSchema),
-  z.record(z.string(), jsonValueSchema),
-]));
-
-const jsonObjectSchema: z.ZodType<JsonObject> = z.record(z.string(), jsonValueSchema);
-
-const runtimeEventSchema = z.strictObject({
-  details: jsonObjectSchema.optional(),
-  sessionId: z.string(),
-  type: z.string(),
-});
-
-const eventEnvelopeSchema = z.strictObject({
-  epochId: z.string().optional(),
-  occurredAt: z.string(),
-  sequence: positiveIntegerSchema,
-});
-
-const projectEventMessageSchema: z.ZodType<ProjectEventMessage> = z.discriminatedUnion('type', [
-  eventEnvelopeSchema.extend({ payload: activeArtifactSchema, type: z.literal('artifact.available') }).extend({ epochId: z.string() }),
-  eventEnvelopeSchema.extend({ payload: artifactStatusSchema, type: z.literal('artifact.status') }),
-  eventEnvelopeSchema.extend({ payload: failedBuildAttemptSchema, type: z.literal('build.failed') }),
-  eventEnvelopeSchema.extend({ payload: runningBuildAttemptSchema, type: z.literal('build.started') }),
-  eventEnvelopeSchema.extend({ payload: invalidationSchema, type: z.literal('invalidation') }),
-  eventEnvelopeSchema.extend({ payload: runtimeEventSchema, type: z.literal('runtime.event') }).extend({ epochId: z.string() }),
-  eventEnvelopeSchema.extend({ payload: invalidationSchema, type: z.literal('source.changed') }),
-  eventEnvelopeSchema.extend({ payload: sourceStatusSchema, type: z.literal('source.status') }),
   z.strictObject({
-    earliestAvailableSequence: positiveIntegerSchema,
-    latestDroppedSequence: nonnegativeIntegerSchema,
-    requestedAfterSequence: nonnegativeIntegerSchema,
-    type: z.literal('replay.gap'),
+    activeEpoch: artifactEpochSchema,
+    currentSourceRevision: z.string(),
+    state: z.literal('active'),
+  }),
+  z.strictObject({
+    currentSourceRevision: z.string().optional(),
+    state: z.literal('missing'),
+  }),
+  z.strictObject({
+    activeEpoch: artifactEpochSchema,
+    currentSourceRevision: z.string(),
+    state: z.literal('stale'),
   }),
 ]);
 
 const projectStatusSchema: z.ZodType<ProjectStatus> = z.strictObject({
   artifact: artifactStatusSchema,
   build: buildStatusSchema,
+  runtime: z.strictObject({ state: z.literal('configured') }).optional(),
   source: sourceStatusSchema,
 });
 
-const projectStatusResponseSchema = z.strictObject({ status: projectStatusSchema });
+const projectStatusResponseSchema: z.ZodType<ProjectStatusResponse> = z.strictObject({
+  status: projectStatusSchema,
+});
 
-const invalidProjectResponse = (): never => {
-  throw new ProjectClientError('Workbench received an invalid foreground project response.');
+const projectStatusResponse = (value: unknown): ProjectStatusResponse => {
+  const result = projectStatusResponseSchema.safeParse(value);
+  if (!result.success) throw new ProjectClientError('Workbench request returned an invalid response.');
+  return Object.freeze(result.data);
 };
 
-const decode = <Result>(schema: z.ZodType<Result>, value: unknown): Result => {
-  const result = schema.safeParse(value);
-  return result.success ? result.data : invalidProjectResponse();
+const projectError = (error: unknown): ProjectClientError | unknown =>
+  error instanceof ForegroundRouteClientError
+    ? new ProjectClientError(`Workbench request failed with HTTP ${error.status}.`, error.code)
+    : error;
+
+const isSequence = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+const parseEventSourceSequence = (lastEventId: string): number | undefined => {
+  if (lastEventId.trim() === '') return undefined;
+  const sequence = Number(lastEventId);
+  return isSequence(sequence) ? sequence : undefined;
 };
 
-const readResponse = async (response: Response): Promise<unknown> => {
-  if (!response.ok) throw new ProjectClientError(`Workbench request failed with HTTP ${response.status}.`);
-  return response.json();
+const malformedProjectEvent = (): never => {
+  throw new ProjectClientError('Workbench received a malformed project event.');
 };
 
-const parseEventData = (event: EventSourceMessage): ProjectEventMessage | undefined => {
+const parseProjectEvent = (
+  expectedType: (typeof projectEventTypes)[number],
+  frame: EventSourceMessage,
+): QueuedProjectEvent => {
+  let value: unknown;
   try {
-    const result = projectEventMessageSchema.safeParse(JSON.parse(event.data));
-    return result.success ? result.data : undefined;
+    value = freezeJsonValue(JSON.parse(frame.data));
   } catch {
-    return undefined;
+    return malformedProjectEvent();
   }
-};
 
-const parseSequence = (event: EventSourceMessage, data: ProjectEventMessage): number | undefined => {
-  if (!('sequence' in data)) return undefined;
-  if (!/^(0|[1-9]\d*)$/u.test(event.lastEventId)) return undefined;
-  const lastEventId = Number(event.lastEventId);
-  return Number.isSafeInteger(lastEventId) && lastEventId === data.sequence ? lastEventId : undefined;
+  if (!isRecord(value) || value.type !== expectedType) return malformedProjectEvent();
+
+  if (expectedType === 'replay.gap') {
+    if (
+      parseEventSourceSequence(frame.lastEventId) !== undefined
+      || !hasExactKeys(value, ['earliestAvailableSequence', 'latestDroppedSequence', 'requestedAfterSequence', 'type'])
+      || !isSequence(value.requestedAfterSequence)
+      || !isSequence(value.latestDroppedSequence)
+      || !isSequence(value.earliestAvailableSequence)
+      || value.latestDroppedSequence < value.requestedAfterSequence
+      || value.earliestAvailableSequence <= value.latestDroppedSequence
+    ) {
+      return malformedProjectEvent();
+    }
+    return Object.freeze({ event: value as unknown as ProjectReplayGap, sequence: undefined });
+  }
+
+  if (
+    !hasExactKeys(value, Object.hasOwn(value, 'epochId') ? ['epochId', 'occurredAt', 'payload', 'sequence', 'type'] : ['occurredAt', 'payload', 'sequence', 'type'])
+    || !isSequence(value.sequence)
+    || parseEventSourceSequence(frame.lastEventId) !== value.sequence
+    || typeof value.occurredAt !== 'string'
+    || !Object.hasOwn(value, 'payload')
+    || !isRecord(value.payload)
+    || (Object.hasOwn(value, 'epochId') && typeof value.epochId !== 'string')
+  ) {
+    return malformedProjectEvent();
+  }
+
+  if (expectedType === 'source.changed') {
+    const payload = value.payload;
+    if (
+      !hasExactKeys(payload, ['occurredAt', 'paths', 'reason']) || typeof payload.occurredAt !== 'string' ||
+      !Array.isArray(payload.paths) || !payload.paths.every((path) => typeof path === 'string') ||
+      !['initial', 'manual', 'source-change'].includes(payload.reason as string)
+    ) return malformedProjectEvent();
+  }
+
+  return Object.freeze({ event: value as ProjectEvent, sequence: value.sequence });
 };
 
 const normalizePaths = (paths: readonly string[]): readonly string[] => Object.freeze(
   [...new Set(paths)].sort((left, right) => left.localeCompare(right)),
 );
 
+const parseSourceChangedEvent = (data: ProjectEventMessage): ProjectEventOf<'source.changed'> | undefined =>
+  data.type === 'source.changed' ? data : undefined;
+
 const activityFor = (paths: readonly string[]): ProjectActivitySnapshot => Object.freeze({
   changedFiles: normalizePaths(paths),
 });
 
-export type ProjectConnectionPhase = 'connected' | 'connecting' | 'unavailable';
-
-/** Immutable foreground identity and stream-health state for the Workbench shell. */
-export interface ProjectConnectionState {
-  readonly generation?: number;
-  readonly instanceId?: string;
-  readonly state: ProjectConnectionPhase;
-}
-
-export type ProjectConnectionListener = (connection: ProjectConnectionState) => void;
-
-const connectionFor = (
-  state: ProjectConnectionPhase,
-  identity?: Readonly<{ readonly generation: number; readonly instanceId: string }>,
-): ProjectConnectionState => Object.freeze({
-  ...(identity === undefined ? {} : { generation: identity.generation, instanceId: identity.instanceId }),
-  state,
-});
-
-const sameConnection = (left: ProjectConnectionState, right: ProjectConnectionState): boolean =>
-  left.generation === right.generation && left.instanceId === right.instanceId && left.state === right.state;
-
-const eventUrl = (snapshot: ForegroundSessionSnapshot): string => new URL('/api/project/events', snapshot.origin).toString();
-
 /**
- * Browser-side transport for the W9 foreground routes. A failed event stream is
- * discarded rather than relying on a native reconnect, so each replacement is
- * bound to a freshly-authoritative foreground instance identity.
+ * Browser-side transport for the W9 foreground routes. Native EventSource forwards
+ * its retained Last-Event-ID on transport reconnects; an app-level replacement seeds
+ * a fresh source from the last locally acknowledged cursor.
  */
 export class ProjectClient {
-  readonly #authority: ForegroundSessionAuthority;
+  readonly #beforeInstanceChange: () => Promise<void>;
   readonly #events: EventSourceFactory;
-  readonly #fetch: typeof fetch;
-  readonly #retryDelay: (milliseconds: number) => Promise<void>;
+  readonly #foreground: ForegroundRouteClient;
+  #connection: ProjectConnectionState = Object.freeze({ state: 'connecting' });
+  readonly #connectionListeners = new Set<ProjectConnectionListener>();
   #closed = false;
   #activity = activityFor([]);
   readonly #activityListeners = new Set<ProjectActivityListener>();
-  #connection = connectionFor('connecting');
-  readonly #connectionListeners = new Set<ProjectConnectionListener>();
+  #eventDrainPromise: Promise<void> | undefined;
+  #eventListener: ProjectEventListener | undefined;
+  readonly #eventSubscribers = new Set<ProjectEventListener>();
+  #eventQueue: QueuedProjectEvent[] = [];
   #eventSource: EventSourceLike | undefined;
   #eventSourceVersion = 0;
   #eventRefreshPromise: Promise<void> | undefined;
   #eventRefreshQueued = false;
+  #highestQueuedEventId = -1;
   #lastEventId = 0;
   #lastSourceChangeSequence = -1;
   #errorListener: ProjectClientErrorListener | undefined;
   #listener: ((status: ProjectStatus) => void) | undefined;
   #refreshPromise: Promise<ProjectStatus> | undefined;
-  #retryPromise: Promise<void> | undefined;
-  #streamOpen = false;
+  #recoveryVersion = 0;
+  readonly #retryDelay: (milliseconds: number) => Promise<void>;
+  #statusGeneration = 0;
 
   constructor(options: ProjectClientOptions = {}) {
+    this.#beforeInstanceChange = options.beforeInstanceChange ?? (async () => undefined);
     this.#events = options.events ?? browserEvents;
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
-    this.#authority = options.authority ?? new ForegroundSessionAuthority({ fetch: this.#fetch });
+    this.#foreground = options.foreground ?? new ForegroundRouteClient({ fetch: options.fetch });
     this.#retryDelay = options.retryDelay ?? retryDelay;
   }
 
@@ -325,8 +344,11 @@ export class ProjectClient {
     return this.#activity;
   }
 
-  get connection(): ProjectConnectionState {
-    return this.#connection;
+  get connection(): ProjectConnectionState { return this.#connection; }
+
+  onConnection(listener: ProjectConnectionListener): () => void {
+    this.#connectionListeners.add(listener);
+    return () => this.#connectionListeners.delete(listener);
   }
 
   onActivity(listener: ProjectActivityListener): () => void {
@@ -334,33 +356,89 @@ export class ProjectClient {
     return () => this.#activityListeners.delete(listener);
   }
 
-  onConnection(listener: ProjectConnectionListener): () => void {
-    this.#connectionListeners.add(listener);
-    return () => this.#connectionListeners.delete(listener);
+  subscribeEvents(listener: ProjectEventListener): () => void {
+    if (typeof listener !== 'function') throw new ProjectClientError('Workbench event listener is not valid.');
+    if (this.#closed) return () => undefined;
+    this.#eventSubscribers.add(listener);
+    return () => this.#eventSubscribers.delete(listener);
   }
 
-  async connect(listener: (status: ProjectStatus) => void, onError?: ProjectClientErrorListener): Promise<ProjectStatus> {
+  async connect(
+    listener: (status: ProjectStatus) => void,
+    onError?: ProjectClientErrorListener,
+    onEvent?: ProjectEventListener,
+  ): Promise<ProjectStatus> {
     if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
     this.#listener = listener;
     this.#errorListener = onError;
-    const version = this.#eventSourceVersion + 1;
+    this.#eventListener = onEvent;
+    let snapshot;
     try {
-      const snapshot = await this.#authority.snapshot();
-      if (this.#closed) return this.#readStatus(snapshot);
-      this.#adoptSnapshot(snapshot, 'connecting');
-      const status = await this.#readAndPublish(snapshot, version);
-      if (!this.#isLifecycleCurrent(version)) return status;
-      this.#startEventSource(snapshot, version);
-      return status;
+      snapshot = await this.#foreground.sessionSnapshot();
+      this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connecting' });
     } catch (error) {
-      this.#setConnection(connectionFor('unavailable', this.#connectionIdentity()));
-      throw error;
+      const reason = projectError(error);
+      if (!this.#closed) {
+        this.#setConnection({ state: 'unavailable' });
+        this.#reportError(reason);
+        this.#startRecovery(this.#eventSourceVersion);
+      }
+      throw reason;
     }
+    if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
+    let status: ProjectStatus;
+    try {
+      status = await this.refresh();
+    } catch (error) {
+      const reason = projectError(error);
+      if (!this.#closed) {
+        this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'unavailable' });
+        this.#reportError(reason);
+        this.#startRecovery(this.#eventSourceVersion);
+      }
+      throw reason;
+    }
+    if (this.#closed) return status;
+    const eventSource = this.#events('/api/project/events');
+    if (this.#closed) {
+      eventSource.close();
+      return status;
+    }
+    this.#eventSource?.close();
+    this.#eventSource = eventSource;
+    const version = ++this.#eventSourceVersion;
+    for (const type of projectEventTypes) {
+      eventSource.addEventListener(type, (event) => {
+        if (version === this.#eventSourceVersion) this.#onEvent(eventSource, type, event);
+      });
+    }
+    eventSource.addEventListener('error', () => {
+      if (!this.#closed && eventSource === this.#eventSource && version === this.#eventSourceVersion) {
+        this.#statusGeneration += 1;
+        this.#eventRefreshQueued = false;
+        eventSource.close();
+        this.#eventSource = undefined;
+        this.#setConnection({ ...this.#connection, state: 'unavailable' });
+        this.#reportError(new ProjectClientError('Foreground project event stream disconnected.'));
+        this.#startRecovery(version);
+      }
+    });
+    eventSource.addEventListener('open', () => {
+      if (!this.#closed && eventSource === this.#eventSource && version === this.#eventSourceVersion && this.#connection.state !== 'connected') {
+        void this.#refreshRecoveredSource(version);
+      }
+    });
+    this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connected' });
+    return status;
   }
 
   async refresh(): Promise<ProjectStatus> {
     if (this.#refreshPromise !== undefined) return this.#refreshPromise;
-    const operation = this.#authority.snapshot().then((snapshot) => this.#readAndPublish(snapshot)).finally(() => {
+    const statusGeneration = this.#statusGeneration;
+    const operation = this.#readStatus().then((status) => {
+      if (!this.#closed && statusGeneration === this.#statusGeneration) this.#listener?.(status);
+      return status;
+    }).finally(() => {
       this.#refreshPromise = undefined;
     });
     this.#refreshPromise = operation;
@@ -369,93 +447,246 @@ export class ProjectClient {
 
   async rebuild(paths: readonly string[] = []): Promise<ProjectStatus> {
     if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
-    const snapshot = await this.#authority.snapshot();
-    const response = await this.#fetch('/api/project/rebuild', {
-      body: JSON.stringify({ paths: normalizePaths(paths) }),
-      headers: {
-        'content-type': 'application/json',
-        'x-agent-bundle-session': snapshot.token,
-      },
-      method: 'POST',
-    });
-    const status = decode(projectStatusResponseSchema, await readResponse(response)).status;
-    if (!this.#closed && !this.#isSnapshotCurrent(snapshot)) {
-      throw new ProjectClientError('Foreground project operation was superseded.');
+    let result: ProjectStatusResponse;
+    try {
+      result = projectStatusResponse(await this.#foreground.protectedJson('/api/project/rebuild', {
+        body: JSON.stringify({ paths: normalizePaths(paths) }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }));
+    } catch (error) {
+      throw projectError(error);
     }
-    if (!this.#closed) this.#listener?.(status);
-    return status;
+    return result.status;
   }
 
   close(): void {
+    if (this.#closed) return;
     this.#closed = true;
+    this.#eventQueue.length = 0;
     this.#eventRefreshQueued = false;
-    this.#discardEventSource();
+    this.#eventSource?.close();
+    this.#eventSource = undefined;
     this.#activityListeners.clear();
     this.#connectionListeners.clear();
+    this.#recoveryVersion += 1;
+    this.#statusGeneration += 1;
     this.#errorListener = undefined;
+    this.#eventListener = undefined;
+    this.#eventSubscribers.clear();
     this.#listener = undefined;
   }
 
-  async #readStatus(snapshot: ForegroundSessionSnapshot): Promise<ProjectStatus> {
-    const response = await this.#fetch('/api/project/status', {
-      headers: { 'x-agent-bundle-session': snapshot.token },
-    });
-    return decode(projectStatusResponseSchema, await readResponse(response)).status;
+  #startRecovery(disconnectedVersion: number): void {
+    const recoveryVersion = ++this.#recoveryVersion;
+    void this.#recover(disconnectedVersion, recoveryVersion);
   }
 
-  async #readAndPublish(snapshot: ForegroundSessionSnapshot, version?: number): Promise<ProjectStatus> {
-    const status = await this.#readStatus(snapshot);
-    if (!this.#closed && !this.#isSnapshotCurrent(snapshot)) {
-      throw new ProjectClientError('Foreground project status was superseded.');
-    }
-    if (!this.#closed && (version === undefined || this.#isLifecycleCurrent(version))) this.#listener?.(status);
-    return status;
-  }
-
-  #onEvent(event: EventSourceMessage, version: number): void {
-    if (!this.#isVersionCurrent(version)) return;
-    const data = parseEventData(event);
-    if (data === undefined) return;
-    const sequence = parseSequence(event, data);
-    const sourceChanged = data.type === 'source.changed' ? data : undefined;
-    if (sequence !== undefined && sourceChanged !== undefined && sourceChanged.sequence === sequence && sourceChanged.sequence > this.#lastSourceChangeSequence) {
-      this.#lastSourceChangeSequence = sourceChanged.sequence;
-      this.#activity = activityFor(sourceChanged.payload.paths);
-      for (const listener of this.#activityListeners) {
-        try {
-          listener(this.#activity);
-        } catch {
-          // Activity observers must not interrupt the foreground status refresh.
-        }
+  async #recover(disconnectedVersion: number, recoveryVersion: number): Promise<void> {
+    while (!this.#closed && recoveryVersion === this.#recoveryVersion) {
+      try {
+        const previousGeneration = this.#connection.generation;
+        const snapshot = await this.#foreground.refreshSession({ beforeAdopt: async () => this.#beforeInstanceChange() });
+        if (this.#closed || recoveryVersion !== this.#recoveryVersion) return;
+        if (previousGeneration !== undefined && previousGeneration !== snapshot.generation) this.#resetInstanceState();
+        const status = await this.#readStatus();
+        if (this.#closed || recoveryVersion !== this.#recoveryVersion) return;
+        this.#listener?.(status);
+        const source = this.#events(this.#eventStreamUrl());
+        if (this.#closed || recoveryVersion !== this.#recoveryVersion) { source.close(); return; }
+        this.#eventSource = source;
+        const version = Math.max(this.#eventSourceVersion + 1, disconnectedVersion + 1);
+        this.#eventSourceVersion = version;
+        for (const type of projectEventTypes) source.addEventListener(type, (event) => this.#onEvent(source, type, event));
+        source.addEventListener('error', () => {
+          if (source !== this.#eventSource || version !== this.#eventSourceVersion) return;
+          this.#statusGeneration += 1;
+          source.close();
+          this.#eventSource = undefined;
+          this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'unavailable' });
+          this.#reportError(new ProjectClientError('Foreground project event stream disconnected.'));
+          this.#startRecovery(version);
+        });
+        source.addEventListener('open', () => { void this.#refreshRecoveredSource(version); });
+        this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connecting' });
+        return;
+      } catch {
+        if (this.#closed || recoveryVersion !== this.#recoveryVersion) return;
+        await this.#retryDelay(retryDelayMilliseconds);
       }
     }
-    if (sequence !== undefined) this.#lastEventId = Math.max(this.#lastEventId, sequence);
-    this.#queueEventRefresh(version);
   }
 
-  #queueEventRefresh(version: number): void {
-    if (!this.#isVersionCurrent(version)) return;
+  async #refreshRecoveredSource(version: number): Promise<void> {
+    const source = this.#eventSource;
+    if (this.#closed || version !== this.#eventSourceVersion || source === undefined) return;
+    try {
+      const status = await this.#readStatus();
+      if (this.#closed || version !== this.#eventSourceVersion || source !== this.#eventSource) return;
+      this.#listener?.(status);
+      const snapshot = await this.#foreground.sessionSnapshot();
+      if (version === this.#eventSourceVersion) this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connected' });
+    } catch (error) {
+      if (version !== this.#eventSourceVersion || source !== this.#eventSource) return;
+      this.#statusGeneration += 1;
+      this.#eventSource = undefined;
+      source.close();
+      this.#setConnection({ ...this.#connection, state: 'unavailable' });
+      this.#reportError(error);
+      this.#startRecovery(version);
+    }
+  }
+
+  #resetInstanceState(): void {
+    this.#eventQueue.length = 0;
+    this.#highestQueuedEventId = -1;
+    this.#lastEventId = 0;
+    this.#lastSourceChangeSequence = -1;
+    this.#activity = activityFor([]);
+    for (const listener of this.#activityListeners) listener(this.#activity);
+  }
+
+  #setConnection(connection: ProjectConnectionState): void {
+    if (this.#connection.state === connection.state && this.#connection.generation === connection.generation && this.#connection.instanceId === connection.instanceId) return;
+    this.#connection = Object.freeze(connection);
+    for (const listener of this.#connectionListeners) {
+      try { listener(this.#connection); } catch { /* observers cannot interrupt recovery */ }
+    }
+  }
+
+  #eventStreamUrl(): string {
+    return this.#lastEventId === 0
+      ? '/api/project/events'
+      : `/api/project/events?after=${encodeURIComponent(String(this.#lastEventId))}`;
+  }
+
+  async #readStatus(): Promise<ProjectStatus> {
+    try {
+      return projectStatusResponse(await this.#foreground.publicJson('/api/project/status')).status;
+    } catch (error) {
+      throw projectError(error);
+    }
+  }
+
+  #onEvent(
+    source: EventSourceLike,
+    expectedType: (typeof projectEventTypes)[number],
+    frame: EventSourceMessage,
+  ): void {
+    if (this.#closed || source !== this.#eventSource) return;
+
+    let queued: QueuedProjectEvent;
+    try {
+      queued = parseProjectEvent(expectedType, frame);
+    } catch (error) {
+      this.#reportError(error);
+      this.#enqueueMalformedEvent(frame);
+      return;
+    }
+
+    if (queued.sequence !== undefined) {
+      if (queued.sequence <= this.#highestQueuedEventId) return;
+      this.#highestQueuedEventId = queued.sequence;
+    }
+    this.#eventQueue.push(queued);
+    this.#queueEventDrain();
+  }
+
+  #enqueueMalformedEvent(frame: EventSourceMessage): void {
+    const sequence = parseEventSourceSequence(frame.lastEventId);
+    if (sequence !== undefined) {
+      if (sequence <= this.#highestQueuedEventId) return;
+      this.#highestQueuedEventId = sequence;
+    }
+    const latestDroppedSequence = sequence ?? this.#lastEventId;
+    this.#eventQueue.push(Object.freeze({
+      event: Object.freeze({
+        earliestAvailableSequence: latestDroppedSequence + 1,
+        latestDroppedSequence,
+        requestedAfterSequence: this.#lastEventId,
+        type: 'replay.gap' as const,
+      }),
+      sequence: undefined,
+    }));
+    this.#queueEventDrain();
+  }
+
+  #queueEventDrain(): void {
+    if (this.#closed || this.#eventDrainPromise !== undefined) return;
+    const operation = Promise.resolve().then(async () => {
+      while (!this.#closed) {
+        const queued = this.#eventQueue.shift();
+        if (queued === undefined) return;
+        if (queued.event.type === 'replay.gap') {
+          this.#publishEvent(queued.event);
+          if (this.#closed) return;
+          this.#lastEventId = Math.max(this.#lastEventId, queued.event.latestDroppedSequence);
+          this.#queueEventRefresh();
+          continue;
+        }
+
+        if (queued.sequence !== undefined && queued.sequence <= this.#lastEventId) continue;
+
+        let synthesizedGap = false;
+        if (queued.sequence !== undefined && queued.sequence > this.#lastEventId + 1) {
+          const gap = Object.freeze({
+            earliestAvailableSequence: queued.sequence,
+            latestDroppedSequence: queued.sequence - 1,
+            requestedAfterSequence: this.#lastEventId,
+            type: 'replay.gap' as const,
+          });
+          this.#publishEvent(gap);
+          if (this.#closed) return;
+          this.#lastEventId = gap.latestDroppedSequence;
+          this.#queueEventRefresh();
+          synthesizedGap = true;
+        }
+
+        this.#publishActivity(queued.event);
+        this.#publishEvent(queued.event);
+        if (this.#closed) return;
+        if (queued.sequence !== undefined) this.#lastEventId = queued.sequence;
+        if (queued.event.type !== 'runtime.event' && !synthesizedGap) this.#queueEventRefresh();
+      }
+    }).finally(() => {
+      this.#eventDrainPromise = undefined;
+      if (this.#eventQueue.length > 0 && !this.#closed) this.#queueEventDrain();
+    });
+    this.#eventDrainPromise = operation;
+  }
+
+  #publishActivity(event: ProjectEventMessage): void {
+    const sourceChanged = parseSourceChangedEvent(event);
+    if (sourceChanged === undefined || sourceChanged.sequence <= this.#lastSourceChangeSequence) return;
+    this.#lastSourceChangeSequence = sourceChanged.sequence;
+    this.#activity = activityFor(sourceChanged.payload.paths);
+    for (const listener of this.#activityListeners) {
+      try {
+        listener(this.#activity);
+      } catch {
+        // Activity observers must not interrupt foreground event delivery.
+      }
+    }
+  }
+
+  #queueEventRefresh(): void {
+    if (this.#closed) return;
     this.#eventRefreshQueued = true;
     if (this.#eventRefreshPromise !== undefined) return;
-    const refresh = this.#refreshEvents(version);
-    const operation = refresh.finally(() => {
-      if (this.#eventRefreshPromise !== operation) return;
+    const operation = this.#refreshEvents().finally(() => {
       this.#eventRefreshPromise = undefined;
-      if (this.#eventRefreshQueued && this.#isVersionCurrent(version)) this.#queueEventRefresh(version);
+      if (this.#eventRefreshQueued && !this.#closed) this.#queueEventRefresh();
     });
     this.#eventRefreshPromise = operation;
   }
 
-  async #refreshEvents(version: number): Promise<void> {
-    while (this.#eventRefreshQueued && this.#isVersionCurrent(version)) {
+  async #refreshEvents(): Promise<void> {
+    while (this.#eventRefreshQueued && !this.#closed) {
       this.#eventRefreshQueued = false;
       try {
-        const snapshot = await this.#authority.snapshot();
-        await this.#readAndPublish(snapshot, version);
-        if (this.#streamOpen && this.#isVersionCurrent(version)) this.#setConnection(connectionFor('connected', snapshot));
+        await this.refresh();
       } catch (error) {
         this.#eventRefreshQueued = false;
-        if (!this.#isVersionCurrent(version)) return;
         this.#reportError(error);
         return;
       }
@@ -471,116 +702,16 @@ export class ProjectClient {
     }
   }
 
-  #startEventSource(snapshot: ForegroundSessionSnapshot, version: number): void {
-    const eventSource = this.#events(eventUrl(snapshot));
-    if (this.#closed || version <= this.#eventSourceVersion) {
-      eventSource.close();
-      return;
-    }
-    this.#discardEventSource();
-    this.#eventSource = eventSource;
-    this.#eventSourceVersion = version;
-    this.#streamOpen = false;
-    for (const type of projectEventTypes) eventSource.addEventListener(type, (event) => this.#onEvent(event, version));
-    eventSource.addEventListener('error', () => this.#onEventSourceError(eventSource, version));
-    eventSource.addEventListener('open', () => this.#onEventSourceOpen(version));
-  }
-
-  #onEventSourceOpen(version: number): void {
-    if (!this.#isVersionCurrent(version)) return;
-    this.#streamOpen = true;
-    this.#queueEventRefresh(version);
-  }
-
-  #onEventSourceError(eventSource: EventSourceLike, version: number): void {
-    if (!this.#isVersionCurrent(version) || this.#eventSource !== eventSource) return;
-    this.#eventRefreshQueued = false;
-    this.#eventRefreshPromise = undefined;
-    this.#discardEventSource();
-    this.#setConnection(connectionFor('unavailable', this.#connectionIdentity()));
-    this.#reportError(new ProjectClientError('Foreground project event stream disconnected.'));
-    this.#startRecovery(version);
-  }
-
-  #startRecovery(disconnectedVersion: number): void {
-    if (this.#retryPromise !== undefined) return;
-    const operation = this.#recover(disconnectedVersion).finally(() => {
-      if (this.#retryPromise === operation) this.#retryPromise = undefined;
-    });
-    this.#retryPromise = operation;
-  }
-
-  async #recover(disconnectedVersion: number): Promise<void> {
-    while (!this.#closed && this.#eventSourceVersion === disconnectedVersion + 1) {
+  #publishEvent(event: ProjectEventMessage): void {
+    const listeners = [
+      ...(this.#eventListener === undefined ? [] : [this.#eventListener]),
+      ...this.#eventSubscribers,
+    ];
+    for (const listener of listeners) {
       try {
-        const snapshot = await this.#authority.refresh();
-        if (this.#closed || this.#eventSourceVersion !== disconnectedVersion + 1) return;
-        this.#adoptSnapshot(snapshot, 'unavailable');
-        const nextVersion = this.#eventSourceVersion + 1;
-        await this.#readAndPublish(snapshot, nextVersion);
-        if (this.#closed || this.#eventSourceVersion !== disconnectedVersion + 1) return;
-        this.#startEventSource(snapshot, nextVersion);
-        return;
-      } catch {
-        if (this.#closed || this.#eventSourceVersion !== disconnectedVersion + 1) return;
-        await this.#retryDelay(retryDelayMilliseconds);
-      }
-    }
-  }
-
-  #adoptSnapshot(snapshot: ForegroundSessionSnapshot, state: ProjectConnectionPhase): void {
-    const previous = this.#connection;
-    if (previous.generation !== undefined && previous.generation !== snapshot.generation) this.#resetInstanceState();
-    this.#setConnection(connectionFor(state, snapshot));
-  }
-
-  #connectionIdentity(): Readonly<{ readonly generation: number; readonly instanceId: string }> | undefined {
-    const { generation, instanceId } = this.#connection;
-    if (generation === undefined || instanceId === undefined) return undefined;
-    return { generation, instanceId };
-  }
-
-  #discardEventSource(): void {
-    this.#eventSource?.close();
-    this.#eventSource = undefined;
-    this.#eventSourceVersion += 1;
-    this.#streamOpen = false;
-  }
-
-  #isVersionCurrent(version: number): boolean {
-    return !this.#closed && this.#eventSource !== undefined && this.#eventSourceVersion === version;
-  }
-
-  #isLifecycleCurrent(version: number): boolean {
-    return !this.#closed && (this.#eventSourceVersion === version || this.#eventSourceVersion + 1 === version);
-  }
-
-  #isSnapshotCurrent(snapshot: ForegroundSessionSnapshot): boolean {
-    return this.#connection.generation === undefined ||
-      this.#connection.generation === snapshot.generation && this.#connection.instanceId === snapshot.instanceId;
-  }
-
-  #resetInstanceState(): void {
-    this.#lastEventId = 0;
-    this.#lastSourceChangeSequence = -1;
-    this.#activity = activityFor([]);
-    for (const listener of this.#activityListeners) {
-      try {
-        listener(this.#activity);
-      } catch {
-        // Activity observers must not interrupt foreground recovery.
-      }
-    }
-  }
-
-  #setConnection(connection: ProjectConnectionState): void {
-    if (sameConnection(this.#connection, connection)) return;
-    this.#connection = connection;
-    for (const listener of this.#connectionListeners) {
-      try {
-        listener(connection);
-      } catch {
-        // Connection observers must not interrupt foreground recovery.
+        listener(event);
+      } catch (error) {
+        this.#reportError(error);
       }
     }
   }

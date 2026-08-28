@@ -9,9 +9,6 @@ export const canonicalHookEvents = Object.freeze(['sessionStart', 'beforeTool', 
 
 export type CanonicalHookEvent = (typeof canonicalHookEvents)[number];
 
-export const canonicalHookEventFor = (event: string): CanonicalHookEvent | undefined =>
-  canonicalHookEvents.find((candidate) => candidate === event);
-
 export const canonicalHookTools = Object.freeze(['shell', 'file.read', 'file.write', 'mcp', 'agent'] as const);
 
 export type CanonicalHookTool = (typeof canonicalHookTools)[number];
@@ -102,6 +99,14 @@ export type AgentBundleHookInput =
   | string
   | AgentBundleHookEntry
   | readonly (string | AgentBundleHookEntry)[];
+
+export interface AgentBundleDevRuntimeConfig {
+  readonly provider: string;
+}
+
+export interface AgentBundleDevConfig {
+  readonly runtime?: AgentBundleDevRuntimeConfig;
+}
 
 export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   /** Project-level static files copied byte-for-byte into every target artifact under `assets/`. */

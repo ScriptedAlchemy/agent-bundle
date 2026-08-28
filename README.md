@@ -4,13 +4,47 @@
 
 It requires Node.js 22.19 or later.
 
-## Install and build
+## Quick start
 
-Install the package in the project that owns the plugin:
+Install the package in the project that owns the plugin, describe the plugin
+once, and compile it for every host you target:
 
 ```sh
 npm install --save-dev agent-bundle
-agent-bundle build --output artifact
+```
+
+```ts
+// agent-bundle.config.ts
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'my-plugin', version: '0.1.0', description: 'One bundle, every agent host.' },
+  targets: ['plugin'],
+  skills: ['skills/*'],
+  hooks: { sessionStart: { handler: './src/session-start.ts' } },
+  mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
+});
+```
+
+```sh
+agent-bundle dev --root .              # local workbench with live rebuilds
+agent-bundle build --root . --output dist
+```
+
+`targets: ['plugin']` emits one **agent plugin bundle** at `dist/plugin/` that
+installs into multiple hosts from the same root: `.claude-plugin/` (Claude
+Code), `.codex-plugin/` (Codex), and `.cursor-plugin/` (Cursor) manifests over
+shared `skills/`, `hooks/`, `mcp/`, `scripts/`, and `assets/` directories,
+plus a generated `AGENTS.md` install matrix. Hooks compile once into
+host-detecting wrappers that serve Claude Code and Codex; Cursor consumes the
+skills and MCP servers. Per-host artifacts remain available as `claude`,
+`codex`, and `portable` targets when a host-specific layout is required.
+
+## Install and build
+
+```sh
+agent-bundle dev --root .
+agent-bundle build --root . --output artifact
 ```
 
 The implemented commands are:
@@ -20,10 +54,19 @@ The implemented commands are:
 - `agent-bundle validate` validates source; `agent-bundle validate --artifact <dir>` validates a previously built artifact without reading source configuration.
 - `agent-bundle mcp list` and `agent-bundle mcp invoke` operate a local artifact MCP server.
 - `agent-bundle hooks list` and `agent-bundle hooks simulate` inspect and simulate generated hooks.
+- `agent-bundle dev` starts the local development server and Workbench for an
+  ordinary project. Runtime remains an advanced optional extension:
+  `dev.runtime.provider` selects an application-owned provider when configured.
 - `agent-bundle eval` runs deterministic or native Claude/Codex eval suites and records a run.
-- `agent-bundle dev` serves the packaged loopback developer workbench.
 
 `inspect` is intentionally a source/config-plan command; run it before source removal. Artifact-only inspection is the validation contract (`validate --artifact`).
+
+`agent-bundle dev` is available without the RSC example. Installing
+`agent-bundle` does not install the example provider or React/RSC dependencies.
+The optional example and Workbench architecture are documented in
+[the RSC Runtime topology](docs/architecture/rsc-runtime-workbench.md). Native
+evaluation evidence is example-owned, reuses an already signed-in host session
+when a contributor runs it, and never accepts or stores API keys.
 
 ## Developer workbench and Agent API
 
@@ -102,7 +145,7 @@ export default defineConfig({
     version: '1.0.0',
     description: 'Review helpers for an agent host.',
   },
-  targets: ['portable', 'codex', 'claude'],
+  targets: ['portable', 'codex', 'claude'], // or ['plugin'] for the unified multi-host bundle
   skills: ['skills/*'],
   scripts: {
     report: './src/report.ts',
@@ -140,6 +183,18 @@ Skills follow the Agent Skills directory layout and may contain references and b
 
 The compiler rejects unsafe output names, unsupported extensions, nonexistent or escaping source paths, unknown targets, and output collisions before it stages an artifact. It does not call Codex, Claude, or another host CLI, and it does not require API keys.
 
+### Adapter-owned extensions
+
+Ordinary projects need no runtime extension key. `AgentBundleConfig` explicitly
+intersects the bundled portable, Codex, and Claude extension interfaces through
+`AgentBundleConfigExtensions`, so packed declarations retain their author
+fields. `TargetRegistry` owns each unique descriptor and adapter. Extension
+values are strict finite JSON; host-specific values belong to their adapter. A
+new host registers an adapter and exports/merges its interface rather than adding
+a raw compiler or Runtime configuration parser. ChatGPT/OpenAI and Claude
+Workbench profiles are local simulation profiles, not configuration-extension
+claims.
+
 ## Artifact contract
 
 Artifacts use stable, unhashed script output names. A representative tree is:
@@ -172,7 +227,7 @@ Portable artifacts contain portable plugin, skills, MCP, and App-resource files.
 
 ## Public examples
 
-The repository includes three credential-free public example workspaces. Each
+The repository includes credential-free public example workspaces. Each
 uses only the public `agent-bundle` CLI and package exports, exactly as an
 external project would. The Workbench is a desktop product; these walkthroughs
 and its acceptance suite use a 1440×900 desktop viewport.
@@ -182,6 +237,7 @@ and its acceptance suite use a 1440×900 desktop viewport.
 | [Skills Starter](examples/skills-starter) | author a release-review Skill and deterministic evidence | `pnpm example:skills` |
 | [Hooks and Scripts](examples/hooks-and-scripts) | simulate a Hook and inspect successful and blocking script traces | `pnpm example:hooks` |
 | [MCP App](examples/mcp-app) | exercise a degraded service result in an interactive App and deterministic eval | `pnpm example:mcp-app` |
+| [Audiobook Curator](examples/audiobook-curator) | inspect, safely prepare, and audit local audiobook media through Claude or Codex | `pnpm example:audiobook` |
 
 Run these commands from the repository root. The filtered package command runs
 inside the selected example, so `agent-bundle` infers that example directory as
@@ -235,5 +291,6 @@ workflow. A skipped native smoke in CI is the intended state, not a delivery gap
 
 Repository-owned Chromium E2E runs independently of a connected ChatGPT Chrome extension. The
 extension is for the separate final manual visual pass, not a substitute for repository or packed
-consumer verification. Publication has no repository script: selecting the npm package name/scope,
-license, and `publishConfig` remains an explicit release-owner decision.
+consumer verification. Package versions and release PRs use Changesets. Add a changeset with
+`pnpm changeset`; merges to `main` update or publish through the standard Changesets action. Pull
+requests publish `agent-bundle` and `@agent-bundle/rsc-runtime` canaries through pkg.pr.new.

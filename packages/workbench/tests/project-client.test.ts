@@ -3,16 +3,24 @@ import { expect, it } from '@rstest/core';
 import {
   ProjectClient,
   ProjectClientError,
-  type ProjectClientOptions,
   type EventSourceFactory,
   type EventSourceLike,
 } from '../src/project-client.ts';
-import { ForegroundSessionAuthority } from '../src/foreground-session.ts';
-import { deferred } from './support/async.ts';
+import { ArtifactClient } from '../src/artifacts/artifact-client.ts';
+import { HookClient } from '../src/hooks/hook-client.ts';
+import { LogClient } from '../src/logs/log-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { PlaygroundClient } from '../src/playground/playground-client.ts';
 
 interface Listener {
   readonly listener: (event: { readonly data: string; readonly lastEventId: string }) => void;
   readonly type: string;
+}
+
+interface Deferred<Value> {
+  readonly promise: Promise<Value>;
+  reject(reason: unknown): void;
+  resolve(value: Value): void;
 }
 
 class RecordingEventSource implements EventSourceLike {
@@ -53,18 +61,47 @@ const status = (state: 'active' | 'missing' | 'stale' = 'active') => ({
   source: { diagnostics: [], revision: 'revision-1', state: 'ready' },
 });
 
-const foregroundAuthority = (): ForegroundSessionAuthority => new ForegroundSessionAuthority({
-  fetch: async () => Response.json({
-    instanceId: 'foreground-instance-a',
-    origin: 'http://foreground.test',
-    token: 'foreground-token',
-  }),
+const foregroundSession = Object.freeze({
+  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+  instanceId: 'foreground-instance-a',
+  origin: 'http://127.0.0.1:3100',
+  token: 'foreground-token',
 });
 
-const projectClient = (options: ProjectClientOptions = {}): ProjectClient => new ProjectClient({
-  authority: foregroundAuthority(),
-  ...options,
+const withForegroundSession = (
+  handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+): typeof fetch => async (input, init) => String(input) === '/api/project/session'
+  ? Response.json(foregroundSession)
+  : handler(input, init);
+
+const deferred = <Value>(): Deferred<Value> => {
+  let reject!: (reason: unknown) => void;
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+};
+
+const runtimeEvent = (sequence: number): { readonly data: string; readonly lastEventId: string } => ({
+  data: JSON.stringify({
+    occurredAt: '2026-08-14T12:00:00.000Z',
+    payload: {
+      providerSessionId: 'provider-session-1',
+      runtimeGenerationId: `generation-${sequence}`,
+      type: 'runtime.generation.activated',
+    },
+    sequence,
+    type: 'runtime.event',
+  }),
+  lastEventId: String(sequence),
 });
+
+const flushEvents = async (): Promise<void> => {
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+};
 
 it('calls the default browser fetch with its global receiver', async () => {
   const originalFetch = globalThis.fetch;
@@ -75,7 +112,7 @@ it('calls the default browser fetch with its global receiver', async () => {
   };
   Object.defineProperty(globalThis, 'fetch', { configurable: true, value: browserFetch });
   try {
-    await expect(projectClient().refresh()).resolves.toMatchObject({ artifact: { state: 'active' } });
+    await expect(new ProjectClient().refresh()).resolves.toMatchObject({ artifact: { state: 'active' } });
   } finally {
     Object.defineProperty(globalThis, 'fetch', { configurable: true, value: originalFetch });
   }
@@ -98,7 +135,7 @@ it('rejects noncanonical project status envelopes and nested status DTOs', async
   ];
 
   for (const response of invalidResponses) {
-    const client = projectClient({ fetch: async () => Response.json(response) });
+    const client = new ProjectClient({ fetch: async () => Response.json(response) });
     await expect(client.refresh()).rejects.toBeInstanceOf(ProjectClientError);
   }
 });
@@ -108,19 +145,19 @@ it('does not publish initial status or retain an event stream when closed during
   const stream = new RecordingEventSource();
   const observed: string[] = [];
   let eventStreams = 0;
-  const client = projectClient({
+  const client = new ProjectClient({
     events: () => {
       eventStreams += 1;
       return stream;
     },
-    fetch: async () => response.promise,
+    fetch: withForegroundSession(async () => response.promise),
   });
 
   const connecting = client.connect((next) => observed.push(next.artifact.state));
   client.close();
   response.resolve(Response.json({ status: status() }));
 
-  await expect(connecting).resolves.toMatchObject({ artifact: { state: 'active' } });
+  await expect(connecting).rejects.toThrow();
   expect(observed).toEqual([]);
   expect(eventStreams).toBe(0);
   expect(stream.closed).toBe(false);
@@ -128,35 +165,111 @@ it('does not publish initial status or retain an event stream when closed during
 
 it('closes an event stream constructed concurrently with client shutdown', async () => {
   const stream = new RecordingEventSource();
-  const client = projectClient({
+  const client = new ProjectClient({
     events: () => {
       client.close();
       return stream;
     },
-    fetch: async () => Response.json({ status: status() }),
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
 
   await expect(client.connect(() => undefined)).resolves.toMatchObject({ artifact: { state: 'active' } });
   expect(stream.closed).toBe(true);
 });
 
+it('completes the shared foreground session bootstrap before constructing its sole EventSource', async () => {
+  const session = deferred<Response>();
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  const originalEventSource = globalThis.EventSource;
+  Object.defineProperty(globalThis, 'EventSource', { configurable: true, value: class {
+    addEventListener = stream.addEventListener.bind(stream);
+    close = stream.close.bind(stream);
+  } });
+  try {
+    const client = new ProjectClient({
+    fetch: async (input) => {
+      requests.push(String(input));
+      return String(input) === '/api/project/session' ? session.promise : Response.json({ status: status() });
+    },
+    });
+
+    const connecting = client.connect(() => undefined);
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(requests).toEqual(['/api/project/session']);
+    expect(stream.listeners).toEqual([]);
+    session.resolve(Response.json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:3100', token: 'token-1' }));
+
+    await expect(connecting).resolves.toMatchObject({ artifact: { state: 'active' } });
+    expect(requests).toEqual(['/api/project/session', '/api/project/status']);
+    expect(stream.listeners).not.toEqual([]);
+  } finally {
+    Object.defineProperty(globalThis, 'EventSource', { configurable: true, value: originalEventSource });
+  }
+});
+
+it('bootstraps an injected EventSource factory before status and leaves no stream when closed during bootstrap', async () => {
+  const session = deferred<Response>();
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  let streams = 0;
+  const client = new ProjectClient({
+    events: () => {
+      streams += 1;
+      return stream;
+    },
+    fetch: async (input) => {
+      requests.push(String(input));
+      return String(input) === '/api/project/session' ? session.promise : Response.json({ status: status() });
+    },
+  });
+  const connecting = client.connect(() => undefined);
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+  expect(requests).toEqual(['/api/project/session']);
+  expect(streams).toBe(0);
+  session.resolve(Response.json(foregroundSession));
+  await expect(connecting).resolves.toMatchObject({ artifact: { state: 'active' } });
+  expect(requests).toEqual(['/api/project/session', '/api/project/status']);
+  expect(streams).toBe(1);
+
+  const pending = deferred<Response>();
+  let lateStreams = 0;
+  const closed = new ProjectClient({
+    events: () => {
+      lateStreams += 1;
+      return new RecordingEventSource();
+    },
+    fetch: async (input) => String(input) === '/api/project/session' ? pending.promise : Response.json({ status: status() }),
+  });
+  const closing = closed.connect(() => undefined);
+  closed.close();
+  pending.resolve(Response.json(foregroundSession));
+  await expect(closing).rejects.toThrow();
+  expect(lateStreams).toBe(0);
+});
+
 it('refreshes Overview state after live named events and keeps the browser EventSource transport open', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];
   let sequence = 0;
-  const client = projectClient({
+  const client = new ProjectClient({
     events: (() => stream) satisfies EventSourceFactory,
-    fetch: async (input) => {
+    fetch: withForegroundSession(async (input) => {
       requests.push(String(input));
       sequence += 1;
       return Response.json({ status: status(sequence === 1 ? 'missing' : 'active') });
-    },
+    }),
   });
   const observed: string[] = [];
 
   await client.connect((next) => observed.push(next.artifact.state));
   stream.emit('artifact.status', {
-    data: JSON.stringify({ occurredAt: '2026-08-16T12:00:00.000Z', payload: status('active').artifact, sequence: 7, type: 'artifact.status' }),
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: status('active').artifact,
+      sequence: 7,
+      type: 'artifact.status',
+    }),
     lastEventId: '7',
   });
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
@@ -169,304 +282,331 @@ it('refreshes Overview state after live named events and keeps the browser Event
   expect(stream.closed).toBe(true);
 });
 
-it('reports an EventSource outage and clears it after reconnection refreshes project status', async () => {
-  const stream = new RecordingEventSource();
+it('drains the old instance before adopting a recovered foreground and opening a fresh event stream', async () => {
+  const firstStream = new RecordingEventSource();
+  const secondStream = new RecordingEventSource();
+  const streams = [firstStream, secondStream];
   const errors: unknown[] = [];
-  let connection: 'connected' | 'unavailable' = 'connected';
-  let requests = 0;
-  const client = projectClient({
-    events: () => stream,
-    fetch: async () => {
-      requests += 1;
+  const connections: string[] = [];
+  const releaseBarrier = deferred<void>();
+  let sessionRequests = 0;
+  let statusRequests = 0;
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      if (String(input) === '/api/project/session') {
+        sessionRequests += 1;
+        return Response.json({
+          cookieName: `agent-bundle-foreground-session-${sessionRequests === 1 ? 'a'.repeat(32) : 'b'.repeat(32)}`,
+          instanceId: `foreground-instance-${sessionRequests === 1 ? 'a' : 'b'}`,
+          origin: 'http://127.0.0.1:3100',
+          token: `token-${sessionRequests === 1 ? 'a' : 'b'}`,
+        });
+      }
+      statusRequests += 1;
       return Response.json({ status: status() });
     },
   });
+  const client = new ProjectClient({
+    beforeInstanceChange: async () => releaseBarrier.promise,
+    events: () => streams.shift()!,
+    foreground,
+    retryDelay: async () => undefined,
+  });
+  client.onConnection((connection) => connections.push(`${connection.state}:${connection.instanceId ?? 'none'}`));
 
   await client.connect(
-    () => { connection = 'connected'; },
-    (reason) => {
-      errors.push(reason);
-      connection = 'unavailable';
-    },
+    () => undefined,
+    (reason) => errors.push(reason),
   );
-  stream.emit('error', { data: '', lastEventId: '' });
+  firstStream.emit('error', { data: '', lastEventId: '' });
+  await flushEvents();
+  expect(firstStream.closed).toBe(true);
+  expect(sessionRequests).toBe(2);
+  expect(statusRequests).toBe(1);
+  expect(connections.at(-1)).toBe('unavailable:foreground-instance-a');
 
-  expect(connection).toBe('unavailable');
+  releaseBarrier.resolve();
+  await flushEvents();
+  await flushEvents();
+  secondStream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+
   expect(errors).toHaveLength(1);
-  expect(errors[0]).toMatchObject({ message: 'Foreground project event stream disconnected.' });
+  expect(statusRequests).toBe(3);
+  expect(connections.at(-1)).toBe('connected:foreground-instance-b');
 
-  stream.emit('open', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-
-  expect(connection).toBe('connected');
-  expect(requests).toBe(2);
+  client.close();
+  expect(secondStream.closed).toBe(true);
 });
 
-it('recovers a replaced foreground authority through a new event source without accepting stale source callbacks', async () => {
-  const streams: RecordingEventSource[] = [];
-  const sessions = [
-    { instanceId: 'foreground-a', origin: 'http://foreground.test', token: 'token-a' },
-    { instanceId: 'foreground-b', origin: 'http://foreground.test', token: 'token-b' },
-  ];
-  const authority = new ForegroundSessionAuthority({
-    fetch: async () => Response.json(sessions.shift()),
+it('seeds a same-instance replacement event stream from the last acknowledged cursor', async () => {
+  const firstStream = new RecordingEventSource();
+  const secondStream = new RecordingEventSource();
+  const streams = [firstStream, secondStream];
+  const eventUrls: string[] = [];
+  let sessionRequests = 0;
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      if (String(input) === '/api/project/session') {
+        sessionRequests += 1;
+        return Response.json({
+          ...foregroundSession,
+          token: `foreground-token-${String(sessionRequests)}`,
+        });
+      }
+      return Response.json({ status: status() });
+    },
   });
-  const errors: unknown[] = [];
-  const observed: string[] = [];
   const client = new ProjectClient({
-    authority,
-    events: () => {
-      const stream = new RecordingEventSource();
-      streams.push(stream);
-      return stream;
+    events: (url) => {
+      eventUrls.push(url);
+      return streams.shift()!;
     },
-    fetch: async () => Response.json({ status: status() }),
+    foreground,
+    retryDelay: async () => undefined,
   });
 
-  await client.connect((next) => observed.push(next.artifact.state), (reason) => errors.push(reason));
-  const first = streams[0];
-  if (first === undefined) throw new Error('Expected the initial foreground event source.');
-  first.emit('source.changed', {
-    data: JSON.stringify({
-      occurredAt: '2026-08-16T12:00:00.000Z',
-      payload: { occurredAt: '2026-08-16T12:00:00.000Z', paths: ['src/stale.ts'], reason: 'source-change' },
-      sequence: 999,
-      type: 'source.changed',
-    }),
-    lastEventId: '999',
-  });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  await client.connect(() => undefined);
+  firstStream.emit('runtime.event', runtimeEvent(7));
+  await flushEvents();
+  expect(client.lastEventId).toBe(7);
 
-  first.emit('error', { data: '', lastEventId: '' });
+  firstStream.emit('error', { data: '', lastEventId: '' });
+  await flushEvents();
+  await flushEvents();
 
-  expect(first.closed).toBe(true);
-  expect(errors).toHaveLength(1);
-  expect(client.connection).toEqual({ generation: 0, instanceId: 'foreground-a', state: 'unavailable' });
-
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  const second = streams[1];
-  if (second === undefined) throw new Error('Expected a replacement foreground event source.');
-  expect(client.activity.changedFiles).toEqual([]);
-  expect(client.lastEventId).toBe(0);
-
-  first.emit('source.changed', {
-    data: JSON.stringify({
-      occurredAt: '2026-08-16T12:01:00.000Z',
-      payload: { occurredAt: '2026-08-16T12:01:00.000Z', paths: ['src/late.ts'], reason: 'source-change' },
-      sequence: 1_000,
-      type: 'source.changed',
-    }),
-    lastEventId: '1000',
-  });
-  second.emit('open', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-
-  expect(client.activity.changedFiles).toEqual([]);
-  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'connected' });
-  expect(observed).toEqual(['active', 'active', 'active', 'active']);
+  expect(eventUrls).toEqual(['/api/project/events', '/api/project/events?after=7']);
+  client.close();
 });
 
-it('coalesces repeated stream errors while retrying a failed authoritative bootstrap', async () => {
-  const retry = deferred<void>();
-  const streams: RecordingEventSource[] = [];
-  let bootstraps = 0;
-  const authority = new ForegroundSessionAuthority({
-    fetch: async () => {
-      bootstraps += 1;
-      if (bootstraps === 2) throw new Error('Foreground server is still restarting.');
-      return Response.json({
-        instanceId: bootstraps === 1 ? 'foreground-a' : 'foreground-b',
-        origin: 'http://foreground.test',
-        token: `token-${bootstraps}`,
-      });
-    },
-  });
+it('reports and retries a failed initial foreground bootstrap', async () => {
+  const stream = new RecordingEventSource();
+  const connections: string[] = [];
   const errors: unknown[] = [];
-  let retryCount = 0;
+  let sessionRequests = 0;
+  let streams = 0;
   const client = new ProjectClient({
-    authority,
     events: () => {
-      const stream = new RecordingEventSource();
-      streams.push(stream);
-      return stream;
-    },
-    fetch: async () => Response.json({ status: status() }),
-    retryDelay: () => {
-      retryCount += 1;
-      return retry.promise;
-    },
-  });
-
-  await client.connect(() => undefined, (reason) => errors.push(reason));
-  const first = streams[0];
-  if (first === undefined) throw new Error('Expected the initial foreground event source.');
-  first.emit('error', { data: '', lastEventId: '' });
-  first.emit('error', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-
-  expect(first.closed).toBe(true);
-  expect(errors).toHaveLength(1);
-  expect(retryCount).toBe(1);
-  expect(streams).toHaveLength(1);
-
-  retry.resolve();
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-
-  expect(streams).toHaveLength(2);
-  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'unavailable' });
-  const second = streams[1];
-  if (second === undefined) throw new Error('Expected the recovered foreground event source.');
-  second.emit('open', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'connected' });
-});
-
-it('ignores a late old-stream refresh without blocking the recovered source open refresh', async () => {
-  const lateStatus = deferred<Response>();
-  const streams: RecordingEventSource[] = [];
-  const sessions = [
-    { instanceId: 'foreground-a', origin: 'http://foreground.test', token: 'token-a' },
-    { instanceId: 'foreground-b', origin: 'http://foreground.test', token: 'token-b' },
-  ];
-  const authority = new ForegroundSessionAuthority({ fetch: async () => Response.json(sessions.shift()) });
-  const observed: string[] = [];
-  let requests = 0;
-  const client = projectClient({
-    authority,
-    events: () => {
-      const stream = new RecordingEventSource();
-      streams.push(stream);
-      return stream;
-    },
-    fetch: async () => {
-      requests += 1;
-      return requests === 2 ? lateStatus.promise : Response.json({ status: status() });
-    },
-  });
-
-  await client.connect((next) => observed.push(next.artifact.state));
-  const first = streams[0];
-  if (first === undefined) throw new Error('Expected the initial foreground event source.');
-  first.emit('artifact.status', {
-    data: JSON.stringify({ occurredAt: '2026-08-16T12:00:00.000Z', payload: status().artifact, sequence: 7, type: 'artifact.status' }),
-    lastEventId: '7',
-  });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  first.emit('error', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  const second = streams[1];
-  if (second === undefined) throw new Error('Expected a replacement foreground event source.');
-  second.emit('open', { data: '', lastEventId: '' });
-  lateStatus.resolve(Response.json({ status: status('missing') }));
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-
-  expect(observed).toEqual(['active', 'active', 'active']);
-  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'connected' });
-});
-
-it('rejects a rebuild response from a superseded foreground generation without publishing its stale status', async () => {
-  const rebuildResponse = deferred<Response>();
-  const rebuildStarted = deferred<void>();
-  const streams: RecordingEventSource[] = [];
-  const sessions = [
-    { instanceId: 'foreground-a', origin: 'http://foreground.test', token: 'token-a' },
-    { instanceId: 'foreground-b', origin: 'http://foreground.test', token: 'token-b' },
-  ];
-  const authority = new ForegroundSessionAuthority({ fetch: async () => Response.json(sessions.shift()) });
-  const observed: string[] = [];
-  let rebuildRequests = 0;
-  const client = projectClient({
-    authority,
-    events: () => {
-      const stream = new RecordingEventSource();
-      streams.push(stream);
+      streams += 1;
       return stream;
     },
     fetch: async (input) => {
-      if (String(input) === '/api/project/rebuild') {
-        rebuildRequests += 1;
-        rebuildStarted.resolve();
-        return rebuildResponse.promise;
+      if (String(input) === '/api/project/session') {
+        sessionRequests += 1;
+        return sessionRequests === 1
+          ? Response.json({ code: 'AB8019', message: 'Foreground unavailable.' }, { status: 503 })
+          : Response.json(foregroundSession);
       }
       return Response.json({ status: status() });
     },
+    retryDelay: async () => undefined,
   });
+  client.onConnection((connection) => connections.push(`${connection.state}:${connection.instanceId ?? 'none'}`));
 
-  await client.connect((next) => observed.push(next.artifact.state));
-  const rebuilding = client.rebuild();
-  await rebuildStarted.promise;
-  const first = streams[0];
-  if (first === undefined) throw new Error('Expected the initial foreground event source.');
-  first.emit('error', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  const second = streams[1];
-  if (second === undefined) throw new Error('Expected a replacement foreground event source.');
-  second.emit('open', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  await expect(client.connect(() => undefined, (reason) => errors.push(reason))).rejects.toBeInstanceOf(ProjectClientError);
+  await flushEvents();
+  await flushEvents();
 
-  rebuildResponse.resolve(Response.json({ status: status('missing') }));
-
-  await expect(rebuilding).rejects.toMatchObject({ message: 'Foreground project operation was superseded.' });
-  expect(rebuildRequests).toBe(1);
-  expect(observed).toEqual(['active', 'active', 'active']);
-  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'connected' });
+  expect(errors).toHaveLength(1);
+  expect(connections).toContain('unavailable:none');
+  expect(sessionRequests).toBe(2);
+  expect(streams).toBe(1);
+  stream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+  expect(connections.at(-1)).toBe('connected:foreground-instance-a');
+  client.close();
 });
 
-it('rejects a status refresh response from a superseded foreground generation without publishing it', async () => {
-  const refreshResponse = deferred<Response>();
-  const refreshStarted = deferred<void>();
-  const streams: RecordingEventSource[] = [];
-  const sessions = [
-    { instanceId: 'foreground-a', origin: 'http://foreground.test', token: 'token-a' },
-    { instanceId: 'foreground-b', origin: 'http://foreground.test', token: 'token-b' },
-  ];
-  const authority = new ForegroundSessionAuthority({ fetch: async () => Response.json(sessions.shift()) });
-  const observed: string[] = [];
-  let requests = 0;
-  const client = projectClient({
-    authority,
-    events: () => {
-      const stream = new RecordingEventSource();
-      streams.push(stream);
-      return stream;
-    },
-    fetch: async () => {
-      requests += 1;
-      if (requests === 2) {
-        refreshStarted.resolve();
-        return refreshResponse.promise;
+it('retries recovery when the replacement stream status probe fails', async () => {
+  const firstStream = new RecordingEventSource();
+  const secondStream = new RecordingEventSource();
+  const thirdStream = new RecordingEventSource();
+  const streams = [firstStream, secondStream, thirdStream];
+  const connections: string[] = [];
+  const errors: unknown[] = [];
+  let sessionRequests = 0;
+  let statusRequests = 0;
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      if (String(input) === '/api/project/session') {
+        sessionRequests += 1;
+        return Response.json({ ...foregroundSession, token: `foreground-token-${String(sessionRequests)}` });
       }
-      return Response.json({ status: status() });
+      statusRequests += 1;
+      return statusRequests === 3
+        ? Response.json({ code: 'AB8019', message: 'Status unavailable.' }, { status: 503 })
+        : Response.json({ status: status() });
     },
   });
+  const client = new ProjectClient({
+    events: () => streams.shift()!,
+    foreground,
+    retryDelay: async () => undefined,
+  });
+  client.onConnection((connection) => connections.push(`${connection.state}:${connection.instanceId ?? 'none'}`));
 
-  await client.connect((next) => observed.push(next.artifact.state));
-  const refreshing = client.refresh();
-  await refreshStarted.promise;
-  const first = streams[0];
-  if (first === undefined) throw new Error('Expected the initial foreground event source.');
-  first.emit('error', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  const second = streams[1];
-  if (second === undefined) throw new Error('Expected a replacement foreground event source.');
-  second.emit('open', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  await client.connect(() => undefined, (reason) => errors.push(reason));
+  firstStream.emit('error', { data: '', lastEventId: '' });
+  await flushEvents();
+  await flushEvents();
+  secondStream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+  await flushEvents();
 
-  refreshResponse.resolve(Response.json({ status: status('missing') }));
-
-  await expect(refreshing).rejects.toMatchObject({ message: 'Foreground project status was superseded.' });
-  expect(observed).toEqual(['active', 'active', 'active']);
+  expect(secondStream.closed).toBe(true);
+  expect(streams).toHaveLength(0);
+  expect(connections).toContain('unavailable:foreground-instance-a');
+  expect(connections.at(-1)).toBe('connecting:foreground-instance-a');
+  expect(errors).toHaveLength(2);
+  thirdStream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+  expect(connections.at(-1)).toBe('connected:foreground-instance-a');
+  expect(statusRequests).toBe(5);
+  client.close();
 });
 
-it('rejects project SSE records with missing, invalid, or mismatched sequence identities', async () => {
+it('delivers synchronous runtime events once in FIFO order and refreshes after an unexplained sequence gap', async () => {
   const stream = new RecordingEventSource();
-  const client = projectClient({
+  const requests: string[] = [];
+  const errors: unknown[] = [];
+  const received: number[] = [];
+  const frozen: boolean[] = [];
+  const client = new ProjectClient({
     events: () => stream,
-    fetch: async () => Response.json({ status: status() }),
+    fetch: withForegroundSession(async (input) => {
+      requests.push(String(input));
+      return Response.json({ status: status() });
+    }),
   });
-  await client.connect(() => undefined);
+
+  await client.connect(
+    () => undefined,
+    (reason) => errors.push(reason),
+    (event) => {
+      if (event.type !== 'runtime.event') return;
+      received.push(event.sequence);
+      frozen.push(Object.isFrozen(event) && Object.isFrozen(event.payload));
+    },
+  );
+  stream.emit('runtime.event', runtimeEvent(8));
+  stream.emit('runtime.event', runtimeEvent(9));
+  stream.emit('runtime.event', runtimeEvent(10));
+  await flushEvents();
+
+  expect(received).toEqual([8, 9, 10]);
+  expect(frozen).toEqual([true, true, true]);
+  expect(client.lastEventId).toBe(10);
+  expect(requests).toEqual(['/api/project/status', '/api/project/status']);
+
+  stream.emit('runtime.event', runtimeEvent(9));
+  stream.emit('runtime.event', runtimeEvent(7));
+  stream.emit('runtime.event', {
+    data: JSON.stringify({ occurredAt: '2026-08-14T12:00:00.000Z', sequence: 11, type: 'runtime.event' }),
+    lastEventId: '11',
+  });
+  await flushEvents();
+
+  expect(received).toEqual([8, 9, 10]);
+  expect(errors).toHaveLength(1);
+  expect(client.lastEventId).toBe(11);
+  expect(requests).toEqual(['/api/project/status', '/api/project/status', '/api/project/status']);
+});
+
+it('preserves a synchronous runtime event after replay gap delivery', async () => {
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  const received: string[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async (input) => {
+      requests.push(String(input));
+      return Response.json({ status: status() });
+    }),
+  });
+
+  await client.connect(
+    () => undefined,
+    undefined,
+    (event) => received.push(event.type === 'replay.gap' ? event.type : `${event.type}:${event.sequence}`),
+  );
+  stream.emit('replay.gap', {
+    data: JSON.stringify({
+      earliestAvailableSequence: 14,
+      latestDroppedSequence: 13,
+      requestedAfterSequence: 10,
+      type: 'replay.gap',
+    }),
+    lastEventId: '',
+  });
+  stream.emit('runtime.event', runtimeEvent(14));
+  await flushEvents();
+
+  expect(received).toEqual(['replay.gap', 'runtime.event:14']);
+  expect(client.lastEventId).toBe(14);
+  expect(requests).toEqual(['/api/project/status', '/api/project/status']);
+});
+
+it('reports a runtime listener exception and still delivers later queued runtime events', async () => {
+  const stream = new RecordingEventSource();
+  const errors: unknown[] = [];
+  const received: number[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
+  });
+
+  await client.connect(
+    () => undefined,
+    (reason) => errors.push(reason),
+    (event) => {
+      if (event.type !== 'runtime.event') return;
+      received.push(event.sequence);
+      if (event.sequence === 8) throw new Error('listener failure');
+    },
+  );
+  stream.emit('runtime.event', runtimeEvent(8));
+  stream.emit('runtime.event', runtimeEvent(9));
+  await flushEvents();
+
+  expect(received).toEqual([8, 9]);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toMatchObject({ message: 'listener failure' });
+  expect(client.lastEventId).toBe(9);
+});
+
+it('clears queued runtime delivery and ignores late callbacks after close', async () => {
+  const stream = new RecordingEventSource();
+  const received: number[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
+  });
+
+  await client.connect(
+    () => undefined,
+    undefined,
+    (event) => {
+      if (event.type === 'runtime.event') received.push(event.sequence);
+    },
+  );
+  stream.emit('runtime.event', runtimeEvent(8));
+  client.close();
+  stream.emit('runtime.event', runtimeEvent(9));
+  await flushEvents();
+
+  expect(received).toEqual([]);
+  expect(client.lastEventId).toBe(0);
+  expect(stream.closed).toBe(true);
+});
+
+it('rejects project SSE records whose payload and EventSource sequence identities do not match', async () => {
+  const stream = new RecordingEventSource();
+  const errors: unknown[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
+  });
+  await client.connect(() => undefined, (reason) => errors.push(reason));
   stream.emit('source.changed', {
     data: JSON.stringify({
       occurredAt: '2026-08-16T12:00:00.000Z',
@@ -492,16 +632,7 @@ it('rejects project SSE records with missing, invalid, or mismatched sequence id
   stream.emit('source.changed', {
     data: JSON.stringify({
       occurredAt: '2026-08-16T12:02:00.000Z',
-      payload: { occurredAt: '2026-08-16T12:02:00.000Z', paths: ['src/invalid-id.ts'], reason: 'source-change' },
-      sequence: 10,
-      type: 'source.changed',
-    }),
-    lastEventId: 'not-a-sequence',
-  });
-  stream.emit('source.changed', {
-    data: JSON.stringify({
-      occurredAt: '2026-08-16T12:03:00.000Z',
-      payload: { occurredAt: '2026-08-16T12:03:00.000Z', paths: ['src/mismatch.ts'], reason: 'source-change' },
+      payload: { occurredAt: '2026-08-16T12:02:00.000Z', paths: ['src/mismatch.ts'], reason: 'source-change' },
       sequence: 12,
       type: 'source.changed',
     }),
@@ -511,22 +642,25 @@ it('rejects project SSE records with missing, invalid, or mismatched sequence id
     data: JSON.stringify({ occurredAt: '2026-08-16T12:04:00.000Z', payload: status().artifact, sequence: 13.5, type: 'artifact.status' }),
     lastEventId: '13',
   });
+  await flushEvents();
 
-  expect(client.lastEventId).toBe(7);
   expect(client.activity.changedFiles).toEqual(['src/kept.ts']);
+  expect(client.lastEventId).toBe(13);
+  expect(errors).toHaveLength(4);
 });
 
 it('rejects versioned, extra, and malformed SSE project event messages', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];
-  const client = projectClient({
+  const errors: unknown[] = [];
+  const client = new ProjectClient({
     events: () => stream,
-    fetch: async (input) => {
+    fetch: withForegroundSession(async (input) => {
       requests.push(String(input));
       return Response.json({ status: status() });
-    },
+    }),
   });
-  await client.connect(() => undefined);
+  await client.connect(() => undefined, (reason) => errors.push(reason));
 
   for (const [lastEventId, data] of [
     ['7', {
@@ -559,17 +693,19 @@ it('rejects versioned, extra, and malformed SSE project event messages', async (
     stream.emit('source.changed', { data: JSON.stringify(data), lastEventId });
   }
 
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  expect(client.lastEventId).toBe(0);
+  await flushEvents();
+  expect(client.lastEventId).toBe(10);
   expect(client.activity.changedFiles).toEqual([]);
-  expect(requests).toEqual(['/api/project/status']);
+  expect(requests.length).toBeGreaterThan(1);
+  expect(requests.every((path) => path === '/api/project/status')).toBe(true);
+  expect(errors).toHaveLength(4);
 });
 
 it('captures the latest valid source-change paths in an immutable browser activity snapshot', async () => {
   const stream = new RecordingEventSource();
-  const client = projectClient({
+  const client = new ProjectClient({
     events: () => stream,
-    fetch: async () => Response.json({ status: status() }),
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
 
   const observed: Array<readonly string[]> = [];
@@ -588,6 +724,7 @@ it('captures the latest valid source-change paths in an immutable browser activi
     }),
     lastEventId: '12',
   });
+  await flushEvents();
 
   const activity = client.activity;
   expect(activity.changedFiles).toEqual(['src/a.ts', 'src/z.ts']);
@@ -600,9 +737,9 @@ it('captures the latest valid source-change paths in an immutable browser activi
 
 it('replaces changed-file activity only when a higher valid source-change sequence arrives', async () => {
   const stream = new RecordingEventSource();
-  const client = projectClient({
+  const client = new ProjectClient({
     events: () => stream,
-    fetch: async () => Response.json({ status: status() }),
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
   await client.connect(() => undefined);
 
@@ -621,6 +758,7 @@ it('replaces changed-file activity only when a higher valid source-change sequen
       lastEventId: String(sequence),
     });
   }
+  await flushEvents();
 
   expect(client.activity.changedFiles).toEqual(['src/new.ts']);
   expect(client.lastEventId).toBe(20);
@@ -628,9 +766,9 @@ it('replaces changed-file activity only when a higher valid source-change sequen
 
 it('retains the latest changed-file activity when a source-change envelope is malformed', async () => {
   const stream = new RecordingEventSource();
-  const client = projectClient({
+  const client = new ProjectClient({
     events: () => stream,
-    fetch: async () => Response.json({ status: status() }),
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
   await client.connect(() => undefined);
   stream.emit('source.changed', {
@@ -655,6 +793,7 @@ it('retains the latest changed-file activity when a source-change envelope is ma
     }),
     lastEventId: '23',
   });
+  await flushEvents();
 
   expect(client.activity.changedFiles).toEqual(['src/kept.ts']);
 });
@@ -663,14 +802,14 @@ it('retains activity across a failed event refresh and ignores post-close event 
   const stream = new RecordingEventSource();
   const errors: unknown[] = [];
   let requests = 0;
-  const client = projectClient({
+  const client = new ProjectClient({
     events: () => stream,
-    fetch: async () => {
+    fetch: withForegroundSession(async () => {
       requests += 1;
       return requests === 1
         ? Response.json({ status: status() })
         : new Response(null, { status: 500 });
-      },
+      }),
   });
   await client.connect(() => undefined, (reason) => errors.push(reason));
   stream.emit('source.changed', {
@@ -716,19 +855,24 @@ it('reports one failed event refresh without an unhandled rejection and retains 
   let requests = 0;
   process.on('unhandledRejection', onUnhandled);
   try {
-    const client = projectClient({
+    const client = new ProjectClient({
       events: () => stream,
-      fetch: async () => {
+      fetch: withForegroundSession(async () => {
         requests += 1;
         return requests === 1
           ? Response.json({ status: status() })
           : new Response(JSON.stringify({ diagnostic: { code: 'AB8007', message: 'Request could not be completed.' } }), { status: 500 });
-      },
+      }),
     });
 
     await client.connect((next) => observed.push(next.artifact.state), (reason) => errors.push(reason));
     stream.emit('artifact.status', {
-      data: JSON.stringify({ occurredAt: '2026-08-16T12:00:00.000Z', payload: status().artifact, sequence: 7, type: 'artifact.status' }),
+      data: JSON.stringify({
+        occurredAt: '2026-08-16T12:00:00.000Z',
+        payload: status().artifact,
+        sequence: 7,
+        type: 'artifact.status',
+      }),
       lastEventId: '7',
     });
     stream.emit('source.changed', {
@@ -752,6 +896,47 @@ it('reports one failed event refresh without an unhandled rejection and retains 
   }
 });
 
+it('does not report a successful rebuild as a recovered foreground refresh', async () => {
+  const stream = new RecordingEventSource();
+  const rebuildResponse = deferred<Response>();
+  const errors: unknown[] = [];
+  const statuses: string[] = [];
+  let statusRequests = 0;
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async (input) => {
+      const route = String(input);
+      if (route === '/api/project/rebuild') return rebuildResponse.promise;
+      if (route === '/api/project/status') {
+        statusRequests += 1;
+        return statusRequests === 1
+          ? Response.json({ status: status() })
+          : new Response(null, { status: 500 });
+      }
+      throw new Error(`Unexpected project route ${JSON.stringify(route)}.`);
+    }),
+  });
+  await client.connect(() => statuses.push('status'), (reason) => errors.push(reason));
+  const rebuilding = client.rebuild();
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:00:00.000Z', paths: ['src/rebuilt.ts'], reason: 'source-change' },
+      sequence: 26,
+      type: 'source.changed',
+    }),
+    lastEventId: '26',
+  });
+  await flushEvents();
+  expect(errors).toHaveLength(1);
+  expect(statuses).toEqual(['status']);
+
+  rebuildResponse.resolve(Response.json({ status: status('stale') }));
+  await expect(rebuilding).resolves.toMatchObject({ artifact: { state: 'stale' } });
+  expect(statuses).toEqual(['status']);
+  client.close();
+});
+
 it('suppresses a late event-refresh error after close', async () => {
   const stream = new RecordingEventSource();
   const response = deferred<Response>();
@@ -761,17 +946,22 @@ it('suppresses a late event-refresh error after close', async () => {
   let requests = 0;
   process.on('unhandledRejection', onUnhandled);
   try {
-    const client = projectClient({
+    const client = new ProjectClient({
       events: () => stream,
-      fetch: async () => {
+      fetch: withForegroundSession(async () => {
         requests += 1;
         return requests === 1 ? Response.json({ status: status() }) : response.promise;
-      },
+      }),
     });
 
     await client.connect(() => undefined, (reason) => errors.push(reason));
     stream.emit('artifact.status', {
-      data: JSON.stringify({ occurredAt: '2026-08-16T12:00:00.000Z', payload: status().artifact, sequence: 7, type: 'artifact.status' }),
+      data: JSON.stringify({
+        occurredAt: '2026-08-16T12:00:00.000Z',
+        payload: status().artifact,
+        sequence: 7,
+        type: 'artifact.status',
+      }),
       lastEventId: '7',
     });
     client.close();
@@ -791,9 +981,7 @@ it('bootstraps a same-session token before posting an explicit rebuild through t
   const client = new ProjectClient({
     fetch: async (input, init) => {
       requests.push({ body: init?.body?.toString(), headers: init?.headers, input: String(input) });
-      if (String(input) === '/api/project/session') {
-        return Response.json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:3100', token: 'token-1' });
-      }
+      if (String(input) === '/api/project/session') return Response.json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:3100', token: 'token-1' });
       return Response.json({ status: status('stale') });
     },
   });
@@ -804,4 +992,198 @@ it('bootstraps a same-session token before posting an explicit rebuild through t
   expect(requests[0]?.input).toBe('/api/project/session');
   expect(requests[1]).toMatchObject({ body: '{"paths":["skills/review/SKILL.md"]}', input: '/api/project/rebuild' });
   expect(new Headers(requests[1]?.headers).get('x-agent-bundle-session')).toBe('token-1');
+});
+
+it('delivers subscribed replay and live events FIFO, exposing gaps before refresh without blocking peers', async () => {
+  const stream = new RecordingEventSource();
+  const received: string[] = [];
+  const errors: unknown[] = [];
+  const statuses: string[] = [];
+  let streamCount = 0;
+  let statusRequests = 0;
+  const client = new ProjectClient({
+    events: () => {
+      streamCount += 1;
+      return stream;
+    },
+    fetch: withForegroundSession(async () => {
+      statusRequests += 1;
+      return Response.json({ status: status() });
+    }),
+  });
+  const subscribed = client as ProjectClient & {
+    subscribeEvents(listener: (event: { readonly sequence?: number; readonly type: string }) => void): () => void;
+  };
+  const eventName = (event: { readonly sequence?: number; readonly type: string }): string =>
+    event.type === 'replay.gap' ? `gap:${event.sequence ?? 'none'}` : `${event.type}:${event.sequence}`;
+
+  subscribed.subscribeEvents((event) => received.push(`first:${eventName(event)}`));
+  subscribed.subscribeEvents((event) => {
+    if (event.type === 'runtime.event' && event.sequence === 1) throw new Error('subscriber failure');
+  });
+  subscribed.subscribeEvents((event) => received.push(`third:${eventName(event)}`));
+  await client.connect(
+    () => statuses.push('status'),
+    (error) => errors.push(error),
+    (event) => received.push(`legacy:${eventName(event)}`),
+  );
+  received.length = 0;
+  statuses.length = 0;
+
+  stream.emit('runtime.event', runtimeEvent(1));
+  stream.emit('runtime.event', runtimeEvent(3));
+  stream.emit('runtime.event', runtimeEvent(3));
+  await flushEvents();
+
+  expect(received).toEqual([
+    'legacy:runtime.event:1', 'first:runtime.event:1', 'third:runtime.event:1',
+    'legacy:gap:none', 'first:gap:none', 'third:gap:none',
+    'legacy:runtime.event:3', 'first:runtime.event:3', 'third:runtime.event:3',
+  ]);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toMatchObject({ message: 'subscriber failure' });
+  expect(statuses).toEqual(['status']);
+  expect(statusRequests).toBe(2);
+  expect(streamCount).toBe(1);
+  expect(client.lastEventId).toBe(3);
+});
+
+it('advances its replay cursor, unsubscribes snapshot listeners, and blocks late event delivery after close', async () => {
+  const stream = new RecordingEventSource();
+  const received: string[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
+  });
+  const subscribed = client as ProjectClient & {
+    subscribeEvents(listener: (event: { readonly sequence?: number; readonly type: string }) => void): () => void;
+  };
+  const unsubscribe = subscribed.subscribeEvents((event) => received.push(event.type === 'replay.gap' ? 'gap' : `${event.type}:${event.sequence}`));
+  await client.connect(() => undefined);
+
+  stream.emit('replay.gap', {
+    data: JSON.stringify({
+      earliestAvailableSequence: 4,
+      latestDroppedSequence: 3,
+      requestedAfterSequence: 0,
+      type: 'replay.gap',
+    }),
+    lastEventId: '',
+  });
+  stream.emit('runtime.event', runtimeEvent(3));
+  stream.emit('runtime.event', runtimeEvent(4));
+  await flushEvents();
+  unsubscribe();
+  stream.emit('runtime.event', runtimeEvent(5));
+  await flushEvents();
+  client.close();
+  stream.emit('runtime.event', runtimeEvent(6));
+  await flushEvents();
+
+  expect(received).toEqual(['gap', 'runtime.event:4']);
+  expect(client.lastEventId).toBe(5);
+  expect(stream.closed).toBe(true);
+});
+
+it('shares one foreground bootstrap and EventSource across project, artifact, hook, playground, and log requests', async () => {
+  const stream = new RecordingEventSource();
+  let eventSources = 0;
+  let sessionBootstraps = 0;
+  const protectedTokens: string[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const path = String(input);
+    if (path === '/api/project/session') {
+      sessionBootstraps += 1;
+      return Response.json(foregroundSession);
+    }
+    protectedTokens.push(new Headers(init?.headers).get('x-agent-bundle-session') ?? '');
+    if (path === '/api/project/status') return Response.json({ status: status() });
+    if (path.startsWith('/api/artifacts/diff?')) {
+      return Response.json({ diff: { added: [], baseEpochId: 'epoch-1', candidateEpochId: 'epoch-2', changed: [], removed: [], unchanged: [] } });
+    }
+    if (path.startsWith('/api/hooks?')) return Response.json({ hooks: [] });
+    if (path === '/api/logs/replay?after=0') {
+      return Response.json({ replay: { cursor: { afterSequence: 0 }, records: [] } });
+    }
+    if (path === '/api/playground/sessions/session-1') return Response.json({
+      session: {
+        cleanupFailures: [],
+        createdAt: '2026-08-14T12:00:00.000Z',
+        id: 'session-1',
+        identity: {
+          epoch: { digest: 'sha256-epoch', id: 'epoch-1' },
+          fixture: { digest: 'sha256-fixture', id: 'fixture-1' },
+          invocation: { intent: {}, kind: 'skill.inspect' },
+          target: { name: 'portable' },
+          task: { id: 'task-1', text: 'Inspect an emitted Skill.' },
+        },
+        state: 'closed',
+      },
+    });
+    throw new Error(`Unexpected foreground route ${path}`);
+  };
+  const foreground = new ForegroundRouteClient({ fetch });
+  const project = new ProjectClient({
+    events: () => { eventSources += 1; return stream; },
+    foreground,
+  });
+  const artifact = new ArtifactClient({ foreground });
+  const hooks = new HookClient({ foreground });
+  const logs = new LogClient({ foreground });
+  const playground = new PlaygroundClient({ foreground });
+
+  await Promise.all([
+    project.connect(() => undefined),
+    artifact.diff('epoch-1', 'epoch-2'),
+    hooks.list({ epochId: 'epoch-1' }),
+    logs.replay(),
+    playground.session('session-1'),
+  ]);
+
+  expect(sessionBootstraps).toBe(1);
+  expect(eventSources).toBe(1);
+  expect(protectedTokens.filter((token) => token === 'foreground-token')).toHaveLength(4);
+  expect(protectedTokens.filter((token) => token === '')).toHaveLength(1);
+});
+
+it('invalidates every shared foreground admission when ProjectClient closes during the held bootstrap', async () => {
+  const session = deferred<Response>();
+  const stream = new RecordingEventSource();
+  let eventSources = 0;
+  let protectedRequests = 0;
+  const fetch: typeof globalThis.fetch = async (input) => {
+    if (String(input) === '/api/project/session') return session.promise;
+    protectedRequests += 1;
+    return Response.json({ status: status() });
+  };
+  const foreground = new ForegroundRouteClient({ fetch });
+  const project = new ProjectClient({
+    events: () => { eventSources += 1; return stream; },
+    foreground,
+  });
+  const artifact = new ArtifactClient({ foreground });
+  const hooks = new HookClient({ foreground });
+  const logs = new LogClient({ foreground });
+  const playground = new PlaygroundClient({ foreground });
+
+  const operations = [
+    project.connect(() => undefined),
+    artifact.diff('epoch-1', 'epoch-2'),
+    hooks.list({ epochId: 'epoch-1' }),
+    logs.replay(),
+    playground.session('session-1'),
+  ];
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  project.close();
+  foreground.forgetAuthentication();
+  session.resolve(Response.json(foregroundSession));
+
+  const settled = await Promise.allSettled(operations);
+  expect(settled).toHaveLength(5);
+  for (const result of settled) {
+    expect(result).toMatchObject({ reason: { code: 'AB8019' }, status: 'rejected' });
+  }
+  expect(protectedRequests).toBe(0);
+  expect(eventSources).toBe(0);
+  expect(stream.closed).toBe(false);
 });

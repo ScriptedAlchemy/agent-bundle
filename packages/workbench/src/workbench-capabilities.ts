@@ -47,6 +47,7 @@ const pagesFor = (counts: WorkbenchCapabilities['counts']): ReadonlySet<Workbenc
   return Object.freeze(new Set(pages));
 };
 
+/** Composes existing strict route catalogs into one build-scoped Workbench view. */
 export const loadWorkbenchCapabilities = async ({
   artifactClient,
   buildId,

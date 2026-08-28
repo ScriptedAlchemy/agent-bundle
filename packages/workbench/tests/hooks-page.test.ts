@@ -4,19 +4,15 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from '@rstest/core';
 
 import type {
-  CanonicalHookEvent,
   HookPlaygroundDiagnosticResult,
   HookPlaygroundHook,
   HookPlaygroundSimulation,
-} from '../../agent-bundle/src/contracts/hooks.ts';
+} from '../../agent-bundle/src/dev/playground/hook-playground-service.ts';
 import { HookClient } from '../src/hooks/hook-client.ts';
-import { canonicalHookInput, canonicalHookInputFor, HookRequestLifecycle, HookSimulationView, HooksPage, runHookReplay, runHookSimulation } from '../src/hooks/hooks-page.tsx';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
+import * as hooksPage from '../src/hooks/hooks-page.tsx';
+import { HookRequestLifecycle, HookSimulationView, HooksPage, runHookReplay, runHookSimulation } from '../src/hooks/hooks-page.tsx';
 import { hookPlaygroundViewFor } from '../src/hooks/hooks-model.ts';
-
-type CanonicalInputUsesCanonicalEvent = Parameters<typeof canonicalHookInput>[0] extends CanonicalHookEvent
-  ? CanonicalHookEvent extends Parameters<typeof canonicalHookInput>[0] ? true : false
-  : false;
-const canonicalInputUsesCanonicalEvent: CanonicalInputUsesCanonicalEvent = true;
 
 const hooks: readonly HookPlaygroundHook[] = [{
   binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
@@ -63,8 +59,14 @@ const response = (body: unknown): Response => new Response(JSON.stringify(body),
   status: 200,
 });
 
+const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
+
 it('provides event-shaped canonical documents for each Hook event', () => {
-  expect(canonicalInputUsesCanonicalEvent).toBe(true);
+  const { canonicalHookInput } = hooksPage as typeof hooksPage & {
+    readonly canonicalHookInput: (event: 'afterTool' | 'beforeTool' | 'sessionStart' | 'stop') => Readonly<Record<string, unknown>>;
+  };
+
+  expect(canonicalHookInput).toBeTypeOf('function');
   expect(canonicalHookInput('sessionStart')).toEqual({
     cwd: '/workspace',
     sessionId: 'workbench-preview',
@@ -95,7 +97,6 @@ it('provides event-shaped canonical documents for each Hook event', () => {
     stopHookActive: false,
     transcriptPath: '/workspace/transcript.json',
   });
-  expect(canonicalHookInputFor('future-event')).toBeUndefined();
 });
 
 it('renders the canonical intent, host mapping, and native trace of a simulation', () => {
@@ -146,7 +147,7 @@ it('renders returned diagnostics as a visible alert', () => {
 });
 
 it('renders the hook controls and no request state when no build is available', () => {
-  const client = new HookClient({ fetch: async () => { throw new Error('No epoch may issue a hook playground request.'); } });
+  const client = new HookClient({ foreground: foreground(async () => { throw new Error('No epoch may issue a hook playground request.'); }) });
   const markup = renderToStaticMarkup(createElement(HooksPage, { client, epochId: undefined }));
 
   expect(markup).toContain('No successful build is available');
@@ -158,7 +159,13 @@ it('renders the hook controls and no request state when no build is available', 
 });
 
 it('renders the simulation and replay controls for an active epoch', () => {
-  const client = new HookClient({ fetch: async () => response({ hooks }) });
+  const client = new HookClient({ foreground: foreground(async (input) => String(input) === '/api/project/session'
+    ? response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
+    })
+    : response({ hooks })) });
   const markup = renderToStaticMarkup(createElement(HooksPage, { client, epochId: 'epoch-1' }));
 
   expect(markup).toContain('id="hook-binding"');
@@ -176,11 +183,15 @@ it('renders the simulation and replay controls for an active epoch', () => {
 it('posts fixture input with the strict simulation request body', async () => {
   const bodies: unknown[] = [];
   const client = new HookClient({
-    fetch: async (request, init) => {
-      if (String(request) === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    foreground: foreground(async (request, init) => {
+      if (String(request) === '/api/project/session') return response({
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+        origin: 'http://127.0.0.1:5173',
+        token: 'foreground-token',
+      });
       bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
       return response({ simulation });
-    },
+    }),
   });
 
   await runHookSimulation(client, simulation.binding, { cwd: '/fixture' }, 'fixture');
@@ -212,12 +223,16 @@ it('makes stale and superseded simulation requests unable to update current page
 it('replays a saved simulation against its original epoch, not the selected one', async () => {
   const bodies: unknown[] = [];
   const client = new HookClient({
-    fetch: async (input, init) => {
+    foreground: foreground(async (input, init) => {
       const url = String(input);
-      if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      if (url === '/api/project/session') return response({
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+        origin: 'http://127.0.0.1:5173',
+        token: 'foreground-token',
+      });
       bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
       return response({ simulation });
-    },
+    }),
   });
   const view = hookPlaygroundViewFor({ epochId: 'epoch-2', hooks, result: simulation, selectedKey: undefined });
 

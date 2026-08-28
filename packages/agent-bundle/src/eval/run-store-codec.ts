@@ -541,8 +541,9 @@ const parseSemanticGraderProvenance = (
     }
     return Object.freeze({ state: 'unrecorded' });
   }
-  requireKeys(record, ['id', 'model'], code, 'Eval trial semantic grader provenance');
+  requireKeys(record, ['contractRevision', 'id', 'model'], code, 'Eval trial semantic grader provenance');
   return Object.freeze({
+    contractRevision: requireProvenanceIdentifier(property(record, 'contractRevision', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader contract revision'),
     id: requireProvenanceIdentifier(property(record, 'id', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader id'),
     model: requireProvenanceIdentifier(property(record, 'model', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader model'),
   });
@@ -626,4 +627,3 @@ export const parseTrialRecord = (value: unknown, sourcePath: string): EvalTrialR
     throw storeError('EVAL_RUN_CORRUPT', `Eval trial record ${JSON.stringify(sourcePath)} does not match the trial schema.`);
   }
 };
-

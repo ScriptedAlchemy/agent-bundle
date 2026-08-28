@@ -1,43 +1,60 @@
 import { z } from 'zod';
 
+import type { EvalComparison } from '../../../agent-bundle/src/contracts/eval.ts';
 import {
   explicitInvocationProvenancePattern,
   semanticGraderIdentityPattern,
-  type EvalComparison,
 } from '../../../agent-bundle/src/contracts/eval.ts';
-import { CodedClientError } from '../client-helpers.ts';
-import { ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
-import { snapshotStrictJsonValue } from '../strict-json.ts';
+import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import {
   nonnegativeIntegerSchema,
   nonnegativeNumberSchema,
   probabilitySchema,
-  provenanceIdentifierSchema,
   safeIntegerSchema,
   safeNumberSchema,
 } from '../schema-atoms.ts';
+
+export interface ComparisonClientOptions {
+  /** Workbench-owned memory-only session authority shared by all foreground routes. */
+  readonly foreground: ForegroundRequestAuthority;
+}
 
 export interface ComparisonRequest {
   readonly base: string;
   readonly candidate: string;
 }
 
-export class ComparisonClientError extends CodedClientError {
+export class ComparisonClientError extends Error {
+  readonly code: string;
+
   constructor(code: string, message: string) {
-    super('ComparisonClientError', code, message);
+    super(message);
+    this.name = 'ComparisonClientError';
+    this.code = code;
   }
 }
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): ComparisonClientError =>
   new ComparisonClientError('AB8083', 'Eval comparison route returned an invalid response.');
 
+const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
+const provenanceIdentifierSchema = z.string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u)
+  .refine((value) => !provenancePathMarker.test(value));
 const invocationProvenanceSchema = z.union([
   z.enum(['automatic', 'none']),
-  z.string().regex(explicitInvocationProvenancePattern),
+  z.string()
+    .regex(explicitInvocationProvenancePattern)
+    .refine((value) => !provenancePathMarker.test(value)),
 ]);
 const semanticGraderIdentitySchema = z.union([
   z.literal('none'),
-  z.string().regex(semanticGraderIdentityPattern),
+  z.string()
+    .regex(semanticGraderIdentityPattern)
+    .refine((value) => !provenancePathMarker.test(value)),
 ]);
 const conditionProvenanceSchema = z.strictObject({
   hostCliVersion: provenanceIdentifierSchema.optional(),
@@ -134,36 +151,49 @@ const comparisonSchema = z.strictObject({
 });
 const comparisonEnvelopeSchema = z.strictObject({ comparison: comparisonSchema });
 
+const frozenJson = (value: unknown): unknown => {
+  if (Array.isArray(value)) return Object.freeze(value.map(frozenJson));
+  if (isRecord(value)) {
+    return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, frozenJson(entry)])));
+  }
+  return value;
+};
+
+const diagnosticError = (value: unknown, status: number): ComparisonClientError => {
+  if (isRecord(value) && isRecord(value.diagnostic) &&
+    typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
+    return new ComparisonClientError(value.diagnostic.code, value.diagnostic.message);
+  }
+  return new ComparisonClientError('AB8083', `Eval comparison request failed with HTTP ${status}.`);
+};
+
 const comparisonResult = (value: unknown): EvalComparison => {
   const parsed = comparisonEnvelopeSchema.safeParse(value);
   if (!parsed.success) throw invalidResponse();
-  // The snapshot is a deep-frozen clone of the zod-validated comparison, so the
-  // widening below restates what safeParse already proved about its shape.
-  const frozen: unknown = snapshotStrictJsonValue(parsed.data.comparison);
-  return frozen as EvalComparison;
+  return frozenJson(parsed.data.comparison) as EvalComparison;
 };
 
 /** A typed, credential-memory-only browser client for the eval comparison route. */
 export class ComparisonClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: WorkbenchClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message) => new ComparisonClientError(code, message),
-      fallbackCode: 'AB8083',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Eval comparison',
-    });
+  constructor(options: ComparisonClientOptions) {
+    this.#foreground = options.foreground;
   }
 
   /** The route aligns the two runs; the page never derives a delta of its own. */
   async compare(request: ComparisonRequest, signal?: AbortSignal): Promise<EvalComparison> {
     const query = new URLSearchParams({ base: request.base, candidate: request.candidate });
-    return comparisonResult(await this.#transport.json(
+    return comparisonResult(await this.#json(
       `/api/evals/comparisons?${query.toString()}`,
       signal === undefined ? {} : { signal },
     ));
   }
 
+  async #json(path: string, init: RequestInit = {}): Promise<unknown> {
+    const response = await this.#foreground.protectedRequest(path, init);
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw diagnosticError(body, response.status);
+    return body;
+  }
 }

@@ -1,6 +1,5 @@
-import type { McpSessionBinding } from '../../../agent-bundle/src/contracts/mcp-session.ts';
-
 import type {
+  McpBrowserSessionBinding,
   McpBrowserSessionConnection,
   McpBrowserSessionInvocation,
   McpBrowserSessionModel,
@@ -22,7 +21,7 @@ export interface McpProtocolTraceExport {
   readonly history: readonly McpBrowserSessionInvocation[];
   readonly kind: 'agent-bundle.mcp-protocol-trace';
   readonly session: Readonly<{
-    readonly binding: McpSessionBinding | null;
+    readonly binding: McpBrowserSessionBinding | null;
     readonly connection: McpBrowserSessionConnection | null;
     readonly id: string | null;
     readonly phase: McpBrowserSessionPhase;

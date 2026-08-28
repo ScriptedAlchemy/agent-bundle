@@ -1,4 +1,5 @@
-import { access, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { get as httpGet } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -13,11 +14,88 @@ import {
   closeDevServerLifecycle,
   DevServerLifecycleCloseError,
   DevServerStartError,
+  RuntimeClientSurfaceBindings,
   startDevServer,
 } from '../src/dev/workbench-server.ts';
+import type { ForegroundCoordinator, ForegroundServerOptions } from '../src/dev/foreground-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
-import { readToEnd, within } from './support/eventually.ts';
+
+const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
+  const decoder = new TextDecoder();
+  let output = '';
+  while (true) {
+    const next = await reader.read();
+    if (next.done) return output;
+    output += decoder.decode(next.value, { stream: true });
+  }
+};
+
+const within = async <Value>(promise: Promise<Value>, milliseconds: number): Promise<Value> => Promise.race([
+  promise,
+  new Promise<Value>((_resolvePromise, rejectPromise) => {
+    setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
+  }),
+]);
+
+it('requires one canonical foreground origin before opening runtime client surfaces', async () => {
+  const bindings = new RuntimeClientSurfaceBindings(undefined, async () => {
+    throw new Error('Runtime lookup must not open a proxy without a bound foreground.');
+  });
+  await expect(bindings.open('mcp.edit-timeline')).rejects.toThrow('not bound');
+  expect(() => bindings.bindHostOrigin('http://127.0.0.1:42000/not-an-origin')).toThrow('canonical foreground');
+  bindings.bindHostOrigin('http://127.0.0.1:42000');
+  expect(() => bindings.bindHostOrigin('http://127.0.0.1:42000')).toThrow('one canonical foreground origin binding');
+  await expect(bindings.open('mcp.edit-timeline')).resolves.toBeUndefined();
+  await expect(bindings.close()).resolves.toBeUndefined();
+});
+
+const openProjectEventStream = (url: string, cookie: string): Readonly<{
+  readonly close: () => void;
+  readonly opened: Promise<void>;
+  readonly until: (marker: string) => Promise<string>;
+}> => {
+  let response: import('node:http').IncomingMessage | undefined;
+  let received = '';
+  let awaitedMarker: string | undefined;
+  let resolveMatch: ((value: string) => void) | undefined;
+  let rejectMatch: ((error: Error) => void) | undefined;
+  let resolveOpened: () => void = () => undefined;
+  let rejectOpened: (error: Error) => void = () => undefined;
+  const opened = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolveOpened = resolvePromise;
+    rejectOpened = rejectPromise;
+  });
+  const request = httpGet(`${url}/api/project/events`, { headers: { cookie, origin: url } }, (stream) => {
+    response = stream;
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk: string) => {
+      received += chunk;
+      if (awaitedMarker !== undefined && received.includes(awaitedMarker)) resolveMatch?.(received);
+    });
+    stream.once('error', (error: Error) => rejectMatch?.(error));
+    resolveOpened();
+  });
+  request.once('error', (error: Error) => {
+    rejectOpened(error);
+    rejectMatch?.(error);
+  });
+  return Object.freeze({
+    close: () => {
+      response?.destroy();
+      request.destroy();
+    },
+    opened,
+    until: (marker) => {
+      if (received.includes(marker)) return Promise.resolve(received);
+      awaitedMarker = marker;
+      return new Promise<string>((resolvePromise, rejectPromise) => {
+        resolveMatch = resolvePromise;
+        rejectMatch = rejectPromise;
+      });
+    },
+  });
+};
 
 const writeMcpProject = async (root: string): Promise<void> => {
   await Promise.all([
@@ -104,9 +182,73 @@ const appPreviewBody = () => ({
   toolName: 'show-app',
 });
 
+interface CompilingRuntimeAppState {
+  emit: ((event: { readonly type: 'runtime.generation.activated' | 'runtime.status' }) => void) | undefined;
+  phase: 'active' | 'compiling';
+  subscribes: number;
+  unsubscribes: number;
+}
+
+const writeCompilingRuntimeAppProject = async (root: string, stateKey: string): Promise<void> => {
+  await mkdir(join(root, 'src', 'dev'), { recursive: true });
+  await Promise.all([
+    writeFile(join(root, 'src', 'dev', 'provider.ts'), [
+      `const state = globalThis[${JSON.stringify(stateKey)}];`,
+      "if (state === undefined) throw new Error('Missing compiling Runtime Apps test state.');",
+      'const registry = {',
+      '  close: async () => undefined,',
+      '  closeSession: async () => undefined,',
+      '  open: async () => { throw new Error(\'unused\'); },',
+      '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+      '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+      '  session: () => undefined,',
+      '  snapshot: () => undefined,',
+      "  subscribe: () => { state.subscribes += 1; state.emit?.({ type: 'runtime.status' }); return { unsubscribe: () => { state.unsubscribes += 1; } }; },",
+      '};',
+      'export const createDevRuntimeProvider = () => ({',
+      "  descriptor: { environmentVariables: [], id: 'compiling-runtime-apps', label: 'Compiling Runtime Apps', schemaVersion: 1 },",
+      '  start: async (context) => {',
+      '    state.emit = context.emit;',
+      '    return {',
+      '      clientSurface: () => undefined,',
+      '      close: async () => undefined,',
+      '      invoke: async () => { throw new Error(\'unused\'); },',
+      '      mcpRegistry: registry,',
+      "      providerSessionId: 'provider-compiling-runtime-apps',",
+      '      readAsset: async () => undefined,',
+      '      readRunFlight: async () => undefined,',
+      '      reconcilePreparedRuntime: async () => undefined,',
+      '      replay: async () => { throw new Error(\'unused\'); },',
+      "      resetState: async () => ({ stateStoreId: 'state-compiling-runtime-apps', stateVersion: 0 }),",
+      '      run: () => undefined,',
+      '      runs: () => [],',
+      "      status: () => ({ descriptor: { environmentVariables: [], id: 'compiling-runtime-apps', label: 'Compiling Runtime Apps', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: state.phase }),",
+      '      surfaces: () => [],',
+      '    };',
+      '  },',
+      '});',
+      '',
+    ].join('\n')),
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "  plugin: { name: 'compiling-runtime-apps', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      "  targets: ['portable'],",
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+};
+
 const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
   artifactLayout: Object.freeze({
-    scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'scripts' }),
+    scripts: Object.freeze({
+      allowedSuffixes: Object.freeze(['.mjs']),
+      directory: 'scripts',
+    }),
   }),
   capabilities: Object.freeze({}),
   configExtension: Object.freeze({ key: 'workbenchSynthetic' }),
@@ -123,10 +265,13 @@ const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
     entries: Object.freeze([{
       content: 'export {};\n',
       kind: 'write' as const,
+      // Custom target plans use the same declared compiled-script namespace
+      // as production adapters; root files are deliberately rejected.
       relativePath: 'scripts/synthetic.mjs',
       sourceInputs: [model.metadata.provenance.sourcePath],
     }]),
   }),
+  validateModel: () => [],
 });
 
 it('contains prebuilt workbench asset reads to their declared root', async () => {
@@ -261,6 +406,833 @@ it('normalizes a relative project root once before constructing every dev servic
     });
   } finally {
     await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('latches a runtime declaration added to an ordinary Workbench session as restart-required', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-runtime-topology-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let events: ReturnType<typeof openProjectEventStream> | undefined;
+  await writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>');
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    await expect(fetch(`${server.url}/api/project/status`).then((response) => response.json())).resolves.toMatchObject({
+      status: { artifact: { state: 'active' } },
+    });
+    const initialProjectStatus = await fetch(`${server.url}/api/project/status`).then((response) => response.json()) as {
+      readonly status: Record<string, unknown>;
+    };
+    expect(Object.hasOwn(initialProjectStatus.status, 'runtime')).toBe(false);
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toEqual({ status: null });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const cookie = bootstrap.headers.get('set-cookie');
+    if (cookie === null) throw new Error('Expected foreground session bootstrap cookie.');
+    events = openProjectEventStream(server.url, cookie);
+    await events.opened;
+    await writeFile(project.configPath, [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "  plugin: { name: 'review', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      '});',
+      '',
+    ].join('\n'));
+    await expect(fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers: { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token },
+      method: 'POST',
+    }).then((response) => response.status)).resolves.toBe(200);
+    const received = await within(events.until('"restartRequired":true'), 5_000);
+    expect(received).toContain('"state":"failed"');
+    const afterTopologyChangeStatus = await fetch(`${server.url}/api/project/status`).then((response) => response.json()) as {
+      readonly status: Record<string, unknown>;
+    };
+    expect(Object.hasOwn(afterTopologyChangeStatus.status, 'runtime')).toBe(false);
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toEqual({ status: null });
+  } finally {
+    events?.close();
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('keeps the ordinary foreground and artifact lane available when provider startup fails', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-runtime-failed-provider-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+  await Promise.all([
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+      'export const createDevRuntimeProvider = () => ({',
+      "  descriptor: { environmentVariables: [], id: 'failed-runtime', label: 'Failed runtime', schemaVersion: 1 },",
+      "  start: () => { throw new Error('Provider startup failed.'); },",
+      '});',
+      '',
+    ].join('\n')),
+    writeFile(project.configPath, [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "  plugin: { name: 'review', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    expect(server.status().artifact.state).toBe('active');
+    await expect(fetch(server.url).then(async (response) => ({ body: await response.text(), status: response.status }))).resolves.toEqual({
+      body: '<!doctype html><title>Agent Bundle workbench</title>',
+      status: 200,
+    });
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
+      status: { diagnostics: [{ phase: 'provider-lifecycle' }], state: 'failed' },
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    await expect(fetch(`${server.url}/api/runtime/apps`, {
+      body: JSON.stringify({ expectedGenerationId: 'missing-generation', profileId: 'portable', runId: 'missing-run' }),
+      headers: { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token },
+      method: 'POST',
+    }).then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
+      status: 404,
+    });
+  } finally {
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('retains Runtime App routes through invalid config updates and reconciles only repaired or removed declarations', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-late-runtime-apps-'));
+  const stateKey = `__agentBundleLateRuntimeApps${Date.now()}${Math.random().toString(16).slice(2)}`;
+  const runtimeState = { calls: [] as string[], closes: 0, reconciles: 0, subscribes: 0, unsubscribes: 0 };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof runtimeState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  const config = (targets: string[], marker: string, extension?: string, includeRuntime = true): string => [
+    "import { defineConfig } from 'agent-bundle';",
+    '',
+    'export default defineConfig({',
+    ...(includeRuntime ? ["  dev: { runtime: { provider: './src/dev/provider.ts' } },"] : []),
+    `  fixtureMarker: ${JSON.stringify(marker)},`,
+    "  plugin: { name: 'late-runtime-apps', version: '1.0.0' },",
+    "  skills: ['skills/review'],",
+    `  targets: ${JSON.stringify(targets)},`,
+    ...(extension === undefined ? [] : [`  portable: ${extension},`]),
+    '});',
+    '',
+  ].join('\n');
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+    await Promise.all([
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+      writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+        `const state = globalThis[${JSON.stringify(stateKey)}];`,
+        "if (state === undefined) throw new Error('Missing late Runtime Apps test state.');",
+        'const registry = {',
+        '  close: async () => undefined,',
+        '  closeSession: async () => undefined,',
+        '  open: async () => { throw new Error(\'unused\'); },',
+        '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  session: () => undefined,',
+        '  snapshot: () => undefined,',
+        "  subscribe: () => { state.calls.push('subscribe'); state.subscribes += 1; return { unsubscribe: () => { state.calls.push('unsubscribe'); state.unsubscribes += 1; } }; },",
+        '};',
+        'export const createDevRuntimeProvider = () => ({',
+        "  descriptor: { environmentVariables: [], id: 'late-runtime-apps', label: 'Late Runtime Apps', schemaVersion: 1 },",
+        '  start: async () => ({',
+        '    clientSurface: () => undefined,',
+        "    close: async () => { state.calls.push('close'); state.closes += 1; },",
+        '    invoke: async () => { throw new Error(\'unused\'); },',
+        '    mcpRegistry: registry,',
+        "    providerSessionId: 'provider-late-runtime-apps',",
+        '    readAsset: async () => undefined,',
+        '    readRunFlight: async () => undefined,',
+        "    reconcilePreparedRuntime: async () => { state.calls.push('reconcile'); state.reconciles += 1; },",
+        '    replay: async () => { throw new Error(\'unused\'); },',
+        "    resetState: async () => ({ stateStoreId: 'state-late-runtime-apps', stateVersion: 0 }),",
+        '    run: () => undefined,',
+        '    runs: () => [],',
+        "    status: () => ({ descriptor: { environmentVariables: [], id: 'late-runtime-apps', label: 'Late Runtime Apps', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),",
+        '    surfaces: () => [],',
+        '  }),',
+        '});',
+        '',
+      ].join('\n')),
+      // An unknown target is a model failure, but the valid development
+      // declaration still constructs the fixed runtime controller.
+      writeFile(project.configPath, config(['portable', 'unknown-target'], 'invalid-initial')),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
+      status: { descriptor: { id: 'late-runtime-apps' }, state: 'active' },
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const headers = { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token };
+    const create = () => fetch(`${server!.url}/api/runtime/apps`, {
+      body: JSON.stringify({ expectedGenerationId: 'missing-generation', profileId: 'portable', runId: 'missing-run' }),
+      headers,
+      method: 'POST',
+    });
+    const history = () => fetch(`${server!.url}/api/runtime/runs`, { headers }).then(async (response) => ({ body: await response.json(), status: response.status }));
+
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
+      status: 404,
+    });
+    expect(runtimeState.subscribes).toBe(0);
+
+    await writeFile(project.configPath, config(['portable'], 'valid-first', '{}'));
+    await within((async () => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const response = await create();
+        const result = { body: await response.json(), status: response.status };
+        if (result.status === 404 && result.body.diagnostic?.code === 'AB8201') return;
+        await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 25); });
+      }
+      throw new Error('Runtime MCP App preview did not attach after the valid config update.');
+    })(), 5_000);
+    expect(runtimeState.subscribes).toBe(1);
+    const stableHistory = await history();
+    expect(stableHistory).toEqual({
+      body: { providerSessionId: expect.any(String), runs: [] },
+      status: 200,
+    });
+    const stableRuntime = {
+      calls: [...runtimeState.calls],
+      closes: runtimeState.closes,
+      reconciles: runtimeState.reconciles,
+      subscribes: runtimeState.subscribes,
+      unsubscribes: runtimeState.unsubscribes,
+    };
+
+    await writeFile(project.configPath, config(['portable'], 'invalid-nonfinite', 'Number.NaN'));
+    const invalid = await fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    }).then(async (response) => ({ body: await response.json(), status: response.status }));
+    expect(invalid).toMatchObject({
+      body: {
+        status: {
+          source: {
+            diagnostics: [{
+              code: 'AB4500',
+              message: 'A registered config extension must contain strict finite JSON data.',
+              sourcePath: project.configPath,
+            }],
+            state: 'invalid',
+          },
+        },
+      },
+      status: 200,
+    });
+    expect(runtimeState).toEqual(stableRuntime);
+    await expect(history()).resolves.toEqual(stableHistory);
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8201', message: 'Runtime MCP App run is not available.' } },
+      status: 404,
+    });
+
+    await expect(fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    }).then((response) => response.status)).resolves.toBe(200);
+    expect(runtimeState).toEqual(stableRuntime);
+
+    await writeFile(project.configPath, config(['portable'], 'valid-repair', '{}'));
+    await expect(fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    }).then((response) => response.status)).resolves.toBe(200);
+    expect(runtimeState).toEqual({
+      calls: [...stableRuntime.calls, 'reconcile'],
+      closes: stableRuntime.closes,
+      reconciles: stableRuntime.reconciles + 1,
+      subscribes: stableRuntime.subscribes,
+      unsubscribes: stableRuntime.unsubscribes,
+    });
+
+    await writeFile(project.configPath, config(['portable'], 'valid-removal', undefined, false));
+    await expect(fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    }).then((response) => response.status)).resolves.toBe(200);
+    expect(runtimeState).toEqual({
+      calls: [...stableRuntime.calls, 'reconcile'],
+      closes: stableRuntime.closes,
+      reconciles: stableRuntime.reconciles + 1,
+      subscribes: stableRuntime.subscribes,
+      unsubscribes: stableRuntime.unsubscribes,
+    });
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
+      status: {
+        diagnostics: [{ code: 'AB8200', message: 'Development runtime declaration changed; restart required.', phase: 'provider-lifecycle' }],
+        state: 'failed',
+      },
+    });
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8023', message: 'MCP App operation could not be completed.' } },
+      status: 502,
+    });
+
+    await expect(server.close()).resolves.toBeUndefined();
+    expect(runtimeState.unsubscribes).toBe(1);
+  } finally {
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 60_000);
+
+it('fences a closing foreground before a held valid runtime reconcile can attach an App preview service', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-late-runtime-close-'));
+  const stateKey = `__agentBundleLateRuntimeClose${Date.now()}${Math.random().toString(16).slice(2)}`;
+  let enteredReconcile: () => void = () => undefined;
+  let releaseReconcile: () => void = () => undefined;
+  const reconcileEntered = new Promise<void>((resolvePromise) => { enteredReconcile = resolvePromise; });
+  const reconcileReleased = new Promise<void>((resolvePromise) => { releaseReconcile = resolvePromise; });
+  const runtimeState = { subscribes: 0, unsubscribes: 0, enteredReconcile, reconcileReleased };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof runtimeState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  const config = (targets: string[]): string => [
+    "import { defineConfig } from 'agent-bundle';",
+    '',
+    'export default defineConfig({',
+    "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+    "  plugin: { name: 'late-runtime-close', version: '1.0.0' },",
+    "  skills: ['skills/review'],",
+    `  targets: ${JSON.stringify(targets)},`,
+    '});',
+    '',
+  ].join('\n');
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+    await Promise.all([
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+      writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+        `const state = globalThis[${JSON.stringify(stateKey)}];`,
+        "if (state === undefined) throw new Error('Missing late Runtime Apps close state.');",
+        'const registry = {',
+        '  close: async () => undefined,',
+        '  closeSession: async () => undefined,',
+        '  open: async () => { throw new Error(\'unused\'); },',
+        '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  session: () => undefined,',
+        '  snapshot: () => undefined,',
+        '  subscribe: () => { state.subscribes += 1; return { unsubscribe: () => { state.unsubscribes += 1; } }; },',
+        '};',
+        'export const createDevRuntimeProvider = () => ({',
+        "  descriptor: { environmentVariables: [], id: 'late-runtime-close', label: 'Late Runtime Close', schemaVersion: 1 },",
+        '  start: async () => ({',
+        '    clientSurface: () => undefined,',
+        '    close: async () => undefined,',
+        '    invoke: async () => { throw new Error(\'unused\'); },',
+        '    mcpRegistry: registry,',
+        "    providerSessionId: 'provider-late-runtime-close',",
+        '    readAsset: async () => undefined,',
+        '    readRunFlight: async () => undefined,',
+        '    reconcilePreparedRuntime: async () => { state.enteredReconcile(); await state.reconcileReleased; },',
+        '    replay: async () => { throw new Error(\'unused\'); },',
+        "    resetState: async () => ({ stateStoreId: 'state-late-runtime-close', stateVersion: 0 }),",
+        '    run: () => undefined,',
+        '    runs: () => [],',
+        "    status: () => ({ descriptor: { environmentVariables: [], id: 'late-runtime-close', label: 'Late Runtime Close', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),",
+        '    surfaces: () => [],',
+        '  }),',
+        '});',
+        '',
+      ].join('\n')),
+      writeFile(project.configPath, config(['portable', 'unknown-target'])),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const headers = { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token };
+    await writeFile(project.configPath, config(['portable']));
+    const rebuilding = fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    });
+    await within(reconcileEntered, 5_000);
+    const closing = server.close();
+    releaseReconcile();
+    await Promise.allSettled([rebuilding]);
+    await expect(closing).resolves.toBeUndefined();
+    expect(runtimeState.subscribes).toBe(0);
+    expect(runtimeState.unsubscribes).toBe(0);
+  } finally {
+    releaseReconcile();
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('does not reconcile a valid preparation released after foreground close begins', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-prepared-runtime-close-'));
+  const stateKey = `__agentBundlePreparedRuntimeClose${Date.now()}${Math.random().toString(16).slice(2)}`;
+  let enteredPrepare: () => void = () => undefined;
+  let releasePrepare: () => void = () => undefined;
+  const preparationEntered = new Promise<void>((resolvePromise) => { enteredPrepare = resolvePromise; });
+  const preparationReleased = new Promise<void>((resolvePromise) => { releasePrepare = resolvePromise; });
+  const runtimeState = {
+    calls: [] as string[],
+    closes: 0,
+    enteredPrepare,
+    preparationReleased,
+    reconciles: 0,
+    subscribes: 0,
+    unsubscribes: 0,
+  };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof runtimeState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  const config = (marker: string, holdPreparation = false): string => {
+    const declaration = [
+      "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      `  fixtureMarker: ${JSON.stringify(marker)},`,
+      "  plugin: { name: 'prepared-runtime-close', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      "  targets: ['portable'],",
+    ];
+    return [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      ...(holdPreparation ? [
+        `const state = globalThis[${JSON.stringify(stateKey)}];`,
+        "if (state === undefined) throw new Error('Missing prepared Runtime Apps close state.');",
+        'export default async () => {',
+        '  state.enteredPrepare();',
+        '  await state.preparationReleased;',
+        '  return defineConfig({',
+        ...declaration,
+        '  });',
+        '};',
+      ] : [
+        'export default defineConfig({',
+        ...declaration,
+        '});',
+      ]),
+      '',
+    ].join('\n');
+  };
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+    await Promise.all([
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+      writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+        `const state = globalThis[${JSON.stringify(stateKey)}];`,
+        "if (state === undefined) throw new Error('Missing prepared Runtime Apps close state.');",
+        'const registry = {',
+        '  close: async () => undefined,',
+        '  closeSession: async () => undefined,',
+        '  open: async () => { throw new Error(\'unused\'); },',
+        '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  session: () => undefined,',
+        '  snapshot: () => undefined,',
+        "  subscribe: () => { state.calls.push('subscribe'); state.subscribes += 1; return { unsubscribe: () => { state.calls.push('unsubscribe'); state.unsubscribes += 1; } }; },",
+        '};',
+        'export const createDevRuntimeProvider = () => ({',
+        "  descriptor: { environmentVariables: [], id: 'prepared-runtime-close', label: 'Prepared Runtime Close', schemaVersion: 1 },",
+        '  start: async () => ({',
+        '    clientSurface: () => undefined,',
+        "    close: async () => { state.calls.push('close'); state.closes += 1; },",
+        '    invoke: async () => { throw new Error(\'unused\'); },',
+        '    mcpRegistry: registry,',
+        "    providerSessionId: 'provider-prepared-runtime-close',",
+        '    readAsset: async () => undefined,',
+        '    readRunFlight: async () => undefined,',
+        "    reconcilePreparedRuntime: async () => { state.calls.push('reconcile'); state.reconciles += 1; },",
+        '    replay: async () => { throw new Error(\'unused\'); },',
+        "    resetState: async () => ({ stateStoreId: 'state-prepared-runtime-close', stateVersion: 0 }),",
+        '    run: () => undefined,',
+        '    runs: () => [],',
+        "    status: () => ({ descriptor: { environmentVariables: [], id: 'prepared-runtime-close', label: 'Prepared Runtime Close', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),",
+        '    surfaces: () => [],',
+        '  }),',
+        '});',
+        '',
+      ].join('\n')),
+      writeFile(project.configPath, config('initial')),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const headers = { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token };
+    const stableRuntime = {
+      closes: runtimeState.closes,
+      reconciles: runtimeState.reconciles,
+      subscribes: runtimeState.subscribes,
+    };
+
+    await writeFile(project.configPath, config('held-after-close', true));
+    const rebuilding = fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    });
+    await within(preparationEntered, 5_000);
+    const closing = server.close();
+    releasePrepare();
+    await Promise.allSettled([rebuilding]);
+    await expect(closing).resolves.toBeUndefined();
+    expect(runtimeState).toMatchObject({
+      closes: stableRuntime.closes + 1,
+      reconciles: stableRuntime.reconciles,
+      subscribes: stableRuntime.subscribes,
+      unsubscribes: 1,
+    });
+    expect(runtimeState.calls).not.toContain('reconcile');
+  } finally {
+    releasePrepare();
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('does not publish a prepared runtime topology after foreground close begins', async () => {
+  const project = await createProjectFixture();
+  const stateKey = `__agentBundlePreparedTopologyClose${Date.now()}${Math.random().toString(16).slice(2)}`;
+  let enteredPrepare: () => void = () => undefined;
+  let releasePrepare: () => void = () => undefined;
+  const preparationEntered = new Promise<void>((resolvePromise) => { enteredPrepare = resolvePromise; });
+  const preparationReleased = new Promise<void>((resolvePromise) => { releasePrepare = resolvePromise; });
+  const preparationState = { enteredPrepare, preparationReleased };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof preparationState | undefined>;
+  let coordinator: ForegroundCoordinator | undefined;
+  let unsubscribeEvents: (() => void) | undefined;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let restartRequiredEvents = 0;
+  try {
+    runtimeGlobal[stateKey] = preparationState;
+    server = await startDevServer({
+      open: false,
+      port: 0,
+      root: project.root,
+      testing: {
+        startForegroundServer: async (options) => {
+          await options.coordinator.start();
+          coordinator = options.coordinator;
+          const subscription = options.eventHub.subscribe((event) => {
+            if (
+              event.type === 'runtime.event' && event.payload.type === 'runtime.status' &&
+              event.payload.details?.restartRequired === true
+            ) restartRequiredEvents += 1;
+          });
+          unsubscribeEvents = () => subscription.unsubscribe();
+          return {
+            close: () => options.coordinator.close(),
+            url: 'http://127.0.0.1:49123',
+          };
+        },
+      },
+    });
+    await writeFile(project.configPath, [
+      "import { defineConfig } from 'agent-bundle';",
+      `const state = globalThis[${JSON.stringify(stateKey)}];`,
+      "if (state === undefined) throw new Error('Missing prepared topology close state.');",
+      'export default async () => {',
+      '  state.enteredPrepare();',
+      '  await state.preparationReleased;',
+      '  return defineConfig({',
+      "    dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "    plugin: { name: 'prepared-topology-close', version: '1.0.0' },",
+      "    skills: ['skills/review'],",
+      "    targets: ['portable'],",
+      '  });',
+      '};',
+      '',
+    ].join('\n'));
+    const rebuilding = coordinator?.rebuild({
+      occurredAt: new Date().toISOString(),
+      paths: ['agent-bundle.config.ts'],
+      reason: 'manual',
+    });
+    if (rebuilding === undefined) throw new Error('Foreground coordinator was not captured.');
+    await within(preparationEntered, 5_000);
+    const closing = server.close();
+    releasePrepare();
+    await Promise.allSettled([rebuilding]);
+    await expect(closing).resolves.toBeUndefined();
+    expect(restartRequiredEvents).toBe(0);
+  } finally {
+    releasePrepare();
+    unsubscribeEvents?.();
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 30_000);
+
+it('attaches Runtime App routes once when a compiling provider later activates, even if registry subscription re-enters status delivery', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-compiling-runtime-apps-'));
+  const stateKey = `__agentBundleCompilingRuntimeApps${Date.now()}${Math.random().toString(16).slice(2)}`;
+  const runtimeState: CompilingRuntimeAppState = { emit: undefined, phase: 'compiling', subscribes: 0, unsubscribes: 0 };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, CompilingRuntimeAppState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await Promise.all([
+      writeCompilingRuntimeAppProject(project.root, stateKey),
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const create = () => fetch(`${server!.url}/api/runtime/apps`, {
+      body: JSON.stringify({ expectedGenerationId: 'missing-generation', profileId: 'portable', runId: 'missing-run' }),
+      headers: { 'content-type': 'application/json', origin: server!.url, 'x-agent-bundle-session': token },
+      method: 'POST',
+    });
+
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
+      status: 404,
+    });
+    expect(runtimeState.subscribes).toBe(0);
+
+    runtimeState.phase = 'active';
+    runtimeState.emit?.({ type: 'runtime.generation.activated' });
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8201', message: 'Runtime MCP App run is not available.' } },
+      status: 404,
+    });
+    expect(runtimeState.subscribes).toBe(1);
+    runtimeState.emit?.({ type: 'runtime.generation.activated' });
+    runtimeState.emit?.({ type: 'runtime.status' });
+    expect(runtimeState.subscribes).toBe(1);
+
+    await expect(server.close()).resolves.toBeUndefined();
+    expect(runtimeState.unsubscribes).toBe(1);
+  } finally {
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('does not attach a compiling Runtime App preview service after foreground close fences a late activation', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-compiling-runtime-close-'));
+  const stateKey = `__agentBundleCompilingRuntimeClose${Date.now()}${Math.random().toString(16).slice(2)}`;
+  const runtimeState: CompilingRuntimeAppState = { emit: undefined, phase: 'compiling', subscribes: 0, unsubscribes: 0 };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, CompilingRuntimeAppState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await Promise.all([
+      writeCompilingRuntimeAppProject(project.root, stateKey),
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const closing = server.close();
+    runtimeState.phase = 'active';
+    runtimeState.emit?.({ type: 'runtime.generation.activated' });
+    await expect(closing).resolves.toBeUndefined();
+    expect(runtimeState.subscribes).toBe(0);
+    expect(runtimeState.unsubscribes).toBe(0);
+  } finally {
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('prepares the optional runtime once with the development config context before provider startup', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-runtime-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let failedServer: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  const boundOrigins: string[] = [];
+  let resolveSurface: ((binding: { readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string; readonly webSocketPath: '/rsbuild-hmr' }) => void) | undefined;
+  const pendingSurface = new Promise<{ readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string; readonly webSocketPath: '/rsbuild-hmr' }>((resolvePromise) => {
+    resolveSurface = resolvePromise;
+  });
+  let proxyCalls = 0;
+  let surfaceCloseCalls = 0;
+  await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+  await Promise.all([
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+      "import { writeFile } from 'node:fs/promises';",
+      "import { join } from 'node:path';",
+      '',
+      'export const createDevRuntimeProvider = () => ({',
+      "  descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },",
+      '  start: async (context) => {',
+      "    await writeFile(join(context.projectRoot, 'provider-context.json'), JSON.stringify({",
+      '      artifact: context.artifactStatus(),',
+      '      environment: context.environment,',
+      '      preparedRuntime: context.preparedRuntime,',
+      '      providerSessionId: context.providerSessionId,',
+      '      projectRoot: context.projectRoot,',
+      '      storageRoot: context.storageRoot,',
+      '    }));',
+      '    return {',
+      "      clientSurface: (surfaceId) => surfaceId === 'timeline' ? { entryPath: '/', httpOrigin: 'http://127.0.0.1:41111', httpPathPrefixes: ['/'], surfaceId, webSocketOrigin: 'ws://127.0.0.1:41111', webSocketPath: '/rsbuild-hmr', webSocketToken: 'rsbuild-token-1234' } : undefined,",
+      '      close: async () => undefined,',
+      '      mcpRegistry: {},',
+      '      providerSessionId: context.providerSessionId,',
+      '      status: () => ({ descriptor: { environmentVariables: [], id: \'fixture-runtime\', label: \'Fixture runtime\', schemaVersion: 1 }, diagnostics: [], hmrReady: false, state: \'active\' }),',
+      '      surfaces: () => [],',
+      '    };',
+      '  },',
+      '});',
+      '',
+    ].join('\n')),
+    writeFile(project.configPath, [
+      "import { appendFile } from 'node:fs/promises';",
+      "import { join } from 'node:path';",
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig(async ({ command, mode, projectRoot }) => {',
+      "  await appendFile(join(projectRoot, 'config-calls.ndjson'), JSON.stringify({ command, mode }) + '\\n');",
+      '  return {',
+      "    dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "    plugin: { name: 'runtime-fixture', version: '1.0.0' },",
+      "    skills: ['skills/review'],",
+      '  };',
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+      testing: {
+        openRuntimeClientSurface: async (_endpoint, _listener, hostOrigin) => {
+          proxyCalls += 1;
+          boundOrigins.push(hostOrigin);
+          return pendingSurface.then((binding) => binding);
+        },
+      },
+    });
+
+    const [calls, context, runtimeStatus, projectStatus] = await Promise.all([
+      readFile(join(project.root, 'config-calls.ndjson'), 'utf8'),
+      readFile(join(project.root, 'provider-context.json'), 'utf8').then(JSON.parse) as Promise<Record<string, unknown>>,
+      fetch(`${server.url}/api/runtime/status`).then((response) => response.json()),
+      fetch(`${server.url}/api/project/status`).then((response) => response.json()),
+    ]);
+    const configCalls = calls.trim().split('\n').map((line) => JSON.parse(line)) as Array<{ readonly command: string; readonly mode: string }>;
+    expect(configCalls.filter((call) => call.command === 'dev')).toEqual([
+      { command: 'dev', mode: 'development' },
+    ]);
+    expect(context).toMatchObject({
+      artifact: { state: 'active' },
+      environment: {},
+      preparedRuntime: { provider: './src/dev/provider.ts' },
+      projectRoot: project.root,
+      storageRoot: expect.stringMatching(new RegExp(`^${join(project.root, '.agent-bundle', 'runtime').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}/`)),
+    });
+    expect(runtimeStatus).toMatchObject({ status: { descriptor: { id: 'fixture-runtime' }, state: 'active' } });
+    expect(projectStatus).toMatchObject({ status: { runtime: { state: 'configured' } } });
+    expect((projectStatus as { readonly status: { readonly runtime?: unknown } }).status.runtime).toEqual({ state: 'configured' });
+    await expect(server.openRuntimeClientSurface('unknown-surface')).resolves.toBeUndefined();
+    const opening = server.openRuntimeClientSurface('timeline');
+    // The test seam records synchronously before returning its unresolved
+    // promise, proving foreground shutdown races an actually pending open.
+    expect(proxyCalls).toBe(1);
+    expect(boundOrigins).toEqual([server.url]);
+    const closing = server.close();
+    expect(surfaceCloseCalls).toBe(0);
+    resolveSurface?.({
+      bootstrapUrl: 'http://127.0.0.1:41112/bootstrap',
+      close: async () => { surfaceCloseCalls += 1; },
+      origin: 'http://127.0.0.1:41112',
+      surfaceId: 'timeline',
+      webSocketPath: '/rsbuild-hmr',
+    });
+    await expect(opening).rejects.toThrow('closed');
+    await expect(closing).resolves.toBeUndefined();
+    expect(proxyCalls).toBe(1);
+    expect(surfaceCloseCalls).toBe(1);
+    await expect(server.openRuntimeClientSurface('unknown-surface')).rejects.toThrow('closed');
+    let failedCloseCalls = 0;
+    failedServer = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+      testing: {
+        openRuntimeClientSurface: async () => ({
+          bootstrapUrl: 'http://127.0.0.1:41113/bootstrap',
+          close: async () => { failedCloseCalls += 1; throw new Error('Completed client surface close failed.'); },
+          origin: 'http://127.0.0.1:41113',
+          surfaceId: 'timeline',
+          webSocketPath: '/rsbuild-hmr',
+        }),
+      },
+    });
+    await expect(failedServer.openRuntimeClientSurface('timeline')).resolves.toMatchObject({ surfaceId: 'timeline' });
+    await expect(failedServer.close()).rejects.toMatchObject({ name: 'ForegroundServerCloseError' });
+    expect(failedCloseCalls).toBe(1);
+  } finally {
+    await server?.close().catch(() => undefined);
+    await failedServer?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
   }
 }, 30_000);
@@ -523,6 +1495,14 @@ it('records a durable playground trace and promotes it through the packaged fore
     const headers = { origin: server.url, 'x-agent-bundle-session': token };
     const jsonHeaders = { ...headers, 'content-type': 'application/json' };
 
+    const unauthenticatedCatalog = await fetch(`${server.url}/api/playground/catalog?epochId=${epoch.id}`, {
+      headers: { origin: server.url },
+    });
+    expect(unauthenticatedCatalog.status).toBe(403);
+    const nativeCatalog = await fetch(`${server.url}/api/playground/catalog?epochId=${epoch.id}`, { headers });
+    expect(nativeCatalog.status).toBe(200);
+    await expect(nativeCatalog.json()).resolves.toMatchObject({ catalog: { epochId: epoch.id } });
+
     const hooks = await fetch(`${server.url}/api/hooks?epochId=${epoch.id}&target=claude`, { headers });
     expect(hooks.status).toBe(200);
     const listed = await hooks.json() as {
@@ -568,7 +1548,7 @@ it('records a durable playground trace and promotes it through the packaged fore
         readonly session: { readonly identity: { readonly epoch: { readonly id: string } } };
       };
     };
-    expect(exportBody.export).not.toHaveProperty('schemaVersion');
+    expect(Object.keys(exportBody.export).sort()).toEqual(['events', 'session']);
     expect(exportBody.export.session.identity.epoch.id).toBe(epoch.id);
     expect(exportBody.export.events).toHaveLength(2);
     const evidence = exportBody.export.events[1]?.rawEventRef;
@@ -588,6 +1568,15 @@ it('records a durable playground trace and promotes it through the packaged fore
         readonly outcome: { readonly status: string };
       };
     };
+    expect(Object.keys(draftEvalCase).sort()).toEqual([
+      'assertions',
+      'epoch',
+      'fixture',
+      'invocation',
+      'outcome',
+      'target',
+      'task',
+    ]);
     expect(draftEvalCase).toMatchObject({
       epoch: { id: epoch.id },
       outcome: { status: 'passed' },
@@ -672,17 +1661,41 @@ it('retains a playground cleanup failure alongside every other lifecycle resourc
   const playgroundFailure = new Error('Playground cleanup failed.');
   const closeOrder: string[] = [];
 
-  await expect(closeDevServerLifecycle(
-    { close: async () => { closeOrder.push('mcp-sessions'); } },
-    { close: async () => { closeOrder.push('coordinator'); } },
-    { close: async () => { closeOrder.push('mcp-apps'); } },
-    { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
-  )).rejects.toEqual(expect.objectContaining({
+  await expect(closeDevServerLifecycle({
+    coordinator: { close: async () => { closeOrder.push('coordinator'); } },
+    mcpApps: { close: async () => { closeOrder.push('mcp-apps'); } },
+    mcpSessions: { close: async () => { closeOrder.push('mcp-sessions'); } },
+    playground: { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
+  })).rejects.toEqual(expect.objectContaining({
     failures: [{ error: playgroundFailure, resource: 'playground' }],
     name: DevServerLifecycleCloseError.name,
   }));
   expect(closeOrder).toEqual(['playground', 'mcp-apps', 'mcp-sessions', 'coordinator']);
 });
+
+it('gives the foreground Eval route and lifecycle lanes the same project-owned service', async () => {
+  const project = await createProjectFixture();
+  const sandboxFailure = new Error('stop after foreground composition');
+  let foreground: ForegroundServerOptions | undefined;
+  try {
+    await expect(startDevServer({
+      open: false,
+      port: 0,
+      root: project.root,
+      testing: {
+        createSandboxProxy: async () => { throw sandboxFailure; },
+        startForegroundServer: async (options) => {
+          foreground = options;
+          return { close: async () => undefined, url: 'http://127.0.0.1:49127' };
+        },
+      },
+    })).rejects.toBe(sandboxFailure);
+
+    expect(foreground?.evalLifecycle).toBe(foreground?.evals);
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 60_000);
 
 it('keeps MCP and coordinator cleanup failures structural while releasing both resources', async () => {
   const mcpFailure = new Error('MCP cleanup failed.');
@@ -690,10 +1703,10 @@ it('keeps MCP and coordinator cleanup failures structural while releasing both r
   let mcpCloseCalls = 0;
   let coordinatorCloseCalls = 0;
 
-  await expect(closeDevServerLifecycle(
-    { close: async () => { mcpCloseCalls += 1; throw mcpFailure; } },
-    { close: async () => { coordinatorCloseCalls += 1; throw coordinatorFailure; } },
-  )).rejects.toEqual(expect.objectContaining({
+  await expect(closeDevServerLifecycle({
+    coordinator: { close: async () => { coordinatorCloseCalls += 1; throw coordinatorFailure; } },
+    mcpSessions: { close: async () => { mcpCloseCalls += 1; throw mcpFailure; } },
+  })).rejects.toEqual(expect.objectContaining({
     failures: [
       { error: mcpFailure, resource: 'mcp-sessions' },
       { error: coordinatorFailure, resource: 'coordinator' },
@@ -710,11 +1723,11 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
   const coordinatorFailure = new Error('Coordinator cleanup failed.');
   const closeOrder: string[] = [];
 
-  await expect(closeDevServerLifecycle(
-    { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
-    { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
-    { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
-  )).rejects.toEqual(expect.objectContaining({
+  await expect(closeDevServerLifecycle({
+    coordinator: { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
+    mcpApps: { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
+    mcpSessions: { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
+  })).rejects.toEqual(expect.objectContaining({
     failures: [
       { error: appFailure, resource: 'mcp-apps' },
       { error: mcpFailure, resource: 'mcp-sessions' },
@@ -723,6 +1736,45 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
     name: DevServerLifecycleCloseError.name,
   }));
   expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
+});
+
+it('leaves Agent API ownership to the foreground release while closing every lifecycle resource in order', async () => {
+  const clientFailure = new Error('Runtime client surface cleanup failed.');
+  const appFailure = new Error('MCP App cleanup failed.');
+  const runtimeFailure = new Error('Runtime cleanup failed.');
+  const mcpFailure = new Error('MCP cleanup failed.');
+  const playgroundFailure = new Error('Playground cleanup failed.');
+  const coordinatorFailure = new Error('Coordinator cleanup failed.');
+  const closeOrder: string[] = [];
+
+  await expect(closeDevServerLifecycle({
+    coordinator: { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
+    mcpApps: { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
+    mcpSessions: { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
+    runtimeResources: {
+      clientSurfaces: { close: async () => { closeOrder.push('runtime-client-surfaces'); throw clientFailure; } },
+      runtime: { close: async () => { closeOrder.push('runtime'); throw runtimeFailure; } },
+    },
+    playground: { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
+  })).rejects.toEqual(expect.objectContaining({
+    failures: [
+      { error: playgroundFailure, resource: 'playground' },
+      { error: appFailure, resource: 'mcp-apps' },
+      { error: clientFailure, resource: 'runtime-client-surfaces' },
+      { error: runtimeFailure, resource: 'runtime' },
+      { error: mcpFailure, resource: 'mcp-sessions' },
+      { error: coordinatorFailure, resource: 'coordinator' },
+    ],
+    name: DevServerLifecycleCloseError.name,
+  }));
+  expect(closeOrder).toEqual([
+    'playground',
+    'mcp-apps',
+    'runtime-client-surfaces',
+    'runtime',
+    'mcp-sessions',
+    'coordinator',
+  ]);
 });
 
 it('retains sandbox startup and foreground cleanup failures structurally', async () => {
@@ -768,7 +1820,12 @@ it('passes --no-open and the requested port from the CLI to the public dev API',
   }, {
     startDevServer: async (options) => {
       received.push(options);
-      return { close: async () => undefined, status: () => ({}) as never, url: 'http://127.0.0.1:4100' };
+      return {
+        close: async () => undefined,
+        openRuntimeClientSurface: async () => undefined,
+        status: () => ({}) as never,
+        url: 'http://127.0.0.1:4100',
+      };
     },
   });
 
@@ -781,7 +1838,12 @@ it('passes explicit Agent API enablement and disablement through the dev CLI', a
   const received: unknown[] = [];
   const startDevServer = async (options: Parameters<typeof import('../src/api.ts').startDevServer>[0]) => {
     received.push(options);
-    return { close: async () => undefined, status: () => ({}) as never, url: 'http://127.0.0.1:4100' };
+    return {
+      close: async () => undefined,
+      openRuntimeClientSurface: async () => undefined,
+      status: () => ({}) as never,
+      url: 'http://127.0.0.1:4100',
+    };
   };
 
   await expect(runCli(['dev', '--root', '/project', '--agent-api'], {}, { startDevServer })).resolves.toBe(0);
@@ -805,6 +1867,7 @@ it('closes the foreground session once when the dev CLI receives a termination s
     },
     startDevServer: async () => ({
       close: async () => { closeCalls += 1; },
+      openRuntimeClientSurface: async () => undefined,
       status: () => ({}) as never,
       url: 'http://127.0.0.1:4100',
     }),

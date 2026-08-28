@@ -1,17 +1,20 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/contracts/mcp-session.ts';
-import { errorMessage as messageFrom, isRecord } from '../client-helpers.ts';
+import type { DevRuntimeMcpAppRunBinding } from '../../../agent-bundle/src/contracts/runtime.ts';
 
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
 import {
   createMcpAppPreviewController,
+  McpAppPreview,
   McpAppPreviewFrame,
   type McpAppPreviewClient,
   type McpAppPreviewController,
+  type McpAppRuntimePreviewProps,
   type McpAppPreviewState,
 } from './mcp-app-preview.tsx';
 import type {
+  McpAppConsentChallenge,
   McpAppHostContext,
   McpAppJsonValue,
   McpAppPreviewProfile,
@@ -22,7 +25,9 @@ import type {
   McpBrowserSessionModel,
   McpBrowserSessionTimelineEntry,
 } from './mcp-session-model.ts';
-import type { McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
+import type { McpSessionControllerBinding, McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
+import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
+import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
 import {
   mcpProtocolTraceDownload,
   type McpDownload,
@@ -38,24 +43,47 @@ export interface McpPageController {
   cancel(id: string): boolean;
   close(): Promise<void>;
   invoke(input: McpSessionControllerRequest): Promise<unknown>;
-  open(binding: McpSessionBinding, timeoutMs?: number): Promise<McpBrowserSessionModel>;
+  open(binding: McpSessionBinding | McpSessionControllerBinding, timeoutMs?: number): Promise<McpBrowserSessionModel>;
   replay(input: McpSessionControllerReplay): Promise<unknown>;
   restart(): Promise<McpBrowserSessionModel>;
   subscribe(listener: (model: McpBrowserSessionModel) => void): () => void;
 }
 
-export interface McpPageProps {
-  /** Whether this presentation is visible and may own a live App preview. */
-  readonly presentationActive?: boolean;
-  /** Credential-owning foreground client; it is never passed to the sandbox frame. */
-  readonly appPreviewClient?: McpAppPreviewClient;
+interface McpPageCommonProps {
   readonly controller: McpPageController;
-  readonly epochOptions: readonly string[];
   readonly initialBinding?: Partial<McpSessionBinding>;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
   readonly onDownloadTrace?: (download: McpDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
   readonly onResetSession?: () => void;
+  /** Lets the host serialize a Runtime departure through this Page's existing preview lifecycle. */
+  readonly registerPreviewClose?: (close: () => Promise<void>) => () => void;
+}
+
+export type McpPageSource =
+  | Readonly<{ readonly kind: 'artifact'; readonly epochOptions: readonly string[]; readonly targetOptions: readonly string[] }>
+  | Readonly<{ readonly kind: 'runtime'; readonly binding: DevRuntimeMcpAppRunBinding }>;
+
+export type McpPagePreviewSelection =
+  | Readonly<{ readonly kind: 'artifact'; readonly source: McpPageAppPreviewSource }>
+  | Readonly<{ readonly kind: 'runtime'; readonly preview: RuntimeAppPreviewProps; readonly binding: DevRuntimeMcpAppRunBinding }>;
+
+type McpPageArtifactPreviewSelection = Extract<McpPagePreviewSelection, { readonly kind: 'artifact' }>;
+type McpPageRuntimePreviewSelection = Extract<McpPagePreviewSelection, { readonly kind: 'runtime' }>;
+
+export type McpPagePreviewLifecycle = RuntimeAppPreviewLifecycle;
+
+/** The Page accepts only the two runtime dependencies its existing preview overload needs. */
+export type McpPageRuntimePreviewDependencies = Pick<McpAppRuntimePreviewProps, 'client' | 'createBridgeFactory'>;
+
+export interface McpPageArtifactProps extends McpPageCommonProps {
+  /** Whether this presentation is visible and may own a live App preview. */
+  readonly presentationActive?: boolean;
+  /** Credential-owning foreground client; it is never passed to the sandbox frame. */
+  readonly appPreviewClient?: McpAppPreviewClient;
+  readonly epochOptions: readonly string[];
+  readonly initialPreview?: McpPageArtifactPreviewSelection;
+  readonly source?: Extract<McpPageSource, { readonly kind: 'artifact' }>;
   /** Artifact-inspected server choices are advisory defaults; operators may still enter another server name. */
   readonly serverOptions?: readonly McpPageServerOption[];
   /** Prevents an unresolved replacement catalog from reclassifying the previous catalog choice as manual input. */
@@ -99,7 +127,22 @@ export interface McpPageBindingOptions {
   readonly targetOptions: readonly string[];
 }
 
+export interface McpPageRuntimeProps extends McpPageCommonProps {
+  readonly initialPreview?: McpPageRuntimePreviewSelection;
+  readonly runtimePreviewDependencies: McpPageRuntimePreviewDependencies;
+  readonly source: Extract<McpPageSource, { readonly kind: 'runtime' }>;
+}
+
+/** Legacy artifact props remain source-compatible; runtime callers supply only the discriminated source. */
+export type McpPageProps = McpPageArtifactProps | McpPageRuntimeProps;
+
 export type McpConfigDownload = McpDownload;
+
+export interface McpProtocolEvidenceProps {
+  readonly ariaLabel: string;
+  readonly protocol?: unknown;
+  readonly trace: readonly unknown[];
+}
 
 type TraceTab = 'raw' | 'logs' | 'progress';
 
@@ -159,6 +202,204 @@ type CatalogItem = Readonly<{
   readonly uriTemplate?: string;
 }>;
 
+const runtimeBindingFields = Object.freeze([
+  'definitionDigest',
+  'registryRevision',
+  'serverDigest',
+  'serverName',
+  'sessionId',
+  'sessionRevision',
+  'target',
+  'transportDigest',
+] as const);
+
+type RuntimeBindingField = typeof runtimeBindingFields[number];
+type RuntimeBindingSnapshot = Readonly<Pick<DevRuntimeMcpAppRunBinding, RuntimeBindingField>>;
+type RuntimePreviewBinding = Readonly<{
+  readonly appSurfaceId: string;
+  readonly binding: RuntimeBindingSnapshot;
+}>;
+
+type RuntimePageAdmission = Readonly<{
+  readonly binding: RuntimeBindingSnapshot;
+  /** A direct Runtime navigation has authoritative binding evidence but no preview to recreate. */
+  readonly selection?: Readonly<{
+    readonly appSurfaceId: string;
+    readonly preview: McpPageRuntimePreviewSelection;
+  }>;
+}>;
+
+const runtimePreviewDiagnostic = 'Runtime App preview is unavailable because its binding evidence is invalid.';
+const maximumRuntimePreviewDepth = 32;
+const maximumRuntimePreviewNodes = 4_096;
+
+const ownDataDescriptors = (value: unknown, allowNullPrototype = true): ReadonlyMap<string, PropertyDescriptor> | undefined => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && (!allowNullPrototype || prototype !== null)) return undefined;
+    const keys = Reflect.ownKeys(value);
+    const descriptors = new Map<string, PropertyDescriptor>();
+    for (const key of keys) {
+      if (typeof key !== 'string') return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return undefined;
+      descriptors.set(key, descriptor);
+    }
+    return descriptors;
+  } catch {
+    return undefined;
+  }
+};
+
+const runtimeText = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0 && value.length <= 4_096 && value.trim().length > 0 && !value.includes('\0');
+
+const runtimeRevision = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+
+const snapshotRuntimeBinding = (value: unknown, allowNullPrototype = false): RuntimeBindingSnapshot | undefined => {
+  const descriptors = ownDataDescriptors(value, allowNullPrototype);
+  if (descriptors === undefined || descriptors.size !== runtimeBindingFields.length || runtimeBindingFields.some((field) => !descriptors.has(field))) return undefined;
+  const values: Partial<Record<RuntimeBindingField, string | number>> = {};
+  for (const field of runtimeBindingFields) {
+    const descriptor = descriptors.get(field);
+    if (descriptor === undefined) return undefined;
+    const current = descriptor.value;
+    if (field === 'registryRevision' || field === 'sessionRevision') {
+      if (!runtimeRevision(current)) return undefined;
+      values[field] = current;
+    } else {
+      if (!runtimeText(current)) return undefined;
+      values[field] = current;
+    }
+  }
+  return Object.freeze({
+    definitionDigest: values.definitionDigest!,
+    registryRevision: values.registryRevision!,
+    serverDigest: values.serverDigest!,
+    serverName: values.serverName!,
+    sessionId: values.sessionId!,
+    sessionRevision: values.sessionRevision!,
+    target: values.target!,
+    transportDigest: values.transportDigest!,
+  }) as RuntimeBindingSnapshot;
+};
+
+const sameRuntimeBinding = (left: RuntimeBindingSnapshot, right: RuntimeBindingSnapshot): boolean =>
+  runtimeBindingFields.every((field) => left[field] === right[field]);
+
+const detachedRuntimeJson = (value: unknown, ancestors = new WeakSet<object>(), state = { nodes: 0 }, depth = 0): unknown | undefined => {
+  state.nodes += 1;
+  if (depth > maximumRuntimePreviewDepth || state.nodes > maximumRuntimePreviewNodes) return undefined;
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'object' || ancestors.has(value)) return undefined;
+  try {
+    ancestors.add(value);
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const arrayLength: unknown = Object.getOwnPropertyDescriptor(value, 'length')?.value;
+      if (typeof arrayLength !== 'number' || !Number.isSafeInteger(arrayLength) || arrayLength < 0 || arrayLength > maximumRuntimePreviewNodes) return undefined;
+      const keys = Reflect.ownKeys(value);
+      if (keys.length !== arrayLength + 1 || keys.some((key) => typeof key === 'symbol')) return undefined;
+      const copy: unknown[] = [];
+      for (let index = 0; index < arrayLength; index += 1) {
+        const descriptor = descriptors[String(index)];
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return undefined;
+        const child = detachedRuntimeJson(descriptor.value, ancestors, state, depth + 1);
+        if (child === undefined) return undefined;
+        copy.push(child);
+      }
+      return Object.freeze(copy);
+    }
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return undefined;
+    const descriptors = ownDataDescriptors(value);
+    if (descriptors === undefined) return undefined;
+    const copy = Object.create(null) as Record<string, unknown>;
+    for (const [key, descriptor] of descriptors) {
+      const child = detachedRuntimeJson(descriptor.value, ancestors, state, depth + 1);
+      if (child === undefined) return undefined;
+      Object.defineProperty(copy, key, { configurable: false, enumerable: true, value: child, writable: false });
+    }
+    return Object.freeze(copy);
+  } catch {
+    return undefined;
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
+const canonicalRuntimeResourceUri = (value: unknown): value is string => {
+  if (!runtimeText(value)) return false;
+  try {
+    const uri = new URL(value);
+    return uri.protocol === 'ui:' && uri.hostname.length > 0 && uri.href === value;
+  } catch {
+    return false;
+  }
+};
+
+/** Public App surface IDs are canonical server-side client-surface locators, not invocation surface IDs. */
+const canonicalRuntimeClientSurfaceId = (value: unknown): value is string =>
+  runtimeText(value) && /^mcp\.[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/u.test(value);
+
+const preparedRuntimePreview = (value: unknown): RuntimeAppPreviewProps | undefined => {
+  const descriptors = ownDataDescriptors(value, false);
+  if (descriptors === undefined) return undefined;
+  const profile = detachedRuntimeJson(descriptors.get('profile')?.value);
+  const profileId = descriptors.get('profileId')?.value;
+  const run = detachedRuntimeJson(descriptors.get('run')?.value);
+  const surface = detachedRuntimeJson(descriptors.get('surface')?.value);
+  if (profile === undefined || run === undefined || surface === undefined || !runtimeText(profileId)) return undefined;
+  return Object.freeze({
+    profile: profile as RuntimeAppPreviewProps['profile'],
+    profileId,
+    run: run as RuntimeAppPreviewProps['run'],
+    surface: surface as RuntimeAppPreviewProps['surface'],
+  });
+};
+
+const runtimePreviewBinding = (preview: RuntimeAppPreviewProps): RuntimePreviewBinding | undefined => {
+  const run = ownDataDescriptors(preview.run);
+  const surface = ownDataDescriptors(preview.surface);
+  if (run === undefined || surface === undefined || run.get('status')?.value !== 'succeeded') return undefined;
+  const result = ownDataDescriptors(run.get('result')?.value);
+  const app = result === undefined ? undefined : ownDataDescriptors(result.get('app')?.value);
+  if (app === undefined) return undefined;
+  const appBinding = snapshotRuntimeBinding(app.get('mcpBinding')?.value, true);
+  const appSurfaceId = app.get('surfaceId')?.value;
+  const runSurfaceId = run.get('surfaceId')?.value;
+  const surfaceId = surface.get('id')?.value;
+  const resourceUri = app.get('resourceUri')?.value;
+  if (appBinding === undefined || !canonicalRuntimeClientSurfaceId(appSurfaceId) || !runtimeText(runSurfaceId) || runSurfaceId !== surfaceId || !canonicalRuntimeResourceUri(resourceUri)) return undefined;
+  return Object.freeze({ appSurfaceId, binding: appBinding });
+};
+
+const admitRuntimePage = (source: unknown, selection: unknown): RuntimePageAdmission | undefined => {
+  const sourceDescriptors = ownDataDescriptors(source, false);
+  if (sourceDescriptors?.get('kind')?.value !== 'runtime') return undefined;
+  const sourceBinding = snapshotRuntimeBinding(sourceDescriptors.get('binding')?.value);
+  if (sourceBinding === undefined) return undefined;
+  if (selection === undefined) return Object.freeze({ binding: sourceBinding });
+
+  const selectionDescriptors = ownDataDescriptors(selection, false);
+  if (selectionDescriptors?.get('kind')?.value !== 'runtime') return undefined;
+  const selectionBinding = snapshotRuntimeBinding(selectionDescriptors.get('binding')?.value);
+  const preview = preparedRuntimePreview(selectionDescriptors.get('preview')?.value);
+  const app = preview === undefined ? undefined : runtimePreviewBinding(preview);
+  if (selectionBinding === undefined || preview === undefined || app === undefined) return undefined;
+  if (!sameRuntimeBinding(sourceBinding, selectionBinding) || !sameRuntimeBinding(sourceBinding, app.binding)) return undefined;
+  return Object.freeze({
+    binding: sourceBinding,
+    selection: Object.freeze({
+      appSurfaceId: app.appSurfaceId,
+      preview: Object.freeze({ binding: sourceBinding, kind: 'runtime', preview }),
+    }),
+  });
+};
+
 const traceTabs: readonly TraceTab[] = ['raw', 'logs', 'progress'];
 
 const noMcpPageServerOptions: readonly McpPageServerOption[] = Object.freeze([]);
@@ -167,6 +408,7 @@ const frozenMcpPageServerOptionsFor = (options: readonly McpPageServerOption[]):
   options.map((option) => Object.freeze({ name: option.name, target: option.target })),
 );
 
+/** Keeps only the immutable artifact servers that the selected generated target can start. */
 export const mcpPageServerOptionsFor = (
   options: readonly McpPageServerOption[],
   target: string,
@@ -314,6 +556,9 @@ export const mcpPageSessionControls = (
   };
 };
 
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
 const text = (value: unknown): string | undefined => typeof value === 'string' && value.length > 0 ? value : undefined;
 
 const browserMcpAppHost = (): McpAppHostContext => {
@@ -374,7 +619,192 @@ const display = (value: unknown): string => {
   }
 };
 
-const errorMessage = (reason: unknown): string => messageFrom(reason, 'The MCP session action failed.');
+const consentDetailLimit = 480;
+const consentDetailDepthLimit = 3;
+const consentDetailEntryLimit = 8;
+const sensitiveConsentDetail = /(?:api[_-]?key|authorization|bearer|cookie|credential|pass(?:word)?|private[_-]?key|secret|token)/iu;
+
+const boundedConsentText = (value: unknown, maximum = 160): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  if (sensitiveConsentDetail.test(value)) return '[redacted]';
+  const normalized = Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint < 0x20 || codePoint === 0x7f ? ' ' : character;
+  }).join('');
+  return normalized.length <= maximum ? normalized : `${normalized.slice(0, Math.max(0, maximum - 1))}…`;
+};
+
+/**
+ * Formats only bounded, finite JSON consent context for a React text node.
+ * It never follows accessors and redacts common credential-bearing names/values.
+ */
+const redactedConsentJson = (value: unknown, depth = 0, ancestors = new WeakSet<object>()): string | undefined => {
+  if (value === null || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : undefined;
+  if (typeof value === 'string') {
+    const textValue = boundedConsentText(value);
+    return textValue === undefined ? undefined : JSON.stringify(textValue);
+  }
+  if (typeof value !== 'object' || depth >= consentDetailDepthLimit || ancestors.has(value)) return undefined;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null && !Array.isArray(value)) return undefined;
+    ancestors.add(value);
+    if (Array.isArray(value)) {
+      const parts: string[] = [];
+      for (let index = 0; index < Math.min(value.length, consentDetailEntryLimit); index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        const entry = descriptor === undefined || !Object.hasOwn(descriptor, 'value')
+          ? '[withheld]'
+          : redactedConsentJson(descriptor.value, depth + 1, ancestors);
+        if (entry === undefined) return undefined;
+        parts.push(entry);
+      }
+      if (value.length > consentDetailEntryLimit) parts.push('…');
+      return `[${parts.join(', ')}]`;
+    }
+    const parts: string[] = [];
+    for (const key of Object.keys(value).sort().slice(0, consentDetailEntryLimit)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) return undefined;
+      const entry = sensitiveConsentDetail.test(key) ? '"[redacted]"' : redactedConsentJson(descriptor.value, depth + 1, ancestors);
+      if (entry === undefined) return undefined;
+      parts.push(`${JSON.stringify(key)}: ${entry}`);
+    }
+    if (Object.keys(value).length > consentDetailEntryLimit) parts.push('…');
+    return `{${parts.join(', ')}}`;
+  } catch {
+    return undefined;
+  } finally {
+    ancestors.delete(value as object);
+  }
+};
+
+const boundedConsentSummary = (value: string): string =>
+  value.length <= consentDetailLimit ? value : `${value.slice(0, consentDetailLimit - 1)}…`;
+
+const publicQueryKeys = (values: Iterable<unknown>): readonly string[] => {
+  const keys = new Set<string>();
+  let inspected = 0;
+  for (const value of values) {
+    if (inspected >= consentDetailEntryLimit * 4 || keys.size >= consentDetailEntryLimit) break;
+    inspected += 1;
+    keys.add(boundedConsentText(value, 48) ?? '[redacted]');
+  }
+  return [...keys].sort();
+};
+
+const externalLinkTarget = (details: Readonly<Record<string, unknown>>): Readonly<{ readonly queryKeys: readonly string[]; readonly target: string }> | undefined => {
+  if (typeof details.target === 'string') {
+    const target = boundedConsentText(details.target, 240);
+    return target === undefined ? undefined : Object.freeze({ queryKeys: Object.freeze(publicQueryKeys(Array.isArray(details.queryKeys) ? details.queryKeys : [])), target });
+  }
+  if (typeof details.url !== 'string') return undefined;
+  try {
+    const target = new URL(details.url);
+    if ((target.protocol !== 'http:' && target.protocol !== 'https:') || target.username.length > 0 || target.password.length > 0) return undefined;
+    const visibleTarget = boundedConsentText(`${target.protocol}//${target.host}${target.pathname}`, 240);
+    if (visibleTarget === undefined) return undefined;
+    const queryKeys = publicQueryKeys(target.searchParams.keys());
+    return Object.freeze({ queryKeys: Object.freeze(queryKeys), target: visibleTarget });
+  } catch {
+    return undefined;
+  }
+};
+
+const base64ByteLength = (value: string): number | undefined => {
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)) return undefined;
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  return value.length / 4 * 3 - padding;
+};
+
+const contentByteLength = (content: unknown): number | undefined => {
+  if (!isRecord(content) || typeof content.type !== 'string') return undefined;
+  if (content.type === 'text') return typeof content.text === 'string' ? new TextEncoder().encode(content.text).byteLength : undefined;
+  if (content.type === 'image' || content.type === 'audio') return typeof content.data === 'string' ? base64ByteLength(content.data) : undefined;
+  if (content.type === 'resource') {
+    if (!isRecord(content.resource)) return undefined;
+    if (typeof content.resource.text === 'string') return new TextEncoder().encode(content.resource.text).byteLength;
+    return typeof content.resource.blob === 'string' ? base64ByteLength(content.resource.blob) : undefined;
+  }
+  return content.type === 'resource_link' && typeof content.size === 'number' && Number.isSafeInteger(content.size) && content.size >= 0
+    ? content.size
+    : undefined;
+};
+
+const publicDownloadItems = (details: Readonly<Record<string, unknown>>): readonly string[] | undefined => {
+  if (Array.isArray(details.items)) return details.items.slice(0, consentDetailEntryLimit).map((entry, index) => {
+    const type = isRecord(entry) ? boundedConsentText(entry.type, 48) ?? 'unspecified' : 'unspecified';
+    const bytes = isRecord(entry) && typeof entry.bytes === 'number' && Number.isSafeInteger(entry.bytes) && entry.bytes >= 0 ? entry.bytes : undefined;
+    return `${index + 1}: ${type} ${bytes === undefined ? 'size unavailable' : `${bytes} B`}`;
+  });
+  const contents = Array.isArray(details.contents) ? details.contents : undefined;
+  if (contents === undefined) return undefined;
+  return contents.slice(0, consentDetailEntryLimit).map((entry, index) => {
+    const type = isRecord(entry) ? boundedConsentText(entry.type, 48) ?? 'unspecified' : 'unspecified';
+    const bytes = contentByteLength(entry);
+    return `${index + 1}: ${type} ${bytes === undefined ? 'size unavailable' : `${bytes} B`}`;
+  });
+};
+
+const actionFingerprint = (request: Readonly<Record<string, unknown>>): string | undefined =>
+  typeof request.actionFingerprint === 'string' && /^act-[A-Za-z0-9_-]{12}$/u.test(request.actionFingerprint)
+    ? request.actionFingerprint
+    : undefined;
+
+/** A capability-specific, bounded and credential-safe explanation of a server challenge. */
+export const mcpAppConsentDetailsSummary = (request: unknown): string => {
+  if (!isRecord(request) || !isRecord(request.details) || typeof request.capability !== 'string') return 'Details unavailable.';
+  const details = request.details;
+  let summary: string;
+  switch (request.capability) {
+    case 'call-tool': {
+      const name = boundedConsentText(details.name, 120);
+      const argumentsSummary = redactedConsentJson(details.arguments);
+      summary = name === undefined ? 'Tool details unavailable.' : `Tool: ${name}${argumentsSummary === undefined ? '' : `; arguments: ${argumentsSummary}`}`;
+      break;
+    }
+    case 'open-external-link': {
+      const target = externalLinkTarget(details);
+      summary = target === undefined
+        ? 'External link target unavailable.'
+        : `External link: ${target.target}${target.queryKeys.length === 0 ? '' : `; query keys: ${target.queryKeys.join(', ')}`}`;
+      break;
+    }
+    case 'download-file': {
+      const items = publicDownloadItems(details);
+      const itemCount = typeof details.itemCount === 'number' && Number.isSafeInteger(details.itemCount) && details.itemCount >= 0
+        ? details.itemCount
+        : Array.isArray(details.contents) ? details.contents.length : undefined;
+      if (items === undefined || itemCount === undefined) {
+        summary = 'Download details unavailable.';
+        break;
+      }
+      summary = `Download ${itemCount} file${itemCount === 1 ? '' : 's'}${items.length === 0 ? '' : ` (${items.join(', ')})`}.`;
+      break;
+    }
+    case 'request-display-mode': {
+      const mode = boundedConsentText(details.mode, 80);
+      summary = mode === undefined ? 'Display mode details unavailable.' : `Display mode: ${mode}`;
+      break;
+    }
+    default: {
+      const value = redactedConsentJson(details);
+      summary = value === undefined ? 'Details unavailable.' : `Request details: ${value}`;
+    }
+  }
+  const fingerprint = actionFingerprint(request);
+  return boundedConsentSummary(`${summary}${fingerprint === undefined ? '' : `; action reference: ${fingerprint}`}`);
+};
+
+/** Read-only provider evidence shared by the live MCP page and Runtime Inspector. */
+export const McpProtocolEvidence = ({ ariaLabel, protocol, trace }: McpProtocolEvidenceProps): React.ReactNode => <section aria-label={ariaLabel} className="mcp-page-trace">
+  <h3>{ariaLabel}</h3>
+  {protocol === undefined ? undefined : <details open><summary>Protocol</summary><pre><code>{display(protocol)}</code></pre></details>}
+  {trace.length === 0 ? <p className="mcp-page-empty">No protocol evidence yet.</p> : <ol>{trace.map((entry, index) => <li key={index}><pre><code>{display(entry)}</code></pre></li>)}</ol>}
+</section>;
+
+const errorMessage = (reason: unknown): string => reason instanceof Error ? reason.message : 'The MCP session action failed.';
 
 const connectionSummary = (connection: McpBrowserSessionModel['connection']): string => {
   if (connection === undefined) return 'No negotiated connection.';
@@ -452,9 +882,18 @@ const traceValue = (entry: McpBrowserSessionTimelineEntry): unknown => {
 };
 
 interface McpPageAppPreviewProps {
+  readonly artifactClient?: McpAppPreviewClient;
+  readonly host: McpAppHostContext;
+  readonly onLifecycleChange: (lifecycle: McpPagePreviewLifecycle | undefined, current?: McpPagePreviewLifecycle) => void;
+  readonly previewProfile: McpAppPreviewProfile;
+  readonly runtimePreviewDependencies?: McpPageRuntimePreviewDependencies;
+  readonly selection: McpPagePreviewSelection;
+}
+
+interface McpPageArtifactPreviewProps {
   readonly client: McpAppPreviewClient;
   readonly host: McpAppHostContext;
-  readonly onControllerChange: (controller: McpAppPreviewController | undefined) => void;
+  readonly onLifecycleChange: (lifecycle: McpPagePreviewLifecycle | undefined, current?: McpPagePreviewLifecycle) => void;
   readonly previewProfile: McpAppPreviewProfile;
   readonly source: McpPageAppPreviewSource;
 }
@@ -465,9 +904,35 @@ const previewProfileName = (state: McpAppPreviewState, fallback: McpAppPreviewPr
   return profile ?? fallback;
 };
 
-/** Page-owned composition keeps the approved preview close promise ahead of session teardown. */
-const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, source }: McpPageAppPreviewProps) => {
+const McpPageRuntimeAppPreview = ({ dependencies, onLifecycleChange, preview }: Readonly<{
+  readonly dependencies: McpPageRuntimePreviewDependencies;
+  readonly onLifecycleChange: McpPageArtifactPreviewProps['onLifecycleChange'];
+  readonly preview: RuntimeAppPreviewProps;
+}>) => {
+  const registerLifecycle = (lifecycle: McpPagePreviewLifecycle): (() => void) => {
+    onLifecycleChange(lifecycle);
+    // Parent unmount cleanup must join this exact handle before a child effect
+    // can release the Page ref. The guarded microtask also makes late old
+    // unregisters inert after a replacement has installed its own lifecycle.
+    return () => { queueMicrotask(() => onLifecycleChange(undefined, lifecycle)); };
+  };
+  return <section className="mcp-page-app-preview">
+    <McpAppPreview
+      {...preview}
+      client={dependencies.client}
+      createBridgeFactory={dependencies.createBridgeFactory}
+      kind="runtime"
+      registerLifecycle={registerLifecycle}
+    />
+  </section>;
+};
+
+/** Page-owned artifact composition keeps the approved preview close promise ahead of session teardown. */
+const McpPageArtifactPreview = ({ client, host, onLifecycleChange, previewProfile, source }: McpPageArtifactPreviewProps) => {
   const [state, setState] = useState<McpAppPreviewState>(() => Object.freeze({ phase: 'loading' }));
+  const [consentChallenges, setConsentChallenges] = useState<readonly McpAppConsentChallenge[]>(Object.freeze([]));
+  const [consentPending, setConsentPending] = useState<string>();
+  const [blankBarrier, setBlankBarrier] = useState<number>();
   const controller = useRef<McpAppPreviewController | undefined>(undefined);
   const iframe = useRef<HTMLIFrameElement>(null);
 
@@ -483,21 +948,58 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
       toolName: source.toolName,
     });
     controller.current = current;
-    onControllerChange(current);
+    onLifecycleChange(current);
     const unsubscribe = current.subscribe(setState);
-    void current.start();
+    let active = true;
+    const refreshConsent = async (): Promise<void> => {
+      try {
+        const challenges = await current.consentChallenges();
+        if (active) setConsentChallenges(challenges);
+      } catch {
+        if (active) setConsentChallenges(Object.freeze([]));
+      }
+    };
+    void current.start().then(refreshConsent);
+    const poll = setInterval(() => { void refreshConsent(); }, 250);
     return () => {
+      active = false;
+      clearInterval(poll);
       unsubscribe();
       if (controller.current === current) controller.current = undefined;
-      onControllerChange(undefined);
+      queueMicrotask(() => onLifecycleChange(undefined, current));
       void current.close();
     };
-  }, [client, host, onControllerChange, previewProfile, source]);
+  }, [client, host, onLifecycleChange, previewProfile, source]);
 
   useEffect(() => {
-    if (state.phase !== 'ready' || iframe.current === null || typeof window === 'undefined') return;
+    if (blankBarrier !== undefined || state.phase !== 'ready' || iframe.current === null || typeof window === 'undefined') return;
     controller.current?.attachFrame(iframe.current, window);
-  }, [state]);
+  }, [blankBarrier, state]);
+
+  useEffect(() => {
+    if (blankBarrier === undefined) return;
+    controller.current?.commitDocumentRemount(blankBarrier);
+    setBlankBarrier(undefined);
+  }, [blankBarrier]);
+
+  const decideConsent = (challenge: McpAppConsentChallenge, approved: boolean): void => {
+    const current = controller.current;
+    if (current === undefined || consentPending !== undefined) return;
+    const previousRevision = current.state.phase === 'ready' ? current.state.preview.frame?.documentPolicy?.revision : undefined;
+    setConsentPending(challenge.id);
+    void current.decideConsent(challenge.id, approved).then(async (accepted) => {
+      if (!accepted) return;
+      const nextRevision = current.pendingDocumentPolicyRevision;
+      if (previousRevision !== nextRevision) {
+        if (nextRevision !== undefined) setBlankBarrier(nextRevision);
+      }
+      try {
+        setConsentChallenges(await current.consentChallenges());
+      } catch {
+        setConsentChallenges(Object.freeze([]));
+      }
+    }).catch(() => undefined).finally(() => { setConsentPending(undefined); });
+  };
 
   const fallback = state.phase === 'fallback' || state.phase === 'error' ? state.fallback : undefined;
   return <section aria-busy={state.phase === 'loading'} aria-label="MCP App preview" className="mcp-page-app-preview">
@@ -512,13 +1014,63 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
       <details open><summary>Tool input</summary><pre><code>{display(fallback.input)}</code></pre></details>
       <details open><summary>Tool result</summary><pre><code>{display(fallback.result)}</code></pre></details>
     </section>}
+    {consentChallenges.length === 0 ? undefined : <section aria-label="MCP App consent">
+      <h4>App permission requests</h4>
+      <ol>{consentChallenges.map((challenge) => <li key={challenge.id}>
+        <p>{isRecord(challenge.request) && typeof challenge.request.summary === 'string'
+          ? challenge.request.summary
+          : 'Allow this MCP App action?'}</p>
+        <p><strong>Details:</strong> {mcpAppConsentDetailsSummary(challenge.request)}</p>
+        <button disabled={consentPending !== undefined} onClick={() => { decideConsent(challenge, true); }} type="button">Allow {isRecord(challenge.request) && typeof challenge.request.capability === 'string' ? challenge.request.capability.replaceAll('-', ' ') : 'action'}</button>
+        <button disabled={consentPending !== undefined} onClick={() => { decideConsent(challenge, false); }} type="button">Deny</button>
+      </li>)}</ol>
+    </section>}
     {state.phase === 'ready' && state.preview.frame !== undefined
-      ? <McpAppPreviewFrame frame={state.preview.frame} iframeRef={iframe} title={`MCP App preview: ${source.toolName}`} />
+      ? blankBarrier !== undefined
+        ? <iframe data-mcp-app-document-revision={blankBarrier} key={`blank:${blankBarrier}`} ref={iframe} sandbox="" src="about:blank" title={`MCP App preview reload barrier: ${source.toolName}`} />
+        : <McpAppPreviewFrame key={state.preview.frame.documentPolicy?.revision ?? 0} frame={state.preview.frame} iframeRef={iframe} title={`MCP App preview: ${source.toolName}`} />
       : undefined}
   </section>;
 };
 
-export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onResetSession, presentationActive = true, serverCatalogState = 'ready', serverOptions = noMcpPageServerOptions, targetOptions }: McpPageProps) => {
+/** The Page retains one preview placement while dispatching its artifact and runtime overloads. */
+const McpPageAppPreview = ({ artifactClient, host, onLifecycleChange, previewProfile, runtimePreviewDependencies, selection }: McpPageAppPreviewProps) => {
+  if (selection.kind === 'runtime') {
+    if (runtimePreviewDependencies === undefined) return null;
+    return <McpPageRuntimeAppPreview
+      dependencies={runtimePreviewDependencies}
+      onLifecycleChange={onLifecycleChange}
+      preview={selection.preview}
+    />;
+  }
+  if (artifactClient === undefined) return null;
+  return <McpPageArtifactPreview
+    client={artifactClient}
+    host={host}
+    onLifecycleChange={onLifecycleChange}
+    previewProfile={previewProfile}
+    source={selection.source}
+  />;
+};
+
+export const McpPage = (props: McpPageProps) => {
+  const { controller, initialBinding, initialPreview, onDownloadConfig, onDownloadTrace, onResetSession, registerPreviewClose } = props;
+  const runtimeProps: McpPageRuntimeProps | undefined = 'runtimePreviewDependencies' in props ? props : undefined;
+  const artifactProps: McpPageArtifactProps | undefined = 'runtimePreviewDependencies' in props ? undefined : props;
+  const [runtimeAdmission] = useState<RuntimePageAdmission | undefined>(() => runtimeProps === undefined
+    ? undefined
+    : admitRuntimePage(runtimeProps.source, runtimeProps.initialPreview));
+  const runtimeSource = runtimeAdmission?.binding;
+  const artifactSource = artifactProps?.source ?? (artifactProps === undefined
+    ? undefined
+    : Object.freeze({ epochOptions: artifactProps.epochOptions, kind: 'artifact' as const, targetOptions: artifactProps.targetOptions }));
+  const appPreviewClient = artifactProps?.appPreviewClient;
+  const presentationActive = artifactProps?.presentationActive ?? true;
+  const epochOptions = artifactSource?.epochOptions ?? Object.freeze([]);
+  const targetOptions = artifactSource?.targetOptions ?? Object.freeze([]);
+  const serverCatalogState = artifactProps?.serverCatalogState ?? 'ready';
+  const serverOptions = artifactProps?.serverOptions ?? noMcpPageServerOptions;
+  const runtimePreviewDependencies = runtimeProps?.runtimePreviewDependencies;
   const [model, setModel] = useState(() => controller.model);
   const [binding, setBinding] = useState<McpPageBinding>(() => {
     const initialTarget = mcpPageTargetFor(initialBinding?.target ?? '', targetOptions);
@@ -547,14 +1099,17 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const [cancelledRequests, setCancelledRequests] = useState<readonly string[]>([]);
   const [pendingActions, setPendingActions] = useState<readonly string[]>([]);
   const [traceTab, setTraceTab] = useState<TraceTab>('raw');
-  const [appPreview, setAppPreview] = useState<McpPageAppPreviewSource>();
+  const [appPreview, setAppPreview] = useState<McpPagePreviewSelection | undefined>(() =>
+    runtimeProps === undefined ? initialPreview : runtimeAdmission?.selection?.preview);
   const [appPreviewBusy, setAppPreviewBusy] = useState(false);
   const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
   const [appHost] = useState(browserMcpAppHost);
   const actionSession = useRef(createMcpPageActionSession());
   const appPreviewClosePromise = useRef<Promise<void> | undefined>(undefined);
-  const appPreviewController = useRef<McpAppPreviewController | undefined>(undefined);
+  const appPreviewController = useRef<McpPagePreviewLifecycle | undefined>(undefined);
   const appPreviewOpenGeneration = useRef(0);
+  const closeAppPreviewRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const previewCloseFacade = useRef<(() => Promise<void>) | undefined>(undefined);
   const controllerIdentity = useRef(controller);
   const requestNumber = useRef(0);
   const traceTabsByName = useRef<Partial<Record<TraceTab, HTMLButtonElement | null>>>({});
@@ -573,6 +1128,9 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     setActiveTimeoutMs(controller.session?.timeoutMs);
   }), [controller]);
   useEffect(() => {
+    setCancelledRequests((current) => current.filter((id) => Object.hasOwn(model.activeRequests, id)));
+  }, [model.activeRequests]);
+  useEffect(() => {
     setBinding((current) => {
       const next = mcpPageBindingFor(current, {
         epochId: initialBinding?.epochId ?? current.epochId,
@@ -586,20 +1144,33 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   }, [initialBinding?.epochId, model.phase, serverCatalogState, serverOptions, targetOptions]);
   useEffect(() => () => { void appPreviewController.current?.close(); }, []);
 
-  const setActiveAppPreviewController = useCallback((next: McpAppPreviewController | undefined): void => {
+  const setActiveAppPreviewController = useCallback((next: McpPagePreviewLifecycle | undefined, current?: McpPagePreviewLifecycle): void => {
+    if (current !== undefined && appPreviewController.current !== current) return;
     appPreviewController.current = next;
   }, []);
   const closeCurrentAppPreview = useCallback((): Promise<void> => {
     if (appPreviewClosePromise.current !== undefined) return appPreviewClosePromise.current;
     const current = appPreviewController.current;
-    appPreviewController.current = undefined;
     setAppPreviewBusy(true);
-    const close: Promise<void> = Promise.resolve(current?.close()).finally(() => {
-      if (appPreviewClosePromise.current !== close) return;
-      appPreviewClosePromise.current = undefined;
-      setAppPreview(undefined);
-      setAppPreviewBusy(false);
+    const closeReference: { promise: Promise<void> | undefined } = { promise: undefined };
+    let closed = false;
+    const close = Promise.resolve().then(async (): Promise<void> => {
+      await current?.close();
+      closed = true;
+    }).catch((error: unknown) => {
+      setActionError(errorMessage(error));
+      throw error;
+    }).finally(() => {
+      if (appPreviewClosePromise.current === closeReference.promise) {
+        appPreviewClosePromise.current = undefined;
+        if (closed) {
+          if (appPreviewController.current === current) appPreviewController.current = undefined;
+          setAppPreview(undefined);
+        }
+        setAppPreviewBusy(false);
+      }
     });
+    closeReference.promise = close;
     appPreviewClosePromise.current = close;
     return close;
   }, []);
@@ -607,21 +1178,35 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     appPreviewOpenGeneration.current += 1;
     return closeCurrentAppPreview();
   }, [closeCurrentAppPreview]);
-  const openAppPreview = (source: McpPageAppPreviewSource, profile = appPreviewProfile): void => {
+  closeAppPreviewRef.current = closeAppPreview;
+  if (previewCloseFacade.current === undefined) {
+    previewCloseFacade.current = () => closeAppPreviewRef.current();
+  }
+  const openAppPreview = (selection: McpPagePreviewSelection, profile = appPreviewProfile): void => {
     const generation = ++appPreviewOpenGeneration.current;
     setAppPreviewBusy(true);
-    void closeCurrentAppPreview().catch(() => undefined).finally(() => {
+    void closeCurrentAppPreview().then(() => {
       if (appPreviewOpenGeneration.current !== generation) return;
       setAppPreviewProfile(profile);
-      setAppPreview(source);
+      setAppPreview(selection);
       setAppPreviewBusy(false);
+    }).catch(() => {
+      if (appPreviewOpenGeneration.current === generation) setAppPreviewBusy(false);
     });
   };
   useEffect(() => {
-    if (appPreview !== undefined && (appPreview.sessionId !== model.sessionId || model.phase === 'closed' || model.phase === 'error')) {
-      void closeAppPreview();
+    if (registerPreviewClose === undefined) return undefined;
+    return registerPreviewClose(previewCloseFacade.current!);
+  }, [registerPreviewClose]);
+  useEffect(() => () => { void closeCurrentAppPreview().catch(() => undefined); }, []);
+  useEffect(() => {
+    if (appPreview !== undefined && (
+      model.phase === 'closed' || model.phase === 'error' ||
+      (appPreview.kind === 'artifact' && appPreview.source.sessionId !== model.sessionId)
+    )) {
+      void closeAppPreview().catch(() => undefined);
     }
-  }, [appPreview?.sessionId, closeAppPreview, model.phase, model.sessionId]);
+  }, [appPreview, closeAppPreview, model.phase, model.sessionId]);
   useEffect(() => {
     if (!presentationActive) void closeAppPreview();
   }, [closeAppPreview, presentationActive]);
@@ -648,16 +1233,10 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     run(`invoke:${operation}`, () => controller.invoke({ id: requestId, operation, request }));
   };
 
-  // Catalogs change only on a server-initiated list refresh, while this page
-  // re-renders on every protocol frame. Projecting per render would reallocate
-  // every item and hand children a new identity each time.
-  const tools = useMemo(() => catalogItems(model.catalogs.tools, 'Tool'), [model.catalogs.tools]);
-  const prompts = useMemo(() => catalogItems(model.catalogs.prompts, 'Prompt'), [model.catalogs.prompts]);
-  const resources = useMemo(() => catalogItems(model.catalogs.resources, 'Resource'), [model.catalogs.resources]);
-  const resourceTemplates = useMemo(
-    () => catalogItems(model.catalogs.resourceTemplates, 'Resource template'),
-    [model.catalogs.resourceTemplates],
-  );
+  const tools = catalogItems(model.catalogs.tools, 'Tool');
+  const prompts = catalogItems(model.catalogs.prompts, 'Prompt');
+  const resources = catalogItems(model.catalogs.resources, 'Resource');
+  const resourceTemplates = catalogItems(model.catalogs.resourceTemplates, 'Resource template');
   const selectedTool = tools.find((item) => item.name === toolName) ?? tools[0];
   const selectedPrompt = prompts.find((item) => item.name === promptName) ?? prompts[0];
   const active = Object.values(model.activeRequests);
@@ -689,7 +1268,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     selectTraceTab(next);
   };
 
-  return <div className="mcp-page" aria-label="MCP playground">
+  return <main className="mcp-page" aria-label="MCP playground">
     <header className="mcp-page-heading">
       <div>
         <p className="mcp-page-eyebrow">Artifact-bound protocol workbench</p>
@@ -709,7 +1288,30 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
             onResetSession?.();
           })} type="button">Reset MCP session</button>
           : <button disabled type="button">New MCP session unavailable</button>}
-      </div> : <form className="mcp-page-binding" onSubmit={(event) => {
+      </div> : runtimeProps !== undefined ? <section aria-label="Runtime-bound MCP session" className="mcp-page-runtime-binding">
+        <h3>Runtime-bound MCP session</h3>
+        {runtimeSource === undefined ? <p role="alert">{runtimePreviewDiagnostic}</p> : <>
+          <dl>
+            <div><dt>Server</dt><dd>{runtimeSource.serverName}</dd></div>
+            <div><dt>Target</dt><dd>{runtimeSource.target}</dd></div>
+            <div><dt>Definition digest</dt><dd><code>{runtimeSource.definitionDigest}</code></dd></div>
+            <div><dt>Transport digest</dt><dd><code>{runtimeSource.transportDigest}</code></dd></div>
+            <div><dt>Server digest</dt><dd><code>{runtimeSource.serverDigest}</code></dd></div>
+            <div><dt>Registry revision</dt><dd>{runtimeSource.registryRevision}</dd></div>
+            <div><dt>Session</dt><dd>{runtimeSource.sessionId} · revision {runtimeSource.sessionRevision}</dd></div>
+          </dl>
+          <div className="mcp-page-actions">
+            <button disabled={!controls.restart} onClick={() => run('restart', async () => {
+              await closeAppPreview();
+              return controller.restart();
+            })} type="button">Restart MCP session</button>
+            <button disabled={!controls.close} onClick={() => run('close', async () => {
+              await closeAppPreview();
+              return controller.close();
+            })} type="button">Close MCP session</button>
+          </div>
+        </>}
+      </section> : <form className="mcp-page-binding" onSubmit={(event) => {
         event.preventDefault();
         if (!controls.open) return;
         const form = event.currentTarget;
@@ -796,13 +1398,13 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
           })} type="button">Close MCP session</button>
         </div>
       </form>}
-      {activeTimeoutMs === undefined ? undefined : <p className="mcp-page-session-timeout">Active session timeout: {activeTimeoutMs} ms.</p>}
+      {runtimeProps === undefined && activeTimeoutMs !== undefined ? <p className="mcp-page-session-timeout">Active session timeout: {activeTimeoutMs} ms.</p> : undefined}
       <div className="mcp-page-connection" aria-label="Negotiated connection">
         <h3>Negotiated connection</h3>
         <p>{connectionSummary(model.connection)}</p>
         {model.connection === undefined ? undefined : <pre><code>{display({ capabilities: model.connection.serverCapabilities, server: model.connection.serverInfo })}</code></pre>}
       </div>
-      <McpLaunchConfiguration config={config} />
+      {runtimeProps === undefined ? <McpLaunchConfiguration config={config} /> : undefined}
       {active.length === 0 ? undefined : <section aria-label="Active MCP operations" className="mcp-page-active">
         <h3>Active operations</h3>
         <ul>{active.map((request) => <li key={request.id}><span>{request.operation} · {request.id}</span><button disabled={cancelledRequests.includes(request.id)} onClick={() => {
@@ -810,7 +1412,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
             setActionError(`MCP operation ${request.id} is no longer active.`);
             return;
           }
-          setCancelledRequests((current) => [...current.filter((id) => Object.hasOwn(model.activeRequests, id)), request.id]);
+          setCancelledRequests((current) => current.includes(request.id) ? current : [...current, request.id]);
         }} type="button">Cancel {request.id}</button></li>)}</ul>
       </section>}
     </section>
@@ -890,26 +1492,36 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
             {supportedMcpAppPreviewProfiles.map((profile) => <option key={profile} value={profile}>{profile}</option>)}
           </select>
         </label>
-        {appPreview === undefined ? <p className="mcp-page-empty">Select a completed tool call below to create an App preview.</p> : <button disabled={appPreviewBusy} onClick={() => { void closeAppPreview(); }} type="button">Close App preview</button>}
+        {appPreview === undefined ? <p className="mcp-page-empty">Select a completed tool call below to create an App preview.</p> : <button disabled={appPreviewBusy} onClick={() => { void closeAppPreview().catch(() => undefined); }} type="button">Close App preview</button>}
       </section>}
-      {appPreviewClient === undefined || appPreview === undefined ? undefined : <McpPageAppPreview
-        client={appPreviewClient}
+      {runtimeProps === undefined || appPreview?.kind !== 'runtime' ? undefined : <section aria-label="Runtime App preview controls" className="mcp-page-app-controls">
+        <div>
+          <h3>Runtime App preview</h3>
+          <p>This preview is bound to the selected runtime session evidence.</p>
+        </div>
+        <button disabled={appPreviewBusy} onClick={() => { void closeAppPreview().catch(() => undefined); }} type="button">Close App preview</button>
+      </section>}
+      {appPreview === undefined ? undefined : <McpPageAppPreview
+        artifactClient={appPreviewClient}
         host={appHost}
-        key={`${appPreview.invocationId}-${appPreviewProfile}`}
-        onControllerChange={setActiveAppPreviewController}
+        key={appPreview.kind === 'artifact'
+          ? `${appPreview.source.invocationId}-${appPreviewProfile}`
+          : `runtime:${appPreview.binding.sessionId}:${appPreview.binding.sessionRevision}:${runtimeAdmission?.selection?.appSurfaceId ?? ''}:${appPreview.preview.run.id}`}
+        onLifecycleChange={setActiveAppPreviewController}
         previewProfile={appPreviewProfile}
-        source={appPreview}
+        runtimePreviewDependencies={runtimePreviewDependencies}
+        selection={appPreview}
       />}
       <section aria-label="Invocation history" className="mcp-page-history">
         <h3>Invocation history</h3>
         {controller.history.length === 0 ? <p className="mcp-page-empty">No completed invocations yet.</p> : <ol>{controller.history.map((invocation) => {
           const previewSource = mcpAppPreviewSourceFor(model, invocation);
           return <li key={invocation.id}>
-            <div><strong>{invocation.operation}</strong><span>{invocation.id}</span>{invocation.replayOf === undefined ? undefined : <span>Replay of {invocation.replayOf}</span>}</div>
-            <pre><code>{display({ error: invocation.error, request: invocation.request, result: invocation.result, timing: invocation.timing })}</code></pre>
-            <button disabled={model.phase !== 'ready' || isPending('replay')} onClick={() => run('replay', () => controller.replay({ id: nextRequestId(), invocationId: invocation.id }))} type="button">Replay {invocation.id}</button>
-            {appPreviewClient === undefined || previewSource === undefined ? undefined : <button disabled={appPreviewBusy} onClick={() => openAppPreview(previewSource)} type="button">Open App preview for {invocation.id}</button>}
-          </li>;
+          <div><strong>{invocation.operation}</strong><span>{invocation.id}</span>{invocation.replayOf === undefined ? undefined : <span>Replay of {invocation.replayOf}</span>}</div>
+          <pre><code>{display({ error: invocation.error, request: invocation.request, result: invocation.result, timing: invocation.timing })}</code></pre>
+          <button disabled={model.phase !== 'ready' || isPending('replay')} onClick={() => run('replay', () => controller.replay({ id: nextRequestId(), invocationId: invocation.id }))} type="button">Replay {invocation.id}</button>
+          {appPreviewClient === undefined || previewSource === undefined ? undefined : <button disabled={appPreviewBusy} onClick={() => openAppPreview({ kind: 'artifact', source: previewSource })} type="button">Open App preview for {invocation.id}</button>}
+        </li>;
         })}</ol>}
       </section>
     </section>
@@ -935,10 +1547,11 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         </button>)}
       </div>
       <section aria-labelledby={`mcp-trace-tab-${traceTab}`} className="mcp-page-trace" id={tracePanelId} role="tabpanel" tabIndex={0}>
-        <h3>{traceLabel}</h3>
-        {traceEntries.length === 0 ? <p className="mcp-page-empty">No {traceLabel.toLowerCase()} entries yet.</p> : <ol>{traceEntries.map((entry, index) => <li key={`${traceTab}-${'sequence' in entry ? entry.sequence : 'local'}-${index}`}>
-          <pre><code>{display(traceValue(entry))}</code></pre>
-        </li>)}</ol>}
+        {traceTab === 'raw'
+          ? <McpProtocolEvidence ariaLabel={traceLabel} trace={rawTrace.map(traceValue)} />
+          : <><h3>{traceLabel}</h3>{traceEntries.length === 0 ? <p className="mcp-page-empty">No {traceLabel.toLowerCase()} entries yet.</p> : <ol>{traceEntries.map((entry, index) => <li key={`${traceTab}-${'sequence' in entry ? entry.sequence : 'local'}-${index}`}>
+            <pre><code>{display(traceValue(entry))}</code></pre>
+          </li>)}</ol>}</>}
       </section>
     </section>
 
@@ -954,5 +1567,5 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
       {actionError === undefined ? undefined : <p>{actionError}</p>}
       {model.diagnostics.map((diagnostic, index) => <p key={`${diagnostic.code}-${index}`}><strong>{diagnostic.code}</strong> {diagnostic.message}</p>)}
     </section>}
-  </div>;
+  </main>;
 };

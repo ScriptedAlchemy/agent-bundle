@@ -4,18 +4,22 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
-import type { PlaygroundReplay, PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/dev/playground/playground-store.ts';
-import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground/playground-contract.ts';
+import type { PlaygroundReplay, PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/contracts/playground.ts';
+import type { PlaygroundRun } from '../../agent-bundle/src/contracts/playground.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { playgroundViewFor } from '../src/playground/playground-model.ts';
 import {
+  cancelPlaygroundRun,
+  createPlaygroundCancelFlight,
+  createPlaygroundCatalogLifecycle,
+  createPlaygroundObservationLifecycle,
   observePlaygroundRun,
   PlaygroundNativePromptControls,
   PlaygroundPage,
   PlaygroundTraceView,
 } from '../src/playground/playground-page.tsx';
 import * as playgroundPage from '../src/playground/playground-page.tsx';
-import { deferred } from './support/async.ts';
 
 const epoch = { digest: 'sha256-current', id: 'epoch-current' };
 const identity = {
@@ -29,6 +33,23 @@ const event = (sequence: number): PlaygroundTraceEvent => ({
   sequence, source: sequence === 1 ? 'build' : 'skill-evidence', summary: `Event ${sequence}`, timestamp: `2026-08-14T10:00:0${sequence}.000Z`,
 });
 
+const events: readonly PlaygroundTraceEvent[] = [event(1), event(2)];
+
+const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
+
+it('renders every trace row with its sequence, source, kind, epoch, and raw event reference', () => {
+  const markup = renderToStaticMarkup(createElement(PlaygroundTraceView, {
+    view: playgroundViewFor({ epoch, events, exported: undefined, selectedRefs: ['session-1/1'], session }),
+  }));
+
+  expect(markup).toContain('events.jsonl#1');
+  expect(markup).toContain('events.jsonl#2');
+  expect(markup).toContain('epoch-pinned');
+  expect(markup).toContain('skill.inspected');
+  expect(markup).toContain('Event 2');
+  expect(markup).toContain('2026-08-14T10:00:01.000Z');
+});
+
 const run: PlaygroundRun = { id: 'run-1', session };
 
 const nativeCatalog = {
@@ -38,6 +59,12 @@ const nativeCatalog = {
   modelPins: [{ host: 'claude' as const, id: 'pin:sonnet', label: 'Sonnet — authored pin' }],
   selections: [{ caseId: 'case:review', fixtureId: 'fixture:empty', host: 'claude' as const, modelPinId: 'pin:sonnet' }],
 } as const;
+
+const deferred = <Value,>() => {
+  let resolvePromise: (value: Value) => void = () => undefined;
+  const promise = new Promise<Value>((resolve) => { resolvePromise = resolve; });
+  return { promise, resolve: resolvePromise };
+};
 
 const replay = (nextSession: PlaygroundSession, events: readonly PlaygroundTraceEvent[] = []): PlaygroundReplay => ({
   cursor: { afterSequence: events.at(-1)?.sequence ?? 0 }, events, session: nextSession,
@@ -54,6 +81,7 @@ it('chooses the first runnable catalog operation without replacing valid explici
       readonly target: string;
     }, targets: readonly { readonly digest: string; readonly name: string }[], catalog: {
       readonly hooks: readonly { readonly event: string; readonly id: string; readonly name: string; readonly target: string }[];
+      readonly mcpServers: readonly { readonly name: string; readonly target: string }[];
       readonly scripts: readonly { readonly id: string; readonly name: string; readonly target: string }[];
       readonly skills: readonly { readonly id: string; readonly name: string; readonly targets?: readonly string[] }[];
     }) => {
@@ -77,6 +105,7 @@ it('chooses the first runnable catalog operation without replacing valid explici
   expect(playgroundSelectionFor).toBeTypeOf('function');
   const catalog = {
     hooks: [{ event: 'sessionStart', id: 'hook:start', name: 'session-start', target: 'portable' }],
+    mcpServers: [],
     scripts,
     skills: [{ id: 'skill:review', name: 'review', targets: ['portable'] }],
   } as const;
@@ -89,11 +118,12 @@ it('chooses the first runnable catalog operation without replacing valid explici
   });
 });
 
-it('renders only catalog-backed operation drafts with named choices and no raw identifiers', () => {
-  const client = new PlaygroundClient({ fetch: async () => { throw new Error('Static rendering issues no request.'); } });
+it('renders only catalog-backed operation drafts with named choices', () => {
+  const client = new PlaygroundClient({ foreground: foreground(async () => { throw new Error('Static rendering issues no request.'); }) });
   const markup = renderToStaticMarkup(createElement(PlaygroundPage, {
     client, epoch, onRunChange: () => undefined, run: undefined, targets: [{ digest: 'portable', name: 'portable' }],
     hooks: [{ event: 'sessionStart', id: 'hook:start', name: 'session-start', target: 'portable' }],
+    mcpServers: [{ name: 'fixture', target: 'portable' }],
     scripts: [{ id: 'script:review', name: 'Verify release', target: 'portable' }],
     skills: [{ id: 'skill:review', name: 'Release review', targets: ['portable'] }],
   } as unknown as Parameters<typeof PlaygroundPage>[0]));
@@ -103,8 +133,7 @@ it('renders only catalog-backed operation drafts with named choices and no raw i
   expect(markup).toContain('Hook simulation');
   expect(markup).toContain('Script execution');
   expect(markup).toContain('Verify release');
-  expect(markup).not.toContain('MCP tool call');
-  expect(markup).not.toContain('playground-mcp-server');
+  expect(markup).toContain('MCP tool call');
   expect(markup).not.toContain('playground-skill-id" type="text');
   expect(markup).not.toContain('playground-hook" type="text');
   expect(markup).not.toContain('Script execution is unavailable');
@@ -199,6 +228,139 @@ it('renders ordered durable evidence as bounded disclosure cards instead of a wi
   expect(markup).toContain('playground-event-card');
   expect(markup).not.toContain('playground-table');
   expect(markup).toContain('events.jsonl#2');
+});
+
+it('starts exactly one synchronous cancel flight until server drain and replay settle', async () => {
+  const lifecycle = createPlaygroundCancelFlight();
+  const blocked = deferred<void>();
+  let calls = 0;
+  const first = lifecycle.start(async () => {
+    calls += 1;
+    await blocked.promise;
+  });
+  const duplicate = lifecycle.start(async () => { calls += 1; });
+
+  expect(first.started).toBe(true);
+  expect(duplicate.started).toBe(false);
+  expect(duplicate.done).toBe(first.done);
+  blocked.resolve();
+  await first.done;
+  expect(lifecycle.start(async () => { calls += 1; }).started).toBe(true);
+  expect(calls).toBe(2);
+});
+
+it('invalidates a held cancel flight before a replacement run can accept its replay', async () => {
+  const lifecycle = createPlaygroundCancelFlight();
+  const blocked = deferred<void>();
+  let accepted = false;
+  const stale = lifecycle.start(async (lease) => {
+    await blocked.promise;
+    if (lease.current()) accepted = true;
+  });
+
+  lifecycle.invalidate();
+  blocked.resolve();
+  await stale.done;
+
+  expect(stale.signal.aborted).toBe(true);
+  expect(accepted).toBe(false);
+});
+
+it('lets a cancel claim supersede held observer evidence before terminal replay commits', async () => {
+  const observationLifecycle = createPlaygroundObservationLifecycle();
+  const observation = observationLifecycle.begin();
+  const heldSession = deferred<PlaygroundSession>();
+  const terminalSession: PlaygroundSession = {
+    ...session,
+    outcome: { status: 'cancelled' },
+    state: 'finalized',
+  };
+  const acceptedStates: string[] = [];
+  const staleCommit = heldSession.promise.then((next) => {
+    if (observation.current()) acceptedStates.push(next.state);
+  });
+  const cancellation = createPlaygroundCancelFlight().start((lease) => cancelPlaygroundRun({
+    client: {
+      cancel: async () => {
+        expect(observation.current()).toBe(false);
+        return true;
+      },
+      replay: async () => replay(terminalSession, [event(1)]),
+    },
+    lease,
+    observation: observationLifecycle,
+    onEvents: () => undefined,
+    onObservationRestart: () => undefined,
+    onSession: (next) => acceptedStates.push(next.state),
+    runId: 'run-1',
+    sessionId: 'session-1',
+  }));
+
+  await cancellation.done;
+  heldSession.resolve(session);
+  await staleCommit;
+
+  expect(observation.signal.aborted).toBe(true);
+  expect(acceptedStates).toEqual(['finalized']);
+});
+
+it('requests a fresh observation when a current cancel attempt fails', async () => {
+  const observationLifecycle = createPlaygroundObservationLifecycle();
+  const original = observationLifecycle.begin();
+  let replacement: ReturnType<typeof observationLifecycle.begin> | undefined;
+  const cancellation = createPlaygroundCancelFlight().start((lease) => cancelPlaygroundRun({
+    client: {
+      cancel: async () => { throw new Error('cancel unavailable'); },
+      replay: async () => replay(session),
+    },
+    lease,
+    observation: observationLifecycle,
+    onEvents: () => undefined,
+    onObservationRestart: () => { replacement = observationLifecycle.begin(); },
+    onSession: () => undefined,
+    runId: 'run-1',
+    sessionId: 'session-1',
+  }));
+
+  await expect(cancellation.done).rejects.toThrow('cancel unavailable');
+
+  expect(original.signal.aborted).toBe(true);
+  expect(replacement?.current()).toBe(true);
+});
+
+it('aborts and rejects a stale catalog completion before accepting a replacement client or epoch', () => {
+  const lifecycle = createPlaygroundCatalogLifecycle();
+  const clientA = {} as PlaygroundClient;
+  const clientB = {} as PlaygroundClient;
+  const a = lifecycle.begin({ client: clientA, epochId: 'epoch-A' });
+  const b = lifecycle.begin({ client: clientB, epochId: 'epoch-B' });
+  const accepted: string[] = [];
+
+  if (a.current()) accepted.push('A');
+  if (b.current()) accepted.push('B');
+
+  expect(a.signal.aborted).toBe(true);
+  expect(a.current()).toBe(false);
+  expect(b.current()).toBe(true);
+  expect(b.key).toEqual({ client: clientB, epochId: 'epoch-B', generation: 2 });
+  expect(accepted).toEqual(['B']);
+});
+
+it('keeps a reentrant catalog replacement distinct from the outer lease that triggered it', () => {
+  const lifecycle = createPlaygroundCatalogLifecycle();
+  const client = {} as PlaygroundClient;
+  const first = lifecycle.begin({ client, epochId: 'epoch-A' });
+  let nested: ReturnType<typeof lifecycle.begin> | undefined;
+  first.signal.addEventListener('abort', () => {
+    nested = lifecycle.begin({ client, epochId: 'epoch-B' });
+  }, { once: true });
+
+  const outer = lifecycle.begin({ client, epochId: 'epoch-C' });
+
+  expect(nested).toBeDefined();
+  expect(nested?.key.generation).not.toBe(outer.key.generation);
+  expect(nested?.current()).toBe(false);
+  expect(outer.current()).toBe(true);
 });
 
 it('renders the pinned server epoch and persisted event references, not a rebuilt current epoch', () => {
@@ -356,4 +518,20 @@ it('closes and drains the stream when final replay rejects before the run can co
   await expect(observer).rejects.toThrow('final replay failed');
   expect(closeCount).toBe(1);
   expect(readerDrained).toBe(true);
+});
+
+it('invalidates a queued old trace callback before replacement clears the page-owned trace', () => {
+  const lifecycle = createPlaygroundObservationLifecycle();
+  const old = lifecycle.begin();
+  let pageTrace: readonly PlaygroundTraceEvent[];
+  const queuedOldEvent = (): void => {
+    if (old.current()) pageTrace = [event(1)];
+  };
+
+  lifecycle.invalidate();
+  pageTrace = [];
+  queuedOldEvent();
+
+  expect(old.signal.aborted).toBe(true);
+  expect(pageTrace).toEqual([]);
 });

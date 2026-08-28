@@ -1,0 +1,62 @@
+{
+  "name": "@agent-bundle/rsc-runtime",
+  "version": "0.0.0",
+  "description": "React Server Component primitives for Agent Bundle hook and MCP results.",
+  "license": "MIT",
+  "keywords": [
+    "agent-bundle",
+    "mcp",
+    "react-server-components"
+  ],
+  "homepage": "https://github.com/ScriptedAlchemy/agent-bundle#readme",
+  "bugs": {
+    "url": "https://github.com/ScriptedAlchemy/agent-bundle/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ScriptedAlchemy/agent-bundle.git",
+    "directory": "packages/rsc-runtime"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
+    }
+  },
+  "scripts": {
+    "build": "rslib build",
+    "test": "rstest tests",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
+  },
+  "peerDependencies": {
+    "agent-bundle": "^0.1.0",
+    "react": "^19.2.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@rslib/core": "0.23.2",
+    "@rstest/core": "0.11.9",
+    "@types/react": "19.2.18",
+    "agent-bundle": "workspace:*",
+    "react": "19.2.8"
+  }
+}

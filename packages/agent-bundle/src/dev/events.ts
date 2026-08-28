@@ -9,7 +9,7 @@ import {
   type ProjectReplayGap,
 } from './types.ts';
 
-type EpochScopedProjectEventType = 'artifact.available' | 'runtime.event';
+type EpochScopedProjectEventType = 'artifact.available';
 
 type ProjectEventInputFor<TType extends ProjectEventType> = Readonly<{
   readonly occurredAt?: string;
@@ -84,7 +84,7 @@ const eventTypes = new Set<ProjectEventType>([
 ]);
 
 const requiresEpoch = (type: ProjectEventType): boolean =>
-  type === 'artifact.available' || type === 'runtime.event';
+  type === 'artifact.available';
 
 const ensureReplayLimit = (replayLimit: number): number => {
   if (!Number.isSafeInteger(replayLimit) || replayLimit < 1) {

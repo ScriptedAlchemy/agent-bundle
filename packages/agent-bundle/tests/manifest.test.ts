@@ -13,6 +13,7 @@ import {
   type ArtifactManifest,
 } from '../src/build/manifest.ts';
 import { digest, stableJson } from '../src/core/digest.ts';
+import { evalTargetDigests } from '../src/eval/artifact.ts';
 import {
   assembleArtifactManifest as assembleArtifactManifestFromIndex,
   parseArtifactManifest as parseArtifactManifestFromIndex,
@@ -189,10 +190,19 @@ it('rejects object shapes, JSON containers, and duplicate JSON keys strictly', (
   arrayManifest.project = [];
   expectInvalid(arrayManifest, /object/i);
   expect(() => assembleArtifactManifest(new (class {})() as ArtifactManifest)).toThrow(/plain object/i);
-  expect(() => parseArtifactManifest('{"runtime":{},"runtime":{}}')).toThrow(
-    /^Artifact manifest JSON has a duplicate key\.$/u,
-  );
-  expect(() => parseArtifactManifest('{')).toThrow(/^Artifact manifest is not valid JSON\.$/u);
+  const duplicateKey = 'private-key';
+  let duplicateError: unknown;
+  try {
+    parseArtifactManifest(`{"${duplicateKey}":true,"${duplicateKey}":false}`);
+  } catch (error) {
+    duplicateError = error;
+  }
+  expect(duplicateError).toBeInstanceOf(SyntaxError);
+  expect((duplicateError as Error).message).toBe('Artifact manifest contains a duplicate JSON key.');
+  expect((duplicateError as Error).message).not.toContain(duplicateKey);
+  expect((duplicateError as Error & { readonly cause: Error }).cause.message).toBe('Artifact manifest JSON parsing failed.');
+  expect((duplicateError as Error & { readonly cause: Error }).cause.message).not.toContain(duplicateKey);
+  expect(() => parseArtifactManifest('{')).toThrow('Artifact manifest is not valid JSON.');
 });
 
 it('rejects malformed scalar fields, unsafe paths, and manifest self-listing', () => {
@@ -219,6 +229,7 @@ it('rejects malformed scalar fields, unsafe paths, and manifest self-listing', (
     [(manifest) => { manifest.runtime.node = '22.12'; }, /major\.minor\.patch/i],
     [(manifest) => { manifest.runtime.node = 'v22.12.0'; }, /major\.minor\.patch/i],
     [(manifest) => { manifest.runtime.node = '22.012.0'; }, /major\.minor\.patch/i],
+    [(manifest) => { manifest.runtime.node = '22.11.9'; }, /runtime floor/i],
   ];
 
   for (const [mutate, message] of mutations) {
@@ -235,6 +246,14 @@ it('records a raised generated-executable runtime floor exactly as selected', ()
   const manifest = parseArtifactManifest(canonicalBytes(raised));
   expect(manifest.runtime).toEqual({ node: '24.3.1' });
   expect(Object.isFrozen(manifest.runtime)).toBe(true);
+});
+
+it('includes the generated runtime floor in Eval target identity', () => {
+  const baseline = validManifest();
+  const raised = structuredClone(baseline) as MutableArtifactManifest;
+  raised.runtime.node = '24.3.1';
+
+  expect(evalTargetDigests(baseline).codex).not.toBe(evalTargetDigests(raised).codex);
 });
 
 it('rejects duplicate or unsorted arrays and cross-record inconsistencies', () => {

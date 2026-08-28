@@ -10,6 +10,9 @@
       "node"
     ]
   },
+  "files": [
+    "src/workbench.d.ts"
+  ],
   "include": [
     "*.ts",
     "src/**/*.ts",

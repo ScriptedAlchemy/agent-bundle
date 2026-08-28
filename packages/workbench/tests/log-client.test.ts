@@ -1,6 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import { LogClient, LogClientError } from '../src/logs/log-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 
 const record = Object.freeze({
   context: Object.freeze({ target: 'codex' }),
@@ -18,7 +19,12 @@ const json = (body: unknown, status = 200): Response => new Response(JSON.string
   status,
 });
 
-const session = (): Response => json({ instanceId: 'foreground-instance-a', origin: 'http://foreground.test', token: 'test-session-token' });
+const session = (): Response => json({
+  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+  origin: 'http://foreground.test',
+  token: 'test-session-token',
+});
+const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
 
 const ndjson = (chunks: readonly Uint8Array[]): Response => new Response(new ReadableStream<Uint8Array>({
   start: (controller) => {
@@ -27,37 +33,22 @@ const ndjson = (chunks: readonly Uint8Array[]): Response => new Response(new Rea
   },
 }), { headers: { 'content-type': 'application/x-ndjson' } });
 
-const streamClient = (response: Response): LogClient => new LogClient({
-  fetch: async (input) => String(input).includes('/api/project/session') ? session() : response,
+const clientFor = (response: Response): LogClient => new LogClient({
+  foreground: foreground(async (input) => String(input).includes('/api/project/session') ? session() : response),
 });
 
-it('rejects hostile or noncontiguous replay envelopes before exposing them to the page', async () => {
-  let calls = 0;
-  const hostile = new Proxy({}, { ownKeys: () => { throw new Error('hostile envelope'); } });
-  const client = new LogClient({
-    fetch: async () => {
-      calls += 1;
-      return calls === 1 ? session() : {
-        json: async () => hostile,
-        ok: true,
-        status: 200,
-      } as unknown as Response;
-    },
-  });
+it('rejects malformed or noncontiguous replay envelopes before exposing them to the page', async () => {
+  await expect(clientFor(new Response('{')).replay()).rejects.toBeInstanceOf(LogClientError);
 
-  await expect(client.replay()).rejects.toBeInstanceOf(LogClientError);
-
-  const noncontiguous = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({ replay: { cursor: { afterSequence: 3 }, records: [{ ...record, sequence: 3 }] } }),
-  });
+  const noncontiguous = clientFor(json({
+    replay: { cursor: { afterSequence: 3 }, records: [{ ...record, sequence: 3 }] },
+  }));
   await expect(noncontiguous.replay()).rejects.toMatchObject({ code: 'AB8093' });
 });
 
 it('rejects a trailing unterminated NDJSON frame instead of accepting a partial record', async () => {
   const encoder = new TextEncoder();
-  const client = streamClient(ndjson([encoder.encode(JSON.stringify(record))]));
+  const client = clientFor(ndjson([encoder.encode(JSON.stringify(record))]));
 
   const stream = client.stream({ afterSequence: 0, onMessage: () => undefined });
   await expect(stream.done).rejects.toMatchObject({ code: 'AB8093' });
@@ -66,38 +57,34 @@ it('rejects a trailing unterminated NDJSON frame instead of accepting a partial 
 it('rejects duplicate replay keys, extra record fields, and unsafe wire text before the page receives a record', async () => {
   const replay = { replay: { cursor: { afterSequence: 1 }, records: [record] } };
   const duplicateDetails = JSON.stringify(replay).replace('"event":"safe"', '"event":"safe","event":"changed"');
-  const duplicate = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session') ? session() : new Response(duplicateDetails),
-  });
+  const duplicate = clientFor(new Response(duplicateDetails));
   await expect(duplicate.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
-  const extraField = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, untrusted: 'extra' }] } }),
-  });
+  const extraField = clientFor(json({
+    replay: { cursor: { afterSequence: 1 }, records: [{ ...record, untrusted: 'extra' }] },
+  }));
   await expect(extraField.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
-  const versioned = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, schemaVersion: 1 }] } }),
-  });
+  const versioned = clientFor(json({
+    replay: { cursor: { afterSequence: 1 }, records: [{ ...record, schemaVersion: 1 }] },
+  }));
   await expect(versioned.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
-  const unsafeText = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary: '/private/fixture-secret' }] } }),
-  });
+  const unsafeText = clientFor(json({
+    replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary: '/private/fixture-secret' }] },
+  }));
   await expect(unsafeText.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
-  const windowsPath = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary: 'C:\\private\\fixture' }] } }),
-  });
-  await expect(windowsPath.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
+  for (const summary of [
+    'C:\\private\\fixture',
+    'C:/private/fixture',
+    'C:private',
+    '\\\\server\\share',
+    'file:///private/fixture',
+  ]) {
+    const path = clientFor(json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary }] } }));
+    await expect(path.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
+  }
 });
 
 it('rejects malformed UTF-8 and a frame larger than 64 KiB before decoding NDJSON records', async () => {
@@ -108,20 +95,42 @@ it('rejects malformed UTF-8 and a frame larger than 64 KiB before decoding NDJSO
   malformed.set(malformedPrefix);
   malformed[malformedPrefix.length] = 0xff;
   malformed.set(malformedSuffix, malformedPrefix.length + 1);
-  const malformedStream = streamClient(ndjson([malformed])).stream({ afterSequence: 0, onMessage: () => undefined });
+  const malformedStream = clientFor(ndjson([malformed])).stream({ afterSequence: 0, onMessage: () => undefined });
   await expect(malformedStream.done).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
   const oversized = { ...record, summary: 'x'.repeat(65 * 1024) };
-  const oversizedStream = streamClient(ndjson([encoder.encode(`${JSON.stringify(oversized)}\n`)])).stream({ afterSequence: 0, onMessage: () => undefined });
+  const oversizedStream = clientFor(ndjson([encoder.encode(`${JSON.stringify(oversized)}\n`)])).stream({ afterSequence: 0, onMessage: () => undefined });
   await expect(oversizedStream.done).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 });
 
-it('maps hostile diagnostics and provider credential values to the stable local error', async () => {
-  const hostileDiagnostic = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({ diagnostic: { code: 'AB8093', message: 'fixture-secret' } }, 503),
+it('accepts a live overflow gap relative to the last delivered record', async () => {
+  const messages = [
+    { ...record, sequence: 2 },
+    { ...record, sequence: 3 },
+    { ...record, sequence: 4 },
+    {
+      earliestAvailableSequence: 8,
+      latestDroppedSequence: 7,
+      requestedAfterSequence: 4,
+      type: 'replay.gap',
+    },
+    { ...record, sequence: 8 },
+    { ...record, sequence: 9 },
+    { ...record, sequence: 10 },
+  ];
+  const bytes = new TextEncoder().encode(`${messages.map((message) => JSON.stringify(message)).join('\n')}\n`);
+  const received: Array<number | 'gap'> = [];
+  const stream = clientFor(ndjson([bytes])).stream({
+    afterSequence: 1,
+    onMessage: (message) => received.push('sequence' in message ? message.sequence : 'gap'),
   });
+
+  await expect(stream.done).resolves.toBeUndefined();
+  expect(received).toEqual([2, 3, 4, 'gap', 8, 9, 10]);
+});
+
+it('maps hostile diagnostics and provider credential values to the stable local error', async () => {
+  const hostileDiagnostic = clientFor(json({ diagnostic: { code: 'AB8093', message: 'fixture-secret' } }, 503));
   await expect(hostileDiagnostic.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
   for (const unsafe of [
@@ -129,31 +138,23 @@ it('maps hostile diagnostics and provider credential values to the stable local 
     { ...record, context: { target: 'ghp_abcdefghijklmnopqrst' } },
     { ...record, details: { event: 'sk-proj-abcdefghijklmnopqrst' } },
   ]) {
-    const client = new LogClient({
-      fetch: async (input) => String(input).includes('/api/project/session')
-        ? session()
-        : json({ replay: { cursor: { afterSequence: 1 }, records: [unsafe] } }),
-    });
+    const client = clientFor(json({ replay: { cursor: { afterSequence: 1 }, records: [unsafe] } }));
     await expect(client.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
   }
 });
 
 it('accepts benign log text containing token, secret, and tokenizer', async () => {
-  const client = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({
-        replay: {
-          cursor: { afterSequence: 1 },
-          records: [{
-            ...record,
-            context: { target: 'Tokenizer' },
-            details: { event: 'Unexpected token' },
-            summary: 'Unexpected token in the secret named Tokenizer.',
-          }],
-        },
-      }),
-  });
+  const client = clientFor(json({
+    replay: {
+      cursor: { afterSequence: 1 },
+      records: [{
+        ...record,
+        context: { target: 'Tokenizer' },
+        details: { event: 'Unexpected token' },
+        summary: 'Unexpected token in the secret named Tokenizer.',
+      }],
+    },
+  }));
 
   await expect(client.replay()).resolves.toMatchObject({ records: [{ summary: 'Unexpected token in the secret named Tokenizer.' }] });
 });
@@ -168,19 +169,15 @@ it('accepts a canonical hook id containing a colon in an otherwise contiguous re
     sequence: 17,
     summary: 'Hook simulation started.',
   };
-  const client = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({
-        replay: {
-          cursor: { afterSequence: 17 },
-          records: [
-            ...Array.from({ length: 16 }, (_value, index) => ({ ...record, sequence: index + 1 })),
-            hookRecord,
-          ],
-        },
-      }),
-  });
+  const client = clientFor(json({
+    replay: {
+      cursor: { afterSequence: 17 },
+      records: [
+        ...Array.from({ length: 16 }, (_value, index) => ({ ...record, sequence: index + 1 })),
+        hookRecord,
+      ],
+    },
+  }));
 
   const replay = await client.replay();
   expect(replay.cursor).toEqual({ afterSequence: 17 });
@@ -188,9 +185,15 @@ it('accepts a canonical hook id containing a colon in an otherwise contiguous re
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
   ]);
   expect(replay.records.at(-1)).toMatchObject(hookRecord);
+
+  const streamed: unknown[] = [];
+  const stream = clientFor(ndjson([new TextEncoder().encode(`${JSON.stringify(hookRecord)}\n`)]))
+    .stream({ afterSequence: 16, onMessage: (message) => streamed.push(message) });
+  await expect(stream.done).resolves.toBeUndefined();
+  expect(streamed).toEqual([hookRecord]);
 });
 
-it('accepts only an initial fragmented gap frame and rejects a gap after a record', async () => {
+it('accepts a fragmented initial gap and rejects a gap with the wrong live cursor', async () => {
   const encoder = new TextEncoder();
   const gap = Object.freeze({
     earliestAvailableSequence: 3,
@@ -199,38 +202,44 @@ it('accepts only an initial fragmented gap frame and rejects a gap after a recor
     type: 'replay.gap' as const,
   });
   const third = Object.freeze({ ...record, sequence: 3 });
-  const illegal = streamClient(ndjson([encoder.encode(`${JSON.stringify(record)}\n${JSON.stringify(gap)}\n${JSON.stringify(third)}\n`)]));
+  const illegal = clientFor(ndjson([encoder.encode(`${JSON.stringify(record)}\n${JSON.stringify(gap)}\n${JSON.stringify(third)}\n`)]));
   await expect(illegal.stream({ afterSequence: 0, onMessage: () => undefined }).done).rejects.toMatchObject({ code: 'AB8093' });
 
   const expected = `${JSON.stringify(gap)}\n${JSON.stringify(third)}\n`;
   const received: unknown[] = [];
-  const fragmented = streamClient(ndjson([encoder.encode(expected.slice(0, 17)), encoder.encode(expected.slice(17))]));
+  const fragmented = clientFor(ndjson([encoder.encode(expected.slice(0, 17)), encoder.encode(expected.slice(17))]));
   await expect(fragmented.stream({ afterSequence: 0, onMessage: (message) => received.push(message) }).done).resolves.toBeUndefined();
   expect(received).toEqual([gap, third]);
 });
 
-it('aborts replay while foreground session acquisition remains pending', async () => {
+it('aborts one replay without cancelling its peer on the shared foreground bootstrap', async () => {
   let replayRequests = 0;
+  let sessionRequests = 0;
   let resolveSession: ((response: Response) => void) | undefined;
-  const client = new LogClient({
-    fetch: async (input) => {
-      if (String(input).includes('/api/project/session')) {
+  const sharedForeground = foreground(async (input) => {
+    if (String(input).includes('/api/project/session')) {
+      sessionRequests += 1;
+      if (resolveSession === undefined) {
         return await new Promise<Response>((resolve) => { resolveSession = resolve; });
       }
-      replayRequests += 1;
-      return json({ replay: { cursor: { afterSequence: 1 }, records: [record] } });
-    },
+      throw new Error('Foreground authentication bootstrapped more than once.');
+    }
+    replayRequests += 1;
+    return json({ replay: { cursor: { afterSequence: 1 }, records: [record] } });
   });
+  const cancelled = new LogClient({ foreground: sharedForeground });
+  const active = new LogClient({ foreground: sharedForeground });
   const controller = new AbortController();
-  const pending = client.replay(0, controller.signal);
+  const cancelledReplay = cancelled.replay(0, controller.signal);
+  const activeReplay = active.replay();
   if (resolveSession === undefined) throw new Error('Expected foreground session acquisition.');
   controller.abort();
   resolveSession(session());
 
-  await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-  await Promise.resolve();
-  await Promise.resolve();
-  expect(replayRequests).toBe(0);
+  await expect(cancelledReplay).rejects.toMatchObject({ name: 'AbortError' });
+  await expect(activeReplay).resolves.toMatchObject({ cursor: { afterSequence: 1 }, records: [{ sequence: 1 }] });
+  expect(sessionRequests).toBe(1);
+  expect(replayRequests).toBe(1);
 });
 
 it('does not finish replay body parsing after its signal aborts', async () => {
@@ -246,9 +255,8 @@ it('does not finish replay body parsing after its signal aborts', async () => {
     ok: true,
     status: 200,
   } as unknown as Response;
-  const client = new LogClient({
-    fetch: async (input) => String(input).includes('/api/project/session') ? session() : replayResponse,
-  });
+  const client = new LogClient({ foreground: foreground(async (input) =>
+    String(input).includes('/api/project/session') ? session() : replayResponse) });
   const controller = new AbortController();
   const pending = client.replay(0, controller.signal);
   await bodyReading;
@@ -277,7 +285,7 @@ it('does not deliver a stream callback after its shared generation signal aborts
     },
     cancel: () => { cancelled = true; },
   }, { highWaterMark: 0 }));
-  const client = streamClient(response);
+  const client = clientFor(response);
   const controller = new AbortController();
   const received: unknown[] = [];
   const stream = client.stream({ afterSequence: 0, onMessage: (message) => received.push(message), signal: controller.signal });
@@ -296,7 +304,7 @@ it('settles a pending stream read when its shared generation signal aborts', asy
   const response = new Response(new ReadableStream<Uint8Array>({
     pull: () => markReading?.(),
   }, { highWaterMark: 0 }));
-  const client = streamClient(response);
+  const client = clientFor(response);
   const controller = new AbortController();
   const stream = client.stream({ afterSequence: 0, onMessage: () => undefined, signal: controller.signal });
   await reading;
@@ -314,20 +322,20 @@ it('settles a pending stream read when its shared generation signal aborts', asy
 });
 
 it('stops processing later records from the same chunk after its callback aborts', async () => {
-  const encoder = new TextEncoder();
-  const second = { ...record, sequence: 2 };
-  const client = streamClient(ndjson([encoder.encode(`${JSON.stringify(record)}\n${JSON.stringify(second)}\n`)]));
+  const bytes = new TextEncoder().encode(`${JSON.stringify(record)}\n${JSON.stringify({ ...record, sequence: 2 })}\n`);
+  const client = clientFor(ndjson([bytes]));
   const controller = new AbortController();
-  const received: unknown[] = [];
+  const received: number[] = [];
   const stream = client.stream({
     afterSequence: 0,
     onMessage: (message) => {
-      received.push(message);
+      if (!('sequence' in message)) return;
+      received.push(message.sequence);
       controller.abort();
     },
     signal: controller.signal,
   });
 
   await expect(stream.done).resolves.toBeUndefined();
-  expect(received).toEqual([record]);
+  expect(received).toEqual([1]);
 });

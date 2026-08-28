@@ -5,10 +5,14 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { npmCliInvocation } from './npm-cli.mjs';
+
 const execFile = promisify(executeFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageRoot = join(repositoryRoot, 'packages', 'agent-bundle');
 const { NODE_PATH: _nodePath, ...productionEnvironment } = process.env;
+const npmCli = npmCliInvocation(productionEnvironment);
+const execNpm = (args, options) => execFile(npmCli.command, [...npmCli.args, ...args], options);
 
 const fail = (message) => {
   throw new Error(`Invalid packed release audit: ${message}`);
@@ -147,13 +151,13 @@ const auditPackedRelease = async () => {
       version: '1.0.0',
     }) + '\n');
 
-    const [{ filename }] = JSON.parse((await execFile('npm', [
+    const [{ filename }] = JSON.parse((await execNpm([
       'pack',
       '--json',
       '--pack-destination', tarballs,
     ], { cwd: packageRoot, env: productionEnvironment })).stdout);
     const tarball = join(tarballs, asString(filename, 'npm pack did not produce a tarball filename'));
-    await execFile('npm', [
+    await execNpm([
       'install',
       '--omit=dev',
       '--ignore-scripts',
@@ -176,7 +180,7 @@ const auditPackedRelease = async () => {
     });
 
     const productManifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
-    const sbom = JSON.parse((await execFile('npm', [
+    const sbom = JSON.parse((await execNpm([
       'sbom',
       '--omit=dev',
       '--sbom-format', 'cyclonedx',

@@ -1,9 +1,11 @@
 // Rslib re-exports its own rspack; installing @rspack/core separately risks
 // version conflicts (https://rslib.rs/api/javascript-api/core).
 import { createRslib, rspack } from '@rslib/core';
+import { readFile, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { isErrno } from '../core/errors.ts';
 import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
 
 export interface RslibVirtualModule {
@@ -27,6 +29,33 @@ interface RslibDependencies {
 }
 
 const entryAnchor = fileURLToPath(import.meta.url);
+
+const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> => {
+  let bytes: string;
+  try {
+    bytes = await readFile(resolve(cwd, 'package.json'), 'utf8');
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return Object.freeze([]);
+    throw error;
+  }
+  const manifest = JSON.parse(bytes) as Record<string, unknown>;
+  const names = new Set<string>();
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+    const dependencies = manifest[field];
+    if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)) continue;
+    for (const name of Object.keys(dependencies)) names.add(name);
+  }
+  const roots = await Promise.all([...names].map(async (name) => {
+    if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/iu.test(name)) return undefined;
+    try {
+      return await realpath(resolve(cwd, 'node_modules', ...name.split('/')));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+  }));
+  return Object.freeze(roots.filter((root): root is string => root !== undefined));
+};
 
 const assertExecutableConfig = (
   entries: readonly RslibEntry[],
@@ -63,6 +92,7 @@ export const buildWithRslib = async (options: {
   if (options.entries.length === 0) {
     return Object.freeze([]);
   }
+  const dependencyRoots = await declaredDependencyRoots(options.cwd);
 
   const rslib = await (dependencies.createRslib ?? createRslib)({
     cwd: options.cwd,
@@ -81,6 +111,11 @@ export const buildWithRslib = async (options: {
           bundle: true,
           dts: false,
           format: 'esm',
+          // Copied projects can share one node_modules tree, so a cache keyed
+          // by this stable library id would give concurrent builds one lock.
+          performance: {
+            buildCache: false,
+          },
           // Rsbuild 2.x deprecated performance.chunkSplit 'all-in-one'; the
           // documented migration is top-level splitChunks: false, which also
           // guards against the node-target splitting default added in v2.2.
@@ -131,7 +166,7 @@ export const buildWithRslib = async (options: {
         path: entry.outputRelativePath,
         sourceInputs: entry.sourceInputs,
       })),
-      ignoredSourcePaths: [entryAnchor, resolve(options.outputRoot, '.agent-bundle-virtual')],
+      ignoredSourcePaths: [entryAnchor, resolve(options.outputRoot, '.agent-bundle-virtual'), ...dependencyRoots],
       projectRoot: options.cwd,
       stats: result.stats,
     });

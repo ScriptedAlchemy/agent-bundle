@@ -123,6 +123,59 @@ export interface EvalRunLifecycleToken {
   readonly runId?: string;
 }
 
+/** One async durable-evidence read is allowed to publish for the active run lifecycle. */
+export interface EvalRunEvidenceReadClaim {
+  readonly signal: AbortSignal;
+  readonly token: EvalRunLifecycleToken;
+}
+
+interface ActiveEvalRunEvidenceRead {
+  readonly claim: EvalRunEvidenceReadClaim;
+  readonly controller: AbortController;
+  readonly parentSignal?: AbortSignal;
+  readonly onParentAbort?: () => void;
+}
+
+/**
+ * Serializes observer, open, and cancellation reads for a run generation.
+ * A later read cancels the prior transport and is the only read allowed to publish.
+ */
+export class EvalRunEvidenceReadCoordinator {
+  #active: ActiveEvalRunEvidenceRead | undefined;
+
+  claim(token: EvalRunLifecycleToken, parentSignal?: AbortSignal): EvalRunEvidenceReadClaim {
+    this.#release(this.#active, true);
+    const controller = new AbortController();
+    const claim = Object.freeze({ signal: controller.signal, token });
+    const onParentAbort = (): void => controller.abort();
+    if (parentSignal?.aborted === true) controller.abort();
+    else parentSignal?.addEventListener('abort', onParentAbort, { once: true });
+    const active: ActiveEvalRunEvidenceRead = { claim, controller, ...(parentSignal === undefined ? {} : { parentSignal, onParentAbort }) };
+    this.#active = active;
+    return claim;
+  }
+
+  complete(claim: EvalRunEvidenceReadClaim): void {
+    if (this.#active?.claim !== claim) return;
+    this.#release(this.#active, false);
+  }
+
+  invalidate(): void {
+    this.#release(this.#active, true);
+  }
+
+  isCurrent(claim: EvalRunEvidenceReadClaim): boolean {
+    return this.#active?.claim === claim && !claim.signal.aborted;
+  }
+
+  #release(active: ActiveEvalRunEvidenceRead | undefined, abort: boolean): void {
+    if (active === undefined) return;
+    if (this.#active === active) this.#active = undefined;
+    active.parentSignal?.removeEventListener('abort', active.onParentAbort!);
+    if (abort) active.controller.abort();
+  }
+}
+
 const maximumTrials = 100;
 
 const noCases: readonly EvalCaseRow[] = Object.freeze([]);

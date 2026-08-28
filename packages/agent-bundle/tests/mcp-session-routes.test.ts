@@ -10,10 +10,10 @@ import {
 import type {
   McpSessionConnectionState,
   McpSessionInspectorConfig,
-  McpSessionTraceEntry,
-  McpSessionTraceListener,
-  McpSessionTraceReplay,
   McpSessionReplayOverflow,
+  McpSessionTraceListener,
+  McpSessionTraceMessage,
+  McpSessionTraceReplay,
   McpSessionTraceSubscription,
 } from '../src/dev/mcp-session/mcp-session-service.ts';
 import {
@@ -33,7 +33,7 @@ class RecordingSession implements McpSessionRouteSession {
   readonly timeoutMs = 5_000;
   readonly calls: unknown[] = [];
   readonly #listeners = new Set<McpSessionTraceListener>();
-  readonly #replay: McpSessionTraceEntry[] = [];
+  readonly #replay: McpSessionTraceMessage[] = [];
   #traceOverflow: McpSessionReplayOverflow | undefined;
   #sequence = 0;
 
@@ -102,12 +102,12 @@ class RecordingSession implements McpSessionRouteSession {
     return Object.freeze({ unsubscribe: () => this.#listeners.delete(listener) });
   }
 
-  publish(entry: McpSessionTraceEntry): void {
+  publish(entry: McpSessionTraceMessage): void {
     this.#sequence += 1;
     for (const listener of this.#listeners) listener(entry);
   }
 
-  queueReplay(entry: McpSessionTraceEntry): void {
+  queueReplay(entry: McpSessionTraceMessage): void {
     this.#sequence += 1;
     this.#replay.push(entry);
   }

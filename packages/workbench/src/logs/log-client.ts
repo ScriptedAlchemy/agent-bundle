@@ -4,14 +4,27 @@ import type {
   DevLogReplay,
   DevLogReplayGap,
 } from '../../../agent-bundle/src/contracts/dev-logs.ts';
-import { devLogKinds, devLogLevels, devLogProducers, hasControlOrSeparators } from '../../../agent-bundle/src/contracts/dev-logs.ts';
-import { parseJsonWithoutDuplicateKeys, type JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import {
+  parseJsonWithoutDuplicateKeys,
+  snapshotStrictJsonValue,
+  type JsonValue,
+} from '../../../agent-bundle/src/contracts/strict-json.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
-import { parseStrictResponseJson, strictJsonSnapshot, isAbortError as isAbort, CodedClientError, exactKeys as hasExactKeys, isRecord } from '../client-helpers.ts';
-import { awaitWithAbort, ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
-import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
+import {
+  awaitWithAbort,
+  ForegroundRouteClientError,
+  type ForegroundRequestAuthority,
+} from '../mcp/mcp-route-client.ts';
 
-export type LogStream = NdjsonStream;
+export interface LogClientOptions {
+  /** Reuses Workbench's single foreground session and invalidation authority. */
+  readonly foreground: ForegroundRequestAuthority;
+}
+
+export interface LogStream {
+  close(): void;
+  readonly done: Promise<void>;
+}
 
 export interface LogStreamOptions {
   readonly afterSequence: number;
@@ -20,24 +33,52 @@ export interface LogStreamOptions {
   readonly signal?: AbortSignal;
 }
 
-export class LogClientError extends CodedClientError {
+export class LogClientError extends Error {
+  readonly code: string;
+
   constructor(code: string, message: string) {
-    super('LogClientError', code, message);
+    super(message);
+    this.name = 'LogClientError';
+    this.code = code;
   }
 }
 
 const maximumLogFrameBytes = 64 * 1024;
 const maximumSummaryLength = 2_048;
 const safeContextKeys = new Set(['buildId', 'diagnosticCode', 'epochId', 'hookId', 'projectId', 'runId', 'sessionId', 'target']);
+const devLogProducers = Object.freeze(['project', 'build', 'diagnostic', 'mcp', 'hook', 'eval', 'playground'] as const);
+const devLogLevels = Object.freeze(['debug', 'info', 'warning', 'error'] as const);
+const devLogKinds = Object.freeze({
+  build: Object.freeze(['artifact.available', 'build.failed', 'build.started']),
+  diagnostic: Object.freeze([
+    'artifact.available.diagnostic', 'artifact.status.diagnostic', 'build.failed.diagnostic', 'build.started.diagnostic',
+    'invalidation.diagnostic', 'runtime.event.diagnostic', 'source.changed.diagnostic', 'source.status.diagnostic',
+  ]),
+  eval: Object.freeze(['eval.run.completed', 'eval.run.failed', 'eval.run.started']),
+  hook: Object.freeze(['hook.simulate.completed', 'hook.simulate.failed', 'hook.simulate.started']),
+  mcp: Object.freeze(['mcp.logging', 'mcp.stderr', 'mcp.operation.failed', 'mcp.operation.started', 'mcp.operation.succeeded']),
+  playground: Object.freeze(['playground.event.appended']),
+  project: Object.freeze([
+    'artifact.status', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation', 'project.events.replay-gap',
+    'project.invalid-source', 'project.load', 'project.prepared', 'runtime.event', 'source.changed', 'source.status',
+  ]),
+});
 const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isDate = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+const hasExactKeys = (value: unknown, keys: readonly string[]): value is Readonly<Record<string, unknown>> =>
+  isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+const hasControlOrSeparators = (value: string): boolean => [...value].some((character) =>
+  character === '/' || character === '\\' || character <= '\u001F' || character === '\u007F');
 const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
 const isSafeWireText = (value: unknown, maximum = maximumLogFrameBytes): value is string => {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || redactEvalCredentialText(value) !== value) return false;
   const withoutProjectPaths = value.replace(safeProjectRelativePath, '');
-  return !hasControlOrSeparators(withoutProjectPaths) && !/(?:file:|[A-Za-z]:[\\/]|\\\\)/iu.test(withoutProjectPaths);
+  return !hasControlOrSeparators(withoutProjectPaths) &&
+    !/(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu.test(withoutProjectPaths);
 };
 const isSafeDetailKey = (value: string): boolean =>
   !isCredentialKey(value) && !hasControlOrSeparators(value);
@@ -64,12 +105,18 @@ const isGap = (value: unknown): value is DevLogReplayGap => hasExactKeys(value, 
   safeInteger(value.latestDroppedSequence) && value.earliestAvailableSequence === value.latestDroppedSequence + 1 &&
   value.requestedAfterSequence < value.earliestAvailableSequence;
 const invalid = (): LogClientError => new LogClientError('AB8093', 'Dev Log route returned an invalid response.');
-const rethrowOrInvalid = (error: unknown, signal?: AbortSignal | null): never => {
-  if (error instanceof LogClientError || isAbort(error) || signal?.aborted) throw error;
-  throw invalid();
+const snapshot = (value: unknown): JsonValue => {
+  try { return snapshotStrictJsonValue(value); }
+  catch { throw invalid(); }
 };
-const snapshot = (value: unknown): JsonValue => strictJsonSnapshot(value, invalid);
-const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalid);
+const parseResponseJson = (bytes: Uint8Array): JsonValue => {
+  try { return snapshot(parseJsonWithoutDuplicateKeys(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); }
+  catch { throw invalid(); }
+};
+const parseMessage = (line: string): JsonValue => {
+  try { return snapshot(parseJsonWithoutDuplicateKeys(line)); }
+  catch { throw invalid(); }
+};
 const contiguous = (records: readonly DevLogRecord[], afterSequence: number): boolean => records.every((record, index) =>
   record.sequence === afterSequence + index + 1);
 
@@ -84,8 +131,9 @@ const replayFor = (value: unknown, afterSequence: number): DevLogReplay => {
     (Object.hasOwn(rawReplay, 'gap') && !isGap(rawReplay.gap))
   ) throw invalid();
   const records = rawReplay.records;
-  const rawGap: unknown = Object.hasOwn(rawReplay, 'gap') ? rawReplay.gap : undefined;
-  const gap = isGap(rawGap) ? rawGap : undefined;
+  const gap: DevLogReplayGap | undefined = Object.hasOwn(rawReplay, 'gap') && isGap(rawReplay.gap)
+    ? rawReplay.gap as unknown as DevLogReplayGap
+    : undefined;
   if (
     !contiguous(records, gap === undefined ? afterSequence : gap.earliestAvailableSequence - 1) ||
     (gap !== undefined && gap.requestedAfterSequence !== afterSequence) ||
@@ -98,17 +146,17 @@ const replayFor = (value: unknown, afterSequence: number): DevLogReplay => {
     records: Object.freeze(records.map((record) => Object.freeze({
       ...record,
       context: Object.freeze({ ...record.context }),
+      details: record.details,
     }))),
   });
 };
 
 const messageFor = (line: string): DevLogMessage => {
-  let parsed: JsonValue;
-  try { parsed = snapshot(parseJsonWithoutDuplicateKeys(line)); }
-  catch { throw invalid(); }
+  const parsed = parseMessage(line);
   if (isDevRecord(parsed) || isGap(parsed)) return parsed;
   throw invalid();
 };
+const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
 const diagnosticMessages = new Map<string, string>([
   ['AB8090', 'Dev Log route path is not valid.'],
   ['AB8091', 'Dev Log cursor is not valid.'],
@@ -124,16 +172,10 @@ const diagnosticFor = (value: unknown): LogClientError => {
 
 /** Same-origin cursor client for redacted production logs; it has no raw attachment API. */
 export class LogClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: WorkbenchClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message) => new LogClientError(code, message),
-      fallbackCode: 'AB8093',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Dev Log',
-    });
+  constructor(options: LogClientOptions) {
+    this.#foreground = options.foreground;
   }
 
   async replay(afterSequence = 0, signal?: AbortSignal): Promise<DevLogReplay> {
@@ -143,7 +185,14 @@ export class LogClient {
   }
 
   stream(options: LogStreamOptions): LogStream {
-    return abortableNdjsonStream(options.signal, (signal) => this.#stream(options, signal));
+    const controller = new AbortController();
+    const forwardAbort = (): void => controller.abort();
+    options.signal?.addEventListener('abort', forwardAbort, { once: true });
+    if (options.signal?.aborted) controller.abort();
+    return Object.freeze({
+      close: () => controller.abort(),
+      done: this.#stream(options, controller.signal).finally(() => options.signal?.removeEventListener('abort', forwardAbort)),
+    });
   }
 
   async #json(path: string, init: RequestInit): Promise<JsonValue> {
@@ -152,18 +201,21 @@ export class LogClient {
       const bytes = await awaitWithAbort(init.signal, () => response.arrayBuffer());
       return parseResponseJson(new Uint8Array(bytes));
     } catch (error) {
-      return rethrowOrInvalid(error, init.signal);
+      if (error instanceof LogClientError || isAbort(error) || init.signal?.aborted) throw error;
+      throw invalid();
     }
   }
 
   async #response(path: string, init: RequestInit): Promise<Response> {
     try {
-      const response = await this.#transport.request(path, init);
+      const response = await this.#foreground.protectedRequest(path, init);
       if (response.ok) return response;
       const bytes = await awaitWithAbort(init.signal, () => response.arrayBuffer());
       throw diagnosticFor(parseResponseJson(new Uint8Array(bytes)));
     } catch (error) {
-      return rethrowOrInvalid(error, init.signal);
+      if (error instanceof LogClientError || isAbort(error) || init.signal?.aborted) throw error;
+      if (error instanceof ForegroundRouteClientError) throw new LogClientError(error.code, error.message);
+      throw invalid();
     }
   }
 
@@ -174,28 +226,66 @@ export class LogClient {
       if (isAbort(error) || signal.aborted) return;
       throw error;
     }
+    if (response.body === null) throw invalid();
+    const reader = response.body.getReader();
+    const cancelReader = (): void => { void reader.cancel().catch(() => undefined); };
+    signal.addEventListener('abort', cancelReader, { once: true });
+    if (signal.aborted) cancelReader();
     const decoder = new TextDecoder('utf-8', { fatal: true });
+    const frameParts: Uint8Array[] = [];
+    let frameBytes = 0;
     let expectedSequence = options.afterSequence + 1;
-    let receivedMessage = false;
+    const append = (part: Uint8Array): void => {
+      if (frameBytes + part.byteLength > maximumLogFrameBytes) throw invalid();
+      if (part.byteLength > 0) frameParts.push(part);
+      frameBytes += part.byteLength;
+    };
+    const consumeFrame = (): void => {
+      const bytes = new Uint8Array(frameBytes);
+      let offset = 0;
+      for (const part of frameParts) {
+        bytes.set(part, offset);
+        offset += part.byteLength;
+      }
+      frameParts.length = 0;
+      frameBytes = 0;
+      if (signal.aborted) return;
+      const line = decoder.decode(bytes).trim();
+      if (line.length === 0) return;
+      const message = messageFor(line);
+      if ('sequence' in message) {
+        if (message.sequence !== expectedSequence) throw invalid();
+        expectedSequence += 1;
+      } else {
+        if (message.requestedAfterSequence !== expectedSequence - 1) throw invalid();
+        expectedSequence = message.earliestAvailableSequence;
+      }
+      options.onMessage(message);
+    };
     try {
-      await readNdjsonResponseFrames(response, (bytes) => {
-        const line = decoder.decode(bytes).trim();
-        if (line.length === 0) return;
-        const message = messageFor(line);
-        if ('sequence' in message) {
-          if (message.sequence !== expectedSequence) throw invalid();
-          expectedSequence += 1;
-        } else {
-          if (receivedMessage || message.requestedAfterSequence !== options.afterSequence) throw invalid();
-          expectedSequence = message.earliestAvailableSequence;
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (signal.aborted) return;
+        let start = 0;
+        for (let index = 0; index < chunk.value.byteLength; index += 1) {
+          if (chunk.value[index] !== 0x0a) continue;
+          append(chunk.value.subarray(start, index));
+          consumeFrame();
+          if (signal.aborted) return;
+          start = index + 1;
         }
-        receivedMessage = true;
-        options.onMessage(message);
-      }, { invalidFrameError: invalid, maxFrameBytes: maximumLogFrameBytes, signal });
+        append(chunk.value.subarray(start));
+      }
+      if (frameBytes > 0) throw invalid();
     } catch (error) {
       if (isAbort(error) || signal.aborted) return;
       if (error instanceof LogClientError) throw error;
       throw invalid();
+    } finally {
+      signal.removeEventListener('abort', cancelReader);
+      await reader.cancel().catch(() => undefined);
     }
   }
+
 }

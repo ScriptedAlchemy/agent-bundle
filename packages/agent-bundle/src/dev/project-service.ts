@@ -1,26 +1,35 @@
-import { lstat, readdir, realpath } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { discoverProject } from '../config/discover.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
 import { loadConfig } from '../config/load.ts';
-import { normalizeProject } from '../config/normalize.ts';
+import { normalizeEvalConfig } from '../eval/config.ts';
+import {
+  normalizeProject,
+} from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
-import { mapConcurrent } from '../core/async.ts';
-import { hasErrors, deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
-import { digest, sha256File } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
-import { isRecord } from '../core/strict-json.ts';
+import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
+import { digest } from '../core/digest.ts';
 import {
   createProjectContext,
   type ProjectContext,
   type ProjectSourceSnapshotInput,
 } from '../core/project-context.ts';
-import type { NormalizedPlugin } from '../core/types.ts';
-import type { SourceStatus } from './types.ts';
+import type {
+  AgentBundleConfig,
+  AgentBundleDevConfig,
+  AgentBundleDevRuntimeConfig,
+  NormalizedMcpApp,
+  NormalizedMcpServer,
+  NormalizedPlugin,
+} from '../core/types.ts';
+import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
+import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
 
-export type ProjectCommand = 'build' | 'inspect' | 'validate';
+export type ProjectCommand = 'build' | 'dev' | 'inspect' | 'validate';
 
 export interface ProjectServiceLogger {
   log?(event: string, details: Readonly<Record<string, unknown>>): void;
@@ -28,6 +37,7 @@ export interface ProjectServiceLogger {
 
 export interface ProjectServiceOptions {
   readonly configPath?: string;
+  readonly includeDevRuntime?: boolean;
   readonly logger?: ProjectServiceLogger;
   readonly mode?: string;
   readonly outputRoots?: readonly string[];
@@ -38,7 +48,11 @@ export interface ProjectServiceOptions {
 
 export interface PreparedProject {
   readonly configPath: string;
+  /** The validated development-only Agent API flag from the prepared configuration. */
+  readonly devAgentApiEnabled?: boolean;
   readonly diagnostics: readonly Diagnostic[];
+  readonly devRuntime?: DevRuntimePreparedProject;
+  readonly devRuntimeDiagnostic?: Diagnostic;
   readonly model?: NormalizedPlugin;
   readonly outputRoots: readonly string[];
   readonly projectContext?: ProjectContext;
@@ -61,6 +75,9 @@ const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnos
     .map((diagnostic) => Object.freeze({ ...diagnostic })),
 );
 
+const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
+  diagnostics.some((diagnostic) => diagnostic.severity === 'error');
+
 const log = (
   logger: ProjectServiceLogger | undefined,
   event: string,
@@ -70,13 +87,11 @@ const log = (
 };
 
 const errorCode = (error: unknown): string =>
-  isRecord(error) && typeof error.code === 'string'
+  typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
     ? error.code
     : error instanceof Error
       ? error.name
       : typeof error;
-
-const directoryWalkLimit = 32;
 
 export type ProjectPathApi = Pick<typeof import('node:path').win32, 'isAbsolute' | 'relative' | 'resolve' | 'sep'>;
 
@@ -107,15 +122,12 @@ const relativeSourcePath = (root: string, source: string): string => {
   return components.join('/');
 };
 
-const sourceInput = async (
-  root: string,
-  source: string,
-): Promise<ProjectSourceSnapshotInput> => {
+const sourceInput = async (root: string, source: string): Promise<ProjectSourceSnapshotInput> => {
   try {
     const resolvedSource = await realpath(source);
     const path = relativeSourcePath(root, resolvedSource);
     return Object.freeze({
-      sha256: await sha256File(resolvedSource),
+      sha256: createHash('sha256').update(await readFile(resolvedSource)).digest('hex'),
       path,
     });
   } catch (error) {
@@ -124,6 +136,9 @@ const sourceInput = async (
     return Object.freeze({ error: errorCode(error), path });
   }
 };
+
+const isNotFound = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 
 const physicalOutputRoot = async (
   root: string,
@@ -137,7 +152,7 @@ const physicalOutputRoot = async (
     try {
       entry = await lstat(candidate);
     } catch (error) {
-      if (!isErrno(error, 'ENOENT')) throw error;
+      if (!isNotFound(error)) throw error;
       return join(physical, ...parts.slice(index));
     }
     if (entry.isSymbolicLink()) {
@@ -196,18 +211,16 @@ const sourcePaths = async (root: string, outputRoots: readonly string[]): Promis
 
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });
-    const nested: string[] = [];
     for (const entry of entries) {
       const source = join(directory, entry.name);
       if (isProjectPathIgnored(rules, root, source)) continue;
       if (outputRoots.some((outputRoot) => containedPathComponents(outputRoot, source) !== undefined)) continue;
       if (entry.isDirectory()) {
-        nested.push(source);
+        await visit(source);
         continue;
       }
       if (entry.isFile()) paths.push(source);
     }
-    await mapConcurrent(nested, directoryWalkLimit, visit);
   };
 
   await visit(root);
@@ -227,9 +240,8 @@ export const snapshotProjectSource = async (
   const resolvedConfigPath = await realpath(requestedConfigPath);
   relativeSourcePath(resolvedRoot, resolvedConfigPath);
   const sources = new Set<string>([resolvedConfigPath, ...(await sourcePaths(resolvedRoot, resolvedOutputRoots))]);
-  const inputs = Object.freeze((await Promise.all(
-    [...sources].map((source) => sourceInput(resolvedRoot, source)),
-  )).sort((left, right) => left.path.localeCompare(right.path)));
+  const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(resolvedRoot, source))))
+    .sort((left, right) => left.path.localeCompare(right.path)));
   return Object.freeze({
     inputs,
     revision: digest({ inputs }),
@@ -262,6 +274,208 @@ const sourceStatus = (
   state: hasErrors(diagnostics) ? 'invalid' : 'ready',
 });
 
+const sourceDiagnostic = (message: string, sourcePath: string): Diagnostic => Object.freeze({
+  code: 'AB8200',
+  message,
+  severity: 'error',
+  sourcePath,
+});
+
+const configExtensionFiniteJsonDiagnosticMessage = 'A registered config extension must contain strict finite JSON data.';
+
+const isConfigExtensionFiniteJsonError = (error: unknown): boolean =>
+  error instanceof Error && error.message.startsWith('AB4500:');
+
+const runtimeDeclaration = (
+  include: boolean,
+  config: unknown,
+  configPath: string,
+): Readonly<{ declaration?: AgentBundleDevRuntimeConfig; diagnostic?: Diagnostic }> => {
+  if (!include) return Object.freeze({});
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return Object.freeze({ diagnostic: sourceDiagnostic('Development configuration must be an object.', configPath) });
+  }
+  const dev = Object.getOwnPropertyDescriptor(config, 'dev');
+  if (dev === undefined) return Object.freeze({});
+  if (!('value' in dev) || typeof dev.value !== 'object' || dev.value === null || Array.isArray(dev.value)) {
+    return Object.freeze({ diagnostic: sourceDiagnostic('Development configuration must be an object.', configPath) });
+  }
+  const runtime = Object.getOwnPropertyDescriptor(dev.value, 'runtime');
+  if (runtime === undefined) return Object.freeze({});
+  if (!('value' in runtime) || typeof runtime.value !== 'object' || runtime.value === null || Array.isArray(runtime.value)) {
+    return Object.freeze({ diagnostic: sourceDiagnostic('Development runtime provider must be a nonempty project-relative module path.', configPath) });
+  }
+  const provider = Object.getOwnPropertyDescriptor(runtime.value, 'provider');
+  if (provider === undefined || !('value' in provider) || typeof provider.value !== 'string' || provider.value.trim().length === 0) {
+    return Object.freeze({ diagnostic: sourceDiagnostic('Development runtime provider must be a nonempty project-relative module path.', configPath) });
+  }
+  return Object.freeze({ declaration: Object.freeze({ provider: provider.value }) });
+};
+
+const agentApiEnabled = (config: AgentBundleConfig): boolean => {
+  const dev = config.dev;
+  if (dev === undefined) return false;
+  if (typeof dev !== 'object' || dev === null || Array.isArray(dev)) {
+    throw new TypeError('Configuration field "dev" must be an object when provided.');
+  }
+  const value = (dev as AgentBundleDevConfig).agentApi;
+  if (value !== undefined && typeof value !== 'boolean') {
+    throw new TypeError('Configuration field "dev.agentApi" must be a boolean when provided.');
+  }
+  return value === true;
+};
+
+const cloneJsonSnapshot = (value: unknown, ancestors = new Set<object>()): JsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    throw new TypeError('numbers must be finite');
+  }
+  if (typeof value !== 'object' || ancestors.has(value)) throw new TypeError('value must be a finite JSON tree');
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const copy: JsonValue[] = [];
+      for (const key of Reflect.ownKeys(value)) {
+        if (typeof key !== 'string' || (key !== 'length' && (!/^(0|[1-9]\d*)$/u.test(key) || Number(key) >= value.length))) {
+          throw new TypeError('arrays must contain only indexed values');
+        }
+      }
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !('value' in descriptor)) throw new TypeError('arrays cannot contain accessors or holes');
+        copy.push(cloneJsonSnapshot(descriptor.value, ancestors));
+      }
+      return copy;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) throw new TypeError('objects must be plain');
+    const copy: Record<string, JsonValue> = {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') throw new TypeError('objects cannot contain symbol properties');
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !('value' in descriptor)) throw new TypeError('objects cannot contain accessors');
+      copy[key] = cloneJsonSnapshot(descriptor.value, ancestors);
+    }
+    return copy;
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
+const appMetadata = (value: unknown): JsonObject => {
+  const snapshot = cloneJsonSnapshot(value);
+  if (typeof snapshot !== 'object' || snapshot === null || Array.isArray(snapshot)) {
+    throw new TypeError('MCP App metadata must be a JSON object');
+  }
+  return freezeJsonValue(snapshot) as JsonObject;
+};
+
+const stringRecord = (value: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined =>
+  value === undefined ? undefined : Object.freeze({ ...value });
+
+const preparedMcpServer = (server: NormalizedMcpServer): DevRuntimePreparedMcpServer => Object.freeze({
+  ...(server.args === undefined ? {} : { args: Object.freeze([...server.args]) }),
+  ...(server.command === undefined ? {} : { command: server.command }),
+  ...(server.cwd === undefined ? {} : { cwd: server.cwd }),
+  ...(server.env === undefined ? {} : { env: stringRecord(server.env) }),
+  ...(server.headers === undefined ? {} : { headers: stringRecord(server.headers) }),
+  id: server.id,
+  name: server.name,
+  ...(server.source === undefined ? {} : { source: server.source }),
+  targets: Object.freeze([...server.targets]),
+  transport: server.transport,
+  ...(server.url === undefined ? {} : { url: server.url }),
+});
+
+const preparedMcpApp = (app: NormalizedMcpApp): DevRuntimePreparedMcpApp => Object.freeze({
+  ...(app._meta === undefined ? {} : { _meta: appMetadata(app._meta) }),
+  id: app.id,
+  name: app.name,
+  resourceUri: app.resourceUri,
+  serverId: app.serverId,
+  serverName: app.serverName,
+  source: app.source,
+  targets: Object.freeze([...app.targets]),
+  ...(app.template === undefined ? {} : { template: app.template }),
+});
+
+const preparedRuntime = (
+  declaration: AgentBundleDevRuntimeConfig,
+  model: NormalizedPlugin,
+  revision: string,
+): DevRuntimePreparedProject => Object.freeze({
+  apps: Object.freeze((model.mcpApps ?? []).map(preparedMcpApp)),
+  provider: declaration.provider,
+  servers: Object.freeze(model.mcpServers.map(preparedMcpServer)),
+  sourceRevision: revision,
+});
+
+const configWithRuntimeMetadataRemoved = (config: Record<string, unknown>): Readonly<{
+  changed: boolean;
+  config: Record<string, unknown>;
+}> => {
+  const mcp = Object.getOwnPropertyDescriptor(config, 'mcp');
+  if (mcp === undefined || !('value' in mcp) || typeof mcp.value !== 'object' || mcp.value === null || Array.isArray(mcp.value)) {
+    return Object.freeze({ changed: false, config });
+  }
+  const servers = Object.getOwnPropertyDescriptor(mcp.value, 'servers');
+  if (servers === undefined || !('value' in servers) || typeof servers.value !== 'object' || servers.value === null || Array.isArray(servers.value)) {
+    return Object.freeze({ changed: false, config });
+  }
+
+  const sanitizedServers: Record<string, unknown> = {};
+  let changed = false;
+  for (const [name, server] of Object.entries(servers.value)) {
+    if (typeof server !== 'object' || server === null || Array.isArray(server)) {
+      sanitizedServers[name] = server;
+      continue;
+    }
+    const apps = Object.getOwnPropertyDescriptor(server, 'apps');
+    if (apps === undefined || !('value' in apps) || typeof apps.value !== 'object' || apps.value === null || Array.isArray(apps.value)) {
+      sanitizedServers[name] = server;
+      continue;
+    }
+    const sanitizedApps: Record<string, unknown> = {};
+    for (const [appName, app] of Object.entries(apps.value)) {
+      if (typeof app !== 'object' || app === null || Array.isArray(app)) {
+        sanitizedApps[appName] = app;
+        continue;
+      }
+      const meta = Object.getOwnPropertyDescriptor(app, '_meta');
+      if (meta === undefined || ('value' in meta && (() => {
+        try {
+          appMetadata(meta.value);
+          return true;
+        } catch {
+          return false;
+        }
+      })())) {
+        sanitizedApps[appName] = app;
+        continue;
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(app);
+      delete descriptors._meta;
+      sanitizedApps[appName] = Object.defineProperties({}, descriptors);
+      changed = true;
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(server);
+    descriptors.apps = { configurable: true, enumerable: true, value: sanitizedApps, writable: true };
+    sanitizedServers[name] = Object.defineProperties({}, descriptors);
+  }
+  if (!changed) return Object.freeze({ changed: false, config });
+  const mcpDescriptors = Object.getOwnPropertyDescriptors(mcp.value);
+  mcpDescriptors.servers = { configurable: true, enumerable: true, value: sanitizedServers, writable: true };
+  const configDescriptors = Object.getOwnPropertyDescriptors(config);
+  configDescriptors.mcp = { configurable: true, enumerable: true, value: Object.defineProperties({}, mcpDescriptors), writable: true };
+  return Object.freeze({
+    changed: true,
+    config: Object.defineProperties({}, configDescriptors),
+  });
+};
+
 const preparedProject = (
   configPath: string,
   snapshot: ProjectSourceSnapshot,
@@ -271,23 +485,28 @@ const preparedProject = (
   registry: TargetRegistry,
   root: string,
   source: SourceStatus,
-  model: NormalizedPlugin | undefined,
-  snapshotSource: (() => Promise<ProjectSourceSnapshot>) | undefined,
+  model?: NormalizedPlugin,
+  devRuntime?: DevRuntimePreparedProject,
+  devRuntimeDiagnostic?: Diagnostic,
+  devAgentApiEnabled?: boolean,
 ): PreparedProject => Object.freeze({
   configPath,
+  ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
   diagnostics,
   ...(model === undefined ? {} : { model }),
+  ...(devRuntime === undefined ? {} : { devRuntime }),
+  ...(devRuntimeDiagnostic === undefined ? {} : { devRuntimeDiagnostic }),
   outputRoots,
   ...(projectContext === undefined ? {} : { projectContext }),
   registry,
   root,
-  ...(snapshotSource === undefined ? {} : { snapshotSource }),
   source,
 });
 
-export type ProjectDiagnosticCode = 'AB7000' | 'AB7001' | 'AB7002' | 'AB7003' | 'AB7004';
+export type ProjectDiagnosticCode = 'AB4500' | 'AB7000' | 'AB7001' | 'AB7002' | 'AB7003' | 'AB7004';
 
 export const projectDiagnosticRecoveries: Readonly<Record<ProjectDiagnosticCode, string>> = Object.freeze({
+  AB4500: 'Correct the project configuration field named by this diagnostic, then inspect again.',
   AB7000: 'Fix the Agent Bundle configuration and source files, then inspect again.',
   AB7001: 'Fix normalized project configuration and source references, then inspect again.',
   AB7002: 'Ensure the project root and configured output roots are readable and remain inside the project root, then inspect again.',
@@ -315,7 +534,6 @@ const invalidPreparedProject = (options: {
   readonly registry: TargetRegistry;
   readonly root: string;
   readonly snapshot?: ProjectSourceSnapshot;
-  readonly snapshotSource?: () => Promise<ProjectSourceSnapshot>;
 }): PreparedProject => {
   const snapshot = options.snapshot ?? emptySnapshot();
   return preparedProject(
@@ -327,8 +545,6 @@ const invalidPreparedProject = (options: {
     options.registry,
     options.root,
     sourceStatus(options.diagnostics, snapshot.revision),
-    undefined,
-    options.snapshotSource,
   );
 };
 
@@ -369,8 +585,6 @@ export class ProjectService {
     const requestedConfigPath = resolve(requestedRoot, this.#options.configPath ?? 'agent-bundle.config.ts');
     let root = requestedRoot;
     let outputRoots: readonly string[] = Object.freeze([]);
-    const snapshotSourceFor = (configPath: string): (() => Promise<ProjectSourceSnapshot>) =>
-      () => snapshotProjectSource(root, configPath, outputRoots);
     const failedPreparation = (
       code: ProjectDiagnosticCode,
       message: string,
@@ -391,7 +605,6 @@ export class ProjectService {
         registry,
         root,
         ...(snapshot === undefined ? {} : { snapshot }),
-        snapshotSource: snapshotSourceFor(configPath),
       });
     };
     try {
@@ -405,6 +618,7 @@ export class ProjectService {
 
     let loaded;
     let discovered;
+    let devAgentApiEnabled: boolean;
     try {
       loaded = await loadConfig({
         command,
@@ -413,6 +627,26 @@ export class ProjectService {
         root: requestedRoot,
         targets: this.#options.targets,
       });
+      devAgentApiEnabled = agentApiEnabled(loaded.config);
+      // Eval runs are generated records, even when a project deliberately
+      // stores them outside the conventional .agent-bundle directory.  Keep
+      // the resolved configuration as the single source of that ownership.
+      let evalRunsDir: string | undefined;
+      try {
+        evalRunsDir = normalizeEvalConfig(loaded.config.evals).runsDir;
+      } catch {
+        // EvalService owns malformed eval configuration diagnostics.  Do not
+        // replace the established project-source error contract with one.
+      }
+      if (evalRunsDir !== undefined) {
+        const evalOutputRoots = await resolveOutputRoots(
+          requestedRoot,
+          root,
+          [evalRunsDir],
+        );
+        outputRoots = Object.freeze([...new Set([...outputRoots, ...evalOutputRoots])]
+          .sort((left, right) => left.localeCompare(right)));
+      }
       discovered = await discoverProject(root, loaded.config);
     } catch {
       const snapshot = await snapshotForLoadFailure(root, configPath, outputRoots);
@@ -425,10 +659,17 @@ export class ProjectService {
     } catch {
       return failedPreparation('AB7003', 'Unable to snapshot project source.', loaded.configPath, 'project.invalid-source');
     }
-    const snapshotSource = snapshotSourceFor(loaded.configPath);
+    const runtime = runtimeDeclaration(this.#options.includeDevRuntime === true, loaded.config, loaded.configPath);
+    const runtimeMetadata = runtime.declaration === undefined
+      ? Object.freeze({ changed: false, config: loaded.config })
+      : configWithRuntimeMetadataRemoved(loaded.config as Record<string, unknown>);
+    const preparedLoaded = runtimeMetadata.config === loaded.config
+      ? loaded
+      : { ...loaded, config: runtimeMetadata.config as AgentBundleConfig };
+    const supplementalMetadataFailure = runtimeMetadata.changed;
     let sourceDiagnostics: readonly Diagnostic[];
     try {
-      sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered, registry));
+      sourceDiagnostics = freezeDiagnostics(validateSource(preparedLoaded, discovered, registry));
     } catch {
       return failedPreparation(
         'AB7001',
@@ -441,24 +682,26 @@ export class ProjectService {
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-      return preparedProject(
-        loaded.configPath,
-        snapshot,
-        sourceDiagnostics,
-        outputRoots,
-        undefined,
-        registry,
-        root,
-        source,
-        undefined,
-        snapshotSource,
-      );
+      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source);
     }
 
     let model: NormalizedPlugin;
     try {
-      model = await normalizeProject(loaded, discovered, registry);
-    } catch {
+      model = await normalizeProject(
+        preparedLoaded,
+        discovered,
+        registry,
+      );
+    } catch (error) {
+      if (isConfigExtensionFiniteJsonError(error)) {
+        return failedPreparation(
+          'AB4500',
+          configExtensionFiniteJsonDiagnosticMessage,
+          loaded.configPath,
+          'project.prepared',
+          snapshot,
+        );
+      }
       return failedPreparation(
         'AB7001',
         'Unable to normalize project source.',
@@ -514,6 +757,18 @@ export class ProjectService {
       root,
       targets: model.targets.map((target) => target.name),
     });
+    let devRuntime: DevRuntimePreparedProject | undefined;
+    let devRuntimeDiagnostic = runtime.diagnostic;
+    if (runtime.declaration !== undefined && !supplementalMetadataFailure) {
+      try {
+        devRuntime = preparedRuntime(runtime.declaration, model, snapshot.revision);
+      } catch {
+        devRuntimeDiagnostic = sourceDiagnostic('Development runtime MCP App metadata must contain only finite JSON data.', loaded.configPath);
+      }
+    }
+    if (supplementalMetadataFailure) {
+      devRuntimeDiagnostic = sourceDiagnostic('Development runtime MCP App metadata must contain only finite JSON data.', loaded.configPath);
+    }
     return preparedProject(
       loaded.configPath,
       snapshot,
@@ -524,7 +779,9 @@ export class ProjectService {
       root,
       source,
       model,
-      snapshotSource,
+      devRuntime,
+      devRuntimeDiagnostic,
+      devAgentApiEnabled,
     );
   }
 }

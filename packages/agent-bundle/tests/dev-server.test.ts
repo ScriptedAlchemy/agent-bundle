@@ -16,8 +16,8 @@ import {
   type ProjectStatus,
 } from '../src/dev/index.ts';
 import { ArtifactInspectionServiceError } from '../src/dev/artifacts/artifact-inspection-service.ts';
+import type { EvalRouteService } from '../src/dev/eval/eval-routes.ts';
 import type { McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
-import { eventually, readToEnd, within } from './support/eventually.ts';
 
 const status = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -76,8 +76,18 @@ class FailingStartCoordinator extends RecordingCoordinator {
   }
 }
 
-const readReplay = (url: string, lastEventId: string, expectedSequence = 2): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  const request = httpGet(`${url}/api/project/events`, { headers: { 'last-event-id': lastEventId } }, (response) => {
+const foregroundCookie = async (url: string): Promise<string> => {
+  const response = await fetch(`${url}/api/project/session`, { headers: { origin: url } });
+  if (!response.ok) throw new Error(`Foreground session bootstrap failed with HTTP ${response.status}.`);
+  const cookie = response.headers.get('set-cookie')?.split(';', 1)[0];
+  if (cookie === undefined || cookie.length === 0) throw new Error('Foreground session bootstrap did not return a cookie.');
+  return cookie;
+};
+
+const readReplay = async (url: string, lastEventId: string, expectedSequence = 2): Promise<string> => {
+  const cookie = await foregroundCookie(url);
+  return new Promise((resolvePromise, rejectPromise) => {
+  const request = httpGet(`${url}/api/project/events`, { headers: { cookie, 'last-event-id': lastEventId, origin: url } }, (response) => {
     let received = '';
     response.setEncoding('utf8');
     response.on('data', (chunk: string) => {
@@ -90,13 +100,35 @@ const readReplay = (url: string, lastEventId: string, expectedSequence = 2): Pro
     response.on('error', rejectPromise);
   });
   request.on('error', rejectPromise);
-});
+  });
+};
+
+const readReplayAfter = async (url: string, after: string, expectedSequence = 2): Promise<string> => {
+  const cookie = await foregroundCookie(url);
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = httpGet(`${url}/api/project/events?after=${encodeURIComponent(after)}`, {
+      headers: { cookie, origin: url },
+    }, (response) => {
+      let received = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => {
+        received += chunk;
+        if (received.includes(`id: ${expectedSequence}\n`)) {
+          response.destroy();
+          resolvePromise(received);
+        }
+      });
+      response.on('error', rejectPromise);
+    });
+    request.on('error', rejectPromise);
+  });
+};
 
 const readRaw = (
   url: string,
   path: string,
   headers?: Readonly<Record<string, string>>,
-): Promise<Readonly<{ readonly body: string; readonly status: number }>> => {
+): Promise<Readonly<{ readonly body: string; readonly headers: import('node:http').IncomingHttpHeaders; readonly status: number }>> => {
   const address = new URL(url);
   return new Promise((resolvePromise, rejectPromise) => {
     const request = httpGet({ headers, host: address.hostname, path, port: address.port }, (response) => {
@@ -105,11 +137,19 @@ const readRaw = (
       response.on('data', (chunk: string) => {
         body += chunk;
       });
-      response.once('end', () => resolvePromise({ body, status: response.statusCode ?? 0 }));
+      response.once('end', () => resolvePromise({ body, headers: response.headers, status: response.statusCode ?? 0 }));
       response.once('error', rejectPromise);
     });
     request.once('error', rejectPromise);
   });
+};
+
+const eventually = async (predicate: () => boolean, milliseconds: number): Promise<void> => {
+  const deadline = Date.now() + milliseconds;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out after ${milliseconds}ms.`);
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
+  }
 };
 
 const openLiveStream = (url: string): Readonly<{
@@ -129,24 +169,31 @@ const openLiveStream = (url: string): Readonly<{
     resolveOpened = resolvePromise;
     rejectOpened = rejectPromise;
   });
-  const request = httpGet(`${url}/api/project/events`, (stream) => {
-    response = stream;
-    stream.setEncoding('utf8');
-    stream.on('data', (chunk: string) => {
-      received += chunk;
-      if (matched !== undefined && received.includes(matched)) resolveMatch?.(received);
+  let request: import('node:http').ClientRequest | undefined;
+  void foregroundCookie(url).then((cookie) => {
+    request = httpGet(`${url}/api/project/events`, { headers: { cookie, origin: url } }, (stream) => {
+      response = stream;
+      stream.setEncoding('utf8');
+      stream.on('data', (chunk: string) => {
+        received += chunk;
+        if (matched !== undefined && received.includes(matched)) resolveMatch?.(received);
+      });
+      stream.once('error', (error: Error) => rejectMatch?.(error));
+      resolveOpened();
     });
-    stream.once('error', (error: Error) => rejectMatch?.(error));
-    resolveOpened();
-  });
-  request.once('error', (error: Error) => {
-    rejectOpened(error);
-    rejectMatch?.(error);
+    request.once('error', (error: Error) => {
+      rejectOpened(error);
+      rejectMatch?.(error);
+    });
+  }, (error: unknown) => {
+    const failure = error instanceof Error ? error : new Error('Foreground session bootstrap failed.');
+    rejectOpened(failure);
+    rejectMatch?.(failure);
   });
   return Object.freeze({
     close: () => {
       response?.destroy();
-      request.destroy();
+      request?.destroy();
     },
     opened,
     pause: () => response?.pause(),
@@ -159,6 +206,23 @@ const openLiveStream = (url: string): Readonly<{
       });
     },
   });
+};
+
+const within = async <T>(promise: Promise<T>, milliseconds: number): Promise<T> => Promise.race([
+  promise,
+  new Promise<T>((_resolvePromise, rejectPromise) => {
+    setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
+  }),
+]);
+
+const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
+  const decoder = new TextDecoder();
+  let output = '';
+  while (true) {
+    const next = await reader.read();
+    if (next.done) return output;
+    output += decoder.decode(next.value, { stream: true });
+  }
 };
 
 it('serves typed project status and supplied prebuilt assets after starting the coordinator', async () => {
@@ -213,6 +277,28 @@ it('replays project events after Last-Event-ID without re-sending the acknowledg
     expect(replay).toContain('id: 2\n');
     expect(replay).toContain('"paths":["second.ts"]');
     expect(replay).not.toContain('"paths":["first.ts"]');
+  } finally {
+    await server.close();
+  }
+});
+
+it('seeds a fresh authenticated project event stream from a canonical query cursor', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  eventHub.publish({
+    payload: { occurredAt: '2026-08-14T12:00:00.000Z', paths: ['first.ts'], reason: 'source-change' },
+    type: 'invalidation',
+  });
+  eventHub.publish({
+    payload: { occurredAt: '2026-08-14T12:00:01.000Z', paths: ['second.ts'], reason: 'source-change' },
+    type: 'invalidation',
+  });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+
+  try {
+    const replay = await readReplayAfter(server.url, '1');
+
+    expect(replay).toContain('id: 2\n');
+    expect(replay).not.toContain('id: 1\n');
   } finally {
     await server.close();
   }
@@ -325,6 +411,133 @@ it('opens a live event stream before a later project event is published', async 
   }
 });
 
+it('publishes runtime App shutdown invalidation before tearing down authenticated SSE streams', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-15T00:00:00.000Z') });
+  const prepared: string[] = [];
+  const previews = {
+    prepareClose: async () => {
+      prepared.push('runtime-apps');
+      eventHub.publish({
+        payload: { occurredAt: '2026-08-15T00:00:00.000Z', paths: ['runtime-shutdown'], reason: 'source-change' },
+        type: 'invalidation',
+      });
+    },
+  } as never;
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(), eventHub, mcpAppPreviews: previews, port: 0,
+  });
+  const stream = openLiveStream(server.url);
+  try {
+    await expect(within(stream.opened, 250)).resolves.toBeUndefined();
+    const published = stream.until('runtime-shutdown');
+    await expect(within(server.close(), 250)).resolves.toBeUndefined();
+    await expect(within(published, 250)).resolves.toContain('runtime-shutdown');
+    expect(prepared).toEqual(['runtime-apps']);
+  } finally {
+    stream.close();
+    await server.close().catch(() => undefined);
+  }
+});
+
+it('authenticates project events before it parses a cursor or subscribes to the hub', async () => {
+  const eventHub = new ProjectEventHub();
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0, sessionToken: 'event-token' });
+  try {
+    const missingCookie = await readRaw(server.url, '/api/project/events?after=not-a-cursor', { origin: server.url });
+    expect(missingCookie.status).toBe(403);
+    expect(missingCookie.headers['cache-control']).toBe('no-store');
+    const wrongOrigin = await readRaw(server.url, '/api/project/events?after=not-a-cursor', {
+      cookie: await foregroundCookie(server.url), origin: 'http://invalid.example',
+    });
+    expect(wrongOrigin.status).toBe(403);
+    const wrongCookie = await readRaw(server.url, '/api/project/events?after=not-a-cursor', {
+      cookie: `${(await foregroundCookie(server.url)).split('=', 1)[0]}=wrong`, origin: server.url,
+    });
+    expect(wrongCookie.status).toBe(403);
+    expect(eventHub.subscriptionCount).toBe(0);
+
+    const cookie = await foregroundCookie(server.url);
+    const headers = await new Promise<import('node:http').IncomingHttpHeaders>((resolvePromise, rejectPromise) => {
+      const request = httpGet(`${server.url}/api/project/events`, {
+        headers: { cookie, origin: server.url },
+      }, (response) => {
+        response.destroy();
+        resolvePromise(response.headers);
+      });
+      request.once('error', rejectPromise);
+    });
+    expect(headers['cache-control']).toBe('no-store');
+  } finally {
+    await server.close();
+  }
+});
+
+it('isolates foreground event cookies across simultaneous loopback listeners', async () => {
+  const first = await startForegroundServer({
+    coordinator: new RecordingCoordinator(), eventHub: new ProjectEventHub(), port: 0, sessionToken: 'first-token',
+  });
+  const second = await startForegroundServer({
+    coordinator: new RecordingCoordinator(), eventHub: new ProjectEventHub(), port: 0, sessionToken: 'second-token',
+  });
+  const eventStatus = async (url: string, cookie: string): Promise<number> => new Promise((resolvePromise, rejectPromise) => {
+    const request = httpGet(`${url}/api/project/events`, { headers: { cookie, origin: url } }, (response) => {
+      response.destroy();
+      resolvePromise(response.statusCode ?? 0);
+    });
+    request.once('error', rejectPromise);
+  });
+  try {
+    const firstBootstrap = await fetch(`${first.url}/api/project/session`, { headers: { origin: first.url } });
+    const secondBootstrap = await fetch(`${second.url}/api/project/session`, { headers: { origin: second.url } });
+    const firstBody = await firstBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
+    const secondBody = await secondBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
+    const firstCookie = firstBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
+    const secondCookie = secondBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
+    expect(typeof firstBody.cookieName).toBe('string');
+    expect(typeof secondBody.cookieName).toBe('string');
+    expect(firstBody.cookieName).not.toBe(secondBody.cookieName);
+    expect(firstCookie).toContain(`${firstBody.cookieName}=`);
+    expect(secondCookie).toContain(`${secondBody.cookieName}=`);
+    const browserCookieJar = `${firstCookie}; ${secondCookie}`;
+    await expect(eventStatus(first.url, browserCookieJar)).resolves.toBe(200);
+    await expect(eventStatus(second.url, browserCookieJar)).resolves.toBe(200);
+  } finally {
+    await Promise.all([first.close(), second.close()]);
+  }
+});
+
+it('reuses the foreground cookie name when the same loopback origin restarts', async () => {
+  const first = await startForegroundServer({
+    coordinator: new RecordingCoordinator(), eventHub: new ProjectEventHub(), port: 0, sessionToken: 'first-token',
+  });
+  const port = Number(new URL(first.url).port);
+  let second: Awaited<ReturnType<typeof startForegroundServer>> | undefined;
+  try {
+    const firstBootstrap = await fetch(`${first.url}/api/project/session`, {
+      headers: { connection: 'close', origin: first.url },
+    });
+    const firstBody = await firstBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
+    const firstCookie = firstBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
+    await first.close();
+
+    second = await startForegroundServer({
+      coordinator: new RecordingCoordinator(), eventHub: new ProjectEventHub(), port, sessionToken: 'second-token',
+    });
+    const secondBootstrap = await fetch(`${second.url}/api/project/session`, {
+      headers: { connection: 'close', origin: second.url },
+    });
+    const secondBody = await secondBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
+    const secondCookie = secondBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
+
+    expect(secondBody.cookieName).toBe(firstBody.cookieName);
+    expect(firstCookie?.split('=', 1)[0]).toBe(secondCookie?.split('=', 1)[0]);
+    expect(firstCookie).toContain('=first-token');
+    expect(secondCookie).toContain('=second-token');
+  } finally {
+    await Promise.allSettled([first.close(), second?.close()]);
+  }
+});
+
 it('closes an unconsumed live event stream without retaining its subscription', async () => {
   const coordinator = new RecordingCoordinator();
   const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
@@ -408,20 +621,16 @@ it('allows a same-origin browser to bootstrap its instance identity and token bu
       headers: { origin: server.url },
     });
     expect(browser.status).toBe(200);
-    await expect(browser.json()).resolves.toEqual({
-      instanceId: 'test-instance-id',
-      origin: server.url,
-      token: 'test-session-token',
+    await expect(browser.json()).resolves.toMatchObject({
+      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), instanceId: 'test-instance-id', origin: server.url, token: 'test-session-token',
     });
 
     const browserWithoutOrigin = await fetch(`${server.url}/api/project/session`, {
       headers: { 'sec-fetch-site': 'same-origin' },
     });
     expect(browserWithoutOrigin.status).toBe(200);
-    await expect(browserWithoutOrigin.json()).resolves.toEqual({
-      instanceId: 'test-instance-id',
-      origin: server.url,
-      token: 'test-session-token',
+    await expect(browserWithoutOrigin.json()).resolves.toMatchObject({
+      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), instanceId: 'test-instance-id', origin: server.url, token: 'test-session-token',
     });
 
     const noBrowserProof = await fetch(`${server.url}/api/project/session`);
@@ -434,43 +643,20 @@ it('allows a same-origin browser to bootstrap its instance identity and token bu
   }
 });
 
-it('assigns independent identities to distinct foreground servers with a shared session token', async () => {
-  const first = await startForegroundServer({
-    coordinator: new RecordingCoordinator(),
-    eventHub: new ProjectEventHub(),
-    port: 0,
-    sessionToken: 'shared-session-token',
+for (const [description, instanceId] of [
+  ['empty', ''], ['blank', '   '], ['leading-whitespace', ' instance-id'],
+  ['trailing-whitespace', 'instance-id '], ['overlong', 'x'.repeat(129)],
+] as const) {
+  it(`refuses a ${description} injected foreground instance ID before starting a coordinator`, async () => {
+    const coordinator = new RecordingCoordinator();
+    await expect(startForegroundServer({ coordinator, eventHub: new ProjectEventHub(), instanceId }))
+      .rejects.toMatchObject({
+        code: 'AB8000',
+        message: 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.',
+      });
+    expect(coordinator.startCalls).toBe(0);
   });
-  const second = await startForegroundServer({
-    coordinator: new RecordingCoordinator(),
-    eventHub: new ProjectEventHub(),
-    port: 0,
-    sessionToken: 'shared-session-token',
-  });
-
-  try {
-    const [firstResponse, secondResponse] = await Promise.all([
-      fetch(`${first.url}/api/project/session`, { headers: { origin: first.url } }),
-      fetch(`${second.url}/api/project/session`, { headers: { origin: second.url } }),
-    ]);
-
-    expect(firstResponse.status).toBe(200);
-    expect(secondResponse.status).toBe(200);
-    await expect(firstResponse.json()).resolves.toEqual({
-      instanceId: first.instanceId,
-      origin: first.url,
-      token: 'shared-session-token',
-    });
-    await expect(secondResponse.json()).resolves.toEqual({
-      instanceId: second.instanceId,
-      origin: second.url,
-      token: 'shared-session-token',
-    });
-    expect(first.instanceId).not.toBe(second.instanceId);
-  } finally {
-    await Promise.all([first.close(), second.close()]);
-  }
-});
+}
 
 it('requires the same origin and session token before a browser can request a rebuild', async () => {
   const coordinator = new RecordingCoordinator();
@@ -833,28 +1019,6 @@ it('refuses every non-loopback bind address before starting a coordinator', asyn
   expect(coordinator.startCalls).toBe(0);
 });
 
-for (const [description, instanceId] of [
-  ['empty', ''],
-  ['blank', '   '],
-  ['leading-whitespace', ' instance-id'],
-  ['trailing-whitespace', 'instance-id '],
-  ['overlong', 'x'.repeat(129)],
-] as const) {
-  it(`refuses a ${description} injected foreground instance ID before starting a coordinator`, async () => {
-    const coordinator = new RecordingCoordinator();
-
-    await expect(startForegroundServer({
-      coordinator,
-      eventHub: new ProjectEventHub(),
-      instanceId,
-    })).rejects.toMatchObject({
-      code: 'AB8000',
-      message: 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.',
-    });
-    expect(coordinator.startCalls).toBe(0);
-  });
-}
-
 it('closes the HTTP server and coordinator once while retaining both release failures structurally', async () => {
   const coordinator = new RecordingCoordinator();
   coordinator.failClose = true;
@@ -893,10 +1057,8 @@ it('never discloses a session token when Host does not identify this bound serve
       'sec-fetch-site': 'same-origin',
     });
     expect(sameServer.status).toBe(200);
-    expect(JSON.parse(sameServer.body)).toEqual({
-      instanceId: server.instanceId,
-      origin: server.url,
-      token: 'test-session-token',
+    expect(JSON.parse(sameServer.body)).toMatchObject({
+      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), origin: server.url, token: 'test-session-token',
     });
   } finally {
     await server.close();
@@ -1049,6 +1211,40 @@ it('closes and releases a paused SSE client after its outstanding bytes exceed t
   }
 });
 
+it('test-only event stream handles disconnect only their current foreground SSE subscription', async () => {
+  const eventHub = new ProjectEventHub();
+  const handles: Array<Readonly<{ readonly disconnect: () => void }>> = [];
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub,
+    port: 0,
+    testing: { onProjectEventStream: (handle) => handles.push(handle) },
+  });
+  const first = openLiveStream(server.url);
+
+  try {
+    await expect(within(first.opened, 250)).resolves.toBeUndefined();
+    await expect(eventually(() => handles.length === 1, 250)).resolves.toBeUndefined();
+    const stale = handles[0];
+    if (stale === undefined) throw new Error('Expected first stream handle.');
+    stale.disconnect();
+    stale.disconnect();
+    await expect(eventually(() => eventHub.subscriptionCount === 0, 250)).resolves.toBeUndefined();
+
+    const replacement = openLiveStream(server.url);
+    await expect(within(replacement.opened, 250)).resolves.toBeUndefined();
+    await expect(eventually(() => handles.length === 2 && eventHub.subscriptionCount === 1, 250)).resolves.toBeUndefined();
+    stale.disconnect();
+    expect(eventHub.subscriptionCount).toBe(1);
+    handles[1]?.disconnect();
+    await expect(eventually(() => eventHub.subscriptionCount === 0, 250)).resolves.toBeUndefined();
+    replacement.close();
+  } finally {
+    first.close();
+    await server.close();
+  }
+});
+
 it('retains both startup and cleanup failures structurally', async () => {
   const coordinator = new FailingStartCoordinator();
   const server = new ForegroundServer({ coordinator, eventHub: new ProjectEventHub(), port: 0 });
@@ -1143,6 +1339,195 @@ it('keeps the foreground close pending until every hook simulation has drained',
   await simulation;
 });
 
+it('keeps foreground close pending until its admitted Eval service durably settles', async () => {
+  let admitRun!: () => void;
+  let beginEvalClose!: () => void;
+  let releaseRun!: () => void;
+  const admitted = new Promise<void>((resolvePromise) => { admitRun = resolvePromise; });
+  const evalCloseStarted = new Promise<void>((resolvePromise) => { beginEvalClose = resolvePromise; });
+  const released = new Promise<void>((resolvePromise) => { releaseRun = resolvePromise; });
+  const evals: EvalRouteService = {
+    async cancel() { throw new Error('Unexpected cancellation.'); },
+    async compare() { throw new Error('Unexpected comparison.'); },
+    async events() { throw new Error('Unexpected event replay.'); },
+    async list() { throw new Error('Unexpected run listing.'); },
+    async openArtifact() { throw new Error('Unexpected artifact read.'); },
+    async read() { throw new Error('Unexpected run read.'); },
+    async start() {
+      admitRun();
+      return Object.freeze({ run: undefined as never });
+    },
+    async subscribeEvents() { throw new Error('Unexpected event subscription.'); },
+    async suites() { throw new Error('Unexpected suite listing.'); },
+  };
+  const evalLifecycle = {
+    close: async (): Promise<void> => {
+      beginEvalClose();
+      await released;
+    },
+  };
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({ coordinator, evalLifecycle, evals, eventHub: new ProjectEventHub(), port: 0 });
+  const run = await fetch(`${server.url}/api/evals/runs`, {
+    body: JSON.stringify({}),
+    headers: {
+      'content-type': 'application/json',
+      origin: server.url,
+      'x-agent-bundle-session': server.sessionToken,
+    },
+    method: 'POST',
+  });
+
+  try {
+    await admitted;
+    expect(run.status).toBe(202);
+    const closing = server.close();
+    await evalCloseStarted;
+    const state = await Promise.race([
+      closing.then(() => 'closed'),
+      new Promise<string>((resolvePromise) => { setTimeout(() => resolvePromise('pending'), 50); }),
+    ]);
+    expect(state).toBe('pending');
+
+    releaseRun();
+    await closing;
+    expect(coordinator.closeCalls).toBe(1);
+  } finally {
+    releaseRun();
+    await server.close().catch(() => undefined);
+  }
+});
+
+it('retains an Eval service drain failure while still releasing the foreground coordinator', async () => {
+  const coordinator = new RecordingCoordinator();
+  const evalFailure = new Error('eval cancellation cleanup failed');
+  let evalCloseCalls = 0;
+  const server = await startForegroundServer({
+    coordinator,
+    evalLifecycle: {
+      close: async () => {
+        evalCloseCalls += 1;
+        throw evalFailure;
+      },
+    },
+    eventHub: new ProjectEventHub(),
+    port: 0,
+  });
+
+  try {
+    await expect(server.close()).rejects.toMatchObject({
+      failures: [{ error: evalFailure, resource: 'eval-service' }],
+      name: 'ForegroundServerCloseError',
+    });
+    expect(evalCloseCalls).toBe(1);
+    expect(coordinator.closeCalls).toBe(1);
+  } finally {
+    await server.close().catch(() => undefined);
+  }
+});
+
+it('drains Eval routes, Agent API, and the Eval service before coordinator shutdown', async () => {
+  let releaseRouteAdmission!: () => void;
+  let releaseAgentClose!: () => void;
+  let releaseEvalClose!: () => void;
+  let signalRouteAdmission!: () => void;
+  let signalAgentClose!: () => void;
+  let signalEvalClose!: () => void;
+  let agentClosed = false;
+  let evalClosed = false;
+  let evalCloseCalls = 0;
+  let evalObservedAgentClosed = false;
+  let coordinatorCloseCalls = 0;
+  let coordinatorObservedEvalClosed = false;
+  const routeAdmissionStarted = new Promise<void>((resolvePromise) => { signalRouteAdmission = resolvePromise; });
+  const agentCloseStarted = new Promise<void>((resolvePromise) => { signalAgentClose = resolvePromise; });
+  const evalCloseStarted = new Promise<void>((resolvePromise) => { signalEvalClose = resolvePromise; });
+  const routeAdmissionRelease = new Promise<void>((resolvePromise) => { releaseRouteAdmission = resolvePromise; });
+  const agentCloseRelease = new Promise<void>((resolvePromise) => { releaseAgentClose = resolvePromise; });
+  const evalCloseRelease = new Promise<void>((resolvePromise) => { releaseEvalClose = resolvePromise; });
+  const evals: EvalRouteService = {
+    async cancel() { throw new Error('Unexpected cancellation.'); },
+    async compare() { throw new Error('Unexpected comparison.'); },
+    async events() { throw new Error('Unexpected event replay.'); },
+    async list() { throw new Error('Unexpected run listing.'); },
+    async openArtifact() { throw new Error('Unexpected artifact read.'); },
+    async read() { throw new Error('Unexpected run read.'); },
+    async start() { throw new Error('Unexpected run start.'); },
+    async subscribeEvents() {
+      signalRouteAdmission();
+      await routeAdmissionRelease;
+      return Object.freeze({
+        activate: (): void => undefined,
+        close: (): void => undefined,
+        replay: Object.freeze({ cursor: Object.freeze({ afterSequence: 0 }), events: Object.freeze([]) }),
+      });
+    },
+    async suites() { throw new Error('Unexpected suite listing.'); },
+  };
+  const coordinator = {
+    close: async (): Promise<void> => {
+      coordinatorCloseCalls += 1;
+      coordinatorObservedEvalClosed = evalClosed;
+    },
+    rebuild: async (): Promise<unknown> => undefined,
+    start: async (): Promise<void> => undefined,
+    status,
+  };
+  const server = await startForegroundServer({
+    agentApi: {
+      close: async (): Promise<void> => {
+        signalAgentClose();
+        await agentCloseRelease;
+        agentClosed = true;
+      },
+    } as never,
+    coordinator,
+    evals,
+    evalLifecycle: {
+      close: async (): Promise<void> => {
+        evalCloseCalls += 1;
+        evalObservedAgentClosed = agentClosed;
+        signalEvalClose();
+        await evalCloseRelease;
+        evalClosed = true;
+      },
+    },
+    eventHub: new ProjectEventHub(),
+    port: 0,
+  });
+  const stream = fetch(`${server.url}/api/evals/runs/run-a/stream`, {
+    headers: { origin: server.url, 'x-agent-bundle-session': server.sessionToken },
+  });
+  try {
+    await routeAdmissionStarted;
+    const closing = server.close();
+    await expect(within(agentCloseStarted, 250)).resolves.toBeUndefined();
+    expect(evalCloseCalls).toBe(0);
+    expect(coordinatorCloseCalls).toBe(0);
+
+    releaseRouteAdmission();
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(evalCloseCalls).toBe(0);
+
+    releaseAgentClose();
+    await evalCloseStarted;
+    expect(evalObservedAgentClosed).toBe(true);
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(coordinatorCloseCalls).toBe(0);
+
+    releaseEvalClose();
+    await expect(closing).resolves.toBeUndefined();
+    expect(coordinatorCloseCalls).toBe(1);
+    expect(coordinatorObservedEvalClosed).toBe(true);
+  } finally {
+    releaseRouteAdmission();
+    releaseAgentClose();
+    releaseEvalClose();
+    await stream.catch(() => undefined);
+    await server.close().catch(() => undefined);
+  }
+});
+
 it('aggregates a hook playground drain failure while still releasing the server and coordinator', async () => {
   const coordinator = new RecordingCoordinator();
   const hookPlayground = new GatedHookPlayground();
@@ -1197,25 +1582,6 @@ it('drains the Eval service after routes close and retains its shutdown failure'
   } finally {
     await server.close().catch(() => undefined);
   }
-});
-
-it('stops Playground routes then drains native Playground work before Eval and coordinator shutdown', async () => {
-  const coordinator = new RecordingCoordinator();
-  const order: string[] = [];
-  const server = await startForegroundServer({
-    coordinator: {
-      close: async () => { order.push('coordinator'); await coordinator.close(); },
-      rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
-      start: () => coordinator.start(),
-      status: () => coordinator.status(),
-    },
-    evalLifecycle: { close: async () => { order.push('eval'); } },
-    eventHub: new ProjectEventHub(),
-    playgroundLifecycle: { close: async () => { order.push('playground'); } },
-    port: 0,
-  });
-  await server.close();
-  expect(order).toEqual(['playground', 'eval', 'coordinator']);
 });
 
 /** Re-enters the foreground close from its own abort callback, as a cleanup listener would. */

@@ -1,0 +1,46 @@
+{
+  "name": "@agent-bundle-example/audiobook-curator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A complete RSC-authored Claude and Codex audiobook-curation plugin, CLI, Skill, and MCP server.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md"
+  ],
+  "bin": {
+    "audiobook-curator": "./bin/audiobook-curator.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "pnpm build:cli && pnpm build:bundle",
+    "build:bundle": "agent-bundle build --json --output artifact",
+    "build:cli": "rslib build",
+    "check": "pnpm test && pnpm typecheck && pnpm build",
+    "dev": "agent-bundle dev",
+    "test": "rstest tests",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "validate": "agent-bundle validate --json"
+  },
+  "dependencies": {
+    "@agent-bundle/rsc-runtime": "workspace:*",
+    "@modelcontextprotocol/server": "2.0.0",
+    "react": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@rslib/core": "0.23.2",
+    "@rstest/core": "0.11.9",
+    "@types/react": "19.2.18",
+    "agent-bundle": "workspace:*"
+  }
+}

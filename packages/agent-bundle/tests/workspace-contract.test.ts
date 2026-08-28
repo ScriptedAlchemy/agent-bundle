@@ -29,9 +29,12 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   const packages = documents.flat();
 
   expect(packages.map(({ name }) => name).sort()).toEqual([
+    '@agent-bundle-example/audiobook-curator',
     '@agent-bundle-example/hooks-and-scripts',
     '@agent-bundle-example/mcp-app',
     '@agent-bundle-example/skills-starter',
+    '@agent-bundle/rsc-agent-runtime-demo',
+    '@agent-bundle/rsc-runtime',
     'agent-bundle',
     'agent-bundle-workbench',
     'agent-bundle-workspace',
@@ -45,6 +48,19 @@ it('selects product packages through the pinned pnpm workspace', async () => {
       readonly scripts?: Readonly<Record<string, string>>;
     };
     expect(manifest.devDependencies?.['agent-bundle']).toBe('workspace:*');
+    if (path.endsWith('/audiobook-curator')) {
+      expect(manifest.scripts).toEqual({
+        build: 'pnpm build:cli && pnpm build:bundle',
+        'build:bundle': 'agent-bundle build --json --output artifact',
+        'build:cli': 'rslib build',
+        check: 'pnpm test && pnpm typecheck && pnpm build',
+        dev: 'agent-bundle dev',
+        test: 'rstest tests',
+        typecheck: 'tsc -p tsconfig.build.json --noEmit',
+        validate: 'agent-bundle validate --json',
+      });
+      return;
+    }
     expect(manifest.scripts).toEqual({
       build: 'agent-bundle build --json',
       check: 'pnpm validate && pnpm build',
@@ -64,14 +80,20 @@ it('selects product packages through the pinned pnpm workspace', async () => {
     readonly files?: readonly string[];
     readonly scripts?: Readonly<Record<string, string>>;
   };
+  const workbenchManifest = JSON.parse(
+    await readFile(join(process.cwd(), 'packages/workbench/package.json'), 'utf8'),
+  ) as {
+    readonly dependencies?: Readonly<Record<string, string>>;
+  };
   expect(rootManifest.devDependencies).toMatchObject({
     '@modelcontextprotocol/server': '2.0.0',
     'agent-bundle': 'workspace:*',
     'playwright-core': '1.62.1',
   });
   expect(rootManifest.scripts).toMatchObject({
-    build: 'pnpm --filter agent-bundle build',
+    build: 'pnpm --filter agent-bundle build && pnpm --filter @agent-bundle/rsc-runtime build',
     check: 'pnpm build && pnpm test:unit && pnpm test:integration:run && pnpm lint && pnpm typecheck',
+    'eval:spot': 'pnpm build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec rstest run tests/micro-eval.spot.test.ts --config rstest.config.ts',
     'example:hooks': 'pnpm build && pnpm --filter @agent-bundle-example/hooks-and-scripts dev',
     'example:mcp-app': 'pnpm build && pnpm --filter @agent-bundle-example/mcp-app dev',
     'example:skills': 'pnpm build && pnpm --filter @agent-bundle-example/skills-starter dev',
@@ -86,6 +108,7 @@ it('selects product packages through the pinned pnpm workspace', async () => {
   });
   expect(agentBundleManifest.bin).toEqual({ 'agent-bundle': './bin/agent-bundle.js' });
   expect(agentBundleManifest.files).toContain('bin');
+  expect(workbenchManifest.dependencies?.['@modelcontextprotocol/sdk']).toBe('1.30.0');
   await expect(access(join(process.cwd(), 'packages/agent-bundle/bin/agent-bundle.js'))).resolves.toBeUndefined();
 
   await expect(access(join(process.cwd(), 'packages/agent-bundle/rslib.config.ts'))).resolves.toBeUndefined();

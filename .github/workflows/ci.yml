@@ -68,6 +68,23 @@ jobs:
       - run: pnpm exec playwright install --with-deps chrome
       - run: pnpm check:release
 
+  rsc-runtime-micro-eval:
+    # Deterministic end-to-end spot-check of the built RSC runtime artifacts
+    # (hook -> RSC worker -> shared kernel state -> MCP tool lowering) without
+    # any real Claude/Codex host. Real native-host smokes stay skip-gated in
+    # the manually dispatched native-host-smoke workflow on purpose.
+    name: RSC runtime micro-eval (Node 22.19)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v1
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm eval:spot
+
   dependency-review:
     if: github.event_name == 'pull_request'
     name: Dependency review

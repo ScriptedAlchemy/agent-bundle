@@ -9,6 +9,7 @@ import { rspack } from '@rslib/core';
 import { expect, it, rs } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
@@ -71,6 +72,58 @@ it('serializes hook index targets by tuple order without sentinel concatenation'
   }
 });
 
+it('keeps the Claude and Codex native wrapper codecs byte-identical apart from identifiers and the target constant', () => {
+  const entry: TargetHookWrapper = {
+    event: 'beforeTool',
+    hook: {
+      event: 'beforeTool',
+      id: 'hook:before-tool:example:00000000',
+      name: 'example',
+      provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+      source: '/project/src/hooks/example.ts',
+      targets: ['claude', 'codex'],
+      tools: [],
+    },
+    nativeEvent: 'PreToolUse',
+    relativePath: 'hooks/example.mjs',
+    target: 'claude',
+  };
+
+  const stripCodecIdentifiers = (source: string): string => source
+    .replaceAll(/decode(?:Claude|Codex|Universal)Native/g, 'decodeNative')
+    .replaceAll(/encode(?:Claude|Codex|Universal)Native/g, 'encodeNative');
+
+  const withoutTargetConstant = (source: string): string => source
+    .split('\n')
+    .filter((line) => !line.startsWith('const target ='))
+    .join('\n');
+
+  const normalize = (source: string): string => stripCodecIdentifiers(withoutTargetConstant(source));
+
+  const claudeSource = nativeHookWrapperSource(entry, 'Claude');
+  const codexSource = nativeHookWrapperSource(entry, 'Codex');
+
+  expect(normalize(claudeSource)).toBe(normalize(codexSource));
+
+  const universalSource = nativeHookWrapperSource(entry, 'Universal');
+
+  expect(universalSource).toContain('process.env.PLUGIN_ROOT');
+  expect(universalSource).toContain('AGENT_BUNDLE_HOOK_HOST');
+
+  const hostDetectionLines = new Set([
+    'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
+    'const target = declaredHost === "claude" || declaredHost === "codex"',
+    '  ? declaredHost',
+    '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
+  ]);
+  const universalWithoutHostDetection = universalSource
+    .split('\n')
+    .filter((line) => !hostDetectionLines.has(line))
+    .join('\n');
+
+  expect(stripCodecIdentifiers(universalWithoutHostDetection)).toBe(normalize(claudeSource));
+});
+
 const runPublishedHook = async (wrapper: string, input: string) => runNodeScript({ args: [wrapper], input });
 
 const runNativeHook = async (wrapper: string, input: Record<string, unknown>) =>
@@ -81,6 +134,53 @@ const importPublishedHook = async (wrapper: string) =>
     args: ['--input-type=module', '--eval', `await import(${JSON.stringify(pathToFileURL(wrapper).href)}); process.exit(0);`],
     cwd: dirname(wrapper),
   });
+
+it('does not share a persistent Rslib cache between generated executables', async () => {
+  const createOptions: unknown[] = [];
+  const rslib = {
+    build: async () => ({
+      close: async () => undefined,
+      stats: {
+        toJson: () => ({
+          assets: [{ name: 'hooks/cache-probe.mjs' }],
+          modules: [],
+        }),
+      },
+    }),
+    inspectConfig: async () => ({
+      origin: {
+        bundlerConfigs: [{
+          output: { asyncChunks: false, path: '/tmp/agent-bundle-rslib-cache-output' },
+          performance: { buildCache: false },
+          target: 'node',
+        }],
+      },
+    }),
+  };
+
+  await buildWithRslib({
+    cwd: '/tmp',
+    entries: [{
+      name: 'cache-probe',
+      outputRelativePath: 'hooks/cache-probe.mjs',
+      source: '/tmp/hook.ts',
+      sourceInputs: ['/tmp/hook.ts'],
+    }],
+    outputRoot: '/tmp/agent-bundle-rslib-cache-output',
+  }, {
+    createRslib: async (options) => {
+      createOptions.push(options);
+      return rslib as never;
+    },
+  });
+
+  const [{ config }] = createOptions as [{
+    readonly config: {
+      readonly lib: readonly [{ readonly performance?: { readonly buildCache?: boolean } }];
+    };
+  }];
+  expect(config.lib[0].performance).toEqual({ buildCache: false });
+});
 
 it('closes the Rslib build result after building a virtual hook entry', async () => {
   const close = rs.fn(async () => undefined);
@@ -542,6 +642,92 @@ it('escalates timed-out and aborted wrapper process trees from TERM to KILL befo
   } finally {
     if (previousDescendantPidPath === undefined) delete process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID;
     else process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID = previousDescendantPidPath;
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(consumer, { force: true, recursive: true }),
+    ]);
+  }
+}, 10_000);
+
+it('waits for an admitted Windows taskkill cleanup after its wrapper leader closes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-service-windows-termination-'));
+  const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-service-windows-termination-consumer-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const artifact = join(consumer, 'installed-plugin');
+  const startedPath = join(root, 'started');
+  const base = hookModel(root);
+  const model: NormalizedPlugin = {
+    ...base,
+    hooks: [{ ...base.hooks[0]!, targets: ['codex'] }],
+    targets: [base.targets[0]!],
+  };
+  const previousStartedPath = process.env.AGENT_BUNDLE_HOOK_SIMULATION_STARTED_PATH;
+  let taskkillCommand: EventEmitter | undefined;
+  let taskkillPid: number | undefined;
+  let resolveTaskkillStarted: (() => void) | undefined;
+  const taskkillStarted = new Promise<void>((resolvePromise) => { resolveTaskkillStarted = resolvePromise; });
+  const service = new HookService({
+    platform: 'win32',
+    taskkill: (arguments_) => {
+      taskkillPid = Number(arguments_[1]);
+      taskkillCommand = new EventEmitter();
+      resolveTaskkillStarted?.();
+      return taskkillCommand as ChildProcess;
+    },
+  });
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'session-start.ts'), [
+        "import { writeFile } from 'node:fs/promises';",
+        "process.once('SIGTERM', () => process.exit(0));",
+        "export default async () => {",
+        "  await writeFile(process.env.AGENT_BUNDLE_HOOK_SIMULATION_STARTED_PATH!, 'started', 'utf8');",
+        '  setInterval(() => undefined, 1_000);',
+        '  return new Promise(() => undefined);',
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await cp(outputRoot, artifact, { recursive: true });
+    process.env.AGENT_BUNDLE_HOOK_SIMULATION_STARTED_PATH = startedPath;
+
+    const controller = new AbortController();
+    let settled = false;
+    const pending = service.simulate({
+      artifact,
+      hook: base.hooks[0]!.id,
+      input: { cwd: '/workspace', sessionId: 'session-1', source: 'startup', transcriptPath: '/workspace/transcript.json' },
+      signal: controller.signal,
+      target: 'codex',
+    }).finally(() => { settled = true; });
+    void pending.catch(() => undefined);
+    await expect.poll(async () => readFile(startedPath, 'utf8'), { timeout: 2_000 }).toBe('started');
+
+    controller.abort();
+    await taskkillStarted;
+    process.kill(taskkillPid!, 'SIGTERM');
+    await expect.poll(() => {
+      try {
+        process.kill(taskkillPid!, 0);
+        return true;
+      } catch (error) {
+        return !(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH');
+      }
+    }, { timeout: 2_000 }).toBe(false);
+    await new Promise<void>((resolvePromise) => { setImmediate(resolvePromise); });
+    expect(settled).toBe(false);
+
+    taskkillCommand!.emit('close', 1);
+    await expect(pending).rejects.toMatchObject({ code: 'hook.simulation.termination.unsettled' });
+  } finally {
+    if (previousStartedPath === undefined) delete process.env.AGENT_BUNDLE_HOOK_SIMULATION_STARTED_PATH;
+    else process.env.AGENT_BUNDLE_HOOK_SIMULATION_STARTED_PATH = previousStartedPath;
     await Promise.all([
       rm(root, { force: true, recursive: true }),
       rm(consumer, { force: true, recursive: true }),

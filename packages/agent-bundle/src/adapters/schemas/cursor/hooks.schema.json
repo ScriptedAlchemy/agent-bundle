@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/cursor/2026-08-28/hooks.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "hooks": {
+      "additionalProperties": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "failClosed": {
+              "type": "boolean"
+            },
+            "matcher": {
+              "type": "string"
+            },
+            "timeout": {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    },
+    "version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "version",
+    "hooks"
+  ],
+  "type": "object"
+}

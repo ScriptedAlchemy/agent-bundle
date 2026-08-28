@@ -1,23 +1,24 @@
 import { z } from 'zod';
 
 import type {
-  EvalRunEvent,
   EvalRunEventsReplay,
-  EvalRunRecord,
   EvalRunResult,
   EvalRunSelection,
   EvalSuiteListing,
 } from '../../../agent-bundle/src/contracts/eval.ts';
-import type { JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
-import { parseStrictResponseJson, isAbortError as isAbort, CodedClientError, decodeDiagnosticError, diagnosticSchema, exactKeys, isRecord } from '../client-helpers.ts';
-import { awaitWithAbort, ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
-import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
+import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
+import { awaitWithAbort, type ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import {
   nonnegativeIntegerSchema,
   positiveIntegerSchema,
-  provenanceIdentifierSchema,
   safeIntegerSchema,
 } from '../schema-atoms.ts';
+
+export interface EvalClientOptions {
+  /** Workbench-owned memory-only session authority shared by all foreground routes. */
+  readonly foreground: ForegroundRequestAuthority;
+}
 
 export type EvalHarness = 'claude' | 'codex' | 'deterministic';
 
@@ -38,7 +39,10 @@ export interface EvalRunCancellation {
   readonly runId: string;
 }
 
-export type EvalEventStream = NdjsonStream;
+export interface EvalEventStream {
+  close(): void;
+  readonly done: Promise<void>;
+}
 
 export interface EvalEventStreamOptions {
   readonly afterSequence: number;
@@ -52,10 +56,13 @@ export interface EvalArtifact {
   readonly filename: string;
   readonly mediaType: string;
 }
+export class EvalClientError extends Error {
+  readonly code: string;
 
-export class EvalClientError extends CodedClientError {
   constructor(code: string, message: string) {
-    super('EvalClientError', code, message);
+    super(message);
+    this.name = 'EvalClientError';
+    this.code = code;
   }
 }
 
@@ -63,23 +70,37 @@ const maximumArtifactBytes = 8 * 1024 * 1024;
 const maximumEventFrameBytes = 256 * 1024;
 const safeArtifactSegment = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const evalHarnesses = new Set<EvalHarness>(['deterministic', 'claude', 'codex']);
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+const exactKeys = (value: unknown, keys: readonly string[]): value is Readonly<Record<string, unknown>> =>
+  isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isIsoTimestamp = (value: unknown): value is string =>
   typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
 const invalidResponse = (): EvalClientError =>
   new EvalClientError('AB8073', 'Eval route returned an invalid response.');
-const rethrowOrInvalid = (error: unknown, signal?: AbortSignal | null): never => {
-  if (error instanceof EvalClientError || isAbort(error) || signal?.aborted) throw error;
-  throw invalidResponse();
-};
+const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
 
 const textSchema = z.string();
+const provenanceIdentifier = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u;
+const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
+const provenanceIdentifierSchema = z.string().refine((value) =>
+  provenanceIdentifier.test(value) && !provenancePathMarker.test(value));
 const timestampSchema = z.string().refine(isIsoTimestamp);
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const evidenceLevelSchema = z.enum(['inferred', 'observed', 'unavailable']);
 const outcomeSchema = z.enum(['fail', 'inconclusive', 'pass']);
 const assertionKindSchema = z.enum(['exit-code', 'mcp-call', 'no-mcp-call', 'no-skill-activation', 'outcome', 'skill-activation']);
+const diagnosticSchema = z.strictObject({
+  code: textSchema,
+  generatedPath: textSchema.optional(),
+  message: textSchema,
+  recovery: textSchema.optional(),
+  severity: z.enum(['error', 'info', 'warning']),
+  sourcePath: textSchema.optional(),
+  target: textSchema.optional(),
+});
 const assertionSummarySchema = z.strictObject({ id: textSchema, kind: assertionKindSchema, skill: textSchema.optional() });
 const invocationSchema = z.strictObject({
   mode: z.enum(['automatic', 'explicit', 'none']),
@@ -100,7 +121,7 @@ const suiteSchema = z.strictObject({
   name: textSchema,
   sourcePath: textSchema,
 });
-const suiteListingSchema: z.ZodType<EvalSuiteListing> = z.strictObject({
+const suiteListingSchema = z.strictObject({
   diagnostics: z.array(diagnosticSchema),
   suites: z.array(suiteSchema),
 });
@@ -116,7 +137,7 @@ const runSummarySchema = z.strictObject({
   pass: nonnegativeIntegerSchema,
   trials: nonnegativeIntegerSchema,
 });
-const runRecordSchema: z.ZodType<EvalRunRecord> = z.strictObject({
+const runRecordSchema = z.strictObject({
   agentBundleVersion: textSchema,
   artifact: artifactBindingSchema,
   completedAt: timestampSchema.optional(),
@@ -159,12 +180,14 @@ const pluginFailureSchema = z.strictObject({
   message: textSchema,
 });
 const trialInvocationProvenanceSchema = z.union([
-  z.strictObject({ mode: z.enum(['automatic', 'none']) }),
+  z.strictObject({ mode: z.literal('automatic'), skill: provenanceIdentifierSchema.optional() }),
+  z.strictObject({ mode: z.literal('none') }),
   z.strictObject({ mode: z.literal('explicit'), skill: provenanceIdentifierSchema }),
 ]);
 const semanticGraderProvenanceSchema = z.union([
   z.null(),
   z.strictObject({
+    contractRevision: provenanceIdentifierSchema,
     id: provenanceIdentifierSchema,
     model: provenanceIdentifierSchema,
   }),
@@ -223,33 +246,31 @@ const caseAggregateSchema = z.strictObject({
   targetDigest: digestSchema,
   trials: nonnegativeIntegerSchema,
 });
-const runResultSchema: z.ZodType<EvalRunResult> = z.strictObject({
+const runResultSchema = z.strictObject({
   aggregates: z.array(caseAggregateSchema),
   diagnostics: z.array(diagnosticSchema),
   run: runRecordSchema,
   trials: z.array(trialRecordSchema),
 });
-const runEventSchema: z.ZodType<EvalRunEvent> = z.strictObject({
-  kind: textSchema.min(1).max(512),
-  payload: z.json(),
-  sequence: positiveIntegerSchema,
-  timestamp: timestampSchema,
-});
-const runRecordListSchema = z.array(runRecordSchema);
+const conforms = (schema: z.ZodType, value: unknown): boolean => schema.safeParse(value).success;
 
-const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalidResponse);
-
-const parseOrInvalid = <Result>(schema: z.ZodType<Result>, value: unknown): Result => {
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) throw invalidResponse();
-  return parsed.data;
+const snapshot = (value: unknown): JsonValue => {
+  try { return snapshotStrictJsonValue(value); }
+  catch { throw invalidResponse(); }
 };
 
-// Returns the caller's already-deep-frozen snapshot (not zod's unfrozen clone)
-// so replayed events keep their immutability; safeParse proves the shape.
+const parseResponseJson = (bytes: Uint8Array): JsonValue => {
+  try { return snapshot(parseJsonWithoutDuplicateKeys(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); }
+  catch { throw invalidResponse(); }
+};
+
 const eventFor = (value: unknown): EvalRunEvent => {
-  if (!runEventSchema.safeParse(value).success) throw invalidResponse();
-  return value as EvalRunEvent;
+  if (!exactKeys(value, ['kind', 'payload', 'sequence', 'timestamp']) ||
+    typeof value.kind !== 'string' || value.kind.length === 0 || value.kind.length > 512 ||
+    !safeInteger(value.sequence, 1) || !isIsoTimestamp(value.timestamp)) {
+    throw invalidResponse();
+  }
+  return value as unknown as EvalRunEvent;
 };
 
 const replayFor = (value: unknown, afterSequence: number): EvalRunEventsReplay => {
@@ -257,32 +278,37 @@ const replayFor = (value: unknown, afterSequence: number): EvalRunEventsReplay =
   const replay = value.replay;
   if (!(exactKeys(replay, ['cursor', 'events']) || exactKeys(replay, ['cursor', 'events', 'incompleteTrailingRecord'])) ||
     !exactKeys(replay.cursor, ['afterSequence']) || !safeInteger(replay.cursor.afterSequence, afterSequence) ||
-    !Array.isArray(replay.events) ||
+    !Array.isArray(replay.events) || !replay.events.every((event) => {
+      try { eventFor(event); return true; } catch { return false; }
+    }) ||
     (Object.hasOwn(replay, 'incompleteTrailingRecord') && replay.incompleteTrailingRecord !== true)) {
     throw invalidResponse();
   }
-  const events = replay.events.map((event) => eventFor(event));
+  const events = replay.events as readonly EvalRunEvent[];
   if (!events.every((event, index) => event.sequence === afterSequence + index + 1) ||
     replay.cursor.afterSequence !== (events.at(-1)?.sequence ?? afterSequence)) {
     throw invalidResponse();
   }
   return Object.freeze({
     cursor: Object.freeze({ afterSequence: replay.cursor.afterSequence }),
-    events: Object.freeze(events),
+    events: Object.freeze([...events]),
     ...(replay.incompleteTrailingRecord === true ? { incompleteTrailingRecord: true as const } : {}),
   });
 };
 
-const suiteListing = (value: unknown): EvalSuiteListing => parseOrInvalid(suiteListingSchema, value);
+const suiteListing = (value: unknown): EvalSuiteListing => {
+  if (!conforms(suiteListingSchema, value)) throw invalidResponse();
+  return value as unknown as EvalSuiteListing;
+};
 
 const runResult = (value: unknown): EvalRunResult => {
-  if (!exactKeys(value, ['run'])) throw invalidResponse();
-  return parseOrInvalid(runResultSchema, value.run);
+  if (!exactKeys(value, ['run']) || !conforms(runResultSchema, value.run)) throw invalidResponse();
+  return value.run as unknown as EvalRunResult;
 };
 
 const runAdmission = (value: unknown): EvalRunAdmission => {
-  if (!exactKeys(value, ['run'])) throw invalidResponse();
-  return Object.freeze({ run: parseOrInvalid(runRecordSchema, value.run) });
+  if (!exactKeys(value, ['run']) || !conforms(runRecordSchema, value.run)) throw invalidResponse();
+  return Object.freeze({ run: value.run as unknown as EvalRunRecord });
 };
 
 const runCancellation = (value: unknown, runId: string): EvalRunCancellation => {
@@ -293,8 +319,8 @@ const runCancellation = (value: unknown, runId: string): EvalRunCancellation => 
 };
 
 const runRecords = (value: unknown): readonly EvalRunRecord[] => {
-  if (!exactKeys(value, ['runs'])) throw invalidResponse();
-  return Object.freeze(parseOrInvalid(runRecordListSchema, value.runs));
+  if (!exactKeys(value, ['runs']) || !Array.isArray(value.runs) || !value.runs.every((entry) => conforms(runRecordSchema, entry))) throw invalidResponse();
+  return Object.freeze([...value.runs]) as readonly EvalRunRecord[];
 };
 
 const opaqueArtifactRef = (reference: string): string => {
@@ -316,28 +342,22 @@ const filenameFor = (value: string | null): string | undefined => {
 
 /** A typed, credential-memory-only browser client for persisted Eval evidence. */
 export class EvalClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: WorkbenchClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message) => new EvalClientError(code, message),
-      fallbackCode: 'AB8073',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Eval',
-    });
+  constructor(options: EvalClientOptions) {
+    this.#foreground = options.foreground;
   }
 
-  async suites(): Promise<EvalSuiteListing> {
-    return suiteListing(await this.#json('/api/evals/suites'));
+  async suites(signal?: AbortSignal): Promise<EvalSuiteListing> {
+    return suiteListing(await this.#json('/api/evals/suites', signal === undefined ? {} : { signal }));
   }
 
-  async runs(): Promise<readonly EvalRunRecord[]> {
-    return runRecords(await this.#json('/api/evals/runs'));
+  async runs(signal?: AbortSignal): Promise<readonly EvalRunRecord[]> {
+    return runRecords(await this.#json('/api/evals/runs', signal === undefined ? {} : { signal }));
   }
 
   async read(runId: string, signal?: AbortSignal): Promise<EvalRunResult> {
-    return runResult(await this.#json(`/api/evals/runs/${encodeURIComponent(runId)}`, { signal }));
+    return runResult(await this.#json(`/api/evals/runs/${encodeURIComponent(runId)}`, signal === undefined ? {} : { signal }));
   }
 
   async start(selection: EvalRunStart, signal?: AbortSignal): Promise<EvalRunAdmission> {
@@ -371,7 +391,14 @@ export class EvalClient {
 
   stream(options: EvalEventStreamOptions): EvalEventStream {
     if (!safeInteger(options.afterSequence)) throw invalidResponse();
-    return abortableNdjsonStream(options.signal, (signal) => this.#stream(options, signal));
+    const controller = new AbortController();
+    const forwardAbort = (): void => controller.abort();
+    options.signal?.addEventListener('abort', forwardAbort, { once: true });
+    if (options.signal?.aborted) controller.abort();
+    return Object.freeze({
+      close: () => controller.abort(),
+      done: this.#stream(options, controller.signal).finally(() => options.signal?.removeEventListener('abort', forwardAbort)),
+    });
   }
 
   async artifact(runId: string, reference: string, signal?: AbortSignal): Promise<EvalArtifact> {
@@ -390,30 +417,35 @@ export class EvalClient {
       if (bytes.byteLength !== declaredSize || bytes.byteLength > maximumArtifactBytes) throw invalidResponse();
       return Object.freeze({ blob: new Blob([bytes], { type: mediaType }), filename, mediaType });
     } catch (error) {
-      return rethrowOrInvalid(error, signal);
+      if (error instanceof EvalClientError || isAbort(error) || signal?.aborted) throw error;
+      throw invalidResponse();
     }
   }
 
   async #json(path: string, init: RequestInit = {}, expectedStatus?: number): Promise<JsonValue> {
+    const response = await this.#response(path, init, expectedStatus);
     try {
-      const response = await this.#response(path, init, expectedStatus);
       return parseResponseJson(new Uint8Array(await awaitWithAbort(init.signal, () => response.arrayBuffer())));
     } catch (error) {
-      return rethrowOrInvalid(error, init.signal);
+      if (error instanceof EvalClientError || isAbort(error) || init.signal?.aborted) throw error;
+      throw invalidResponse();
     }
   }
 
   async #response(path: string, init: RequestInit = {}, expectedStatus?: number): Promise<Response> {
+    const response = await this.#foreground.protectedRequest(path, init);
+    if (response.ok && (expectedStatus === undefined || response.status === expectedStatus)) return response;
+    if (response.ok) throw invalidResponse();
     try {
-      const response = await this.#transport.request(path, init);
-      if (response.ok && (expectedStatus === undefined || response.status === expectedStatus)) return response;
-      if (response.ok) throw invalidResponse();
       const body = parseResponseJson(new Uint8Array(await awaitWithAbort(init.signal, () => response.arrayBuffer())));
-      const decoded = decodeDiagnosticError(body);
-      if (decoded !== undefined) throw new EvalClientError(decoded.code, decoded.message);
+      if (exactKeys(body, ['diagnostic']) && exactKeys(body.diagnostic, ['code', 'message']) &&
+        typeof body.diagnostic.code === 'string' && typeof body.diagnostic.message === 'string') {
+        throw new EvalClientError(body.diagnostic.code, body.diagnostic.message);
+      }
       throw new EvalClientError('AB8073', `Eval request failed with HTTP ${response.status}.`);
     } catch (error) {
-      return rethrowOrInvalid(error, init.signal);
+      if (error instanceof EvalClientError || isAbort(error) || init.signal?.aborted) throw error;
+      throw invalidResponse();
     }
   }
 
@@ -428,20 +460,57 @@ export class EvalClient {
       if (isAbort(error) || signal.aborted) return;
       throw error;
     }
-    if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/x-ndjson')) throw invalidResponse();
+    if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/x-ndjson') || response.body === null) throw invalidResponse();
+    const reader = response.body.getReader();
+    const cancel = (): void => { void reader.cancel().catch(() => undefined); };
+    signal.addEventListener('abort', cancel, { once: true });
+    if (signal.aborted) cancel();
+    const parts: Uint8Array[] = [];
+    let partBytes = 0;
     let expected = options.afterSequence + 1;
+    const append = (part: Uint8Array): void => {
+      if (partBytes + part.byteLength > maximumEventFrameBytes) throw invalidResponse();
+      if (part.byteLength > 0) parts.push(part);
+      partBytes += part.byteLength;
+    };
+    const consume = (): void => {
+      const bytes = new Uint8Array(partBytes);
+      let offset = 0;
+      for (const part of parts) {
+        bytes.set(part, offset);
+        offset += part.byteLength;
+      }
+      parts.length = 0;
+      partBytes = 0;
+      if (bytes.byteLength === 0) return;
+      const event = eventFor(parseResponseJson(bytes));
+      if (event.sequence !== expected) throw invalidResponse();
+      expected += 1;
+      options.onEvent(event);
+    };
     try {
-      await readNdjsonResponseFrames(response, (bytes) => {
-        if (bytes.byteLength === 0) return;
-        const event = eventFor(parseResponseJson(bytes));
-        if (event.sequence !== expected) throw invalidResponse();
-        expected += 1;
-        options.onEvent(event);
-      }, { invalidFrameError: invalidResponse, maxFrameBytes: maximumEventFrameBytes, signal });
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (signal.aborted) return;
+        let start = 0;
+        for (let index = 0; index < chunk.value.byteLength; index += 1) {
+          if (chunk.value[index] !== 0x0a) continue;
+          append(chunk.value.subarray(start, index));
+          consume();
+          if (signal.aborted) return;
+          start = index + 1;
+        }
+        append(chunk.value.subarray(start));
+      }
+      if (partBytes > 0) throw invalidResponse();
     } catch (error) {
       if (isAbort(error) || signal.aborted) return;
       if (error instanceof EvalClientError) throw error;
       throw invalidResponse();
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      await reader.cancel().catch(() => undefined);
     }
   }
 }

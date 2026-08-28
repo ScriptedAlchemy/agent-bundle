@@ -178,9 +178,25 @@ it('labels a host CLI version, invocation, semantic grader identity, or harness 
     provenance: {
       hostCliVersion: '2.4.0',
       invocation: { mode: 'automatic' },
-      semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6' },
+      semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-6' },
     },
   }))).toEqual(['semantic-grader-identity-mismatch']);
+  expect(nonComparable(compareEvalRuns({
+    baseline: side('run-base', trials(['pass', 'pass', 'pass'], {
+      provenance: {
+        hostCliVersion: '2.4.0',
+        invocation: { mode: 'automatic' },
+        semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-5' },
+      },
+    })),
+    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], {
+      provenance: {
+        hostCliVersion: '2.4.0',
+        invocation: { mode: 'automatic' },
+        semanticGrader: { contractRevision: 'v2', id: 'claude-semantic', model: 'claude-opus-4-5' },
+      },
+    })),
+  }).rows[0]).causes.map((cause) => cause.code)).toEqual(['semantic-grader-identity-mismatch']);
   expect(nonComparable(compareEvalRuns({
     baseline: side('run-base', baselineTrials),
     candidate: side('run-candidate', candidateTrials, { run: run('run-candidate', { harness: 'claude-native' }) }),

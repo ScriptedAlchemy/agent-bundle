@@ -57,6 +57,23 @@ it('reports observed MCP evidence only for a completed, well-formed stream', asy
   expect(codexMcpEvidence(malformed).level).toBe('unavailable');
 });
 
+it('retains known MCP calls from an incomplete stream without claiming negative evidence', () => {
+  const knownCall = normalizeCodexEventStream([
+    '{"type":"item.completed","item":{"id":"mcp-1","type":"mcp_tool_call","server":"payments","tool":"charge"}}',
+    '{"type":"item.completed","item":',
+  ].join('\n'));
+  const noKnownCall = normalizeCodexEventStream([
+    '{"type":"turn.started"}',
+    '{"type":"item.completed","item":',
+  ].join('\n'));
+
+  expect(codexMcpEvidence(knownCall)).toEqual({
+    calls: [{ server: 'payments', tool: 'charge' }],
+    level: 'unavailable',
+  });
+  expect(codexMcpEvidence(noKnownCall)).toEqual({ calls: [], level: 'unavailable' });
+});
+
 it('keeps Codex Skill activation inferred and never upgrades it to observed', async () => {
   const run = normalizeCodexEventStream(await loadStream('complete-run.jsonl'));
 

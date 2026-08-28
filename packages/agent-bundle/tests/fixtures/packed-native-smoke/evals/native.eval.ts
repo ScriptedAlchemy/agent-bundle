@@ -1,9 +1,9 @@
-import { defineEvalSuite, expectExitCode } from 'agent-bundle/eval';
+import { defineEvalSuite, expectExitCode, expectSkillActivation } from 'agent-bundle/eval';
 
 export default defineEvalSuite({
   cases: [
     {
-      assertions: [expectExitCode(0)],
+      assertions: [expectExitCode(0), expectSkillActivation({ skill: 'review' })],
       fixture: './fixtures/repository',
       hosts: { claude: { model: 'claude-sonnet-4-5' } },
       id: 'packed-native-claude',
@@ -12,7 +12,7 @@ export default defineEvalSuite({
       trials: 1,
     },
     {
-      assertions: [expectExitCode(0)],
+      assertions: [expectExitCode(0), expectSkillActivation({ skill: 'review' })],
       fixture: './fixtures/repository',
       hosts: { codex: { model: 'gpt-5.6-sol' } },
       id: 'packed-native-codex',

@@ -105,7 +105,7 @@ export const resolveMcpSessionLaunch = (options: ResolveMcpSessionLaunchOptions)
   });
   if (resolved.kind === 'stdio') {
     const cwd = resolved.cwd === undefined
-      ? undefined
+      ? options.resolved.targetRoot
       : assertInside(options.resolved.targetRoot, resolve(options.resolved.targetRoot, resolved.cwd));
     const inheritedEnv = Object.fromEntries(
       Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
@@ -113,7 +113,7 @@ export const resolveMcpSessionLaunch = (options: ResolveMcpSessionLaunchOptions)
     return Object.freeze({
       args: Object.freeze([...resolved.args]),
       command: resolved.command,
-      ...(cwd === undefined ? {} : { cwd }),
+      cwd,
       env: Object.freeze({ ...inheritedEnv, ...(resolved.env ?? {}) }),
       inspectorEnv: inspectorEnvironment(resolved.env),
       kind: 'stdio',

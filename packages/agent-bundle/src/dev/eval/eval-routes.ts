@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 
+import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import {
   EvalConfigError,
   EvalDefinitionError,
@@ -22,23 +23,16 @@ import {
   type EvalServiceErrorCode,
   type EvalSuiteListing,
 } from './eval-service.ts';
-import {
-  decodedOpaqueSegment,
-  diagnostic,
-  hasOnly,
-  isRequestDiagnostic,
-  nonemptyString,
-  rawPathname,
-  readJsonBody,
-  requestError,
-  responseDiagnostic,
-  responseJson as writeJsonResponse,
-  type RequestDiagnostic,
-} from '../http.ts';
-import { createBackpressuredWriter, encodedNdjsonFrame } from '../route-streams.ts';
 
+const bodyLimit = 64 * 1024;
 const maximumTrials = 100;
 const streamByteLimit = 256 * 1024;
+
+interface RequestDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly status: number;
+}
 
 type Route =
   | Readonly<{ readonly artifactRef: string; readonly kind: 'artifact'; readonly runId: string }>
@@ -75,13 +69,22 @@ export interface EvalRoutesOptions {
   readonly service?: EvalRouteService;
 }
 
-const responseJson = (response: ServerResponse, body: unknown, status = 200): void =>
-  writeJsonResponse(response, body, { destroyIfEnded: true, status });
+const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
+
+const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
+  new Error(value.message),
+  value,
+);
+
+const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
+  typeof value === 'object' && value !== null &&
+  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
+  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
+  typeof (value as Partial<RequestDiagnostic>).status === 'number';
 
 /** Service messages name project paths, so each code keeps one fixed browser-facing sentence. */
 const serviceDiagnostics: Readonly<Record<EvalServiceErrorCode, RequestDiagnostic>> = Object.freeze({
   EVAL_ARTIFACT_NOT_FOUND: diagnostic('AB8085', 'Recorded raw evidence was not found.', 404),
-  EVAL_ARTIFACT_OUTSIDE_PROJECT: diagnostic('AB8084', 'The evaluated artifact must be inside the project.', 422),
   EVAL_ARTIFACT_UNAVAILABLE: diagnostic('AB8086', 'Recorded raw evidence is not available.', 422),
   EVAL_EVENTS_CURSOR_INVALID: diagnostic('AB8087', 'Eval event cursor is not valid.', 400),
   EVAL_HARNESS_UNSUPPORTED: diagnostic('AB8075', 'The requested eval harness is unknown or unsupported.', 422),
@@ -110,8 +113,72 @@ const authoringDiagnostic = (error: unknown): RequestDiagnostic | undefined => {
   return undefined;
 };
 
+const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
+  if (response.headersSent || response.writableEnded) {
+    response.destroy();
+    return;
+  }
+  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
+};
+
+const responseJson = (response: ServerResponse, body: unknown, status = 200): void => {
+  if (response.headersSent || response.writableEnded) {
+    response.destroy();
+    return;
+  }
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(body));
+};
+
 const terminalEvent = (event: EvalRunEventsReplay['events'][number]): boolean =>
   event.kind === 'run.cancelled' || event.kind === 'run.completed' || event.kind === 'run.failed';
+
+const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
+  typeof value === 'string' ? value : undefined;
+
+const unquoteHeaderValue = (value: string): string | undefined => {
+  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
+  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
+  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
+};
+
+const isJsonRequest = (request: IncomingMessage): boolean => {
+  const contentType = singleHeader(request.headers['content-type']);
+  if (contentType === undefined) return false;
+  const parts = contentType.split(';').map((part) => part.trim());
+  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
+  if (parts.length === 0) return true;
+  if (parts.length !== 1) return false;
+  const parameter = parts[0] ?? '';
+  const equals = parameter.indexOf('=');
+  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
+  return unquoteHeaderValue(parameter.slice(equals + 1).trim())?.toLowerCase() === 'utf-8';
+};
+
+const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
+  let size = 0;
+  let tooLarge = false;
+  const chunks: Buffer[] = [];
+  request.on('data', (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > bodyLimit) {
+      tooLarge = true;
+      return;
+    }
+    if (!tooLarge) chunks.push(chunk);
+  });
+  request.once('end', () => {
+    if (tooLarge) {
+      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
+      return;
+    }
+    resolvePromise(Buffer.concat(chunks).toString('utf8'));
+  });
+  request.once('error', rejectPromise);
+});
+
+const rawPathname = (requestTarget: string | undefined): string => requestTarget?.split(/[?#]/u, 1)[0] ?? '';
 
 const pathError = (): never => {
   throw requestError(diagnostic('AB8070', 'Eval route path is not valid.', 400));
@@ -121,8 +188,21 @@ const invalidShape = (): never => {
   throw requestError(diagnostic('AB8072', 'Eval request has an invalid shape.', 400));
 };
 
-const decodedSegment = (segment: string): string =>
-  decodedOpaqueSegment(segment, { code: 'AB8070', message: 'Eval route path is not valid.' });
+const decodedSegment = (segment: string): string => {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return pathError();
+  }
+  if (
+    decoded.length === 0 || decoded === '.' || decoded === '..' ||
+    decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
+  ) {
+    return pathError();
+  }
+  return decoded;
+};
 
 const opaqueArtifactRef = (value: string): string => {
   if (!/^[A-Za-z0-9_-]{1,8192}$/u.test(value)) return pathError();
@@ -160,6 +240,15 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return Object.freeze({ kind: 'run', runId: segments[1] ?? pathError() });
 };
 
+const isRecord = (value: unknown): value is JsonObject =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const hasOnly = (value: JsonObject, fields: readonly string[]): boolean =>
+  Object.keys(value).every((field) => fields.includes(field));
+
+const nonemptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');
+
 const nameList = (value: unknown): readonly string[] => {
   if (!Array.isArray(value) || value.length === 0 || !value.every(nonemptyString)) return invalidShape();
   return Object.freeze([...value]);
@@ -172,7 +261,19 @@ const trials = (value: unknown): number => {
   return value;
 };
 
-const jsonBody = (request: IncomingMessage): Promise<JsonObject> => readJsonBody(request, { invalidShape });
+const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
+  if (!isJsonRequest(request)) {
+    throw requestError(diagnostic('AB8009', 'Request body must use application/json.', 415));
+  }
+  let parsed: unknown;
+  try {
+    parsed = parseJsonWithoutDuplicateKeys(await readBody(request));
+  } catch (error) {
+    if (isRequestDiagnostic(error)) throw error;
+    throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
+  }
+  return isRecord(parsed) ? parsed : invalidShape();
+};
 
 /**
  * A browser selects authored suites, authored cases, and a trial count. Artifact
@@ -413,54 +514,80 @@ export class EvalRoutes {
     response.once('close', markResponseClosed);
     try {
       const subscription = await service.subscribeEvents(runId, afterSequence);
-      if (responseClosed || this.#closePromise !== undefined) {
-        subscription.close();
-        throw this.#unavailable(503);
-      }
+      let buffered = 0;
+      let blocked = false;
+      let blockedBytes = 0;
       let closed = false;
       let closePromise: Promise<void> | undefined;
+      let flushing = false;
       let terminalQueued = false;
-      // The terminal frame ends the response only once the writer is idle, so
-      // no queued frame is dropped and the peer receives every drained byte.
-      const endAfterTerminal = (): void => {
-        if (!terminalQueued || closed || response.destroyed || response.writableEnded) return;
-        response.end();
-        void close().catch(() => undefined);
+      const frames: Array<Readonly<{ readonly frame: string; readonly size: number }>> = [];
+      const onDrain = (): void => {
+        if (closed || !blocked) return;
+        blocked = false;
+        buffered -= blockedBytes;
+        blockedBytes = 0;
+        flush();
       };
-      const writer = createBackpressuredWriter(response, {
-        byteLimit: streamByteLimit,
-        countInFlightBytes: true,
-        onIdle: endAfterTerminal,
-        rejectOversizedFrame: true,
-      });
       const close = (abortResponse = false): Promise<void> => {
         if (closePromise !== undefined) return closePromise;
         closed = true;
-        writer.markClosed();
+        frames.length = 0;
+        buffered = 0;
+        blockedBytes = 0;
         this.#closeReaders.delete(closeFromShutdown);
         response.off('close', closeFromPeer);
-        subscription.close();
+        response.off('close', markResponseClosed);
+        response.off('drain', onDrain);
         if (abortResponse && !response.destroyed && !response.writableEnded) response.destroy();
-        closePromise = Promise.resolve();
+        closePromise = this.#trackReaderClose(Promise.resolve().then(() => subscription.close()));
         return closePromise;
       };
       const closeFromPeer = (): void => { void close().catch(() => undefined); };
       const closeFromShutdown = (): Promise<void> => close(true);
+      if (responseClosed || this.#closePromise !== undefined) {
+        await close();
+        throw this.#unavailable(503);
+      }
+      const flush = (): void => {
+        if (flushing || blocked || closed || response.destroyed || response.writableEnded) return;
+        flushing = true;
+        try {
+          while (!blocked && frames.length > 0) {
+            const next = frames.shift()!;
+            if (response.write(next.frame)) {
+              buffered -= next.size;
+              continue;
+            }
+            blocked = true;
+            blockedBytes = next.size;
+            response.once('drain', onDrain);
+          }
+          if (!blocked && terminalQueued && frames.length === 0) {
+            response.end();
+            void close().catch(() => undefined);
+          }
+        } finally {
+          flushing = false;
+        }
+      };
       const enqueue = (event: EvalRunEventsReplay['events'][number]): void => {
         if (closed || terminalQueued) return;
-        const result = writer.enqueue(encodedNdjsonFrame(event));
-        if (result === 'overflow') {
+        const frame = `${JSON.stringify(event)}\n`;
+        const size = Buffer.byteLength(frame, 'utf8');
+        if (buffered + size > streamByteLimit) {
           void close(true).catch(() => undefined);
           return;
         }
-        if (result === 'closed') return;
+        frames.push(Object.freeze({ frame, size }));
+        buffered += size;
         terminalQueued = terminalEvent(event);
-        if (writer.idle) endAfterTerminal();
+        flush();
       };
       const replayBytes = subscription.replay.events.reduce((total, event) =>
-        total + Buffer.byteLength(encodedNdjsonFrame(event), 'utf8'), 0);
+        total + Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8'), 0);
       if (replayBytes > streamByteLimit) {
-        subscription.close();
+        await close();
         responseDiagnostic(response, diagnostic('AB8088', 'Eval event replay exceeds the stream limit.', 413));
         return;
       }
@@ -470,8 +597,10 @@ export class EvalRoutes {
       });
       this.#closeReaders.add(closeFromShutdown);
       response.once('close', closeFromPeer);
+      response.off('close', markResponseClosed);
       for (const event of subscription.replay.events) enqueue(event);
       if (!closed && !terminalQueued) subscription.activate(enqueue);
+      flush();
     } finally {
       response.off('close', markResponseClosed);
       finishAdmission();

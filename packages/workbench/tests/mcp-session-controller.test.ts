@@ -1,4 +1,7 @@
 import { expect, it } from '@rstest/core';
+import type { Client, Transport } from '@modelcontextprotocol/client';
+import type { McpAppBoundOperationResult } from '../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
+import type { McpAppBindingOperation } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 
 import {
   createMcpSessionController,
@@ -7,7 +10,6 @@ import {
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
 import { McpRouteClientError, type McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
-import { deferred, eventually } from './support/async.ts';
 
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' as const });
 const connection = Object.freeze({
@@ -16,6 +18,100 @@ const connection = Object.freeze({
   protocolVersion: '2025-11-25',
   server: { name: 'weather-fixture', version: '1.0.0' },
 });
+
+const runtimeSession = Object.freeze({
+  binding: Object.freeze({
+    definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather',
+    sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+  }),
+  connection: Object.freeze({
+    capabilities: Object.freeze({ resources: Object.freeze({ listChanged: true }), tools: Object.freeze({ listChanged: true }) }),
+    protocolEra: 'modern' as const,
+    protocolVersion: '2026-07-28',
+    server: Object.freeze({ name: 'weather-runtime', version: '4.2.0' }),
+  }),
+  state: 'ready' as const,
+});
+
+const runtimeBinding = Object.freeze({ kind: 'runtime' as const, binding: runtimeSession.binding, session: runtimeSession });
+const runtimeAppVector = Object.freeze({ runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 2 });
+const runtimeAppResult = (
+  operation: McpAppBindingOperation,
+  sequence = 1,
+): McpAppBoundOperationResult => Object.freeze({
+  operationId: `runtime-app-operation-${sequence}`,
+  sessionId: 'runtime-session-a',
+  sessionRevision: 3,
+  value: operation.kind === 'tools/list'
+    ? Object.freeze([{ name: 'forecast' }])
+    : operation.kind === 'resources/list'
+      ? Object.freeze([{ uri: 'weather://today' }])
+      : operation.kind === 'resources/read'
+        ? Object.freeze({ contents: Object.freeze([{ text: 'sunny', uri: operation.uri }]) })
+        : Object.freeze({ content: Object.freeze([{ text: `forecast:${operation.name}`, type: 'text' }]) }),
+  vector: runtimeAppVector,
+});
+const runtimeAppAttachment = (
+  execute: (operation: McpAppBindingOperation, signal?: AbortSignal) => Promise<McpAppBoundOperationResult>,
+  onResult?: (operation: McpAppBindingOperation, result: McpAppBoundOperationResult) => void,
+) => Object.freeze({
+  bindingId: 'runtime-app-binding-a',
+  execute,
+  ...(onResult === undefined ? {} : { onResult }),
+});
+const restartedRuntimeSession = Object.freeze({
+  binding: Object.freeze({
+    definitionDigest: 'definition-b', registryRevision: 8, serverDigest: 'server-b', serverName: 'weather',
+    sessionId: 'runtime-session-a', sessionRevision: 4, target: 'portable', transportDigest: 'transport-b',
+  }),
+  connection: Object.freeze({
+    capabilities: Object.freeze({ resources: Object.freeze({ listChanged: true }), tools: Object.freeze({ listChanged: true }) }),
+    protocolEra: 'modern' as const,
+    protocolVersion: '2026-02-09',
+    server: Object.freeze({ name: 'weather-runtime-next', version: '5.0.0' }),
+  }),
+  state: 'ready' as const,
+});
+const implementationUpdatedRuntimeSession = Object.freeze({
+  binding: Object.freeze({
+    ...runtimeSession.binding,
+    serverDigest: 'server-implementation-b',
+  }),
+  connection: Object.freeze({
+    ...runtimeSession.connection,
+    server: Object.freeze({ name: 'weather-runtime-implementation', version: '4.2.1' }),
+  }),
+  state: 'ready' as const,
+});
+const unusedRuntimeRestart = Object.freeze({
+  reconcile: Object.freeze({
+    action: 'implementation-updated' as const,
+    invalidatedBindings: Object.freeze([]),
+    registryRevision: 7,
+    restartedSessionIds: Object.freeze([]),
+    runtimeGenerationId: 'generation-a',
+    sequence: 1,
+  }),
+  session: runtimeSession,
+});
+
+const deferred = <Value>() => {
+  let reject: (reason?: unknown) => void = () => undefined;
+  let resolve: (value: Value) => void = () => undefined;
+  const promise = new Promise<Value>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, reject, resolve };
+};
+
+const eventually = async (predicate: () => boolean, timeout = 300): Promise<void> => {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeout}ms.`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+  }
+};
 
 const settledWithin = async <Value>(
   promise: Promise<Value>,
@@ -42,8 +138,11 @@ const traceStream = (): {
     },
   }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
   return Object.freeze({
-    // The trace client cancels its reader on abort, which may have closed the stream already.
-    close: () => { try { controller?.close(); } catch { /* already closed */ } },
+    close: () => {
+      try { controller?.close(); } catch (error) {
+        if (!(error instanceof TypeError && error.message === 'Invalid state: Controller is already closed')) throw error;
+      }
+    },
     response,
     send: (entry) => controller?.enqueue(new TextEncoder().encode(`${JSON.stringify(entry)}\n`)),
   });
@@ -147,6 +246,870 @@ it('connects the exact artifact binding then atomically publishes catalog and co
 
   stream.close();
   await controller.close();
+});
+
+it('attaches one non-owning runtime App client through one exact App authority and preserves ordered public App request history', async () => {
+  const calls: string[] = [];
+  const appOperations: McpAppBindingOperation[] = [];
+  const appTraces: Array<Readonly<{ readonly kind: string; readonly operationId: string; readonly vector: object }>> = [];
+  let attachedTransport: Transport | undefined;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => { calls.push('app-client.close'); },
+      connect: async (transport: Transport) => { attachedTransport = transport; await transport.start(); },
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async (request) => { calls.push(`runtime.close:${request.expectedSessionRevision}`); },
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Runtime App attachment must not use the legacy runtime MCP route executor.'); },
+      openRuntime: async () => { throw new Error('Runtime App attachment must not open a new backend session.'); },
+      restart: async () => connection,
+      restartRuntime: async (request) => {
+        calls.push(`runtime.restart:${request.expectedSessionRevision}`);
+        return {
+          reconcile: { action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8, restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-a', sequence: 1 },
+          session: restartedRuntimeSession,
+        };
+      },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  const modelBinding = controller.model.binding;
+  if (modelBinding === undefined || !('kind' in modelBinding) || modelBinding.kind !== 'runtime') {
+    throw new Error('Expected the browser model to retain the runtime binding.');
+  }
+  expect(Object.hasOwn(modelBinding.binding, 'providerSessionId')).toBe(false);
+  expect(Object.hasOwn(modelBinding.binding, 'stateStoreId')).toBe(false);
+  const attachment = runtimeAppAttachment(
+    async (operation) => {
+      appOperations.push(operation);
+      return runtimeAppResult(operation, appOperations.length);
+    },
+    (operation, result) => appTraces.push(Object.freeze({ kind: operation.kind, operationId: result.operationId, vector: result.vector })),
+  );
+  const attach = (authority: typeof attachment): Promise<Awaited<ReturnType<typeof controller.attachApp>>> =>
+    (controller.attachApp as unknown as (this: typeof controller, input: typeof attachment) => Promise<Awaited<ReturnType<typeof controller.attachApp>>>).call(controller, authority);
+  const app = await attach(attachment);
+  const messages: unknown[] = [];
+  if (attachedTransport === undefined) throw new Error('Expected controller-owned attached transport.');
+  attachedTransport.onmessage = (message) => messages.push(message);
+  await attachedTransport.send({ id: 0, jsonrpc: '2.0', method: 'initialize' });
+  await attachedTransport.send({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
+  await attachedTransport.send({ id: 2, jsonrpc: '2.0', method: 'resources/list' });
+  await attachedTransport.send({ id: 3, jsonrpc: '2.0', method: 'resources/read', params: { uri: 'weather://today' } });
+  await attachedTransport.send({ id: 4, jsonrpc: '2.0', method: 'tools/call', params: { arguments: { city: 'Paris' }, name: 'forecast' } });
+  await attachedTransport.send({ id: 5, jsonrpc: '2.0', method: 'prompts/list' });
+  await expect(attachedTransport.send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } })).rejects.toThrow(
+    'MCP remote transport received an invalid notification.',
+  );
+
+  expect(app).toMatchObject({ sessionId: 'runtime-session-a', sessionRevision: 3 });
+  expect(messages).toEqual([
+    { id: 0, jsonrpc: '2.0', result: { capabilities: { resources: { listChanged: true }, tools: { listChanged: true } }, protocolVersion: '2026-07-28', serverInfo: { name: 'weather-runtime', version: '4.2.0' } } },
+    { id: 1, jsonrpc: '2.0', result: { tools: [{ name: 'forecast' }] } },
+    { id: 2, jsonrpc: '2.0', result: { resources: [{ uri: 'weather://today' }] } },
+    { id: 3, jsonrpc: '2.0', result: { contents: [{ text: 'sunny', uri: 'weather://today' }] } },
+    { id: 4, jsonrpc: '2.0', result: { content: [{ text: 'forecast:forecast', type: 'text' }] } },
+    { error: { code: -32601, message: 'MCP method "prompts/list" is not supported by the Agent Bundle remote transport.' }, id: 5, jsonrpc: '2.0' },
+  ]);
+  expect(appOperations).toEqual([
+    { kind: 'tools/list' },
+    { kind: 'resources/list' },
+    { kind: 'resources/read', uri: 'weather://today' },
+    { arguments: { city: 'Paris' }, kind: 'tools/call', name: 'forecast' },
+  ]);
+  expect(calls).toEqual([]);
+  expect(controller.history).toEqual([
+    expect.objectContaining({ operation: 'listTools', result: [{ name: 'forecast' }] }),
+    expect.objectContaining({ operation: 'listResources', result: [{ uri: 'weather://today' }] }),
+    expect.objectContaining({ operation: 'readResource', result: { contents: [{ text: 'sunny', uri: 'weather://today' }] } }),
+    expect.objectContaining({ operation: 'callTool', result: { content: [{ text: 'forecast:forecast', type: 'text' }] } }),
+  ]);
+  expect(controller.history.every((entry) => !Object.hasOwn(entry, 'vector'))).toBe(true);
+  expect(appTraces).toEqual([
+    { kind: 'tools/list', operationId: 'runtime-app-operation-1', vector: runtimeAppVector },
+    { kind: 'resources/list', operationId: 'runtime-app-operation-2', vector: runtimeAppVector },
+    { kind: 'resources/read', operationId: 'runtime-app-operation-3', vector: runtimeAppVector },
+    { kind: 'tools/call', operationId: 'runtime-app-operation-4', vector: runtimeAppVector },
+  ]);
+
+  await controller.restart();
+  expect(controller.model).toMatchObject({
+    binding: { kind: 'runtime', binding: restartedRuntimeSession.binding },
+    connection: { protocolVersion: '2026-02-09', serverCapabilities: { resources: { listChanged: true }, tools: { listChanged: true } }, serverInfo: { name: 'weather-runtime-next', version: '5.0.0' } },
+  });
+  expect(calls).toEqual(['app-client.close', 'runtime.restart:3']);
+
+  const replacement = await attach(attachment);
+  if (attachedTransport === undefined) throw new Error('Expected replacement runtime transport.');
+  attachedTransport.onmessage = (message) => messages.push(message);
+  await attachedTransport.send({ id: 3, jsonrpc: '2.0', method: 'initialize' });
+  expect(replacement).toMatchObject({ sessionId: 'runtime-session-a', sessionRevision: 4 });
+  expect(messages.at(-1)).toEqual({
+    id: 3,
+    jsonrpc: '2.0',
+    result: {
+      capabilities: { resources: { listChanged: true }, tools: { listChanged: true } },
+      protocolVersion: '2026-02-09',
+      serverInfo: { name: 'weather-runtime-next', version: '5.0.0' },
+    },
+  });
+
+  await app.close();
+  expect(calls).toEqual(['app-client.close', 'runtime.restart:3']);
+  await controller.close();
+  expect(calls).toEqual(['app-client.close', 'runtime.restart:3', 'app-client.close', 'runtime.close:4']);
+});
+
+it('rejects a mismatched runtime preview session before it can open or attach an SDK client', async () => {
+  let appClientCreated = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => {
+      appClientCreated += 1;
+      return {} as Client;
+    },
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+  const mismatched = Object.freeze({
+    ...runtimeBinding,
+    session: Object.freeze({
+      ...runtimeSession,
+      binding: Object.freeze({ ...runtimeSession.binding, sessionRevision: 4 }),
+    }),
+  });
+
+  await expect(controller.open(mismatched)).rejects.toThrow('MCP session binding must contain only epochId, target, and serverName.');
+  expect(appClientCreated).toBe(0);
+  expect(controller.model.phase).toBe('idle');
+});
+
+it('serializes attached runtime App requests before admitting the next route operation', async () => {
+  const first = deferred<McpAppBoundOperationResult>();
+  const calls: string[] = [];
+  let attachedTransport: Transport | undefined;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => undefined,
+      connect: async (transport: Transport) => { attachedTransport = transport; await transport.start(); },
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected legacy runtime route operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  const attachment = runtimeAppAttachment(async (operation) => {
+    calls.push(operation.kind);
+    return calls.length === 1 ? first.promise : runtimeAppResult(operation, calls.length);
+  });
+  await controller.attachApp(attachment);
+  if (attachedTransport === undefined) throw new Error('Expected controller-owned attached transport.');
+  const tools = attachedTransport.send({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
+  await eventually(() => calls.length === 1);
+  const resources = attachedTransport.send({ id: 2, jsonrpc: '2.0', method: 'resources/list' });
+  await Promise.resolve();
+  expect(calls).toEqual(['tools/list']);
+
+  first.resolve(runtimeAppResult({ kind: 'tools/list' }));
+  await Promise.all([tools, resources]);
+  expect(calls).toEqual(['tools/list', 'resources/list']);
+  await controller.close();
+});
+
+it('rejects injected App results from a foreign session or stale revision before SDK delivery or public tracing', async () => {
+  let attachedTransport: Transport | undefined;
+  const traces: Array<Readonly<{ readonly kind: string; readonly sessionRevision: number }>> = [];
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => undefined,
+      connect: async (transport: Transport) => { attachedTransport = transport; await transport.start(); },
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected legacy runtime route operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  const staleResults = [
+    Object.freeze({ ...runtimeAppResult({ kind: 'tools/list' }), sessionId: 'runtime-session-b' }),
+    Object.freeze({ ...runtimeAppResult({ kind: 'tools/list' }), sessionRevision: 4 }),
+  ];
+  await controller.attachApp(Object.freeze({
+    bindingId: 'runtime-app-binding-a',
+    execute: async () => staleResults.shift() ?? runtimeAppResult({ kind: 'tools/list' }),
+    onResult: (operation: McpAppBindingOperation, result: McpAppBoundOperationResult) => {
+      traces.push(Object.freeze({ kind: operation.kind, sessionRevision: result.sessionRevision }));
+    },
+  }));
+  if (attachedTransport === undefined) throw new Error('Expected controller-owned attached transport.');
+  const messages: unknown[] = [];
+  attachedTransport.onmessage = (message) => messages.push(message);
+
+  await attachedTransport.send({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
+  await attachedTransport.send({ id: 2, jsonrpc: '2.0', method: 'tools/list' });
+
+  expect(messages).toEqual([
+    {
+      error: { code: -32603, message: 'Runtime MCP App operation response belongs to a stale session revision.' },
+      id: 1,
+      jsonrpc: '2.0',
+    },
+    {
+      error: { code: -32603, message: 'Runtime MCP App operation response belongs to a stale session revision.' },
+      id: 2,
+      jsonrpc: '2.0',
+    },
+  ]);
+  expect(traces).toEqual([]);
+  expect(controller.history).toEqual([
+    expect.objectContaining({ error: { message: 'Runtime MCP App operation response belongs to a stale session revision.', name: 'McpSessionControllerError' }, operation: 'listTools' }),
+    expect.objectContaining({ error: { message: 'Runtime MCP App operation response belongs to a stale session revision.', name: 'McpSessionControllerError' }, operation: 'listTools' }),
+  ]);
+  await controller.close();
+});
+
+it('admits one runtime attachment, then clears only that closed attachment before a fresh reattach', async () => {
+  const connected = deferred<void>();
+  const clients: Client[] = [];
+  let connects = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => {
+      const client = {
+        close: async () => undefined,
+        connect: async (next: Transport) => {
+          connects += 1;
+          await next.start();
+          await connected.promise;
+        },
+        request: async () => undefined,
+      } as unknown as Client;
+      clients.push(client);
+      return client;
+    },
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => ({ operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [], vector: { providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2 } }),
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  const attachment = runtimeAppAttachment(async (operation) => runtimeAppResult(operation));
+  const first = controller.attachApp(attachment);
+  const second = controller.attachApp(attachment);
+  await expect(controller.attachApp(Object.freeze({ bindingId: 'runtime-app-binding-b', execute: attachment.execute }))).rejects.toThrow(
+    'different runtime App binding authority',
+  );
+  await eventually(() => connects === 1);
+  connected.resolve();
+  const [left, right] = await Promise.all([first, second]);
+
+  expect(clients).toHaveLength(1);
+  expect(left.client).toBe(right.client);
+  await expect(controller.attachApp(Object.freeze({
+    bindingId: 'runtime-app-binding-b',
+    execute: attachment.execute,
+  }))).rejects.toThrow('different runtime App binding authority');
+  await left.close();
+  const fresh = await controller.attachApp(attachment);
+  expect(clients).toHaveLength(2);
+  expect(fresh.client).not.toBe(left.client);
+  await controller.close();
+});
+
+it('retains a failed attached cleanup until controller close retries that exact attachment', async () => {
+  const firstFailure = new Error('first attached client cleanup failed');
+  const retryFailure = new Error('retry attached client cleanup failed');
+  let appClients = 0;
+  let closeAttempts = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => {
+      appClients += 1;
+      return {
+        close: async () => {
+          closeAttempts += 1;
+          throw closeAttempts === 1 ? firstFailure : retryFailure;
+        },
+        connect: async (transport: Transport) => transport.start(),
+        request: async () => undefined,
+      } as unknown as Client;
+    },
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => ({ operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [], vector: { providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2 } }),
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  const attachment = runtimeAppAttachment(async (operation) => runtimeAppResult(operation));
+  const attached = await controller.attachApp(attachment);
+  await expect(attached.close()).rejects.toBe(firstFailure);
+  const retained = await controller.attachApp(attachment);
+  expect(retained.client).toBe(attached.client);
+  expect(appClients).toBe(1);
+
+  await expect(controller.close()).rejects.toMatchObject({
+    failures: [{ reason: retryFailure, resource: 'app-client' }],
+  });
+  expect(closeAttempts).toBe(2);
+  expect(appClients).toBe(1);
+});
+
+it('drains an old runtime attachment across restart without publishing its stale result', async () => {
+  const first = deferred<McpAppBoundOperationResult>();
+  const transports: Transport[] = [];
+  const closedClients: number[] = [];
+  const requests: string[] = [];
+  const controller = createMcpSessionController({
+    appClientFactory: () => {
+      const index = closedClients.length;
+      closedClients.push(0);
+      return {
+        close: async () => { closedClients[index] += 1; },
+        connect: async (transport: Transport) => { transports.push(transport); await transport.start(); },
+        request: async () => undefined,
+      } as unknown as Client;
+    },
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected legacy runtime route operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => Object.freeze({
+        reconcile: Object.freeze({
+          action: 'sessions-restarted' as const,
+          invalidatedBindings: Object.freeze([{ sessionId: 'runtime-session-a', sessionRevision: 3 }]),
+          registryRevision: 8,
+          restartedSessionIds: Object.freeze(['runtime-session-a']),
+          runtimeGenerationId: 'generation-b',
+          sequence: 1,
+        }),
+        session: restartedRuntimeSession,
+      }),
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  const attachment = runtimeAppAttachment(async (operation) => {
+    requests.push(operation.kind);
+    return requests.length === 1 ? first.promise : Object.freeze({
+      operationId: 'operation-2', sessionId: 'runtime-session-a', sessionRevision: 4, value: Object.freeze([{ name: 'fresh' }]),
+      vector: Object.freeze({ runtimeGenerationId: 'generation-b', sourceRevision: 'source-b', stateVersion: 3 }),
+    });
+  });
+  const old = await controller.attachApp(attachment);
+  const oldTransport = transports[0];
+  if (oldTransport === undefined) throw new Error('Expected first runtime attachment.');
+  const oldMessages: unknown[] = [];
+  oldTransport.onmessage = (message) => oldMessages.push(message);
+  const oldOperation = oldTransport.send({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
+  await eventually(() => requests.length === 1);
+  const restarting = controller.restart();
+  first.resolve(Object.freeze({
+    operationId: 'operation-1', sessionId: 'runtime-session-a', sessionRevision: 3, value: Object.freeze([{ name: 'stale' }]),
+    vector: runtimeAppVector,
+  }));
+  await Promise.all([oldOperation, restarting]);
+
+  expect(oldMessages).toEqual([]);
+  expect(closedClients).toEqual([1]);
+  expect(controller.history).toEqual([]);
+  const fresh = await controller.attachApp(attachment);
+  const freshTransport = transports[1];
+  if (freshTransport === undefined) throw new Error('Expected replacement runtime attachment.');
+  await freshTransport.send({ id: 2, jsonrpc: '2.0', method: 'tools/list' });
+  expect(fresh.sessionRevision).toBe(4);
+  expect(requests).toEqual(['tools/list', 'tools/list']);
+  await controller.close();
+  await old.close();
+});
+
+it('aborts an in-flight runtime route operation before the coalesced controller close publishes a stale result', async () => {
+  const completed = deferred<Awaited<ReturnType<NonNullable<McpSessionControllerRoutes['executeRuntime']>>>>();
+  const started = deferred<void>();
+  const closeCalls: string[] = [];
+  let routeSignal: AbortSignal | undefined;
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => { closeCalls.push('runtime.close'); },
+      config: async () => ({}),
+      executeRuntime: (async (_sessionId: string, _request: unknown, signal?: AbortSignal) => {
+        routeSignal = signal;
+        started.resolve();
+        return new Promise((resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          void completed.promise.then(resolve, reject);
+        });
+      }) as McpSessionControllerRoutes['executeRuntime'],
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+  const cancellation = new AbortController();
+  let invoking: Promise<unknown> | undefined;
+  let closing: Promise<void> | undefined;
+
+  try {
+    await controller.open(runtimeBinding);
+    invoking = controller.invoke({ id: 'runtime-route-cancel', operation: 'listTools', request: {}, signal: cancellation.signal });
+    await started.promise;
+
+    cancellation.abort(new DOMException('Runtime route invocation cancelled.', 'AbortError'));
+    expect(routeSignal).toBeInstanceOf(AbortSignal);
+    expect(routeSignal).not.toBe(cancellation.signal);
+    expect(routeSignal?.aborted).toBe(true);
+    closing = controller.close();
+    expect(controller.close()).toBe(closing);
+
+    await expect(invoking).rejects.toBe(cancellation.signal.reason);
+    await expect(closing).resolves.toBeUndefined();
+    expect(closeCalls).toEqual(['runtime.close']);
+    expect(controller.history.some((entry) => entry.id === 'runtime-route-cancel')).toBe(false);
+  } finally {
+    completed.resolve(Object.freeze({
+      operationId: 'runtime-route-operation-a',
+      sessionId: 'runtime-session-a',
+      sessionRevision: 3,
+      value: Object.freeze([{ name: 'forecast' }]),
+      vector: Object.freeze({
+        providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2,
+      }),
+    }));
+    await invoking?.catch(() => undefined);
+    await closing?.catch(() => undefined);
+    await controller.close().catch(() => undefined);
+  }
+});
+
+it('aborts an attached runtime App operation during a coalesced controller close without publishing a stale result', async () => {
+  const completed = deferred<McpAppBoundOperationResult>();
+  const started = deferred<void>();
+  const closeCalls: string[] = [];
+  let appSignal: AbortSignal | undefined;
+  let attachedTransport: Transport | undefined;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => undefined,
+      connect: async (transport: Transport) => { attachedTransport = transport; await transport.start(); },
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => { closeCalls.push('runtime.close'); },
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Attached App must not use the legacy runtime route executor.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+  let sending: Promise<void> | undefined;
+  let closing: Promise<void> | undefined;
+
+  try {
+    await controller.open(runtimeBinding);
+    await controller.attachApp(runtimeAppAttachment(async (operation, signal?: AbortSignal) => {
+      appSignal = signal;
+      started.resolve();
+      return new Promise((resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        void completed.promise.then(resolve, reject);
+      });
+    }));
+    if (attachedTransport === undefined) throw new Error('Expected controller-owned attached transport.');
+    sending = attachedTransport.send({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
+    await started.promise;
+
+    closing = controller.close();
+    expect(controller.cancel('app:1')).toBe(true);
+    expect(controller.close()).toBe(closing);
+    expect(appSignal).toBeInstanceOf(AbortSignal);
+    expect(appSignal?.aborted).toBe(true);
+
+    await expect(sending).resolves.toBeUndefined();
+    await expect(closing).resolves.toBeUndefined();
+    expect(closeCalls).toEqual(['runtime.close']);
+    expect(controller.history.some((entry) => entry.id === 'app:1')).toBe(false);
+  } finally {
+    completed.resolve(runtimeAppResult({ kind: 'tools/list' }));
+    await sending?.catch(() => undefined);
+    await closing?.catch(() => undefined);
+    await controller.close().catch(() => undefined);
+  }
+});
+
+it('adopts an authoritative higher runtime session revision without reopening the stable session', async () => {
+  let runtimeRouteCalls = 0;
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => { runtimeRouteCalls += 1; },
+      config: async () => ({}),
+      executeRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.adoptRuntimeSession(restartedRuntimeSession);
+
+  expect(controller.model).toMatchObject({
+    binding: { binding: restartedRuntimeSession.binding, kind: 'runtime' },
+    connection: {
+      protocolVersion: restartedRuntimeSession.connection.protocolVersion,
+      serverInfo: restartedRuntimeSession.connection.server,
+    },
+    phase: 'ready',
+  });
+  expect(runtimeRouteCalls).toBe(0);
+  await controller.close();
+});
+
+it('adopts a same-revision implementation update without reopening the stable runtime session', async () => {
+  let runtimeRouteCalls = 0;
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => { runtimeRouteCalls += 1; },
+      config: async () => ({}),
+      executeRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.adoptRuntimeSession(implementationUpdatedRuntimeSession);
+
+  expect(controller.model).toMatchObject({
+    binding: { binding: implementationUpdatedRuntimeSession.binding, kind: 'runtime' },
+    connection: {
+      protocolVersion: implementationUpdatedRuntimeSession.connection.protocolVersion,
+      serverInfo: implementationUpdatedRuntimeSession.connection.server,
+    },
+    phase: 'ready',
+  });
+  expect(runtimeRouteCalls).toBe(0);
+  await controller.close();
+});
+
+it('coalesces an exact authoritative adoption while its old App attachment drains', async () => {
+  const appClose = deferred<void>();
+  let appCloses = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => { appCloses += 1; await appClose.promise; },
+      connect: async (transport: Transport) => transport.start(),
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.attachApp(runtimeAppAttachment(async (operation) => runtimeAppResult(operation)));
+  const first = controller.adoptRuntimeSession(restartedRuntimeSession);
+  const second = controller.adoptRuntimeSession(restartedRuntimeSession);
+  expect(second).toBe(first);
+  await eventually(() => appCloses === 1);
+  expect(controller.model.phase).toBe('restarting');
+
+  appClose.resolve();
+  await first;
+  expect(controller.model.binding).toEqual({ binding: restartedRuntimeSession.binding, kind: 'runtime' });
+  await controller.close();
+});
+
+it('drains the attached App before one implementation-only adoption and fences a conflicting authority', async () => {
+  const appClose = deferred<void>();
+  let appCloses = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => { appCloses += 1; await appClose.promise; },
+      connect: async (transport: Transport) => transport.start(),
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.attachApp(runtimeAppAttachment(async (operation) => runtimeAppResult(operation)));
+  const first = controller.adoptRuntimeSession(implementationUpdatedRuntimeSession);
+  const second = controller.adoptRuntimeSession(implementationUpdatedRuntimeSession);
+  expect(second).toBe(first);
+  await expect(controller.adoptRuntimeSession(restartedRuntimeSession)).rejects.toThrow('already running for a different session authority');
+  await eventually(() => appCloses === 1);
+  expect(controller.model).toMatchObject({ binding: { binding: runtimeSession.binding, kind: 'runtime' }, phase: 'restarting' });
+
+  appClose.resolve();
+  await first;
+  expect(controller.model).toMatchObject({ binding: { binding: implementationUpdatedRuntimeSession.binding, kind: 'runtime' }, phase: 'ready' });
+  await controller.close();
+});
+
+it('retains the old ready runtime authority when attached cleanup rejects, then permits an exact retry', async () => {
+  const cleanupFailure = new Error('attached App cleanup failed');
+  let closeAttempts = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => {
+        closeAttempts += 1;
+        if (closeAttempts === 1) throw cleanupFailure;
+      },
+      connect: async (transport: Transport) => transport.start(),
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.attachApp(runtimeAppAttachment(async (operation) => runtimeAppResult(operation)));
+  await expect(controller.adoptRuntimeSession(restartedRuntimeSession)).rejects.toMatchObject({
+    failures: [{ reason: cleanupFailure, resource: 'app-client' }],
+  });
+  expect(controller.model).toMatchObject({ binding: { binding: runtimeSession.binding, kind: 'runtime' }, phase: 'ready' });
+
+  await controller.adoptRuntimeSession(restartedRuntimeSession);
+  expect(closeAttempts).toBe(2);
+  expect(controller.model).toMatchObject({ binding: { binding: restartedRuntimeSession.binding, kind: 'runtime' }, phase: 'ready' });
+  await controller.close();
+});
+
+it('rejects non-authoritative runtime adoption lanes without disturbing the ready authority', async () => {
+  const foreign = Object.freeze({
+    ...restartedRuntimeSession,
+    binding: Object.freeze({ ...restartedRuntimeSession.binding, sessionId: 'runtime-session-foreign' }),
+  });
+  const wrongServer = Object.freeze({
+    ...restartedRuntimeSession,
+    binding: Object.freeze({ ...restartedRuntimeSession.binding, serverName: 'foreign-runtime' }),
+  });
+  const wrongTarget = Object.freeze({
+    ...restartedRuntimeSession,
+    binding: Object.freeze({ ...restartedRuntimeSession.binding, target: 'codex' as const }),
+  });
+  const registryOnly = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, registryRevision: 8 }),
+  });
+  const sessionOnly = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, sessionRevision: 4 }),
+  });
+  const mixedRevision = Object.freeze({
+    ...restartedRuntimeSession,
+    binding: Object.freeze({ ...restartedRuntimeSession.binding, registryRevision: 6 }),
+  });
+  const downgraded = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, registryRevision: 6, sessionRevision: 2 }),
+  });
+  const sameRevisionDefinition = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, definitionDigest: 'definition-b' }),
+  });
+  const sameRevisionTransport = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, transportDigest: 'transport-b' }),
+  });
+  const nonReady = Object.freeze({ ...implementationUpdatedRuntimeSession, state: 'restarting' as const });
+  const malformed = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, serverDigest: '' }),
+  });
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  for (const invalid of [
+    foreign,
+    wrongServer,
+    wrongTarget,
+    runtimeSession,
+    registryOnly,
+    sessionOnly,
+    mixedRevision,
+    downgraded,
+    sameRevisionDefinition,
+    sameRevisionTransport,
+  ]) {
+    await expect(controller.adoptRuntimeSession(invalid)).rejects.toThrow('does not advance the current stable session authority');
+    expect(controller.model).toMatchObject({ binding: { binding: runtimeSession.binding, kind: 'runtime' }, phase: 'ready' });
+  }
+  for (const invalid of [nonReady, malformed]) {
+    await expect(controller.adoptRuntimeSession(invalid)).rejects.toThrow('requires a current ready runtime session snapshot');
+    expect(controller.model).toMatchObject({ binding: { binding: runtimeSession.binding, kind: 'runtime' }, phase: 'ready' });
+  }
+  await controller.close();
+});
+
+it('fences an in-flight runtime adoption when the controller closes', async () => {
+  const appClose = deferred<void>();
+  const closeCalls: Array<Readonly<{ readonly expectedSessionRevision: number; readonly sessionId: string }>> = [];
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => appClose.promise,
+      connect: async (transport: Transport) => transport.start(),
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async (request) => { closeCalls.push(request); },
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.attachApp(runtimeAppAttachment(async (operation) => runtimeAppResult(operation)));
+  const adoption = controller.adoptRuntimeSession(restartedRuntimeSession);
+  const closing = controller.close();
+  appClose.resolve();
+  await Promise.all([adoption, closing]);
+
+  expect(controller.model.phase).toBe('closed');
+  expect(controller.model.binding).not.toEqual({ binding: restartedRuntimeSession.binding, kind: 'runtime' });
+  expect(closeCalls).toEqual([{ expectedSessionRevision: 3, sessionId: 'runtime-session-a' }]);
 });
 
 it('rejects command, path, and environment smuggling instead of widening the immutable binding', async () => {
@@ -253,9 +1216,86 @@ it('creates one detached frozen binding snapshot before a proxy can smuggle comm
   expect(controller.model.binding).toEqual(binding);
   expect(controller.model.binding).not.toHaveProperty('command');
   expect(controller.model.binding).not.toHaveProperty('env');
+  stream.close();
+  await controller.close();
+});
+
+it('turns a replay overflow into the inclusive replay-gap marker before applying later trace entries', async () => {
+  const stream = traceStream();
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => stream.response,
+      trace: async () => ({
+        entries: [{ kind: 'logging', occurredAt: 7, payload: { message: 'resumed' }, sequence: 7 }],
+        overflow: { afterSequence: 0, droppedThroughSequence: 6 },
+      }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(binding);
+
+  expect(controller.model.timeline).toEqual({
+    droppedThroughSequence: 6,
+    entries: [
+      {
+        earliestAvailableSequence: 7,
+        latestDroppedSequence: 6,
+        requestedAfterSequence: 0,
+        type: 'replay.gap',
+      },
+      { kind: 'logging', occurredAt: 7, payload: { message: 'resumed' }, sequence: 7 },
+    ],
+    lastSequence: 7,
+  });
 
   stream.close();
   await controller.close();
+});
+
+it('accepts the largest representable replay gap and rejects an overflow before deriving its earliest cursor', async () => {
+  const acceptedStream = traceStream();
+  const accepted = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => acceptedStream.response,
+      trace: async () => ({ entries: [], overflow: { afterSequence: 0, droppedThroughSequence: Number.MAX_SAFE_INTEGER - 1 } }),
+    },
+    transportFactory: fakeTransport,
+  });
+  await accepted.open(binding);
+  expect(accepted.model.timeline.entries).toContainEqual({
+    earliestAvailableSequence: Number.MAX_SAFE_INTEGER,
+    latestDroppedSequence: Number.MAX_SAFE_INTEGER - 1,
+    requestedAfterSequence: 0,
+    type: 'replay.gap',
+  });
+  acceptedStream.close();
+  await accepted.close();
+
+  const rejectedStream = traceStream();
+  const rejected = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => rejectedStream.response,
+      trace: async () => ({ entries: [], overflow: { afterSequence: 0, droppedThroughSequence: Number.MAX_SAFE_INTEGER } }),
+    },
+    transportFactory: fakeTransport,
+  });
+  await expect(rejected.open(binding)).rejects.toThrow('Foreground MCP trace stream contained an invalid entry.');
+  expect(rejected.model.timeline.entries).toEqual([]);
+  rejectedStream.close();
+  await expect(rejected.close()).rejects.toThrow('Foreground MCP trace stream contained an invalid entry.');
 });
 
 it('leaves the controller retryable when the transport factory throws before opening', async () => {
@@ -669,7 +1709,7 @@ it('threads the admitted timeout through open while keeping it outside the immut
   await controller.open(binding, 12_345);
 
   expect(received).toMatchObject({ binding, timeoutMs: 12_345 });
-  expect((controller as unknown as { readonly session?: { readonly timeoutMs?: number } }).session?.timeoutMs).toBe(12_345);
+  expect(controller.session?.timeoutMs).toBe(12_345);
   expect(controller.model.binding).toEqual(binding);
   expect('timeoutMs' in (controller.model.binding ?? {})).toBe(false);
 
@@ -807,6 +1847,56 @@ it('cancels active SDK work through its transport signal and closes trace before
   await controller.close();
   expect(events).toEqual(['request.abort', 'trace.abort', 'client.close', 'transport.close']);
   expect(controller.model).toMatchObject({ activeRequests: {}, phase: 'closed' });
+});
+
+it('fails an active session when its transport reports a real fault during a request', async () => {
+  const stream = traceStream();
+  const events: string[] = [];
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async (_id, _after, signal) => {
+      signal?.addEventListener('abort', () => {
+        events.push('trace.abort');
+        stream.close();
+      }, { once: true });
+      return stream.response;
+    },
+    trace: async () => ({ entries: [] }),
+  };
+  const transport: McpSessionControllerTransport & { readonly events: string[] } = {
+    close: async () => { events.push('transport.close'); },
+    events,
+    send: async () => undefined,
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
+    start: async () => undefined,
+  };
+  const client: McpSessionControllerClient = {
+    close: async () => { events.push('client.close'); },
+    connect: async (next) => next.start(),
+    request: async (_request, options) => new Promise<unknown>((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => {
+        events.push('request.abort');
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    }),
+  };
+  const controller = createMcpSessionController({ clientFactory: () => client, routes, transportFactory: () => transport });
+  await controller.open(binding);
+
+  const request = controller.invoke({ id: 'tools-1', operation: 'listTools', request: {} });
+  await eventually(() => controller.model.activeRequests['tools-1'] !== undefined);
+  transport.onerror?.(new Error('MCP socket disconnected.'));
+
+  await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+  await eventually(() => controller.model.phase === 'error');
+  expect(controller.model.diagnostics).toContainEqual({
+    code: 'mcp.transport.error',
+    message: 'MCP session controller failed: MCP socket disconnected..',
+    severity: 'error',
+  });
+  expect(events).toEqual(['trace.abort', 'request.abort', 'client.close', 'transport.close']);
 });
 
 it('keeps the session ready when a cancelled request later reports its operation route failure', async () => {

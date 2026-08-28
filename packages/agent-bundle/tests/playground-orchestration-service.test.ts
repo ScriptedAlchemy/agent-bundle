@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import {
   PlaygroundOrchestrationService,
   type PlaygroundDurableTraceStore,
@@ -51,9 +52,21 @@ const currentStatus = (): ProjectStatus => Object.freeze({
 const eventually = (assertion: () => void): Promise<void> =>
   eventuallyPasses(assertion, { attempts: 25, delayMs: 2 });
 
+const deferred = <Value,>() => {
+  let reject!: (reason: unknown) => void;
+  let resolve!: (value: Value | PromiseLike<Value>) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return Object.freeze({ promise, reject, resolve });
+};
+
 class RecordingTraceStore implements PlaygroundDurableTraceStore {
   readonly appended: PlaygroundEventInput[] = [];
   closed = 0;
+  closeSessionCalls = 0;
+  finalizeCalls = 0;
   finalized: PlaygroundDurableOutcome | undefined;
   input: PlaygroundSessionInput | undefined;
   readonly promoted: PlaygroundSelectedAssertion[][] = [];
@@ -83,6 +96,7 @@ class RecordingTraceStore implements PlaygroundDurableTraceStore {
   }
 
   async finalize(sessionId: string, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession> {
+    this.finalizeCalls += 1;
     this.finalized = outcome;
     const session = this.#session;
     if (session === undefined) throw new Error('Expected the run to open a session first.');
@@ -134,6 +148,7 @@ class RecordingTraceStore implements PlaygroundDurableTraceStore {
   }
 
   async closeSession(sessionId: string): Promise<void> {
+    this.closeSessionCalls += 1;
     const session = this.#session;
     if (session?.id !== sessionId) throw new Error('Expected the session to exist before closing it.');
     this.#session = Object.freeze({ ...session, outcome: Object.freeze({ status: 'aborted' }), state: 'closed' });
@@ -277,6 +292,140 @@ it('atomically pins an omitted native prompt to the active epoch and persists aw
   ]);
 });
 
+it('drains an admitted native catalog lookup before closing native and trace ownership', async () => {
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const calls: string[] = [];
+  const nativeEpoch = Object.freeze({
+    ...activeEpoch,
+    id: 'epoch-native-catalog',
+    targetDigests: Object.freeze({ claude: 'native-target-digest' }),
+  });
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    epochStore: {
+      acquireActiveEpochReference: async () => {
+        calls.push('acquire');
+        entered.resolve();
+        await release.promise;
+        return Object.freeze({
+          close: async () => { calls.push('reference-close'); },
+          epoch: nativeEpoch,
+          root: '/epochs/native-catalog',
+        });
+      },
+      acquireEpochReference: async () => { throw new Error('Expected the active native epoch.'); },
+    },
+    native: {
+      catalog: async () => {
+        calls.push('catalog');
+        return Object.freeze({
+          cases: Object.freeze([]),
+          epochId: nativeEpoch.id,
+          fixtures: Object.freeze([]),
+          modelPins: Object.freeze([]),
+          selections: Object.freeze([]),
+        });
+      },
+      close: async () => { calls.push('native-close'); },
+      prepare: async () => { throw new Error('Unexpected native preparation.'); },
+      run: async () => { throw new Error('Unexpected native run.'); },
+    },
+    trace: new RecordingTraceStore(),
+  });
+
+  const catalog = service.catalog();
+  await entered.promise;
+  let closeSettled = false;
+  const closing = service.close().finally(() => { closeSettled = true; });
+  await Promise.resolve();
+  const settledBeforeLookupReleased = closeSettled;
+  release.resolve();
+
+  await expect(catalog).rejects.toThrow('closed');
+  await expect(closing).resolves.toBeUndefined();
+  expect(settledBeforeLookupReleased).toBe(false);
+  expect(calls).toEqual(['acquire', 'reference-close', 'native-close']);
+});
+
+it('drains admitted native preparation before closing its epoch and service ownership', async () => {
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const calls: string[] = [];
+  const nativeEpoch = Object.freeze({
+    ...activeEpoch,
+    id: 'epoch-native-prepare',
+    targetDigests: Object.freeze({ claude: 'native-target-digest' }),
+  });
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    epochStore: {
+      acquireActiveEpochReference: async () => Object.freeze({
+        close: async () => { calls.push('reference-close'); },
+        epoch: nativeEpoch,
+        root: '/epochs/native-prepare',
+      }),
+      acquireEpochReference: async () => { throw new Error('Expected the active native epoch.'); },
+    },
+    native: {
+      catalog: async () => { throw new Error('Unexpected native catalog.'); },
+      close: async () => { calls.push('native-close'); },
+      prepare: async () => {
+        calls.push('prepare');
+        entered.resolve();
+        await release.promise;
+        return Object.freeze({ epochId: nativeEpoch.id, fixtureDigest: 'fixture-digest', host: 'claude', prompt: 'Review.', target: 'claude' });
+      },
+      run: async () => { calls.push('native-run'); throw new Error('Native run must not start after close.'); },
+    },
+    trace: new RecordingTraceStore(),
+  } as unknown as ConstructorParameters<typeof PlaygroundOrchestrationService>[0]);
+
+  const admitted = service.run({
+    caseId: 'opaque-case',
+    fixtureId: 'opaque-fixture',
+    host: 'claude',
+    modelPinId: 'opaque-model',
+    operation: 'native.prompt',
+    prompt: 'Review.',
+    target: 'claude',
+  });
+  await entered.promise;
+  let closeSettled = false;
+  const closing = service.close().finally(() => { closeSettled = true; });
+  await Promise.resolve();
+  const settledBeforePrepareReleased = closeSettled;
+  release.resolve();
+
+  await expect(admitted).rejects.toThrow('closed');
+  await expect(closing).resolves.toBeUndefined();
+  expect(settledBeforePrepareReleased).toBe(false);
+  expect(calls).toEqual(['prepare', 'reference-close', 'native-close']);
+});
+
+it('retains native and trace close failures under one orchestration close result', async () => {
+  const trace = new RecordingTraceStore();
+  const nativeFailure = new Error('native close failed');
+  const traceFailure = new Error('trace close failed');
+  trace.close = async () => { throw traceFailure; };
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    epochStore: epochAuthority([]),
+    native: {
+      catalog: async () => { throw new Error('Unexpected native catalog.'); },
+      close: async () => { throw nativeFailure; },
+      prepare: async () => { throw new Error('Unexpected native preparation.'); },
+      run: async () => { throw new Error('Unexpected native run.'); },
+    },
+    trace,
+  });
+
+  await expect(service.close()).rejects.toMatchObject({
+    errors: [nativeFailure, traceFailure],
+    message: 'Playground background operations could not be contained.',
+  });
+});
+
 it('cancels an admitted native host after its safe start progress and releases the exact epoch once', async () => {
   const trace = new RecordingTraceStore();
   const calls: string[] = [];
@@ -417,7 +566,12 @@ it('exports and promotes the real durable response event reference from a native
     projectRevision: 'native-revision-digest',
     targetDigests: Object.freeze({ codex: 'native-target-digest' }),
   });
-  const reference = Object.freeze({ close: async () => undefined, epoch: nativeEpoch, root: '/epochs/native-durable' });
+  const operationCompleted = Promise.withResolvers<void>();
+  const reference = Object.freeze({
+    close: async () => { operationCompleted.resolve(); },
+    epoch: nativeEpoch,
+    root: '/epochs/native-durable',
+  });
   const service = new PlaygroundOrchestrationService({
     coordinator: { status: currentStatus },
     createRunId: () => 'run-native-durable',
@@ -444,7 +598,8 @@ it('exports and promotes the real durable response event reference from a native
       caseId: 'opaque-case-a', fixtureId: 'opaque-fixture-a', host: 'codex', modelPinId: 'opaque-model-a',
       operation: 'native.prompt', prompt: 'Review the fixture.', target: 'codex',
     });
-    await eventually(() => expect(trace.session(admitted.session.id)?.state).toBe('finalized'));
+    await operationCompleted.promise;
+    expect(trace.session(admitted.session.id)?.state).toBe('finalized');
     const exported = await service.export(admitted.session.id);
     const response = exported.events.find((event) => event.kind === 'native.response');
     expect(response).toMatchObject({ raw: { text: 'Safe native response.' }, rawEventRef: 'events.jsonl#2' });
@@ -610,6 +765,183 @@ it('keeps close pending through epoch-reference release and reports its containe
     expect(rejections).toEqual([]);
     expect(references).toEqual(['epoch-active']);
   } finally { process.off('unhandledRejection', onUnhandled); }
+});
+
+it('drains every admitted setup stage before closing durable playground ownership', async () => {
+  for (const held of ['acquire', 'open', 'append'] as const) {
+    const trace = new RecordingTraceStore();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let referenceCloses = 0;
+    let skillCalls = 0;
+    const originalOpen = trace.openSession.bind(trace);
+    const originalAppend = trace.append.bind(trace);
+    if (held === 'open') {
+      trace.openSession = async (input) => {
+        entered.resolve();
+        await release.promise;
+        return originalOpen(input);
+      };
+    }
+    if (held === 'append') {
+      trace.append = async (sessionId, input) => {
+        if (input.kind === 'epoch.bound') {
+          entered.resolve();
+          await release.promise;
+        }
+        return originalAppend(sessionId, input);
+      };
+    }
+    const service = new PlaygroundOrchestrationService({
+      coordinator: { status: currentStatus },
+      createRunId: () => `run-${held}`,
+      createSessionId: () => `session-${held}`,
+      epochStore: {
+        acquireEpochReference: async (epochId) => {
+          if (held === 'acquire') {
+            entered.resolve();
+            await release.promise;
+          }
+          return Object.freeze({
+            close: async () => { referenceCloses += 1; },
+            root: `/epochs/${epochId}`,
+          });
+        },
+      },
+      skillDocuments: { generated: async () => { skillCalls += 1; return undefined; } },
+      trace,
+    });
+
+    const admitted = service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' });
+    await entered.promise;
+    let closeSettled = false;
+    const closing = service.close().finally(() => { closeSettled = true; });
+    await Promise.resolve();
+    const settledBeforeSetupReleased = closeSettled;
+    release.resolve();
+    await expect(admitted).rejects.toThrow('closed');
+    await expect(closing).resolves.toBeUndefined();
+
+    expect(settledBeforeSetupReleased).toBe(false);
+    expect(referenceCloses).toBe(1);
+    expect(trace.closed).toBe(1);
+    expect(skillCalls).toBe(0);
+    expect(trace.finalizeCalls).toBe(held === 'acquire' ? 0 : 1);
+    expect(trace.closeSessionCalls).toBe(0);
+  }
+});
+
+it('keeps foreground close pending behind a POST admitted during epoch acquisition', async () => {
+  const trace = new RecordingTraceStore();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  let referenceCloses = 0;
+  let skillCalls = 0;
+  const coordinator = {
+    close: async () => service.close(),
+    rebuild: async () => undefined,
+    start: async () => undefined,
+    status: currentStatus,
+  };
+  const service = new PlaygroundOrchestrationService({
+    coordinator,
+    createRunId: () => 'run-foreground-close',
+    createSessionId: () => 'session-foreground-close',
+    epochStore: {
+      acquireEpochReference: async (epochId) => {
+        entered.resolve();
+        await release.promise;
+        return Object.freeze({
+          close: async () => { referenceCloses += 1; },
+          root: `/epochs/${epochId}`,
+        });
+      },
+    },
+    skillDocuments: { generated: async () => { skillCalls += 1; return undefined; } },
+    trace,
+  });
+  const foreground = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    playground: service,
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const posted = fetch(`${foreground.url}/api/playground/runs`, {
+      body: JSON.stringify({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' }),
+      headers: {
+        'content-type': 'application/json',
+        origin: foreground.url,
+        'x-agent-bundle-session': foreground.sessionToken,
+      },
+      method: 'POST',
+    }).catch(() => undefined);
+    await entered.promise;
+
+    const closing = foreground.close();
+    const settledBeforeAcquireReleased = await Promise.race([
+      closing.then(() => true),
+      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 20); }),
+    ]);
+    expect(settledBeforeAcquireReleased).toBe(false);
+
+    release.resolve();
+    await Promise.all([closing, posted]);
+    expect(referenceCloses).toBe(1);
+    expect(trace.closed).toBe(1);
+    expect(trace.input).toBeUndefined();
+    expect(skillCalls).toBe(0);
+  } finally {
+    release.resolve();
+    await foreground.close().catch(() => undefined);
+  }
+});
+
+it('retains an admitted containment failure in the same close result', async () => {
+  const trace = new RecordingTraceStore();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const containmentFailure = new Error('epoch release failed during close');
+  let referenceCloses = 0;
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    createRunId: () => 'run-admission-containment',
+    createSessionId: () => 'session-admission-containment',
+    epochStore: {
+      acquireEpochReference: async (epochId) => {
+        entered.resolve();
+        await release.promise;
+        return Object.freeze({
+          close: async () => {
+            referenceCloses += 1;
+            throw containmentFailure;
+          },
+          root: `/epochs/${epochId}`,
+        });
+      },
+    },
+    skillDocuments: { generated: async () => undefined },
+    trace,
+  });
+  const admitted = service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' });
+  await entered.promise;
+
+  const firstClose = service.close();
+  expect(service.close()).toBe(firstClose);
+  release.resolve();
+
+  await expect(admitted).rejects.toMatchObject({
+    errors: [expect.any(Error), containmentFailure],
+    message: 'Playground admission and containment both failed.',
+  });
+  await expect(firstClose).rejects.toMatchObject({
+    errors: [expect.objectContaining({ message: 'Playground admission and containment both failed.' })],
+    message: 'Playground background operations could not be contained.',
+  });
+  expect(referenceCloses).toBe(1);
+  expect(trace.closed).toBe(1);
 });
 
 it('records the selected script id and its nonzero exit as durable failed script evidence', async () => {

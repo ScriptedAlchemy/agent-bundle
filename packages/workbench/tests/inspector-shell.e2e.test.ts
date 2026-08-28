@@ -4,7 +4,10 @@ import { join } from 'node:path';
 import { expect } from '@rstest/playwright';
 
 import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
-import { e2e, execFile, withWorkbenchProjectServer, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
+import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
+import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
+import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { e2e, execFile, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
 
 const browserTimeout = 5_000;
 
@@ -63,9 +66,16 @@ const writeInspectorProject = async (root: string): Promise<void> => {
   ]);
 };
 
-e2e('canonicalizes legacy routes, preserves browser history, and rejects Inspector routes', { timeout: 60_000 }, async ({ page }) => {
+e2e('treats an unsupported Inspector hash as the overview without opening an MCP session', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
-  await withWorkbenchProjectServer(async (server) => {
+  const project = await createProjectFixture();
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  try {
     const pageErrors: Error[] = [];
     let sessionPosts = 0;
     page.on('pageerror', (error) => pageErrors.push(error));
@@ -73,38 +83,30 @@ e2e('canonicalizes legacy routes, preserves browser history, and rejects Inspect
       if (request.url() === `${server.url}/api/mcp/sessions` && request.method() === 'POST') sessionPosts += 1;
     });
 
-    await page.goto(`${server.url}#/inspector`);
-    await expect(page).toHaveURL(/#\/overview$/u, { timeout: browserTimeout });
+    await page.goto(`${server.url}#inspector`);
+    await expect(page).toHaveURL(/#inspector$/u, { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveCount(0);
-
-    await page.goto(`${server.url}#logs`);
-    await expect(page).toHaveURL(/#\/logs$/u, { timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'Logs' })).toHaveAttribute('aria-current', 'page');
-
-    await page.getByRole('link', { name: 'Artifacts', exact: true }).click();
-    await expect(page).toHaveURL(/#\/artifacts$/u, { timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Artifacts', exact: true })).toBeVisible({ timeout: browserTimeout });
-    await page.goBack();
-    await expect(page).toHaveURL(/#\/logs$/u, { timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'Logs' })).toHaveAttribute('aria-current', 'page');
-    await page.goForward();
-    await expect(page).toHaveURL(/#\/artifacts$/u, { timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'Artifacts' })).toHaveAttribute('aria-current', 'page');
-
-    await page.goto(`${server.url}#inspector`);
-    await expect(page).toHaveURL(/#\/overview$/u, { timeout: browserTimeout });
     expect(sessionPosts).toBe(0);
     expect(pageErrors).toEqual([]);
-  });
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
 });
 
 e2e('shares one real session between the MCP Playground and Inspector presentations', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
-  await withWorkbenchProjectServer(async (server) => {
+  const project = await createProjectFixture();
+  await writeInspectorProject(project.root);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  try {
     const pageErrors: Error[] = [];
     let sessionPosts = 0;
     page.on('pageerror', (error) => pageErrors.push(error));
@@ -112,7 +114,7 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
       if (request.url() === `${server.url}/api/mcp/sessions` && request.method() === 'POST') sessionPosts += 1;
     });
 
-    await page.goto(`${server.url}#/mcp`);
+    await page.goto(`${server.url}#mcp`);
     const playgroundTab = page.getByRole('tab', { name: 'Playground' });
     const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
     const presentationHistoryLength = await page.evaluate(() => window.history.length);
@@ -121,29 +123,35 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     await expect(inspectorTab).toHaveAttribute('tabindex', '-1');
     await playgroundTab.focus();
     await page.keyboard.press('ArrowRight');
-    await expect(inspectorTab).toBeFocused();
+    await expect(inspectorTab).toBeFocused({ timeout: browserTimeout });
     await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
-    await page.keyboard.press('Home');
-    await expect(playgroundTab).toBeFocused();
+    await expect(page).toHaveURL(/#mcp$/u);
+    await page.keyboard.press('ArrowDown');
+    await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
     await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
-    await page.keyboard.press('End');
-    await expect(inspectorTab).toBeFocused();
-    await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('ArrowLeft');
-    await expect(playgroundTab).toBeFocused();
+    await expect(inspectorTab).toBeFocused({ timeout: browserTimeout });
+    await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('ArrowUp');
+    await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
     await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
+    expect(sessionPosts).toBe(0);
+    await page.keyboard.press('Home');
+    await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
+    await page.keyboard.press('End');
+    await expect(inspectorTab).toBeFocused({ timeout: browserTimeout });
     expect(await page.evaluate(() => window.history.length)).toBe(presentationHistoryLength);
+    await page.keyboard.press('Home');
+    await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
+    await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#mcp-playground-presentation')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('#mcp-inspector-presentation')).not.toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
     await inspectorTab.click();
-    await expect(page).toHaveURL(/#\/mcp$/u);
-    await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
-
-    await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
-    await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
-    await inspectorTab.click();
+    await expect(page).toHaveURL(/#mcp$/u);
     await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
 
     const inspector = page.locator('#mcp-inspector-presentation');
@@ -219,15 +227,26 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     expect(sessionPosts).toBe(1);
     expect(await page.evaluate(() => window.history.length)).toBe(presentationHistoryLength);
     expect(pageErrors).toEqual([]);
-  }, { setup: (project) => writeInspectorProject(project.root) });
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
 });
 
 e2e('mounts the internal Inspector presentation from an explicit development-mode artifact', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench('development');
-  await withWorkbenchProjectServer(async (server) => {
+  const project = await createProjectFixture();
+  await writeInspectorProject(project.root);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  try {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${server.url}#/mcp`);
+    await page.goto(`${server.url}#mcp`);
     const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
     await inspectorTab.click();
     await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
@@ -235,5 +254,8 @@ e2e('mounts the internal Inspector presentation from an explicit development-mod
     await expect(page.getByText('Negotiated protocol: Not negotiated')).toBeVisible({ timeout: browserTimeout });
     await expect(await readFile(join(workbenchAssets, 'static', 'js', 'lib-react.js'), 'utf8')).toContain('react.development.js');
     expect(pageErrors).toEqual([]);
-  }, { setup: (project) => writeInspectorProject(project.root) });
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
 });

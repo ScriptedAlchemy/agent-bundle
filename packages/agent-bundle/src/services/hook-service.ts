@@ -121,6 +121,7 @@ const runWrapper = async (options: {
   let treeTerminationFailed = false;
   let forceKillTimer: NodeJS.Timeout | undefined;
   let terminationSettlementTimer: NodeJS.Timeout | undefined;
+  const terminationTasks: Promise<boolean>[] = [];
   const cleanup = () => {
     clearTimeout(timeoutTimer);
     if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
@@ -133,14 +134,28 @@ const runWrapper = async (options: {
     cleanup();
     action();
   };
+  const settleAfterTermination = (action: () => void) => {
+    void (async () => {
+      let joined = 0;
+      while (joined < terminationTasks.length) {
+        const tasks = terminationTasks.slice(joined);
+        joined += tasks.length;
+        await Promise.allSettled(tasks);
+      }
+      action();
+    })();
+  };
   const terminate = (error: Error) => {
     if (terminationError !== undefined || closed) return;
     terminationError = error;
-    const terminateTree = (signal: NodeJS.Signals) => terminateProcessTree(child, signal, {
-      onTreeTerminationFailure: () => { treeTerminationFailed = true; },
-      platform: options.platform,
-      taskkill: options.taskkill,
-    });
+    const terminateTree = (signal: NodeJS.Signals) => {
+      const task = terminateProcessTree(child, signal, {
+        onTreeTerminationFailure: () => { treeTerminationFailed = true; },
+        platform: options.platform,
+        taskkill: options.taskkill,
+      });
+      terminationTasks.push(task);
+    };
     terminateTree('SIGTERM');
     forceKillTimer = setTimeout(() => {
       if (closed) return;
@@ -151,7 +166,10 @@ const runWrapper = async (options: {
         child.stdin.destroy();
         child.stdout.destroy();
         child.stderr.destroy();
-        settle(() => reject(new HookSimulationTerminationError(errorToReport)));
+        settleAfterTermination(() => {
+          if (closed) return;
+          settle(() => reject(new HookSimulationTerminationError(errorToReport)));
+        });
       }, terminationSettlementMs);
     }, terminationGraceMs);
   };
@@ -174,15 +192,26 @@ const runWrapper = async (options: {
     stderr = append(stderr, chunk);
   });
   child.once('error', (error) => {
+    if (terminationError !== undefined) {
+      const errorToReport = terminationError;
+      settleAfterTermination(() => {
+        settle(() => reject(treeTerminationFailed
+          ? new HookSimulationTerminationError(errorToReport)
+          : errorToReport));
+      });
+      return;
+    }
     settle(() => reject(error));
   });
   child.once('close', (code) => {
     closed = true;
     const errorToReport = terminationError;
     if (errorToReport !== undefined) {
-      settle(() => reject(treeTerminationFailed
-        ? new HookSimulationTerminationError(errorToReport)
-        : errorToReport));
+      settleAfterTermination(() => {
+        settle(() => reject(treeTerminationFailed
+          ? new HookSimulationTerminationError(errorToReport)
+          : errorToReport));
+      });
       return;
     }
     if (streamLimitExceeded) {

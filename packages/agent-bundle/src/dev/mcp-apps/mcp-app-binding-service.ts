@@ -1,16 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
-import { isRecord } from '../../core/strict-json.ts';
-import { requireMcpAppJson, type McpAppJsonValue } from './mcp-app-json.ts';
+export type McpAppJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly McpAppJsonValue[]
+  | { readonly [key: string]: McpAppJsonValue };
 
-export type { McpAppJsonValue } from './mcp-app-json.ts';
-
-export const mcpAppPreviewProfiles = Object.freeze(['chatgpt', 'claude', 'portable'] as const);
-
-export type McpAppPreviewProfile = (typeof mcpAppPreviewProfiles)[number];
-
-export const isMcpAppPreviewProfile = (value: unknown): value is McpAppPreviewProfile =>
-  (mcpAppPreviewProfiles as readonly unknown[]).includes(value);
+export type McpAppPreviewProfile = 'chatgpt' | 'claude' | 'portable';
 
 export interface McpAppToolDefinition {
   readonly _meta?: { readonly [key: string]: McpAppJsonValue };
@@ -118,8 +116,25 @@ interface BindingEntry {
 const defaultTeardownTimeoutMs = 1_000;
 const maximumTeardownTimeoutMs = 30_000;
 
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isJsonValue = (value: unknown): value is McpAppJsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (!isRecord(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  return Object.values(value).every(isJsonValue);
+};
+
+const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
+  if (Array.isArray(value)) return Object.freeze(value.map(cloneJson));
+  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneJson(child)])));
+};
+
 const requireJson = (value: unknown, label: string): McpAppJsonValue => {
-  return requireMcpAppJson(value, `${label} must be a finite JSON value.`);
+  if (!isJsonValue(value)) throw new TypeError(`${label} must be a finite JSON value.`);
+  return cloneJson(value);
 };
 
 const requireNonempty = (value: string, label: string): string => {
@@ -128,7 +143,7 @@ const requireNonempty = (value: string, label: string): string => {
 };
 
 const requireProfile = (profile: McpAppPreviewProfile): McpAppPreviewProfile => {
-  if (isMcpAppPreviewProfile(profile)) return profile;
+  if (profile === 'chatgpt' || profile === 'claude' || profile === 'portable') return profile;
   throw new Error(`Unsupported MCP App preview profile ${JSON.stringify(profile)}.`);
 };
 
@@ -291,15 +306,20 @@ export class McpAppBindingService {
     }
     if (entry.closeAttempt !== undefined) return entry.closeAttempt;
 
-    const attempt = Promise.withResolvers<void>();
-    entry.closeAttempt = attempt.promise;
-    void this.#releaseEntry(entry).then(
-      () => attempt.resolve(),
-      (error: unknown) => attempt.reject(this.#closeFailure(entry, error)),
-    ).finally(() => {
-      if (entry.closeAttempt === attempt.promise) entry.closeAttempt = undefined;
+    let resolveAttempt: (() => void) | undefined;
+    let rejectAttempt: ((error: Error) => void) | undefined;
+    const attempt = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolveAttempt = resolvePromise;
+      rejectAttempt = rejectPromise;
     });
-    return attempt.promise;
+    entry.closeAttempt = attempt;
+    void this.#releaseEntry(entry).then(
+      () => resolveAttempt?.(),
+      (error: unknown) => rejectAttempt?.(this.#closeFailure(entry, error)),
+    ).finally(() => {
+      if (entry.closeAttempt === attempt) entry.closeAttempt = undefined;
+    });
+    return attempt;
   }
 
   async #releaseEntry(entry: BindingEntry): Promise<void> {

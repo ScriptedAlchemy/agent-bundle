@@ -4,14 +4,58 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
-import { EvalService, EvalServiceError } from '../src/dev/eval/eval-service.ts';
+import {
+  EvalService,
+  EvalServiceBackgroundFailureOverflowError,
+  EvalServiceBackgroundFailureRetention,
+  EvalServiceError,
+} from '../src/dev/eval/eval-service.ts';
 import { evalCaseFromDraft } from '../src/eval/index.ts';
 import { EvalRunWriter } from '../src/eval/run-store.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
-import { withEvalRunStoreDurabilityTestHook } from './support/durability.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 
 const service = (root: string): EvalService => new EvalService({ projectRoot: root, targets: ['portable'] });
+
+type EvalRunStoreDurabilityTestHook = (
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
+  event: Readonly<{ readonly kind: string }>,
+  path: string,
+  journal: Readonly<{ close(): Promise<void>; writeFile(contents: string, options?: string): Promise<void> }> | undefined,
+) => void | Promise<void>;
+
+const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
+
+const withEvalRunStoreDurabilityTestHook = async <T>(
+  hook: EvalRunStoreDurabilityTestHook,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
+  const previous = hooks[evalRunStoreDurabilityTestHookKey];
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  hooks[evalRunStoreDurabilityTestHookKey] = hook;
+  process.env.NODE_ENV = 'test';
+  try {
+    return await operation();
+  } finally {
+    if (previous === undefined) delete hooks[evalRunStoreDurabilityTestHookKey];
+    else hooks[evalRunStoreDurabilityTestHookKey] = previous;
+    if (previousNodeEnvironment === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnvironment;
+  }
+};
+
+it('bounds background failures while retaining explicit overflow evidence', () => {
+  const retention = new EvalServiceBackgroundFailureRetention();
+  const failures = Array.from({ length: 257 }, (_, index) => new Error(`background failure ${index}`));
+  failures.forEach((failure) => retention.retain(failure));
+
+  const retained = retention.snapshot();
+  expect(retained.slice(0, 256)).toEqual(failures.slice(0, 256));
+  expect(retained[256]).toBeInstanceOf(EvalServiceBackgroundFailureOverflowError);
+  expect(retained[256]).toMatchObject({ droppedCount: 1 });
+  expect((retained[256] as Error).message).not.toContain('background failure 256');
+});
 
 it('lists authored suites and their cases without exposing absolute filesystem paths', async () => {
   const project = await createProjectFixture();
@@ -96,7 +140,7 @@ it('persists complete evidence for every trial of a multi-trial run', async () =
   }
 }, 120_000);
 
-it('rejects an explicit artifact outside the project instead of persisting an absolute path', async () => {
+it('persists an explicit artifact outside the project as an opaque portable identity', async () => {
   const project = await createProjectFixture();
   const artifactProject = await createProjectFixture();
   try {
@@ -104,8 +148,13 @@ it('rejects an explicit artifact outside the project instead of persisting an ab
     const artifact = join(artifactProject.root, 'prebuilt');
     await build({ output: artifact, root: artifactProject.root, targets: ['portable'] });
 
-    await expect(service(project.root).run({ artifact, caseIds: ['reads-result'] })).rejects.toMatchObject({
-      code: 'EVAL_ARTIFACT_OUTSIDE_PROJECT',
+    await expect(service(project.root).run({ artifact, caseIds: ['reads-result'] })).resolves.toMatchObject({
+      run: {
+        artifact: {
+          manifestPath: expect.stringMatching(/^external\/[a-f0-9]{64}\.json$/u),
+          source: 'explicit',
+        },
+      },
     });
   } finally {
     await Promise.all([
@@ -185,6 +234,9 @@ it('replays only complete persisted events with a frozen durable cursor', async 
     const continued = await evals.events(created.run.id, 1);
 
     expect(replay.events.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+    expect(replay.events.map((event) => event.kind)).toEqual([
+      'run.started', 'trial.started', 'trial.completed', 'run.completed',
+    ]);
     expect(replay.cursor).toEqual({ afterSequence: 4 });
     expect(replay.incompleteTrailingRecord).toBe(true);
     expect(continued.events.map((event) => event.sequence)).toEqual([2, 3, 4]);
@@ -1014,20 +1066,26 @@ it('uses the uncommitted sequence for a terminal fallback after an open failure'
   }
 }, 120_000);
 
-it('forbids a terminal fallback when partial-write rollback is uncertain', async () => {
+it('does not finalize or append a fallback terminal when partial-write rollback is uncertain', async () => {
   const project = await createProjectFixture();
-  const partialWriteFailure = new Error('run.completed event journal partial write failed');
+  const writeFailure = new Error('run.completed event journal partial write failed');
+  const rollbackFailure = new Error('run.completed event journal rollback failed');
+  const partial = '{"kind":"run.completed"';
   let evals: EvalService | undefined;
-  let injected = false;
+  let writeInjected = false;
+  let rollbackInjected = false;
   try {
     await seedEvalProject(project.root);
     await withEvalRunStoreDurabilityTestHook(async (phase, event, _path, journal) => {
-      if (phase === 'before-event-write' && event.kind === 'run.completed' && !injected) {
+      if (phase === 'before-event-write' && event.kind === 'run.completed' && !writeInjected) {
         if (journal === undefined) throw new Error('The partial-write hook did not receive the event journal.');
-        injected = true;
-        await journal.writeFile('{"kind":"run.completed"', 'utf8');
-        await journal.close();
-        throw partialWriteFailure;
+        writeInjected = true;
+        await journal.writeFile(partial, 'utf8');
+        throw writeFailure;
+      }
+      if (phase === 'before-event-rollback' && event.kind === 'run.completed' && !rollbackInjected) {
+        rollbackInjected = true;
+        throw rollbackFailure;
       }
     }, async () => {
       const service = new EvalService({ projectRoot: project.root, targets: ['portable'] });
@@ -1042,12 +1100,14 @@ it('forbids a terminal fallback when partial-write rollback is uncertain', async
       }
       if (replay === undefined) throw new Error('The uncertain partial terminal was not observed.');
 
-      expect(injected).toBe(true);
+      expect(writeInjected).toBe(true);
+      expect(rollbackInjected).toBe(true);
       expect(replay.events.map((event) => event.kind)).toEqual([
         'run.started',
         'trial.started',
         'trial.completed',
       ]);
+      expect((await service.read(admission.run.id)).run.completedAt).toBeUndefined();
       await expect(service.close()).rejects.toThrow('Eval service could not close.');
     });
   } finally {

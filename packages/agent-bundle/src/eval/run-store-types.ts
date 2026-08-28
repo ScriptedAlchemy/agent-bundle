@@ -46,6 +46,7 @@ export interface EvalTrialInvocationProvenance {
 
 /** The server-owned semantic grader identity used to produce a semantic outcome. */
 export interface EvalSemanticGraderProvenance {
+  readonly contractRevision: string;
   readonly id: string;
   readonly model: string;
 }

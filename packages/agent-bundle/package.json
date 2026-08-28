@@ -63,6 +63,7 @@
     "@rsbuild/plugin-react": "2.1.0",
     "@rslib/core": "0.23.2",
     "@rslint/core": "0.8.0",
+    "@rspack/core": "2.1.10",
     "@rstackjs/load-config": "0.1.2",
     "acorn": "8.18.0",
     "ajv": "8.20.0",
@@ -74,6 +75,11 @@
     "ignore": "7.0.6",
     "jiti": "2.7.0",
     "open": "11.0.1",
+    "ws": "8.21.3",
     "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "@types/ws": "8.18.1"
   }
 }

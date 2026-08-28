@@ -1,10 +1,15 @@
 import type {
+  McpSessionBinding,
   McpSessionInspectorConfig,
   McpSessionOperation,
   McpSessionTraceEntry,
   McpSessionTraceReplayGap,
 } from '../../../agent-bundle/src/contracts/mcp-session.ts';
-import type { McpRouteSessionBinding } from './mcp-route-client.ts';
+import type { DevRuntimeMcpAppRunBinding, RuntimeVector } from '../../../agent-bundle/src/contracts/runtime.ts';
+
+export type McpBrowserSessionBinding =
+  | McpSessionBinding
+  | Readonly<{ readonly kind: 'runtime'; readonly binding: DevRuntimeMcpAppRunBinding }>;
 
 export type McpBrowserSessionPhase =
   | 'idle'
@@ -40,26 +45,24 @@ export interface McpBrowserSessionTiming {
   readonly startedAt: number;
 }
 
-/** Requests the controller can record; session-lifecycle operations never enter the history. */
-export type McpBrowserSessionRequestOperation = Exclude<McpSessionOperation, 'cancel' | 'close' | 'restart'>;
-
 export interface McpBrowserSessionInvocation {
-  readonly binding?: McpRouteSessionBinding;
+  readonly binding?: McpBrowserSessionBinding;
   readonly error?: unknown;
   readonly id: string;
-  readonly operation: McpBrowserSessionRequestOperation;
+  readonly operation: McpSessionOperation;
   readonly replayOf?: string;
-  readonly request: Readonly<Record<string, unknown>>;
+  readonly request: unknown;
   readonly result?: unknown;
   readonly timing: McpBrowserSessionTiming;
+  readonly vector?: RuntimeVector;
 }
 
 export interface McpBrowserSessionActiveRequest {
-  readonly binding?: McpRouteSessionBinding;
+  readonly binding?: McpBrowserSessionBinding;
   readonly id: string;
-  readonly operation: McpBrowserSessionRequestOperation;
+  readonly operation: McpSessionOperation;
   readonly replayOf?: string;
-  readonly request: Readonly<Record<string, unknown>>;
+  readonly request: unknown;
   readonly startedAt: number;
 }
 
@@ -81,7 +84,7 @@ export interface McpBrowserSessionTimeline {
 
 export interface McpBrowserSessionModel {
   readonly activeRequests: Readonly<Record<string, McpBrowserSessionActiveRequest>>;
-  readonly binding?: McpRouteSessionBinding;
+  readonly binding?: McpBrowserSessionBinding;
   readonly catalogs: McpBrowserSessionCatalogs;
   readonly conciseTrace: readonly McpBrowserSessionTimelineEntry[];
   readonly config?: McpSessionInspectorConfig;
@@ -95,7 +98,8 @@ export interface McpBrowserSessionModel {
 }
 
 export type McpBrowserSessionEvent =
-  | Readonly<{ readonly binding: McpRouteSessionBinding; readonly type: 'open' }>
+  | Readonly<{ readonly binding: McpBrowserSessionBinding; readonly type: 'open' }>
+  | Readonly<{ readonly binding: McpBrowserSessionBinding; readonly type: 'binding' }>
   | Readonly<{ readonly connection: McpBrowserSessionConnection; readonly type: 'connection' }>
   | Readonly<{ readonly catalogs: McpBrowserSessionCatalogs; readonly type: 'catalogs' }>
   | Readonly<{ readonly config: McpSessionInspectorConfig; readonly type: 'config' }>
@@ -107,6 +111,7 @@ export type McpBrowserSessionEvent =
     readonly id: string;
     readonly result?: unknown;
     readonly type: 'request.settled';
+    readonly vector?: RuntimeVector;
   }>
   | Readonly<{ readonly diagnostic: McpBrowserSessionDiagnostic; readonly type: 'failed' }>
   | Readonly<{ readonly type: 'ready' | 'restart' | 'close' | 'closed' }>;
@@ -220,9 +225,9 @@ const allowedEventsByPhase: Readonly<Record<McpBrowserSessionPhase, readonly Mcp
   closing: ['closed'],
   error: ['close'],
   idle: ['open', 'close', 'failed'],
-  opening: ['connection', 'catalogs', 'config', 'trace', 'request.start', 'request.settled', 'ready', 'close', 'failed'],
-  ready: ['connection', 'catalogs', 'config', 'trace', 'request.start', 'request.settled', 'restart', 'close', 'failed'],
-  restarting: ['connection', 'catalogs', 'config', 'trace', 'request.start', 'request.settled', 'ready', 'close', 'failed'],
+  opening: ['binding', 'connection', 'catalogs', 'config', 'trace', 'request.start', 'request.settled', 'ready', 'close', 'failed'],
+  ready: ['binding', 'connection', 'catalogs', 'config', 'trace', 'request.start', 'request.settled', 'restart', 'close', 'failed'],
+  restarting: ['binding', 'connection', 'catalogs', 'config', 'trace', 'request.start', 'request.settled', 'ready', 'close', 'failed'],
 };
 
 const activeRequestsWith = (
@@ -306,6 +311,7 @@ const settledInvocation = (
     durationMs: Math.max(0, event.completedAt - active.startedAt),
     startedAt: active.startedAt,
   },
+  ...(event.vector === undefined ? {} : { vector: event.vector }),
 });
 
 export const createMcpBrowserSessionModel = (sessionId: string): McpBrowserSessionModel => withViews({
@@ -325,6 +331,8 @@ export const reduceMcpBrowserSession = (
   switch (event.type) {
     case 'open':
       return update(model, { binding: snapshot(event.binding), phase: 'opening' });
+    case 'binding':
+      return update(model, { binding: snapshot(event.binding) });
     case 'connection':
       return update(model, { connection: snapshot(event.connection) });
     case 'catalogs':

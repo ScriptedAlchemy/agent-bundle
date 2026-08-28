@@ -1,7 +1,7 @@
 import { expect, it } from '@rstest/core';
 import type { JSONRPCMessage } from '@modelcontextprotocol/client';
 
-import { AgentBundleRemoteTransport } from '../src/mcp/agent-bundle-remote-transport.ts';
+import { AgentBundleRemoteTransport, dispatchAgentBundleMcpRequest } from '../src/mcp/agent-bundle-remote-transport.ts';
 import { McpRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { deferred, eventually } from './support/async.ts';
 
@@ -66,6 +66,11 @@ const connection = Object.freeze({
   protocolVersion: '2025-11-25',
   server: { name: 'weather-fixture', version: '1.0.0' },
 });
+const foregroundBootstrap = Object.freeze({
+  cookieName: 'agent-bundle-foreground-session-00000000000000000000000000000000', instanceId: 'foreground-instance-a',
+  origin: 'http://127.0.0.1:4100',
+  token: 'token-a',
+});
 
 const routeFetch = (options: {
   readonly operation?: (body: Record<string, unknown>) => unknown;
@@ -79,7 +84,7 @@ const routeFetch = (options: {
       const url = String(input);
       const body = init?.body?.toString();
       requests.push({ body, headers: new Headers(init?.headers), url });
-      if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
+      if (url === '/api/project/session') return json(foregroundBootstrap);
       if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: options.timeoutMs ?? 5_000 } });
       if (url.startsWith('/api/mcp/sessions/session-a/stream?after=')) {
         const response = options.streams[streamIndex];
@@ -140,6 +145,36 @@ it('maps supported SDK requests to authenticated operations and delivers same-id
   await transport.close();
 });
 
+it('returns a request-scoped route failure as a same-id JSON-RPC error without reporting a transport fault', async () => {
+  const stream = heldStream();
+  const transport = new AgentBundleRemoteTransport({
+    binding,
+    routes: new McpRouteClient({
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url === '/api/project/session') return json(foregroundBootstrap);
+        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
+        if (url.includes('/stream?')) return stream.response;
+        if (url.endsWith('/operations')) return json({ diagnostic: { code: 'AB8024', message: 'Operation cancelled.' } }, 499);
+        if (url === '/api/mcp/sessions/session-a' && init?.method === 'DELETE') return json({ closed: true });
+        throw new Error(`Unexpected route request ${url}.`);
+      },
+    }),
+  });
+  const errors: string[] = [];
+  const messages: JSONRPCMessage[] = [];
+  transport.onerror = (error) => errors.push(error.message);
+  transport.onmessage = (message) => messages.push(message);
+
+  await transport.start();
+  await transport.send({ id: 7, jsonrpc: '2.0', method: 'tools/call', params: { arguments: {}, name: 'forecast' } });
+  await eventually(() => messages.length === 1);
+
+  expect(messages).toEqual([{ error: { code: -32603, message: 'Operation cancelled.' }, id: 7, jsonrpc: '2.0' }]);
+  expect(errors).toEqual([]);
+  await transport.close();
+});
+
 it('threads one session timeout through the foreground create boundary without widening the binding', async () => {
   const stream = heldStream();
   const fixture = routeFetch({ streams: [stream.response], timeoutMs: 12_345 });
@@ -151,7 +186,6 @@ it('threads one session timeout through the foreground create boundary without w
   expect((transport.session as unknown as { readonly timeoutMs?: number }).timeoutMs).toBe(12_345);
   expect(transport.session.binding).toEqual(binding);
   expect('timeoutMs' in transport.session.binding).toBe(false);
-
   await transport.close();
 });
 
@@ -234,7 +268,7 @@ it('uses one foreground bootstrap for the model-facing session, catalog, config,
     fetch: async (input, init) => {
       const url = String(input);
       requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-      if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
+      if (url === '/api/project/session') return json(foregroundBootstrap);
       if (url === '/api/mcp/sessions/session-a') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
       if (url === '/api/mcp/sessions/session-a/connection') return json({ connection });
       if (url === '/api/mcp/sessions/session-a/catalog') return json({
@@ -344,7 +378,7 @@ it('sends MCP cancellation to its typed route while a serialized tool call remai
       fetch: async (input, init) => {
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-        if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json(foregroundBootstrap);
         if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/operations')) {
@@ -381,7 +415,7 @@ it('closes a session created concurrently without re-bootstrap and notifies only
         const url = String(input);
         if (url === '/api/project/session') {
           bootstraps += 1;
-          return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
+          return json(foregroundBootstrap);
         }
         if (url === '/api/mcp/sessions') return created.promise;
         if (url === '/api/mcp/sessions/session-a' && init?.method === 'DELETE') {
@@ -417,7 +451,7 @@ it('linearizes close by aborting active work, cancelling the reader, waiting cle
       fetch: async (input, init) => {
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-        if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json(foregroundBootstrap);
         if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/operations')) {
@@ -461,7 +495,7 @@ it('deletes a mismatched created session using its held foreground token before 
       fetch: async (input, init) => {
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-        if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json(foregroundBootstrap);
         if (url === '/api/mcp/sessions') return json({
           session: { binding: { ...binding, epochId: 'wrong-epoch' }, connection, id: 'session-wrong', timeoutMs: 5_000 },
         });
@@ -520,7 +554,7 @@ it('aborts and waits for a bypassed cancellation before releasing its session', 
     routes: new McpRouteClient({
       fetch: async (input, init) => {
         const url = String(input);
-        if (url === '/api/project/session') return json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json(foregroundBootstrap);
         if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/cancel')) {
@@ -558,4 +592,322 @@ it('aborts and waits for a bypassed cancellation before releasing its session', 
     resolveCancellation?.(json({ cancelled: true }));
     await cancelling;
   }
+});
+
+it('keeps the runtime App dispatcher closed: initialization and ping stay local while only tool and resource methods execute', async () => {
+  const executed: unknown[] = [];
+  const options = {
+    allowedMethods: new Set(['tools/list', 'resources/list', 'tools/call', 'resources/read'] as const),
+    connection,
+    execute: async (operation: unknown) => {
+      executed.push(operation);
+      return { value: operation };
+    },
+  };
+
+  await expect(dispatchAgentBundleMcpRequest({ id: 1, jsonrpc: '2.0', method: 'initialize', params: {} }, options)).resolves.toEqual({
+    id: 1,
+    jsonrpc: '2.0',
+    result: { capabilities: { tools: {} }, protocolVersion: '2025-11-25', serverInfo: { name: 'weather-fixture', version: '1.0.0' } },
+  });
+  await expect(dispatchAgentBundleMcpRequest({ jsonrpc: '2.0', method: 'notifications/initialized' }, options)).resolves.toBeUndefined();
+  await expect(dispatchAgentBundleMcpRequest({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, options)).rejects.toThrow(
+    'MCP remote transport received an invalid notification.',
+  );
+  await expect(dispatchAgentBundleMcpRequest({ id: 2, jsonrpc: '2.0', method: 'ping' }, options)).resolves.toEqual({
+    id: 2,
+    jsonrpc: '2.0',
+    result: {},
+  });
+  await expect(dispatchAgentBundleMcpRequest({ id: 3, jsonrpc: '2.0', method: 'tools/call', params: { arguments: { city: 'London' }, name: 'forecast' } }, options)).resolves.toEqual({
+    id: 3,
+    jsonrpc: '2.0',
+    result: { arguments: { city: 'London' }, name: 'forecast', operation: 'tools/call', requestId: 'number:3' },
+  });
+  await expect(dispatchAgentBundleMcpRequest({ id: 4, jsonrpc: '2.0', method: 'prompts/list' }, options)).resolves.toEqual({
+    error: { code: -32601, message: 'MCP method "prompts/list" is not supported by the Agent Bundle remote transport.' },
+    id: 4,
+    jsonrpc: '2.0',
+  });
+  await expect(dispatchAgentBundleMcpRequest({ id: 5, jsonrpc: '2.0', method: 'tools/call', params: { arguments: 'invalid', name: 'forecast' } }, options)).resolves.toEqual({
+    error: { code: -32602, message: 'MCP method "tools/call" has invalid parameters.' },
+    id: 5,
+    jsonrpc: '2.0',
+  });
+  expect(executed).toEqual([{ arguments: { city: 'London' }, name: 'forecast', operation: 'tools/call', requestId: 'number:3' }]);
+});
+
+it('uses only exact runtime MCP routes and preserves the operation vector', async () => {
+  const requests: RecordedRequest[] = [];
+  const runtimeBinding = {
+    definitionDigest: 'definition-a',
+    registryRevision: 7,
+    serverDigest: 'server-a',
+    serverName: 'weather',
+    sessionId: 'runtime-session-a',
+    sessionRevision: 3,
+    target: 'portable',
+    transportDigest: 'transport-a',
+  };
+  const restartedSession = {
+    binding: {
+      definitionDigest: 'definition-b', registryRevision: 8, serverDigest: 'server-b', serverName: 'weather',
+      sessionId: 'runtime-session-a', sessionRevision: 4, target: 'portable', transportDigest: 'transport-b',
+    },
+    connection: {
+      capabilities: { resources: { listChanged: true }, tools: { listChanged: true } },
+      protocolEra: 'modern', protocolVersion: '2026-02-09', server: { name: 'weather-next', version: '2.0.0' },
+    },
+    state: 'ready',
+  };
+  const vector = {
+    providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2,
+  };
+  const client = new McpRouteClient({
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
+      if (url === '/api/project/session') return json(foregroundBootstrap);
+      if (url === '/api/runtime/mcp/sessions') return json({ session: { binding: runtimeBinding, connection, state: 'ready' } });
+      if (url === '/api/runtime/mcp/sessions/runtime-session-a/restart') return json({
+        reconcile: {
+          action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8,
+          restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-b', sequence: 4,
+        },
+        session: restartedSession,
+      });
+      if (url === '/api/runtime/mcp/sessions/runtime-session-a/rpc') return json({ result: {
+        operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [{ name: 'forecast' }], vector,
+      } });
+      if (url === '/api/runtime/mcp/sessions/runtime-session-a' && init?.method === 'DELETE') return json({ closed: true });
+      throw new Error(`Unexpected route request ${url}.`);
+    },
+  });
+
+  const opened = await client.openRuntime({ expectedRegistryRevision: 7, serverName: 'weather', target: 'portable' });
+  const restarted = await client.restartRuntime({ expectedSessionRevision: 3, sessionId: 'runtime-session-a' });
+  const operation = await client.executeRuntime('runtime-session-a', { expectedSessionRevision: 3, kind: 'list-tools' });
+  const called = await client.executeRuntime('runtime-session-a', {
+    arguments: { city: 'London' }, expectedSessionRevision: 3, kind: 'call-tool', name: 'forecast', requestId: 'app-request-a',
+  });
+  await client.closeRuntime({ expectedSessionRevision: 3, sessionId: 'runtime-session-a' });
+
+  expect(opened).toEqual({
+    binding: {
+      definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather',
+      sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+    },
+    connection,
+    state: 'ready',
+  });
+  expect(Object.hasOwn(opened.binding, 'providerSessionId')).toBe(false);
+  expect(Object.hasOwn(opened.binding, 'stateStoreId')).toBe(false);
+  expect(restarted).toEqual({
+    reconcile: {
+      action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8,
+      restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-b', sequence: 4,
+    },
+    session: restartedSession,
+  });
+  expect(operation).toMatchObject({ operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [{ name: 'forecast' }], vector });
+  expect(called).toMatchObject({ operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [{ name: 'forecast' }], vector });
+  expect(requests.map((request) => request.url)).toEqual([
+    '/api/project/session',
+    '/api/runtime/mcp/sessions',
+    '/api/runtime/mcp/sessions/runtime-session-a/restart',
+    '/api/runtime/mcp/sessions/runtime-session-a/rpc',
+    '/api/runtime/mcp/sessions/runtime-session-a/rpc',
+    '/api/runtime/mcp/sessions/runtime-session-a',
+  ]);
+  expect(requests.slice(1).map((request) => request.body)).toEqual([
+    '{"expectedRegistryRevision":7,"serverName":"weather","target":"portable"}',
+    '{"expectedSessionRevision":3,"sessionId":"runtime-session-a"}',
+    '{"expectedSessionRevision":3,"kind":"list-tools"}',
+    '{"arguments":{"city":"London"},"expectedSessionRevision":3,"kind":"call-tool","name":"forecast"}',
+    '{"expectedSessionRevision":3,"sessionId":"runtime-session-a"}',
+  ]);
+});
+
+it('rejects private provider and state-store identifiers in a raw runtime session response', async () => {
+  const client = new McpRouteClient({
+    fetch: async (input) => {
+      const url = String(input);
+      if (url === '/api/project/session') return json(foregroundBootstrap);
+      if (url === '/api/runtime/mcp/sessions') return json({ session: {
+        binding: {
+          definitionDigest: 'definition-a', providerSessionId: 'provider-private', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather',
+          sessionId: 'runtime-session-a', sessionRevision: 3, stateStoreId: 'state-private', target: 'portable', transportDigest: 'transport-a',
+        },
+        connection,
+        state: 'ready',
+      } });
+      throw new Error(`Unexpected route request ${url}.`);
+    },
+  });
+
+  await expect(client.openRuntime({ serverName: 'weather', target: 'portable' })).rejects.toMatchObject({ code: 'AB8019' });
+});
+
+it('rejects private and unknown direct connection keys in raw runtime open snapshots', async () => {
+  const invalidFields = [
+    ['providerSessionId', 'provider-private'],
+    ['stateStoreId', 'state-private'],
+    ['unexpected', 'unexpected-value'],
+  ] as const;
+
+  for (const [field, value] of invalidFields) {
+    const client = new McpRouteClient({
+      fetch: async (input) => {
+        const url = String(input);
+        if (url === '/api/project/session') return json(foregroundBootstrap);
+        if (url === '/api/runtime/mcp/sessions') return json({ session: {
+          binding: {
+            definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather',
+            sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+          },
+          connection: { ...connection, [field]: value },
+          state: 'ready',
+        } });
+        throw new Error(`Unexpected route request ${url}.`);
+      },
+    });
+
+    await expect(client.openRuntime({ serverName: 'weather', target: 'portable' })).rejects.toMatchObject({ code: 'AB8019' });
+  }
+});
+
+it('preserves opaque nested capability keys in a raw runtime connection snapshot', async () => {
+  const client = new McpRouteClient({
+    fetch: async (input) => {
+      const url = String(input);
+      if (url === '/api/project/session') return json(foregroundBootstrap);
+      if (url === '/api/runtime/mcp/sessions') return json({ session: {
+        binding: {
+          definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather',
+          sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+        },
+        connection: { ...connection, capabilities: { arbitrary: { nested: ['value'] } } },
+        state: 'ready',
+      } });
+      throw new Error(`Unexpected route request ${url}.`);
+    },
+  });
+
+  await expect(client.openRuntime({ serverName: 'weather', target: 'portable' })).resolves.toMatchObject({
+    connection: { capabilities: { arbitrary: { nested: ['value'] } } },
+  });
+});
+
+it('rejects malformed direct server keys in raw runtime open and restart snapshots', async () => {
+  const invalidFields = [
+    ['providerSessionId', 'provider-private'],
+    ['stateStoreId', 'state-private'],
+    ['unexpected', 'unexpected-value'],
+  ] as const;
+  const operations = ['open', 'restart'] as const;
+
+  for (const operation of operations) {
+    for (const [field, value] of invalidFields) {
+      const client = new McpRouteClient({
+        fetch: async (input) => {
+          const url = String(input);
+          if (url === '/api/project/session') return json(foregroundBootstrap);
+          const runtimeSession = {
+            binding: {
+              definitionDigest: 'definition-b', registryRevision: 8, serverDigest: 'server-b', serverName: 'weather',
+              sessionId: 'runtime-session-a', sessionRevision: operation === 'open' ? 3 : 4, target: 'portable', transportDigest: 'transport-b',
+            },
+            connection: { ...connection, server: { name: 'weather-fixture', version: '1.0.0', [field]: value } },
+            state: 'ready',
+          };
+          if (operation === 'open' && url === '/api/runtime/mcp/sessions') return json({ session: runtimeSession });
+          if (operation === 'restart' && url === '/api/runtime/mcp/sessions/runtime-session-a/restart') return json({
+            reconcile: {
+              action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8,
+              restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-b', sequence: 4,
+            },
+            session: runtimeSession,
+          });
+          throw new Error(`Unexpected route request ${url}.`);
+        },
+      });
+
+      const request = operation === 'open'
+        ? client.openRuntime({ serverName: 'weather', target: 'portable' })
+        : client.restartRuntime({ expectedSessionRevision: 3, sessionId: 'runtime-session-a' });
+      await expect(request).rejects.toMatchObject({ code: 'AB8019' });
+    }
+  }
+});
+
+it('rejects private and unknown direct keys in raw runtime restart success DTOs', async () => {
+  const invalidFields = [
+    ['providerSessionId', 'provider-private'],
+    ['stateStoreId', 'state-private'],
+    ['unexpected', 'unexpected-value'],
+  ] as const;
+  const levels = ['connection', 'reconcile', 'invalidatedBinding'] as const;
+
+  for (const level of levels) {
+    for (const [field, value] of invalidFields) {
+      const client = new McpRouteClient({
+        fetch: async (input) => {
+          const url = String(input);
+          if (url === '/api/project/session') return json(foregroundBootstrap);
+          if (url === '/api/runtime/mcp/sessions/runtime-session-a/restart') return json({
+            reconcile: {
+              action: 'sessions-restarted',
+              invalidatedBindings: [{
+                sessionId: 'runtime-session-a',
+                sessionRevision: 3,
+                ...(level === 'invalidatedBinding' ? { [field]: value } : {}),
+              }],
+              registryRevision: 8,
+              restartedSessionIds: ['runtime-session-a'],
+              runtimeGenerationId: 'generation-b',
+              sequence: 4,
+              ...(level === 'reconcile' ? { [field]: value } : {}),
+            },
+            session: {
+              binding: {
+                definitionDigest: 'definition-b', registryRevision: 8, serverDigest: 'server-b', serverName: 'weather',
+                sessionId: 'runtime-session-a', sessionRevision: 4, target: 'portable', transportDigest: 'transport-b',
+              },
+              connection: { ...connection, ...(level === 'connection' ? { [field]: value } : {}) },
+              state: 'ready',
+            },
+          });
+          throw new Error(`Unexpected route request ${url}.`);
+        },
+      });
+
+      await expect(client.restartRuntime({ expectedSessionRevision: 3, sessionId: 'runtime-session-a' })).rejects.toMatchObject({ code: 'AB8019' });
+    }
+  }
+});
+
+it('rejects a runtime restart snapshot that disagrees with the reconciliation evidence', async () => {
+  const client = new McpRouteClient({
+    fetch: async (input) => {
+      const url = String(input);
+      if (url === '/api/project/session') return json(foregroundBootstrap);
+      if (url === '/api/runtime/mcp/sessions/runtime-session-a/restart') return json({
+        reconcile: {
+          action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8,
+          restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-b', sequence: 4,
+        },
+        session: {
+          binding: {
+            definitionDigest: 'definition-b', registryRevision: 7, serverDigest: 'server-b', serverName: 'weather',
+            sessionId: 'runtime-session-a', sessionRevision: 4, target: 'portable', transportDigest: 'transport-b',
+          },
+          connection,
+          state: 'ready',
+        },
+      });
+      throw new Error(`Unexpected route request ${url}.`);
+    },
+  });
+
+  await expect(client.restartRuntime({ expectedSessionRevision: 3, sessionId: 'runtime-session-a' })).rejects.toMatchObject({ code: 'AB8019' });
 });

@@ -1,112 +1,264 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
-import { lstat, mkdir, open, readFile, readdir, realpath, writeFile, type FileHandle } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile, type FileHandle } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
 
 import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
-import { readPinnedFile, readTornTailJsonl, writeJsonFileAtomically } from '../core/durable-fs.ts';
-import { testModeGlobalValue } from '../core/durability-test-hook.ts';
-import { CodedError, isErrno } from '../core/errors.ts';
-import { acquireOwnerLockFile, isProcessAlive } from '../core/owner-lock.ts';
-import { sameFile, isInsideOrEqual } from '../core/paths.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isErrno } from '../core/errors.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
+import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { defaultEvalRunsDir } from './config.ts';
-import { EvalRunStoreError, storeError } from './errors.ts';
-import {
-  maximumTrialRecordBytes,
-  mintRunId,
-  parseCreateOptions,
-  parseEventInput,
-  parseEventRecord,
-  parseListOptions,
-  parseOwner,
-  parseRunRecord,
-  parseRunSummaryInput,
-  parseTrialInput,
-  parseTrialRecord,
-  requireRunsDir,
-  requireSafeRelativePath,
-  safeSegment,
-} from './run-store-codec.ts';
+import { findCredentialConfiguration } from './credentials.ts';
+import { EvalRunStoreError } from './errors.ts';
 import type {
-  CreateEvalRunOptions,
-  EvalRunEvent,
-  EvalRunEventInput,
-  EvalRunEventsRead,
-  EvalRunOwner,
-  EvalRunRecord,
-  EvalRunSummary,
-  EvalTrialRecord,
-  EvalTrialRecordInput,
-  EvalTrialWriter,
-  ListEvalRunsOptions,
-} from './run-store-types.ts';
+  EvalAssertionOutcome,
+  EvalAssertionResult,
+  EvalHarnessFailure,
+  EvalPluginFailure,
+  EvalTrialEvidence,
+} from './types.ts';
 
-export type * from './run-store-types.ts';
-export { mintRunId };
+export interface EvalArtifactBinding {
+  readonly manifestPath: string;
+  readonly source: 'explicit' | 'run-owned';
+  readonly targetDigests: Readonly<Record<string, string>>;
+}
+
+export interface EvalRunProvenance {
+  readonly agentBundleVersion: string;
+  readonly harness: string;
+  readonly projectRevision: string;
+}
+
+export interface EvalRunSummary {
+  readonly cases: number;
+  readonly fail: number;
+  readonly inconclusive: number;
+  readonly pass: number;
+  readonly trials: number;
+}
+
+export interface EvalRunRecord {
+  readonly agentBundleVersion: string;
+  readonly artifact: EvalArtifactBinding;
+  readonly completedAt?: string;
+  readonly createdAt: string;
+  readonly harness: string;
+  readonly id: string;
+  readonly projectRevision: string;
+  readonly summary?: EvalRunSummary;
+}
+
+/** A safe, authored invocation identity; it deliberately never carries a command or path. */
+export interface EvalTrialInvocationProvenance {
+  readonly mode: 'automatic' | 'explicit' | 'none';
+  readonly skill?: string;
+}
+
+/** The server-owned semantic grader identity used to produce a semantic outcome. */
+export interface EvalSemanticGraderProvenance {
+  readonly contractRevision: string;
+  readonly id: string;
+  readonly model: string;
+}
+
+/** A semantic grader ran but its identity was not safe or complete enough to compare. */
+export interface EvalUnrecordedSemanticGraderProvenance {
+  readonly state: 'unrecorded';
+}
+
+export type EvalTrialSemanticGraderProvenance =
+  | EvalSemanticGraderProvenance
+  | EvalUnrecordedSemanticGraderProvenance
+  | null;
+
+/** Alignment data observed by a trial, limited to safe model, version, and authored identity values. */
+export interface EvalTrialProvenance {
+  readonly hostCliVersion?: string;
+  readonly invocation: EvalTrialInvocationProvenance;
+  readonly semanticGrader: EvalTrialSemanticGraderProvenance;
+}
+
+/** Normalized token counts reported by a host; absent means that host reported no usable usage. */
+export interface EvalTrialUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+export interface EvalTrialRecord {
+  readonly assertions: readonly EvalAssertionResult[];
+  readonly caseDigest: string;
+  readonly caseId: string;
+  readonly completedAt: string;
+  readonly durationMs: number;
+  readonly evidence: EvalTrialEvidence;
+  readonly fixtureDigest: string;
+  readonly harnessFailure?: EvalHarnessFailure;
+  readonly host: string;
+  readonly id: string;
+  readonly model: string;
+  readonly outcome: EvalAssertionOutcome;
+  readonly pluginFailure?: EvalPluginFailure;
+  readonly prompt: string;
+  readonly provenance: EvalTrialProvenance;
+  readonly rawArtifacts: readonly string[];
+  readonly startedAt: string;
+  readonly targetDigest: string;
+  readonly trialIndex: number;
+  /** Omitted when the host did not emit normalized token counts. */
+  readonly usage?: EvalTrialUsage;
+}
+
+export type EvalTrialRecordInput = EvalTrialRecord;
+
+/** The harness only needs durable artifact and normalized trial writes. */
+export interface EvalTrialWriter {
+  writeArtifactFile(relativePath: string, contents: string): Promise<string>;
+  writeTrial(trial: EvalTrialRecordInput): Promise<EvalTrialRecord>;
+}
+
+export interface EvalRunEventInput {
+  readonly kind: string;
+  readonly payload: unknown;
+}
+
+export interface EvalRunEvent {
+  readonly kind: string;
+  readonly payload: JsonValue;
+  readonly sequence: number;
+  readonly timestamp: string;
+}
 
 /** The full JSONL event line exists, but fsync or descriptor close could not confirm its durability. */
-export class EvalRunEventDurabilityError extends CodedError<'EVAL_RUN_EVENT_DURABILITY'> {
+export class EvalRunEventDurabilityError extends Error {
   readonly event: EvalRunEvent;
   readonly failures: readonly unknown[];
 
   constructor(event: EvalRunEvent, failures: readonly unknown[]) {
-    super(
-      'EvalRunEventDurabilityError',
-      'EVAL_RUN_EVENT_DURABILITY',
-      `Eval run event ${JSON.stringify(event.kind)} was written but could not be durably confirmed.`,
-      { cause: failures[0] },
-    );
+    super(`Eval run event ${JSON.stringify(event.kind)} was written but could not be durably confirmed.`, { cause: failures[0] });
+    this.name = 'EvalRunEventDurabilityError';
     this.event = event;
     this.failures = Object.freeze([...failures]);
   }
 }
 
 /** A failed append may have left bytes that could not be durably rolled back to the prior journal boundary. */
-export class EvalRunEventWriteUncertainError extends CodedError<'EVAL_RUN_EVENT_WRITE_UNCERTAIN'> {
+export class EvalRunEventWriteUncertainError extends Error {
   readonly event: EvalRunEvent;
   readonly failures: readonly unknown[];
 
   constructor(event: EvalRunEvent, failures: readonly unknown[]) {
-    super(
-      'EvalRunEventWriteUncertainError',
-      'EVAL_RUN_EVENT_WRITE_UNCERTAIN',
-      `Eval run event ${JSON.stringify(event.kind)} could not be safely rolled back.`,
-      { cause: failures[0] },
-    );
+    super(`Eval run event ${JSON.stringify(event.kind)} could not be safely rolled back.`, { cause: failures[0] });
+    this.name = 'EvalRunEventWriteUncertainError';
     this.event = event;
     this.failures = Object.freeze([...failures]);
   }
 }
 
+export interface EvalRunEventsRead {
+  readonly events: readonly EvalRunEvent[];
+  readonly incompleteTrailingRecord?: string;
+}
+
+export interface EvalRunOwner {
+  readonly createdAt: string;
+  readonly nonce: string;
+  readonly pid: number;
+}
+
+export interface CreateEvalRunOptions {
+  readonly artifact: EvalArtifactBinding;
+  readonly now?: () => Date;
+  readonly probeProcess?: (pid: number) => boolean;
+  readonly projectRoot: string;
+  readonly provenance: EvalRunProvenance;
+  readonly runId?: string;
+  readonly runsDir?: string;
+}
+
+export interface ListEvalRunsOptions {
+  readonly projectRoot: string;
+  readonly runsDir?: string;
+}
+
 const eventsFileName = 'events.jsonl';
 const ownerFileName = 'owner.json';
 const runFileName = 'run.json';
+const safeSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
+const safeRelativeSegment = /^(?!\.{1,2}$)[a-z0-9._-]+$/iu;
+const maximumTrialRecordBytes = 1024 * 1024;
+const maximumProvenanceTextLength = 256;
 type EvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write' | 'before-event-open' | 'before-event-write',
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
   event: EvalRunEvent,
   path: string,
   journal: FileHandle | undefined,
 ) => void | Promise<void>;
 const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
 
-/** A caller-requested run id fails as invalid input, distinct from a corrupt or unwritable record. */
-const requireRequestedRunId = (value: string): string => {
-  if (!safeSegment.test(value)) {
-    throw storeError('EVAL_RUN_ID_INVALID', 'Eval run id must be a path-safe identifier.');
-  }
-  return value;
-};
+const storeError = (
+  code: ConstructorParameters<typeof EvalRunStoreError>[0],
+  message: string,
+): EvalRunStoreError => new EvalRunStoreError(code, message);
 
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
 const runEvalRunStoreDurabilityTestHook = async (
-  phase: 'after-event-write' | 'before-event-open' | 'before-event-write',
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
   event: EvalRunEvent,
   path: string,
   journal: FileHandle | undefined,
 ): Promise<void> => {
-  await testModeGlobalValue<EvalRunStoreDurabilityTestHook>(evalRunStoreDurabilityTestHookKey)?.(phase, event, path, journal);
+  if (process.env.NODE_ENV !== 'test') return;
+  const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
+  await hooks[evalRunStoreDurabilityTestHookKey]?.(phase, event, path, journal);
+};
+
+const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isProcessRunning = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !isErrno(error, 'ESRCH');
+  }
+};
+
+const requireSafeSegment = (value: unknown, label: string): string => {
+  if (typeof value !== 'string' || !safeSegment.test(value)) {
+    throw storeError('EVAL_RUN_RECORD_INVALID', `${label} must be a path-safe identifier.`);
+  }
+  return value;
+};
+
+const requireSafeRelativePath = (value: string, label: string): string => {
+  const segments = value.split('/');
+  if (
+    value.length === 0 ||
+    value.includes('\\') ||
+    segments.some((segment) => !safeRelativeSegment.test(segment))
+  ) {
+    throw storeError('EVAL_RUN_RECORD_INVALID', `${label} must be a path-safe relative path.`);
+  }
+  return value;
+};
+
+const requireRunsDir = (value: unknown): string => {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.includes('\\') ||
+    isAbsolute(value) ||
+    win32.isAbsolute(value) ||
+    value.split('/').some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+  ) {
+    throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval run storage must be a contained relative path.');
+  }
+  return value;
 };
 
 const assertNoSymlinkedStorageAncestor = async (projectRoot: string, storageRoot: string): Promise<void> => {
@@ -185,22 +337,175 @@ const ensureWritablePath = async (root: string, path: string): Promise<void> => 
   }
 };
 
-/**
- * Deliberate durability upgrade (audit §1.1): the run store previously
- * renamed staged JSON documents without any fsync. It now shares the
- * fsync-everywhere publication its sibling stores use — fsync the staged
- * file, rename, then fsync the containing directory.
- */
-const writeJsonAtomically = async (root: string, path: string, value: unknown, serialized?: string): Promise<void> => {
+const writeJsonAtomically = async (root: string, path: string, value: unknown): Promise<void> => {
   await ensureWritablePath(root, path);
-  await writeJsonFileAtomically(path, serialized ?? `${stableJson(value)}\n`, {
-    temporaryPath: join(dirname(path), `.${basename(path) || 'record'}.stage-${process.pid}-${randomUUID()}`),
-  });
+  const temporaryPath = join(dirname(path), `.${basename(path) || 'record'}.stage-${process.pid}-${randomUUID()}`);
+  try {
+    await writeFile(temporaryPath, `${stableJson(value)}\n`, 'utf8');
+    await rename(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
 };
 
 const runsRoot = (options: ListEvalRunsOptions): string => {
   const projectRoot = resolve(options.projectRoot);
   return resolve(projectRoot, requireRunsDir(options.runsDir ?? defaultEvalRunsDir));
+};
+
+type RunStoreValidationCode = 'EVAL_RUN_CORRUPT' | 'EVAL_RUN_RECORD_INVALID';
+type JsonRecord = Readonly<Record<string, JsonValue>>;
+
+const validationError = (code: RunStoreValidationCode, message: string): never => {
+  throw storeError(code, message);
+};
+
+const strictJson = (value: unknown, code: RunStoreValidationCode, label: string): JsonValue => {
+  try {
+    return snapshotStrictJsonValue(value);
+  } catch {
+    return validationError(code, `${label} must contain only detached strict JSON data.`);
+  }
+};
+
+const strictRecord = (value: unknown, code: RunStoreValidationCode, label: string): JsonRecord => {
+  const snapshot = strictJson(value, code, label);
+  if (!isRecord(snapshot)) {
+    return validationError(code, `${label} must be a JSON object.`);
+  }
+  return snapshot as JsonRecord;
+};
+
+const requireKeys = (
+  value: JsonRecord,
+  keys: readonly string[],
+  code: RunStoreValidationCode,
+  label: string,
+): void => {
+  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right));
+  const expected = [...keys].sort((left, right) => left.localeCompare(right));
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    validationError(code, `${label} has an invalid schema.`);
+  }
+};
+
+const requireOptionalKeys = (
+  value: JsonRecord,
+  required: readonly string[],
+  optional: readonly string[],
+  code: RunStoreValidationCode,
+  label: string,
+): void => {
+  const allowed = new Set([...required, ...optional]);
+  if (required.some((key) => !Object.hasOwn(value, key)) || Object.keys(value).some((key) => !allowed.has(key))) {
+    validationError(code, `${label} has an invalid schema.`);
+  }
+};
+
+const property = (value: JsonRecord, key: string, code: RunStoreValidationCode, label: string): JsonValue => {
+  if (!Object.hasOwn(value, key)) {
+    return validationError(code, `${label} is missing ${JSON.stringify(key)}.`);
+  }
+  return value[key]!;
+};
+
+const requireString = (value: JsonValue, code: RunStoreValidationCode, label: string): string => {
+  if (typeof value !== 'string' || value.length === 0) {
+    return validationError(code, `${label} must be a non-empty string.`);
+  }
+  return value;
+};
+
+const requireBoundedText = (value: JsonValue, code: RunStoreValidationCode, label: string): string => {
+  const text = requireString(value, code, label);
+  if (text.length > maximumProvenanceTextLength) {
+    return validationError(code, `${label} must be at most ${maximumProvenanceTextLength} characters.`);
+  }
+  return text;
+};
+
+const safeProvenanceIdentifier = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u;
+const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
+
+/** Durable comparison values are labels, never paths, commands, or credential material. */
+const requireProvenanceIdentifier = (value: JsonValue, code: RunStoreValidationCode, label: string): string => {
+  const text = requireBoundedText(value, code, label);
+  if (provenancePathMarker.test(text) || !safeProvenanceIdentifier.test(text) || findCredentialConfiguration(text) !== undefined) {
+    return validationError(code, 'Eval trial provenance contains an unsafe identifier.');
+  }
+  return text;
+};
+
+const requireTimestamp = (value: JsonValue, code: RunStoreValidationCode, label: string): string => {
+  const timestamp = requireString(value, code, label);
+  if (!Number.isFinite(Date.parse(timestamp))) {
+    return validationError(code, `${label} must be a valid timestamp.`);
+  }
+  return timestamp;
+};
+
+const requireInteger = (value: JsonValue, code: RunStoreValidationCode, label: string, minimum = 0): number => {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) {
+    return validationError(code, `${label} must be a safe integer no smaller than ${minimum}.`);
+  }
+  return value;
+};
+
+const requireBoolean = (value: JsonValue, code: RunStoreValidationCode, label: string): boolean => {
+  if (typeof value !== 'boolean') {
+    return validationError(code, `${label} must be a boolean.`);
+  }
+  return value;
+};
+
+const requireArray = (value: JsonValue, code: RunStoreValidationCode, label: string): readonly JsonValue[] => {
+  if (!Array.isArray(value)) {
+    return validationError(code, `${label} must be a JSON array.`);
+  }
+  return value;
+};
+
+const assertionOutcomes = new Set<EvalAssertionOutcome>(['fail', 'inconclusive', 'pass']);
+const evidenceLevels = new Set(['inferred', 'observed', 'unavailable']);
+const assertionKinds = new Set(['exit-code', 'mcp-call', 'no-mcp-call', 'no-skill-activation', 'outcome', 'skill-activation']);
+const harnessFailureCodes = new Set(['EVAL_ARTIFACT_UNAVAILABLE', 'EVAL_FIXTURE_UNAVAILABLE', 'EVAL_GRADER_FAILED', 'EVAL_PROCESS_UNAVAILABLE', 'EVAL_TRACE_UNAVAILABLE']);
+const harnessFailureStages = new Set(['artifact', 'fixture', 'grader', 'preflight', 'trace']);
+const pluginFailureCodes = new Set(['EVAL_PLUGIN_ASSERTION_FAILED', 'EVAL_PLUGIN_PROCESS_FAILED', 'EVAL_PLUGIN_TIMED_OUT']);
+
+const requireOutcome = (value: JsonValue, code: RunStoreValidationCode, label: string): EvalAssertionOutcome => {
+  if (typeof value !== 'string' || !assertionOutcomes.has(value as EvalAssertionOutcome)) {
+    return validationError(code, `${label} must be an eval assertion outcome.`);
+  }
+  return value as EvalAssertionOutcome;
+};
+
+const requireEvidenceLevel = (value: JsonValue, code: RunStoreValidationCode, label: string): 'inferred' | 'observed' | 'unavailable' => {
+  if (typeof value !== 'string' || !evidenceLevels.has(value)) {
+    return validationError(code, `${label} must be an evidence level.`);
+  }
+  return value as 'inferred' | 'observed' | 'unavailable';
+};
+
+/** The store validates the ids it mints, so every minting caller must share this format. */
+export const mintRunId = (createdAt: Date): string =>
+  `${createdAt.toISOString().replace(/[-:.]/gu, '').replace('T', 't').toLowerCase()}-${randomUUID().slice(0, 8)}`;
+
+const ownerDocumentKeys = ['createdAt', 'nonce', 'pid'];
+
+const parseOwner = (value: unknown): EvalRunOwner => {
+  const owner = strictRecord(value, 'EVAL_RUN_CORRUPT', 'Eval run owner metadata');
+  requireKeys(owner, ownerDocumentKeys, 'EVAL_RUN_CORRUPT', 'Eval run owner metadata');
+  const pid = owner.pid;
+  if (
+    typeof owner.createdAt !== 'string' ||
+    typeof owner.nonce !== 'string' ||
+    typeof pid !== 'number' ||
+    !Number.isSafeInteger(pid) ||
+    pid <= 0
+  ) {
+    return validationError('EVAL_RUN_CORRUPT', 'Eval run owner metadata has an invalid schema.');
+  }
+  return Object.freeze({ createdAt: owner.createdAt, nonce: owner.nonce, pid });
 };
 
 const readOwner = async (directory: string): Promise<EvalRunOwner | undefined> => {
@@ -217,17 +522,416 @@ const readOwner = async (directory: string): Promise<EvalRunOwner | undefined> =
     throw storeError('EVAL_RUN_CORRUPT', 'Eval run owner metadata is not a valid ownership record.');
   }
 };
+
+const parseArtifact = (value: unknown, code: RunStoreValidationCode): EvalArtifactBinding => {
+  const record = strictRecord(value, code, 'Eval run artifact');
+  requireKeys(record, ['manifestPath', 'source', 'targetDigests'], code, 'Eval run artifact');
+  const manifestPath = requireSafeRelativePath(requireString(property(record, 'manifestPath', code, 'Eval run artifact'), code, 'Eval run artifact manifest path'), 'Eval run artifact manifest path');
+  const source = property(record, 'source', code, 'Eval run artifact');
+  if (source !== 'explicit' && source !== 'run-owned') {
+    return validationError(code, 'Eval run artifact source must be "explicit" or "run-owned".');
+  }
+  const targetDigests = strictRecord(property(record, 'targetDigests', code, 'Eval run artifact'), code, 'Eval run artifact target digests');
+  const targets = Object.entries(targetDigests).sort(([left], [right]) => left.localeCompare(right));
+  if (targets.length === 0) {
+    return validationError(code, 'Eval run artifact must record at least one target digest.');
+  }
+  const normalizedTargets: [string, string][] = [];
+  for (const [target, targetDigest] of targets) {
+    requireSafeSegment(target, 'Eval run artifact target name');
+    normalizedTargets.push([target, requireString(targetDigest, code, `Eval run artifact target ${JSON.stringify(target)} digest`)]);
+  }
+  return Object.freeze({
+    manifestPath,
+    source,
+    targetDigests: Object.freeze(Object.fromEntries(normalizedTargets)),
+  });
+};
+
+const parseProvenance = (value: unknown, code: RunStoreValidationCode): EvalRunProvenance => {
+  const record = strictRecord(value, code, 'Eval run provenance');
+  requireKeys(record, ['agentBundleVersion', 'harness', 'projectRevision'], code, 'Eval run provenance');
+  return Object.freeze({
+    agentBundleVersion: requireString(property(record, 'agentBundleVersion', code, 'Eval run provenance'), code, 'Eval run agent bundle version'),
+    harness: requireString(property(record, 'harness', code, 'Eval run provenance'), code, 'Eval run harness'),
+    projectRevision: requireString(property(record, 'projectRevision', code, 'Eval run provenance'), code, 'Eval run project revision'),
+  });
+};
+
+const optionRecord = (
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): Readonly<Record<string, unknown>> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return validationError('EVAL_RUN_RECORD_INVALID', `${label} must be a plain object.`);
+  }
+  let descriptors: Record<string | symbol, PropertyDescriptor>;
+  try {
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+      return validationError('EVAL_RUN_RECORD_INVALID', `${label} must be a plain object.`);
+    }
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
+    return validationError('EVAL_RUN_RECORD_INVALID', `${label} must not be a proxy or inaccessible object.`);
+  }
+  const keys = Reflect.ownKeys(descriptors);
+  const allowed = new Set([...required, ...optional]);
+  if (
+    keys.some((key) => typeof key !== 'string' || !allowed.has(key)) ||
+    required.some((key) => !Object.hasOwn(descriptors, key)) ||
+    keys.some((key) => {
+      const descriptor = descriptors[key]!;
+      return !descriptor.enumerable || !('value' in descriptor);
+    })
+  ) {
+    return validationError('EVAL_RUN_RECORD_INVALID', `${label} must use only enumerable data properties.`);
+  }
+  return Object.freeze(Object.fromEntries(keys.map((key) => [key, descriptors[key]!.value])));
+};
+
+interface ParsedCreateEvalRunOptions {
+  readonly artifact: EvalArtifactBinding;
+  readonly now?: () => Date;
+  readonly probeProcess?: (pid: number) => boolean;
+  readonly projectRoot: string;
+  readonly provenance: EvalRunProvenance;
+  readonly runId?: string;
+  readonly runsDir?: string;
+}
+
+const parseCreateOptions = (value: unknown): ParsedCreateEvalRunOptions => {
+  const options = optionRecord(value, ['artifact', 'projectRoot', 'provenance'], ['now', 'probeProcess', 'runId', 'runsDir'], 'Eval run options');
+  const now = options.now;
+  const probeProcess = options.probeProcess;
+  const runId = options.runId;
+  const runsDir = options.runsDir;
+  if (now !== undefined && typeof now !== 'function') {
+    return validationError('EVAL_RUN_RECORD_INVALID', 'Eval run now must be a function.');
+  }
+  if (probeProcess !== undefined && typeof probeProcess !== 'function') {
+    return validationError('EVAL_RUN_RECORD_INVALID', 'Eval run probeProcess must be a function.');
+  }
+  if (runId !== undefined && typeof runId !== 'string') {
+    return validationError('EVAL_RUN_RECORD_INVALID', 'Eval run id must be a string.');
+  }
+  if (runsDir !== undefined && typeof runsDir !== 'string') {
+    return validationError('EVAL_RUN_RECORD_INVALID', 'Eval run storage must be a string.');
+  }
+  return Object.freeze({
+    artifact: parseArtifact(options.artifact, 'EVAL_RUN_RECORD_INVALID'),
+    ...(now === undefined ? {} : { now: now as () => Date }),
+    ...(probeProcess === undefined ? {} : { probeProcess: probeProcess as (pid: number) => boolean }),
+    projectRoot: requireString(options.projectRoot as JsonValue, 'EVAL_RUN_RECORD_INVALID', 'Eval run project root'),
+    provenance: parseProvenance(options.provenance, 'EVAL_RUN_RECORD_INVALID'),
+    ...(runId === undefined ? {} : { runId }),
+    ...(runsDir === undefined ? {} : { runsDir }),
+  });
+};
+
+const parseListOptions = (value: unknown): ListEvalRunsOptions => {
+  const options = optionRecord(value, ['projectRoot'], ['runsDir'], 'Eval run list options');
+  if (options.runsDir !== undefined && typeof options.runsDir !== 'string') {
+    return validationError('EVAL_RUN_RECORD_INVALID', 'Eval run storage must be a string.');
+  }
+  return Object.freeze({
+    projectRoot: requireString(options.projectRoot as JsonValue, 'EVAL_RUN_RECORD_INVALID', 'Eval run project root'),
+    ...(options.runsDir === undefined ? {} : { runsDir: options.runsDir }),
+  });
+};
+
+const parseSummary = (value: unknown, code: RunStoreValidationCode): EvalRunSummary => {
+  const record = strictRecord(value, code, 'Eval run summary');
+  requireKeys(record, ['cases', 'fail', 'inconclusive', 'pass', 'trials'], code, 'Eval run summary');
+  return Object.freeze({
+    cases: requireInteger(property(record, 'cases', code, 'Eval run summary'), code, 'Eval run summary cases'),
+    fail: requireInteger(property(record, 'fail', code, 'Eval run summary'), code, 'Eval run summary fail'),
+    inconclusive: requireInteger(property(record, 'inconclusive', code, 'Eval run summary'), code, 'Eval run summary inconclusive'),
+    pass: requireInteger(property(record, 'pass', code, 'Eval run summary'), code, 'Eval run summary pass'),
+    trials: requireInteger(property(record, 'trials', code, 'Eval run summary'), code, 'Eval run summary trials'),
+  });
+};
+
+const parseRunRecordValue = (value: unknown, code: RunStoreValidationCode): EvalRunRecord => {
+  const record = strictRecord(value, code, 'Eval run document');
+  requireOptionalKeys(record,
+    ['agentBundleVersion', 'artifact', 'createdAt', 'harness', 'id', 'projectRevision'],
+    ['completedAt', 'summary'],
+    code,
+    'Eval run document');
+  const completedAt = Object.hasOwn(record, 'completedAt')
+    ? requireTimestamp(property(record, 'completedAt', code, 'Eval run document'), code, 'Eval run completedAt')
+    : undefined;
+  const summary = Object.hasOwn(record, 'summary')
+    ? parseSummary(property(record, 'summary', code, 'Eval run document'), code)
+    : undefined;
+  if ((completedAt === undefined) !== (summary === undefined)) {
+    return validationError(code, 'Eval run document must record completion time and summary together.');
+  }
+  return Object.freeze({
+    agentBundleVersion: requireString(property(record, 'agentBundleVersion', code, 'Eval run document'), code, 'Eval run agent bundle version'),
+    artifact: parseArtifact(property(record, 'artifact', code, 'Eval run document'), code),
+    ...(completedAt === undefined ? {} : { completedAt }),
+    createdAt: requireTimestamp(property(record, 'createdAt', code, 'Eval run document'), code, 'Eval run createdAt'),
+    harness: requireString(property(record, 'harness', code, 'Eval run document'), code, 'Eval run harness'),
+    id: requireSafeSegment(requireString(property(record, 'id', code, 'Eval run document'), code, 'Eval run id'), 'Eval run id'),
+    projectRevision: requireString(property(record, 'projectRevision', code, 'Eval run document'), code, 'Eval run project revision'),
+    ...(summary === undefined ? {} : { summary }),
+  });
+};
+
+const parseRunRecord = (value: unknown): EvalRunRecord | undefined => {
+  try {
+    return parseRunRecordValue(value, 'EVAL_RUN_CORRUPT');
+  } catch {
+    return undefined;
+  }
+};
+
+const parseEventRecordValue = (value: unknown, code: RunStoreValidationCode): EvalRunEvent => {
+  const record = strictRecord(value, code, 'Eval run event');
+  requireKeys(record, ['kind', 'payload', 'sequence', 'timestamp'], code, 'Eval run event');
+  return Object.freeze({
+    kind: requireString(property(record, 'kind', code, 'Eval run event'), code, 'Eval run event kind'),
+    payload: property(record, 'payload', code, 'Eval run event'),
+    sequence: requireInteger(property(record, 'sequence', code, 'Eval run event'), code, 'Eval run event sequence', 1),
+    timestamp: requireTimestamp(property(record, 'timestamp', code, 'Eval run event'), code, 'Eval run event timestamp'),
+  });
+};
+
+const parseEventRecord = (value: unknown): EvalRunEvent | undefined => {
+  try {
+    return parseEventRecordValue(value, 'EVAL_RUN_CORRUPT');
+  } catch {
+    return undefined;
+  }
+};
+
+const parseAssertion = (value: JsonValue, code: RunStoreValidationCode): EvalAssertionResult => {
+  const record = strictRecord(value, code, 'Eval trial assertion');
+  requireKeys(record, ['assertionId', 'detail', 'evidence', 'kind', 'outcome'], code, 'Eval trial assertion');
+  const kind = requireString(property(record, 'kind', code, 'Eval trial assertion'), code, 'Eval trial assertion kind');
+  if (!assertionKinds.has(kind)) {
+    return validationError(code, 'Eval trial assertion kind is invalid.');
+  }
+  return Object.freeze({
+    assertionId: requireString(property(record, 'assertionId', code, 'Eval trial assertion'), code, 'Eval trial assertion id'),
+    detail: requireString(property(record, 'detail', code, 'Eval trial assertion'), code, 'Eval trial assertion detail'),
+    evidence: requireEvidenceLevel(property(record, 'evidence', code, 'Eval trial assertion'), code, 'Eval trial assertion evidence'),
+    kind: kind as EvalAssertionResult['kind'],
+    outcome: requireOutcome(property(record, 'outcome', code, 'Eval trial assertion'), code, 'Eval trial assertion outcome'),
+  });
+};
+
+const parseEvidence = (value: JsonValue, code: RunStoreValidationCode): EvalTrialEvidence => {
+  const evidence = strictRecord(value, code, 'Eval trial evidence');
+  requireKeys(evidence, ['mcp', 'process', 'scripts', 'skillActivation'], code, 'Eval trial evidence');
+  const mcp = strictRecord(property(evidence, 'mcp', code, 'Eval trial evidence'), code, 'Eval trial MCP evidence');
+  requireKeys(mcp, ['calls', 'level'], code, 'Eval trial MCP evidence');
+  const calls = requireArray(property(mcp, 'calls', code, 'Eval trial MCP evidence'), code, 'Eval trial MCP calls').map((call) => {
+    const record = strictRecord(call, code, 'Eval trial MCP call');
+    requireKeys(record, ['server', 'tool'], code, 'Eval trial MCP call');
+    return Object.freeze({
+      server: requireString(property(record, 'server', code, 'Eval trial MCP call'), code, 'Eval trial MCP server'),
+      tool: requireString(property(record, 'tool', code, 'Eval trial MCP call'), code, 'Eval trial MCP tool'),
+    });
+  });
+  const process = strictRecord(property(evidence, 'process', code, 'Eval trial evidence'), code, 'Eval trial process evidence');
+  requireOptionalKeys(process, ['level', 'timedOut'], ['exitCode'], code, 'Eval trial process evidence');
+  const scripts = strictRecord(property(evidence, 'scripts', code, 'Eval trial evidence'), code, 'Eval trial script evidence');
+  requireKeys(scripts, ['level', 'results'], code, 'Eval trial script evidence');
+  const scriptResults = strictRecord(property(scripts, 'results', code, 'Eval trial script evidence'), code, 'Eval trial script results');
+  const results = Object.freeze(Object.fromEntries(Object.entries(scriptResults).map(([name, result]) => {
+    const record = strictRecord(result, code, `Eval trial script result ${JSON.stringify(name)}`);
+    requireKeys(record, ['detail', 'outcome'], code, `Eval trial script result ${JSON.stringify(name)}`);
+    return [name, Object.freeze({
+      detail: requireString(property(record, 'detail', code, `Eval trial script result ${JSON.stringify(name)}`), code, `Eval trial script result ${JSON.stringify(name)} detail`),
+      outcome: requireOutcome(property(record, 'outcome', code, `Eval trial script result ${JSON.stringify(name)}`), code, `Eval trial script result ${JSON.stringify(name)} outcome`),
+    })];
+  })));
+  const skillActivation = strictRecord(property(evidence, 'skillActivation', code, 'Eval trial evidence'), code, 'Eval trial skill evidence');
+  requireKeys(skillActivation, ['activated', 'level'], code, 'Eval trial skill evidence');
+  const activated = requireArray(property(skillActivation, 'activated', code, 'Eval trial skill evidence'), code, 'Eval trial activated skills')
+    .map((skill) => requireString(skill, code, 'Eval trial activated skill'));
+  return Object.freeze({
+    mcp: Object.freeze({ calls: Object.freeze(calls), level: requireEvidenceLevel(property(mcp, 'level', code, 'Eval trial MCP evidence'), code, 'Eval trial MCP evidence level') }),
+    process: Object.freeze({
+      ...(Object.hasOwn(process, 'exitCode') ? { exitCode: requireInteger(property(process, 'exitCode', code, 'Eval trial process evidence'), code, 'Eval trial process exit code') } : {}),
+      level: requireEvidenceLevel(property(process, 'level', code, 'Eval trial process evidence'), code, 'Eval trial process evidence level'),
+      timedOut: requireBoolean(property(process, 'timedOut', code, 'Eval trial process evidence'), code, 'Eval trial process timedOut'),
+    }),
+    scripts: Object.freeze({ level: requireEvidenceLevel(property(scripts, 'level', code, 'Eval trial script evidence'), code, 'Eval trial script evidence level'), results }),
+    skillActivation: Object.freeze({ activated: Object.freeze(activated), level: requireEvidenceLevel(property(skillActivation, 'level', code, 'Eval trial skill evidence'), code, 'Eval trial skill evidence level') }),
+  });
+};
+
+const parseHarnessFailure = (value: JsonValue, code: RunStoreValidationCode): EvalHarnessFailure => {
+  const record = strictRecord(value, code, 'Eval trial harness failure');
+  requireKeys(record, ['code', 'message', 'stage'], code, 'Eval trial harness failure');
+  const failureCode = requireString(property(record, 'code', code, 'Eval trial harness failure'), code, 'Eval trial harness failure code');
+  const stage = requireString(property(record, 'stage', code, 'Eval trial harness failure'), code, 'Eval trial harness failure stage');
+  if (!harnessFailureCodes.has(failureCode) || !harnessFailureStages.has(stage)) {
+    return validationError(code, 'Eval trial harness failure is invalid.');
+  }
+  return Object.freeze({
+    code: failureCode as EvalHarnessFailure['code'],
+    message: requireString(property(record, 'message', code, 'Eval trial harness failure'), code, 'Eval trial harness failure message'),
+    stage: stage as EvalHarnessFailure['stage'],
+  });
+};
+
+const parsePluginFailure = (value: JsonValue, code: RunStoreValidationCode): EvalPluginFailure => {
+  const record = strictRecord(value, code, 'Eval trial plugin failure');
+  requireKeys(record, ['code', 'message'], code, 'Eval trial plugin failure');
+  const failureCode = requireString(property(record, 'code', code, 'Eval trial plugin failure'), code, 'Eval trial plugin failure code');
+  if (!pluginFailureCodes.has(failureCode)) {
+    return validationError(code, 'Eval trial plugin failure is invalid.');
+  }
+  return Object.freeze({
+    code: failureCode as EvalPluginFailure['code'],
+    message: requireString(property(record, 'message', code, 'Eval trial plugin failure'), code, 'Eval trial plugin failure message'),
+  });
+};
+
+const parseInvocationProvenance = (
+  value: JsonValue,
+  code: RunStoreValidationCode,
+): EvalTrialInvocationProvenance => {
+  const record = strictRecord(value, code, 'Eval trial invocation provenance');
+  const mode = property(record, 'mode', code, 'Eval trial invocation provenance');
+  if (mode === 'automatic') {
+    requireOptionalKeys(record, ['mode'], ['skill'], code, 'Eval trial invocation provenance');
+    return Object.freeze({
+      mode,
+      ...(Object.hasOwn(record, 'skill')
+        ? { skill: requireProvenanceIdentifier(property(record, 'skill', code, 'Eval trial invocation provenance'), code, 'Eval trial invocation Skill') }
+        : {}),
+    });
+  }
+  if (mode === 'none') {
+    requireKeys(record, ['mode'], code, 'Eval trial invocation provenance');
+    return Object.freeze({ mode });
+  }
+  if (mode === 'explicit') {
+    requireKeys(record, ['mode', 'skill'], code, 'Eval trial invocation provenance');
+    return Object.freeze({
+      mode,
+      skill: requireProvenanceIdentifier(property(record, 'skill', code, 'Eval trial invocation provenance'), code, 'Eval trial invocation Skill'),
+    });
+  }
+  return validationError(code, 'Eval trial invocation provenance mode is invalid.');
+};
+
+const parseSemanticGraderProvenance = (
+  value: JsonValue,
+  code: RunStoreValidationCode,
+): Exclude<EvalTrialSemanticGraderProvenance, null> => {
+  const record = strictRecord(value, code, 'Eval trial semantic grader provenance');
+  if (Object.hasOwn(record, 'state')) {
+    requireKeys(record, ['state'], code, 'Eval trial semantic grader provenance');
+    if (record.state !== 'unrecorded') {
+      return validationError(code, 'Eval trial semantic grader provenance state is invalid.');
+    }
+    return Object.freeze({ state: 'unrecorded' });
+  }
+  requireKeys(record, ['contractRevision', 'id', 'model'], code, 'Eval trial semantic grader provenance');
+  return Object.freeze({
+    contractRevision: requireProvenanceIdentifier(property(record, 'contractRevision', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader contract revision'),
+    id: requireProvenanceIdentifier(property(record, 'id', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader id'),
+    model: requireProvenanceIdentifier(property(record, 'model', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader model'),
+  });
+};
+
+const parseTrialProvenance = (value: JsonValue, code: RunStoreValidationCode): EvalTrialProvenance => {
+  const record = strictRecord(value, code, 'Eval trial provenance');
+  requireOptionalKeys(record, ['invocation', 'semanticGrader'], ['hostCliVersion'], code, 'Eval trial provenance');
+  const semanticGrader = property(record, 'semanticGrader', code, 'Eval trial provenance');
+  return Object.freeze({
+    ...(Object.hasOwn(record, 'hostCliVersion')
+      ? { hostCliVersion: requireProvenanceIdentifier(property(record, 'hostCliVersion', code, 'Eval trial provenance'), code, 'Eval host CLI version') }
+      : {}),
+    invocation: parseInvocationProvenance(property(record, 'invocation', code, 'Eval trial provenance'), code),
+    semanticGrader: semanticGrader === null ? null : parseSemanticGraderProvenance(semanticGrader, code),
+  });
+};
+
+const parseTrialUsage = (value: JsonValue, code: RunStoreValidationCode): EvalTrialUsage => {
+  const record = strictRecord(value, code, 'Eval trial usage');
+  requireKeys(record, ['inputTokens', 'outputTokens'], code, 'Eval trial usage');
+  return Object.freeze({
+    inputTokens: requireInteger(property(record, 'inputTokens', code, 'Eval trial usage'), code, 'Eval input tokens'),
+    outputTokens: requireInteger(property(record, 'outputTokens', code, 'Eval trial usage'), code, 'Eval output tokens'),
+  });
+};
+
+const trialInputKeys = ['assertions', 'caseDigest', 'caseId', 'completedAt', 'durationMs', 'evidence', 'fixtureDigest', 'host', 'id', 'model', 'outcome', 'prompt', 'provenance', 'rawArtifacts', 'startedAt', 'targetDigest', 'trialIndex'];
+
+const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode): EvalTrialRecord => {
+  const record = strictRecord(value, code, 'Eval trial record');
+  requireOptionalKeys(record,
+    trialInputKeys,
+    ['harnessFailure', 'pluginFailure', 'usage'],
+    code,
+    'Eval trial record');
+  const harnessFailure = Object.hasOwn(record, 'harnessFailure')
+    ? parseHarnessFailure(property(record, 'harnessFailure', code, 'Eval trial record'), code)
+    : undefined;
+  const pluginFailure = Object.hasOwn(record, 'pluginFailure')
+    ? parsePluginFailure(property(record, 'pluginFailure', code, 'Eval trial record'), code)
+    : undefined;
+  const provenance = parseTrialProvenance(property(record, 'provenance', code, 'Eval trial record'), code);
+  const usage = Object.hasOwn(record, 'usage')
+    ? parseTrialUsage(property(record, 'usage', code, 'Eval trial record'), code)
+    : undefined;
+  if (harnessFailure !== undefined && pluginFailure !== undefined) {
+    return validationError(code, 'A trial records either a harness failure or a plugin failure, never both.');
+  }
+  return Object.freeze({
+    assertions: Object.freeze(requireArray(property(record, 'assertions', code, 'Eval trial record'), code, 'Eval trial assertions').map((assertion) => parseAssertion(assertion, code))),
+    caseDigest: requireString(property(record, 'caseDigest', code, 'Eval trial record'), code, 'Eval trial case digest'),
+    caseId: requireSafeSegment(requireString(property(record, 'caseId', code, 'Eval trial record'), code, 'Eval trial case id'), 'Eval trial caseId'),
+    completedAt: requireTimestamp(property(record, 'completedAt', code, 'Eval trial record'), code, 'Eval trial completedAt'),
+    durationMs: requireInteger(property(record, 'durationMs', code, 'Eval trial record'), code, 'Eval trial duration'),
+    evidence: parseEvidence(property(record, 'evidence', code, 'Eval trial record'), code),
+    fixtureDigest: requireString(property(record, 'fixtureDigest', code, 'Eval trial record'), code, 'Eval trial fixture digest'),
+    ...(harnessFailure === undefined ? {} : { harnessFailure }),
+    host: requireString(property(record, 'host', code, 'Eval trial record'), code, 'Eval trial host'),
+    id: requireSafeSegment(requireString(property(record, 'id', code, 'Eval trial record'), code, 'Eval trial id'), 'Eval trial id'),
+    model: requireString(property(record, 'model', code, 'Eval trial record'), code, 'Eval trial model'),
+    outcome: requireOutcome(property(record, 'outcome', code, 'Eval trial record'), code, 'Eval trial outcome'),
+    ...(pluginFailure === undefined ? {} : { pluginFailure }),
+    prompt: requireString(property(record, 'prompt', code, 'Eval trial record'), code, 'Eval trial prompt'),
+    provenance,
+    rawArtifacts: Object.freeze(requireArray(property(record, 'rawArtifacts', code, 'Eval trial record'), code, 'Eval trial raw artifacts')
+      .map((rawArtifact) => requireSafeRelativePath(requireString(rawArtifact, code, 'Eval trial raw artifact'), 'Eval trial raw artifact'))),
+    startedAt: requireTimestamp(property(record, 'startedAt', code, 'Eval trial record'), code, 'Eval trial startedAt'),
+    targetDigest: requireString(property(record, 'targetDigest', code, 'Eval trial record'), code, 'Eval trial target digest'),
+    trialIndex: requireInteger(property(record, 'trialIndex', code, 'Eval trial record'), code, 'Eval trial index'),
+    ...(usage === undefined ? {} : { usage }),
+  });
+};
+
+const parseTrialInput = (value: unknown): EvalTrialRecord => parseTrialRecordValue(value, 'EVAL_RUN_RECORD_INVALID');
+
+const parseTrialRecord = (value: unknown, sourcePath: string): EvalTrialRecord => {
+  try {
+    return parseTrialRecordValue(value, 'EVAL_RUN_CORRUPT');
+  } catch {
+    throw storeError('EVAL_RUN_CORRUPT', `Eval trial record ${JSON.stringify(sourcePath)} does not match the trial schema.`);
+  }
+};
+
+/** One writer owns one run directory; every other process creates its own run. */
 export class EvalRunWriter implements EvalTrialWriter {
   readonly #directory: string;
   #closed = false;
   #closeFailures: unknown[] = [];
   #closePromise: Promise<void> | undefined;
-  #journal: FileHandle | undefined;
-  #journalOffset = 0;
+  #eventJournalFailure: EvalRunEventWriteUncertainError | undefined;
   #record: EvalRunRecord;
   #sequence = 0;
   readonly #queue = serialQueue();
-  #uncertainEventWrite = false;
 
   constructor(directory: string, record: EvalRunRecord) {
     this.#directory = directory;
@@ -244,8 +948,17 @@ export class EvalRunWriter implements EvalTrialWriter {
 
   async appendEvent(event: EvalRunEventInput): Promise<EvalRunEvent> {
     this.#assertOpen();
-    const input = parseEventInput(event);
+    const inputRecord = strictRecord(event, 'EVAL_RUN_RECORD_INVALID', 'Eval run event input');
+    requireKeys(inputRecord, ['kind', 'payload'], 'EVAL_RUN_RECORD_INVALID', 'Eval run event input');
+    const input = parseEventRecordValue({
+      kind: property(inputRecord, 'kind', 'EVAL_RUN_RECORD_INVALID', 'Eval run event input'),
+      payload: property(inputRecord, 'payload', 'EVAL_RUN_RECORD_INVALID', 'Eval run event input'),
+      sequence: 1,
+      timestamp: new Date().toISOString(),
+    }, 'EVAL_RUN_RECORD_INVALID');
+    if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
     return this.#serialize(async () => {
+      if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
       const sequence = this.#sequence + 1;
       const record: EvalRunEvent = Object.freeze({
         ...input,
@@ -255,48 +968,56 @@ export class EvalRunWriter implements EvalTrialWriter {
       const eventPath = join(this.#directory, eventsFileName);
       await ensureWritablePath(this.#directory, eventPath);
       await runEvalRunStoreDurabilityTestHook('before-event-open', record, eventPath, undefined);
-      const journal = await this.#ensureJournal(eventPath);
+      const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
       const failures: unknown[] = [];
-      const line = `${stableJson(record)}\n`;
-      const boundary = this.#journalOffset;
-      let rollbackUncertain = false;
-      let writeStarted = false;
-      let written = false;
+      let originalSize: number;
       try {
-        writeStarted = true;
+        originalSize = (await journal.stat()).size;
+      } catch (error) {
+        failures.push(error);
+        try { await journal.close(); }
+        catch (closeFailure) { failures.push(closeFailure); }
+        if (failures.length === 1) throw error;
+        throw new AggregateError(failures, 'Eval run event journal could not be inspected.', { cause: error });
+      }
+      let written = false;
+      let rollbackConfirmed = false;
+      try {
         await runEvalRunStoreDurabilityTestHook('before-event-write', record, eventPath, journal);
-        await journal.writeFile(line, 'utf8');
+        await journal.writeFile(`${stableJson(record)}\n`, 'utf8');
         written = true;
         this.#sequence = sequence;
         await runEvalRunStoreDurabilityTestHook('after-event-write', record, eventPath, journal);
         await journal.sync();
-        this.#journalOffset = boundary + Buffer.byteLength(line, 'utf8');
       } catch (error) {
         failures.push(error);
-        if (writeStarted && !written) {
+        if (!written) {
           try {
-            await journal.truncate(boundary);
+            await runEvalRunStoreDurabilityTestHook('before-event-rollback', record, eventPath, journal);
+            await journal.truncate(originalSize);
             await journal.sync();
+            rollbackConfirmed = true;
           } catch (rollbackFailure) {
-            rollbackUncertain = true;
             failures.push(rollbackFailure);
           }
         }
       }
+      try { await journal.close(); }
+      catch (error) { failures.push(error); }
       if (failures.length > 0) {
-        try { await this.#releaseJournal(); }
-        catch (error) {
-          failures.push(error);
-          if (writeStarted && !written) rollbackUncertain = true;
-        }
         if (written) throw new EvalRunEventDurabilityError(record, failures);
-        if (rollbackUncertain) {
-          this.#uncertainEventWrite = true;
+        if (!rollbackConfirmed) {
+          const uncertain = new EvalRunEventWriteUncertainError(record, failures);
+          this.#eventJournalFailure = uncertain;
           this.#closed = true;
-          throw new EvalRunEventWriteUncertainError(record, failures);
+          throw uncertain;
         }
         if (failures.length === 1) throw failures[0];
-        throw new AggregateError(failures, `Eval run event ${JSON.stringify(record.kind)} could not be written.`);
+        throw new AggregateError(
+          failures,
+          `Eval run event ${JSON.stringify(record.kind)} could not be written and was rolled back.`,
+          { cause: failures[0] },
+        );
       }
       return record;
     });
@@ -319,19 +1040,18 @@ export class EvalRunWriter implements EvalTrialWriter {
   async writeTrial(trial: EvalTrialRecordInput): Promise<EvalTrialRecord> {
     this.#assertOpen();
     const record = parseTrialInput(trial);
-    const serialized = `${stableJson(record)}\n`;
-    if (Buffer.byteLength(serialized, 'utf8') > maximumTrialRecordBytes) {
+    if (Buffer.byteLength(`${stableJson(record)}\n`, 'utf8') > maximumTrialRecordBytes) {
       throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval trial record exceeds the 1 MiB storage limit.');
     }
     return this.#serialize(async () => {
-      await writeJsonAtomically(this.#directory, join(this.#directory, 'cases', record.caseId, `${record.id}.json`), record, serialized);
+      await writeJsonAtomically(this.#directory, join(this.#directory, 'cases', record.caseId, `${record.id}.json`), record);
       return record;
     });
   }
 
   async finish(summary: EvalRunSummary): Promise<EvalRunRecord> {
     this.#assertOpen();
-    const validatedSummary = parseRunSummaryInput(summary);
+    const validatedSummary = parseSummary(summary, 'EVAL_RUN_RECORD_INVALID');
     const finish = this.#serialize(async () => {
       const record: EvalRunRecord = Object.freeze({
         ...this.#record,
@@ -356,36 +1076,13 @@ export class EvalRunWriter implements EvalTrialWriter {
 
   async #drain(): Promise<void> {
     await this.#queue.run(async () => undefined);
-    try {
-      await this.#releaseJournal();
-    } catch (error) {
-      this.#closeFailures.push(error);
-    }
     if (this.#closeFailures.length > 0) {
       throw new AggregateError(this.#closeFailures, `Eval run ${JSON.stringify(this.#record.id)} closed with admitted write failures.`);
     }
   }
 
-  async #ensureJournal(eventPath: string): Promise<FileHandle> {
-    if (this.#journal !== undefined) return this.#journal;
-    const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
-    try {
-      this.#journalOffset = (await journal.stat()).size;
-    } catch (error) {
-      await journal.close().catch(() => undefined);
-      throw error;
-    }
-    this.#journal = journal;
-    return journal;
-  }
-
-  async #releaseJournal(): Promise<void> {
-    const journal = this.#journal;
-    this.#journal = undefined;
-    if (journal !== undefined) await journal.close();
-  }
-
   #assertOpen(): void {
+    if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
     if (this.#closed) {
       throw storeError('EVAL_RUN_CLOSED', `Eval run ${JSON.stringify(this.#record.id)} is closed.`);
     }
@@ -395,7 +1092,7 @@ export class EvalRunWriter implements EvalTrialWriter {
     this.#assertOpen();
     return this.#queue.run(async () => {
       try {
-        if (this.#uncertainEventWrite) this.#assertOpen();
+        if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
         return await operation();
       } catch (error) {
         this.#closeFailures.push(error);
@@ -414,9 +1111,9 @@ export const createEvalRun = async (options: CreateEvalRunOptions): Promise<Eval
   const root = runsRoot(input);
   const id = input.runId === undefined
     ? mintRunId(createdAt)
-    : requireRequestedRunId(input.runId);
+    : requireSafeSegment(input.runId, 'Eval run id');
   const directory = join(root, id);
-  const probeProcess = input.probeProcess ?? isProcessAlive;
+  const probeProcess = input.probeProcess ?? isProcessRunning;
 
   await ensureStorageRoot(resolve(input.projectRoot), root);
   try {
@@ -433,31 +1130,23 @@ export const createEvalRun = async (options: CreateEvalRunOptions): Promise<Eval
     nonce: randomUUID(),
     pid: process.pid,
   });
-  await acquireOwnerLockFile<void>({
-    create: async () => {
-      await ensureWritablePath(directory, join(directory, ownerFileName));
-      await writeFile(join(directory, ownerFileName), `${stableJson(owner)}\n`, { encoding: 'utf8', flag: 'wx' });
-    },
-    // Runs are immutable: contention always resolves to an ownership error,
-    // never a retry, so acquisition can never exhaust its single attempt.
-    exhausted: () => storeError(
+  try {
+    await ensureWritablePath(directory, join(directory, ownerFileName));
+    await writeFile(join(directory, ownerFileName), `${stableJson(owner)}\n`, { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    if (!isErrno(error, 'EEXIST')) throw error;
+    const current = await readOwner(directory);
+    if (current !== undefined && probeProcess(current.pid)) {
+      throw storeError(
+        'EVAL_RUN_OWNED',
+        `Eval run ${JSON.stringify(id)} is owned by a running process (pid ${current.pid}). Create a new run instead of appending to it.`,
+      );
+    }
+    throw storeError(
       'EVAL_RUN_EXISTS',
       `Eval run ${JSON.stringify(id)} already exists. Runs are immutable once created; create a new run.`,
-    ),
-    onContention: async () => {
-      const current = await readOwner(directory);
-      if (current !== undefined && probeProcess(current.pid)) {
-        throw storeError(
-          'EVAL_RUN_OWNED',
-          `Eval run ${JSON.stringify(id)} is owned by a running process (pid ${current.pid}). Create a new run instead of appending to it.`,
-        );
-      }
-      throw storeError(
-        'EVAL_RUN_EXISTS',
-        `Eval run ${JSON.stringify(id)} already exists. Runs are immutable once created; create a new run.`,
-      );
-    },
-  });
+    );
+  }
 
   const record: EvalRunRecord = Object.freeze({
     agentBundleVersion: input.provenance.agentBundleVersion,
@@ -512,21 +1201,32 @@ export const readEvalRunEvents = async (directory: string): Promise<EvalRunEvent
     }
     throw error;
   }
-  const read = readTornTailJsonl<EvalRunEvent>(contents, {
-    decode: (parsed) => {
-      const event = parseEventRecord(parsed);
-      if (event === undefined) {
-        throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a record that does not match the event schema.');
-      }
-      return event;
-    },
-    emptyRecord: () => storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains an empty complete record.'),
-    malformedRecord: () => storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a complete but malformed record.'),
-    sequenceViolation: () => storeError('EVAL_RUN_CORRUPT', 'Eval run event log sequences must be exactly 1 through N.'),
+  const lines = contents.split('\n');
+  const trailing = lines.pop() ?? '';
+  const events = lines.map((line) => {
+    if (line.length === 0) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains an empty complete record.');
+    }
+    let parsed: unknown;
+    try {
+      parsed = parseJsonWithoutDuplicateKeys(line);
+    } catch {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a complete but malformed record.');
+    }
+    const event = parseEventRecord(parsed);
+    if (event === undefined) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a record that does not match the event schema.');
+    }
+    return event;
   });
+  for (const [index, event] of events.entries()) {
+    if (event.sequence !== index + 1) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log sequences must be exactly 1 through N.');
+    }
+  }
   return Object.freeze({
-    events: read.records,
-    ...(read.incompleteTrailingRecord === undefined ? {} : { incompleteTrailingRecord: read.incompleteTrailingRecord }),
+    events: Object.freeze(events),
+    ...(trailing.length === 0 ? {} : { incompleteTrailingRecord: trailing }),
   });
 };
 
@@ -557,14 +1257,28 @@ const readTrialRecordFile = async (
   sourcePath: string,
   directories: readonly TrialDirectoryIdentity[],
 ): Promise<unknown> => {
-  const bytes = await readPinnedFile(sourcePath, {
-    changedWhileOpening: () => storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while opening.'),
-    changedWhileReading: () => storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while reading.'),
-    maximumBytes: maximumTrialRecordBytes,
-    unsafe: () => storeError('EVAL_RUN_CORRUPT', 'Eval trial record is not a safe regular file.'),
-    verifyAncestry: async () => { await assertTrialDirectories(directories); },
-  });
-  return parseJsonWithoutDuplicateKeys(bytes);
+  await assertTrialDirectories(directories);
+  const before = await lstat(sourcePath);
+  if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1 || before.size > maximumTrialRecordBytes) {
+    throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record is not a safe regular file.');
+  }
+  const file = await open(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const descriptor = await file.stat();
+    if (!descriptor.isFile() || descriptor.nlink !== 1 || descriptor.size > maximumTrialRecordBytes || !sameFile(before, descriptor)) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while opening.');
+    }
+    const bytes = await file.readFile({ encoding: 'utf8' });
+    const [after, final] = await Promise.all([lstat(sourcePath), file.stat()]);
+    await assertTrialDirectories(directories);
+    if (after.isSymbolicLink() || !after.isFile() || after.nlink !== 1 || !sameFile(before, after) || !sameFile(descriptor, final) ||
+      final.size !== descriptor.size || Buffer.byteLength(bytes, 'utf8') !== descriptor.size) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while reading.');
+    }
+    return parseJsonWithoutDuplicateKeys(bytes);
+  } finally {
+    await file.close();
+  }
 };
 
 interface ReadEvalTrialsOptions {
@@ -608,10 +1322,7 @@ export const readEvalTrials = async (
       let parsed: unknown;
       try {
         parsed = await readTrialRecordFile(sourcePath, [cases, caseIdentity]);
-      } catch (error) {
-        // The reader's own store errors carry precise integrity evidence; only
-        // relabel the remaining JSON parse and I/O failures.
-        if (error instanceof EvalRunStoreError) throw error;
+      } catch {
         throw storeError('EVAL_RUN_CORRUPT', `Eval trial record ${JSON.stringify(sourcePath)} cannot be parsed as JSON.`);
       }
       trials.push(parseTrialRecord(parsed, sourcePath));

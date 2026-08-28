@@ -397,16 +397,15 @@ const isSkillArtifactPath = (relativePath: string, skills: string | undefined): 
   return layout === skills && name !== undefined && resource !== undefined;
 };
 
-const isSafeAssetPathSegment = (segment: string): boolean =>
-  segment.length > 0 &&
-  segment !== '.' &&
-  segment !== '..' &&
-  !segment.includes('\\');
-
-const isTargetAssetPath = (relativePath: string): boolean => {
+const isRecursiveArtifactPath = (relativePath: string, directory: string | undefined): boolean => {
+  if (directory === undefined) return false;
   const [layout, ...segments] = relativePath.split('/');
-  return layout === 'assets' && segments.length > 0 && segments.every(isSafeAssetPathSegment);
+  return layout === directory && segments.length > 0 && segments.every((segment) =>
+    segment.length > 0 && segment !== '.' && segment !== '..' && !segment.includes('\\'));
 };
+
+const isAdapterRootDocument = (relativePath: string, rootDocuments: readonly string[] | undefined): boolean =>
+  rootDocuments?.includes(relativePath) === true;
 
 const isTargetArtifactPath = (
   path: string,
@@ -420,12 +419,13 @@ const isTargetArtifactPath = (
   const layout = registry.artifactLayout(target);
   const hookContract = registry.hookContract(target);
   const mcpRuntime = registry.mcpRuntime(target);
-  return isDirectOutputLayoutPath(relativePath, layout.hookWrappers) ||
+  return isRecursiveArtifactPath(relativePath, layout.assets) ||
+    isDirectOutputLayoutPath(relativePath, layout.hookWrappers) ||
     isDirectOutputLayoutPath(relativePath, layout.mcpApps) ||
     isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||
     isDirectOutputLayoutPath(relativePath, layout.scripts) ||
-    isTargetAssetPath(relativePath) ||
     isSkillArtifactPath(relativePath, layout.skills) ||
+    isAdapterRootDocument(relativePath, layout.rootDocuments) ||
     relativePath === hookContract?.manifestPath ||
     relativePath === mcpRuntime?.manifestPath ||
     registry.artifactValidation(target).documents.some((document) => document.path === relativePath);

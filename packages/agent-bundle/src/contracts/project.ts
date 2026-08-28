@@ -4,6 +4,7 @@
  * dev server modules behind it touch Node builtins.
  */
 export type { SourceProvenance } from '../core/types.ts';
+export { freezeJsonValue } from '../dev/types.ts';
 export type {
   ArtifactEpoch,
   ArtifactState,
@@ -14,6 +15,9 @@ export type {
   JsonObject,
   JsonValue,
   ProjectEventMessage,
+  ProjectEvent,
+  ProjectEventOf,
+  ProjectReplayGap,
   ProjectStatus,
   SourceState,
   SourceStatus,

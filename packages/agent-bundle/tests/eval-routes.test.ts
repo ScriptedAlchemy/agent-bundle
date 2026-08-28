@@ -1,4 +1,5 @@
-import type { IncomingMessage } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
@@ -14,11 +15,31 @@ import {
 } from '../src/dev/eval/eval-service.ts';
 import type { EvalComparison } from '../src/eval/compare.ts';
 import type { EvalRunEvent, EvalRunRecord, EvalTrialRecord } from '../src/eval/run-store.ts';
-import { authorize, originHeaders, startRoutes as startRouteServer, type StartedRoutes } from './support/route-harness.ts';
 
-const headers: Readonly<Record<string, string>> = Object.freeze({
+interface StartedRoutes {
+  readonly close: () => Promise<void>;
+  readonly routes: EvalRoutes;
+  readonly url: string;
+}
+
+const routeError = (code: string, message: string, status: number): Error & {
+  readonly code: string;
+  readonly status: number;
+} => Object.assign(new Error(message), { code, message, status });
+
+const authorize = (request: IncomingMessage): void => {
+  if (request.headers.origin !== 'http://127.0.0.1:4567') {
+    throw routeError('AB8003', 'Request origin is not this foreground server.', 403);
+  }
+  if (request.headers['x-agent-bundle-session'] !== 'test-session-token') {
+    throw routeError('AB8004', 'A valid same-session token is required.', 403);
+  }
+};
+
+const headers = Object.freeze({
   'content-type': 'application/json',
-  ...originHeaders(),
+  origin: 'http://127.0.0.1:4567',
+  'x-agent-bundle-session': 'test-session-token',
 });
 
 const runRecord: EvalRunRecord = Object.freeze({
@@ -121,6 +142,7 @@ class RecordingService implements EvalRouteService {
   streamOpening = false;
   streamOpeningRelease: (() => void) | undefined;
   streamOpeningStarted: (() => void) | undefined;
+  streamSubscriptionCloseFailure: unknown;
   streamSubscriptionCloses = 0;
   streamEvents: readonly EvalRunEvent[] | undefined;
 
@@ -219,7 +241,10 @@ class RecordingService implements EvalRouteService {
         }
         listener(Object.freeze({ kind: 'run.completed', payload: Object.freeze({}), sequence: 3, timestamp: '2026-08-17T00:00:02.000Z' }));
       },
-      close: (): void => { this.streamSubscriptionCloses += 1; },
+      close: (): void => {
+        this.streamSubscriptionCloses += 1;
+        if (this.streamSubscriptionCloseFailure !== undefined) throw this.streamSubscriptionCloseFailure;
+      },
       replay,
     });
   }
@@ -262,37 +287,44 @@ class BlockedStreamResponse extends EventEmitter {
   }
 }
 
-class DeferredJsonRequest extends Readable {
-  readonly headers = headers;
-  readonly method = 'POST';
-  readonly url = '/api/evals/runs';
-  readonly #bodyOpened: Promise<void>;
-  #openBody!: () => void;
-  #released = false;
-
-  constructor() {
-    super();
-    this.#bodyOpened = new Promise<void>((resolvePromise) => { this.#openBody = resolvePromise; });
-  }
-
-  get bodyOpened(): Promise<void> {
-    return this.#bodyOpened;
-  }
-
-  release(): void {
-    if (this.#released) return;
-    this.#released = true;
-    this.push('{}');
-    this.push(null);
-  }
-
-  _read(): void {
-    this.#openBody();
-  }
-}
-
-const startRoutes = async (service?: EvalRouteService): Promise<StartedRoutes<EvalRoutes>> =>
-  startRouteServer(new EvalRoutes({ authorize, ...(service === undefined ? {} : { service }) }));
+const startRoutes = async (service?: EvalRouteService, onRequest?: () => void): Promise<StartedRoutes> => {
+  const routes = new EvalRoutes({ authorize, ...(service === undefined ? {} : { service }) });
+  const server = createServer((request, response) => {
+    const handling = routes.handle(request, response);
+    onRequest?.();
+    void handling.then((handled) => {
+      if (!handled) response.writeHead(404).end();
+    }).catch((error: unknown) => {
+      const diagnostic = error as Partial<{ code: string; message: string; status: number }>;
+      if (response.headersSent || response.writableEnded) {
+        response.destroy();
+        return;
+      }
+      response.writeHead(diagnostic.status ?? 500, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        diagnostic: {
+          code: diagnostic.code ?? 'AB8007',
+          message: diagnostic.message ?? 'Request could not be completed.',
+        },
+      }));
+    });
+  });
+  await new Promise<void>((resolvePromise) => server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
+  const address = server.address() as AddressInfo;
+  return Object.freeze({
+    close: async () => {
+      await Promise.all([
+        routes.close(),
+        new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
+          if (error === undefined) resolvePromise();
+          else rejectPromise(error);
+        })),
+      ]);
+    },
+    routes,
+    url: `http://127.0.0.1:${address.port}`,
+  });
+};
 
 it('leaves every non-eval request to the rest of the foreground server', async () => {
   const started = await startRoutes(new RecordingService());
@@ -392,28 +424,49 @@ it('keeps route close pending until a stream subscription admitted before it res
   }
 });
 
-it('keeps start admission open through body parsing and refuses it after route close begins', async () => {
+it('closes a stream subscription resolved after its peer disconnects during admission', async () => {
   const service = new RecordingService();
-  const routes = new EvalRoutes({ authorize, service });
-  const request = new DeferredJsonRequest();
-  const response = new BlockedStreamResponse();
-  const handling = routes.handle(request as unknown as IncomingMessage, response as unknown as import('node:http').ServerResponse);
+  service.streamOpening = true;
+  const opening = new Promise<void>((resolvePromise) => { service.streamOpeningStarted = resolvePromise; });
+  const started = await startRoutes(service);
   try {
-    await request.bodyOpened;
-    const closing = routes.close();
-    let settled = false;
-    void closing.then(() => { settled = true; });
-    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
-    expect(settled).toBe(false);
+    const controller = new AbortController();
+    const pending = fetch(`${started.url}/api/evals/runs/run-a/stream`, { headers, signal: controller.signal });
+    await opening;
+    controller.abort();
+    service.streamOpeningRelease?.();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
 
-    request.release();
-    await closing;
-    await expect(handling).rejects.toMatchObject({ code: 'AB8071', status: 503 });
-    expect(service.calls).toEqual([]);
+    expect(service.streamSubscriptionCloses).toBe(1);
+    await started.routes.close();
   } finally {
-    request.release();
-    await handling.catch(() => undefined);
-    await routes.close().catch(() => undefined);
+    service.streamOpeningRelease?.();
+    await started.close().catch(() => undefined);
+  }
+});
+
+it('retains a late event-subscription cleanup failure in the stable route close aggregate', async () => {
+  const service = new RecordingService();
+  service.streamOpening = true;
+  service.streamSubscriptionCloseFailure = new Error('subscription close failed');
+  const opening = new Promise<void>((resolvePromise) => { service.streamOpeningStarted = resolvePromise; });
+  const started = await startRoutes(service);
+  let response: Response | undefined;
+  try {
+    const pending = fetch(`${started.url}/api/evals/runs/run-a/stream`, { headers });
+    await opening;
+    const closing = started.routes.close();
+    service.streamOpeningRelease?.();
+
+    await expect(closing).rejects.toThrow('Eval route readers could not close.');
+    response = await pending;
+    expect(response.status).toBe(502);
+    expect(service.streamSubscriptionCloses).toBe(1);
+  } finally {
+    service.streamOpeningRelease?.();
+    await response?.text().catch(() => undefined);
+    await started.close().catch(() => undefined);
   }
 });
 
@@ -877,6 +930,37 @@ it('requires a JSON body to start a run', async () => {
   }
 });
 
+it('keeps route close pending while a valid run JSON body is still arriving', async () => {
+  const service = new RecordingService();
+  let receivedRequest!: () => void;
+  const received = new Promise<void>((resolvePromise) => { receivedRequest = resolvePromise; });
+  const started = await startRoutes(service, receivedRequest);
+  let finishResponse!: (status: number) => void;
+  const response = new Promise<number>((resolvePromise) => { finishResponse = resolvePromise; });
+  const request = httpRequest(`${started.url}/api/evals/runs`, { headers, method: 'POST' }, (incoming) => {
+    incoming.resume();
+    incoming.once('end', () => finishResponse(incoming.statusCode ?? 0));
+  });
+  try {
+    request.write('{');
+    await received;
+
+    const closing = started.routes.close();
+    let closed = false;
+    void closing.then(() => { closed = true; });
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(closed).toBe(false);
+
+    request.end('}');
+    await expect(closing).resolves.toBeUndefined();
+    await expect(response).resolves.toBe(503);
+    expect(service.calls).toEqual([]);
+  } finally {
+    request.destroy();
+    await started.close().catch(() => undefined);
+  }
+});
+
 it('reports missing and closed eval routes distinctly', async () => {
   const withoutService = await startRoutes();
   try {
@@ -920,7 +1004,6 @@ it('does not cancel an already admitted service run when routes close', async ()
     await started.close();
   }
 });
-
 
 it('compares two runs and rejects a smuggled or incomplete comparison query', async () => {
   const service = new RecordingService();

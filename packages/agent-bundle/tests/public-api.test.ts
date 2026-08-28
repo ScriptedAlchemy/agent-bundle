@@ -27,6 +27,16 @@ import type {
   TargetMcpRuntimeContract,
 } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
+import type {
+  AgentBundleConfig as ConfigEntryAgentBundleConfig,
+  AgentBundleDevConfig,
+  AgentBundleDevRuntimeConfig,
+} from '../src/config/index.ts';
+import { defineConfig as defineConfigFromConfigEntry } from '../src/config/index.ts';
+import type {
+  CreateDevRuntimeProvider,
+  DevRuntimeProvider,
+} from '../src/api.ts';
 import { agentBundleNodeModules, workspaceNodeModules } from './helpers/workspace-paths.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
 
@@ -58,6 +68,31 @@ const readPackageManifest = async (): Promise<PackageManifest> =>
     await readFile(join(packageRoot, 'package.json'), 'utf8'),
   ) as PackageManifest;
 
+const createBuildProject = async (root: string): Promise<{ readonly output: string; readonly project: string }> => {
+  const project = join(root, 'manifest-version-project');
+  const output = join(project, 'manifest-version-artifact');
+  await mkdir(join(project, 'skills', 'review'), { recursive: true });
+  await Promise.all([
+    writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
+    writeFile(
+      join(project, 'agent-bundle.config.ts'),
+      "export default { plugin: { name: 'manifest-version-fixture', version: '1.0.0' }, targets: ['portable'] };\n",
+    ),
+    writeFile(
+      join(project, 'skills', 'review', 'SKILL.md'),
+      '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
+    ),
+  ]);
+  return { output, project };
+};
+
+const producerFrom = async (output: string): Promise<{ readonly name: string; readonly version: string }> => {
+  const manifest = JSON.parse(
+    await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'),
+  ) as { readonly producer: { readonly name: string; readonly version: string } };
+  return manifest.producer;
+};
+
 it('keeps package output filenames stable', async () => {
   const config = (await import('../rslib.config.ts')).default;
   expect(config).toMatchObject({ output: { filenameHash: false } });
@@ -72,6 +107,34 @@ it('preserves a synchronous config and exposes opaque path tokens', () => {
     pluginData: 'agent-bundle:path:plugin-data',
     workspaceRoot: 'agent-bundle:path:workspace-root',
   });
+});
+
+it('exposes the same typed config factory from the config entrypoint', () => {
+  const config = {
+    plugin: { name: 'config-entrypoint', version: '1.0.0' },
+  } satisfies ConfigEntryAgentBundleConfig;
+
+  expect(defineConfigFromConfigEntry).toBe(defineConfig);
+  expect(defineConfigFromConfigEntry(config)).toBe(config);
+});
+
+it('exposes an optional author-facing development runtime declaration', () => {
+  const runtime = {
+    provider: './src/dev/provider.ts',
+  } satisfies AgentBundleDevRuntimeConfig;
+  const dev = { runtime } satisfies AgentBundleDevConfig;
+  const config = {
+    dev,
+    plugin: { name: 'runtime-contract', version: '1.0.0' },
+  } satisfies AgentBundleConfig;
+
+  const providerFactory: CreateDevRuntimeProvider | undefined = undefined;
+  const provider: DevRuntimeProvider | undefined = undefined;
+
+  expect(defineConfig(config)).toBe(config);
+  expect(config.dev?.runtime?.provider).toBe('./src/dev/provider.ts');
+  expect(providerFactory).toBeUndefined();
+  expect(provider).toBeUndefined();
 });
 
 it('exposes bundled adapter extension and normalized-extension types from the root import', () => {
@@ -182,10 +245,11 @@ it('publishes directly executable built entrypoints with declarations', async ()
   const distFiles = await readdir(join(packageRoot, 'dist'));
   expect(distFiles.filter((file) => file.endsWith('.js')).every((file) => !/-[a-f0-9]{8,}\.js$/i.test(file))).toBe(true);
 
-  await expect(import('agent-bundle')).resolves.toBeDefined();
+  const rootEntrypoint = await import('agent-bundle');
   await expect(import('agent-bundle/api')).resolves.toBeDefined();
-  await expect(import('agent-bundle/config')).resolves.toBeDefined();
+  const configEntrypoint = await import('agent-bundle/config');
   await expect(import('agent-bundle/eval')).resolves.toBeDefined();
+  expect(configEntrypoint.defineConfig).toBe(rootEntrypoint.defineConfig);
 
   const binPath = join(packageRoot, manifest.bin['agent-bundle']);
   const binSource = await readFile(binPath, 'utf8');
@@ -194,6 +258,61 @@ it('publishes directly executable built entrypoints with declarations', async ()
   const { stdout } = await execFile(binPath, ['--version']);
   expect(stdout).toBe(`${manifest.version}\n`);
 }, 15_000);
+
+it('writes the package version as the producer of a built CLI manifest', async () => {
+  await buildPackage();
+
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-built-manifest-'));
+  const manifest = await readPackageManifest();
+  try {
+    const project = await createBuildProject(root);
+    const binPath = join(packageRoot, manifest.bin['agent-bundle']);
+    await execFile(binPath, ['build', '--root', project.project, '--output', project.output], { cwd: project.project });
+
+    await expect(producerFrom(project.output)).resolves.toEqual({
+      name: 'agent-bundle',
+      version: manifest.version,
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('writes the package version as the producer of a packed CLI manifest', async () => {
+  await buildPackage();
+
+  const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-manifest-'));
+  const manifest = await readPackageManifest();
+  try {
+    const { stdout: packedOutput } = await execFile(
+      'npm', ['pack', '--json', '--pack-destination', consumerRoot], { cwd: packageRoot },
+    );
+    const [packed] = JSON.parse(packedOutput) as Array<{ filename: string }>;
+    await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
+    await execFile(
+      'npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(consumerRoot, packed.filename)],
+      { cwd: consumerRoot },
+    );
+
+    const project = await createBuildProject(consumerRoot);
+    const packedCli = join(
+      consumerRoot,
+      'node_modules',
+      'agent-bundle',
+      manifest.bin['agent-bundle'],
+    );
+    await execFile(process.execPath, [packedCli, 'build', '--root', project.project, '--output', project.output], {
+      cwd: consumerRoot,
+    });
+
+    await expect(producerFrom(project.output)).resolves.toEqual({
+      name: 'agent-bundle',
+      version: manifest.version,
+    });
+  } finally {
+    await rm(consumerRoot, { force: true, recursive: true });
+  }
+}, 30_000);
 
 it('imports the externalized config entry from a packed npm consumer', async () => {
   await buildPackage();
@@ -222,9 +341,44 @@ it('imports the externalized config entry from a packed npm consumer', async () 
       execFile(process.execPath, [
         '--input-type=module',
         '--eval',
-        "await import('agent-bundle/config');",
+        [
+          "import { defineConfig as rootDefineConfig } from 'agent-bundle';",
+          "import { defineConfig } from 'agent-bundle/config';",
+          'if (defineConfig !== rootDefineConfig) throw new Error(\'config factory identity mismatch\');',
+        ].join('\n'),
       ], { cwd: consumerRoot }),
     ).resolves.toMatchObject({ stderr: '', stdout: '' });
+    await symlink(
+      join(workspaceRoot, 'node_modules', '@types'),
+      join(consumerRoot, 'node_modules', '@types'),
+      'dir',
+    );
+    await writeFile(join(consumerRoot, 'config.mts'), [
+      "import { defineConfig, type AgentBundleConfig } from 'agent-bundle/config';",
+      '',
+      'const config: AgentBundleConfig = {',
+      "  claude: { nativeHooks: './claude-hooks.json' },",
+      "  codex: { nativeHooks: './codex-hooks.json' },",
+      "  plugin: { name: 'packed-config-types', version: '1.0.0' },",
+      "  portable: { compatibility: 'v1' },",
+      '};',
+      '',
+      'const claudeHook: string | undefined = config.claude?.nativeHooks;',
+      'const codexHook: string | undefined = config.codex?.nativeHooks;',
+      'const portableConfig: { readonly [key: string]: unknown } | undefined = config.portable;',
+      'void defineConfig(config);',
+      'void [claudeHook, codexHook, portableConfig];',
+      '',
+    ].join('\n'));
+    await expect(execFile(join(workspaceRoot, 'node_modules', '.bin', 'tsc'), [
+      '--module', 'nodenext',
+      '--moduleResolution', 'nodenext',
+      '--noEmit',
+      '--strict',
+      '--target', 'es2022',
+      '--types', 'node',
+      'config.mts',
+    ], { cwd: consumerRoot })).resolves.toMatchObject({ stderr: '', stdout: '' });
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }
@@ -264,6 +418,7 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       '--module', 'nodenext',
       '--moduleResolution', 'nodenext',
       '--noCheck',
+      '--rootDir', join(packageRoot, 'src'),
       '--outDir', join(emittedPackageRoot, 'dist'),
       '--target', 'es2022',
       join(packageRoot, 'src', 'index.ts'),
@@ -347,6 +502,9 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
       })}\n`,
     );
     await writeFixtureManifest({ artifactRoot: artifact, targets: ['portable'] });
+    await expect(readFile(join(artifact, 'agent-bundle.hooks.json'), 'utf8')).resolves.toBe(
+      '{"hooks":[]}\n',
+    );
 
     const { stdout: packedOutput } = await execFile(
       'npm',

@@ -97,6 +97,13 @@ export interface StandardPluginArtifactsInput {
   readonly marketplaceRelativePath: string;
   readonly marketplaceValid: boolean;
   readonly mcp?: Record<string, unknown>;
+  /** Artifact-relative path for the MCP document; defaults to the plugin-root `.mcp.json` convention. */
+  readonly mcpRelativePath?: string;
+  /**
+   * Emit the target-agnostic skill and asset copy entries; a composing target
+   * that lays two host plans into one root emits them from one side only.
+   */
+  readonly sharedCopyEntries?: boolean;
   readonly mcpValid: boolean;
   readonly model: NormalizedPlugin;
   readonly plugin: Record<string, unknown>;
@@ -162,7 +169,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
     entries.push({
       content: `${stableJson(mcp)}\n`,
       kind: 'write',
-      relativePath: '.mcp.json',
+      relativePath: input.mcpRelativePath ?? '.mcp.json',
       sourceInputs: sourceInputs(...targetSourceInputs, ...mcpSourceInputs),
     });
   }
@@ -186,7 +193,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
       sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
     });
   }
-  for (const skill of model.skills) {
+  for (const skill of input.sharedCopyEntries === false ? [] : model.skills) {
     if (!isSelected(skill.targets)) continue;
     for (const resource of skill.resources) {
       entries.push({
@@ -199,7 +206,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
     }
   }
 
-  for (const asset of model.assets ?? []) {
+  for (const asset of input.sharedCopyEntries === false ? [] : model.assets ?? []) {
     if (!isSelected(asset.targets)) continue;
     entries.push({
       bytes: asset.bytes,
@@ -267,9 +274,12 @@ const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = Object.
  * Every field is an emitted-layout fact rather than a target-name convention.
  */
 export interface TargetArtifactLayout {
+  readonly assets?: string;
   readonly hookWrappers?: TargetArtifactOutputLayout;
   readonly mcpApps?: TargetArtifactOutputLayout;
   readonly mcpEntries?: TargetArtifactOutputLayout;
+  /** Adapter-owned plain documents at the artifact root (for example a generated AGENTS.md). */
+  readonly rootDocuments?: readonly string[];
   readonly scripts?: TargetArtifactOutputLayout;
   readonly skills?: string;
 }
@@ -280,6 +290,7 @@ export interface TargetArtifactLayout {
  * land in the same target-agnostic directories with the same suffix policy.
  */
 export const standardArtifactLayout: TargetArtifactLayout = Object.freeze({
+  assets: 'assets',
   hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
   mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
   mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),

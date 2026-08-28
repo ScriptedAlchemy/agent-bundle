@@ -1,8 +1,8 @@
+import { spawn } from 'node:child_process';
 import { cp } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
-import { runBoundedChildProcess } from '../host-contracts/process.ts';
 import { redactEvalCredentialText } from './credentials.ts';
 import { resolveEvalAssertions } from './assertions.ts';
 import {
@@ -34,13 +34,14 @@ import {
   trialOutcome,
   unavailableEvidence,
 } from './harness.ts';
-import { graderFailureFor, outcomeGraderSpecs, runEvalGraders, type EvalGraderSpec } from './graders.ts';
+import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
 import { isErrno } from '../core/errors.ts';
 import type { EvalTrialRecord, EvalTrialWriter } from './run-store.ts';
 import type {
   EvalCase,
   EvalHarnessFailure,
+  EvalMcpEvidence,
   EvalTrialEvidence,
 } from './types.ts';
 
@@ -101,34 +102,65 @@ const defaultHost = 'codex';
 const defaultKillGraceMs = 1_000;
 const defaultMaxOutputBytes = 4 * 1024 * 1024;
 const defaultTimeoutMs = 300_000;
-const defaultCodexRunner: CodexCommandRunner = async (command) => {
-  const result = await runBoundedChildProcess(Object.freeze({
-    args: command.args,
+const defaultCodexRunner: CodexCommandRunner = (command) => new Promise((resolvePromise, reject) => {
+  const child = spawn(codexExecutable, [...command.args], {
     cwd: command.cwd,
-    environment: command.environment,
-    executable: codexExecutable,
-  }), Object.freeze({
-    abortAlreadyAborted: false,
-    gracePeriodMs: defaultKillGraceMs,
-    labels: Object.freeze({
-      aborted: 'cancelled',
-      outputLimit: 'output-limit',
-      timedOut: 'timeout',
-    }),
-    maxOutputBytes: defaultMaxOutputBytes,
-    overflow: 'drop',
-    outputBudget: 'combined',
-    signal: command.signal,
-    timeoutMs: command.timeoutMs,
+    env: command.environment,
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
-  }));
-  return Object.freeze({
-    exitCode: result.exitCode ?? 1,
-    ...(result.termination === undefined ? {} : { failure: result.termination }),
-    stderr: result.stderr,
-    stdout: result.stdout,
   });
-};
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
+  let bytes = 0;
+  let failure: CodexCommandResult['failure'];
+  let finished = false;
+  let escalationTimer: NodeJS.Timeout | undefined;
+
+  const settle = (exitCode: number): void => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timeoutTimer);
+    if (escalationTimer !== undefined) clearTimeout(escalationTimer);
+    command.signal?.removeEventListener('abort', onAbort);
+    resolvePromise(Object.freeze({
+      exitCode,
+      ...(failure === undefined ? {} : { failure }),
+      stderr: Buffer.concat(stderrChunks).toString('utf8'),
+      stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+    }));
+  };
+  const terminate = (reason: NonNullable<CodexCommandResult['failure']>): void => {
+    if (failure !== undefined || finished) return;
+    failure = reason;
+    child.kill('SIGTERM');
+    escalationTimer = setTimeout(() => {
+      if (!finished) child.kill('SIGKILL');
+    }, defaultKillGraceMs);
+  };
+  const onAbort = (): void => terminate('cancelled');
+  const append = (chunks: Buffer[], chunk: Buffer): void => {
+    if (failure !== undefined) return;
+    if (bytes + chunk.byteLength > defaultMaxOutputBytes) {
+      terminate('output-limit');
+      return;
+    }
+    bytes += chunk.byteLength;
+    chunks.push(chunk);
+  };
+  const timeoutTimer = setTimeout(() => terminate('timeout'), command.timeoutMs);
+
+  command.signal?.addEventListener('abort', onAbort, { once: true });
+  child.stdout?.on('data', (chunk: Buffer) => append(stdoutChunks, chunk));
+  child.stderr?.on('data', (chunk: Buffer) => append(stderrChunks, chunk));
+  child.once('error', (error) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timeoutTimer);
+    command.signal?.removeEventListener('abort', onAbort);
+    reject(error);
+  });
+  child.once('close', (code) => settle(code ?? 1));
+});
 
 const activationSkills = (candidateSkills: readonly string[], evalCase: EvalCase): readonly string[] =>
   Object.freeze([...new Set([
@@ -164,6 +196,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
   const childEnvironment = codexChildEnvironment(environment, temporary.home);
   const lifecycle: string[] = [];
   let execution: CodexExecution | undefined;
+  let incompleteMcpEvidence: EvalMcpEvidence | undefined;
   let harnessFailure: EvalHarnessFailure | undefined;
   let fixtureDigest = options.fixturePlan.digest;
   let hostCliVersion: string | undefined;
@@ -270,6 +303,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       await options.onProgress?.('host.started');
       const result = await executionResult;
       const run = normalizeCodexEventStream(result.stdout);
+      incompleteMcpEvidence = codexMcpEvidence(run);
       if (result.failure !== 'timeout' && (run.malformedLines > 0 || run.envelopes.length === 0)) {
         throw new CodexEvalHarnessError(
           'CODEX_TRACE_INVALID',
@@ -282,7 +316,12 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
     }
 
     const graderSpecs: readonly EvalGraderSpec[] = harnessFailure === undefined
-      ? [...(options.graders ?? []), ...outcomeGraderSpecs(options.evalCase.assertions, options.suiteDir)]
+      ? [
+        ...(options.graders ?? []),
+        ...options.evalCase.assertions
+          .filter((assertion) => assertion.kind === 'outcome')
+          .map((assertion) => evalScriptGraderSpec(assertion.script, options.suiteDir)),
+      ]
       : [];
     const graded = await runEvalGraders(graderSpecs, {
       artifactRoot: options.artifact.root,
@@ -291,7 +330,9 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
     });
 
     const evidence: EvalTrialEvidence = execution === undefined
-      ? unavailableEvidence
+      ? incompleteMcpEvidence === undefined || incompleteMcpEvidence.calls.length === 0
+        ? unavailableEvidence
+        : Object.freeze({ ...unavailableEvidence, mcp: incompleteMcpEvidence })
       : Object.freeze({
         mcp: codexMcpEvidence(execution.run),
         process: Object.freeze({
@@ -307,7 +348,13 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       });
 
     const assertions = resolveEvalAssertions(options.evalCase.assertions, evidence);
-    const graderFailure = graderFailureFor(graded.failures);
+    const graderFailure: EvalHarnessFailure | undefined = graded.failures.length === 0
+      ? undefined
+      : Object.freeze({
+        code: 'EVAL_GRADER_FAILED',
+        message: `Grading is incomplete: ${graded.failures.map((failure) => `${failure.id}: ${failure.message}`).join('; ')}`,
+        stage: 'grader',
+      });
 
     const rawArtifacts = [
       await options.writer.writeArtifactFile(`${trialId}/${evidenceArtifactName}`, `${stableJson(evidence)}\n`),

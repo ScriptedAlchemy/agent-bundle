@@ -1,5 +1,7 @@
 import { posix } from 'node:path';
 
+import type { ValidateFunction } from 'ajv/dist/2020.js';
+
 import { createTargetDiagnostics } from './diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
@@ -36,6 +38,7 @@ import {
   standardPluginArtifactPlan,
   validateJsonSchemaDocument,
   type TargetAdapter,
+  type TargetArtifactDocumentValidator,
   type TargetArtifactPlan,
 } from './types.ts';
 
@@ -50,10 +53,47 @@ declare module '../core/types.ts' {
 }
 
 const codexName = 'codex';
+
+/** Codex's conventional artifact document paths, shared with the unified bundle adapter. */
+export const codexArtifactPaths = Object.freeze({
+  hooksManifest: 'hooks/hooks.json',
+  marketplace: '.agents/plugins/marketplace.json',
+  mcp: '.mcp.json',
+  plugin: '.codex-plugin/plugin.json',
+});
 const validator = createAdapterValidator();
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
+
+/**
+ * The pinned schema const-locks the manifest's `mcpServers` pointer to the
+ * conventional root path. The field is a path pointer, so a plan that
+ * relocates the MCP document widens the validator to accept exactly the
+ * conventional path or the requested relocation - nothing wider - keeping the
+ * pointer and its validator impossible to configure apart.
+ */
+const relocatedPluginValidators = new Map<string, ValidateFunction>();
+const pluginValidatorFor = (mcpRelativePath: string): ValidateFunction => {
+  if (mcpRelativePath === codexArtifactPaths.mcp) return validatePlugin;
+  let compiled = relocatedPluginValidators.get(mcpRelativePath);
+  if (compiled === undefined) {
+    const cloned = structuredClone(pluginSchema) as Record<string, unknown>;
+    // The clone must not reuse the pinned schema's registered $id.
+    delete cloned['$id'];
+    const properties = cloned['properties'] as Record<string, Record<string, unknown>>;
+    const canonical = properties['mcpServers']?.['const'];
+    if (typeof canonical !== 'string') throw new Error('Pinned Codex plugin schema mcpServers pointer is not a const string.');
+    properties['mcpServers'] = { enum: [canonical, `./${mcpRelativePath}`], type: 'string' };
+    compiled = validator.compile(cloned);
+    relocatedPluginValidators.set(mcpRelativePath, compiled);
+  }
+  return compiled;
+};
+
+/** Wrapped manifest validator for a plan whose MCP document path was relocated. */
+export const codexPluginDocumentValidator = (mcpRelativePath: string): TargetArtifactDocumentValidator =>
+  validateJsonSchemaDocument(pluginValidatorFor(mcpRelativePath));
 const validateHooks = validator.compile(hooksSchema);
 const hookContract = Object.freeze({
   commandRoot: '${PLUGIN_ROOT}',
@@ -101,8 +141,6 @@ const mcpRuntime = createTargetMcpRuntime({
 });
 
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(codexName, 'Codex');
-
-const selectedForCodex = (targets: readonly string[]): boolean => targets.includes(codexName);
 
 const hasLeadingPluginRoot = (value: string): boolean =>
   value === pathTokens.pluginRoot || value.startsWith(`${pathTokens.pluginRoot}/`);
@@ -248,11 +286,26 @@ const planMcpServer = (
   };
 };
 
-const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
+export interface CodexArtifactPlanOptions {
+  /** Artifact-relative path for the Codex MCP document; the unified bundle relocates it. */
+  readonly mcpRelativePath?: string;
+  /** See StandardPluginArtifactsInput.sharedCopyEntries; the unified bundle emits shared copies once. */
+  readonly sharedCopyEntries?: boolean;
+  /** Target name used for selection and provenance; native hooks stay keyed to Codex. */
+  readonly targetName?: string;
+}
+
+export const planCodexArtifacts = (
+  model: NormalizedPlugin,
+  options: CodexArtifactPlanOptions = {},
+): TargetArtifactPlan => {
+  const targetName = options.targetName ?? codexName;
+  const mcpRelativePath = options.mcpRelativePath ?? codexArtifactPaths.mcp;
+  const isSelected = (targets: readonly string[]): boolean => targets.includes(targetName);
   const diagnostics: Diagnostic[] = [];
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
   for (const server of model.mcpServers) {
-    if (!selectedForCodex(server.targets)) continue;
+    if (!isSelected(server.targets)) continue;
     const serverPlan = planMcpServer(server);
     diagnostics.push(...serverPlan.diagnostics);
     if (serverPlan.value !== undefined) servers[server.name] = serverPlan.value;
@@ -261,7 +314,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
-  const generatedHooks = planHooks(model, codexName, hookContract);
+  const generatedHooks = planHooks(model, targetName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
@@ -276,7 +329,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     capabilities: [
       ...(mcp === undefined ? [] : ['mcp']),
       ...(hookDocument === undefined ? [] : ['hooks']),
-      ...(model.skills.some((skill) => selectedForCodex(skill.targets)) ? ['skills'] : []),
+      ...(model.skills.some((skill) => isSelected(skill.targets)) ? ['skills'] : []),
     ],
     defaultPrompt: [`Help me use ${model.metadata.name}.`],
     developerName: model.metadata.name,
@@ -291,13 +344,14 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       longDescription: description,
       shortDescription: description,
     },
-    ...(mcp === undefined ? {} : { mcpServers: './.mcp.json' }),
+    ...(mcp === undefined ? {} : { mcpServers: `./${mcpRelativePath}` }),
     ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
     name: model.metadata.name,
     skills: './skills/',
     version: model.metadata.version,
   };
-  diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
+  const pluginValidator = pluginValidatorFor(mcpRelativePath);
+  diagnostics.push(...schemaDiagnostics('plugin', pluginValidator(plugin), pluginValidator.errors));
 
   const marketplace = model.marketplace !== true ? undefined : {
     interface: { displayName: model.metadata.name },
@@ -320,16 +374,18 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     hookDocumentValid,
     hookEntries: generatedHooks.hookEntries,
     hookManifestPath: hookContract.manifestPath,
-    isSelected: selectedForCodex,
+    isSelected,
     marketplace,
-    marketplaceRelativePath: '.agents/plugins/marketplace.json',
+    marketplaceRelativePath: codexArtifactPaths.marketplace,
     marketplaceValid,
     mcp,
+    mcpRelativePath,
     mcpValid,
     model,
     plugin,
-    pluginRelativePath: '.codex-plugin/plugin.json',
-    targetName: codexName,
+    ...(options.sharedCopyEntries === undefined ? {} : { sharedCopyEntries: options.sharedCopyEntries }),
+    pluginRelativePath: codexArtifactPaths.plugin,
+    targetName,
   });
 };
 
@@ -348,5 +404,5 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   mcpRuntime,
   name: codexName,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.codex?.nativeHooks,
-  plan,
+  plan: planCodexArtifacts,
 });

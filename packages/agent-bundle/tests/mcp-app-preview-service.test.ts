@@ -105,7 +105,6 @@ const serviceFor = (bindingAuthority: McpAppPreviewBindingAuthority, options: {
 });
 
 const createPreview = (service: McpAppPreviewService) => service.create({
-  consent: { permissions: { geolocation: {} } },
   host,
   input: originalInput,
   previewProfile: 'portable',
@@ -177,7 +176,6 @@ it('creates one canonical Apps preview from its leased binding resource', async 
   });
 
   const preview = await service.create({
-    consent: { permissions: { geolocation: {} } },
     host,
     input: originalInput,
     previewProfile: 'portable',
@@ -198,7 +196,7 @@ it('creates one canonical Apps preview from its leased binding resource', async 
   expect(preview.binding).toBe(binding);
   expect(preview.profile).toMatchObject({
     kind: 'apps',
-    permissions: { geolocation: {} },
+    permissions: {},
     resourceUri: 'ui://weather/forecast.html',
   });
   expect(preview.resource).toEqual({
@@ -208,7 +206,7 @@ it('creates one canonical Apps preview from its leased binding resource', async 
     permissions: { geolocation: {} },
   });
   expect(preview.frame).toMatchObject({
-    allow: 'geolocation',
+    allow: '',
     sandbox: 'allow-scripts allow-same-origin',
     targetOrigin: 'http://127.0.0.1:43124',
   });
@@ -221,7 +219,6 @@ it('replaces browser toolInfo with the canonical leased tool definition', async 
     toolInfo: { tool: { inputSchema: { type: 'object' }, name: 'browser-forged-tool' } },
   };
   await service.create({
-    consent: { permissions: { geolocation: {} } },
     host: forgedHost,
     input: originalInput,
     previewProfile: 'portable',
@@ -368,6 +365,20 @@ it('preserves input-result FIFO order across one bounded outbound slot', async (
   expect((await service.takeOutbound(binding.id)).map((message) => message.method)).toEqual(['ui/notifications/tool-input']);
   expect((await service.takeOutbound(binding.id)).map((message) => message.method)).toEqual(['ui/notifications/tool-result']);
   expect(preview.bridge.lifecycle).toBe('initialized');
+});
+
+it('creates document permission challenges server-side and remounts only after an approved exact decision', async () => {
+  const service = serviceFor(authorityFor());
+  const preview = await createPreview(service);
+  expect(preview.frame?.allow).toBe('');
+  expect(preview.frame?.documentPolicy?.revision).toBe(1);
+  const challenge = service.consentChallenges(binding.id)?.find((candidate) => candidate.request.capability === 'geolocation');
+  expect(challenge).toBeDefined();
+  await expect(service.decideConsent(binding.id, 'forged-camera', true)).resolves.toBe(false);
+  expect(service.get(binding.id)?.frame?.allow).toBe('');
+  await expect(service.decideConsent(binding.id, challenge?.id ?? '', true)).resolves.toBe(true);
+  expect(service.get(binding.id)?.frame?.allow).toBe('geolocation');
+  expect(service.get(binding.id)?.frame?.documentPolicy?.revision).toBe(2);
 });
 
 it('reuses outbound byte capacity after each drain', async () => {

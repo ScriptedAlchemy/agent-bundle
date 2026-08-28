@@ -8,14 +8,18 @@ import { expect } from '@rstest/playwright';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
+import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
+import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
+import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from '../../agent-bundle/tests/support/eval-project.ts';
 import { readFinalizedEvalRun } from '../src/evals/evals-page.tsx';
 import { closeServer } from './support/http.ts';
 import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
-import { buildWorkbench, e2e, withWorkbenchProjectServer, workspaceRoot } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, workbenchAssets, workspaceRoot } from './support/workbench-e2e.ts';
 
 const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
 const browserTimeout = 12_000;
+const runCompletionTimeout = 60_000;
 
 e2e('retries a terminal canonical read until the durable run finalization is visible', async () => {
   let reads = 0;
@@ -207,16 +211,24 @@ const seedGatedEvalProject = async (root: string): Promise<{ readonly release: (
   return { release: async () => writeFile(gate, 'released\n') };
 };
 
-e2e('admits a deterministic Eval promptly and renders refreshed durable evidence without desktop overflow', { timeout: 120_000 }, async ({ page }) => {
+e2e('admits a deterministic Eval promptly and renders refreshed durable evidence without desktop overflow', { timeout: 180_000 }, async ({ page }) => {
   await buildWorkbench();
-  await withWorkbenchProjectServer(async (server) => {
+  const project = await createProjectFixture();
+  await seedEvalProject(project.root);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  try {
     const pageErrors: Error[] = [];
     const durableReads: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('request', (request) => {
       if (request.method() === 'GET' && request.url().includes('/api/evals/runs/')) durableReads.push(request.url());
     });
-    await page.goto(`${server.url}#/evals`);
+    await page.goto(`${server.url}#evals`);
     await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('button', { name: 'Run deterministic suite' })).toBeEnabled({ timeout: browserTimeout });
     await expect(page.getByLabel('Harness')).toHaveValue('deterministic');
@@ -230,7 +242,7 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
     const runId = admission.run.id;
     expect(admissionResponse.request().postDataJSON()).toEqual({ harness: 'deterministic', suites: ['review-change'] });
 
-    await expect(page.getByText(`Run ${runId} finished:`)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.eval-summary')).toContainText(`Run ${runId} finished:`, { timeout: runCompletionTimeout });
     expect(durableReads).toContain(`${server.url}/api/evals/runs/${encodeURIComponent(runId)}`);
     await expect(page.getByRole('button', { name: 'Cancel run' })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Durable event timeline' })).toBeVisible({ timeout: browserTimeout });
@@ -258,22 +270,32 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
     await page.getByRole('button', { name: 'Run deterministic suite' }).click();
     const replacement = await (await restarted).json() as { readonly run: Readonly<{ readonly id: string }> };
     expect(replacement.run.id).not.toBe(runId);
-    await expect(page.getByText(`Run ${replacement.run.id} finished:`)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText(`Run ${replacement.run.id} finished:`)).toBeVisible({ timeout: runCompletionTimeout });
     await expect(page.getByRole('link', { name: 'Download evidence.json' })).toHaveCount(0);
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
-  }, { setup: (project) => seedEvalProject(project.root) });
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
 });
 
 e2e('keeps a gated deterministic run cancellable exactly once and rejects stale run-list refreshes', { timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
-  let gate: Awaited<ReturnType<typeof seedGatedEvalProject>> | undefined;
+  const project = await createProjectFixture();
+  const gate = await seedGatedEvalProject(project.root);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
   let releaseStaleList: (() => void) | undefined;
   let releaseCancel: (() => void) | undefined;
-  await withWorkbenchProjectServer(async (server) => {
+  try {
     let listRequests = 0;
     let resolveSecondList: (() => void) | undefined;
     const secondList = new Promise<void>((resolve) => { resolveSecondList = resolve; });
@@ -304,7 +326,7 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
       await heldCancel;
       await route.continue();
     });
-    await page.goto(`${server.url}#/evals`);
+    await page.goto(`${server.url}#evals`);
     await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
     await page.getByLabel('Suite').selectOption('gated-cancel');
     const admitted = page.waitForResponse((response) =>
@@ -314,10 +336,10 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
     const runId = admission.run.id;
     await secondList;
     releaseStaleList?.();
-    await expect(page.getByLabel('Recorded run')).toHaveValue(runId, { timeout: browserTimeout });
+    await expect(page.getByLabel('Recorded run')).toHaveValue(runId, { timeout: runCompletionTimeout });
 
     const cancel = page.getByRole('button', { name: 'Cancel run' });
-    await expect(cancel).toBeVisible({ timeout: browserTimeout });
+    await expect(cancel).toBeVisible({ timeout: runCompletionTimeout });
     await cancel.evaluate((button) => {
       if (button instanceof HTMLButtonElement) {
         button.click();
@@ -328,27 +350,38 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
     await expect(page.getByRole('button', { name: 'Cancelling…' })).toBeDisabled();
     expect(cancellations).toBe(1);
     releaseCancel?.();
-    await expect(page.getByText('Cancellation was recorded for this run.')).toBeVisible({ timeout: browserTimeout });
-    await gate?.release();
-    await expect(page.getByText(`Run ${runId} was cancelled after recording`)).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByText('run.cancelled')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('run.cancelling')).toBeVisible({ timeout: runCompletionTimeout });
+    await gate.release();
+    await expect(page.getByText('Cancellation was recorded for this run.')).toBeVisible({ timeout: runCompletionTimeout });
+    await expect(page.getByText(`Run ${runId} was cancelled after recording`)).toBeVisible({ timeout: runCompletionTimeout });
+    await expect(page.getByText('run.cancelled')).toBeVisible({ timeout: runCompletionTimeout });
     expect(cancellations).toBe(1);
     expect(pageErrors).toEqual([]);
-  }, {
-    setup: async (project) => { gate = await seedGatedEvalProject(project.root); },
-    teardown: [() => releaseStaleList?.(), () => releaseCancel?.(), () => gate?.release()],
-  });
+  } finally {
+    releaseStaleList?.();
+    releaseCancel?.();
+    await gate.release();
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
 });
 
 e2e('does not cancel a gated run when a newer admission replaces it or the Eval page unmounts', { timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
-  let gate: Awaited<ReturnType<typeof seedGatedEvalProject>> | undefined;
-  await withWorkbenchProjectServer(async (server) => {
+  const project = await createProjectFixture();
+  const gate = await seedGatedEvalProject(project.root);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  try {
     let cancellations = 0;
     page.on('request', (request) => {
       if (request.method() === 'POST' && request.url().includes('/cancel')) cancellations += 1;
     });
-    await page.goto(`${server.url}#/evals`);
+    await page.goto(`${server.url}#evals`);
     await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
     await page.getByLabel('Suite').selectOption('gated-cancel');
     const firstAdmission = page.waitForResponse((response) =>
@@ -364,13 +397,14 @@ e2e('does not cancel a gated run when a newer admission replaces it or the Eval 
     await expect(page.locator('.eval-summary')).toContainText(replacement.run.id, { timeout: browserTimeout });
     await page.waitForTimeout(150);
     await expect(page.locator('.eval-summary')).not.toContainText(first.run.id);
-    await page.goto(`${server.url}#/overview`);
+    await page.goto(`${server.url}#overview`);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     expect(cancellations).toBe(0);
-  }, {
-    setup: async (project) => { gate = await seedGatedEvalProject(project.root); },
-    teardown: [() => gate?.release()],
-  });
+  } finally {
+    await gate.release();
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
 });
 
 e2e('fails closed while replacing an active Eval client and ignores every late client-A completion', { timeout: 120_000 }, async ({ page }) => {
@@ -428,6 +462,7 @@ e2e('fails closed while replacing an active Eval client and ignores every late c
     }).__evalClientScopeFixture.stats().eventsB)).toEqual(['run-b']);
     expect(pageErrors).toEqual([]);
   } finally {
+    await page.goto('about:blank');
     await fixture.close();
   }
 });

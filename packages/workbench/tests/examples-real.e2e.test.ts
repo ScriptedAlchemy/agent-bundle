@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { expect } from '@rstest/playwright';
 
+import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
+import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import {
   captureExampleState,
   copyExample,
@@ -12,7 +14,7 @@ import {
   waitForSettledWorkbench,
   writeExampleReport,
 } from './support/example-acceptance.ts';
-import { buildWorkbench, e2e, startWorkbenchDevServer, withWorkbenchServer } from './support/workbench-e2e.ts';
+import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
 
 const browserTimeout = 15_000;
 
@@ -29,20 +31,24 @@ const waitForExampleValue = async <Value>(
     value = await read();
   }
   if (!accepts(value)) {
-    throw new Error(`Timed out waiting for ${label}; last value was ${JSON.stringify(value)}.`);
+    throw new Error(
+      `Timed out waiting for ${label}; last value was ${JSON.stringify(value)}; frames were ${JSON.stringify(page.frames().map((frame) => frame.url()))}.`,
+    );
   }
   return value;
 };
 
 e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
-  await withWorkbenchServer({
-    createProject: async () => ({ root: exampleRoot('skills-starter') }),
-    dispose: () => undefined,
-    start: startWorkbenchDevServer,
-  }, async (server) => {
-    const ledger = createExampleErrorLedger(page, server.url);
-    await page.goto(`${server.url}#/skills`);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: exampleRoot('skills-starter'),
+  });
+  const ledger = createExampleErrorLedger(page, server.url);
+  try {
+    await page.goto(`${server.url}#skills`);
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'dependency-upgrade', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.skill-tree-item')).toHaveCount(3, { timeout: browserTimeout });
@@ -67,9 +73,9 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     );
     await captureExampleState(page, 'skills-starter', 'skills-populated');
 
-    await page.goto(`${server.url}#/hooks`);
+    await page.goto(`${server.url}#hooks`);
     await waitForSettledWorkbench(page);
-    await expect(page).toHaveURL(new URL('#/overview', server.url).href, { timeout: browserTimeout });
+    await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
 
@@ -81,45 +87,48 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     await captureExampleState(page, 'skills-starter', 'artifacts-populated');
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();
-  });
+  } finally {
+    await server.close();
+  }
 });
 
 e2e('reveals, retains, repairs, and removes capabilities without reloading Chrome', { timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
+  const project = await copyExample('skills-starter');
+  const configPath = join(project.root, 'agent-bundle.config.ts');
+  const hookSource = join(project.root, 'src', 'hooks', 'session-start.ts');
+  const originalConfig = await readFile(configPath, 'utf8');
   const healthyHook = `export default () => ({\n  additionalContext: 'Review the current operational evidence before changing production.',\n  outcome: 'continue' as const,\n});\n`;
-  await withWorkbenchServer({
-    createProject: () => copyExample('skills-starter'),
-    dispose: (project) => project.release(),
-    setup: async (project) => {
-      await mkdir(join(project.root, 'src', 'hooks'), { recursive: true });
-      await writeFile(join(project.root, 'src', 'hooks', 'session-start.ts'), healthyHook);
-    },
-    start: startWorkbenchDevServer,
-  }, async (server, project) => {
-    const configPath = join(project.root, 'agent-bundle.config.ts');
-    const hookSource = join(project.root, 'src', 'hooks', 'session-start.ts');
-    const originalConfig = await readFile(configPath, 'utf8');
-    const hookConfig = originalConfig.replace(
-      '  plugin:',
-      "  hooks: { sessionStart: { handler: './src/hooks/session-start.ts' } },\n  plugin:",
-    );
-    const ledger = createExampleErrorLedger(page, server.url);
-    const rebuildFromCurrentPage = async (): Promise<void> => {
-      const status = await page.evaluate(async () => {
-        const sessionResponse = await fetch('/api/project/session');
-        const session = await sessionResponse.json() as { readonly token: string };
-        const response = await fetch('/api/project/rebuild', {
-          body: JSON.stringify({ paths: [] }),
-          headers: { 'content-type': 'application/json', 'x-agent-bundle-session': session.token },
-          method: 'POST',
-        });
-        return response.status;
+  const hookConfig = originalConfig.replace(
+    '  plugin:',
+    "  hooks: { sessionStart: { handler: './src/hooks/session-start.ts' } },\n  plugin:",
+  );
+  await mkdir(join(project.root, 'src', 'hooks'), { recursive: true });
+  await writeFile(hookSource, healthyHook);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  const ledger = createExampleErrorLedger(page, server.url);
+  const rebuildFromCurrentPage = async (): Promise<void> => {
+    const status = await page.evaluate(async () => {
+      const sessionResponse = await fetch('/api/project/session');
+      const session = await sessionResponse.json() as { readonly token: string };
+      const response = await fetch('/api/project/rebuild', {
+        body: JSON.stringify({ paths: [] }),
+        headers: { 'content-type': 'application/json', 'x-agent-bundle-session': session.token },
+        method: 'POST',
       });
-      expect(status).toBe(200);
-    };
-    await page.goto(`${server.url}#/hooks`);
+      return response.status;
+    });
+    expect(status).toBe(200);
+  };
+  try {
+    await page.goto(`${server.url}#hooks`);
     await waitForSettledWorkbench(page);
-    await expect(page).toHaveURL(new URL('#/overview', server.url).href, { timeout: browserTimeout });
+    await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Playground', exact: true })).toHaveCount(0, { timeout: browserTimeout });
 
@@ -153,29 +162,32 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
     await writeFile(configPath, originalConfig);
     await rebuildFromCurrentPage();
-    await expect(page).toHaveURL(new URL('#/overview', server.url).href, { timeout: browserTimeout });
+    await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Playground', exact: true })).toHaveCount(0, { timeout: browserTimeout });
-    await page.goBack();
-    await expect(page).toHaveURL(new URL('#/overview', server.url).href, { timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
     await captureExampleState(page, 'skills-starter', 'capability-removed');
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();
-  });
+  } finally {
+    await server.close();
+    await project.release();
+  }
 });
 
 e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
-  await withWorkbenchServer({
-    createProject: () => copyExample('hooks-and-scripts'),
-    dispose: (project) => project.release(),
-    start: startWorkbenchDevServer,
-  }, async (server, project) => {
-    const hookSource = join(project.root, 'src', 'hooks', 'session-start.ts');
-    const healthyHook = await readFile(hookSource, 'utf8');
-    const ledger = createExampleErrorLedger(page, server.url);
-    await page.goto(`${server.url}#/hooks`);
+  const project = await copyExample('hooks-and-scripts');
+  const hookSource = join(project.root, 'src', 'hooks', 'session-start.ts');
+  const healthyHook = await readFile(hookSource, 'utf8');
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  const ledger = createExampleErrorLedger(page, server.url);
+  try {
+    await page.goto(`${server.url}#hooks`);
     await waitForSettledWorkbench(page);
     await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
     const canonicalHookDraft = JSON.stringify({
@@ -256,18 +268,24 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-repaired');
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();
-  });
+  } finally {
+    await server.close();
+    await project.release();
+  }
 });
 
 e2e('drives every populated MCP App workflow surface in real Chrome', { timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
-  await withWorkbenchServer({
-    createProject: () => copyExample('mcp-app'),
-    dispose: (project) => project.release(),
-    start: startWorkbenchDevServer,
-  }, async (server) => {
-    const ledger = createExampleErrorLedger(page, server.url);
-    await page.goto(`${server.url}#/overview`);
+  const project = await copyExample('mcp-app');
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  const ledger = createExampleErrorLedger(page, server.url);
+  try {
+    await page.goto(`${server.url}#overview`);
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('See what this bundle publishes, try supported workflows, and rebuild after source changes.', { exact: true })).toBeVisible({ timeout: browserTimeout });
@@ -368,12 +386,17 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
       }
       return undefined;
     };
-    await waitForExampleValue(
-      page,
-      () => appText('#service'),
-      (value) => value === 'payments-api',
-      'the App service',
-    );
+    try {
+      await waitForExampleValue(
+        page,
+        () => appText('#service'),
+        (value) => value === 'payments-api',
+        'the App service',
+      );
+    } catch (error) {
+      await expectHealthyExamplePage(ledger);
+      throw error;
+    }
     await waitForExampleValue(
       page,
       () => appText('#status'),
@@ -509,5 +532,8 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await captureExampleState(page, 'mcp-app', 'eval-completed');
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();
-  });
+  } finally {
+    await server.close();
+    await project.release();
+  }
 });

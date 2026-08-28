@@ -35,6 +35,20 @@ export const jsonEquivalent = (left: unknown, right: unknown): boolean => {
 export const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/**
+ * Hands the viewer a browser download. The object URL is revoked on a queued
+ * task: a synchronous revoke can abort the scheduled download of larger blobs.
+ */
+export const downloadBlob = (blob: Blob, filename: string): void => {
+  const url = URL.createObjectURL(blob);
+  const link = globalThis.document.createElement('a');
+  link.download = filename;
+  link.href = url;
+  link.rel = 'noopener';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
 /** Tolerates hostile error objects whose message accessor throws. */
 export const errorMessage = (reason: unknown, fallback: string): string => {
   try { return reason instanceof Error && typeof reason.message === 'string' ? reason.message : fallback; }

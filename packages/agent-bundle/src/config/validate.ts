@@ -1,28 +1,26 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
-import { basename, extname, posix, resolve } from 'node:path';
+import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { isInsideOrEqual } from '../core/paths.ts';
-import { isPlainRecord, isRecord, isStrictJsonValue } from '../core/strict-json.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
   defaultGeneratedRuntime,
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { canonicalHookEvents, canonicalHookTools, parseNativeHookToolSelector } from '../core/types.ts';
+import { parseNativeHookToolSelector } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
   AgentBundleMcpApp,
   AgentBundleMcpServer,
   AgentBundleScriptInput,
+  CanonicalHookEvent,
   NormalizationTargetRegistry,
   NormalizedPlugin,
 } from '../core/types.ts';
 import type { DiscoveredProject } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
-import { bundleExtensions, mcpEntryAliasPattern } from './normalize.ts';
 import type { SkillDocument } from './skill.ts';
 import { referencedResources } from './skill-references.ts';
 import { validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
@@ -33,7 +31,14 @@ const sourceDiagnostic = (
   sourcePath: string,
 ): Diagnostic => ({ code, message, severity: 'error', sourcePath });
 
-const hookTools: ReadonlySet<string> = new Set(canonicalHookTools);
+const hookEvents: readonly CanonicalHookEvent[] = [
+  'sessionStart',
+  'beforeTool',
+  'afterTool',
+  'stop',
+];
+
+const hookTools = new Set(['shell', 'file.read', 'file.write', 'mcp', 'agent']);
 
 const isHookEntryList = (
   input: AgentBundleHookInput,
@@ -48,9 +53,12 @@ const validateHooks = (
 ): Diagnostic[] => {
   const hooks = loaded.config.hooks;
   if (hooks === undefined) return [];
+  const selectedTargets = loaded.context.selectedTargets.length > 0
+    ? loaded.context.selectedTargets
+    : (loaded.config.targets ?? registry.defaultTargetNames());
 
   const diagnostics: Diagnostic[] = [];
-  for (const event of canonicalHookEvents) {
+  for (const event of hookEvents) {
     const input = hooks[event];
     if (input === undefined) continue;
     for (const rawEntry of asHookEntries(input)) {
@@ -90,7 +98,7 @@ const validateHooks = (
             `Hook ${event} native tool selector ${JSON.stringify(tool)} names target ${JSON.stringify(selector.target)}, which cannot emit hooks.`,
             loaded.configPath,
           ));
-        } else if (entry.targets !== undefined && !entry.targets.includes(selector.target)) {
+        } else if (!(entry.targets ?? selectedTargets).includes(selector.target)) {
           diagnostics.push(sourceDiagnostic(
             'AB4212',
             `Hook ${event} native tool selector ${JSON.stringify(tool)} names target ${JSON.stringify(selector.target)} outside the hook's selected targets.`,
@@ -128,6 +136,53 @@ const validateHooks = (
     }
   }
   return diagnostics;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isPlainRecord = (value: object): value is Record<string, unknown> => {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+const isProtocolJsonValue = (value: unknown, ancestors = new Set<object>()): boolean => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || ancestors.has(value)) return false;
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor) || !isProtocolJsonValue(descriptor.value, ancestors)) {
+          return false;
+        }
+      }
+      for (const key of Reflect.ownKeys(value)) {
+        if (key === 'length') continue;
+        if (typeof key !== 'string' || !/^(?:0|[1-9]\d*)$/u.test(key)) return false;
+        const index = Number(key);
+        if (index >= value.length) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (!isPlainRecord(value)) return false;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') return false;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !('value' in descriptor) || !isProtocolJsonValue(descriptor.value, ancestors)) {
+        return false;
+      }
+    }
+    return true;
+  } finally {
+    ancestors.delete(value);
+  }
 };
 
 const nonemptyString = (value: unknown): value is string =>
@@ -177,6 +232,11 @@ const localEntryExists = (root: string, entry: string): boolean => {
   }
 };
 
+const isInside = (root: string, candidate: string): boolean => {
+  const path = relative(resolve(root), resolve(candidate));
+  return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+};
+
 const scriptExtensions = new Set([
   '.js',
   '.jsx',
@@ -189,6 +249,10 @@ const scriptExtensions = new Set([
   '.sh',
   '.bash',
   '.py',
+]);
+
+const bundleScriptExtensions = new Set([
+  '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
 ]);
 
 const isSafeScriptName = (name: string): boolean =>
@@ -233,7 +297,7 @@ const validateScripts = (
       continue;
     }
     const source = resolve(loaded.context.projectRoot, entry);
-    if (!isInsideOrEqual(loaded.context.projectRoot, source)) {
+    if (!isInside(loaded.context.projectRoot, source)) {
       diagnostics.push(sourceDiagnostic(
         'AB4405',
         `Script ${JSON.stringify(name)} entry must resolve inside the project root.`,
@@ -250,7 +314,7 @@ const validateScripts = (
     } else {
       const extension = extname(source).toLowerCase();
       const output = posix.normalize(
-        `scripts/${name}${bundleExtensions.has(extension) ? '.mjs' : extension}`,
+        `scripts/${name}${bundleScriptExtensions.has(extension) ? '.mjs' : extension}`,
       );
       const firstSource = outputSources.get(output);
       if (firstSource === undefined) {
@@ -266,7 +330,7 @@ const validateScripts = (
     try {
       const canonicalRoot = realpathSync(loaded.context.projectRoot);
       const canonicalSource = realpathSync(source);
-      if (!isInsideOrEqual(canonicalRoot, canonicalSource)) {
+      if (!isInside(canonicalRoot, canonicalSource)) {
         diagnostics.push(sourceDiagnostic(
           'AB4405',
           `Script ${JSON.stringify(name)} entry must resolve inside the project root.`,
@@ -425,7 +489,7 @@ const validateMcpApps = (
         `MCP App ${JSON.stringify(appName)} _meta must be an object.`,
         loaded.configPath,
       ));
-    } else if (app._meta !== undefined && !isStrictJsonValue(app._meta)) {
+    } else if (app._meta !== undefined && !isProtocolJsonValue(app._meta)) {
       diagnostics.push(sourceDiagnostic(
         'AB4338',
         `MCP App ${JSON.stringify(appName)} _meta must contain only JSON data.`,
@@ -433,20 +497,6 @@ const validateMcpApps = (
       ));
     }
   }
-  return diagnostics;
-};
-
-const validateStdioOptions = (
-  name: string,
-  server: AgentBundleMcpServer,
-  loaded: LoadedConfig,
-): Diagnostic[] => {
-  const diagnostics: Diagnostic[] = [];
-  if (server.headers !== undefined) {
-    diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
-  }
-  diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
-  diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
   return diagnostics;
 };
 
@@ -490,7 +540,11 @@ const validateMcpServer = (
     if (server.cwd !== undefined) {
       diagnostics.push(sourceDiagnostic('AB4309', `MCP server ${JSON.stringify(name)} local entry cannot set cwd.`, loaded.configPath));
     }
-    diagnostics.push(...validateStdioOptions(name, server, loaded));
+    if (server.headers !== undefined) {
+      diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
+    }
+    diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
+    diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
     return diagnostics;
   }
 
@@ -504,7 +558,11 @@ const validateMcpServer = (
     if (server.cwd !== undefined && !nonemptyString(server.cwd)) {
       diagnostics.push(sourceDiagnostic('AB4315', `MCP server ${JSON.stringify(name)} cwd must be a nonempty path.`, loaded.configPath));
     }
-    diagnostics.push(...validateStdioOptions(name, server, loaded));
+    if (server.headers !== undefined) {
+      diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
+    }
+    diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
+    diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
     return diagnostics;
   }
 
@@ -530,7 +588,7 @@ const validateAssets = (loaded: LoadedConfig): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   for (const entry of assets) {
     const source = resolve(loaded.context.projectRoot, entry);
-    if (!isInsideOrEqual(loaded.context.projectRoot, source)) {
+    if (!isInside(loaded.context.projectRoot, source)) {
       diagnostics.push(sourceDiagnostic(
         'AB4601',
         `Asset entry ${JSON.stringify(entry)} must resolve inside the project root.`,
@@ -552,13 +610,13 @@ const validateAssets = (loaded: LoadedConfig): Diagnostic[] => {
 const validateRuntime = (loaded: LoadedConfig): Diagnostic[] => {
   const runtime = loaded.config.runtime;
   if (runtime === undefined) return [];
-  if (!isPlainRecord(runtime)) {
-    return [sourceDiagnostic('AB4500', 'Runtime configuration must be an object.', loaded.configPath)];
+  if (!isRecord(runtime) || !isPlainRecord(runtime)) {
+    return [sourceDiagnostic('AB4600', 'Runtime configuration must be an object.', loaded.configPath)];
   }
   const keys = Object.keys(runtime);
   if (keys.length !== 1 || keys[0] !== 'node') {
     return [sourceDiagnostic(
-      'AB4500',
+      'AB4600',
       'Runtime configuration must contain exactly one node version.',
       loaded.configPath,
     )];
@@ -567,14 +625,14 @@ const validateRuntime = (loaded: LoadedConfig): Diagnostic[] => {
   const version = typeof node === 'string' ? parseRuntimeVersion(node) : undefined;
   if (version === undefined) {
     return [sourceDiagnostic(
-      'AB4501',
+      'AB4601',
       'Runtime node floor must be a version string such as "22.16" or "24.0.0".',
       loaded.configPath,
     )];
   }
   if (!satisfiesGeneratedRuntimeFloor(version)) {
     return [sourceDiagnostic(
-      'AB4502',
+      'AB4602',
       `Runtime node floor ${JSON.stringify(node)} cannot lower the Node.js ${defaultGeneratedRuntime.node} default.`,
       loaded.configPath,
     )];
@@ -834,7 +892,7 @@ export const validateModel = (
     }
     if (server.source !== undefined) {
       const output = server.args?.[0];
-      if (typeof output !== 'string' || !mcpEntryAliasPattern.test(output)) {
+      if (typeof output !== 'string' || !/^mcp\/mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs$/u.test(output)) {
         diagnostics.push({
           code: 'AB4321',
           message: `MCP server ${JSON.stringify(server.name)} has an unsafe local output alias.`,

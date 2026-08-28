@@ -44,7 +44,11 @@ export const evalTargetDigests = (manifest: ArtifactManifest): Readonly<Record<s
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([target, files]) => [
       target,
-      digest({ files: files.sort((left, right) => left.path.localeCompare(right.path)), target }),
+      digest({
+        files: files.sort((left, right) => left.path.localeCompare(right.path)),
+        runtime: manifest.runtime,
+        target,
+      }),
     ])));
 };
 

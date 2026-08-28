@@ -460,4 +460,3 @@ an install URL scoped to `ScriptedAlchemy/agent-bundle@<short-sha>`.
 Run the MCP example with `pnpm example:mcp-app`, open its Workbench URL in X11
 Chrome at `#overview`, and open `examples/mcp-app` in Cursor. Verify both windows
 are visible on the configured X11 display and leave them running for the user.
-

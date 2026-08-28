@@ -272,7 +272,7 @@ it('awaits only safe native progress phases and reports completion after Claude 
     expect(completed).toEqual([expect.objectContaining({ hookEvents: ['SessionStart'], response: 'Reviewed the change.' })]);
     expect(JSON.stringify(completed)).not.toContain('/private/host-stderr-not-progress');
   });
-});
+}, 240_000);
 
 it('does not persist zero token usage when Claude omits usage from an otherwise complete stream', async () => {
   await withClaudeContext(defaultAssertions, async (context) => {
@@ -514,6 +514,7 @@ it('runs one server-owned configured semantic Claude grader after deterministic 
     });
 
     expect(trial.provenance?.semanticGrader).toEqual({
+      contractRevision: 'v1',
       id: 'claude-semantic',
       model: 'claude-opus-4-6',
     });

@@ -17,19 +17,10 @@ import {
 import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol/node';
 
 import { stableJson } from '../core/digest.ts';
-import { isRecord, snapshotStrictJsonValue } from '../core/strict-json.ts';
-import {
-  diagnosticsListWireDto,
-  epochWireIdentities,
-  evalRunAdmissionWireDto,
-  projectStatusWireDto,
-  type AgentApiEpochSummary,
-  type AgentApiEvalRunAdmission,
-} from './agent-api-wire.ts';
+import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type { EvalService } from './eval/eval-service.ts';
+import { runtimeAppFiniteOrdinaryJsonByteLength } from './runtime-app-message-limits.ts';
 import type { ProjectStatus } from './types.ts';
-
-export type { AgentApiEpochSummary } from './agent-api-wire.ts';
 
 export const agentApiToolNames = Object.freeze([
   'project_status',
@@ -61,6 +52,17 @@ export interface AgentApiEpochStore {
   listEpochs(): Promise<readonly AgentApiEpochSummary[]>;
 }
 
+/** Deliberately path-free epoch identity permitted on the Agent API wire. */
+export interface AgentApiEpochSummary {
+  readonly configDigest?: string;
+  readonly createdAt?: string;
+  readonly diagnostics?: Readonly<{ readonly errors: number; readonly infos: number; readonly warnings: number }>;
+  readonly id: string;
+  readonly modelDigest?: string;
+  readonly projectRevision?: string;
+  readonly targetDigests?: Readonly<Record<string, string>>;
+}
+
 export interface AgentApiMcpSession {
   callTool(options: Readonly<{ readonly arguments: Record<string, unknown>; readonly name: string; readonly signal?: AbortSignal }>): Promise<unknown>;
   close(): Promise<void>;
@@ -76,7 +78,7 @@ export interface AgentApiOptions {
   readonly coordinator: Readonly<{ readonly status: () => ProjectStatus }>;
   readonly diagnostics: Readonly<{ readonly list: () => Promise<unknown> }>;
   readonly epochs: AgentApiEpochStore;
-  readonly evals: Pick<EvalService, 'list' | 'read' | 'start' | 'subscribeEvents' | 'suites'>;
+  readonly evals: Pick<EvalService, 'cancel' | 'list' | 'read' | 'start' | 'subscribeEvents' | 'suites'>;
   readonly hooks: Readonly<{
     readonly list: (options: Readonly<{ readonly epochId: string; readonly target?: string }>) => Promise<unknown>;
     readonly simulate: (options: Readonly<{
@@ -110,16 +112,6 @@ export class AgentApiCloseError extends Error {
     this.failures = Object.freeze([...failures]);
   }
 }
-
-type AgentApiToolHandler = (
-  arguments_: unknown,
-  context: { readonly mcpReq: { readonly signal: AbortSignal } },
-) => Promise<unknown>;
-
-type AgentApiToolHandlers = Readonly<{
-  readonly [Name in AgentApiToolName]: AgentApiToolHandler;
-}>;
-
 const apiError = (code: string, message: string): Error & Readonly<{ readonly code: string }> =>
   Object.assign(new Error(message), { code });
 
@@ -129,9 +121,11 @@ const objectSchema = (
 ) => fromJsonSchema({ additionalProperties: false, properties, required: [...required], type: 'object' });
 
 const noArguments = objectSchema({});
-const epochArgument = { minLength: 1, type: 'string' };
-const targetArgument = { minLength: 1, type: 'string' };
-const identifierArgument = { minLength: 1, type: 'string' };
+const maximumArgumentItems = 256;
+const maximumIdentifierLength = 128;
+const epochArgument = { maxLength: maximumIdentifierLength, minLength: 1, type: 'string' };
+const targetArgument = { maxLength: maximumIdentifierLength, minLength: 1, type: 'string' };
+const identifierArgument = { maxLength: maximumIdentifierLength, minLength: 1, type: 'string' };
 
 const skillListSchema = objectSchema({ epoch: epochArgument, target: targetArgument }, ['target']);
 const skillInspectSchema = objectSchema({ epoch: epochArgument, skill_id: identifierArgument, target: targetArgument }, ['skill_id', 'target']);
@@ -152,47 +146,44 @@ const hookSimulateSchema = objectSchema({
   target: targetArgument,
 }, ['hook', 'input', 'target']);
 const evalRunSchema = objectSchema({
-  case_ids: { items: identifierArgument, type: 'array' },
+  case_ids: { items: identifierArgument, maxItems: maximumArgumentItems, type: 'array', uniqueItems: true },
   epoch: epochArgument,
-  suites: { items: identifierArgument, type: 'array' },
+  suites: { items: identifierArgument, maxItems: maximumArgumentItems, type: 'array', uniqueItems: true },
   trials: { maximum: 100, minimum: 1, type: 'integer' },
 });
 const evalGetSchema = objectSchema({ run_id: identifierArgument }, ['run_id']);
 
-const argumentAt = (args: unknown, name: string): unknown => {
-  if (!isRecord(args)) throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
-  return args[name];
-};
+const asRecord = (value: unknown): Record<string, unknown> => value as Record<string, unknown>;
 
-const stringArgument = (args: unknown, name: string): string => {
-  const value = argumentAt(args, name);
+const stringArgument = (args: Record<string, unknown>, name: string): string => {
+  const value = args[name];
   if (typeof value !== 'string') throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
   return value;
 };
 
-const optionalStringArgument = (args: unknown, name: string): string | undefined => {
-  const value = argumentAt(args, name);
+const optionalStringArgument = (args: Record<string, unknown>, name: string): string | undefined => {
+  const value = args[name];
   if (value === undefined) return undefined;
   return typeof value === 'string'
     ? value
     : (() => { throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.'); })();
 };
 
-const objectArgument = (args: unknown, name: string): Record<string, unknown> => {
-  const value = argumentAt(args, name);
-  if (!isRecord(value)) {
+const objectArgument = (args: Record<string, unknown>, name: string): Record<string, unknown> => {
+  const value = args[name];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
   }
   return value as Record<string, unknown>;
 };
 
-const optionalObjectArgument = (args: unknown, name: string): Record<string, unknown> => {
-  if (argumentAt(args, name) === undefined) return {};
+const optionalObjectArgument = (args: Record<string, unknown>, name: string): Record<string, unknown> => {
+  if (args[name] === undefined) return {};
   return objectArgument(args, name);
 };
 
-const stringListArgument = (args: unknown, name: string): readonly string[] | undefined => {
-  const value = argumentAt(args, name);
+const stringListArgument = (args: Record<string, unknown>, name: string): readonly string[] | undefined => {
+  const value = args[name];
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
@@ -200,8 +191,8 @@ const stringListArgument = (args: unknown, name: string): readonly string[] | un
   return Object.freeze([...value]);
 };
 
-const optionalIntegerArgument = (args: unknown, name: string): number | undefined => {
-  const value = argumentAt(args, name);
+const optionalIntegerArgument = (args: Record<string, unknown>, name: string): number | undefined => {
+  const value = args[name];
   if (value === undefined) return undefined;
   if (!Number.isSafeInteger(value)) throw apiError('AGENT_API_ARGUMENT_INVALID', 'Tool arguments are not valid.');
   return value as number;
@@ -226,7 +217,6 @@ const stableErrorCodes = new Set([
   'SKILL_EPOCH_UNAVAILABLE',
   'SKILL_RESOURCE_UNAVAILABLE',
   'SKILL_TARGET_UNAVAILABLE',
-  'EVAL_ARTIFACT_OUTSIDE_PROJECT',
   'EVAL_HARNESS_UNSUPPORTED',
   'EVAL_RUN_NOT_FOUND',
   'EVAL_SELECTION_EMPTY',
@@ -234,6 +224,71 @@ const stableErrorCodes = new Set([
   'EVAL_TARGET_MISSING',
   'EVAL_TRIALS_INVALID',
 ] as const);
+
+const maximumAgentApiRequestBytes = 64 * 1_024;
+const maximumAgentApiJsonDepth = 32;
+const maximumAgentApiJsonNodes = 4_096;
+const maximumAgentApiToolResultBytes = 1_024 * 1_024;
+
+class AgentApiRequestError extends Error {
+  readonly code: 'AGENT_API_REQUEST_INVALID' | 'AGENT_API_REQUEST_TOO_LARGE';
+  readonly status: 400 | 413;
+
+  constructor(code: AgentApiRequestError['code'], message: string, status: AgentApiRequestError['status']) {
+    super(message);
+    this.name = 'AgentApiRequestError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+const readAgentApiRequest = async (request: IncomingMessage): Promise<unknown> => new Promise((resolvePromise, rejectPromise) => {
+  let bytes = 0;
+  let settled = false;
+  const chunks: Buffer[] = [];
+  const reject = (error: unknown): void => {
+    if (settled) return;
+    settled = true;
+    chunks.length = 0;
+    rejectPromise(error);
+  };
+  request.on('data', (chunk: Buffer) => {
+    if (settled) return;
+    bytes += chunk.length;
+    if (bytes > maximumAgentApiRequestBytes) {
+      request.resume();
+      reject(new AgentApiRequestError('AGENT_API_REQUEST_TOO_LARGE', 'Agent API request exceeds 64 KiB.', 413));
+      return;
+    }
+    chunks.push(chunk);
+  });
+  request.once('error', reject);
+  request.once('end', () => {
+    if (settled) return;
+    try {
+      const body = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+      const parsed = parseJsonWithoutDuplicateKeys(body);
+      if (runtimeAppFiniteOrdinaryJsonByteLength(parsed, {
+        maximumBytes: maximumAgentApiRequestBytes,
+        maximumDepth: maximumAgentApiJsonDepth,
+        maximumNodes: maximumAgentApiJsonNodes,
+      }) === undefined) {
+        throw new AgentApiRequestError('AGENT_API_REQUEST_INVALID', 'Agent API request must contain bounded JSON.', 400);
+      }
+      settled = true;
+      resolvePromise(parsed);
+    } catch (error) {
+      reject(error instanceof AgentApiRequestError
+        ? error
+        : new AgentApiRequestError('AGENT_API_REQUEST_INVALID', 'Agent API request is not valid JSON.', 400));
+    }
+  });
+});
+
+const writeAgentApiRequestError = (response: ServerResponse, error: AgentApiRequestError): void => {
+  response.writeHead(error.status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(stableJson({ error: { code: error.code, message: error.message } }));
+};
 
 /** Reads only an own data descriptor: hostile accessors and Proxy traps are never evaluated. */
 const ownDataProperty = (value: unknown, key: string): unknown => {
@@ -257,9 +312,281 @@ const safeErrorCode = (error: unknown): string => {
   return 'AGENT_API_OPERATION_FAILED';
 };
 
+type AgentApiJsonRecord = Readonly<Record<string, unknown>>;
+
+interface AgentApiDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly recovery?: string;
+  readonly severity: 'error' | 'info' | 'warning';
+  readonly target?: string;
+}
+
+interface AgentApiProjectStatus {
+  readonly artifact: unknown;
+  readonly build: unknown;
+  readonly source: Readonly<{ readonly diagnostics: readonly AgentApiDiagnostic[]; readonly revision?: string; readonly state: string }>;
+}
+
+/** Durable, path-free acknowledgement returned when an eval background job is admitted. */
+interface AgentApiEvalRunAdmission {
+  readonly id: string;
+  readonly status: 'admitted';
+}
+
+const maximumDiagnosticTextLength = 4_096;
+const safeDiagnosticCodePattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
+const safeDigestPattern = /^[a-f0-9]{64}$/iu;
+const safeEpochIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
+const safeTargetPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
+const safeTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+const secretAssignmentPattern = /\b(?:api[_ -]?key|authorization|password|secret|token)\s*(?:=|:)/iu;
+const diagnosticMessageFallback = 'Diagnostic details are available in the local workbench.';
+const diagnosticRecoveryFallback = 'Recovery guidance is available in the local workbench.';
+
+const hasControlCharacter = (value: string): boolean => {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
+  }
+  return false;
+};
+
+const snapshotValue = (value: unknown): unknown => {
+  try {
+    if (runtimeAppFiniteOrdinaryJsonByteLength(value, {
+      maximumBytes: maximumAgentApiToolResultBytes,
+      maximumDepth: maximumAgentApiJsonDepth,
+      maximumNodes: maximumAgentApiJsonNodes,
+    }) === undefined) return undefined;
+    return snapshotStrictJsonValue(value);
+  } catch {
+    return undefined;
+  }
+};
+
+const snapshotRecord = (value: unknown): AgentApiJsonRecord | undefined => {
+  const snapshot = snapshotValue(value);
+  return typeof snapshot === 'object' && snapshot !== null && !Array.isArray(snapshot)
+    ? snapshot as AgentApiJsonRecord
+    : undefined;
+};
+
+const snapshotArray = (value: unknown): readonly unknown[] | undefined => {
+  const snapshot = snapshotValue(value);
+  return Array.isArray(snapshot) ? snapshot : undefined;
+};
+
+const safeDigest = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeDigestPattern.test(value) ? value : undefined;
+
+const safeDiagnosticCode = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeDiagnosticCodePattern.test(value) ? value : undefined;
+
+const safeEpochId = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeEpochIdPattern.test(value) ? value : undefined;
+
+const safeTarget = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeTargetPattern.test(value) ? value : undefined;
+
+const safeTimestamp = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeTimestampPattern.test(value) && Number.isFinite(Date.parse(value))
+    ? value
+    : undefined;
+
+/** Deliberately excludes run provenance, artifact bindings, and later execution results. */
+const evalRunAdmissionWireDto = (value: unknown): AgentApiEvalRunAdmission => {
+  const run = snapshotRecord(value);
+  const id = safeEpochId(run?.id);
+  if (id === undefined) {
+    throw apiError('AGENT_API_OPERATION_FAILED', 'Eval admission did not return a durable run identity.');
+  }
+  return Object.freeze({ id, status: 'admitted' });
+};
+
+/** Messages fail closed: any path-like, control, or secret-assignment text is never partially redacted. */
+const safeDiagnosticText = (value: unknown, fallback: string): string =>
+  typeof value === 'string' && value.length <= maximumDiagnosticTextLength &&
+    !value.includes('/') && !value.includes('\\') && !hasControlCharacter(value) &&
+    !secretAssignmentPattern.test(value)
+    ? value
+    : fallback;
+
+/** Dedicated, detached DTO: only diagnostic fields that can be safely named reach the wire. */
+const diagnosticWireDto = (value: unknown): AgentApiDiagnostic | undefined => {
+  const diagnostic = snapshotRecord(value);
+  if (diagnostic === undefined) return undefined;
+  const code = safeDiagnosticCode(diagnostic.code);
+  const severity = diagnostic.severity;
+  if (code === undefined || (severity !== 'error' && severity !== 'info' && severity !== 'warning')) return undefined;
+  const recovery = typeof diagnostic.recovery === 'string'
+    ? safeDiagnosticText(diagnostic.recovery, diagnosticRecoveryFallback)
+    : undefined;
+  const target = safeTarget(diagnostic.target);
+  return Object.freeze({
+    code,
+    message: safeDiagnosticText(diagnostic.message, diagnosticMessageFallback),
+    ...(recovery === undefined ? {} : { recovery }),
+    severity,
+    ...(target === undefined ? {} : { target }),
+  });
+};
+
+const diagnosticWireDtos = (value: unknown): readonly AgentApiDiagnostic[] => Object.freeze(
+  (snapshotArray(value) ?? []).flatMap((diagnostic) => {
+    const projected = diagnosticWireDto(diagnostic);
+    return projected === undefined ? [] : [projected];
+  }),
+);
+
+const diagnosticSummaryWireDto = (value: unknown): AgentApiEpochSummary['diagnostics'] | undefined => {
+  const summary = snapshotRecord(value);
+  if (summary === undefined) return undefined;
+  const errors = summary.errors;
+  const infos = summary.infos;
+  const warnings = summary.warnings;
+  if (![errors, infos, warnings].every((count) => Number.isSafeInteger(count) && (count as number) >= 0)) return undefined;
+  return Object.freeze({ errors: errors as number, infos: infos as number, warnings: warnings as number });
+};
+
+const targetDigestsWireDto = (value: unknown): Readonly<Record<string, string>> | undefined => {
+  const targetDigests = snapshotRecord(value);
+  if (targetDigests === undefined) return undefined;
+  const entries = Object.entries(targetDigests);
+  if (entries.length === 0 || entries.some(([target, digest]) => safeTarget(target) === undefined || safeDigest(digest) === undefined)) {
+    return undefined;
+  }
+  return Object.freeze(Object.fromEntries(entries.map(([target, digest]) => [target, digest as string])));
+};
+
+/** Explicit safe epoch identity; manifest/root/source fields are intentionally not represented. */
+const epochWireIdentity = (value: unknown): AgentApiEpochSummary | undefined => {
+  const epoch = snapshotRecord(value);
+  if (epoch === undefined) return undefined;
+  const id = safeEpochId(epoch.id);
+  if (id === undefined) return undefined;
+  const configDigest = safeDigest(epoch.configDigest);
+  const createdAt = safeTimestamp(epoch.createdAt);
+  const diagnostics = diagnosticSummaryWireDto(epoch.diagnostics);
+  const modelDigest = safeDigest(epoch.modelDigest);
+  const projectRevision = safeDigest(epoch.projectRevision);
+  const targetDigests = targetDigestsWireDto(epoch.targetDigests);
+  return Object.freeze({
+    ...(configDigest === undefined ? {} : { configDigest }),
+    ...(createdAt === undefined ? {} : { createdAt }),
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+    id,
+    ...(modelDigest === undefined ? {} : { modelDigest }),
+    ...(projectRevision === undefined ? {} : { projectRevision }),
+    ...(targetDigests === undefined ? {} : { targetDigests }),
+  });
+};
+
+const epochWireIdentities = (value: unknown): readonly AgentApiEpochSummary[] => Object.freeze(
+  (snapshotArray(value) ?? []).flatMap((epoch) => {
+    const projected = epochWireIdentity(epoch);
+    return projected === undefined ? [] : [projected];
+  }),
+);
+
+const sourceWireDto = (value: unknown): AgentApiProjectStatus['source'] => {
+  const source = snapshotRecord(value);
+  const state = source?.state;
+  const revision = safeDigest(source?.revision);
+  return Object.freeze({
+    diagnostics: diagnosticWireDtos(source?.diagnostics),
+    ...(revision === undefined ? {} : { revision }),
+    state: state === 'invalid' || state === 'ready' || state === 'unknown' ? state : 'unknown',
+  });
+};
+
+const buildAttemptWireDto = (value: unknown): unknown | undefined => {
+  const attempt = snapshotRecord(value);
+  if (attempt === undefined) return undefined;
+  const outcome = attempt.outcome;
+  const id = safeEpochId(attempt.id);
+  const sourceRevision = safeDigest(attempt.sourceRevision);
+  const startedAt = safeTimestamp(attempt.startedAt);
+  if (id === undefined || sourceRevision === undefined || startedAt === undefined ||
+    (outcome !== 'failed' && outcome !== 'running' && outcome !== 'succeeded')) return undefined;
+  const completedAt = safeTimestamp(attempt.completedAt);
+  if (outcome === 'running') {
+    return Object.freeze({ diagnostics: diagnosticWireDtos(attempt.diagnostics), id, outcome, sourceRevision, startedAt });
+  }
+  if (completedAt === undefined) return undefined;
+  const result = snapshotRecord(attempt.result);
+  const epoch = epochWireIdentity(result?.epoch);
+  return Object.freeze({
+    completedAt,
+    diagnostics: diagnosticWireDtos(attempt.diagnostics),
+    id,
+    outcome,
+    ...(outcome === 'succeeded' && epoch !== undefined ? { result: Object.freeze({ epoch }) } : {}),
+    sourceRevision,
+    startedAt,
+  });
+};
+
+const artifactWireDto = (value: unknown): unknown => {
+  const artifact = snapshotRecord(value);
+  const state = artifact?.state;
+  if (artifact === undefined || (state !== 'active' && state !== 'stale')) return Object.freeze({ state: 'missing' });
+  const activeEpoch = epochWireIdentity(artifact.activeEpoch);
+  const currentSourceRevision = safeDigest(artifact.currentSourceRevision);
+  return Object.freeze({
+    ...(activeEpoch === undefined ? {} : { activeEpoch }),
+    ...(currentSourceRevision === undefined ? {} : { currentSourceRevision }),
+    state,
+  });
+};
+
+const buildWireDto = (value: unknown): unknown => {
+  const build = snapshotRecord(value);
+  const state = build?.state;
+  const activeAttempt = buildAttemptWireDto(build?.activeAttempt);
+  const lastAttempt = buildAttemptWireDto(build?.lastAttempt);
+  if (state === 'building' && activeAttempt !== undefined) {
+    return Object.freeze({ activeAttempt, ...(lastAttempt === undefined ? {} : { lastAttempt }), state });
+  }
+  if (state === 'failed' && lastAttempt !== undefined) return Object.freeze({ lastAttempt, state });
+  return Object.freeze({ ...(lastAttempt === undefined ? {} : { lastAttempt }), state: 'idle' });
+};
+
+/** Explicit status DTO that carries only safe state, epoch identity, and projected diagnostics. */
+const projectStatusWireDto = (value: unknown): AgentApiProjectStatus => {
+  const status = snapshotRecord(value);
+  return Object.freeze({
+    artifact: artifactWireDto(status?.artifact),
+    build: buildWireDto(status?.build),
+    source: sourceWireDto(status?.source),
+  });
+};
+
+/** Flattens only known diagnostic arrays from a direct service result or a ProjectStatus-shaped result. */
+const diagnosticsListWireDto = (value: unknown): readonly AgentApiDiagnostic[] => {
+  const result = snapshotRecord(value);
+  if (result === undefined) return Object.freeze([]);
+  const direct = snapshotArray(result.diagnostics);
+  if (direct !== undefined) return diagnosticWireDtos(direct);
+  const source = snapshotRecord(result.source);
+  const build = snapshotRecord(result.build);
+  const activeAttempt = snapshotRecord(build?.activeAttempt);
+  const lastAttempt = snapshotRecord(build?.lastAttempt);
+  return Object.freeze([
+    ...diagnosticWireDtos(source?.diagnostics),
+    ...diagnosticWireDtos(activeAttempt?.diagnostics),
+    ...diagnosticWireDtos(lastAttempt?.diagnostics),
+  ]);
+};
+
 const safeToolResult = (value: unknown) => {
-  const snapshot = snapshotStrictJsonValue(value === undefined ? null : value);
-  const structured = isRecord(snapshot) ? snapshot : Object.freeze({ value: snapshot });
+  const snapshot = snapshotValue(value === undefined ? null : value);
+  if (snapshot === undefined) {
+    throw apiError('AGENT_API_OPERATION_FAILED', 'Tool result exceeds the Agent API JSON limit.');
+  }
+  const structured = snapshot !== null && typeof snapshot === 'object' && !Array.isArray(snapshot)
+    ? snapshot
+    : Object.freeze({ value: snapshot });
   return {
     content: [{ text: stableJson(structured), type: 'text' as const }],
     structuredContent: structured,
@@ -294,11 +621,8 @@ export const agentApiTokenFromEnvironment = (environment: NodeJS.ProcessEnv = pr
 };
 
 /**
- * Stateless MCP facade over the already-owned development services. The SDK
- * factory must return a fresh McpServer per HTTP request (it connect()s that
- * instance to a one-shot transport and close()s it after the exchange); tool
- * closures are built once and re-registered. The API only leases epochs and
- * never owns those services.
+ * Stateless MCP facade over the already-owned development services. Every request
+ * receives a fresh MCP server; the API only leases epochs and never owns those services.
  */
 export class AgentApi {
   readonly #artifacts: AgentApiOptions['artifacts'];
@@ -317,7 +641,6 @@ export class AgentApi {
   readonly #mcpSessions: AgentApiMcpSessions;
   readonly #skills: AgentApiOptions['skills'];
   readonly #token: string;
-  readonly #tools: AgentApiToolHandlers;
   readonly #version: string;
 
   constructor(options: AgentApiOptions) {
@@ -338,7 +661,6 @@ export class AgentApi {
     this.#skills = options.skills;
     this.#token = token;
     this.#version = options.version ?? '0.1.0';
-    this.#tools = this.#createToolRegistrations();
     this.#handler = options.handlerFactory?.(() => this.#createServer()) ??
       createMcpHandler(() => this.#createServer(), { legacy: 'stateless' });
     this.#nodeHandler = toNodeHandler(this.#handler);
@@ -374,7 +696,19 @@ export class AgentApi {
     const authorized = request as IncomingMessage & { auth?: AuthInfo };
     authorized.auth = auth;
     try {
-      await this.#nodeHandler(authorized, response);
+      let parsedBody: unknown;
+      if (request.method === 'POST') {
+        try {
+          parsedBody = await readAgentApiRequest(request);
+        } catch (error) {
+          if (error instanceof AgentApiRequestError) {
+            writeAgentApiRequestError(response, error);
+            return;
+          }
+          throw error;
+        }
+      }
+      await this.#nodeHandler(authorized, response, parsedBody);
     } finally {
       delete authorized.auth;
     }
@@ -417,179 +751,161 @@ export class AgentApi {
   }
 
   #createServer(): McpServer {
-    // createMcpHandler({ legacy: 'stateless' }) connect()s a factory product to a
-    // fresh transport and close()s that product after the POST; a shared instance
-    // would be torn down on the first request.
     const server = new McpServer({ name: 'agent-bundle', version: this.#version });
-    const tools = this.#tools;
-    server.registerTool('project_status', { inputSchema: noArguments }, tools.project_status as never);
-    server.registerTool('skills_list', { inputSchema: skillListSchema }, tools.skills_list as never);
-    server.registerTool('skill_inspect', { inputSchema: skillInspectSchema }, tools.skill_inspect as never);
-    server.registerTool('artifacts_list', { inputSchema: noArguments }, tools.artifacts_list as never);
-    server.registerTool('artifact_inspect', { inputSchema: artifactInspectSchema }, tools.artifact_inspect as never);
-    server.registerTool('mcp_servers_list', { inputSchema: mcpServersListSchema }, tools.mcp_servers_list as never);
-    server.registerTool('mcp_invoke', { inputSchema: mcpInvokeSchema }, tools.mcp_invoke as never);
-    server.registerTool('hooks_list', { inputSchema: hooksListSchema }, tools.hooks_list as never);
-    server.registerTool('hook_simulate', { inputSchema: hookSimulateSchema }, tools.hook_simulate as never);
-    server.registerTool('evals_list', { inputSchema: noArguments }, tools.evals_list as never);
-    server.registerTool('eval_run', { inputSchema: evalRunSchema }, tools.eval_run as never);
-    server.registerTool('eval_get', { inputSchema: evalGetSchema }, tools.eval_get as never);
-    server.registerTool('diagnostics_list', { inputSchema: noArguments }, tools.diagnostics_list as never);
-    return server;
-  }
-
-  #createToolRegistrations(): AgentApiToolHandlers {
-    return Object.freeze({
-    project_status: async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, () => Promise.resolve({ status: projectStatusWireDto(this.#coordinator.status()) })),
-    skills_list: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => ({
-        skills: await this.#skills.generatedTree(epochId, stringArgument(arguments_, 'target')),
-      }))),
-    skill_inspect: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => ({
+    server.registerTool('project_status', { inputSchema: noArguments }, async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, () => Promise.resolve({ status: projectStatusWireDto(this.#coordinator.status()) })));
+    server.registerTool('skills_list', { inputSchema: skillListSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
+        skills: await this.#skills.generatedTree(epochId, stringArgument(asRecord(arguments_), 'target')),
+      }))));
+    server.registerTool('skill_inspect', { inputSchema: skillInspectSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         skill: await this.#skills.generated(
           epochId,
-          stringArgument(arguments_, 'target'),
-          stringArgument(arguments_, 'skill_id'),
+          stringArgument(asRecord(arguments_), 'target'),
+          stringArgument(asRecord(arguments_), 'skill_id'),
         ),
-      }))),
-    artifacts_list: async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ epochs: epochWireIdentities(await this.#epochs.listEpochs()) })),
-    artifact_inspect: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => ({
+      }))));
+    server.registerTool('artifacts_list', { inputSchema: noArguments }, async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ epochs: epochWireIdentities(await this.#epochs.listEpochs()) })));
+    server.registerTool('artifact_inspect', { inputSchema: artifactInspectSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         artifact: await this.#artifacts.inspect(epochId),
-      }))),
-    mcp_servers_list: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => ({
-        servers: await this.#mcpServers(epochId, stringArgument(arguments_, 'target')),
-      }))),
-    mcp_invoke: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => {
+      }))));
+    server.registerTool('mcp_servers_list', { inputSchema: mcpServersListSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
+        servers: await this.#mcpServers(epochId, stringArgument(asRecord(arguments_), 'target')),
+      }))));
+    server.registerTool('mcp_invoke', { inputSchema: mcpInvokeSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
+        const args = asRecord(arguments_);
         const session = await this.#mcpSessions.open({
           epochId,
-          serverName: stringArgument(arguments_, 'server'),
-          target: stringArgument(arguments_, 'target'),
+          serverName: stringArgument(args, 'server'),
+          target: stringArgument(args, 'target'),
         });
         try {
           await session.initialize({ signal });
-          return { result: await session.callTool({ arguments: optionalObjectArgument(arguments_, 'arguments'), name: stringArgument(arguments_, 'tool'), signal }) };
+          return { result: await session.callTool({ arguments: optionalObjectArgument(args, 'arguments'), name: stringArgument(args, 'tool'), signal }) };
         } finally {
           await session.close();
         }
-      })),
-    hooks_list: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => {
-        const target = optionalStringArgument(arguments_, 'target');
+      })));
+    server.registerTool('hooks_list', { inputSchema: hooksListSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
+        const target = optionalStringArgument(asRecord(arguments_), 'target');
         return {
           hooks: await this.#hooks.list({
             epochId,
             ...(target === undefined ? {} : { target }),
           }),
         };
-      })),
-    hook_simulate: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(arguments_, 'epoch'), async (epochId) => {
+      })));
+    server.registerTool('hook_simulate', { inputSchema: hookSimulateSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
+        const args = asRecord(arguments_);
         return {
           simulation: await this.#hooks.simulate({
             epochId,
-            hook: stringArgument(arguments_, 'hook'),
-            input: { inline: objectArgument(arguments_, 'input') },
+            hook: stringArgument(args, 'hook'),
+            input: { inline: objectArgument(args, 'input') },
             signal,
-            target: stringArgument(arguments_, 'target'),
+            target: stringArgument(args, 'target'),
           }),
         };
-      })),
-    evals_list: async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, async () => {
-        const [runs, suites] = await Promise.all([this.#evals.list(), this.#evals.suites()]);
-        return { runs, suites };
-      }),
-    eval_run: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, (signal) => this.#admitEvalRun(arguments_, signal)),
-    eval_get: async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(arguments_, 'run_id')) })),
-    diagnostics_list: async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ diagnostics: diagnosticsListWireDto(await this.#diagnostics.list()) })),
-    });
-  }
-
-  /**
-   * Admission/subscription/terminal-release protocol for one background eval
-   * run: lease the epoch, admit under a lifecycle signal (request cancellation
-   * governs admission only), subscribe to run events, and release the
-   * subscription and epoch lease exactly once — at the run's terminal event,
-   * or immediately when admission or subscription fails before release began.
-   */
-  async #admitEvalRun(arguments_: unknown, signal: AbortSignal): Promise<{ run: AgentApiEvalRunAdmission }> {
-    const caseIds = stringListArgument(arguments_, 'case_ids');
-    const suites = stringListArgument(arguments_, 'suites');
-    const trials = optionalIntegerArgument(arguments_, 'trials');
-    const requestedEpochId = optionalStringArgument(arguments_, 'epoch');
-    const reference = requestedEpochId === undefined
-      ? await this.#epochs.acquireActiveEpochReference()
-      : await this.#epochs.acquireEpochReference(requestedEpochId);
-    const lifecycle = new AbortController();
-    const lifecycleSettled = Promise.withResolvers<void>();
-    const completeLifecycle = (): void => {
-      if (this.#evalLifecycles.delete(lifecycle)) lifecycleSettled.resolve();
-    };
-    let releaseStarted = false;
-    let subscription: Awaited<ReturnType<AgentApiOptions['evals']['subscribeEvents']>> | undefined;
-    try {
-      // Request cancellation governs admission only; an admitted run belongs to its lifecycle.
-      signal.throwIfAborted();
-      this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
-      const admission = await this.#evals.start({
-        artifact: reference.root,
-        ...(caseIds === undefined ? {} : { caseIds }),
-        harness: 'deterministic',
-        ...(suites === undefined ? {} : { suites }),
-        ...(trials === undefined ? {} : { trials }),
-        signal: lifecycle.signal,
-      });
-      subscription = await this.#evals.subscribeEvents(admission.run.id, 0);
-      const eventSubscription = subscription;
-      let released: Promise<void> | undefined;
-      const release = (): Promise<void> => {
-        releaseStarted = true;
-        released ??= Promise.allSettled([
-          Promise.resolve().then(() => eventSubscription.close()),
-          reference.close(),
-        ]).then((results) => {
-          const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-          if (failures.length > 0) {
-            throw new AggregateError(failures, 'Agent API eval lifecycle cleanup failed.', { cause: failures[0] });
+      })));
+    server.registerTool('evals_list', { inputSchema: noArguments }, async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ runs: await this.#evals.list(), suites: await this.#evals.suites() })));
+    server.registerTool('eval_run', { inputSchema: evalRunSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async (signal) => {
+        const args = asRecord(arguments_);
+        const caseIds = stringListArgument(args, 'case_ids');
+        const suites = stringListArgument(args, 'suites');
+        const trials = optionalIntegerArgument(args, 'trials');
+        const requestedEpochId = optionalStringArgument(args, 'epoch');
+        const reference = requestedEpochId === undefined
+          ? await this.#epochs.acquireActiveEpochReference()
+          : await this.#epochs.acquireEpochReference(requestedEpochId);
+        const lifecycle = new AbortController();
+        const lifecycleSettled = Promise.withResolvers<void>();
+        this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
+        let lifecycleCompleted = false;
+        const completeLifecycle = (): void => {
+          if (lifecycleCompleted) return;
+          lifecycleCompleted = true;
+          this.#evalLifecycles.delete(lifecycle);
+          lifecycleSettled.resolve();
+        };
+        const abortAdmission = (): void => lifecycle.abort(signal.reason);
+        signal.addEventListener('abort', abortAdmission, { once: true });
+        if (signal.aborted) abortAdmission();
+        let released: Promise<void> | undefined;
+        let admission: Awaited<ReturnType<AgentApiOptions['evals']['start']>> | undefined;
+        let subscription: Awaited<ReturnType<AgentApiOptions['evals']['subscribeEvents']>> | undefined;
+        const release = (options: Readonly<{ readonly cancelRun: boolean; readonly retainFailure: boolean }>): Promise<void> => {
+          released ??= Promise.resolve().then(async () => {
+            const cancellation = options.cancelRun && admission !== undefined
+              ? await Promise.allSettled([this.#evals.cancel(admission.run.id)])
+              : [];
+            const closingSubscription = subscription;
+            const resources = await Promise.allSettled([
+              ...(closingSubscription === undefined ? [] : [Promise.resolve().then(() => closingSubscription.close())]),
+              reference.close(),
+            ]);
+            const failures = [...cancellation, ...resources]
+              .flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+            if (failures.length > 0) {
+              throw new AggregateError(failures, 'Agent API eval lifecycle cleanup failed.', { cause: failures[0] });
+            }
+          }).catch((error) => {
+            if (options.retainFailure) this.#evalLifecycleFailures.add(error);
+            throw error;
+          }).finally(completeLifecycle);
+          return released;
+        };
+        try {
+          try {
+            lifecycle.signal.throwIfAborted();
+            admission = await this.#evals.start({
+              artifact: reference.root,
+              ...(caseIds === undefined ? {} : { caseIds }),
+              harness: 'deterministic',
+              ...(suites === undefined ? {} : { suites }),
+              ...(trials === undefined ? {} : { trials }),
+              signal: lifecycle.signal,
+            });
+          } finally {
+            signal.removeEventListener('abort', abortAdmission);
           }
-        }).catch((error) => {
-          this.#evalLifecycleFailures.add(error);
+          subscription = await this.#evals.subscribeEvents(admission.run.id, 0);
+          const eventSubscription = subscription;
+          const terminal = (kind: string): boolean =>
+            kind === 'run.cancelled' || kind === 'run.completed' || kind === 'run.failed';
+          if (eventSubscription.replay.events.some((event) => terminal(event.kind))) {
+            await release({ cancelRun: false, retainFailure: true });
+          }
+          else eventSubscription.activate((event) => {
+            if (terminal(event.kind)) void release({ cancelRun: false, retainFailure: true }).catch(() => undefined);
+          });
+          return { run: evalRunAdmissionWireDto(admission.run) };
+        } catch (error) {
+          signal.removeEventListener('abort', abortAdmission);
+          const cleanup = release({ cancelRun: true, retainFailure: false });
+          lifecycle.abort(error);
+          const cleanupResult = await Promise.allSettled([cleanup]);
+          const failures = cleanupResult.flatMap((result) =>
+            result.status === 'rejected' && result.reason !== error ? [result.reason] : []);
+          if (failures.length > 0) {
+            throw new AggregateError([error, ...failures], 'Agent API eval admission cleanup failed.', { cause: error });
+          }
           throw error;
-        }).finally(completeLifecycle);
-        return released;
-      };
-      const terminal = (kind: string): boolean =>
-        kind === 'run.cancelled' || kind === 'run.completed' || kind === 'run.failed';
-      if (eventSubscription.replay.events.some((event) => terminal(event.kind))) await release();
-      else eventSubscription.activate((event) => {
-        if (terminal(event.kind)) void release().catch(() => undefined);
-      });
-      return { run: evalRunAdmissionWireDto(admission.run) };
-    } catch (error) {
-      lifecycle.abort(error);
-      completeLifecycle();
-      if (!releaseStarted) {
-        const closingSubscription = subscription;
-        const cleanup = await Promise.allSettled([
-          ...(closingSubscription === undefined ? [] : [Promise.resolve().then(() => closingSubscription.close())]),
-          reference.close(),
-        ]);
-        const failures = cleanup.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-        if (failures.length > 0) {
-          throw new AggregateError([error, ...failures], 'Agent API eval admission and epoch release both failed.', { cause: error });
         }
-      }
-      throw error;
-    }
+      }));
+    server.registerTool('eval_get', { inputSchema: evalGetSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(asRecord(arguments_), 'run_id')) })));
+    server.registerTool('diagnostics_list', { inputSchema: noArguments }, async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ diagnostics: diagnosticsListWireDto(await this.#diagnostics.list()) })));
+    return server;
   }
 
   async #mcpServers(epochId: string, target: string): Promise<unknown> {

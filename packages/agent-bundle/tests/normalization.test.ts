@@ -1,5 +1,6 @@
 import { expect, it } from '@rstest/core';
 
+import * as normalizeModule from '../src/config/normalize.ts';
 import {
   normalizeProject,
   validateModel,
@@ -26,6 +27,10 @@ const extensionRegistry: NormalizationTargetRegistry = {
   has: (name) => name === 'example',
   supports: (name, capability) => name === 'example' && capability === 'hooks',
 };
+
+it('keeps internal config-extension finite JSON failures non-constructible', () => {
+  expect(normalizeModule).not.toHaveProperty('ConfigExtensionFiniteJsonError');
+});
 
 const loadedProject = (
   config: AgentBundleConfig,
@@ -164,6 +169,7 @@ it('rejects non-JSON values in registered config extensions before normalization
   }
   const cyclic: { self?: unknown } = {};
   cyclic.self = cyclic;
+  const prototypeMutated = Object.setPrototypeOf({ enabled: true }, { inherited: true });
   const values: readonly unknown[] = [
     new Map([['value', true]]),
     new Set(['value']),
@@ -177,6 +183,7 @@ it('rejects non-JSON values in registered config extensions before normalization
     Number.NaN,
     Number.POSITIVE_INFINITY,
     cyclic,
+    prototypeMutated,
   ];
 
   for (const value of values) {
@@ -184,7 +191,7 @@ it('rejects non-JSON values in registered config extensions before normalization
       example: value,
       plugin: { name: 'extension-json-fixture', version: '1.0.0' },
     }), { skills: [] }, extensionRegistry)).rejects.toThrow(
-      'AB4500: Config extension "example" must contain strict finite JSON data.',
+      'AB4500: A registered config extension must contain strict finite JSON data.',
     );
   }
 });
@@ -564,7 +571,16 @@ it('validates host-native hook tool selectors against the registry and hook targ
       registry,
     ).map(({ code }) => code);
 
-  expect(diagnosticsFor(['claude:WebSearch'])).toEqual([]);
+  expect(diagnosticsFor(['claude:WebSearch'], ['claude'])).toEqual([]);
+  expect(validateSource(
+    loadedProject({
+      hooks: { beforeTool: { handler: './hooks/guard.ts', tools: ['claude:WebSearch'] } },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['codex'],
+    }),
+    { skills: [] },
+    registry,
+  ).map(({ code }) => code)).toEqual(['AB4212']);
   expect(diagnosticsFor(['future-host:tool'])).toEqual(['AB4210']);
   expect(diagnosticsFor(['portable:tool'])).toEqual(['AB4211']);
   expect(diagnosticsFor(['claude:WebSearch'], ['codex'])).toEqual(['AB4212']);
@@ -600,14 +616,14 @@ it('normalizes the generated-executable runtime floor and validates raises only'
   expect(diagnosticsFor(undefined)).toEqual([]);
   expect(diagnosticsFor({ node: '22.12' })).toEqual([]);
   expect(diagnosticsFor({ node: '24.0.0' })).toEqual([]);
-  expect(diagnosticsFor('22.16')).toEqual(['AB4500']);
-  expect(diagnosticsFor({})).toEqual(['AB4500']);
-  expect(diagnosticsFor({ node: '24.0', extra: true })).toEqual(['AB4500']);
-  expect(diagnosticsFor({ node: 'v22.16' })).toEqual(['AB4501']);
-  expect(diagnosticsFor({ node: 'latest' })).toEqual(['AB4501']);
-  expect(diagnosticsFor({ node: `${'9'.repeat(400)}.0` })).toEqual(['AB4501']);
-  expect(diagnosticsFor({ node: '22.11.9' })).toEqual(['AB4502']);
-  expect(diagnosticsFor({ node: '20.19.0' })).toEqual(['AB4502']);
+  expect(diagnosticsFor('22.16')).toEqual(['AB4600']);
+  expect(diagnosticsFor({})).toEqual(['AB4600']);
+  expect(diagnosticsFor({ node: '24.0', extra: true })).toEqual(['AB4600']);
+  expect(diagnosticsFor({ node: 'v22.16' })).toEqual(['AB4601']);
+  expect(diagnosticsFor({ node: 'latest' })).toEqual(['AB4601']);
+  expect(diagnosticsFor({ node: `${'9'.repeat(400)}.0` })).toEqual(['AB4601']);
+  expect(diagnosticsFor({ node: '22.11.9' })).toEqual(['AB4602']);
+  expect(diagnosticsFor({ node: '20.19.0' })).toEqual(['AB4602']);
 });
 
 it('reports unknown targets, duplicate IDs, and portable output collisions', async () => {

@@ -1,10 +1,23 @@
+import { createServer } from 'node:http';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { join, relative } from 'node:path';
+import { tmpdir } from 'node:os';
+
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
+import { createRsbuild } from '@rsbuild/core';
+import { pluginReact } from '@rsbuild/plugin-react';
+
+import { mantineEsmEntry, workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { chromium } from 'playwright';
 
 import {
   createMcpAppFrameRelay,
+  applyMcpAppFramePolicy,
   McpAppFrame,
+  SecureAppRenderer,
   type McpAppFrameMessageListener,
   type McpAppFrameRelayRoutes,
   type McpAppFrameWindow,
@@ -69,7 +82,157 @@ const proxyReady = (): Readonly<Record<string, unknown>> => Object.freeze({
   params: Object.freeze({}),
 });
 
+const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
+const workbenchSource = join(workspaceRoot, 'packages', 'workbench', 'src');
+const secureRendererSource = join(workbenchSource, 'mcp', 'mcp-app-frame.tsx');
+const runtimeClientSource = join(workbenchSource, 'mcp', 'mcp-app-client.ts');
+const runtimeRouteClientSource = join(workbenchSource, 'mcp', 'mcp-route-client.ts');
+
+const mountedSecureRendererFixture = async () => {
+  const bootstrapRequests: string[] = [];
+  const bootstrap = createServer((request, response) => {
+    bootstrapRequests.push(request.url ?? '/');
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end('<!doctype html><title>Runtime App</title><main>Runtime App</main>');
+  });
+  bootstrap.listen(0, '127.0.0.1');
+  await once(bootstrap, 'listening');
+  const bootstrapAddress = bootstrap.address();
+  if (bootstrapAddress === null || typeof bootstrapAddress === 'string') throw new Error('Secure renderer bootstrap fixture did not receive a TCP address.');
+  const bootstrapUrl = `http://127.0.0.1:${bootstrapAddress.port}/app-bootstrap`;
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-secure-renderer-'));
+  const entry = join(root, 'secure-renderer.tsx');
+  const dist = join(root, 'dist');
+  await writeFile(entry, [
+    "import React from 'react';",
+    "import { createRoot } from 'react-dom/client';",
+    "import { MantineProvider } from '@mantine/core';",
+    `import { SecureAppRenderer } from ${JSON.stringify(secureRendererSource)};`,
+    `import { McpAppClient } from ${JSON.stringify(runtimeClientSource)};`,
+    `import { ForegroundRouteClient } from ${JSON.stringify(runtimeRouteClientSource)};`,
+    '',
+    `const bootstrapUrl = ${JSON.stringify(bootstrapUrl)};`,
+    "const policy = { allow: '', approvedPermissions: {}, revision: 1, warnings: [] };",
+    "const metadata = { extensions: { claude: {}, openai: {} }, provenance: {}, raw: {}, standard: {} };",
+    "const preview = { binding: { definitionDigest: 'definition-a', evidence: 'simulated', id: 'runtime-binding', profileId: 'portable', profileVersion: 'agent-bundle:mcp-apps:2026-01-26', registryRevision: 3, runVector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 1 }, serverDigest: 'server-a', serverName: 'weather', sessionId: 'runtime-session-a', sessionRevision: 2, target: 'portable', transportDigest: 'transport-a' }, clientSurface: { bootstrapUrl, origin: new URL(bootstrapUrl).origin, webSocketPath: '/rsbuild-hmr' }, documentPolicy: policy, kind: 'apps', metadata: { resource: metadata, result: metadata, tool: metadata }, operations: [], profile: { bootstrap: { kind: 'none' }, configExtensions: { entries: [], sourceRevision: 'source-a' }, descriptor: { claimsRealHostParity: false, evidence: 'simulated', id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' }, hostContext: { availableDisplayModes: ['inline'], containerDimensions: { height: 720, width: 1024 }, deviceCapabilities: {}, displayMode: 'inline', locale: 'en-US', platform: 'web', safeAreaInsets: { bottom: 0, left: 0, right: 0, top: 0 }, styles: {}, theme: 'light', timeZone: 'UTC', toolInfo: {}, userAgent: 'agent-bundle-runtime-mcp-app/1' }, kind: 'apps', metadata, permissions: { camera: {}, geolocation: {} }, resourceUri: 'ui://weather/app.html', warnings: [] }, resource: { html: '<main>Weather</main>', permissions: { camera: {}, geolocation: {} } }, result: { appVisible: { content: [] }, isError: false, modelVisible: {} }, session: { binding: { definitionDigest: 'definition-a', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather', sessionId: 'runtime-session-a', sessionRevision: 2, target: 'portable', transportDigest: 'transport-a' }, connection: { capabilities: { tools: {} }, protocolEra: 'modern', protocolVersion: '2026-01-26', server: { name: 'weather', version: '1.0.0' } }, state: 'ready' } };",
+    "const response = (body) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' }, status: 200 });",
+    "const foreground = new ForegroundRouteClient({ fetch: async (input, init) => { const path = new URL(String(input), location.origin).pathname; if (path === '/api/project/session') return response({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a', origin: location.origin, token: 'foreground-secret' }); if (path === '/api/runtime/apps') return response({ preview }); if (path === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') return response({ closed: true }); throw new Error('Unexpected runtime fixture request ' + path); } }); const runtime = new McpAppClient({ foreground });",
+    "const trace = []; const iframeNodes = new Set();",
+    "const originalSetAttribute = Element.prototype.setAttribute; Element.prototype.setAttribute = function(name, value) { if (this instanceof HTMLIFrameElement && ['allow', 'referrerpolicy', 'sandbox', 'src'].includes(name)) trace.push({ name, value: String(value) }); return originalSetAttribute.call(this, name, value); };",
+    "const observer = new MutationObserver((records) => { for (const record of records) for (const node of record.addedNodes) { if (node instanceof HTMLIFrameElement) iframeNodes.add(node); if (node instanceof Element) node.querySelectorAll('iframe').forEach((frame) => iframeNodes.add(frame)); } }); observer.observe(document.documentElement, { childList: true, subtree: true });",
+    "const bridge = { addEventListener: () => undefined, close: async () => undefined, sendHostContextChange: async () => undefined, sendToolCancelled: async () => undefined, sendToolInput: async () => undefined, sendToolInputPartial: async () => undefined, sendToolResult: async () => undefined, teardownResource: async () => ({}) };",
+    "let factories = 0; const bridgeFactory = () => { factories += 1; return bridge; }; const tool = { inputSchema: { type: 'object' }, name: 'weather' }; const root = createRoot(document.getElementById('root'));",
+    "class Boundary extends React.Component { state = { error: undefined }; static getDerivedStateFromError(error) { return { error: String(error?.message ?? error) }; } render() { return this.state.error ? React.createElement('div', { id: 'policy-error' }, this.state.error) : this.props.children; } }",
+    "let trusted; const mount = (candidate, key) => root.render(React.createElement(MantineProvider, null, React.createElement(React.StrictMode, null, React.createElement(Boundary, { key }, React.createElement(SecureAppRenderer, { bindingId: 'runtime-binding', bootstrapUrl, bridgeFactory, documentPolicy: candidate, policyClient: runtime, rendererProps: { tool } })))));",
+    "await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' }); trusted = runtime.currentDocumentPolicy('runtime-binding'); mount(trusted, 'trusted');",
+    "globalThis.__secureRendererFixture = { copied: () => mount(Object.freeze({ bindingId: trusted.bindingId, snapshot: trusted.snapshot }), 'copied'), widened: () => mount(Object.freeze({ bindingId: trusted.bindingId, snapshot: Object.freeze({ ...trusted.snapshot, allow: 'camera' }) }), 'widened'), stale: async () => { await runtime.closeRuntime('runtime-binding'); mount(trusted, 'stale'); }, stats: () => ({ factories, iframeNodes: iframeNodes.size, trace: [...trace] }) };",
+    '',
+  ].join('\n'));
+  const rsbuild = await createRsbuild({
+    config: {
+      output: {
+        cleanDistPath: false,
+        distPath: { css: 'assets', js: 'assets', root: dist },
+        filename: { css: '[name].css', js: '[name].js' },
+        filenameHash: false,
+      },
+      plugins: [pluginReact()],
+      resolve: {
+        alias: {
+          ...workbenchBrowserAliases,
+          '@mantine/core': mantineEsmEntry,
+        },
+      },
+      source: {
+        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+        entry: { renderer: entry },
+      },
+      tools: {
+        rspack: {
+          resolve: { extensionAlias: { '.js': ['.js', '.ts', '.tsx'], '.jsx': ['.jsx', '.tsx'] } },
+        },
+      },
+    },
+    cwd: workspaceRoot,
+  });
+  const build = await rsbuild.build();
+  await build.close();
+  const assets = await readdir(dist, { recursive: true });
+  if (!assets.includes('renderer.html')) throw new Error('Mounted secure renderer fixture did not produce its browser document.');
+  const server = createServer(async (request, response) => {
+    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    const asset = pathname === '/' ? 'index.html' : pathname.slice(1);
+    const file = join(dist, asset);
+    if (relative(dist, file).startsWith('..')) {
+      response.writeHead(404).end();
+      return;
+    }
+    try {
+      const body = await readFile(file);
+      response.writeHead(200, { 'content-type': asset.endsWith('.css') ? 'text/css' : asset.endsWith('.js') ? 'text/javascript' : 'text/html' });
+      response.end(body);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('Mounted secure renderer fixture did not receive a TCP address.');
+  return {
+    bootstrapRequests,
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error === undefined ? resolve() : reject(error));
+      });
+      await new Promise<void>((resolve, reject) => {
+        bootstrap.close((error) => error === undefined ? resolve() : reject(error));
+      });
+      await rm(root, { force: true, recursive: true });
+    },
+    url: `http://127.0.0.1:${address.port}/renderer.html`,
+  };
+};
+
 describe('MCP App frame relay', () => {
+  it('exposes the distinct secure official AppRenderer boundary', () => {
+    expect(typeof SecureAppRenderer).toBe('function');
+    expect(typeof applyMcpAppFramePolicy).toBe('function');
+  });
+
+  it('rejects an untrusted copied document-policy handle before an AppRenderer can navigate', () => {
+    const copiedPolicy = Object.freeze({
+      bindingId: 'binding-weather',
+      snapshot: Object.freeze({ allow: 'camera', approvedPermissions: Object.freeze({ camera: Object.freeze({}) }), revision: 2, warnings: Object.freeze([]) }),
+    });
+    const policyClient = Object.freeze({ currentDocumentPolicy: () => copiedPolicy });
+    expect(() => renderToStaticMarkup(createElement(SecureAppRenderer, {
+      bindingId: 'binding-weather',
+      bootstrapUrl: 'https://apps.example.test/bootstrap',
+      bridgeFactory: (async () => ({ close: async () => undefined })) as never,
+      documentPolicy: copiedPolicy as never,
+      policyClient,
+      rendererProps: { tool: { inputSchema: { type: 'object' }, name: 'weather' } },
+    }))).toThrow('no longer current');
+  });
+
+  it('applies the exact server-issued policy to the one outer frame without widening it', () => {
+    const attributes = new Map<string, string>();
+    const iframe = {
+      getAttribute: (name: string) => attributes.get(name) ?? null,
+      setAttribute: (name: string, value: string) => { attributes.set(name, value); },
+    };
+    applyMcpAppFramePolicy(iframe as never, Object.freeze({
+      bindingId: 'binding-weather',
+      snapshot: Object.freeze({ allow: 'camera; microphone', approvedPermissions: Object.freeze({}), revision: 2, warnings: Object.freeze([]) }),
+    }) as never);
+    expect(Object.fromEntries(attributes)).toEqual({
+      allow: 'camera; microphone',
+      referrerpolicy: 'no-referrer',
+      sandbox: 'allow-scripts allow-same-origin',
+    });
+  });
+
   it('accepts only its exact proxy source and origin before providing the canonical resource without an authenticated route call', () => {
     const browser = fakeBrowser();
     const messages: unknown[] = [];
@@ -97,9 +260,9 @@ describe('MCP App frame relay', () => {
         jsonrpc: '2.0',
         method: 'ui/notifications/sandbox-resource-ready',
         params: {
-          csp: { connectDomains: ['https://api.example.test'] },
+          allow: '',
+          contentSecurityPolicy: "default-src 'none'",
           html: '<main>Weather</main>',
-          permissions: { clipboardWrite: {} },
         },
       },
       targetOrigin: 'http://127.0.0.1:43124',
@@ -129,7 +292,11 @@ describe('MCP App frame relay', () => {
       message: {
         jsonrpc: '2.0',
         method: 'ui/notifications/sandbox-resource-ready',
-        params: { html },
+        params: {
+          allow: frame.allow,
+          contentSecurityPolicy: frame.policy.contentSecurityPolicy,
+          html,
+        },
       },
       targetOrigin: frame.targetOrigin,
     }]);
@@ -169,6 +336,22 @@ describe('MCP App frame relay', () => {
       { message: { id: 'one', jsonrpc: '2.0', result: { ready: 1 } }, targetOrigin: frame.targetOrigin },
       { message: { id: 'two', jsonrpc: '2.0', result: { ready: 2 } }, targetOrigin: frame.targetOrigin },
     ]);
+  });
+
+  it('delivers an authenticated consent continuation only to its current proxy window', () => {
+    const browser = fakeBrowser();
+    const relay = createMcpAppFrameRelay({
+      bindingId: 'binding-weather', frame, iframe: browser.iframe, resource,
+      routes: { close: async () => closeResult(), forceClose: async () => true, message: async () => messageResult() },
+      window: browser.window,
+    });
+    relay.start();
+    expect(relay.deliverHostMessages([{ id: 'action-1', jsonrpc: '2.0', result: { continued: true } }])).toBe(true);
+    expect(browser.child.posts).toEqual([{
+      message: { id: 'action-1', jsonrpc: '2.0', result: { continued: true } }, targetOrigin: frame.targetOrigin,
+    }]);
+    relay.detach();
+    expect(relay.deliverHostMessages([{ id: 'late', jsonrpc: '2.0', result: {} }])).toBe(false);
   });
 
   it('waits for the trusted teardown acknowledgement before releasing the route and never processes further frames', async () => {
@@ -277,6 +460,86 @@ describe('MCP App frame relay', () => {
     expect(calls).toEqual([{ id: 'one', jsonrpc: '2.0', method: 'ping' }]);
 
     first.resolve(messageResult());
+  });
+
+  it('rejects nonordinary nested JSON at both proxy boundaries without throwing its message listener', async () => {
+    const deep = (): unknown => {
+      let value: unknown = Object.freeze({ leaf: true });
+      for (let depth = 0; depth < 64; depth += 1) value = Object.freeze({ child: value });
+      return value;
+    };
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    const customPrototype = Object.create({ inherited: true });
+    customPrototype.value = 'custom';
+    const invalidValues: readonly unknown[] = [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      () => undefined,
+      Symbol('untrusted'),
+      new Date(),
+      customPrototype,
+      cyclic,
+      deep(),
+      Array.from({ length: 4_097 }, () => Object.freeze({})),
+    ];
+
+    for (const nested of invalidValues) {
+      const browser = fakeBrowser();
+      const messages: unknown[] = [];
+      const relay = createMcpAppFrameRelay({
+        bindingId: 'binding-weather', frame, iframe: browser.iframe, resource,
+        routes: {
+          close: async () => closeResult(),
+          forceClose: async () => true,
+          message: async (_bindingId, message) => {
+            messages.push(message);
+            return messageResult();
+          },
+        },
+        window: browser.window,
+      });
+      relay.start();
+      expect(relay.receive({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child })).toBe(true);
+      const message = Object.freeze({ id: 'invalid', jsonrpc: '2.0' as const, method: 'ping', params: Object.freeze({ nested }) });
+      const event = Object.freeze({ data: message, origin: frame.targetOrigin, source: browser.child });
+
+      expect(relay.receive(event)).toBe(false);
+      expect(() => browser.emit(event)).not.toThrow();
+      expect(relay.deliverHostMessages([message as never])).toBe(false);
+      expect(messages).toEqual([]);
+    }
+  });
+
+  it('preserves null-prototype JSON with an enumerable own __proto__ value at both proxy boundaries', async () => {
+    const browser = fakeBrowser();
+    const messages: unknown[] = [];
+    const relay = createMcpAppFrameRelay({
+      bindingId: 'binding-weather', frame, iframe: browser.iframe, resource,
+      routes: {
+        close: async () => closeResult(),
+        forceClose: async () => true,
+        message: async (_bindingId, message) => {
+          messages.push(message);
+          return messageResult();
+        },
+      },
+      window: browser.window,
+    });
+    const payload = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(payload, '__proto__', { enumerable: true, value: 'literal-data' });
+    const inbound = Object.freeze({ id: 'inbound', jsonrpc: '2.0' as const, method: 'ping', params: payload });
+    const outbound = Object.freeze({ id: 'outbound', jsonrpc: '2.0' as const, method: 'ping', params: payload });
+    relay.start();
+    expect(relay.receive({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child })).toBe(true);
+
+    expect(relay.receive({ data: inbound, origin: frame.targetOrigin, source: browser.child })).toBe(true);
+    await eventually(() => messages.length === 1);
+    expect(messages[0]).toBe(inbound);
+    expect(relay.deliverHostMessages([outbound as never])).toBe(true);
+    const delivered = browser.child.posts.at(-1) as { readonly message: unknown };
+    expect(delivered.message).toBe(outbound);
+    expect((delivered.message as { readonly params: object }).params).toBe(payload);
   });
 
   it('always queues its close operation behind already accepted traffic even when normal relay capacity is exhausted', async () => {
@@ -395,4 +658,84 @@ describe('MCP App frame relay', () => {
     forced.resolve(true);
     await closing;
   });
+});
+
+describe('Secure AppRenderer in Chrome', () => {
+  it('holds one real iframe at about:blank until policy attributes are applied, then makes one bootstrap request', async () => {
+    const fixture = await mountedSecureRendererFixture();
+    const browser = await chromium.launch({ channel: 'chrome' });
+    const page = await browser.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', (error) => { errors.push(error.message); });
+    try {
+      await page.goto(fixture.url);
+      try {
+        await page.waitForFunction(() => '__secureRendererFixture' in globalThis, undefined, { timeout: 10_000 });
+      } catch (error) {
+        throw new Error(`Mounted secure renderer fixture did not initialize: ${errors.join('\n')}`, { cause: error });
+      }
+      try {
+        await page.waitForFunction(() => (globalThis as typeof globalThis & {
+          __secureRendererFixture: { stats(): { readonly factories: number; readonly iframeNodes: number } };
+        }).__secureRendererFixture.stats().factories === 1, undefined, { timeout: 10_000 });
+      } catch (error) {
+        const stats = await page.evaluate(() => (globalThis as typeof globalThis & {
+          __secureRendererFixture: { stats(): unknown };
+        }).__secureRendererFixture.stats());
+        const markup = await page.locator('body').innerHTML();
+        throw new Error(`Mounted secure renderer bridge did not settle: ${JSON.stringify(stats)} ${errors.join('\n')} ${markup}`, { cause: error });
+      }
+      await page.waitForFunction(() => document.querySelectorAll('iframe').length === 1, undefined, { timeout: 10_000 });
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __secureRendererFixture: { stats(): { readonly trace: readonly Readonly<{ readonly name: string; readonly value: string }>[] } };
+      }).__secureRendererFixture.stats().trace.some((entry) => entry.name === 'src' && entry.value.endsWith('/app-bootstrap')), undefined, { timeout: 10_000 });
+
+      const frame = page.locator('iframe');
+      expect(await frame.getAttribute('allow')).toBe('');
+      expect(await frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+      expect(await frame.getAttribute('referrerpolicy')).toBe('no-referrer');
+      await expect.poll(() => fixture.bootstrapRequests.length).toBe(1);
+      expect(fixture.bootstrapRequests).toEqual(['/app-bootstrap']);
+
+      const positive = await page.evaluate(() => (globalThis as typeof globalThis & {
+        __secureRendererFixture: { stats(): { readonly factories: number; readonly iframeNodes: number; readonly trace: readonly Readonly<{ readonly name: string; readonly value: string }>[] } };
+      }).__secureRendererFixture.stats());
+      const blank = positive.trace.findIndex((entry) => entry.name === 'src' && entry.value === 'about:blank');
+      const allow = positive.trace.findIndex((entry, index) => index > blank && entry.name === 'allow' && entry.value === '');
+      const referrer = positive.trace.findIndex((entry, index) => index > allow && entry.name === 'referrerpolicy' && entry.value === 'no-referrer');
+      const sandbox = positive.trace.findIndex((entry, index) => index > referrer && entry.name === 'sandbox' && entry.value === 'allow-scripts allow-same-origin');
+      const bootstrap = positive.trace.findIndex((entry, index) => index > sandbox && entry.name === 'src' && entry.value.endsWith('/app-bootstrap'));
+      expect(blank).toBeGreaterThanOrEqual(0);
+      expect(allow).toBeGreaterThan(blank);
+      expect(referrer).toBeGreaterThan(allow);
+      expect(sandbox).toBeGreaterThan(referrer);
+      expect(bootstrap).toBeGreaterThan(sandbox);
+      expect(positive).toMatchObject({ factories: 1, iframeNodes: 1 });
+
+      await page.evaluate(() => (globalThis as typeof globalThis & {
+        __secureRendererFixture: { copied(): void };
+      }).__secureRendererFixture.copied());
+      await page.locator('#policy-error').waitFor();
+      expect(await page.locator('iframe').count()).toBe(0);
+      expect(fixture.bootstrapRequests).toEqual(['/app-bootstrap']);
+
+      await page.evaluate(() => (globalThis as typeof globalThis & {
+        __secureRendererFixture: { widened(): void };
+      }).__secureRendererFixture.widened());
+      await page.locator('#policy-error').waitFor();
+      expect(await page.locator('iframe').count()).toBe(0);
+      expect(fixture.bootstrapRequests).toEqual(['/app-bootstrap']);
+
+      await page.evaluate(async () => (globalThis as typeof globalThis & {
+        __secureRendererFixture: { stale(): Promise<void> };
+      }).__secureRendererFixture.stale());
+      await page.locator('#policy-error').waitFor();
+      expect(await page.locator('iframe').count()).toBe(0);
+      expect(fixture.bootstrapRequests).toEqual(['/app-bootstrap']);
+      expect(errors).toEqual([]);
+    } finally {
+      await browser.close();
+      await fixture.close();
+    }
+  }, 45_000);
 });

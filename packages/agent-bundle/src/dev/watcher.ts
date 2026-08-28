@@ -60,6 +60,7 @@ export class ProjectWatcher {
   readonly #now: () => Date;
   readonly #onError?: (error: unknown) => void;
   readonly #onInvalidation: (invalidation: Invalidation) => Promise<unknown>;
+  readonly #outputPaths = new Set<string>();
   readonly #paths = new Set<string>();
   readonly #ready: Promise<void>;
   readonly #root: string;
@@ -78,15 +79,13 @@ export class ProjectWatcher {
     this.#now = options.now ?? (() => new Date());
     this.#onError = options.onError;
     this.#onInvalidation = options.onInvalidation;
-    const ignoredPaths = [...new Set([...(options.ignoredPaths ?? []), ...(options.outputPaths ?? ['dist'])]
-      .map((path) => relativePath(this.#root, path))
-      .filter((path): path is string => path !== undefined))];
+    this.addOutputPaths([...(options.ignoredPaths ?? []), ...(options.outputPaths ?? ['dist'])]);
     this.#ignored = (path) => {
       const source = relativePath(this.#root, path);
       if (source === undefined) return true;
       const parts = source.split('/');
       return parts.some((part) => excludedDirectoryNames.has(part)) ||
-        ignoredPaths.some((ignored) => source === ignored || source.startsWith(`${ignored}/`)) ||
+        [...this.#outputPaths].some((ignored) => source === ignored || source.startsWith(`${ignored}/`)) ||
         (source.length > 0 && options.isIgnored?.(resolve(this.#root, path)) === true);
     };
     const ready = Promise.withResolvers<void>();
@@ -102,6 +101,14 @@ export class ProjectWatcher {
 
   ready(): Promise<void> {
     return this.#ready;
+  }
+
+  /** Adds generated roots discovered after a configuration recovery without replacing the live watcher. */
+  addOutputPaths(paths: readonly string[]): void {
+    for (const path of paths) {
+      const relativeOutput = relativePath(this.#root, path);
+      if (relativeOutput !== undefined && relativeOutput.length > 0) this.#outputPaths.add(relativeOutput);
+    }
   }
 
   async flush(): Promise<void> {

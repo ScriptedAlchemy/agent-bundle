@@ -143,4 +143,3 @@ Automated acceptance must prove:
 - diagnostic → stale epoch → repair → current epoch works in real Chrome;
 - no capture occurs while a loading state is visible; and
 - the final showcase is open in X11 Chrome and Cursor after all release gates.
-

@@ -4,3 +4,4 @@ dist/
 .worktrees/
 coverage/
 *.log
+examples/audiobook-curator/artifact/

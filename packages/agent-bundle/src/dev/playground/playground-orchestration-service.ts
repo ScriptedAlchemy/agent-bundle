@@ -47,7 +47,7 @@ export interface PlaygroundEpochAuthority {
   acquireEpochReference(epochId: string): Promise<PlaygroundEpochReference>;
 }
 
-/** PlaygroundStore remains private durable storage behind this internal surface. */
+/** PlaygroundService remains private durable storage behind this internal surface. */
 export interface PlaygroundDurableTraceStore {
   append(sessionId: string, input: PlaygroundEventInput): Promise<PlaygroundTraceEvent>;
   close(): Promise<void>;
@@ -110,7 +110,7 @@ const resultHasError = (value: unknown): boolean => {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, 'isError');
     return descriptor !== undefined && 'value' in descriptor && descriptor.value === true;
-  } catch { return true; } // Hostile isError accessors are treated as an error result.
+  } catch { return true; }
 };
 
 const scriptFailureEvidence = (operation: PlaygroundOperationRequest, error: unknown): Readonly<{
@@ -125,176 +125,36 @@ const scriptCleanupEvidence = (error: unknown): readonly PlaygroundJsonObject[] 
   scriptPlaygroundCleanupFailures(error).map(({ code }): PlaygroundJsonObject => Object.freeze({ code })),
 );
 
+const operationIntent = (operation: PlaygroundOperationRequest): PlaygroundSessionInput['invocation'] => {
+  if (operation.operation === 'skill.inspect') {
+    return Object.freeze({ intent: Object.freeze({ skillId: operation.skillId }), kind: operation.operation });
+  }
+  if (operation.operation === 'hook.simulate') {
+    return Object.freeze({ intent: Object.freeze({ hook: operation.hook }), kind: operation.operation });
+  }
+  if (operation.operation === 'mcp.call-tool') {
+    return Object.freeze({ intent: Object.freeze({ serverName: operation.serverName, tool: operation.tool }), kind: operation.operation });
+  }
+  if (operation.operation === 'native.prompt') {
+    return Object.freeze({
+      intent: Object.freeze({ caseId: operation.caseId, fixtureId: operation.fixtureId, host: operation.host, modelPinId: operation.modelPinId }),
+      kind: operation.operation,
+    });
+  }
+  return Object.freeze({ intent: Object.freeze({ scriptId: operation.scriptId }), kind: operation.operation });
+};
+
+const taskText = (operation: PlaygroundOperationRequest): string => {
+  if (operation.operation === 'skill.inspect') return 'Inspect an emitted Skill.';
+  if (operation.operation === 'hook.simulate') return 'Simulate an emitted Hook.';
+  if (operation.operation === 'mcp.call-tool') return 'Call an emitted MCP tool.';
+  if (operation.operation === 'native.prompt') return operation.prompt;
+  return 'Run an emitted script.';
+};
+
 const unavailable = (name: string): never => {
   throw new Error(`Playground ${name} service is not available.`);
 };
-
-/** Narrows an acquired lease to the native boundary shape without an assertion cast. */
-const hasEpochMetadata = (
-  reference: PlaygroundEpochReference,
-): reference is NativePlaygroundEpochReference & PlaygroundEpochReference => reference.epoch !== undefined;
-
-type PlaygroundOperationKind = PlaygroundOperationRequest['operation'];
-
-/** Keyed operation shapes keep handler dispatch correlated with each kind. */
-type PlaygroundOperationByKind = {
-  readonly [K in PlaygroundOperationKind]: Extract<PlaygroundOperationRequest, { readonly operation: K }>;
-};
-
-/** Everything admission must pin before a durable session may open. */
-interface PlaygroundOperationAdmission {
-  readonly epoch: ArtifactEpoch;
-  readonly fixtureId?: string;
-  readonly preparedNative?: NativePlaygroundPrepared;
-  readonly reference: PlaygroundEpochReference;
-}
-
-interface PlaygroundAdmissionContext {
-  readonly acquireNativeEpochReference: (epochId: string | undefined) => Promise<NativePlaygroundEpochReference>;
-  readonly native: PlaygroundOrchestrationServiceOptions['native'];
-}
-
-interface PlaygroundOperationContext {
-  /** Appends to the run's durable session so hosts can stream progress evidence. */
-  readonly appendEvent: (event: PlaygroundEventInput) => Promise<void>;
-  readonly epochId: string;
-  readonly hookPlayground: PlaygroundOrchestrationServiceOptions['hookPlayground'];
-  readonly mcpSessions: PlaygroundOrchestrationServiceOptions['mcpSessions'];
-  readonly native: PlaygroundOrchestrationServiceOptions['native'];
-  readonly preparedNative: NativePlaygroundPrepared | undefined;
-  readonly runId: string;
-  readonly scripts: PlaygroundOrchestrationServiceOptions['scripts'];
-  readonly signal: AbortSignal;
-  readonly skillDocuments: PlaygroundOrchestrationServiceOptions['skillDocuments'];
-  readonly targetDigest: string;
-}
-
-interface PlaygroundOperationHandler<K extends PlaygroundOperationKind> {
-  readonly execute: (operation: PlaygroundOperationByKind[K], context: PlaygroundOperationContext) => Promise<PlaygroundOperationResult>;
-  readonly intent: (operation: PlaygroundOperationByKind[K]) => PlaygroundSessionInput['invocation'];
-  /** Admission capability for kinds that must pin their own epoch and host preparation. */
-  readonly prepare?: (operation: PlaygroundOperationByKind[K], context: PlaygroundAdmissionContext) => Promise<PlaygroundOperationAdmission>;
-  readonly taskText: (operation: PlaygroundOperationByKind[K]) => string;
-}
-
-/** Adding an operation kind fails compilation here until its handler exists. */
-type PlaygroundOperationHandlers = { readonly [K in PlaygroundOperationKind]: PlaygroundOperationHandler<K> };
-
-const playgroundOperationHandlers = Object.freeze<PlaygroundOperationHandlers>({
-  'hook.simulate': {
-    execute: async (operation, context) => {
-      const service = context.hookPlayground ?? unavailable('Hook playground');
-      const result = await service.simulate({ epochId: context.epochId, hook: operation.hook, input: { inline: operation.input }, signal: context.signal, target: operation.target });
-      context.signal.throwIfAborted();
-      return Object.freeze({ event: Object.freeze({ kind: 'hook.simulated', raw: Object.freeze({ hook: operation.hook, result: evidenceValue(result) }), source: 'hook', summary: 'Simulated emitted Hook.' }), status: 'diagnostics' in result ? 'failed' : 'passed' });
-    },
-    intent: (operation) => Object.freeze({ intent: Object.freeze({ hook: operation.hook }), kind: operation.operation }),
-    taskText: () => 'Simulate an emitted Hook.',
-  },
-  'mcp.call-tool': {
-    execute: async (operation, context) => {
-      const service = context.mcpSessions ?? unavailable('MCP session');
-      const session = await service.open({ epochId: context.epochId, serverName: operation.serverName, signal: context.signal, target: operation.target });
-      try {
-        context.signal.throwIfAborted();
-        const result = await session.callTool({ arguments: operation.arguments, name: operation.tool, requestId: context.runId, signal: context.signal });
-        context.signal.throwIfAborted();
-        return Object.freeze({ event: Object.freeze({ kind: 'mcp.tool.called', raw: Object.freeze({ result: evidenceValue(result), serverName: operation.serverName, tool: operation.tool }), source: 'mcp', summary: 'Called emitted MCP tool.' }), status: resultHasError(result) ? 'failed' : 'passed' });
-      } finally {
-        await service.closeSession(session.id);
-        context.signal.throwIfAborted();
-      }
-    },
-    intent: (operation) => Object.freeze({ intent: Object.freeze({ serverName: operation.serverName, tool: operation.tool }), kind: operation.operation }),
-    taskText: () => 'Call an emitted MCP tool.',
-  },
-  'native.prompt': {
-    execute: async (_operation, context) => {
-      const service = context.native ?? unavailable('Native Playground');
-      const prepared = context.preparedNative ?? unavailable('prepared Native Playground');
-      const result = await service.run(prepared, { emit: context.appendEvent, signal: context.signal });
-      return Object.freeze({
-        events: result.events,
-        ...(result.response === undefined && result.workspace === undefined
-          ? {}
-          : { outcome: Object.freeze({
-            ...(result.response === undefined ? {} : { response: result.response }),
-            ...(result.workspace === undefined ? {} : { workspace: result.workspace }),
-          }) }),
-        status: result.status,
-      });
-    },
-    intent: (operation) => Object.freeze({
-      intent: Object.freeze({ caseId: operation.caseId, fixtureId: operation.fixtureId, host: operation.host, modelPinId: operation.modelPinId }),
-      kind: operation.operation,
-    }),
-    prepare: async (operation, context) => {
-      const service = context.native ?? unavailable('Native Playground');
-      const reference = await context.acquireNativeEpochReference(operation.epochId);
-      try {
-        const preparedNative = await service.prepare(reference, operation);
-        return Object.freeze({ epoch: reference.epoch, fixtureId: operation.fixtureId, preparedNative, reference });
-      } catch (error) {
-        try { await reference.close(); }
-        catch (releaseError) {
-          throw new AggregateError([error, releaseError], 'Native Playground admission and epoch release both failed.', { cause: releaseError });
-        }
-        throw error;
-      }
-    },
-    taskText: (operation) => operation.prompt,
-  },
-  'script.run': {
-    execute: async (operation, context) => {
-      const service = context.scripts ?? unavailable('Script');
-      const result = await service.run({ epochId: context.epochId, scriptId: operation.scriptId, signal: context.signal, target: operation.target });
-      context.signal.throwIfAborted();
-      return Object.freeze({
-        event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest: context.targetDigest }), source: 'script', summary: 'Ran emitted script.' }),
-        status: result.exitCode === 0 && (result.cleanupFailures?.length ?? 0) === 0 ? 'passed' : 'failed',
-      });
-    },
-    intent: (operation) => Object.freeze({ intent: Object.freeze({ scriptId: operation.scriptId }), kind: operation.operation }),
-    taskText: () => 'Run an emitted script.',
-  },
-  'skill.inspect': {
-    execute: async (operation, context) => {
-      const service = context.skillDocuments ?? unavailable('Skill document');
-      await service.generated(context.epochId, operation.target, operation.skillId);
-      context.signal.throwIfAborted();
-      return Object.freeze({ event: Object.freeze({ kind: 'skill.inspected', raw: Object.freeze({ skillId: operation.skillId }), source: 'skill-evidence', summary: 'Inspected emitted Skill.' }), status: 'passed' });
-    },
-    intent: (operation) => Object.freeze({ intent: Object.freeze({ skillId: operation.skillId }), kind: operation.operation }),
-    taskText: () => 'Inspect an emitted Skill.',
-  },
-});
-
-/*
- * The generic kind parameter keeps each lookup correlated with its own
- * operation shape, so callers holding the full request union dispatch
- * through these helpers instead of re-branching per kind.
- */
-const admitOperation = <K extends PlaygroundOperationKind>(
-  kind: K,
-  operation: PlaygroundOperationByKind[K],
-  context: PlaygroundAdmissionContext,
-): Promise<PlaygroundOperationAdmission> | undefined => playgroundOperationHandlers[kind].prepare?.(operation, context);
-
-const operationIntent = <K extends PlaygroundOperationKind>(
-  kind: K,
-  operation: PlaygroundOperationByKind[K],
-): PlaygroundSessionInput['invocation'] => playgroundOperationHandlers[kind].intent(operation);
-
-const operationTaskText = <K extends PlaygroundOperationKind>(
-  kind: K,
-  operation: PlaygroundOperationByKind[K],
-): string => playgroundOperationHandlers[kind].taskText(operation);
-
-const executeOperation = <K extends PlaygroundOperationKind>(
-  kind: K,
-  operation: PlaygroundOperationByKind[K],
-  context: PlaygroundOperationContext,
-): Promise<PlaygroundOperationResult> => playgroundOperationHandlers[kind].execute(operation, context);
 
 /**
  * Owns the public Playground operation lifecycle. It creates durable sessions
@@ -311,6 +171,7 @@ export class PlaygroundOrchestrationService {
   readonly #scripts: PlaygroundOrchestrationServiceOptions['scripts'];
   readonly #skillDocuments: PlaygroundOrchestrationServiceOptions['skillDocuments'];
   readonly #trace: PlaygroundDurableTraceStore;
+  readonly #admitting = new Set<RunningPlaygroundOperation>();
   readonly #running = new Map<string, RunningPlaygroundOperation>();
   readonly #backgroundFailures: unknown[] = [];
   /**
@@ -342,53 +203,85 @@ export class PlaygroundOrchestrationService {
     const id = this.#createRunId();
     const controller = new AbortController();
     const signal = options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal]);
-    const admission = await (admitOperation(input.operation, input, Object.freeze({
-      acquireNativeEpochReference: (epochId: string | undefined) => this.#nativeReference(epochId),
-      native: this.#native,
-    })) ?? this.#activeEpochAdmission());
-    const { epoch, preparedNative, reference } = admission;
-    const targetDigest = epoch.targetDigests[input.target];
-    if (typeof targetDigest !== 'string') {
-      await reference.close();
-      throw new Error('Playground operation target is not in the selected artifact epoch.');
-    }
-    const sessionId = this.#createSessionId();
-    const epochDigest = digest({
-      configDigest: epoch.configDigest,
-      id: epoch.id,
-      modelDigest: epoch.modelDigest,
-      projectRevision: epoch.projectRevision,
-      targetDigests: epoch.targetDigests,
+    let rejectAdmission!: (reason: unknown) => void;
+    let settleAdmission!: () => void;
+    const admission = Object.freeze({
+      controller,
+      done: new Promise<void>((resolvePromise, rejectPromise) => {
+        rejectAdmission = rejectPromise;
+        settleAdmission = resolvePromise;
+      }),
     });
-    const fixtureDigest = preparedNative?.fixtureDigest ?? digest({ epochDigest, kind: 'server-owned-workspace', target: input.target });
+    // A failed admission may reach its caller before shutdown starts. Keep this
+    // internal ownership promise observed until close() joins it later.
+    void admission.done.catch(() => undefined);
+    this.#admitting.add(admission);
+    let reference: PlaygroundEpochReference | undefined;
+    const sessionId = this.#createSessionId();
+    let admissionFailure: unknown;
+    let admissionFailed = false;
     let opened = false;
     try {
-      if (this.#closed) throw new Error('Playground orchestration service is closed.');
+      let epoch: ArtifactEpoch;
+      let preparedNative: NativePlaygroundPrepared | undefined;
+      if (input.operation === 'native.prompt') {
+        const service = this.#native ?? unavailable('Native Playground');
+        reference = await this.#nativeReference(input.epochId);
+        signal.throwIfAborted();
+        epoch = reference.epoch!;
+        preparedNative = await service.prepare(reference as NativePlaygroundEpochReference, input);
+      } else {
+        const artifact = this.#coordinator.status().artifact;
+        if (artifact.state === 'missing') throw new Error('Playground requires an active artifact epoch.');
+        epoch = artifact.activeEpoch;
+        reference = await this.#epochStore.acquireEpochReference(epoch.id);
+      }
+      const acquiredReference = reference;
+      signal.throwIfAborted();
+      const targetDigest = epoch.targetDigests[input.target];
+      if (typeof targetDigest !== 'string') {
+        throw new Error('Playground operation target is not in the selected artifact epoch.');
+      }
+      const epochDigest = digest({
+        configDigest: epoch.configDigest,
+        id: epoch.id,
+        modelDigest: epoch.modelDigest,
+        projectRevision: epoch.projectRevision,
+        targetDigests: epoch.targetDigests,
+      });
+      const fixtureDigest = preparedNative?.fixtureDigest ?? digest({ epochDigest, kind: 'server-owned-workspace', target: input.target });
       const session = await this.#trace.openSession(Object.freeze({
         epoch: Object.freeze({ digest: epochDigest, id: epoch.id }),
-        fixture: Object.freeze({ digest: fixtureDigest, id: admission.fixtureId ?? 'server-owned-workspace' }),
-        invocation: operationIntent(input.operation, input),
+        fixture: Object.freeze({ digest: fixtureDigest, id: input.operation === 'native.prompt' ? input.fixtureId : 'server-owned-workspace' }),
+        invocation: operationIntent(input),
         sessionId,
         target: Object.freeze({ digest: targetDigest, name: input.target }),
-        task: Object.freeze({ id, text: operationTaskText(input.operation, input) }),
+        task: Object.freeze({ id, text: taskText(input) }),
       }));
       opened = true;
+      signal.throwIfAborted();
       await this.#trace.append(sessionId, Object.freeze({
         kind: 'epoch.bound',
         raw: Object.freeze({ epochId: epoch.id, target: input.target, targetDigest }),
         source: 'build',
         summary: 'Bound playground run to the current active artifact epoch.',
       }));
-      const done = (async () => {
-        try { await this.#finish(sessionId, input, epoch.id, targetDigest, id, signal, preparedNative); }
+      signal.throwIfAborted();
+      const done = Promise.resolve().then(async () => {
+        try {
+          signal.throwIfAborted();
+          await this.#finish(sessionId, input, epoch.id, targetDigest, id, signal, preparedNative);
+        }
         catch (error) { this.#backgroundFailures.push(error); }
         finally {
-          try { await reference.close(); }
+          try { await acquiredReference.close(); }
           catch (error) { this.#backgroundFailures.push(error); }
           finally { this.#running.delete(id); }
         }
-      })();
+      });
       this.#running.set(id, Object.freeze({ controller, done }));
+      this.#admitting.delete(admission);
+      settleAdmission();
       return Object.freeze({ id, session });
     } catch (error) {
       const containment: unknown[] = [];
@@ -400,9 +293,21 @@ export class PlaygroundOrchestrationService {
           catch (closeError) { containment.push(closeError); }
         }
       }
-      await reference.close();
-      if (containment.length > 0) throw new AggregateError([error, ...containment], 'Playground admission and containment both failed.', { cause: error });
+      if (reference !== undefined) {
+        try { await reference.close(); }
+        catch (closeError) { containment.push(closeError); }
+      }
+      if (containment.length > 0) {
+        admissionFailure = new AggregateError([error, ...containment], 'Playground admission and containment both failed.', { cause: error });
+        admissionFailed = true;
+        throw admissionFailure;
+      }
       throw error;
+    } finally {
+      if (this.#admitting.delete(admission)) {
+        if (admissionFailed) rejectAdmission(admissionFailure);
+        else settleAdmission();
+      }
     }
   }
 
@@ -417,9 +322,47 @@ export class PlaygroundOrchestrationService {
   async catalog(options: { readonly epochId?: string } = {}): Promise<NativePlaygroundCatalog> {
     if (this.#closed) throw new Error('Playground orchestration service is closed.');
     const service = this.#native ?? unavailable('Native Playground');
-    const reference = await this.#nativeReference(options.epochId);
-    try { return await service.catalog(reference); }
-    finally { await reference.close(); }
+    const controller = new AbortController();
+    let rejectAdmission!: (reason: unknown) => void;
+    let settleAdmission!: () => void;
+    const admission = Object.freeze({
+      controller,
+      done: new Promise<void>((resolvePromise, rejectPromise) => {
+        rejectAdmission = rejectPromise;
+        settleAdmission = resolvePromise;
+      }),
+    });
+    void admission.done.catch(() => undefined);
+    this.#admitting.add(admission);
+    let reference: NativePlaygroundEpochReference | undefined;
+    let primaryFailure: unknown;
+    let admissionFailure: unknown;
+    let admissionFailed = false;
+    let catalog!: NativePlaygroundCatalog;
+    try {
+      reference = await this.#nativeReference(options.epochId);
+      controller.signal.throwIfAborted();
+      catalog = await service.catalog(reference);
+      controller.signal.throwIfAborted();
+    } catch (error) {
+      primaryFailure = error;
+    }
+    if (reference !== undefined) {
+      try { await reference.close(); }
+      catch (closeError) {
+        admissionFailure = primaryFailure === undefined
+          ? closeError
+          : new AggregateError([primaryFailure, closeError], 'Playground catalog lookup and containment both failed.', { cause: primaryFailure });
+        admissionFailed = true;
+      }
+    }
+    if (this.#admitting.delete(admission)) {
+      if (admissionFailed) rejectAdmission(admissionFailure);
+      else settleAdmission();
+    }
+    if (admissionFailed) throw admissionFailure;
+    if (primaryFailure !== undefined) throw primaryFailure;
+    return catalog;
   }
 
   session(sessionId: string): PlaygroundSession | undefined {
@@ -459,29 +402,36 @@ export class PlaygroundOrchestrationService {
       if (this.#abortDispatchDepth > 0) return this.#abortReentryCompletion;
       return this.#closePromise;
     }
-    const closing = Promise.withResolvers<void>();
-    this.#closePromise = closing.promise;
-    void this.#close().then(closing.resolve, closing.reject);
-    return closing.promise;
+    let resolvePromise!: () => void;
+    let rejectPromise!: (reason: unknown) => void;
+    const closing = new Promise<void>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+    this.#closePromise = closing;
+    void this.#close().then(resolvePromise, rejectPromise);
+    return closing;
   }
 
   async #close(): Promise<void> {
     this.#closed = true;
-    const running = [...this.#running.values()];
-    for (const operation of running) {
+    const operations = [...new Set([...this.#admitting, ...this.#running.values()])];
+    for (const operation of operations) {
       this.#abortDispatchDepth += 1;
       try { operation.controller.abort(new Error('Playground orchestration service is closed.')); }
       finally { this.#abortDispatchDepth -= 1; }
     }
-    await Promise.allSettled(running.map((operation) => operation.done));
+    const operationResults = await Promise.allSettled(operations.map((operation) => operation.done));
     let nativeFailure: unknown;
     try { await this.#native?.close(); }
     catch (error) { nativeFailure = error; }
     let traceFailure: unknown;
     try { await this.#trace.close(); }
     catch (error) { traceFailure = error; }
+    const operationFailures = operationResults.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
     const failures = [
       ...this.#backgroundFailures,
+      ...operationFailures,
       ...(nativeFailure === undefined ? [] : [nativeFailure]),
       ...(traceFailure === undefined ? [] : [traceFailure]),
     ];
@@ -540,7 +490,7 @@ export class PlaygroundOrchestrationService {
     }
   }
 
-  #operation(
+  async #operation(
     operation: PlaygroundOperationRequest,
     epochId: string,
     targetDigest: string,
@@ -549,34 +499,63 @@ export class PlaygroundOrchestrationService {
     sessionId: string,
     preparedNative: NativePlaygroundPrepared | undefined,
   ): Promise<PlaygroundOperationResult> {
-    return executeOperation(operation.operation, operation, Object.freeze({
-      appendEvent: async (event: PlaygroundEventInput) => { await this.#trace.append(sessionId, event); },
-      epochId,
-      hookPlayground: this.#hookPlayground,
-      mcpSessions: this.#mcpSessions,
-      native: this.#native,
-      preparedNative,
-      runId,
-      scripts: this.#scripts,
-      signal,
-      skillDocuments: this.#skillDocuments,
-      targetDigest,
-    }));
-  }
-
-  /** Default admission for operations without their own prepare capability. */
-  async #activeEpochAdmission(): Promise<PlaygroundOperationAdmission> {
-    const artifact = this.#coordinator.status().artifact;
-    if (artifact.state === 'missing') throw new Error('Playground requires an active artifact epoch.');
-    const epoch = artifact.activeEpoch;
-    return Object.freeze({ epoch, reference: await this.#epochStore.acquireEpochReference(epoch.id) });
+    if (operation.operation === 'skill.inspect') {
+      const service = this.#skillDocuments ?? unavailable('Skill document');
+      await service.generated(epochId, operation.target, operation.skillId);
+      signal.throwIfAborted();
+      return Object.freeze({ event: Object.freeze({ kind: 'skill.inspected', raw: Object.freeze({ skillId: operation.skillId }), source: 'skill-evidence', summary: 'Inspected emitted Skill.' }), status: 'passed' });
+    }
+    if (operation.operation === 'hook.simulate') {
+      const service = this.#hookPlayground ?? unavailable('Hook playground');
+      const result = await service.simulate({ epochId, hook: operation.hook, input: { inline: operation.input }, signal, target: operation.target });
+      signal.throwIfAborted();
+      return Object.freeze({ event: Object.freeze({ kind: 'hook.simulated', raw: Object.freeze({ hook: operation.hook, result: evidenceValue(result) }), source: 'hook', summary: 'Simulated emitted Hook.' }), status: 'diagnostics' in result ? 'failed' : 'passed' });
+    }
+    if (operation.operation === 'mcp.call-tool') {
+      const service = this.#mcpSessions ?? unavailable('MCP session');
+      const session = await service.open({ epochId, serverName: operation.serverName, signal, target: operation.target });
+      try {
+        signal.throwIfAborted();
+        const result = await session.callTool({ arguments: operation.arguments, name: operation.tool, requestId: runId, signal });
+        signal.throwIfAborted();
+        return Object.freeze({ event: Object.freeze({ kind: 'mcp.tool.called', raw: Object.freeze({ result: evidenceValue(result), serverName: operation.serverName, tool: operation.tool }), source: 'mcp', summary: 'Called emitted MCP tool.' }), status: resultHasError(result) ? 'failed' : 'passed' });
+      } finally {
+        await service.closeSession(session.id);
+        signal.throwIfAborted();
+      }
+    }
+    if (operation.operation === 'native.prompt') {
+      const service = this.#native ?? unavailable('Native Playground');
+      const prepared = preparedNative ?? unavailable('prepared Native Playground');
+      const result = await service.run(prepared, {
+        emit: async (event) => { await this.#trace.append(sessionId, event); },
+        signal,
+      });
+      return Object.freeze({
+        events: result.events,
+        ...(result.response === undefined && result.workspace === undefined
+          ? {}
+          : { outcome: Object.freeze({
+            ...(result.response === undefined ? {} : { response: result.response }),
+            ...(result.workspace === undefined ? {} : { workspace: result.workspace }),
+          }) }),
+        status: result.status,
+      });
+    }
+    const service = this.#scripts ?? unavailable('Script');
+    const result = await service.run({ epochId, scriptId: operation.scriptId, signal, target: operation.target });
+    signal.throwIfAborted();
+    return Object.freeze({
+      event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest }), source: 'script', summary: 'Ran emitted script.' }),
+      status: result.exitCode === 0 && (result.cleanupFailures?.length ?? 0) === 0 ? 'passed' : 'failed',
+    });
   }
 
   async #nativeReference(epochId: string | undefined): Promise<NativePlaygroundEpochReference> {
     const reference = epochId === undefined
       ? await (this.#epochStore.acquireActiveEpochReference?.() ?? unavailable('active epoch'))
       : await this.#epochStore.acquireEpochReference(epochId);
-    if (hasEpochMetadata(reference)) return reference;
+    if (reference.epoch !== undefined) return reference as NativePlaygroundEpochReference;
     try { await reference.close(); }
     catch { /* The missing metadata refusal remains the primary safe diagnosis. */ }
     throw new Error('Playground native epoch reference lacks immutable metadata.');

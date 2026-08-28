@@ -145,6 +145,7 @@ export const compileMcpApps = async (
         filenameHash: false,
         inlineScripts: true,
         inlineStyles: true,
+        legalComments: 'inline',
         sourceMap: false,
         target: 'web',
       },
@@ -165,6 +166,7 @@ export const compileMcpApps = async (
     result = await rsbuild.build();
     const evidence = collectBundledOutputEvidence({
       expectedAssets: compiled.map((app) => ({
+        allowUnassociatedHtml: true,
         path: `mcp-apps/${app.name}.html`,
         sourceInputs: app.sourceInputs,
       })),

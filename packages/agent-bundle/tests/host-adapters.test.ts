@@ -119,12 +119,12 @@ it('pins host help, capabilities, and every schema snapshot to the supported CLI
   const hosts = {
     claude: {
       hashes: {
-        'hooks.schema.json': 'a122f0e3b83f8222186bfac6965795b75f8f50716c6d76b105864ac1a578306a',
-        'marketplace.schema.json': 'eba6a3ab555d40926168adecf381f449d64f1b6a5635a53e67d730dd57d5faf7',
-        'mcp.schema.json': '5c885bb78328a0f47e2bd769de653c6c9f4479ac79eba0dbcd4d4fdc011b4d17',
-        'plugin.schema.json': '55f81e2b772afcdb4f9439b5ea09f0584257175d4ed953a0104261f1114d37cc',
+        'hooks.schema.json': '3c6f3e4391f3dca939d75bd0b200ea88e68db939a2cb885d46f0b143293efb84',
+        'marketplace.schema.json': '5a08f241f9e856bb59489a265d9bf4db9c905e874d720f46def59fdb6f3ca257',
+        'mcp.schema.json': '76ccf02c7bfe2d57945ba18e84da8d655529bd68b4d692f72bce28238c99067e',
+        'plugin.schema.json': 'd145d370f5ad16fb9f29a6f1b5c9cb3ae8a6b9c33b3a11513eea324e8feb17c5',
       },
-      version: '2.1.232',
+      version: '2.1.250',
     },
     codex: {
       hashes: {
@@ -211,7 +211,7 @@ it.each(['codex', 'claude'] as const)('copies project assets selected for %s and
 
 it('plans byte-stable native Codex and Claude plugin trees from the same frozen model', async () => {
   const registry = createDefaultRegistry();
-  expect(registry.names()).toEqual(['portable', 'codex', 'claude']);
+  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'plugin']);
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(Object.isFrozen(plugin)).toBe(true);
 
@@ -291,6 +291,26 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
   ]);
   await validateDocuments('codex', writeContents(plugin, 'codex'));
   await validateDocuments('claude', writeContents(plugin, 'claude'));
+});
+
+it('embeds the Claude plugin root in compiled MCP entry arguments', () => {
+  const compiled = {
+    ...plugin,
+    mcpServers: Object.freeze([Object.freeze({
+      ...plugin.mcpServers[0],
+      args: Object.freeze(['mcp/compiled-server.mjs']),
+      source: '/workspace/server.ts',
+    })]),
+  } satisfies NormalizedPlugin;
+  const entry = planEntries(compiled, 'claude').find((candidate) => candidate.relativePath === '.mcp.json');
+  expect(entry?.kind).toBe('write');
+  const document = JSON.parse(entry?.kind === 'write' ? entry.content : '{}') as {
+    mcpServers: Record<string, { args?: string[]; cwd?: string }>;
+  };
+  expect(document.mcpServers.stdio).toMatchObject({
+    args: ['${CLAUDE_PLUGIN_ROOT}/mcp/compiled-server.mjs'],
+  });
+  expect(document.mcpServers.stdio).not.toHaveProperty('cwd');
 });
 
 it.each(['codex', 'claude'] as const)(

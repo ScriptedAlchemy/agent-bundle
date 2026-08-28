@@ -185,6 +185,7 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
     schemas: [{ name: 'document', validate }],
   },
   artifactLayout: {
+    assets: 'assets',
     scripts: { allowedSuffixes: ['.json', '.mjs', '.sh'], directory: 'scripts' },
     skills: 'skills',
   },
@@ -589,6 +590,25 @@ it('rejects a special manifest without following its symlink target', async () =
   }
 });
 
+it('rejects a canonical manifest whose runtime is below the generated floor', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+
+  try {
+    const manifestPath = join(root, 'agent-bundle.manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { runtime: { node: string } };
+    manifest.runtime.node = '22.11.9';
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+
+    expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6001', generatedPath: 'agent-bundle.manifest.json' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('settles promptly when the artifact manifest is a FIFO', async () => {
   const root = await writeArtifact([
     { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
@@ -701,6 +721,26 @@ it('rejects a canonically rehashed script with an unsupported extension', async 
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
     ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('admits nested project assets in the target-owned recursive asset namespace', async () => {
+  const registry = createDefaultRegistry();
+  const portable = targetFromRegistry(registry, 'portable');
+  const files = [
+    {
+      contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
+      kind: 'generated' as const,
+      path: 'portable/plugin.json',
+    },
+    { contents: '<svg/>\n', kind: 'copy' as const, path: 'portable/assets/branding/logo.svg' },
+  ];
+  const root = await writeArtifact(files, true, [portable]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1661,7 +1701,7 @@ const throwingArrayElement = (): unknown => {
   const issues: unknown[] = [];
   Object.defineProperty(issues, '0', {
     enumerable: true,
-    get: () => {
+    get: (): never => {
       throw new Error('issue element getter must not escape validation');
     },
   });
@@ -1669,7 +1709,7 @@ const throwingArrayElement = (): unknown => {
   return issues;
 };
 
-const throwingIssueProperty = (): object => Object.defineProperties({}, {
+const throwingIssueProperty = (): unknown => Object.defineProperties({}, {
   instancePath: {
     enumerable: true,
     get: () => {
@@ -1684,9 +1724,9 @@ const throwingIssueProperty = (): object => Object.defineProperties({}, {
   },
 });
 
-const thenableArray = (): unknown => Object.assign([], { then: () => undefined });
+const thenableArray = (): unknown => Object.assign([], { then: (): undefined => undefined });
 
-const malformedValidatorCases: readonly (readonly [string, () => unknown])[] = [
+const malformedValidatorCases = [
   ['a null callback result', () => null],
   ['an array-like callback result', () => ({ 0: {}, length: 1 })],
   ['a thenable callback result', () => ({ then: () => undefined })],
@@ -1698,7 +1738,7 @@ const malformedValidatorCases: readonly (readonly [string, () => unknown])[] = [
   ['a throwing callback', () => {
     throw new Error('validator callback must not escape artifact validation');
   }],
-];
+] as const satisfies readonly (readonly [string, () => unknown])[];
 
 it.each(malformedValidatorCases)('reports $0 through the stable schema diagnostic', async (_name, callback) => {
   const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];

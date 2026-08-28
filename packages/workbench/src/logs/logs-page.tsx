@@ -1,5 +1,4 @@
-import { errorMessage as messageFrom } from '../client-helpers.ts';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import type { DevLogRecord, DevLogReplayGap } from '../../../agent-bundle/src/contracts/dev-logs.ts';
 import { LogClient, LogClientError } from './log-client.ts';
@@ -14,32 +13,31 @@ export interface LogsPageProps {
 
 const all = '';
 const filter = (value: string): string | undefined => value === all ? undefined : value;
-const errorMessage = (reason: unknown): string => messageFrom(reason, 'Production logs could not be read.');
+const errorMessage = (reason: unknown): string => {
+  try { return reason instanceof Error && typeof reason.message === 'string' ? reason.message : 'Production logs could not be read.'; }
+  catch { return 'Production logs could not be read.'; }
+};
 const isCursorAhead = (reason: unknown): boolean => {
   try { return reason instanceof LogClientError && reason.code === 'AB8092'; }
   catch { return false; }
 };
 
-// Records are frozen and merged by reference, so memoizing on the record identity
-// keeps large bursts from re-rendering (and re-stringifying) every retained entry.
-const LogsEntry = React.memo(({ record }: { readonly record: DevLogRecord }) => <li>
-  <div className="logs-entry-head">
-    <span className="logs-entry-sequence">#{record.sequence}</span>
-    <time className="logs-entry-timestamp">{record.occurredAt}</time>
-    <span className="logs-entry-source">{record.producer}</span>
-    <span className={`logs-entry-level logs-entry-level--${record.level}`}>{record.level}</span>
-    <span className="logs-entry-kind">{record.kind}</span>
-  </div>
-  <p className="logs-entry-summary">{record.summary}</p>
-  <p className="logs-entry-binding">{Object.entries(record.context).map(([key, value]) => <span className="identifier" key={key}>{key} {value}</span>)}</p>
-  <details className="logs-details"><summary>Details</summary><pre>{JSON.stringify({ context: record.context, details: record.details }, null, 2)}</pre></details>
-</li>);
-
 export const LogsView = ({ view }: { readonly view: LogsViewModel }) => <div className="logs-trace">
   {view.gap === undefined ? undefined : <p className="logs-gap" role="status">Earlier records are no longer retained.</p>}
   <p className="logs-summary" role="status">{view.summary}</p>
   {view.records.length === 0 ? <p className="empty-row">No production log record matches this filter.</p> : <ol className="logs-entries">
-    {view.records.map((record) => <LogsEntry key={record.sequence} record={record} />)}
+    {view.records.map((record) => <li key={record.sequence}>
+      <div className="logs-entry-head">
+        <span className="logs-entry-sequence">#{record.sequence}</span>
+        <time className="logs-entry-timestamp">{record.occurredAt}</time>
+        <span className="logs-entry-source">{record.producer}</span>
+        <span className={`logs-entry-level logs-entry-level--${record.level}`}>{record.level}</span>
+        <span className="logs-entry-kind">{record.kind}</span>
+      </div>
+      <p className="logs-entry-summary">{record.summary}</p>
+      <p className="logs-entry-binding">{Object.entries(record.context).map(([key, value]) => <span className="identifier" key={key}>{key} {value}</span>)}</p>
+      <details className="logs-details"><summary>Details</summary><pre>{JSON.stringify({ context: record.context, details: record.details }, null, 2)}</pre></details>
+    </li>)}
   </ol>}
 </div>;
 
@@ -52,10 +50,7 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
   const [producer, setProducer] = useState(all);
   const [context, setContext] = useState(all);
   const [records, setRecords] = useState<readonly DevLogRecord[]>(suppliedRecords ?? []);
-  const view = useMemo(
-    () => logsViewFor({ context: filter(context), gap, kind: filter(kind), level: filter(level), producer: filter(producer), records }),
-    [context, gap, kind, level, producer, records],
-  );
+  const view = logsViewFor({ context: filter(context), gap, kind: filter(kind), level: filter(level), producer: filter(producer), records });
 
   useEffect(() => {
     if (suppliedRecords !== undefined) return;
@@ -108,6 +103,16 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
     const connect = async (): Promise<void> => {
       const attempt = generation + 1;
       generation = attempt;
+      const handleFailure = (reason: unknown): void => {
+        if (!current || attempt !== generation) return;
+        if (isCursorAhead(reason)) {
+          resetCursor();
+          void connect();
+          return;
+        }
+        setError(errorMessage(reason));
+        reconnectLater();
+      };
       stream?.close();
       generationController?.abort();
       generationController = new AbortController();
@@ -132,26 +137,10 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
         });
         void stream.done.then(
           () => { if (attempt === generation) reconnectLater(); },
-          (reason: unknown) => {
-            if (!current || attempt !== generation) return;
-            if (isCursorAhead(reason)) {
-              resetCursor();
-              void connect();
-              return;
-            }
-            setError(errorMessage(reason));
-            reconnectLater();
-          },
+          handleFailure,
         );
       } catch (reason) {
-        if (!current || attempt !== generation) return;
-        if (isCursorAhead(reason)) {
-          resetCursor();
-          void connect();
-          return;
-        }
-        setError(errorMessage(reason));
-        reconnectLater();
+        handleFailure(reason);
       }
     };
     void connect();

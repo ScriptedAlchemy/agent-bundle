@@ -9,6 +9,7 @@ import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
+import { pluginAdapter } from './plugin.ts';
 import type {
   TargetAdapter,
   TargetArtifactDocumentContract,
@@ -154,6 +155,18 @@ const snapshotOutputLayout = (value: unknown, field: string): TargetArtifactOutp
   });
 };
 
+const snapshotRootDocuments = (value: unknown): readonly string[] => {
+  const documents = dataArrayValues(value);
+  if (documents === undefined) throw new Error('Target adapter artifact layout root documents must be a data array.');
+  return Object.freeze(documents.map((document) => {
+    const name = requireNonempty(document, 'artifact layout root document');
+    if (!isSafeArtifactDirectory(name)) {
+      throw new Error('Target adapter artifact layout root documents must be safe single-segment names.');
+    }
+    return name;
+  }));
+};
+
 const snapshotArtifactLayout = (
   adapter: TargetAdapter,
   hookContract: TargetHookContract | undefined,
@@ -172,10 +185,17 @@ const snapshotArtifactLayout = (
     ? undefined
     : snapshotOutputLayout(layout.mcpEntries, 'MCP entries');
   const scripts = layout.scripts === undefined ? undefined : snapshotOutputLayout(layout.scripts, 'scripts');
+  const assets = layout.assets === undefined
+    ? undefined
+    : requireNonempty(layout.assets, 'artifact layout assets namespace');
   const skills = layout.skills === undefined
     ? undefined
     : requireNonempty(layout.skills, 'artifact layout skills namespace');
+  const rootDocuments = layout.rootDocuments === undefined ? undefined : snapshotRootDocuments(layout.rootDocuments);
 
+  if (assets !== undefined && !isSafeArtifactDirectory(assets)) {
+    throw new Error('Target adapter artifact layout assets namespace must be a safe single namespace.');
+  }
   if (skills !== undefined && !isSafeArtifactDirectory(skills)) {
     throw new Error('Target adapter artifact layout skills namespace must be a safe single namespace.');
   }
@@ -189,9 +209,11 @@ const snapshotArtifactLayout = (
     throw new Error(`Target adapter "${adapter.name}" declares Skill layout without skills capability.`);
   }
   return Object.freeze({
+    ...(assets === undefined ? {} : { assets }),
     ...(hookWrappers === undefined ? {} : { hookWrappers }),
     ...(mcpApps === undefined ? {} : { mcpApps }),
     ...(mcpEntries === undefined ? {} : { mcpEntries }),
+    ...(rootDocuments === undefined ? {} : { rootDocuments }),
     ...(scripts === undefined ? {} : { scripts }),
     ...(skills === undefined ? {} : { skills }),
   });
@@ -471,4 +493,5 @@ export const createDefaultRegistry = (): TargetRegistry =>
   new TargetRegistry()
     .register(portableAdapter, { default: true })
     .register(codexAdapter)
-    .register(claudeAdapter);
+    .register(claudeAdapter)
+    .register(pluginAdapter);

@@ -6,8 +6,10 @@ import { expect, it } from '@rstest/core';
 import type { EvalComparison, EvalConditionMetrics } from '../../agent-bundle/src/eval/compare.ts';
 import type { EvalRunRecord } from '../../agent-bundle/src/eval/run-store.ts';
 import { ComparisonClient } from '../src/comparisons/comparison-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import {
   ComparisonControls,
+  ComparisonsRequestLifecycle,
   ComparisonMatrix,
   ComparisonsPage,
   loadComparisonRuns,
@@ -95,10 +97,18 @@ const response = (body: unknown): Response => new Response(JSON.stringify(body),
 
 const stubFetch = (calls: string[], body: unknown): typeof fetch => async (input) => {
   const url = String(input);
-  if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+  if (url === '/api/project/session') return response({
+    cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+    origin: 'http://127.0.0.1:5173',
+    token: 'foreground-token',
+  });
   calls.push(url);
   return response(body);
 };
+
+const client = (fetch: typeof globalThis.fetch): ComparisonClient => new ComparisonClient({
+  foreground: new ForegroundRouteClient({ fetch }),
+});
 
 it('shows the actual k/n beside pass@k and pass^k in the matrix', () => {
   const markup = renderToStaticMarkup(createElement(ComparisonMatrix, { view }));
@@ -171,8 +181,11 @@ it('offers a baseline and candidate selection with a compare action', () => {
 });
 
 it('renders no comparison controls until two runs are recorded', () => {
-  const comparisonClient = new ComparisonClient({ fetch: async () => { throw new Error('The page compares through its own effect.'); } });
-  const evalClient = new EvalClient({ fetch: async () => { throw new Error('The page lists runs through its own effect.'); } });
+  const foreground = new ForegroundRouteClient({
+    fetch: async () => { throw new Error('The page lists runs through its own effect.'); },
+  });
+  const comparisonClient = new ComparisonClient({ foreground });
+  const evalClient = new EvalClient({ foreground });
   const markup = renderToStaticMarkup(createElement(ComparisonsPage, { comparisonClient, evalClient }));
 
   expect(markup).toContain('At least two recorded runs');
@@ -181,16 +194,48 @@ it('renders no comparison controls until two runs are recorded', () => {
 });
 
 it('delegates run loading to EvalClient and the server comparison to ComparisonClient', async () => {
-  const comparisonCalls: string[] = [];
-  const evalCalls: string[] = [];
-  const comparisonClient = new ComparisonClient({ fetch: stubFetch(comparisonCalls, { comparison }) });
-  const evalClient = new EvalClient({ fetch: stubFetch(evalCalls, { runs }) });
+  const calls: string[] = [];
+  let bootstraps = 0;
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      const path = String(input);
+      if (path === '/api/project/session') {
+        bootstraps += 1;
+        return response({
+          cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+          origin: 'http://127.0.0.1:5173',
+          token: 'foreground-token',
+        });
+      }
+      calls.push(path);
+      if (path === '/api/evals/runs') return response({ runs });
+      return response({ comparison });
+    },
+  });
+  const comparisonClient = new ComparisonClient({ foreground });
+  const evalClient = new EvalClient({ foreground });
 
   await expect(loadComparisonRuns(evalClient)).resolves.toMatchObject([{ id: 'run-base' }, { id: 'run-candidate' }]);
+
   const result = await runComparison(comparisonClient, 'run-base', 'run-candidate');
 
-  expect(evalCalls).toEqual(['/api/evals/runs']);
-  expect(comparisonCalls).toEqual(['/api/evals/comparisons?base=run-base&candidate=run-candidate']);
+  expect(calls).toEqual(['/api/evals/runs', '/api/evals/comparisons?base=run-base&candidate=run-candidate']);
+  expect(bootstraps).toBe(1);
   expect(result.rows).toHaveLength(3);
   expect(result.summary).toMatchObject({ comparable: 2, nonComparable: 1 });
+});
+
+it('aborts a stale comparison and all outstanding work when the page leaves', () => {
+  const lifecycle = new ComparisonsRequestLifecycle();
+  const listing = lifecycle.begin('runs');
+  const comparison = lifecycle.begin('comparison');
+
+  expect(lifecycle.isCurrent(listing)).toBe(true);
+  expect(lifecycle.isCurrent(comparison)).toBe(true);
+
+  lifecycle.invalidate();
+
+  expect(listing.signal.aborted).toBe(true);
+  expect(comparison.signal.aborted).toBe(true);
+  expect(lifecycle.isCurrent(comparison)).toBe(false);
 });

@@ -61,6 +61,7 @@ export interface TargetMcpRuntimeContract {
 interface CreateTargetMcpRuntimeOptions {
   readonly manifestPath: string;
   readonly remoteTypes: readonly string[];
+  readonly validatedButNonModernRemoteTypes?: readonly string[];
   readonly resolveStdioArgument?: TargetMcpRuntimeContract['resolveStdioArgument'];
   readonly resolveValue: TargetMcpRuntimeContract['resolveValue'];
 }
@@ -144,10 +145,12 @@ const streamableHttpServer = (
 const readModernMcpServers = (
   document: unknown,
   remoteTypes: ReadonlySet<string>,
+  validatedButNonModernRemoteTypes: ReadonlySet<string>,
 ): ModernMcpServersReadResult => {
   if (!isPlainDataRecord(document)) return { status: 'invalid' };
   const servers = ownDataValue(document, 'mcpServers');
   if (servers === undefined || !servers.found || !isPlainDataRecord(servers.value)) return { status: 'invalid' };
+  const validatedRemoteTypes = new Set([...remoteTypes, ...validatedButNonModernRemoteTypes]);
   const entries: ModernMcpServerEntry[] = [];
   for (const name of Object.keys(servers.value).sort((left, right) => left.localeCompare(right))) {
     const value = servers.value[name];
@@ -156,8 +159,9 @@ const readModernMcpServers = (
     if (type === undefined || !type.found || typeof type.value !== 'string') return { status: 'invalid' };
     const server = type.value === 'stdio'
       ? stdioServer(value)
-      : streamableHttpServer(value, remoteTypes);
+      : streamableHttpServer(value, validatedRemoteTypes);
     if (server === undefined) return { status: 'invalid' };
+    if (type.value !== 'stdio' && validatedButNonModernRemoteTypes.has(type.value)) continue;
     entries.push(Object.freeze({ name, server }));
   }
   return Object.freeze({ servers: Object.freeze(entries), status: 'found' });
@@ -278,13 +282,15 @@ export const readTargetMcpServer = (
 export const createTargetMcpRuntime = ({
   manifestPath,
   remoteTypes,
+  validatedButNonModernRemoteTypes = [],
   resolveStdioArgument = noRelativeArgumentResolution,
   resolveValue,
 }: CreateTargetMcpRuntimeOptions): TargetMcpRuntimeContract => {
   const nativeRemoteTypes = new Set(remoteTypes);
+  const nonModernRemoteTypes = new Set(validatedButNonModernRemoteTypes);
   return Object.freeze({
     manifestPath,
-    readModernServers: (document: unknown) => readModernMcpServers(document, nativeRemoteTypes),
+    readModernServers: (document: unknown) => readModernMcpServers(document, nativeRemoteTypes, nonModernRemoteTypes),
     resolveStdioArgument,
     resolveValue,
   });

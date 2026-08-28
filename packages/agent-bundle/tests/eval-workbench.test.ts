@@ -27,7 +27,9 @@ it('runs a real deterministic eval through the packaged foreground server', asyn
       root: project.root,
     });
     const artifact = server.status().artifact;
-    if (artifact.state !== 'active') throw new Error('Expected the workbench to publish an active artifact epoch.');
+    if (artifact.state !== 'active') {
+      throw new Error(`Expected the workbench to publish an active artifact epoch: ${JSON.stringify(server.status())}`);
+    }
     const bootstrap = await fetch(`${server.url}/api/project/session`, {
       headers: { 'sec-fetch-site': 'same-origin' },
     });

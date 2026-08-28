@@ -10,6 +10,7 @@ import type {
   ArtifactInspectionFile,
 } from '../../agent-bundle/src/dev/types.ts';
 import { ArtifactClient } from '../src/artifacts/artifact-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import {
   ArtifactEpochDiffView,
   ArtifactInspectionView,
@@ -113,9 +114,15 @@ const response = (body: unknown, status = 200): Response => new Response(JSON.st
 
 const sessionFetch = (reply: (url: string) => Response): typeof fetch => async (input) => {
   const url = String(input);
-  if (url === '/api/project/session') return response({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+  if (url === '/api/project/session') return response({
+    cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+    origin: 'http://127.0.0.1:5173',
+    token: 'foreground-token',
+  });
   return reply(url);
 };
+
+const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
 
 const readyView = artifactViewFor({
   diagnostics: [],
@@ -182,7 +189,7 @@ it('states that no build comparison has been requested yet', () => {
 
 it('renders no inspection controls when no build is available', () => {
   const client = new ArtifactClient({
-    fetch: async () => { throw new Error('No epoch may issue an artifact inspection request.'); },
+    foreground: foreground(async () => { throw new Error('No epoch may issue an artifact inspection request.'); }),
   });
   const markup = renderToStaticMarkup(createElement(ArtifactsPage, { client, epochId: undefined }));
 
@@ -192,7 +199,7 @@ it('renders no inspection controls when no build is available', () => {
 });
 
 it('renders the target and epoch comparison controls for an active epoch', () => {
-  const client = new ArtifactClient({ fetch: sessionFetch(() => response({ inspection })) });
+  const client = new ArtifactClient({ foreground: foreground(sessionFetch(() => response({ inspection }))) });
   const markup = renderToStaticMarkup(createElement(ArtifactsPage, { client, epochId: 'epoch-2' }));
 
   expect(markup).toContain('id="artifact-target"');
@@ -202,10 +209,10 @@ it('renders the target and epoch comparison controls for an active epoch', () =>
 
 it('turns a validation failure into renderable diagnostics instead of an opaque error', async () => {
   const client = new ArtifactClient({
-    fetch: sessionFetch(() => response({
+    foreground: foreground(sessionFetch(() => response({
       diagnostic: { code: 'AB8064', message: 'Artifact epoch failed validation.' },
       diagnostics,
-    }, 422)),
+    }, 422))),
   });
 
   const result = await inspectArtifactEpoch(client, 'epoch-2');
@@ -216,7 +223,7 @@ it('turns a validation failure into renderable diagnostics instead of an opaque 
 });
 
 it('reports a transport failure as an error with no diagnostics', async () => {
-  const client = new ArtifactClient({ fetch: sessionFetch(() => response({}, 503)) });
+  const client = new ArtifactClient({ foreground: foreground(sessionFetch(() => response({}, 503))) });
 
   const result = await inspectArtifactEpoch(client, 'epoch-2');
 
@@ -227,10 +234,10 @@ it('reports a transport failure as an error with no diagnostics', async () => {
 it('compares an authored base epoch against the active epoch, never two authored ids', async () => {
   const urls: string[] = [];
   const client = new ArtifactClient({
-    fetch: sessionFetch((url) => {
+    foreground: foreground(sessionFetch((url) => {
       urls.push(url);
       return response({ diff });
-    }),
+    })),
   });
 
   await expect(compareArtifactEpochs(client, ' epoch-1 ', 'epoch-2')).resolves.toMatchObject({ baseEpochId: 'epoch-1' });
@@ -240,7 +247,7 @@ it('compares an authored base epoch against the active epoch, never two authored
 
 it('issues no comparison request for a blank base epoch id', async () => {
   const client = new ArtifactClient({
-    fetch: sessionFetch(() => { throw new Error('A blank base epoch id may not issue a diff request.'); }),
+    foreground: foreground(sessionFetch(() => { throw new Error('A blank base epoch id may not issue a diff request.'); })),
   });
 
   await expect(compareArtifactEpochs(client, '   ', 'epoch-2')).resolves.toBeUndefined();

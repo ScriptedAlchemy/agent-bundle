@@ -1,19 +1,24 @@
-import { rm } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { createHash } from 'node:crypto';
+import { constants, type Stats } from 'node:fs';
+import { lstat, open, realpath, rm } from 'node:fs/promises';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+import { Readable } from 'node:stream';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
-import { mapConcurrent } from '../../core/async.ts';
 import { loadConfig } from '../../config/load.ts';
-import { aggregateEvalTrials, summarizeEvalRun } from '../../eval/aggregate.ts';
+import type { Diagnostic } from '../../core/diagnostics.ts';
+import { digest } from '../../core/digest.ts';
+import { aggregateEvalTrials, summarizeEvalRun, type EvalCaseAggregate } from '../../eval/aggregate.ts';
 import { compareEvalRuns, type EvalComparison } from '../../eval/compare.ts';
 import { prepareEvalArtifact, type PreparedEvalArtifact } from '../../eval/artifact.ts';
 import { normalizeEvalConfig, type NormalizedEvalConfig } from '../../eval/config.ts';
 import { runClaudeTrial } from '../../eval/claude-harness.ts';
-import { runCodexEvalTrial } from '../../eval/codex-harness.ts';
+import { runCodexEvalTrial, type CodexCommandRunner } from '../../eval/codex-harness.ts';
 import { discoverEvalSuites, type DiscoveredEvalSuite } from '../../eval/discovery.ts';
 import { EvalHarnessError } from '../../eval/errors.ts';
 import { planEvalFixture, type EvalFixturePlan } from '../../eval/fixtures.ts';
 import { createEvalHarness, runDeterministicTrial, type EvalHarness } from '../../eval/harness.ts';
+import type { NativeClaudeProcessRunner } from '../../host-contracts/native-claude-contract.ts';
 import {
   createEvalRun,
   EvalRunEventDurabilityError,
@@ -23,44 +28,136 @@ import {
   readEvalRun,
   readEvalRunEvents,
   readEvalTrials,
-  type EvalArtifactBinding,
   type EvalRunEvent,
   type EvalRunRecord,
   type EvalTrialRecord,
 } from '../../eval/run-store.ts';
-import type { EvalCase } from '../../eval/types.ts';
+import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../../eval/types.ts';
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
+import { isInsideOrEqual } from '../../core/paths.ts';
 import { isErrno } from '../../core/errors.ts';
-import { PendingEvalEventSubscription } from './eval-event-subscription.ts';
-import {
-  artifactSegments,
-  assertNoSymlinkedArtifactPath,
-  openEvalArtifactSnapshot,
-  type OpenedEvalArtifact,
-} from './eval-artifact-reader.ts';
 
-import {
-  EvalServiceError,
-  evalServiceError as serviceError,
-} from './eval-service-error.ts';
-import type {
-  EvalArtifactReader,
-  EvalCaseSummary,
-  EvalEventSubscription,
-  EvalRunAdmission,
-  EvalRunEventsReplay,
-  EvalRunRequest,
-  EvalRunResult,
-  EvalRunSelection,
-  EvalServiceNativeOptions,
-  EvalServiceOptions,
-  EvalSuiteListing,
-  EvalSuiteSummary,
-} from './eval-service-types.ts';
+export type EvalServiceErrorCode =
+  | 'EVAL_ARTIFACT_NOT_FOUND'
+  | 'EVAL_ARTIFACT_UNAVAILABLE'
+  | 'EVAL_EVENTS_CURSOR_INVALID'
+  | 'EVAL_HARNESS_UNSUPPORTED'
+  | 'EVAL_RUN_NOT_FOUND'
+  | 'EVAL_SELECTION_EMPTY'
+  | 'EVAL_SEMANTIC_GRADER_UNSUPPORTED'
+  | 'EVAL_TARGET_MISSING'
+  | 'EVAL_TRIALS_INVALID';
 
-export { EvalServiceError, type EvalServiceErrorCode } from './eval-service-error.ts';
-export type * from './eval-service-types.ts';
+/** Every refusal a caller can act on without reading the eval internals. */
+export class EvalServiceError extends Error {
+  readonly code: EvalServiceErrorCode;
 
+  constructor(code: EvalServiceErrorCode, message: string) {
+    super(message);
+    this.name = 'EvalServiceError';
+    this.code = code;
+  }
+}
+
+export interface EvalAssertionSummary {
+  readonly id: string;
+  readonly kind: EvalAssertionKind;
+  /** The Skill an activation assertion references; absent for blanket and non-Skill assertions. */
+  readonly skill?: string;
+}
+
+export interface EvalCaseSummary {
+  readonly assertions: readonly EvalAssertionSummary[];
+  readonly digest: string;
+  readonly hosts: readonly string[];
+  readonly id: string;
+  readonly invocation: EvalInvocation;
+  readonly prompt: string;
+  readonly trials: number;
+}
+
+export interface EvalSuiteSummary {
+  readonly cases: readonly EvalCaseSummary[];
+  readonly digest: string;
+  readonly name: string;
+  /** Project-relative so no caller, browser included, learns an absolute location. */
+  readonly sourcePath: string;
+}
+
+export interface EvalSuiteListing {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly suites: readonly EvalSuiteSummary[];
+}
+
+export interface EvalRunSelection {
+  readonly caseIds?: readonly string[];
+  readonly suites?: readonly string[];
+}
+
+export interface EvalRunRequest extends EvalRunSelection {
+  /** An already-built artifact root. Only the API and CLI may name one; the browser never does. */
+  readonly artifact?: string;
+  readonly harness?: string;
+  readonly signal?: AbortSignal;
+  readonly trials?: number;
+}
+
+export interface EvalRunResult {
+  readonly aggregates: readonly EvalCaseAggregate[];
+  readonly diagnostics: readonly Diagnostic[];
+  readonly run: EvalRunRecord;
+  readonly trials: readonly EvalTrialRecord[];
+}
+
+/** A durable run identity returned before its background trials settle. */
+export interface EvalRunAdmission {
+  readonly run: EvalRunRecord;
+}
+
+/** A durable event replay never includes an incomplete append record. */
+export interface EvalRunEventsReplay {
+  readonly cursor: Readonly<{ readonly afterSequence: number }>;
+  readonly events: readonly EvalRunEvent[];
+  /** True when the event file ends with an incomplete record that was not replayed. */
+  readonly incompleteTrailingRecord?: true;
+}
+
+/** A run-pinned raw-evidence descriptor. Call close when its response stream ends. */
+export interface EvalArtifactReader {
+  readonly digest: string;
+  readonly filename: string;
+  readonly ref: string;
+  readonly size: number;
+  close(): Promise<void>;
+  read(start?: number, end?: number): Readable;
+}
+
+/** A replay snapshot followed by durable, ordered events published after its cursor. */
+export interface EvalEventSubscription {
+  readonly replay: EvalRunEventsReplay;
+  activate(listener: (event: EvalRunEvent) => void): void;
+  close(): void;
+}
+
+export interface EvalServiceOptions {
+  readonly configPath?: string;
+  readonly mode?: string;
+  /** Optional non-throwing producer-wide diagnostics sink. */
+  readonly logger?: DevLogSink;
+  /** Native CLI injection is deliberately limited to test runners and their child environment. */
+  readonly native?: EvalServiceNativeOptions;
+  /** Injectable only to make run identity deterministic in tests. */
+  readonly now?: () => Date;
+  readonly projectRoot: string;
+  readonly registry?: TargetRegistry;
+  readonly targets?: readonly string[];
+}
+
+export interface EvalServiceNativeOptions {
+  readonly claudeRun?: NativeClaudeProcessRunner;
+  readonly codexRun?: CodexCommandRunner;
+  readonly environment?: Readonly<NodeJS.ProcessEnv>;
+}
 
 interface SelectedEvalCase {
   readonly evalCase: EvalCase;
@@ -90,35 +187,71 @@ interface ActiveEvalRun {
 }
 
 const maximumTrials = 100;
+const maximumArtifactBytes = 8 * 1024 * 1024;
 /** Background failures are surfaced once at close; retain a bounded window so long-lived services cannot grow without limit. */
 const maximumRetainedBackgroundFailures = 256;
 const safeRunId = /^[a-z0-9][a-z0-9._-]*$/u;
+const safeArtifactSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
+
+const serviceError = (code: EvalServiceErrorCode, message: string): EvalServiceError =>
+  new EvalServiceError(code, message);
+
+/** Explicit evidence that Eval shutdown observed more distinct background failures than it retained. */
+export class EvalServiceBackgroundFailureOverflowError extends Error {
+  readonly droppedCount: number;
+
+  constructor(droppedCount: number) {
+    super(`Eval service omitted ${droppedCount} additional background failure${droppedCount === 1 ? '' : 's'} after its bounded retention limit.`);
+    this.name = 'EvalServiceBackgroundFailureOverflowError';
+    this.droppedCount = droppedCount;
+  }
+}
+
+/** @internal Bounded, loss-aware retention used by the long-lived Eval service. */
+export class EvalServiceBackgroundFailureRetention {
+  readonly #failures = new Set<unknown>();
+  readonly #limit: number;
+  #droppedCount = 0;
+
+  constructor(limit = maximumRetainedBackgroundFailures) {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError('Eval background failure retention limit must be positive.');
+    this.#limit = limit;
+  }
+
+  retain(error: unknown): void {
+    if (this.#failures.has(error)) return;
+    if (this.#failures.size < this.#limit) {
+      this.#failures.add(error);
+      return;
+    }
+    this.#droppedCount += 1;
+  }
+
+  snapshot(): readonly unknown[] {
+    return Object.freeze([
+      ...this.#failures,
+      ...(this.#droppedCount === 0 ? [] : [new EvalServiceBackgroundFailureOverflowError(this.#droppedCount)]),
+    ]);
+  }
+}
 
 const projectRelative = (projectRoot: string, path: string): string =>
   relative(projectRoot, path).replaceAll('\\', '/');
 
-const persistedArtifactBinding = (
+/** Persist artifact identity without leaking or trusting an absolute host path. */
+const storedArtifactBinding = (
   projectRoot: string,
   runDirectory: string,
-  binding: EvalArtifactBinding,
-): EvalArtifactBinding => {
-  const base = binding.source === 'run-owned' ? runDirectory : projectRoot;
-  const manifestPath = relative(base, binding.manifestPath);
-  if (
-    manifestPath.length === 0 ||
-    isAbsolute(manifestPath) ||
-    manifestPath === '..' ||
-    manifestPath.startsWith(`..${sep}`)
-  ) {
-    throw serviceError(
-      'EVAL_ARTIFACT_OUTSIDE_PROJECT',
-      'The evaluated artifact must be inside the project so its durable run record never exposes an absolute path.',
-    );
-  }
+  artifact: PreparedEvalArtifact,
+) => {
+  const base = artifact.binding.source === 'run-owned' ? runDirectory : projectRoot;
+  const manifestPath = projectRelative(base, artifact.binding.manifestPath);
+  const storedManifestPath = manifestPath !== '..' && !manifestPath.startsWith('../')
+    ? manifestPath
+    : `external/${digest({ targetDigests: artifact.binding.targetDigests })}.json`;
   return Object.freeze({
-    manifestPath: manifestPath.replaceAll('\\', '/'),
-    source: binding.source,
-    targetDigests: binding.targetDigests,
+    ...artifact.binding,
+    manifestPath: storedManifestPath,
   });
 };
 
@@ -182,27 +315,121 @@ const requestedAfterSequence = (value: number): number => {
   return value;
 };
 
-/**
- * The one terminal-failure transition for both the trial-loop failure and the
- * terminal-append failure: a durability error whose failed event was terminal
- * proves that event reached the log ('written'), while an uncertain write
- * leaves the log state unknowable ('uncertain'). Any other failure leaves the
- * terminal state untouched so #execute still appends a terminal event.
- */
-const classifyTerminalFailure = (active: ActiveEvalRun, error: unknown): void => {
-  if (
-    error instanceof EvalRunEventDurabilityError
-    && (error.event.kind === 'run.cancelled' || error.event.kind === 'run.completed' || error.event.kind === 'run.failed')
-  ) {
-    active.terminal = 'written';
+class PendingEvalEventSubscription implements EvalEventSubscription {
+  #closed = false;
+  #listener: ((event: EvalRunEvent) => void) | undefined;
+  readonly #onClose: () => void;
+  #queued: EvalRunEvent[] = [];
+  #replay: EvalRunEventsReplay | undefined;
+
+  constructor(onClose: () => void) {
+    this.#onClose = onClose;
   }
-  if (error instanceof EvalRunEventWriteUncertainError) {
-    active.terminal = 'uncertain';
-    active.uncertainty = error;
+
+  get replay(): EvalRunEventsReplay {
+    if (this.#replay === undefined) throw new Error('Eval event subscription has not finished replaying.');
+    return this.#replay;
+  }
+
+  bind(replay: EvalRunEventsReplay): void {
+    this.#replay = replay;
+    this.#queued = this.#queued.filter((event) => event.sequence > replay.cursor.afterSequence);
+  }
+
+  publish(event: EvalRunEvent): void {
+    if (this.#closed) return;
+    if (this.#replay !== undefined && event.sequence <= this.#replay.cursor.afterSequence) return;
+    const listener = this.#listener;
+    if (listener === undefined) this.#queued.push(event);
+    else listener(event);
+  }
+
+  activate(listener: (event: EvalRunEvent) => void): void {
+    if (this.#closed || this.#listener !== undefined) return;
+    this.#listener = listener;
+    const queued = this.#queued;
+    this.#queued = [];
+    for (const event of queued) listener(event);
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#listener = undefined;
+    this.#queued = [];
+    this.#onClose();
+  }
+}
+
+const artifactSegments = (value: unknown): readonly string[] | undefined => {
+  if (typeof value !== 'string' || /%(?:2f|5c)/iu.test(value) || value.includes('\\') || value.includes('\0')) {
+    return undefined;
+  }
+  const segments = value.split('/');
+  if (
+    segments.length < 2 || segments[0] !== 'artifacts' ||
+    segments.some((segment) => !safeArtifactSegment.test(segment))
+  ) return undefined;
+  return Object.freeze(segments);
+};
+
+const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
+
+const assertNoSymlinkedArtifactPath = async (projectRoot: string, target: string): Promise<void> => {
+  const root = resolve(projectRoot);
+  const resolvedTarget = resolve(target);
+  if (!isInsideOrEqual(root, resolvedTarget)) throw new Error('Raw evidence path escaped the project.');
+  const segments = relative(root, resolvedTarget).split(/[/\\]/u);
+  let current = root;
+  for (const [index, segment] of segments.entries()) {
+    current = join(current, segment);
+    const entry = await lstat(current);
+    if (entry.isSymbolicLink() || index < segments.length - 1 && !entry.isDirectory()) {
+      throw new Error('Raw evidence path must contain only real directories and a real file.');
+    }
   }
 };
 
+class OpenedEvalArtifact implements EvalArtifactReader {
+  readonly digest: string;
+  readonly filename: string;
+  readonly ref: string;
+  readonly size: number;
+  readonly #bytes: Buffer;
+  readonly #onClose: () => void;
+  #closePromise: Promise<void> | undefined;
 
+  constructor(options: {
+    readonly bytes: Buffer;
+    readonly digest: string;
+    readonly filename: string;
+    readonly onClose: () => void;
+    readonly ref: string;
+    readonly size: number;
+  }) {
+    this.digest = options.digest;
+    this.filename = options.filename;
+    this.#bytes = options.bytes;
+    this.#onClose = options.onClose;
+    this.ref = options.ref;
+    this.size = options.size;
+  }
+
+  read(start = 0, end = this.size - 1): Readable {
+    if (this.#closePromise !== undefined) throw new Error('Raw evidence reader is closed.');
+    if (this.size === 0 && start === 0 && end === -1) return Readable.from([]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= this.size) {
+      throw new RangeError('Raw evidence read range is not valid.');
+    }
+    return Readable.from([Buffer.from(this.#bytes.subarray(start, end + 1))]);
+  }
+
+  close(): Promise<void> {
+    if (this.#closePromise !== undefined) return this.#closePromise;
+    this.#closePromise = Promise.resolve().then(() => { this.#onClose(); });
+    return this.#closePromise;
+  }
+}
 
 /**
  * The one eval path the CLI, the programmatic API, and the workbench browser all
@@ -211,7 +438,7 @@ const classifyTerminalFailure = (active: ActiveEvalRun, error: unknown): void =>
  */
 export class EvalService {
   readonly #artifactReaders = new Set<OpenedEvalArtifact>();
-  readonly #backgroundFailures = new Set<unknown>();
+  readonly #backgroundFailures = new EvalServiceBackgroundFailureRetention();
   readonly #configPath: string | undefined;
   readonly #mode: string;
   readonly #logger: DevLogSink | undefined;
@@ -249,9 +476,7 @@ export class EvalService {
     const config = await this.#config();
     const ids = await listEvalRuns({ projectRoot: this.#projectRoot, runsDir: config.runsDir });
     const records: EvalRunRecord[] = [];
-    await mapConcurrent(ids.map((id, index) => ({ id, index })), 16, async ({ id, index }) => {
-      records[index] = await readEvalRun(this.#runDirectory(config, id));
-    });
+    for (const id of ids) records.push(await readEvalRun(this.#runDirectory(config, id)));
     return Object.freeze(records);
   }
 
@@ -360,7 +585,7 @@ export class EvalService {
         ...[...starts, ...results]
           .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
           .map((result) => result.reason),
-        ...this.#backgroundFailures,
+        ...this.#backgroundFailures.snapshot(),
       ];
       if (failures.length > 0) {
         throw new AggregateError([...new Set(failures)], 'Eval service could not close.');
@@ -383,11 +608,12 @@ export class EvalService {
 
   start(request: EvalRunRequest): Promise<EvalRunAdmission> {
     if (this.#closePromise !== undefined) throw new Error('Eval service is closing.');
-    const pending = Promise.withResolvers<void>();
-    this.#startingRuns.add(pending.promise);
+    let finishStart!: () => void;
+    const pending = new Promise<void>((resolvePromise) => { finishStart = resolvePromise; });
+    this.#startingRuns.add(pending);
     return this.#admit(request).finally(() => {
-      this.#startingRuns.delete(pending.promise);
-      pending.resolve();
+      this.#startingRuns.delete(pending);
+      finishStart();
     });
   }
 
@@ -441,7 +667,7 @@ export class EvalService {
     }
 
     const writer = await createEvalRun({
-      artifact: persistedArtifactBinding(this.#projectRoot, directory, artifact.binding),
+      artifact: storedArtifactBinding(this.#projectRoot, directory, artifact),
       projectRoot: this.#projectRoot,
       provenance: Object.freeze({
         agentBundleVersion: artifact.manifest.producer.version,
@@ -479,8 +705,12 @@ export class EvalService {
       uncertainty: undefined,
       writer,
     };
-    const result = Promise.withResolvers<EvalRunResult>();
-    active.result = result.promise;
+    let resolveResult!: (result: EvalRunResult) => void;
+    let rejectResult!: (reason: unknown) => void;
+    active.result = new Promise<EvalRunResult>((resolvePromise, rejectPromise) => {
+      resolveResult = resolvePromise;
+      rejectResult = rejectPromise;
+    });
     this.#activeRuns.set(runId, active);
     if (request.signal !== undefined) {
       active.requestAbort = () => { void this.#requestCancellation(active).catch(() => undefined); };
@@ -493,9 +723,9 @@ export class EvalService {
       directory,
       harness,
       planned,
-    }).then(result.resolve, (error: unknown) => {
-      if (this.#backgroundFailures.size < maximumRetainedBackgroundFailures) this.#backgroundFailures.add(error);
-      result.reject(error);
+    }).then(resolveResult, (error: unknown) => {
+      this.#backgroundFailures.retain(error);
+      rejectResult(error);
     });
     void active.result.catch(() => undefined);
     return Object.freeze({ run: writer.record });
@@ -608,7 +838,16 @@ export class EvalService {
     } catch (error) {
       executionFailure = error;
       executionFailed = true;
-      classifyTerminalFailure(active, error);
+      if (
+        error instanceof EvalRunEventDurabilityError
+        && (error.event.kind === 'run.cancelled' || error.event.kind === 'run.completed' || error.event.kind === 'run.failed')
+      ) {
+        active.terminal = 'written';
+      }
+      if (error instanceof EvalRunEventWriteUncertainError) {
+        active.terminal = 'uncertain';
+        active.uncertainty = error;
+      }
       if (active.terminal !== 'persisted' && active.terminal !== 'uncertain' && active.terminal !== 'written') {
         active.terminal = 'finishing';
         try {
@@ -618,7 +857,14 @@ export class EvalService {
           });
           active.terminal = 'persisted';
         } catch (terminalFailure) {
-          classifyTerminalFailure(active, terminalFailure);
+          if (terminalFailure instanceof EvalRunEventDurabilityError
+            && (terminalFailure.event.kind === 'run.cancelled' || terminalFailure.event.kind === 'run.failed')) {
+            active.terminal = 'written';
+          }
+          if (terminalFailure instanceof EvalRunEventWriteUncertainError) {
+            active.terminal = 'uncertain';
+            active.uncertainty = terminalFailure;
+          }
           executionFailure = new AggregateError([executionFailure, terminalFailure], 'Eval run execution and terminal persistence both failed.', { cause: executionFailure });
         }
       }
@@ -687,7 +933,7 @@ export class EvalService {
     if (subscriptions !== undefined) {
       for (const subscription of [...subscriptions]) {
         try { subscription.publish(persisted); }
-        catch { subscription.close(); } // A throwing subscriber cannot stall durable append.
+        catch { subscription.close(); }
       }
     }
     return persisted;
@@ -808,18 +1054,51 @@ export class EvalService {
     ref: string,
     segments: readonly string[],
   ): Promise<EvalArtifactReader> {
-    const reader = await openEvalArtifactSnapshot({
-      directory,
-      onClose: (closed) => this.#artifactReaders.delete(closed),
-      projectRoot: this.#projectRoot,
-      ref,
-      segments,
-    });
-    this.#artifactReaders.add(reader);
-    if (this.#closePromise !== undefined) {
-      await reader.close();
-      throw serviceError('EVAL_ARTIFACT_UNAVAILABLE', 'Recorded raw evidence is not available.');
+    const artifactRoot = join(directory, 'artifacts');
+    const target = join(directory, ...segments);
+    await assertNoSymlinkedArtifactPath(this.#projectRoot, target);
+    const before = await lstat(target);
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximumArtifactBytes) {
+      throw new Error('Raw evidence file metadata is not safe.');
     }
-    return reader;
+    const [physicalRoot, physicalTarget] = await Promise.all([realpath(artifactRoot), realpath(target)]);
+    if (!isInsideOrEqual(physicalRoot, physicalTarget)) throw new Error('Raw evidence file escaped its run artifacts directory.');
+    const file = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const [after, descriptor] = await Promise.all([lstat(target), file.stat()]);
+      if (
+        !after.isFile() || after.isSymbolicLink() || after.nlink !== 1 || after.size > maximumArtifactBytes ||
+        !descriptor.isFile() || descriptor.nlink !== 1 || descriptor.size > maximumArtifactBytes ||
+        !sameFile(before, descriptor) || !sameFile(after, descriptor)
+      ) {
+        throw new Error('Raw evidence file changed while opening.');
+      }
+      const bytes = Buffer.alloc(Math.min(descriptor.size, maximumArtifactBytes) + 1);
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+      const final = await file.stat();
+      if (!sameFile(descriptor, final) || final.size !== descriptor.size || bytesRead !== descriptor.size || bytesRead > maximumArtifactBytes) {
+        throw new Error('Raw evidence file changed while hashing.');
+      }
+      const snapshot = Buffer.from(bytes.subarray(0, bytesRead));
+      const digest = createHash('sha256').update(snapshot).digest('hex');
+      await file.close();
+      const reader = new OpenedEvalArtifact({
+        bytes: snapshot,
+        digest,
+        filename: basename(ref),
+        onClose: () => this.#artifactReaders.delete(reader),
+        ref,
+        size: descriptor.size,
+      });
+      this.#artifactReaders.add(reader);
+      if (this.#closePromise !== undefined) {
+        await reader.close();
+        throw serviceError('EVAL_ARTIFACT_UNAVAILABLE', 'Recorded raw evidence is not available.');
+      }
+      return reader;
+    } catch (error) {
+      await file.close().catch(() => undefined);
+      throw error;
+    }
   }
 }

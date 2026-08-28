@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -28,6 +28,30 @@ it('requires a host-specific opt-in and keeps the canonical Claude model pinned'
       { enabled: true, host: 'codex' },
     ],
   });
+});
+
+it('runs npm and the installed CLI through Node entrypoints on Windows', async () => {
+  const harness = await loadPackedNativeSmoke() as undefined | {
+    readonly packedNativeNodeCommand?: (
+      entrypoint: string,
+      args: readonly string[],
+      nodeExecutable?: string,
+    ) => Readonly<{ readonly args: readonly string[]; readonly executable: string }>;
+  };
+  expect(harness?.packedNativeNodeCommand).toBeDefined();
+
+  const node = 'C:\\Program Files\\nodejs\\node.exe';
+  const npm = 'C:\\Users\\runner\\npm\\node_modules\\npm\\bin\\npm-cli.js';
+  const cli = 'C:\\work\\consumer\\node_modules\\agent-bundle\\dist\\cli.js';
+  expect(harness!.packedNativeNodeCommand!(npm, ['pack', '--json'], node)).toEqual({
+    args: [npm, 'pack', '--json'],
+    executable: node,
+  });
+  expect(harness!.packedNativeNodeCommand!(cli, ['eval', '--json'], node)).toEqual({
+    args: [cli, 'eval', '--json'],
+    executable: node,
+  });
+  expect(JSON.stringify(harness!.packedNativeNodeCommand!(cli, [], node))).not.toContain('.cmd');
 });
 
 it('removes workspace module resolution and credential-shaped environment values', async () => {
@@ -74,6 +98,15 @@ it('detects normal Claude config, settings, or plugin changes without retaining 
     await expect(harness!.normalClaudeHomeUnchanged!(environment, async () => undefined)).resolves.toBe(true);
     await expect(harness!.normalClaudeHomeUnchanged!(environment, async () => {
       await writeFile(join(root, 'plugins', 'installed.json'), '{"plugins":["changed"]}\n');
+    })).resolves.toBe(false);
+
+    const pluginPath = join(root, 'plugins', 'installed.json');
+    await writeFile(pluginPath, '{"marker":"normal-plugin-marker"}\n');
+    const fixedTime = new Date('2026-08-14T12:00:00.000Z');
+    await utimes(pluginPath, fixedTime, fixedTime);
+    await expect(harness!.normalClaudeHomeUnchanged!(environment, async () => {
+      await writeFile(pluginPath, '{"marker":"normal-plugin-change"}\n');
+      await utimes(pluginPath, fixedTime, fixedTime);
     })).resolves.toBe(false);
   } finally {
     await rm(root, { force: true, recursive: true });

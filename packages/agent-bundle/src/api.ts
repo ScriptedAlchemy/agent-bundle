@@ -142,6 +142,14 @@ export type {
 } from './services/mcp-service.ts';
 export { startDevServer } from './dev/workbench-server.ts';
 export type { DevServerSession, StartDevServerOptions } from './dev/workbench-server.ts';
+export type {
+  AgentBundleDevConfig,
+  AgentBundleDevRuntimeConfig,
+} from './core/types.ts';
+export type {
+  CreateDevRuntimeProvider,
+  DevRuntimeProvider,
+} from './dev/runtime-provider.ts';
 
 export interface StructuredLogger {
   log?(event: string, details: Readonly<Record<string, unknown>>): void;
@@ -356,9 +364,9 @@ const skippedComponentsFor = (
     id: component.id,
     kind: component.kind,
     name: component.name,
-    reason: (component.capability !== undefined && capabilities[component.capability] !== true
-      ? 'unsupported-capability'
-      : 'excluded-by-targets') satisfies InspectionSkipReason,
+    reason: (!component.targets.includes(target)
+      ? 'excluded-by-targets'
+      : 'unsupported-capability') satisfies InspectionSkipReason,
   })));
 
 export const inspect = async (options: InspectOptions): Promise<InspectResult> => {
@@ -449,10 +457,6 @@ const evalDiagnostics: Readonly<Record<EvalServiceErrorCode, Readonly<{
   EVAL_ARTIFACT_NOT_FOUND: Object.freeze({
     code: 'AB9009',
     recovery: 'Select raw evidence that the recorded eval trial persisted.',
-  }),
-  EVAL_ARTIFACT_OUTSIDE_PROJECT: Object.freeze({
-    code: 'AB9006',
-    recovery: 'Evaluate an artifact inside the project so its run record records no absolute path.',
   }),
   EVAL_ARTIFACT_UNAVAILABLE: Object.freeze({
     code: 'AB9010',

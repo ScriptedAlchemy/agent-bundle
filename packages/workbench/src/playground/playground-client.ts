@@ -2,55 +2,140 @@ import { z } from 'zod';
 
 import type {
   DraftEvalCase,
-  NativePlaygroundCatalog,
   PlaygroundExport,
-  PlaygroundOperationRequest,
   PlaygroundReplay,
-  PlaygroundRun,
   PlaygroundSession,
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/contracts/playground.ts';
-import { isAbortError as isAbort, CodedClientError, exactKeys, isRecord, nonemptyString, parseStrictResponseJson } from '../client-helpers.ts';
-import { ForegroundTransport, type WorkbenchClientOptions } from '../foreground-session.ts';
-import { abortableNdjsonStream, readNdjsonResponseFrames, type NdjsonStream } from '../ndjson.ts';
-import { snapshotStrictJsonValue } from '../strict-json.ts';
+import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
+import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/contracts/playground.ts';
+import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/contracts/playground.ts';
+
+export interface PlaygroundClientOptions {
+  readonly foreground: ForegroundRequestAuthority;
+}
 
 export interface PlaygroundStreamOptions {
   readonly afterSequence?: number;
   readonly onEvent: (event: PlaygroundTraceEvent) => void;
 }
 
-/** Settles when the ndjson body ends, the stream is closed, or the transport fails. */
-export type PlaygroundStream = NdjsonStream;
+export interface PlaygroundStream {
+  close(): void;
+  /** Settles when the ndjson body ends, the stream is closed, or the transport fails. */
+  readonly done: Promise<void>;
+}
 
-export class PlaygroundClientError extends CodedClientError {
+export class PlaygroundClientError extends Error {
+  readonly code: string;
+
   constructor(code: string, message: string) {
-    super('PlaygroundClientError', code, message);
+    super(message);
+    this.name = 'PlaygroundClientError';
+    this.code = code;
   }
 }
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): PlaygroundClientError =>
   new PlaygroundClientError('AB8043', 'Playground route returned an invalid response.');
 
-// Matches the foreground playground route's per-subscriber stream byte budget.
-const maximumTraceFrameBytes = 1024 * 1024;
-
 const invalidJson = Symbol('invalid playground JSON');
 
+interface DetachedJsonLimits {
+  readonly maxArrayLength: number;
+  readonly maxDepth: number;
+  readonly maxObjectKeys: number;
+  readonly maxStringLength: number;
+  readonly maxValues: number;
+}
+
+interface DetachedJsonState {
+  remaining: number;
+}
+
 /** Decodes only own data properties, so boundary values cannot retain getters, prototypes, or mutable references. */
-const detachedJson = (value: unknown): unknown | typeof invalidJson => {
+const detachedJson = (
+  value: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+  limits?: DetachedJsonLimits,
+  state: DetachedJsonState = { remaining: limits?.maxValues ?? Number.POSITIVE_INFINITY },
+): unknown | typeof invalidJson => {
+  if (state.remaining <= 0 || (limits !== undefined && depth > limits.maxDepth)) return invalidJson;
+  state.remaining -= 1;
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'string') return limits === undefined || value.length <= limits.maxStringLength ? value : invalidJson;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : invalidJson;
+  if (typeof value !== 'object') return invalidJson;
   try {
-    return snapshotStrictJsonValue(value, { nullPrototype: true });
+    if (seen.has(value)) return invalidJson;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) return invalidJson;
+      const keys = Reflect.ownKeys(value);
+      const length = Object.getOwnPropertyDescriptor(value, 'length');
+      if (length === undefined || !('value' in length) || !Number.isSafeInteger(length.value) || length.value < 0 ||
+        (limits !== undefined && length.value > limits.maxArrayLength) ||
+        keys.length !== length.value + 1 ||
+        keys.some((key) => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/u.test(key)))) return invalidJson;
+      const detached: unknown[] = [];
+      for (let index = 0; index < length.value; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return invalidJson;
+        const entry = detachedJson(descriptor.value, seen, depth + 1, limits, state);
+        if (entry === invalidJson) return invalidJson;
+        detached.push(entry);
+      }
+      return Object.freeze(detached);
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return invalidJson;
+    const detached = Object.create(null) as Record<string, unknown>;
+    const keys = Reflect.ownKeys(value);
+    if (limits !== undefined && keys.length > limits.maxObjectKeys) return invalidJson;
+    for (const key of keys) {
+      if (typeof key !== 'string') return invalidJson;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return invalidJson;
+      const entry = detachedJson(descriptor.value, seen, depth + 1, limits, state);
+      if (entry === invalidJson) return invalidJson;
+      Object.defineProperty(detached, key, { configurable: false, enumerable: true, value: entry, writable: false });
+    }
+    return Object.freeze(detached);
   } catch {
     return invalidJson;
   }
+};
+
+const exactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 };
 
 const optionalKeys = (value: Readonly<Record<string, unknown>>, required: readonly string[], optional: readonly string[]): boolean =>
   optional.some((key) => exactKeys(value, [...required, key])) || exactKeys(value, required) ||
   (optional.length === 2 && exactKeys(value, [...required, ...optional]));
 
-const textSchema = z.string().min(1);
+const nonemptyString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+const jsonObject = (value: unknown): value is Readonly<Record<string, unknown>> => isRecord(value);
+
+const maximumNativeCatalogEntries = 256;
+const maximumNativeCatalogResponseBytes = 8 * 1024 * 1024;
+const maximumNativeCatalogStringLength = 16_384;
+const maximumPlaygroundStreamFrameBytes = 1024 * 1024;
+const nativeCatalogJsonLimits: DetachedJsonLimits = Object.freeze({
+  maxArrayLength: maximumNativeCatalogEntries,
+  maxDepth: 5,
+  maxObjectKeys: 5,
+  maxStringLength: maximumNativeCatalogStringLength,
+  maxValues: 4_096,
+});
+const textSchema = z.string().min(1).max(maximumNativeCatalogStringLength);
 const nativeHostSchema = z.enum(['claude', 'codex']);
 const nativeCatalogItemSchema = z.strictObject({ id: textSchema, label: textSchema });
 const nativeModelPinSchema = nativeCatalogItemSchema.extend({ host: nativeHostSchema });
@@ -61,18 +146,12 @@ const nativeCatalogSelectionSchema = z.strictObject({
   modelPinId: textSchema,
 });
 const nativeCatalogSchema = z.strictObject({
-  cases: z.array(nativeCatalogItemSchema),
+  cases: z.array(nativeCatalogItemSchema).max(maximumNativeCatalogEntries),
   epochId: textSchema,
-  fixtures: z.array(nativeCatalogItemSchema),
-  modelPins: z.array(nativeModelPinSchema),
-  selections: z.array(nativeCatalogSelectionSchema),
+  fixtures: z.array(nativeCatalogItemSchema).max(maximumNativeCatalogEntries),
+  modelPins: z.array(nativeModelPinSchema).max(maximumNativeCatalogEntries),
+  selections: z.array(nativeCatalogSelectionSchema).max(maximumNativeCatalogEntries),
 });
-
-/** Zod receives only inert plain JSON after the hostile boundary value has been detached. */
-const zodJsonSnapshot = (value: unknown): unknown | typeof invalidJson => {
-  try { return JSON.parse(JSON.stringify(value)); }
-  catch { return invalidJson; }
-};
 
 const nativeCatalogCoherent = (catalog: NativePlaygroundCatalog): boolean => {
   const uniqueIds = (entries: readonly { readonly id: string }[]): Set<string> | undefined => {
@@ -101,12 +180,36 @@ const nativeCatalogCoherent = (catalog: NativePlaygroundCatalog): boolean => {
   return true;
 };
 
+const boundedJsonResponse = async (response: Response, maximumBytes: number): Promise<unknown> => {
+  const body = response.body;
+  if (body === null) throw invalidResponse();
+  const reader = body.getReader();
+  const bytes = new Uint8Array(maximumBytes);
+  let total = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (total + chunk.value.byteLength > maximumBytes) throw invalidResponse();
+      bytes.set(chunk.value, total);
+      total += chunk.value.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  try {
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, total)));
+  } catch {
+    throw invalidResponse();
+  }
+};
+
 const isIdentity = (value: unknown): boolean => {
   if (!isRecord(value) || !exactKeys(value, ['epoch', 'fixture', 'invocation', 'target', 'task'])) return false;
   const { epoch, fixture, invocation, target, task } = value;
   return isRecord(epoch) && exactKeys(epoch, ['digest', 'id']) && nonemptyString(epoch.digest) && nonemptyString(epoch.id) &&
     isRecord(fixture) && exactKeys(fixture, ['digest', 'id']) && nonemptyString(fixture.digest) && nonemptyString(fixture.id) &&
-    isRecord(invocation) && exactKeys(invocation, ['intent', 'kind']) && isRecord(invocation.intent) && nonemptyString(invocation.kind) &&
+    isRecord(invocation) && exactKeys(invocation, ['intent', 'kind']) && jsonObject(invocation.intent) && nonemptyString(invocation.kind) &&
     isRecord(target) && optionalKeys(target, ['name'], ['digest']) && nonemptyString(target.name) &&
       (target.digest === undefined || nonemptyString(target.digest)) &&
     isRecord(task) && exactKeys(task, ['id', 'text']) && nonemptyString(task.id) && nonemptyString(task.text);
@@ -114,7 +217,7 @@ const isIdentity = (value: unknown): boolean => {
 
 const isOutcome = (value: unknown): boolean => {
   if (!isRecord(value) || !optionalKeys(value, ['status'], ['response', 'workspace']) || !nonemptyString(value.status)) return false;
-  return (value.response === undefined || nonemptyString(value.response)) && (value.workspace === undefined || isRecord(value.workspace));
+  return (value.response === undefined || nonemptyString(value.response)) && (value.workspace === undefined || jsonObject(value.workspace));
 };
 
 const traceSources = new Set([
@@ -133,6 +236,14 @@ const isCleanupFailure = (value: unknown): boolean =>
   isRecord(value) && exactKeys(value, ['message', 'operation']) && nonemptyString(value.message) &&
   (value.operation === 'admission' || value.operation === 'subscriber');
 
+const diagnosticError = (value: unknown, status: number): PlaygroundClientError => {
+  if (isRecord(value) && isRecord(value.diagnostic) &&
+    typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
+    return new PlaygroundClientError(value.diagnostic.code, value.diagnostic.message);
+  }
+  return new PlaygroundClientError('AB8043', `Playground request failed with HTTP ${status}.`);
+};
+
 const isSession = (value: unknown): boolean =>
   isRecord(value) && optionalKeys(value, ['cleanupFailures', 'createdAt', 'id', 'identity', 'state'], ['outcome']) &&
   nonemptyString(value.id) && nonemptyString(value.createdAt) && isIdentity(value.identity) &&
@@ -143,8 +254,8 @@ const isSession = (value: unknown): boolean =>
 const isRun = (value: unknown): boolean =>
   isRecord(value) && exactKeys(value, ['id', 'session']) && nonemptyString(value.id) && isSession(value.session);
 
-const detachedRecord = (value: unknown): Readonly<Record<string, unknown>> => {
-  const detached = detachedJson(value);
+const detachedRecord = (value: unknown, limits?: DetachedJsonLimits): Readonly<Record<string, unknown>> => {
+  const detached = detachedJson(value, new WeakSet<object>(), 0, limits);
   if (detached === invalidJson || !isRecord(detached)) throw invalidResponse();
   return detached;
 };
@@ -166,10 +277,9 @@ const runBody = (value: unknown): PlaygroundRun => {
 };
 
 const catalogBody = (value: unknown, requestedEpochId: string | undefined): NativePlaygroundCatalog => {
-  const envelope = detachedRecord(value);
+  const envelope = detachedRecord(value, nativeCatalogJsonLimits);
   const catalog = envelope.catalog;
-  const zodCatalog = zodJsonSnapshot(catalog);
-  if (!exactKeys(envelope, ['catalog']) || zodCatalog === invalidJson || !nativeCatalogSchema.safeParse(zodCatalog).success) throw invalidResponse();
+  if (!exactKeys(envelope, ['catalog']) || !nativeCatalogSchema.safeParse(catalog).success) throw invalidResponse();
   const decoded = catalog as NativePlaygroundCatalog;
   if ((requestedEpochId !== undefined && decoded.epochId !== requestedEpochId) || !nativeCatalogCoherent(decoded)) throw invalidResponse();
   return decoded;
@@ -226,7 +336,7 @@ const draftEvalBody = (value: unknown): DraftEvalCase => {
     !Array.isArray(body.assertions) || !isRecord(body.epoch) || !exactKeys(body.epoch, ['digest', 'id']) ||
     !nonemptyString(body.epoch.digest) || !nonemptyString(body.epoch.id) || !isRecord(body.fixture) || !exactKeys(body.fixture, ['digest', 'id']) ||
     !nonemptyString(body.fixture.digest) || !nonemptyString(body.fixture.id) || !isRecord(body.invocation) ||
-    !exactKeys(body.invocation, ['intent', 'kind']) || !isRecord(body.invocation.intent) || !nonemptyString(body.invocation.kind) ||
+    !exactKeys(body.invocation, ['intent', 'kind']) || !jsonObject(body.invocation.intent) || !nonemptyString(body.invocation.kind) ||
     !isRecord(body.target) || !optionalKeys(body.target, ['name'], ['digest']) || !nonemptyString(body.target.name) ||
     (body.target.digest !== undefined && !nonemptyString(body.target.digest)) || !isRecord(body.task) ||
     !exactKeys(body.task, ['id', 'text']) || !nonemptyString(body.task.id) || !nonemptyString(body.task.text) || !isOutcome(body.outcome) ||
@@ -237,24 +347,26 @@ const draftEvalBody = (value: unknown): DraftEvalCase => {
   return body as unknown as DraftEvalCase;
 };
 
-const traceEventFrame = (bytes: Uint8Array): PlaygroundTraceEvent => {
-  const event = parseStrictResponseJson(bytes, invalidResponse);
-  if (!isTraceEvent(event)) throw invalidResponse();
-  return event;
+const traceEventLine = (line: string): PlaygroundTraceEvent => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    throw invalidResponse();
+  }
+  const detached = detachedJson(parsed);
+  if (detached === invalidJson || !isTraceEvent(detached)) throw invalidResponse();
+  return detached;
 };
+
+const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
 
 /** A typed, credential-memory-only browser client for the durable playground trace routes. */
 export class PlaygroundClient {
-  readonly #transport: ForegroundTransport;
+  readonly #foreground: ForegroundRequestAuthority;
 
-  constructor(options: WorkbenchClientOptions = {}) {
-    this.#transport = new ForegroundTransport({
-      errorFor: (code, message) => new PlaygroundClientError(code, message),
-      fallbackCode: 'AB8043',
-      ...(options.authority === undefined ? {} : { authority: options.authority }),
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      label: 'Playground',
-    });
+  constructor(options: PlaygroundClientOptions) {
+    this.#foreground = options.foreground;
   }
 
   /** Starts a server-owned operation and receives its live run and session identity promptly. */
@@ -262,7 +374,7 @@ export class PlaygroundClient {
     const body = input.operation === 'native.prompt'
       ? this.#nativePromptBody(input)
       : input;
-    return runBody(await this.#transport.json('/api/playground/runs', {
+    return runBody(await this.#json('/api/playground/runs', {
       body: JSON.stringify(body),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -273,12 +385,15 @@ export class PlaygroundClient {
   /** Reads the immutable server-owned native choices for exactly one active or retained epoch. */
   async catalog(epochId?: string, signal?: AbortSignal): Promise<NativePlaygroundCatalog> {
     const query = epochId === undefined ? '' : `?epochId=${encodeURIComponent(epochId)}`;
-    return catalogBody(await this.#transport.json(`/api/playground/catalog${query}`, { signal }), epochId);
+    const response = await this.#foreground.protectedRequest(`/api/playground/catalog${query}`, { signal });
+    const body = await boundedJsonResponse(response, maximumNativeCatalogResponseBytes);
+    if (!response.ok) throw diagnosticError(body, response.status);
+    return catalogBody(body, epochId);
   }
 
   /** Cancellation is an operation-level action; callers refresh the durable session afterwards. */
   async cancel(runId: string, signal?: AbortSignal): Promise<boolean> {
-    return cancelledBody(await this.#transport.json(`${this.#runPath(runId)}/cancel`, {
+    return cancelledBody(await this.#json(`${this.#runPath(runId)}/cancel`, {
       body: '{}',
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -287,17 +402,17 @@ export class PlaygroundClient {
   }
 
   async session(sessionId: string, signal?: AbortSignal): Promise<PlaygroundSession> {
-    return sessionBody(await this.#transport.json(this.#path(sessionId), { signal }));
+    return sessionBody(await this.#json(this.#path(sessionId), { signal }));
   }
 
   /** The cursor stays exactly where the caller left it, so replayed order and epoch binding survive. */
   async replay(sessionId: string, afterSequence?: number, signal?: AbortSignal): Promise<PlaygroundReplay> {
     const query = afterSequence === undefined ? '' : `?after=${String(afterSequence)}`;
-    return replayBody(await this.#transport.json(`${this.#path(sessionId)}/replay${query}`, { signal }));
+    return replayBody(await this.#json(`${this.#path(sessionId)}/replay${query}`, { signal }));
   }
 
   async export(sessionId: string, signal?: AbortSignal): Promise<PlaygroundExport> {
-    return exportBody(await this.#transport.json(`${this.#path(sessionId)}/export`, { signal }));
+    return exportBody(await this.#json(`${this.#path(sessionId)}/export`, { signal }));
   }
 
   async promoteToDraftEval(
@@ -305,7 +420,7 @@ export class PlaygroundClient {
     rawEventRefs: readonly string[],
     signal?: AbortSignal,
   ): Promise<DraftEvalCase> {
-    return draftEvalBody(await this.#transport.json(`${this.#path(sessionId)}/draft-eval`, {
+    return draftEvalBody(await this.#json(`${this.#path(sessionId)}/draft-eval`, {
       body: JSON.stringify({ rawEventRefs }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -315,7 +430,9 @@ export class PlaygroundClient {
 
   /** Reads the ndjson trace stream frame by frame; closing aborts the request itself. */
   stream(sessionId: string, options: PlaygroundStreamOptions): PlaygroundStream {
-    return abortableNdjsonStream(undefined, (signal) => this.#stream(sessionId, options, signal));
+    const controller = new AbortController();
+    const done = this.#stream(sessionId, options, controller.signal);
+    return Object.freeze({ close: () => controller.abort(), done });
   }
 
   #path(sessionId: string): string {
@@ -348,26 +465,58 @@ export class PlaygroundClient {
     const after = options.afterSequence ?? 0;
     let response: Response;
     try {
-      response = await this.#transport.request(`${this.#path(sessionId)}/stream?after=${String(after)}`, { signal });
+      response = await this.#foreground.protectedRequest(`${this.#path(sessionId)}/stream?after=${String(after)}`, { signal });
     } catch (error) {
       if (isAbort(error) || signal.aborted) return;
       throw error;
     }
     if (!response.ok) {
-      throw this.#transport.diagnosticError(await response.json().catch(() => undefined), response.status);
+      throw diagnosticError(await response.json().catch(() => undefined), response.status);
     }
-    const emitLine = (bytes: Uint8Array): void => {
-      if (bytes.byteLength > 0) options.onEvent(traceEventFrame(bytes));
+    const body = response.body;
+    if (body === null) throw invalidResponse();
+    const reader = body.getReader();
+    const frameBuffer = new Uint8Array(maximumPlaygroundStreamFrameBytes);
+    let frameBytes = 0;
+    const appendFrameBytes = (chunk: Uint8Array): void => {
+      if (frameBytes + chunk.byteLength > maximumPlaygroundStreamFrameBytes) throw invalidResponse();
+      frameBuffer.set(chunk, frameBytes);
+      frameBytes += chunk.byteLength;
+    };
+    const emitFrame = (): void => {
+      const bytes = frameBuffer.subarray(0, frameBytes);
+      frameBytes = 0;
+      if (signal.aborted) return;
+      let line: string;
+      try { line = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim(); }
+      catch { throw invalidResponse(); }
+      if (line.length > 0 && !signal.aborted) options.onEvent(traceEventLine(line));
     };
     try {
-      await readNdjsonResponseFrames(response, emitLine, {
-        invalidFrameError: invalidResponse,
-        maxFrameBytes: maximumTraceFrameBytes,
-        signal,
-      });
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        let start = 0;
+        for (let index = 0; index < chunk.value.byteLength; index += 1) {
+          if (chunk.value[index] !== 0x0a) continue;
+          appendFrameBytes(chunk.value.subarray(start, index));
+          emitFrame();
+          start = index + 1;
+        }
+        appendFrameBytes(chunk.value.subarray(start));
+      }
+      if (frameBytes > 0) emitFrame();
     } catch (error) {
       if (!isAbort(error) && !signal.aborted) throw error;
+    } finally {
+      await reader.cancel().catch(() => undefined);
     }
   }
 
+  async #json(path: string, init: RequestInit = {}): Promise<unknown> {
+    const response = await this.#foreground.protectedRequest(path, init);
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw diagnosticError(body, response.status);
+    return body;
+  }
 }

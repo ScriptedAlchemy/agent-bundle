@@ -6,17 +6,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import {
-  ScriptPlaygroundService,
-  type ResolvedPlaygroundScript,
-} from '../src/dev/playground/script-playground-service.ts';
-import { deferred, eventuallyPasses } from './support/eventually.ts';
-
-const script: ResolvedPlaygroundScript = Object.freeze({
-  interpreter: Object.freeze({ args: Object.freeze([]), command: process.execPath }),
-  name: 'review.mjs',
-  path: '/validated/epoch/codex/scripts/review.mjs',
-});
+import { ScriptPlaygroundService } from '../src/dev/playground/script-playground-service.ts';
 
 const temporaryScript = async (source: string): Promise<Readonly<{ readonly close: () => Promise<void>; readonly path: string }>> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-playground-test-'));
@@ -25,8 +15,25 @@ const temporaryScript = async (source: string): Promise<Readonly<{ readonly clos
   return Object.freeze({ close: () => rm(root, { force: true, recursive: true }), path });
 };
 
-const eventually = (assertion: () => Promise<void> | void): Promise<void> =>
-  eventuallyPasses(assertion, { attempts: 50, delayMs: 10 });
+const eventually = async (assertion: () => Promise<void> | void): Promise<void> => {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      await assertion();
+      return;
+    } catch (error) {
+      failure = error;
+      await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 10); });
+    }
+  }
+  throw failure;
+};
+
+const deferred = <Value,>() => {
+  let resolvePromise!: (value: Value) => void;
+  const promise = new Promise<Value>((resolve) => { resolvePromise = resolve; });
+  return Object.freeze({ promise, resolve: resolvePromise });
+};
 
 it('runs a server-resolved emitted script with stdout, stderr, and a nonzero exit', async () => {
   const emitted = await temporaryScript([
@@ -367,7 +374,7 @@ it('reports a stable interpreter-unavailable failure without exposing a command 
     resolveScript: async () => Object.freeze({
       interpreter: Object.freeze({ args: Object.freeze([]), command: join(tmpdir(), 'agent-bundle-missing-script-interpreter') }),
       name: 'review',
-      path: script.path,
+      path: join(tmpdir(), 'agent-bundle-unreached-script.mjs'),
     }),
   });
 

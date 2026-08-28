@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/cursor/2026-08-28/plugin.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "author": {
+      "additionalProperties": false,
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "description": {
+      "type": "string"
+    },
+    "displayName": {
+      "type": "string"
+    },
+    "hooks": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "homepage": {
+      "type": "string"
+    },
+    "keywords": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "license": {
+      "type": "string"
+    },
+    "mcpServers": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$",
+      "type": "string"
+    },
+    "repository": {
+      "type": "string"
+    },
+    "skills": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "version": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}

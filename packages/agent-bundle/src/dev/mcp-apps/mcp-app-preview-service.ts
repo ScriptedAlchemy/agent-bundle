@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 
-import { serialQueue, type SerialQueue } from '../../core/async.ts';
 import {
   selectMcpAppResourceUri,
   type McpAppBinding,
@@ -27,8 +26,13 @@ import {
   type McpAppHostProfileResolution,
 } from './mcp-app-host-profiles.ts';
 import {
+  createMcpAppConsentAuthority,
+  createMcpAppConsentActionDigest,
+  createMcpAppDocumentPolicySnapshot,
   createMcpAppSandboxFrame,
-  type McpAppSandboxConsent,
+  type McpAppConsentAuthority,
+  type McpAppConsentChallenge,
+  type McpAppDocumentPolicySnapshot,
   type McpAppSandboxEndpoint,
   type McpAppSandboxFrame,
   type McpAppSandboxPermissions,
@@ -52,7 +56,6 @@ export interface McpAppPreviewToolAuthority {
 export type McpAppPreviewHostContext = Omit<McpAppHostContextInput, 'toolInfo'>;
 
 export interface CreateMcpAppPreviewOptions {
-  readonly consent?: McpAppSandboxConsent;
   readonly host: McpAppPreviewHostContext;
   readonly input: McpAppJsonValue;
   readonly previewProfile: McpAppPreviewProfile;
@@ -89,9 +92,14 @@ export interface McpAppPreviewServiceOptions {
 interface PreviewEntry {
   readonly binding: McpAppBinding;
   readonly bridge: McpAppBridge;
+  readonly consent: McpAppConsentAuthority;
+  readonly host: McpAppHostContextInput;
+  readonly previewProfile: McpAppPreviewProfile;
+  documentPolicy?: McpAppDocumentPolicySnapshot;
+  documentPolicyRevision: number;
+  resource?: McpAppBridgeResourceResolution;
   preview?: McpAppPreview;
   readonly outbound: McpAppBridgeMessage[];
-  readonly queue: SerialQueue;
   pendingTeardown?: McpAppBridgeMessage;
   teardownAckAccepted: boolean;
   actionCount: number;
@@ -100,6 +108,7 @@ interface PreviewEntry {
   closing: boolean;
   closed: boolean;
   outboundBytes: number;
+  tail: Promise<void>;
 }
 
 interface CreateControl {
@@ -214,6 +223,25 @@ export class McpAppPreviewService {
     return this.#entries.get(bindingId)?.preview;
   }
 
+  consentChallenges(bindingId: string): readonly McpAppConsentChallenge[] | undefined {
+    const entry = this.#entries.get(bindingId);
+    return entry === undefined || entry.closed ? undefined : entry.consent.pending();
+  }
+
+  async decideConsent(bindingId: string, challengeId: string, approved: boolean): Promise<boolean> {
+    const entry = this.#entries.get(bindingId);
+    if (entry === undefined || entry.closed) return false;
+    return this.#serialize(entry, async () => {
+      const challenge = entry.consent.inspect(challengeId);
+      if (challenge === undefined) return false;
+      if (challenge.request.scope === 'action') return entry.bridge.decideConsent(challengeId, approved);
+      const grant = entry.consent.grant(challengeId, approved);
+      if (grant === undefined || grant.scope !== 'document' || entry.resource?.kind !== 'resource') return false;
+      this.#refreshDocumentPreview(entry);
+      return true;
+    });
+  }
+
   async create(options: CreateMcpAppPreviewOptions): Promise<McpAppPreview> {
     if (this.#closing) throw new Error('MCP App preview service is closed.');
     const control = createControl();
@@ -237,6 +265,7 @@ export class McpAppPreviewService {
       this.#assertCanonicalBinding(binding, options);
       this.#assertCreateAvailable(control);
       const toolDefinition = canonicalTool(binding.toolDefinition);
+      const consentAuthority = createMcpAppConsentAuthority();
       const host: McpAppHostContextInput = {
         ...options.host,
         toolInfo: { tool: toolDefinition },
@@ -245,12 +274,14 @@ export class McpAppPreviewService {
       const entryRef: { current?: PreviewEntry } = {};
       const bridge = createMcpAppBridge({
         binding,
+        consentAuthority,
         host: {
           ...this.#host,
           context: hostContextRecord(options.host, toolDefinition),
           info: this.#hostInfo,
         },
         operations: this.#bindingAuthority,
+        profile: options.previewProfile,
         send: (message) => {
           const entry = entryRef.current;
           const bytes = messageByteLength(message);
@@ -273,11 +304,15 @@ export class McpAppPreviewService {
         actionCount: 0,
         binding,
         bridge,
+        consent: consentAuthority,
+        host,
+        previewProfile: options.previewProfile,
+        documentPolicyRevision: 0,
         closing: false,
         closed: false,
         outbound,
         outboundBytes: 0,
-        queue: serialQueue(),
+        tail: Promise.resolve(),
         teardownAckAccepted: false,
       };
       entryRef.current = entry;
@@ -287,21 +322,39 @@ export class McpAppPreviewService {
       const resource = await bridge.loadResource();
       this.#assertCreateAvailable(control);
       const profile = resolveMcpAppHostProfile({
-        consentedCapabilities: capabilitiesOf(options.consent?.permissions),
+        consentedCapabilities: [],
         declaredCapabilities: capabilitiesOf(resource.kind === 'resource' ? resource.permissions : undefined),
         host,
         profile: options.previewProfile,
         resource: resourceForProfile(binding, resource),
       });
+      const documentPolicy = resource.kind === 'resource'
+        ? createMcpAppDocumentPolicySnapshot(1, { csp: resource.csp, permissions: resource.permissions }, [])
+        : undefined;
       const frame = resource.kind === 'resource' && profile.kind === 'apps'
         ? createMcpAppSandboxFrame({
-          consent: options.consent,
+          consent: Object.freeze({}),
           declaration: { csp: resource.csp, permissions: resource.permissions },
+          ...(documentPolicy === undefined ? {} : { documentPolicy }),
           hostOrigin: this.#hostOrigin,
           proxy: this.#sandboxProxy,
         })
         : undefined;
       const preview = Object.freeze({ binding, bridge, ...(frame === undefined ? {} : { frame }), profile, resource });
+      entry.resource = resource;
+      entry.documentPolicy = documentPolicy;
+      entry.documentPolicyRevision = documentPolicy?.revision ?? 0;
+      if (resource.kind === 'resource') {
+        for (const [capability, permission] of [
+          ['camera', resource.permissions?.camera], ['clipboard-write', resource.permissions?.clipboardWrite],
+          ['geolocation', resource.permissions?.geolocation], ['microphone', resource.permissions?.microphone],
+        ] as const) {
+          if (permission !== undefined) consentAuthority.challenge({
+            actionDigest: createMcpAppConsentActionDigest(capability, {}), bindingId: binding.id,
+            capability, details: {}, profile: options.previewProfile,
+          });
+        }
+      }
       this.#assertCreateAvailable(control);
       entry.preview = preview;
       return preview;
@@ -325,7 +378,7 @@ export class McpAppPreviewService {
       return false;
     }
     entry.actionCount += 1;
-    return entry.queue.run(async () => {
+    return this.#serialize(entry, async () => {
       if (entry.closed || this.#entries.get(bindingId) !== entry || entry.teardownAckAccepted) return false;
       const accepted = await entry.bridge.receive(action);
       const acknowledged = accepted && entry.closing;
@@ -341,7 +394,7 @@ export class McpAppPreviewService {
   async takeOutbound(bindingId: string): Promise<readonly McpAppBridgeMessage[]> {
     const entry = this.#entries.get(bindingId);
     if (entry === undefined || entry.closed) return Object.freeze([]);
-    return entry.queue.run(async () => {
+    return this.#serialize(entry, () => {
       const outbound = Object.freeze(entry.outbound.splice(0));
       entry.outboundBytes = 0;
       entry.bridge.flushHostTraffic();
@@ -390,6 +443,42 @@ export class McpAppPreviewService {
     if (resourceUri === undefined || resourceUri !== binding.resourceUri) {
       throw new Error('MCP App preview binding must retain one canonical standard _meta.ui.resourceUri.');
     }
+  }
+
+  #refreshDocumentPreview(entry: PreviewEntry): void {
+    const resource = entry.resource;
+    if (resource?.kind !== 'resource') return;
+    const documentPolicy = createMcpAppDocumentPolicySnapshot(
+      Math.max(1, entry.documentPolicyRevision + 1),
+      { csp: resource.csp, permissions: resource.permissions },
+      entry.consent.documentGrants(entry.binding.id, entry.previewProfile),
+    );
+    const profile = resolveMcpAppHostProfile({
+      consentedCapabilities: capabilitiesOf(documentPolicy.approvedPermissions), declaredCapabilities: capabilitiesOf(resource.permissions),
+      host: entry.host, profile: entry.previewProfile, resource: resourceForProfile(entry.binding, resource),
+    });
+    const frame = profile.kind === 'apps' ? createMcpAppSandboxFrame({
+      consent: Object.freeze({ permissions: documentPolicy.approvedPermissions }),
+      declaration: { csp: resource.csp, permissions: resource.permissions },
+      documentPolicy,
+      hostOrigin: this.#hostOrigin,
+      proxy: this.#sandboxProxy,
+    }) : undefined;
+    entry.documentPolicy = documentPolicy;
+    entry.documentPolicyRevision = documentPolicy.revision;
+    entry.preview = Object.freeze({
+      binding: entry.binding,
+      bridge: entry.bridge,
+      ...(frame === undefined ? {} : { frame }),
+      profile,
+      resource,
+    });
+  }
+
+  #serialize<T>(entry: PreviewEntry, operation: () => Promise<T> | T): Promise<T> {
+    const result = entry.tail.then(operation, operation);
+    entry.tail = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   #closeEntry(entry: PreviewEntry, operation: () => Promise<void>, discardOutbound: boolean, replace = false): Promise<void> {

@@ -1,6 +1,10 @@
 import { digest, stableJson } from '../core/digest.ts';
-import { deepFreeze } from '../core/freeze.ts';
-import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import {
+  formatRuntimeVersion,
+  parseRuntimeVersion,
+  satisfiesGeneratedRuntimeFloor,
+} from '../core/runtime.ts';
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated';
 export type ArtifactManifestValidationStatus = 'passed';
@@ -87,18 +91,23 @@ export interface AssembledArtifactManifest {
   readonly manifest: ArtifactManifest;
 }
 
-type JsonRecord = Readonly<Record<string, unknown>>;
+type JsonRecord = Record<string, unknown>;
 
 const manifestFileName = 'agent-bundle.manifest.json';
 const sha256Pattern = /^[a-f0-9]{64}$/u;
-const runtimeVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
 const fail = (message: string): never => {
   throw new TypeError(`Artifact manifest ${message}`);
 };
 
+const isPlainObject = (value: unknown): value is JsonRecord => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
 const requireRecord = (value: unknown, location: string): JsonRecord =>
-  isPlainRecord(value) ? value : fail(`${location} must be a plain object.`);
+  isPlainObject(value) ? value : fail(`${location} must be a plain object.`);
 
 const requireArray = (value: unknown, location: string): readonly unknown[] =>
   Array.isArray(value) ? value : fail(`${location} must be an array.`);
@@ -273,8 +282,15 @@ const parseRuntime = (value: unknown): ArtifactManifestRuntime => {
   const runtime = requireRecord(value, 'runtime');
   requireExactKeys(runtime, 'runtime', ['node']);
   const node = requireString(runtime.node, 'runtime.node');
-  if (!runtimeVersionPattern.test(node)) {
+  const version = parseRuntimeVersion(node);
+  if (version === undefined) {
+    return fail('runtime.node must be a canonical major.minor.patch version.');
+  }
+  if (formatRuntimeVersion(version) !== node) {
     fail('runtime.node must be a canonical major.minor.patch version.');
+  }
+  if (!satisfiesGeneratedRuntimeFloor(version)) {
+    fail('runtime.node must satisfy the generated runtime floor.');
   }
   return { node };
 };
@@ -347,21 +363,36 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   };
 };
 
+const freezeDeep = <Value>(value: Value): Value => {
+  if (Array.isArray(value)) {
+    value.forEach(freezeDeep);
+  } else if (typeof value === 'object' && value !== null) {
+    Object.values(value).forEach(freezeDeep);
+  }
+  return Object.freeze(value);
+};
+
+const isDuplicateJsonKeyError = (error: unknown): boolean =>
+  error instanceof SyntaxError && error.message.startsWith('JSON has duplicate key ');
+
+const manifestJsonSyntaxError = (message: string): SyntaxError =>
+  new SyntaxError(message, { cause: new SyntaxError('Artifact manifest JSON parsing failed.') });
+
 export const parseArtifactManifest = (bytes: string): ArtifactManifest => {
   let value: unknown;
   try {
     value = parseJsonWithoutDuplicateKeys(bytes);
   } catch (error) {
-    if (error instanceof SyntaxError && error.message.startsWith('JSON has duplicate key ')) {
-      throw new SyntaxError('Artifact manifest JSON has a duplicate key.', { cause: error });
+    if (isDuplicateJsonKeyError(error)) {
+      throw manifestJsonSyntaxError('Artifact manifest contains a duplicate JSON key.');
     }
-    throw new SyntaxError('Artifact manifest is not valid JSON.', { cause: error });
+    throw manifestJsonSyntaxError('Artifact manifest is not valid JSON.');
   }
   const manifest = validateManifest(value);
   if (bytes !== `${stableJson(manifest)}\n`) {
     fail('bytes are not canonical.');
   }
-  return deepFreeze(manifest);
+  return freezeDeep(manifest);
 };
 
 /**

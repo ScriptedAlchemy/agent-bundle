@@ -1,7 +1,15 @@
 import { expect, it } from '@rstest/core';
 
 import { HookClient } from '../src/hooks/hook-client.ts';
-import { recordingFetch, type RecordedRequest } from './support/recording-fetch.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
+
+interface RecordedRequest {
+  readonly body: unknown;
+  readonly method: string;
+  readonly signal?: AbortSignal;
+  readonly token: string | null;
+  readonly url: string;
+}
 
 const response = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json' },
@@ -28,15 +36,36 @@ const simulation = {
   },
 };
 
+const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
+  async (input, init) => {
+    const url = String(input);
+    if (url === '/api/project/session') return response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
+    });
+    const signal = init?.signal;
+    calls.push({
+      body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      method: init?.method ?? 'GET',
+      ...(signal === null || signal === undefined ? {} : { signal }),
+      token: new Headers(init?.headers).get('x-agent-bundle-session'),
+      url,
+    });
+    return reply();
+  };
+
+const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
+
 it('lists epoch-bound hooks over the same foreground session', async () => {
   const calls: RecordedRequest[] = [];
   const client = new HookClient({
-    fetch: recordingFetch(calls, () => response({
+    foreground: foreground(recordingFetch(calls, () => response({
       hooks: [{
         binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
         hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'claude/hooks/session-start.mjs', target: 'claude' },
       }],
-    })),
+    }))),
   });
 
   await expect(client.list({ epochId: 'epoch-1', target: 'claude' })).resolves.toMatchObject([
@@ -52,7 +81,7 @@ it('lists epoch-bound hooks over the same foreground session', async () => {
 
 it('omits an unselected target from the hook list query', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new HookClient({ fetch: recordingFetch(calls, () => response({ hooks: [] })) });
+  const client = new HookClient({ foreground: foreground(recordingFetch(calls, () => response({ hooks: [] }))) });
 
   await expect(client.list({ epochId: 'epoch-1' })).resolves.toEqual([]);
   expect(calls[0]?.url).toBe('/api/hooks?epochId=epoch-1');
@@ -60,7 +89,7 @@ it('omits an unselected target from the hook list query', async () => {
 
 it('passes a cancellation signal to an epoch-bound hook list', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new HookClient({ fetch: recordingFetch(calls, () => response({ hooks: [] })) });
+  const client = new HookClient({ foreground: foreground(recordingFetch(calls, () => response({ hooks: [] }))) });
   const controller = new AbortController();
 
   await client.list({ epochId: 'epoch-1' }, controller.signal);
@@ -70,7 +99,7 @@ it('passes a cancellation signal to an epoch-bound hook list', async () => {
 
 it('posts inline canonical input as a simulation and returns the simulation', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new HookClient({ fetch: recordingFetch(calls, () => response({ simulation })) });
+  const client = new HookClient({ foreground: foreground(recordingFetch(calls, () => response({ simulation }))) });
 
   await expect(client.simulate({
     epochId: 'epoch-1',
@@ -88,7 +117,7 @@ it('posts inline canonical input as a simulation and returns the simulation', as
 
 it('posts a saved replay back unchanged', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new HookClient({ fetch: recordingFetch(calls, () => response({ simulation })) });
+  const client = new HookClient({ foreground: foreground(recordingFetch(calls, () => response({ simulation }))) });
 
   await client.replay(simulation.replay);
 
@@ -98,7 +127,7 @@ it('posts a saved replay back unchanged', async () => {
 
 it('returns route diagnostics instead of a simulation', async () => {
   const client = new HookClient({
-    fetch: recordingFetch([], () => response({
+    foreground: foreground(recordingFetch([], () => response({
       diagnostics: [{
         code: 'hook.playground.target.unsupported',
         event: 'sessionStart',
@@ -106,7 +135,7 @@ it('returns route diagnostics instead of a simulation', async () => {
         severity: 'error',
         target: 'codex',
       }],
-    })),
+    }))),
   });
 
   await expect(client.simulate({
@@ -130,7 +159,7 @@ it('rejects surplus fields throughout the hook list wire DTO', async () => {
   ];
 
   for (const body of malformed) {
-    const client = new HookClient({ fetch: recordingFetch([], () => response(body)) });
+    const client = new HookClient({ foreground: foreground(recordingFetch([], () => response(body))) });
 
     await expect(client.list({ epochId: 'epoch-1' })).rejects.toMatchObject({ code: 'AB8033' });
   }
@@ -157,7 +186,7 @@ it('rejects surplus fields throughout the hook simulation wire DTO', async () =>
   ];
 
   for (const body of malformed) {
-    const client = new HookClient({ fetch: recordingFetch([], () => response(body)) });
+    const client = new HookClient({ foreground: foreground(recordingFetch([], () => response(body))) });
 
     await expect(client.simulate({
       epochId: 'epoch-1',
@@ -170,9 +199,9 @@ it('rejects surplus fields throughout the hook simulation wire DTO', async () =>
 
 it('decodes a route diagnostic body into a coded client error', async () => {
   const client = new HookClient({
-    fetch: recordingFetch([], () => response({
+    foreground: foreground(recordingFetch([], () => response({
       diagnostic: { code: 'AB8032', message: 'Hook playground request has an invalid shape.' },
-    }, 400)),
+    }, 400))),
   });
 
   await expect(client.list({ epochId: 'epoch-1' })).rejects.toMatchObject({
@@ -182,7 +211,7 @@ it('decodes a route diagnostic body into a coded client error', async () => {
 });
 
 it('reports an unrecognised failure body with the transport status', async () => {
-  const client = new HookClient({ fetch: recordingFetch([], () => response({}, 503)) });
+  const client = new HookClient({ foreground: foreground(recordingFetch([], () => response({}, 503))) });
 
   await expect(client.list({ epochId: 'epoch-1' })).rejects.toMatchObject({
     code: 'AB8033',

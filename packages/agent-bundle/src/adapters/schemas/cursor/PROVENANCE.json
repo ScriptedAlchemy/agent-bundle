@@ -1,0 +1,24 @@
+{
+  "observedCliVersion": "2026-08-28",
+  "retrievedAt": "2026-08-28",
+  "schemaSource": "https://cursor.com/docs/plugins",
+  "notes": "Modeled from the published Cursor plugin reference and hooks documentation; Cursor publishes no machine-readable schema. The plugin schema covers only the fields this compiler emits.",
+  "schemas": {
+    "hooks.schema.json": {
+      "bytes": 969,
+      "sha256": "106d76f79c8fa6600e09cd5bcf25ebf8d06015cde249c48c50fe8060d991e21d",
+      "url": "https://cursor.com/docs/agent/hooks"
+    },
+    "mcp.schema.json": {
+      "bytes": 1490,
+      "sha256": "ba5379d4dd3f3d7ff291f2a82a9a04b96b4be7c8dd8c106808a186cad3610764",
+      "url": "https://cursor.com/docs/reference/plugins"
+    },
+    "plugin.schema.json": {
+      "bytes": 1369,
+      "sha256": "ad5099d50f7f59913a5022b90acaf76e9c50e6d9c5058157a1eed55a842d9d61",
+      "url": "https://cursor.com/docs/reference/plugins"
+    }
+  },
+  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Package builds do not download schemas or invoke host-side validators."
+}

@@ -3,7 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { expect, it } from '@rstest/core';
 
+import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { SkillClient } from '../src/skill-client.ts';
 import { SkillDocumentPanel, skillGenerationSummaryFor, SkillsPage, SkillTree } from '../src/skills-page.tsx';
 
@@ -104,9 +106,10 @@ it('explains when generated output intentionally matches the authored Skill', ()
 });
 
 it('explains the authored, generated, resource, and eval-coverage views', () => {
+  const fetch = async (): Promise<Response> => { throw new Error('Effects do not run during server rendering.'); };
   const markup = renderToStaticMarkup(createElement(SkillsPage, {
-    client: new SkillClient(),
-    evalClient: new EvalClient(),
+    client: new SkillClient({ fetch }),
+    evalClient: new EvalClient({ foreground: new ForegroundRouteClient({ fetch }) }),
     status: {
       artifact: { state: 'missing' },
       build: { state: 'idle' },
@@ -167,6 +170,27 @@ it('gives both two-option groups a complete roving-tab and labelled-tabpanel con
   expect(markup).toContain('role="tabpanel"');
   expect(markup).toContain('id="skill-review-panel"');
   expect(markup).toContain('aria-labelledby="skill-review-document-tab-source skill-review-view-tab-rendered"');
+});
+
+it('keeps the source and generated document selector available without an active epoch or selected document', () => {
+  const status: ProjectStatus = {
+    artifact: { state: 'missing' },
+    build: { state: 'idle' },
+    source: { diagnostics: [], state: 'unknown' },
+  };
+  const client = new SkillClient({ fetch: async () => { throw new Error('Effects do not run during server rendering.'); } });
+  const evalClient = new EvalClient({
+    foreground: new ForegroundRouteClient({
+      fetch: async () => { throw new Error('Effects do not run during server rendering.'); },
+    }),
+  });
+
+  const markup = renderToStaticMarkup(createElement(SkillsPage, { client, evalClient, status }));
+
+  expect(markup).toContain('aria-label="Skill document"');
+  expect(markup).toContain('>Source</button>');
+  expect(markup).toContain('>Generated</button>');
+  expect(markup).toContain('Loading source Skills…');
 });
 
 it('renders eval coverage with per-case kind badges beneath the resource tree', () => {

@@ -5,6 +5,7 @@ import type { EvalRunRecord, EvalTrialRecord } from '../../agent-bundle/src/eval
 import {
   admitEvalRunLifecycle,
   createEvalRunLifecycle,
+  EvalRunEvidenceReadCoordinator,
   evalRunLifecycleToken,
   evalOutcomeLabel,
   evalRunSelectionFor,
@@ -249,6 +250,59 @@ it('rejects stale observer and canonical-read updates after a replacement lifecy
   expect(replacement.events).toEqual([]);
   expect(replacement.result).toBeUndefined();
   expect(replacement.runId).toBe('20260817t000000001z-abcdef02');
+});
+
+it('accepts only the newest same-run evidence read and aborts claims on replacement', async () => {
+  const coordinator = new EvalRunEvidenceReadCoordinator();
+  const deferred = <Value>() => {
+    let resolve!: (value: Value) => void;
+    return {
+      promise: new Promise<Value>((resolvePromise) => { resolve = resolvePromise; }),
+      resolve,
+    };
+  };
+  const admitted = admitEvalRunLifecycle(createEvalRunLifecycle(), { ...runRecord, completedAt: undefined, summary: undefined });
+  const token = evalRunLifecycleToken(admitted);
+  let lifecycle = admitted;
+  const apply = async (
+    claim: ReturnType<EvalRunEvidenceReadCoordinator['claim']>,
+    pending: Promise<EvalRunResult>,
+  ): Promise<void> => {
+    const next = await pending;
+    if (!coordinator.isCurrent(claim)) return;
+    lifecycle = updateEvalRunLifecycle(lifecycle, claim.token, { result: next });
+    coordinator.complete(claim);
+  };
+
+  const heldObserver = deferred<EvalRunResult>();
+  const observerClaim = coordinator.claim(token);
+  const observer = apply(observerClaim, heldObserver.promise);
+  const cancelClaim = coordinator.claim(token);
+  const cancelResult = { ...result, trials: [] };
+  const cancel = apply(cancelClaim, Promise.resolve(cancelResult));
+  await cancel;
+  expect(observerClaim.signal.aborted).toBe(true);
+  expect(lifecycle.result).toBe(cancelResult);
+  heldObserver.resolve(result);
+  await observer;
+  expect(lifecycle.result).toBe(cancelResult);
+
+  const heldOpen = deferred<EvalRunResult>();
+  const openClaim = coordinator.claim(token);
+  const open = apply(openClaim, heldOpen.promise);
+  const observerAfterOpenClaim = coordinator.claim(token);
+  const observerAfterOpenResult = { ...result, trials: [trial({ id: 'newer-observer' })] };
+  await apply(observerAfterOpenClaim, Promise.resolve(observerAfterOpenResult));
+  expect(openClaim.signal.aborted).toBe(true);
+  expect(lifecycle.result).toBe(observerAfterOpenResult);
+  heldOpen.resolve(result);
+  await open;
+  expect(lifecycle.result).toBe(observerAfterOpenResult);
+
+  const replacementClaim = coordinator.claim(token);
+  coordinator.invalidate();
+  expect(replacementClaim.signal.aborted).toBe(true);
+  expect(coordinator.isCurrent(replacementClaim)).toBe(false);
 });
 
 it('surfaces configuration diagnostics beside the suites they came from', () => {

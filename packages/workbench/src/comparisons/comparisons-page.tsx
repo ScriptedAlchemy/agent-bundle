@@ -33,7 +33,8 @@ const errorMessage = (reason: unknown): string => messageFrom(reason, 'The eval 
 
 export const loadComparisonRuns = async (
   client: EvalClient,
-): Promise<readonly EvalRunRecord[]> => client.runs();
+  signal?: AbortSignal,
+): Promise<readonly EvalRunRecord[]> => client.runs(signal);
 
 /** The route aligns the two runs, so a mismatch can never be folded into a delta by the page. */
 export const runComparison = async (
@@ -43,39 +44,48 @@ export const runComparison = async (
   signal?: AbortSignal,
 ): Promise<EvalComparison> => client.compare({ base, candidate }, signal);
 
-interface ComparisonRequest {
+type ComparisonsRequestKind = 'comparison' | 'runs';
+
+interface ComparisonsRequestOwner {
   readonly comparisonClient: ComparisonClient;
   readonly evalClient: EvalClient;
+}
+
+export interface ComparisonsRequest {
   readonly generation: number;
+  readonly kind: ComparisonsRequestKind;
+  readonly owner?: ComparisonsRequestOwner;
   readonly signal: AbortSignal;
 }
 
-/** Cancels a replaced comparison immediately and makes every late completion inert. */
-export class ComparisonRequestLifecycle {
-  #active: { readonly controller: AbortController; readonly request: ComparisonRequest } | undefined;
+/** Owns request cancellation so a departed comparison cannot publish stale evidence. */
+export class ComparisonsRequestLifecycle {
+  readonly #active = new Map<ComparisonsRequestKind, { readonly controller: AbortController; readonly request: ComparisonsRequest }>();
   #generation = 0;
 
-  begin(comparisonClient: ComparisonClient, evalClient: EvalClient): ComparisonRequest {
-    this.#active?.controller.abort();
+  begin(kind: ComparisonsRequestKind, owner?: ComparisonsRequestOwner): ComparisonsRequest {
+    this.#active.get(kind)?.controller.abort();
     const controller = new AbortController();
-    const request = Object.freeze({ comparisonClient, evalClient, generation: this.#generation, signal: controller.signal });
-    this.#active = { controller, request };
+    const request = Object.freeze({ generation: this.#generation, kind, owner, signal: controller.signal });
+    this.#active.set(kind, { controller, request });
     return request;
   }
 
-  complete(request: ComparisonRequest): void {
-    if (this.#active?.request === request) this.#active = undefined;
+  complete(request: ComparisonsRequest): void {
+    if (this.#active.get(request.kind)?.request === request) this.#active.delete(request.kind);
   }
 
   invalidate(): void {
     this.#generation += 1;
-    this.#active?.controller.abort();
-    this.#active = undefined;
+    for (const { controller } of this.#active.values()) controller.abort();
+    this.#active.clear();
   }
 
-  isCurrent(request: ComparisonRequest, comparisonClient: ComparisonClient, evalClient: EvalClient): boolean {
-    return request.comparisonClient === comparisonClient && request.evalClient === evalClient &&
-      request.generation === this.#generation && !request.signal.aborted && this.#active?.request === request;
+  isCurrent(request: ComparisonsRequest, owner?: ComparisonsRequestOwner): boolean {
+    return request.generation === this.#generation &&
+      !request.signal.aborted &&
+      this.#active.get(request.kind)?.request === request &&
+      (owner === undefined || request.owner?.comparisonClient === owner.comparisonClient && request.owner.evalClient === owner.evalClient);
   }
 }
 
@@ -178,12 +188,12 @@ export const ComparisonMatrix = ({ view }: ComparisonMatrixProps) => <div classN
 /** Aligns two recorded eval runs and shows the reliability matrix of every shared condition. */
 export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPageProps) => {
   const [baseRunId, setBaseRunId] = useState<string>();
-  const [busy, setBusy] = useState<ComparisonRequest>();
+  const [busy, setBusy] = useState<ComparisonsRequest>();
   const [candidateRunId, setCandidateRunId] = useState<string>();
   const [comparison, setComparison] = useState<{ readonly comparisonClient: ComparisonClient; readonly evalClient: EvalClient; readonly result: EvalComparison }>();
   const [error, setError] = useState<{ readonly comparisonClient: ComparisonClient; readonly evalClient: EvalClient; readonly message: string }>();
-  const [runs, setRuns] = useState<readonly EvalRunRecord[]>([]);
-  const lifecycle = useRef<ComparisonRequestLifecycle>(new ComparisonRequestLifecycle()).current;
+  const [runs, setRuns] = useState<{ readonly evalClient: EvalClient; readonly records: readonly EvalRunRecord[] }>();
+  const lifecycle = useRef<ComparisonsRequestLifecycle>(new ComparisonsRequestLifecycle()).current;
   const currentClients = useRef({ comparisonClient, evalClient });
   if (currentClients.current.comparisonClient !== comparisonClient || currentClients.current.evalClient !== evalClient) {
     currentClients.current = { comparisonClient, evalClient };
@@ -191,8 +201,10 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
   }
   const currentComparison = comparison?.comparisonClient === comparisonClient && comparison.evalClient === evalClient ? comparison.result : undefined;
   const currentError = error?.comparisonClient === comparisonClient && error.evalClient === evalClient ? error.message : undefined;
-  const busyForClient = busy !== undefined && lifecycle.isCurrent(busy, comparisonClient, evalClient);
-  const view = comparisonsViewFor({ baseRunId, candidateRunId, comparison: currentComparison, runs });
+  const currentRuns = runs?.evalClient === evalClient ? runs.records : [];
+  const currentOwner = { comparisonClient, evalClient };
+  const busyForClient = busy !== undefined && lifecycle.isCurrent(busy, currentOwner);
+  const view = comparisonsViewFor({ baseRunId, candidateRunId, comparison: currentComparison, runs: currentRuns });
 
   useEffect(() => () => lifecycle.invalidate(), [lifecycle]);
 
@@ -203,37 +215,45 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
   }, [comparisonClient, evalClient]);
 
   useEffect(() => {
-    let current = true;
+    lifecycle.invalidate();
+    const owner = { comparisonClient, evalClient };
+    const request = lifecycle.begin('runs', owner);
     setError(undefined);
-    void loadComparisonRuns(evalClient).then(
-      (next) => { if (current) setRuns(next); },
+    void loadComparisonRuns(evalClient, request.signal).then(
+      (next) => {
+        if (!lifecycle.isCurrent(request, owner)) return;
+        lifecycle.complete(request);
+        setRuns({ evalClient, records: next });
+      },
       (reason) => {
-        if (!current) return;
-        setRuns([]);
+        if (!lifecycle.isCurrent(request, owner)) return;
+        lifecycle.complete(request);
+        setRuns(undefined);
         setError({ comparisonClient, evalClient, message: errorMessage(reason) });
       },
     );
-    return () => { current = false; };
-  }, [evalClient]);
+    return () => lifecycle.invalidate();
+  }, [comparisonClient, evalClient, lifecycle]);
 
   const compare = async (): Promise<void> => {
     const base = view.base?.key;
     const candidate = view.candidate?.key;
     if (base === undefined || candidate === undefined) return;
-    const request = lifecycle.begin(comparisonClient, evalClient);
+    const owner = { comparisonClient, evalClient };
+    const request = lifecycle.begin('comparison', owner);
     setBusy(request);
     setError(undefined);
     setComparison(undefined);
     try {
       const result = await runComparison(comparisonClient, base, candidate, request.signal);
-      if (!lifecycle.isCurrent(request, comparisonClient, evalClient)) return;
+      if (!lifecycle.isCurrent(request, owner)) return;
       setComparison({ comparisonClient, evalClient, result });
     } catch (reason) {
-      if (lifecycle.isCurrent(request, comparisonClient, evalClient) && !isAbortError(reason)) {
+      if (lifecycle.isCurrent(request, owner) && !isAbortError(reason)) {
         setError({ comparisonClient, evalClient, message: errorMessage(reason) });
       }
     } finally {
-      if (lifecycle.isCurrent(request, comparisonClient, evalClient)) {
+      if (lifecycle.isCurrent(request, owner)) {
         lifecycle.complete(request);
         setBusy(undefined);
       }

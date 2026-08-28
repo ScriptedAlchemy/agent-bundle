@@ -2,10 +2,10 @@ import { stableJson } from '../core/digest.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runClaudeStreamProcess, type ClaudeProcessOptions } from './claude-process.ts';
 import { normalizeClaudeStream, type ClaudeTraceEvent } from './claude-stream.ts';
-import { isEvalScriptOutcome } from './graders.ts';
+import { claudeSemanticGraderContractRevision, isEvalScriptOutcome } from './graders.ts';
 import type { EvalAssertion, EvalScriptOutcome } from './types.ts';
 
-export { claudeSemanticGraderId } from './graders.ts';
+export { claudeSemanticGraderContractRevision, claudeSemanticGraderId } from './graders.ts';
 
 export interface RunClaudeSemanticGraderOptions extends ClaudeProcessOptions {
   readonly assertions: readonly EvalAssertion[];
@@ -70,6 +70,7 @@ const requestFor = (options: RunClaudeSemanticGraderOptions): string => stableJs
 });
 
 const provenanceFor = (model: string): string => stableJson({
+  contractRevision: claudeSemanticGraderContractRevision,
   harness: 'claude',
   model,
 });

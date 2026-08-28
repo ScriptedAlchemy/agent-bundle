@@ -2,6 +2,7 @@ import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { loadConfig as loadRstackConfig } from '@rstackjs/load-config';
+import { createJiti } from 'jiti';
 
 import { isInsideOrEqual } from '../core/paths.ts';
 import type {
@@ -10,6 +11,7 @@ import type {
 } from '../core/types.ts';
 
 const defaultConfigFile = 'agent-bundle.config.ts';
+const typescriptConfig = /\.tsx?$/u;
 
 export interface LoadConfigOptions {
   command: string;
@@ -62,15 +64,26 @@ export const loadConfig = async ({
     projectRoot: realProjectRoot,
     selectedTargets: [...targets],
   };
-  const { content: config } = await loadRstackConfig<
-    AgentBundleConfig,
-    [ConfigFactoryContext]
-  >({
-    configParams: [context],
-    fresh: true,
-    loader: 'auto',
-    path: resolvedConfigPath,
-  });
+  const config = typescriptConfig.test(resolvedConfigPath)
+    ? await (async () => {
+        const jiti = createJiti(resolvedConfigPath, {
+          interopDefault: true,
+          jsx: { runtime: 'automatic' },
+          moduleCache: false,
+          nativeModules: ['typescript'],
+        });
+        const exported = await jiti.import<AgentBundleConfig | ((value: ConfigFactoryContext) => AgentBundleConfig | Promise<AgentBundleConfig>)>(
+          resolvedConfigPath,
+          { default: true },
+        );
+        return typeof exported === 'function' ? await exported(context) : exported;
+      })()
+    : (await loadRstackConfig<AgentBundleConfig, [ConfigFactoryContext]>({
+        configParams: [context],
+        fresh: true,
+        loader: 'auto',
+        path: resolvedConfigPath,
+      })).content;
 
   if (!isConfig(config)) {
     throw new TypeError(

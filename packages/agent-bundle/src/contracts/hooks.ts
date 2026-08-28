@@ -1,6 +1,7 @@
-/** Browser-consumable contract surface for hook metadata and simulation. */
-export { canonicalHookEventFor } from '../core/types.ts';
-export type { CanonicalHookEvent } from '../core/types.ts';
+/**
+ * Browser-consumable contract surface for the hook playground. Type-only:
+ * hook simulation runs on the server.
+ */
 export type {
   HookPlaygroundBinding,
   HookPlaygroundCanonicalIntent,

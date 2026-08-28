@@ -72,8 +72,7 @@ it('loads an async TypeScript config and discovers its conventional skill files'
   } finally {
     await removeProjectFixture(fixture.root);
   }
-  // The first jiti compile of the package source graph dominates this test; keep headroom over the 5s default.
-}, 30_000);
+}, 15_000);
 
 it('honors an explicit empty skills list instead of conventional discovery', async () => {
   const fixture = await createProjectFixture({ skills: [] });
@@ -93,7 +92,7 @@ it('honors an explicit empty skills list instead of conventional discovery', asy
   } finally {
     await removeProjectFixture(fixture.root);
   }
-}, 30_000);
+});
 
 it('loads sync config objects from relative and absolute explicit paths', async () => {
   const fixture = await createProjectFixture();
@@ -129,7 +128,39 @@ it('loads sync config objects from relative and absolute explicit paths', async 
   } finally {
     await removeProjectFixture(fixture.root);
   }
-}, 30_000);
+});
+
+it('loads a TypeScript config that imports an authored TSX application tree', async () => {
+  const fixture = await createProjectFixture();
+  try {
+    await writeFile(
+      join(fixture.root, 'application.tsx'),
+      [
+        "import React from 'react';",
+        "export const application = <agent-bundle-app name=\"tsx-application\" />;",
+        '',
+      ].join('\n'),
+    );
+    await writeFile(
+      fixture.configPath,
+      [
+        "import { application } from './application.tsx';",
+        "export default { plugin: { name: application.props.name, version: '1.0.0' } };",
+        '',
+      ].join('\n'),
+    );
+
+    await expect(loadConfig({
+      command: 'build',
+      mode: 'production',
+      root: fixture.root,
+    })).resolves.toMatchObject({
+      config: { plugin: { name: 'tsx-application', version: '1.0.0' } },
+    });
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
 
 it('rejects external config paths before evaluating their modules', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-external-config-'));
@@ -151,7 +182,7 @@ it('rejects external config paths before evaluating their modules', async () => 
   } finally {
     await rm(parent, { force: true, recursive: true });
   }
-}, 30_000);
+});
 
 it('rejects config symlinks whose resolved targets escape the real project root before evaluation', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-symlink-config-'));
@@ -172,7 +203,7 @@ it('rejects config symlinks whose resolved targets escape the real project root 
   } finally {
     await rm(parent, { force: true, recursive: true });
   }
-}, 30_000);
+});
 
 it('reloads an edited native ESM config on each load', async () => {
   const fixture = await createProjectFixture();
@@ -210,7 +241,48 @@ it('reloads an edited native ESM config on each load', async () => {
   } finally {
     await removeProjectFixture(fixture.root);
   }
-}, 30_000);
+});
+
+it('reloads an overwritten static TypeScript default config', async () => {
+  const fixture = await createProjectFixture();
+  const options = {
+    command: 'inspect',
+    mode: 'development',
+    root: fixture.root,
+    targets: [],
+  };
+
+  try {
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'review', version: '1.0.0' } },
+    });
+    await writeFile(
+      fixture.configPath,
+      [
+        "enum Version { Current = '1.0.0' }",
+        "export default { plugin: { name: 'typescript-fresh', version: Version.Current } };",
+        '',
+      ].join('\n'),
+    );
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'typescript-fresh', version: '1.0.0' } },
+    });
+
+    await writeFile(
+      fixture.configPath,
+      [
+        "enum Version { Current = '2.0.0' }",
+        "export default { plugin: { name: 'typescript-fresh', version: Version.Current } };",
+        '',
+      ].join('\n'),
+    );
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'typescript-fresh', version: '2.0.0' } },
+    });
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
 
 it('discovers an explicit non-conventional skill path relative to the project root', async () => {
   const fixture = await createProjectFixture();

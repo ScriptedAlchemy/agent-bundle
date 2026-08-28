@@ -1,11 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { basename } from 'node:path';
 
 import { validateOriginHeader } from '@modelcontextprotocol/server';
 
-import { CodedError } from '../core/errors.ts';
 import { ArtifactRoutes, type ArtifactRouteService } from './artifacts/artifact-routes.ts';
 import type { AgentApi } from './agent-api.ts';
 import { DevLogRoutes } from './logs/dev-log-routes.ts';
@@ -16,40 +15,39 @@ import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playgro
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session/mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session/mcp-session-service.ts';
+import { RuntimeMcpRoutes } from './runtime-mcp-routes.ts';
+import { RuntimeRoutes } from './runtime-routes.ts';
+import type { DevRuntimeSession } from './runtime-provider.ts';
 import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/playground-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
-import {
-  decodedOpaqueSegment,
-  diagnostic,
-  isJsonRequest,
-  isRequestDiagnostic,
-  rawPathname,
-  readBody,
-  requestError,
-  responseDiagnostic as writeResponseDiagnostic,
-  responseJson,
-  singleHeader,
-  type RequestDiagnostic,
-} from './http.ts';
-import { createBackpressuredWriter, encodedFrame, writeKeepAliveStreamHead } from './route-streams.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
+const bodyLimit = 64 * 1024;
 const instanceIdLengthLimit = 128;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
 const sseQueueByteLimit = 256 * 1024;
 
+interface QueuedSseFrame {
+  readonly bytes: number;
+  readonly frame: string;
+}
+
 export type ForegroundServerErrorCode = 'AB8000';
 
 /** Configuration errors that prevent a foreground server from starting. */
-export class ForegroundServerError extends CodedError<ForegroundServerErrorCode> {
+export class ForegroundServerError extends Error {
+  readonly code: ForegroundServerErrorCode;
+
   constructor(code: ForegroundServerErrorCode, message: string) {
-    super('ForegroundServerError', code, message);
+    super(message);
+    this.name = 'ForegroundServerError';
+    this.code = code;
   }
 }
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'playground' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'mcp-apps' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -87,6 +85,16 @@ export interface ForegroundCoordinator {
   status(): ProjectStatus;
 }
 
+/** Test-only ownership of one already-authenticated SSE response. */
+export interface ForegroundProjectEventStreamHandle {
+  disconnect(): void;
+}
+
+export interface ForegroundServerTesting {
+  /** Observes the current stream only after its subscription and close listeners exist. */
+  readonly onProjectEventStream?: (stream: ForegroundProjectEventStreamHandle) => void;
+}
+
 export interface WorkbenchAsset {
   readonly body: string | Uint8Array;
   readonly contentType: string;
@@ -108,7 +116,7 @@ export interface ForegroundServerOptions {
   readonly logs?: DevLogService;
   /** Deterministic and native eval runs; the browser names discovered suites, never a path or command. */
   readonly evals?: EvalRouteService;
-  /** The project-owned Eval service is closed only after foreground Eval routes have drained. */
+  /** The project-owned Eval service closes after foreground Eval routes and Agent API admissions drain. */
   readonly evalLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
@@ -123,13 +131,21 @@ export interface ForegroundServerOptions {
   readonly now?: () => Date;
   /** Durable playground trace store; the browser never selects its storage root or project identity. */
   readonly playground?: PlaygroundRouteService;
-  /** Native Playground runs drain after their routes close and before Eval or epochs are released. */
-  readonly playgroundLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly port?: number;
+  /** Optional runtime session; its lifecycle remains Workbench-owned. */
+  readonly runtime?: DevRuntimeSession;
   /** Read-only Skill document/resource service for the workbench. */
   readonly skillDocuments?: SkillDocumentService;
   /** Injectable only to make integration contracts deterministic. */
   readonly sessionToken?: string;
+  /** Test-only foreground stream observation; production callers never supply this. */
+  readonly testing?: ForegroundServerTesting;
+}
+
+interface RequestDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly status: number;
 }
 
 type SkillRoute =
@@ -140,17 +156,102 @@ type SkillRoute =
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-document'; readonly skillId: string; readonly target: string }>
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-resource'; readonly resource: readonly string[]; readonly skillId: string; readonly target: string }>;
 
+const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
+
+const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
+  new Error(value.message),
+  value,
+);
+
+const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
+  typeof value === 'object' && value !== null &&
+  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
+  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
+  typeof (value as Partial<RequestDiagnostic>).status === 'number';
+
 /** Route groups may attach structured diagnostics that are the answer, not an internal detail. */
 const attachedDiagnostics = (value: RequestDiagnostic): readonly unknown[] | undefined => {
   const diagnostics = (value as Partial<{ readonly diagnostics: unknown }>).diagnostics;
   return Array.isArray(diagnostics) ? diagnostics : undefined;
 };
 
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void =>
-  writeResponseDiagnostic(response, value, attachedDiagnostics(value));
+const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
+  if (response.headersSent || response.writableEnded) {
+    response.destroy();
+    return;
+  }
+  const diagnostics = attachedDiagnostics(value);
+  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify({
+    diagnostic: { code: value.code, message: value.message },
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+  }));
+};
+
+const responseJson = (response: ServerResponse, body: unknown): void => {
+  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(body));
+};
 
 const attachmentHeader = (relativePath: string): string =>
   `attachment; filename*=UTF-8''${encodeURIComponent(basename(relativePath)).replaceAll("'", '%27')}`;
+
+const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
+  typeof value === 'string' ? value : undefined;
+
+const cookieValue = (request: IncomingMessage, name: string): string | undefined => {
+  const header = singleHeader(request.headers.cookie);
+  if (header === undefined) return undefined;
+  for (const pair of header.split(';')) {
+    const index = pair.indexOf('=');
+    if (index < 1) continue;
+    if (pair.slice(0, index).trim() === name) return pair.slice(index + 1).trim();
+  }
+  return undefined;
+};
+
+const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
+  let size = 0;
+  let tooLarge = false;
+  const chunks: Buffer[] = [];
+  request.on('data', (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > bodyLimit) {
+      tooLarge = true;
+      return;
+    }
+    chunks.push(chunk);
+  });
+  request.once('end', () => {
+    if (tooLarge) {
+      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
+      return;
+    }
+    resolvePromise(Buffer.concat(chunks).toString('utf8'));
+  });
+  request.once('error', rejectPromise);
+});
+
+const isJsonRequest = (request: IncomingMessage): boolean => {
+  const contentType = singleHeader(request.headers['content-type']);
+  if (contentType === undefined) return false;
+  const parts = contentType.split(';').map((part) => part.trim());
+  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
+  if (parts.length === 0) return true;
+  if (parts.length !== 1) return false;
+  const parameter = parts[0]!;
+  const equals = parameter.indexOf('=');
+  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
+  const rawValue = parameter.slice(equals + 1).trim();
+  const value = unquoteHeaderValue(rawValue);
+  return value?.toLowerCase() === 'utf-8';
+};
+
+const unquoteHeaderValue = (value: string): string | undefined => {
+  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
+  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
+  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
+};
 
 const decodedAssetPath = (requestTarget: string | undefined): string => {
   const pathname = requestTarget?.split(/[?#]/u, 1)[0];
@@ -158,13 +259,43 @@ const decodedAssetPath = (requestTarget: string | undefined): string => {
     throw requestError(diagnostic('AB8005', 'Asset path is not valid.', 400));
   }
   if (pathname === '/') return 'index.html';
-  return pathname.slice(1).split('/').map((part) =>
-    decodedOpaqueSegment(part, { code: 'AB8005', message: 'Asset path is not valid.' }),
-  ).join('/');
+
+  const parts = pathname.slice(1).split('/').map((part) => {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(part);
+    } catch {
+      throw requestError(diagnostic('AB8005', 'Asset path is not valid.', 400));
+    }
+    if (
+      decoded.length === 0 || decoded === '.' || decoded === '..' ||
+      decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
+    ) {
+      throw requestError(diagnostic('AB8005', 'Asset path is not valid.', 400));
+    }
+    return decoded;
+  });
+  return parts.join('/');
 };
 
-const decodedSkillSegment = (segment: string): string =>
-  decodedOpaqueSegment(segment, { code: 'AB8012', message: 'Skill route path is not valid.' });
+const rawPathname = (requestTarget: string | undefined): string =>
+  requestTarget?.split(/[?#]/u, 1)[0] ?? '';
+
+const decodedSkillSegment = (segment: string): string => {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  if (
+    decoded.length === 0 || decoded === '.' || decoded === '..' ||
+    decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
+  ) {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  return decoded;
+};
 
 const skillRoute = (requestTarget: string | undefined): SkillRoute | undefined => {
   const pathname = rawPathname(requestTarget);
@@ -230,21 +361,25 @@ const isProjectRelativePath = (value: unknown): value is string => {
   return value.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
 };
 
-const eventFrame = (event: ProjectEventMessage): string =>
-  encodedFrame(event, () => {
-    const id = event.type === 'replay.gap' ? '' : `id: ${event.sequence}\n`;
-    return `${id}event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-  });
+const eventFrame = (event: ProjectEventMessage): string => {
+  const id = event.type === 'replay.gap' ? '' : `id: ${event.sequence}\n`;
+  return `${id}event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+};
 
 const afterSequence = (request: IncomingMessage, latestSequence: number): number => {
   const header = singleHeader(request.headers['last-event-id']);
-  if (header === undefined || header.length === 0) return 0;
-  if (!/^(0|[1-9]\d*)$/u.test(header)) {
-    throw requestError(diagnostic('AB8006', 'Last-Event-ID must be a non-negative integer.', 400));
+  const queryValues = new URL(request.url ?? '/', 'http://foreground.invalid').searchParams.getAll('after');
+  if (queryValues.length > 1) {
+    throw requestError(diagnostic('AB8006', 'Project event cursor must be singular.', 400));
   }
-  const sequence = Number(header);
+  const cursor = header === undefined || header.length === 0 ? queryValues[0] : header;
+  if (cursor === undefined || cursor.length === 0) return 0;
+  if (!/^(0|[1-9]\d*)$/u.test(cursor)) {
+    throw requestError(diagnostic('AB8006', 'Project event cursor must be a non-negative integer.', 400));
+  }
+  const sequence = Number(cursor);
   if (!Number.isSafeInteger(sequence) || sequence > latestSequence) {
-    throw requestError(diagnostic('AB8006', 'Last-Event-ID must not be ahead of the project event stream.', 400));
+    throw requestError(diagnostic('AB8006', 'Project event cursor must not be ahead of the project event stream.', 400));
   }
   return sequence;
 };
@@ -286,16 +421,19 @@ export class ForegroundServer {
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
   readonly #host: string;
+  readonly #mcpAppPreviews: McpAppRoutePreviewService | undefined;
   readonly #mcpAppRoutes: McpAppRoutes;
+  readonly #runtimeMcpRoutes: RuntimeMcpRoutes;
   readonly #mcpSessionRoutes: McpSessionRoutes;
+  readonly #runtimeRoutes: RuntimeRoutes;
   readonly #now: () => Date;
-  readonly #playgroundLifecycle: Readonly<{ close(): Promise<void> }> | undefined;
   readonly #playgroundRoutes: PlaygroundRoutes;
   readonly #port: number;
   readonly #server: Server;
   readonly #skillDocuments: SkillDocumentService | undefined;
   readonly #sockets = new Set<Socket>();
   readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
+  readonly #testing: ForegroundServerTesting | undefined;
   #closePromise: Promise<void> | undefined;
   #closing = false;
   #listenStarted = false;
@@ -313,10 +451,7 @@ export class ForegroundServer {
       throw new ForegroundServerError('AB8000', 'Foreground server port must be a safe TCP port number.');
     }
     const instanceId = options.instanceId ?? randomUUID();
-    if (
-      instanceId.length === 0 || instanceId.length > instanceIdLengthLimit ||
-      instanceId.trim() !== instanceId
-    ) {
+    if (instanceId.length === 0 || instanceId.length > instanceIdLengthLimit || instanceId.trim() !== instanceId) {
       throw new ForegroundServerError('AB8000', 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.');
     }
 
@@ -327,10 +462,11 @@ export class ForegroundServer {
     this.#eventHub = options.eventHub;
     this.#host = host;
     this.instanceId = instanceId;
+    this.#mcpAppPreviews = options.mcpAppPreviews;
     this.#now = options.now ?? (() => new Date());
-    this.#playgroundLifecycle = options.playgroundLifecycle;
     this.#port = port;
     this.#skillDocuments = options.skillDocuments;
+    this.#testing = options.testing;
     this.sessionToken = options.sessionToken ?? randomUUID();
     this.#mcpAppRoutes = new McpAppRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -339,6 +475,22 @@ export class ForegroundServer {
     this.#mcpSessionRoutes = new McpSessionRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.mcpSessions === undefined ? {} : { service: options.mcpSessions }),
+    });
+    this.#runtimeMcpRoutes = new RuntimeMcpRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.mcpAppPreviews === undefined
+        ? {}
+        : {
+            awaitRegistryMutation: async () => { await options.mcpAppPreviews?.runtime?.flushRegistry?.(); },
+            awaitSessionClose: async ({ expectedSessionRevision, sessionId }) => {
+              await options.mcpAppPreviews?.runtime?.closeSession?.(sessionId, expectedSessionRevision);
+            },
+          }),
+      ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
+    });
+    this.#runtimeRoutes = new RuntimeRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     });
     this.#hookPlaygroundRoutes = new HookPlaygroundRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -481,21 +633,52 @@ export class ForegroundServer {
   async #release(): Promise<readonly ForegroundServerCloseFailure[]> {
     this.#mcpAppRoutes.close();
     this.#mcpSessionRoutes.close();
-    // Cancelled hook simulations own wrapper processes and clones, so their
-    // drain is released alongside the other resources and awaited with them.
+    this.#runtimeMcpRoutes.close();
+    this.#runtimeRoutes.close();
+    // Publish the hook playground drain before awaiting App tombstones. Its
+    // abort callbacks may synchronously re-enter foreground shutdown, and
+    // must observe the already-published close outcome.
     const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
+    // App tombstone publication below deliberately yields once before joining
+    // resource drains. Observe this promise now so a fast drain failure cannot
+    // become an unhandled rejection during that handoff; allSettled below still
+    // records and reports the same rejection.
+    void releaseHookPlayground.catch(() => undefined);
     this.#playgroundRoutes.close();
-    // The route admission gate is closed before native work starts draining.
-    // Its runner can retain an epoch reference while final evidence is written,
-    // so Eval and the coordinator must remain available until it settles.
-    const releasePlayground = this.#playgroundLifecycle?.close() ?? Promise.resolve();
     this.#artifactRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
+    void releaseEvals.catch(() => undefined);
+    // Fence both public Eval authorities in this turn. Agent API handlers can
+    // still enter EvalService while Eval routes drain their readers, so the
+    // service waits for both fences rather than letting either admit new work.
+    const releaseAgentApi = this.#agentApi?.close() ?? Promise.resolve();
+    void releaseAgentApi.catch(() => undefined);
+    const releaseEvalService = Promise.allSettled([releaseEvals, releaseAgentApi])
+      .then(() => this.#evalLifecycle?.close());
+    void releaseEvalService.catch(() => undefined);
+    // Fence all authenticated log streams before the shared coordinator begins
+    // producer shutdown.  Observe an early rejection until the all-settled
+    // aggregation below can report it with its fixed resource label.
     const releaseLogs = this.#devLogRoutes.close();
+    void releaseLogs.catch(() => undefined);
     // The Agent API owns admissions over every shared foreground service. It
     // must publish closure and drain active handlers before those services or
     // the epoch-owning coordinator begin their own shutdown.
-    const [agentApi] = await Promise.allSettled([this.#agentApi?.close() ?? Promise.resolve()]);
+    const [agentApi] = await Promise.allSettled([releaseAgentApi]);
+    // Publish runtime App tombstones while authenticated event streams are
+    // still subscribed. Lifecycle close below owns proxies and sandboxes.
+    const appPreparation = await Promise.allSettled([this.#mcpAppPreviews?.prepareClose?.() ?? Promise.resolve()]);
+    // EventHub delivery is synchronous, while a socket write may need one
+    // turn to leave Node's stream buffer before shutdown destroys sockets.
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    // Eval terminal events are producer-owned diagnostics.  Fence their
+    // lifecycle drain before the coordinator can close that producer, even
+    // when route closure itself reported an independent failure.
+    const releaseCoordinator = releaseEvalService.then(
+      () => this.#coordinator.close(),
+      () => this.#coordinator.close(),
+    );
+    void releaseCoordinator.catch(() => undefined);
     const releaseServer = this.#listenStarted
       ? (() => {
           this.#listenStarted = false;
@@ -505,22 +688,23 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    const [playground] = await Promise.allSettled([releasePlayground]);
-    const [evalRoutes] = await Promise.allSettled([releaseEvals]);
-    const [evalService] = await Promise.allSettled([this.#evalLifecycle?.close() ?? Promise.resolve()]);
-    const [server, coordinator, hookPlayground, logs] = await Promise.allSettled([
+    const [server, coordinator, evalRoutes, evalService, hookPlayground, logs] = await Promise.allSettled([
       releaseServer,
-      this.#coordinator.close(),
+      releaseCoordinator,
+      releaseEvals,
+      releaseEvalService,
       releaseHookPlayground,
       releaseLogs,
     ]);
     const failures: ForegroundServerCloseFailure[] = [];
     if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
+    for (const result of appPreparation) {
+      if (result.status === 'rejected') failures.push(Object.freeze({ error: result.reason, resource: 'mcp-apps' }));
+    }
     if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
     if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
     if (evalRoutes.status === 'rejected') failures.push(Object.freeze({ error: evalRoutes.reason, resource: 'eval-routes' }));
     if (evalService.status === 'rejected') failures.push(Object.freeze({ error: evalService.reason, resource: 'eval-service' }));
-    if (playground.status === 'rejected') failures.push(Object.freeze({ error: playground.reason, resource: 'playground' }));
     if (hookPlayground.status === 'rejected') {
       failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
     }
@@ -541,6 +725,8 @@ export class ForegroundServer {
     }
     if (await this.#mcpAppRoutes.handle(request, response)) return;
     if (await this.#mcpSessionRoutes.handle(request, response)) return;
+    if (await this.#runtimeMcpRoutes.handle(request, response)) return;
+    if (await this.#runtimeRoutes.handle(request, response)) return;
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
     if (await this.#playgroundRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;
@@ -555,7 +741,15 @@ export class ForegroundServer {
     if (pathname === '/api/project/session') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       this.#assertSessionBootstrapOrigin(request);
-      return responseJson(response, { instanceId: this.instanceId, origin: this.url, token: this.sessionToken });
+      const cookieName = this.#sessionCookieName();
+      response.writeHead(200, {
+        'cache-control': 'no-store',
+        'content-type': 'application/json; charset=utf-8',
+        'set-cookie': `${cookieName}=${this.sessionToken}; HttpOnly; SameSite=Strict; Path=/api`,
+        'x-content-type-options': 'nosniff',
+      });
+      response.end(JSON.stringify({ cookieName, instanceId: this.instanceId, origin: this.url, token: this.sessionToken }));
+      return;
     }
     if (pathname === '/api/project/rebuild') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -639,44 +833,119 @@ export class ForegroundServer {
     }
   }
 
+  #assertEventSession(request: IncomingMessage): void {
+    const origin = singleHeader(request.headers.origin);
+    if (origin !== this.url && (origin !== undefined || singleHeader(request.headers['sec-fetch-site']) !== 'same-origin')) {
+      throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
+    }
+    if (cookieValue(request, this.#sessionCookieName()) !== this.sessionToken) {
+      throw requestError(diagnostic('AB8004', 'A valid foreground session cookie is required.', 403));
+    }
+  }
+
+  /** Stable per-origin names overwrite restart credentials while isolating concurrent loopback ports. */
+  #sessionCookieName(): string {
+    return `agent-bundle-foreground-session-${createHash('sha256').update(this.url).digest('hex').slice(0, 32)}`;
+  }
+
   #streamEvents(request: IncomingMessage, response: ServerResponse): void {
+    try {
+      this.#assertEventSession(request);
+    } catch (error) {
+      const failure = isRequestDiagnostic(error)
+        ? error
+        : diagnostic('AB8007', 'Request could not be completed.', 500);
+      response.writeHead(failure.status, {
+        'cache-control': 'no-store',
+        'content-type': 'application/json; charset=utf-8',
+        'x-content-type-options': 'nosniff',
+      });
+      response.end(JSON.stringify({ diagnostic: { code: failure.code, message: failure.message } }));
+      return;
+    }
     const sequence = afterSequence(request, this.#eventHub.latestSequence);
-    writeKeepAliveStreamHead(response, {
-      cacheControl: 'no-cache',
-      contentType: 'text/event-stream; charset=utf-8',
+    response.writeHead(200, {
+      'cache-control': 'no-store',
+      connection: 'keep-alive',
+      'content-type': 'text/event-stream; charset=utf-8',
     });
+    response.flushHeaders();
+    let backpressured = false;
+    let closed = false;
+    let bufferedBytes = 0;
+    let queuedBytes = 0;
+    const queued: QueuedSseFrame[] = [];
     const stream = { subscription: undefined as ProjectEventSubscription | undefined };
-    const writer = createBackpressuredWriter(response, {
-      byteLimit: sseQueueByteLimit,
-      countInFlightBytes: true,
-    });
     const unsubscribe = () => {
       stream.subscription?.unsubscribe();
       if (stream.subscription !== undefined) this.#streamSubscriptions.delete(stream.subscription);
-      writer.markClosed();
+      bufferedBytes = 0;
+      queued.length = 0;
+      queuedBytes = 0;
     };
     const closeStream = () => {
-      writer.markClosed();
+      closed = true;
       unsubscribe();
     };
     const closeSlowStream = () => {
       closeStream();
       response.destroy();
     };
+    const drain = () => {
+      if (closed || response.writableEnded || response.destroyed) return;
+      backpressured = false;
+      bufferedBytes = 0;
+      while (queued.length > 0) {
+        const next = queued.shift()!;
+        queuedBytes -= next.bytes;
+        if (!response.write(next.frame)) {
+          backpressured = true;
+          bufferedBytes = next.bytes;
+          response.once('drain', drain);
+          return;
+        }
+      }
+    };
     const deliver = (frame: string) => {
-      if (writer.enqueue(frame) === 'overflow') closeSlowStream();
+      if (closed || response.writableEnded || response.destroyed) return;
+      const bytes = Buffer.byteLength(frame);
+      if (!backpressured) {
+        if (!response.write(frame)) {
+          backpressured = true;
+          bufferedBytes = bytes;
+          response.once('drain', drain);
+        }
+        return;
+      }
+      if (bufferedBytes + queuedBytes + bytes > sseQueueByteLimit) {
+        closeSlowStream();
+        return;
+      }
+      queued.push({ bytes, frame });
+      queuedBytes += bytes;
     };
     const subscription = this.#eventHub.subscribe({ afterSequence: sequence }, (event) => {
       deliver(eventFrame(event));
     });
     stream.subscription = subscription;
-    if (writer.closed || request.destroyed || response.destroyed) {
+    if (closed || request.destroyed || response.destroyed) {
       closeStream();
       return;
     }
     this.#streamSubscriptions.add(subscription);
     request.once('close', closeStream);
     response.once('close', closeStream);
+    const handle = Object.freeze({
+      disconnect: () => {
+        if (closed) return;
+        closeSlowStream();
+      },
+    });
+    try {
+      this.#testing?.onProjectEventStream?.(handle);
+    } catch {
+      // Test observation cannot perturb an authenticated project stream.
+    }
   }
 
   async #serveAsset(request: IncomingMessage, response: ServerResponse, method: string): Promise<void> {

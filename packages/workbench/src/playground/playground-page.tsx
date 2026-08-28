@@ -1,24 +1,20 @@
-import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
 import type { ArtifactInspection, ArtifactInspectionScript } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import type { ServedSkillDocument } from '../../../agent-bundle/src/contracts/skills.ts';
 import type {
   DraftEvalCase,
-  NativePlaygroundCatalog,
-  NativePlaygroundHost,
   PlaygroundEpochIdentity,
   PlaygroundExport,
   PlaygroundJsonObject,
-  PlaygroundOperationRequest,
   PlaygroundReplay,
-  PlaygroundRun,
   PlaygroundSession,
   PlaygroundTarget,
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/contracts/playground.ts';
+import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/contracts/playground.ts';
+import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/contracts/playground.ts';
 
-import { wait } from '../foreground-session.ts';
 import { canonicalHookInputFor } from '../hooks/hooks-page.tsx';
 import { parseRawJsonRecord, serializeJsonRecord } from '../mcp/mcp-json-input.tsx';
 import { PlaygroundClientError, type PlaygroundClient } from './playground-client.ts';
@@ -41,6 +37,7 @@ export interface PlaygroundTraceViewProps {
 
 type PlaygroundScriptCatalogEntry = Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>;
 type PlaygroundHookCatalogEntry = Pick<ArtifactInspection['runtime']['hooks'][number], 'event' | 'id' | 'name' | 'target'>;
+type PlaygroundMcpServerCatalogEntry = Pick<ArtifactInspection['runtime']['mcpServers'][number], 'name' | 'target'>;
 type PlaygroundSkillCatalogEntry = Pick<ServedSkillDocument, 'id' | 'name' | 'targets'>;
 
 export interface PlaygroundScriptCatalog {
@@ -71,6 +68,7 @@ export interface PlaygroundPageProps {
   /** The active epoch is only used for admitting a new run; persisted sessions pin their own epoch. */
   readonly epoch: PlaygroundEpochIdentity | undefined;
   readonly hooks: readonly PlaygroundHookCatalogEntry[];
+  readonly mcpServers: readonly PlaygroundMcpServerCatalogEntry[];
   /** The shell retains the run/session identity across navigation and project rebuilds. */
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly run: PlaygroundRun | undefined;
@@ -83,7 +81,8 @@ export type PlaygroundOperation = PlaygroundOperationRequest['operation'];
 
 const jsonDraftError = 'This field must contain a JSON object.';
 
-const errorMessage = (reason: unknown): string => messageFrom(reason, 'The playground request could not be completed.');
+const errorMessage = (reason: unknown): string =>
+  reason instanceof Error ? reason.message : 'The playground request could not be completed.';
 
 const asJsonObject = (value: Readonly<Record<string, unknown>>): PlaygroundJsonObject => value as PlaygroundJsonObject;
 
@@ -91,8 +90,21 @@ const terminal = (session: PlaygroundSession): boolean => session.state === 'clo
 
 const abortError = (): Error => Object.assign(new Error('Playground observation was aborted.'), { name: 'AbortError' });
 
-const delay = (milliseconds: number, signal: AbortSignal): Promise<void> =>
-  wait(milliseconds, { abortError, onAbort: 'reject', signal });
+const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> => new Promise((resolvePromise, rejectPromise) => {
+  if (signal.aborted) {
+    rejectPromise(abortError());
+    return;
+  }
+  const timeout = setTimeout(() => {
+    signal.removeEventListener('abort', abort);
+    resolvePromise();
+  }, milliseconds);
+  const abort = (): void => {
+    clearTimeout(timeout);
+    rejectPromise(abortError());
+  };
+  signal.addEventListener('abort', abort, { once: true });
+});
 
 const maxStreamReconnects = 3;
 const pollDelayMilliseconds = 250;
@@ -123,6 +135,7 @@ export interface PlaygroundSelection {
 
 interface PlaygroundCapabilityCatalog {
   readonly hooks: readonly PlaygroundHookCatalogEntry[];
+  readonly mcpServers: readonly PlaygroundMcpServerCatalogEntry[];
   readonly nativeAvailable?: boolean;
   readonly scripts: readonly PlaygroundScriptCatalogEntry[];
   readonly skills: readonly PlaygroundSkillCatalogEntry[];
@@ -138,6 +151,11 @@ const playgroundSkillsForTarget = (
   target: string,
 ): readonly PlaygroundSkillCatalogEntry[] => skills.filter((skill) => skill.targets === undefined || skill.targets.includes(target));
 
+const playgroundMcpServersForTarget = (
+  servers: readonly PlaygroundMcpServerCatalogEntry[],
+  target: string,
+): readonly PlaygroundMcpServerCatalogEntry[] => servers.filter((server) => server.target === target);
+
 const operationsForTarget = (
   catalog: PlaygroundCapabilityCatalog,
   target: string,
@@ -145,6 +163,7 @@ const operationsForTarget = (
   ...(playgroundScriptsForTarget(catalog.scripts, target).length === 0 ? [] : ['script.run' as const]),
   ...(playgroundHooksForTarget(catalog.hooks, target).length === 0 ? [] : ['hook.simulate' as const]),
   ...(playgroundSkillsForTarget(catalog.skills, target).length === 0 ? [] : ['skill.inspect' as const]),
+  ...(playgroundMcpServersForTarget(catalog.mcpServers, target).length === 0 ? [] : ['mcp.call-tool' as const]),
   ...(catalog.nativeAvailable === true ? ['native.prompt' as const] : []),
 ]);
 
@@ -153,13 +172,13 @@ const operationsForCatalog = (
   targets: readonly PlaygroundTarget[],
 ): readonly PlaygroundOperation[] => {
   const available = new Set(targets.flatMap((target) => operationsForTarget(catalog, target.name)));
-  return Object.freeze((['script.run', 'hook.simulate', 'skill.inspect', 'native.prompt'] as const)
+  return Object.freeze((['script.run', 'hook.simulate', 'skill.inspect', 'mcp.call-tool', 'native.prompt'] as const)
     .filter((operation) => available.has(operation)));
 };
 
 /** Defaults only missing or stale catalog choices, keeping a user's valid selection intact. */
 export const playgroundSelectionFor = (
-  input: Readonly<PlaygroundSelection & { readonly operationIsImplicit: boolean }>,
+  input: Readonly<PlaygroundSelection & { readonly operationIsImplicit: boolean }> ,
   targets: readonly PlaygroundTarget[],
   catalog: PlaygroundCapabilityCatalog,
 ): PlaygroundSelection => {
@@ -191,6 +210,228 @@ export interface PlaygroundRunObserverOptions {
   readonly signal: AbortSignal;
   readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
+
+export interface PlaygroundObservationLease {
+  abort(): void;
+  current(): boolean;
+  readonly signal: AbortSignal;
+}
+
+export interface PlaygroundObservationLifecycle {
+  begin(): PlaygroundObservationLease;
+  invalidate(): void;
+}
+
+export interface PlaygroundCancelLease {
+  current(): boolean;
+  readonly signal: AbortSignal;
+}
+
+export interface PlaygroundCancelFlight extends PlaygroundCancelLease {
+  readonly done: Promise<void>;
+  readonly started: boolean;
+}
+
+export interface PlaygroundCancelFlightLifecycle {
+  start(operation: (lease: PlaygroundCancelLease) => Promise<void>): PlaygroundCancelFlight;
+  invalidate(): void;
+}
+
+/** Guards the server-draining cancel/replay sequence before React re-renders the button disabled. */
+export const createPlaygroundCancelFlight = (): PlaygroundCancelFlightLifecycle => {
+  let active: { readonly controller: AbortController; done: Promise<void> } | undefined;
+  const flight = (
+    owner: NonNullable<typeof active>,
+    started: boolean,
+  ): PlaygroundCancelFlight => Object.freeze({
+    current: () => active === owner && !owner.controller.signal.aborted,
+    done: owner.done,
+    signal: owner.controller.signal,
+    started,
+  });
+  const invalidate = (): void => {
+    const previous = active;
+    active = undefined;
+    previous?.controller.abort();
+  };
+  return Object.freeze({
+    start: (operation: (lease: PlaygroundCancelLease) => Promise<void>): PlaygroundCancelFlight => {
+      if (active !== undefined) return flight(active, false);
+      const controller = new AbortController();
+      const owner = { controller, done: Promise.resolve() };
+      active = owner;
+      const lease = Object.freeze({
+        current: () => active === owner && !controller.signal.aborted,
+        signal: controller.signal,
+      });
+      let done: Promise<void>;
+      try { done = Promise.resolve(operation(lease)); }
+      catch (reason) { done = Promise.reject(reason); }
+      owner.done = done;
+      void done.finally(() => {
+        if (active === owner) active = undefined;
+      }).catch(() => undefined);
+      return flight(owner, true);
+    },
+    invalidate,
+  });
+};
+
+export interface PlaygroundActionLease {
+  abort(): void;
+  current(): boolean;
+  release(): void;
+  readonly key: Readonly<{ readonly client: PlaygroundClient; readonly generation: number }>;
+  readonly signal: AbortSignal;
+}
+
+export interface PlaygroundActionLifecycle {
+  begin(client: PlaygroundClient): PlaygroundActionLease;
+  invalidate(): void;
+  replace(client: PlaygroundClient): void;
+}
+
+/** Client changes retire every action synchronously, before a late response can write page or shell state. */
+export const createPlaygroundActionLifecycle = (initialClient: PlaygroundClient): PlaygroundActionLifecycle => {
+  let client = initialClient;
+  let generation = 0;
+  const controllers = new Set<AbortController>();
+  const invalidate = (): void => {
+    generation += 1;
+    for (const controller of controllers) controller.abort();
+    controllers.clear();
+  };
+  const replace = (nextClient: PlaygroundClient): void => {
+    if (client === nextClient) return;
+    client = nextClient;
+    invalidate();
+  };
+  return Object.freeze({
+    begin: (actionClient: PlaygroundClient): PlaygroundActionLease => {
+      replace(actionClient);
+      const controller = new AbortController();
+      const key = Object.freeze({ client: actionClient, generation });
+      controllers.add(controller);
+      return Object.freeze({
+        abort: () => controller.abort(),
+        current: () => client === key.client && generation === key.generation && !controller.signal.aborted,
+        key,
+        release: () => controllers.delete(controller),
+        signal: controller.signal,
+      });
+    },
+    invalidate,
+    replace,
+  });
+};
+
+export interface PlaygroundCatalogKey {
+  readonly client: PlaygroundClient;
+  readonly epochId: string;
+  readonly generation: number;
+}
+
+export interface PlaygroundCatalogLease {
+  abort(): void;
+  current(): boolean;
+  readonly key: PlaygroundCatalogKey;
+  readonly signal: AbortSignal;
+}
+
+export interface PlaygroundCatalogLifecycle {
+  begin(key: Omit<PlaygroundCatalogKey, 'generation'>): PlaygroundCatalogLease;
+  invalidate(): void;
+}
+
+interface GenerationLease {
+  abort(): void;
+  current(): boolean;
+  readonly generation: number;
+  readonly signal: AbortSignal;
+}
+
+/** One live request at a time: beginning a lease synchronously retires and aborts the previous one. */
+const createGenerationLifecycle = (): { begin(): GenerationLease; invalidate(): void } => {
+  let active: { readonly controller: AbortController; readonly generation: number } | undefined;
+  let generation = 0;
+  const invalidate = (): void => {
+    const previous = active;
+    active = undefined;
+    generation += 1;
+    previous?.controller.abort();
+  };
+  return Object.freeze({
+    begin: (): GenerationLease => {
+      const previous = active;
+      active = undefined;
+      previous?.controller.abort();
+      generation += 1;
+      const controller = new AbortController();
+      const ownGeneration = generation;
+      active = { controller, generation: ownGeneration };
+      return Object.freeze({
+        abort: () => {
+          if (active?.controller === controller) invalidate();
+          else controller.abort();
+        },
+        current: () => active?.generation === ownGeneration && !controller.signal.aborted,
+        generation: ownGeneration,
+        signal: controller.signal,
+      });
+    },
+    invalidate,
+  });
+};
+
+export interface PlaygroundCancelRunOptions {
+  readonly client: Pick<PlaygroundClient, 'cancel' | 'replay'>;
+  readonly lease: PlaygroundCancelLease;
+  readonly observation: PlaygroundObservationLifecycle;
+  readonly onEvents: (events: readonly PlaygroundTraceEvent[]) => void;
+  readonly onObservationRestart: () => void;
+  readonly onSession: (session: PlaygroundSession) => void;
+  readonly runId: string;
+  readonly sessionId: string;
+}
+
+/** Claims same-run evidence before cancellation so an older observer cannot overwrite the terminal replay. */
+export const cancelPlaygroundRun = async ({
+  client, lease, observation, onEvents, onObservationRestart, onSession, runId, sessionId,
+}: PlaygroundCancelRunOptions): Promise<void> => {
+  observation.invalidate();
+  try {
+    await client.cancel(runId, lease.signal);
+    if (!lease.current()) return;
+    const replay = await client.replay(sessionId, 0, lease.signal);
+    if (!lease.current()) return;
+    onEvents(replay.events);
+    onSession(replay.session);
+  } catch (reason) {
+    if (lease.current()) onObservationRestart();
+    throw reason;
+  }
+};
+
+/** Every request owns a key, so a late catalog cannot repopulate a replacement client or artifact epoch. */
+export const createPlaygroundCatalogLifecycle = (): PlaygroundCatalogLifecycle => {
+  const lifecycle = createGenerationLifecycle();
+  return Object.freeze({
+    begin: (next: Omit<PlaygroundCatalogKey, 'generation'>): PlaygroundCatalogLease => {
+      const lease = lifecycle.begin();
+      return Object.freeze({
+        abort: lease.abort,
+        current: lease.current,
+        key: Object.freeze({ ...next, generation: lease.generation }),
+        signal: lease.signal,
+      });
+    },
+    invalidate: lifecycle.invalidate,
+  });
+};
+
+/** The page can retire a prior run synchronously before React commits its replacement state. */
+export const createPlaygroundObservationLifecycle = (): PlaygroundObservationLifecycle =>
+  createGenerationLifecycle();
 
 /** Observes one immutable run identity; callers abort it before replacing the run or unmounting the page. */
 export const observePlaygroundRun = async ({ client, onEvents, onSession, run, signal, wait = delay }: PlaygroundRunObserverOptions): Promise<void> => {
@@ -430,12 +671,13 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
  * Starts typed server-owned operations, then observes their durable session by
  * replay, live NDJSON stream, polling, and a final replay before stream close.
  */
-export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, client, epoch, hooks, onRunChange, run, scripts, skills, targets }: PlaygroundPageProps) => {
+export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, client, epoch, hooks, mcpServers, onRunChange, run, scripts, skills, targets }: PlaygroundPageProps) => {
   const initialSelection = playgroundSelectionFor({
     hook: '', operation: 'skill.inspect', operationIsImplicit: true, scriptId: '', skillId: '', target: '',
-  }, targets, { hooks, nativeAvailable: catalog !== undefined && catalog.selections.length > 0, scripts, skills });
+  }, targets, { hooks, mcpServers, nativeAvailable: catalog !== undefined && catalog.selections.length > 0, scripts, skills });
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [observationRevision, setObservationRevision] = useState(0);
   const [draftEvalCase, setDraftEvalCase] = useState<DraftEvalCase>();
   const [error, setError] = useState<string>();
   const [events, setEvents] = useState<readonly PlaygroundTraceEvent[]>([]);
@@ -444,6 +686,9 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const [hookInput, setHookInput] = useState(() => serializeJsonRecord(
     canonicalHookInputFor(hooks.find((entry) => entry.id === initialSelection.hook)?.event ?? '') ?? {},
   ));
+  const [mcpArguments, setMcpArguments] = useState(() => serializeJsonRecord({}));
+  const [mcpServerName, setMcpServerName] = useState('');
+  const [mcpTool, setMcpTool] = useState('');
   const [operation, setOperation] = useState<PlaygroundOperation>(initialSelection.operation);
   const [scriptId, setScriptId] = useState(initialSelection.scriptId);
   const [selectedRefs, setSelectedRefs] = useState<readonly string[]>([]);
@@ -452,23 +697,53 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const [nativeSelection, setNativeSelection] = useState<NativePlaygroundSelection>(emptyNativeSelection);
   const [targetName, setTargetName] = useState(initialSelection.target);
   const operationIsImplicit = useRef(true);
-  const actionControllers = useRef(new Set<AbortController>());
-  const observationController = useRef<AbortController | undefined>(undefined);
-  const session = run?.session;
+  const cancelFlight = useRef(createPlaygroundCancelFlight());
+  const cancelPresentation = useRef<Promise<void> | undefined>(undefined);
+  const clientOwner = useRef(client);
+  const clientResetPending = useRef(false);
+  const actionLifecycle = useRef(createPlaygroundActionLifecycle(client));
+  const observationLifecycle = useRef(createPlaygroundObservationLifecycle());
+  const clientReplaced = clientOwner.current !== client;
+  if (clientReplaced) {
+    clientOwner.current = client;
+    clientResetPending.current = true;
+    actionLifecycle.current.replace(client);
+    cancelFlight.current.invalidate();
+    observationLifecycle.current.invalidate();
+  }
+  const activeRun = clientReplaced ? undefined : run;
+  const session = activeRun?.session;
   const sessionId = session?.id;
-  const runId = run?.id;
+  const runId = activeRun?.id;
+  const cancelOwner = useRef({ client, runId, sessionId });
+  if (cancelOwner.current.client !== client || cancelOwner.current.runId !== runId || cancelOwner.current.sessionId !== sessionId) {
+    cancelOwner.current = { client, runId, sessionId };
+    cancelFlight.current.invalidate();
+  }
   const hookInputObject = parseRawJsonRecord(hookInput);
-  const view = playgroundViewFor({ epoch, events, exported, selectedRefs, session });
+  const mcpArgumentsObject = parseRawJsonRecord(mcpArguments);
+  const view = playgroundViewFor({
+    epoch,
+    events: clientReplaced ? [] : events,
+    exported: clientReplaced ? undefined : exported,
+    selectedRefs: clientReplaced ? [] : selectedRefs,
+    session,
+  });
   const selectedTargetName = targets.some((target) => target.name === targetName) ? targetName : '';
   const currentNativeSelection = nativeSelectionFor(catalog, nativeSelection);
   const targetScripts = playgroundScriptsForTarget(scripts, selectedTargetName);
   const selectedScriptId = playgroundSelectedScriptId(scriptId, scripts, selectedTargetName);
   const targetHooks = playgroundHooksForTarget(hooks, selectedTargetName);
   const selectedHook = targetHooks.find((entry) => entry.id === hook);
+  const targetMcpServers = playgroundMcpServersForTarget(mcpServers, selectedTargetName);
+  const selectedMcpServerName = targetMcpServers.some((server) => server.name === mcpServerName)
+    ? mcpServerName
+    : targetMcpServers[0]?.name ?? '';
   const targetSkills = playgroundSkillsForTarget(skills, selectedTargetName);
   const selectedSkill = targetSkills.find((entry) => entry.id === skillId);
   const capabilityCatalog = {
     hooks,
+    mcpServers,
     nativeAvailable: catalog !== undefined && catalog.selections.length > 0,
     scripts,
     skills,
@@ -478,6 +753,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   useEffect(() => {
     const next = playgroundSelectionFor({ hook, operation, operationIsImplicit: operationIsImplicit.current, scriptId, skillId, target: targetName }, targets, {
       hooks,
+      mcpServers,
       nativeAvailable: catalog !== undefined && catalog.selections.length > 0,
       scripts,
       skills,
@@ -487,54 +763,75 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     if (next.scriptId !== scriptId) setScriptId(next.scriptId);
     if (next.skillId !== skillId) setSkillId(next.skillId);
     if (next.target !== targetName) setTargetName(next.target);
-  }, [catalog, hook, hooks, operation, scriptId, scripts, skillId, skills, targetName, targets]);
+  }, [catalog, hook, hooks, mcpServers, operation, scriptId, scripts, skillId, skills, targetName, targets]);
 
   useEffect(() => {
-    const controllers = actionControllers.current;
-    return () => {
-      for (const controller of controllers) controller.abort();
-      controllers.clear();
-    };
-  }, []);
+    if (!clientResetPending.current) return;
+    clientResetPending.current = false;
+    setDraftEvalCase(undefined);
+    setError(undefined);
+    setEvents([]);
+    setExported(undefined);
+    setSelectedRefs([]);
+    setBusy(false);
+    setCancelling(false);
+    onRunChange(undefined);
+  }, [client, onRunChange]);
+
+  useEffect(() => () => actionLifecycle.current.invalidate(), []);
 
   useEffect(() => {
-    if (run === undefined || runId === undefined || sessionId === undefined) return;
-    const observedRun = run;
-    const controller = new AbortController();
-    observationController.current = controller;
-    const live = (): boolean => !controller.signal.aborted;
+    if (selectedTargetName !== targetName) setTargetName(selectedTargetName);
+  }, [selectedTargetName, targetName]);
+
+  useEffect(() => {
+    if (currentNativeSelection.caseId !== nativeSelection.caseId || currentNativeSelection.epochId !== nativeSelection.epochId ||
+      currentNativeSelection.fixtureId !== nativeSelection.fixtureId || currentNativeSelection.host !== nativeSelection.host ||
+      currentNativeSelection.modelPinId !== nativeSelection.modelPinId) setNativeSelection(currentNativeSelection);
+  }, [currentNativeSelection, nativeSelection]);
+
+  useEffect(() => {
+    if (activeRun === undefined || runId === undefined || sessionId === undefined) return;
+    const observedRun = activeRun;
+    const observation = observationLifecycle.current.begin();
     void observePlaygroundRun({
       client,
       onEvents: (next) => {
-        if (live()) setEvents(next);
+        if (observation.current()) setEvents(next);
       },
       onSession: (next) => {
-        if (live()) onRunChange({ id: runId, session: next });
+        if (observation.current()) onRunChange({ id: runId, session: next });
       },
       run: observedRun,
-      signal: controller.signal,
+      signal: observation.signal,
     }).catch((reason: unknown) => {
-      if (live()) setError(errorMessage(reason));
+      if (observation.current()) setError(errorMessage(reason));
     });
     return () => {
-      controller.abort();
-      if (observationController.current === controller) observationController.current = undefined;
+      observation.abort();
     };
-  }, [client, onRunChange, runId, sessionId]);
+  }, [client, observationRevision, onRunChange, runId, sessionId]);
 
-  const runAction = async (action: (signal: AbortSignal) => Promise<void>): Promise<void> => {
-    const controller = new AbortController();
-    actionControllers.current.add(controller);
-    const live = (): boolean => !controller.signal.aborted;
+  useEffect(() => () => {
+    cancelPresentation.current = undefined;
+    cancelFlight.current.invalidate();
+  }, []);
+
+  const runAction = async (action: (lease: PlaygroundActionLease) => Promise<void>): Promise<void> => {
+    const lease = actionLifecycle.current.begin(client);
+    if (!lease.current()) {
+      lease.release();
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
-      await action(controller.signal);
+      await action(lease);
     } catch (reason) {
-      if (live()) setError(errorMessage(reason));
+      if (lease.current()) setError(errorMessage(reason));
     } finally {
-      if (live()) setBusy(false);
-      actionControllers.current.delete(controller);
+      if (lease.current()) setBusy(false);
+      lease.release();
     }
   };
 
@@ -560,16 +857,24 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     if (operation === 'script.run') {
       return selectedScriptId.length === 0 ? undefined : { operation, scriptId: selectedScriptId, target: selectedTargetName };
     }
+    if (operation === 'mcp.call-tool') {
+      return selectedMcpServerName.length === 0 || mcpTool.length === 0 || mcpArgumentsObject === null
+        ? undefined
+        : {
+            arguments: asJsonObject(mcpArgumentsObject), operation, serverName: selectedMcpServerName,
+            target: selectedTargetName, tool: mcpTool,
+          };
+    }
     return undefined;
   };
 
   const start = async (): Promise<void> => {
     const input = operationInput();
     if (input === undefined) return;
-    await runAction(async (signal) => {
-      const started = await client.run(input, signal);
-      if (signal.aborted) return;
-      observationController.current?.abort();
+    await runAction(async (lease) => {
+      const started = await client.run(input, lease.signal);
+      if (!lease.current()) return;
+      observationLifecycle.current.invalidate();
       setDraftEvalCase(undefined);
       setEvents([]);
       setExported(undefined);
@@ -578,41 +883,53 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     });
   };
 
-  const cancel = async (): Promise<void> => {
-    if (runId === undefined || sessionId === undefined) return;
-    const controller = new AbortController();
-    actionControllers.current.add(controller);
-    const live = (): boolean => !controller.signal.aborted;
-    setCancelling(true);
-    setError(undefined);
-    try {
-      await client.cancel(runId, controller.signal);
-      if (!live()) return;
-      const replay = await client.replay(sessionId, 0, controller.signal);
-      if (!live()) return;
-      setEvents(replay.events);
-      onRunChange({ id: runId, session: replay.session });
-    } catch (reason) {
-      if (live()) setError(errorMessage(reason));
-    } finally {
-      if (live()) setCancelling(false);
-      actionControllers.current.delete(controller);
+  const cancel = (): Promise<void> => {
+    if (runId === undefined || sessionId === undefined) return Promise.resolve();
+    const flight = cancelFlight.current.start(async (lease) => {
+      try {
+        setError(undefined);
+        await cancelPlaygroundRun({
+          client,
+          lease,
+          observation: observationLifecycle.current,
+          onEvents: setEvents,
+          onObservationRestart: () => setObservationRevision((previous) => previous + 1),
+          onSession: (next) => onRunChange({ id: runId, session: next }),
+          runId,
+          sessionId,
+        });
+      } catch (reason) {
+        if (lease.current()) {
+          setError(errorMessage(reason));
+        }
+      }
+    });
+    if (flight.started) {
+      cancelPresentation.current = flight.done;
+      setCancelling(true);
+      void flight.done.finally(() => {
+        if (cancelPresentation.current === flight.done) {
+          cancelPresentation.current = undefined;
+          setCancelling(false);
+        }
+      }).catch(() => undefined);
     }
+    return flight.done;
   };
 
   const exportTrace = async (): Promise<void> => {
     if (sessionId === undefined) return;
-    await runAction(async (signal) => {
-      const next = await client.export(sessionId, signal);
-      if (!signal.aborted) setExported(next);
+    await runAction(async (lease) => {
+      const next = await client.export(sessionId, lease.signal);
+      if (lease.current()) setExported(next);
     });
   };
 
   const promote = async (): Promise<void> => {
     if (sessionId === undefined || !view.canPromote) return;
-    await runAction(async (signal) => {
-      const next = await client.promoteToDraftEval(sessionId, view.rawEventRefs, signal);
-      if (!signal.aborted) setDraftEvalCase(next);
+    await runAction(async (lease) => {
+      const next = await client.promoteToDraftEval(sessionId, view.rawEventRefs, lease.signal);
+      if (lease.current()) setDraftEvalCase(next);
     });
   };
 
@@ -622,7 +939,9 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
       : [...previous, rawEventRef]);
   };
 
-  const controlsDisabled = busy || cancelling || (session !== undefined && !terminal(session));
+  const actionBusy = clientReplaced ? false : busy;
+  const actionCancelling = clientReplaced ? false : cancelling;
+  const controlsDisabled = actionBusy || actionCancelling || (session !== undefined && !terminal(session));
   const startDisabled = controlsDisabled || epoch === undefined || operationInput() === undefined;
 
   return <div className="playground-content">
@@ -632,7 +951,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
         <p>Choose a supported operation, review its defaults, and run it against the current build.</p>
       </div>
     </div>
-    {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
+    {clientReplaced || error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
     {epoch === undefined && session === undefined
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
@@ -650,6 +969,7 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
             {availableOperations.includes('script.run') ? <option value="script.run">Script execution</option> : undefined}
             {availableOperations.includes('hook.simulate') ? <option value="hook.simulate">Hook simulation</option> : undefined}
             {availableOperations.includes('skill.inspect') ? <option value="skill.inspect">Skill inspection</option> : undefined}
+            {availableOperations.includes('mcp.call-tool') ? <option value="mcp.call-tool">MCP tool call</option> : undefined}
             {availableOperations.includes('native.prompt') ? <option value="native.prompt">Native host prompt</option> : undefined}
           </select>
           {operation === 'native.prompt'
@@ -718,6 +1038,17 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
                   {hookInputObject === null ? <p id="playground-hook-input-error" role="alert">{jsonDraftError}</p> : undefined}
                 </details>
               </>}
+              {operation !== 'mcp.call-tool' ? undefined : <>
+                <label htmlFor="playground-mcp-server">MCP server</label>
+                <select disabled={controlsDisabled || targetMcpServers.length === 0} id="playground-mcp-server" onChange={(event) => setMcpServerName(event.currentTarget.value)} value={selectedMcpServerName}>
+                  {targetMcpServers.map((server) => <option key={server.name} value={server.name}>{server.name}</option>)}
+                </select>
+                <label htmlFor="playground-mcp-tool">MCP tool</label>
+                <input disabled={controlsDisabled} id="playground-mcp-tool" onChange={(event) => setMcpTool(event.currentTarget.value)} value={mcpTool} />
+                <label htmlFor="playground-mcp-arguments">MCP arguments (JSON)</label>
+                <textarea aria-describedby={mcpArgumentsObject === null ? 'playground-mcp-arguments-error' : undefined} aria-invalid={mcpArgumentsObject === null ? true : undefined} disabled={controlsDisabled} id="playground-mcp-arguments" onChange={(event) => setMcpArguments(event.currentTarget.value)} spellCheck={false} value={mcpArguments} />
+                {mcpArgumentsObject === null ? <p id="playground-mcp-arguments-error" role="alert">{jsonDraftError}</p> : undefined}
+              </>}
               {operation !== 'script.run' ? undefined : <>
                 <label htmlFor="playground-script-id">Emitted script</label>
                 <select
@@ -737,9 +1068,9 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
         </section>
         {session === undefined ? undefined : <section aria-label="Server-owned run controls" className="playground-controls">
           <div className="playground-actions">
-            <button disabled={busy || cancelling || terminal(session)} onClick={() => void cancel()} type="button">{cancelling ? 'Cancelling…' : 'Cancel run'}</button>
-            <button disabled={busy || cancelling} onClick={() => void exportTrace()} type="button">Export trace</button>
-            <button disabled={busy || cancelling || !view.canPromote} onClick={() => void promote()} type="button">Promote to draft eval case</button>
+            <button disabled={actionBusy || actionCancelling || terminal(session)} onClick={() => void cancel()} type="button">{actionCancelling ? 'Cancelling…' : 'Cancel run'}</button>
+            <button disabled={actionBusy || actionCancelling} onClick={() => void exportTrace()} type="button">Export trace</button>
+            <button disabled={actionBusy || actionCancelling || !view.canPromote} onClick={() => void promote()} type="button">Promote to draft eval case</button>
           </div>
         </section>}
         <PlaygroundTraceView onToggle={toggle} view={view} />

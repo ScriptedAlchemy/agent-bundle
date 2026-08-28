@@ -26,6 +26,11 @@ export interface BundledOutputCandidate {
   readonly path: string;
   /** Absolute authored inputs known by the compiler before bundling. */
   readonly sourceInputs: readonly string[];
+  /**
+   * Permits a final HTML asset to use its declared inputs when public stats do
+   * not associate it with any chunks. No other output kind may opt in.
+   */
+  readonly allowUnassociatedHtml?: true;
 }
 
 export interface BundledOutputEvidence {
@@ -123,7 +128,9 @@ const assertProjectInput = (projectRoot: string, source: string): string =>
 
 const sourcesForAsset = (options: {
   readonly asset: JsonRecord;
+  readonly assetPath: string;
   readonly compilation: JsonRecord;
+  readonly allowUnassociatedHtml: boolean;
   readonly explicitInputs: readonly string[];
   readonly ignoredSourcePaths: readonly string[];
   readonly projectRoot: string;
@@ -131,11 +138,19 @@ const sourcesForAsset = (options: {
   const assetChunks = chunksAt(options.asset);
   const modules = flattenModules(recordsAt(options.compilation.modules));
   const canUseAllModules = recordsAt(options.compilation.assets).length === 1;
+  const explicitInputs = options.explicitInputs.map((source) => assertProjectInput(options.projectRoot, source));
+  if (options.allowUnassociatedHtml && !options.assetPath.endsWith('.html')) {
+    throw new Error(`Only final HTML assets may use declared source inputs without chunk association: ${JSON.stringify(options.assetPath)}.`);
+  }
+  if (options.allowUnassociatedHtml && explicitInputs.length === 0) {
+    throw new Error(`Final HTML asset ${JSON.stringify(options.assetPath)} must declare source inputs.`);
+  }
   if (!canUseAllModules && assetChunks.length === 0) {
+    if (options.allowUnassociatedHtml) return sortedUnique(explicitInputs);
     throw new Error('Bundler stats cannot associate an output asset with its source modules.');
   }
   const sources = [
-    ...options.explicitInputs.map((source) => assertProjectInput(options.projectRoot, source)),
+    ...explicitInputs,
     ...modules.flatMap((module) => {
       if (!canUseAllModules && !hasSharedChunk(assetChunks, chunksAt(module))) return [];
       const source = stringAt(module, 'nameForCondition');
@@ -185,7 +200,9 @@ export const collectBundledOutputEvidence = (options: {
       path: expected.path,
       sourceInputs: sourcesForAsset({
         asset: match.asset,
+        assetPath: expected.path,
         compilation: match.compilation,
+        allowUnassociatedHtml: expected.allowUnassociatedHtml === true,
         explicitInputs: expected.sourceInputs,
         ignoredSourcePaths,
         projectRoot: options.projectRoot,
