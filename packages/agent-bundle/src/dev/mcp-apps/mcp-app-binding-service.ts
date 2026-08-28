@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../mcp-app-profile-descriptors.ts';
+
 export type McpAppJsonValue =
   | null
   | boolean
@@ -8,7 +10,7 @@ export type McpAppJsonValue =
   | readonly McpAppJsonValue[]
   | { readonly [key: string]: McpAppJsonValue };
 
-export type McpAppPreviewProfile = 'chatgpt' | 'claude' | 'portable';
+export type McpAppPreviewProfile = McpAppProfileId;
 
 export interface McpAppToolDefinition {
   readonly _meta?: { readonly [key: string]: McpAppJsonValue };
@@ -143,7 +145,7 @@ const requireNonempty = (value: string, label: string): string => {
 };
 
 const requireProfile = (profile: McpAppPreviewProfile): McpAppPreviewProfile => {
-  if (profile === 'chatgpt' || profile === 'claude' || profile === 'portable') return profile;
+  if (Object.hasOwn(MCP_APP_PROFILE_DESCRIPTORS, profile)) return profile;
   throw new Error(`Unsupported MCP App preview profile ${JSON.stringify(profile)}.`);
 };
 

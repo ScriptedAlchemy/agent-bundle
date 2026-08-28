@@ -9,6 +9,7 @@ import { redactEvalCredentialText, withoutEvalCredentialEnvironment } from './cr
 import { harnessError } from './errors.ts';
 import { materializeEvalFixture, type EvalFixturePlan } from './fixtures.ts';
 import { graderFailureFor, outcomeGraderSpecs, runEvalGraders, type EvalGraderSpec } from './graders.ts';
+import type { EvalHarnessName } from './harness-names.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
 import type { EvalRunWriter, EvalTrialRecord } from './run-store.ts';
 import type {
@@ -91,7 +92,7 @@ const harnessKinds: Readonly<Record<string, EvalHarness['kind']>> = Object.freez
   claude: 'native-claude',
   codex: 'native-codex',
   deterministic: 'deterministic',
-});
+} satisfies Record<EvalHarnessName, EvalHarness['kind']>);
 
 /** Case-qualified trial ids keep records and raw evidence unique across one multi-case run. */
 export const evalTrialId = (caseId: string, host: string, trialIndex: number): string =>

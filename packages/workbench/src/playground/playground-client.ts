@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { NATIVE_HOSTS } from '../../../agent-bundle/src/contracts/playground.ts';
 import type {
   DraftEvalCase,
   PlaygroundExport,
@@ -136,7 +137,7 @@ const nativeCatalogJsonLimits: DetachedJsonLimits = Object.freeze({
   maxValues: 4_096,
 });
 const textSchema = z.string().min(1).max(maximumNativeCatalogStringLength);
-const nativeHostSchema = z.enum(['claude', 'codex']);
+const nativeHostSchema = z.enum(NATIVE_HOSTS);
 const nativeCatalogItemSchema = z.strictObject({ id: textSchema, label: textSchema });
 const nativeModelPinSchema = nativeCatalogItemSchema.extend({ host: nativeHostSchema });
 const nativeCatalogSelectionSchema = z.strictObject({

@@ -4,9 +4,10 @@ import { promisify } from 'node:util';
 import { isRecord } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import { isMissingExecutableError } from './native-host-spine.ts';
+import type { NativeHost } from './native-hosts.ts';
 
 // Pure parsing and opt-in probing contract for subscription-backed native host CLIs.
-export type NativeHost = 'claude' | 'codex';
+export type { NativeHost } from './native-hosts.ts';
 
 export type HostContractStatus = 'changed' | 'compatible' | 'incompatible' | 'missing' | 'skipped';
 

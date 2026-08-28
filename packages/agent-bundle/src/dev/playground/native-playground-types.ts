@@ -8,8 +8,9 @@ import type { EvalCase } from '../../eval/types.ts';
 import type { NativeClaudeProcessRunner } from '../../host-contracts/native-claude-contract.ts';
 import type { PlaygroundEventInput, PlaygroundJsonObject } from './playground-store.ts';
 import type { ArtifactEpoch } from '../types.ts';
+import type { NativeHost } from '../../host-contracts/native-hosts.ts';
 
-export type NativePlaygroundHost = 'claude' | 'codex';
+export type NativePlaygroundHost = NativeHost;
 
 /** The exact browser shape accepted only after route-level strict decoding. */
 export interface NativePlaygroundRequest {

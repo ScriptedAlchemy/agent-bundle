@@ -3,7 +3,8 @@ import { isCallToolResult } from '@modelcontextprotocol/client';
 import type { ProjectClient } from '../project-client.ts';
 import type { ProjectEventMessage } from '../../../agent-bundle/src/contracts/project.ts';
 import { validateMcpAppUiUri } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
-import { runtimeAppMessageLimits } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+import { MCP_APP_PROFILE_DESCRIPTORS, runtimeAppMessageLimits } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+import type { McpAppProfileId } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type {
   CreateMcpAppPreviewRequest as RuntimeCreateRequest,
   McpAppBindingOperation,
@@ -32,7 +33,7 @@ export interface McpAppJsonObject {
 
 export type McpAppJsonValue = McpAppJsonArray | McpAppJsonObject | McpAppJsonPrimitive;
 
-export type McpAppPreviewProfile = 'chatgpt' | 'claude' | 'portable';
+export type McpAppPreviewProfile = McpAppProfileId;
 export type McpAppBridgeLifecycle = 'created' | 'initializing' | 'initialized' | 'closing' | 'closed';
 export type McpAppRequestId = string | number | null;
 
@@ -548,13 +549,13 @@ const runtimeConfigExtensions = (value: unknown): unknown => {
   return Object.freeze({ entries: Object.freeze(entries), sourceRevision });
 };
 
-const runtimeDescriptor = (value: unknown, profileId: 'portable' | 'chatgpt' | 'claude', profileVersion: string): unknown => {
+const runtimeDescriptor = (value: unknown, profileId: McpAppProfileId, profileVersion: string): unknown => {
   const record = runtimeRecord(value, ['claimsRealHostParity', 'evidence', 'id', 'label', 'version']);
-  const labels: Readonly<Record<typeof profileId, string>> = { chatgpt: 'ChatGPT Simulation', claude: 'Claude Simulation', portable: 'Portable MCP Apps' };
-  if (record.claimsRealHostParity !== false || record.evidence !== 'simulated' || record.id !== profileId || record.label !== labels[profileId] || record.version !== profileVersion) {
+  const label = MCP_APP_PROFILE_DESCRIPTORS[profileId].label;
+  if (record.claimsRealHostParity !== false || record.evidence !== 'simulated' || record.id !== profileId || record.label !== label || record.version !== profileVersion) {
     runtimeInvalid('Runtime MCP App route returned an invalid profile descriptor.');
   }
-  return Object.freeze({ claimsRealHostParity: false, evidence: 'simulated', id: profileId, label: labels[profileId], version: profileVersion });
+  return Object.freeze({ claimsRealHostParity: false, evidence: 'simulated', id: profileId, label, version: profileVersion });
 };
 
 const runtimeResource = (value: unknown): unknown => {

@@ -9,6 +9,8 @@ export {
   provenanceIdentifierPattern,
   semanticGraderIdentityPattern,
 } from '../eval/provenance.ts';
+export { EVAL_HARNESS_NAMES } from '../eval/harness-names.ts';
+export type { EvalHarnessName } from '../eval/harness-names.ts';
 export type {
   EvalCaseSummary,
   EvalRunEventsReplay,

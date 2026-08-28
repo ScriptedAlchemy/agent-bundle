@@ -8,8 +8,9 @@ import type {
   RuntimeVector,
 } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
+import { isMcpSessionTarget, type McpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 
-export type McpRouteTarget = 'claude' | 'codex' | 'cursor' | 'portable';
+export type McpRouteTarget = McpSessionTarget;
 
 export interface McpRouteSessionBinding {
   readonly epochId: string;
@@ -108,8 +109,7 @@ interface Diagnostic {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const isTarget = (value: unknown): value is McpRouteTarget =>
-  value === 'claude' || value === 'codex' || value === 'cursor' || value === 'portable';
+const isTarget = isMcpSessionTarget;
 
 const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;

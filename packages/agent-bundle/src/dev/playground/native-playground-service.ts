@@ -17,14 +17,16 @@ import type { EvalTrialRecord, EvalTrialWriter } from '../../eval/run-store.ts';
 import { normalizeEvalCase } from '../../eval/suite.ts';
 import type { EvalCase } from '../../eval/types.ts';
 import type { NativeClaudeProcessRunner } from '../../host-contracts/native-claude-contract.ts';
+import { NATIVE_HOSTS } from '../../host-contracts/native-hosts.ts';
 import type { PlaygroundEventInput, PlaygroundJsonObject } from './playground-store.ts';
+import type { NativePlaygroundHost } from './native-playground-types.ts';
 import { safeDevWireText } from '../logs/dev-log-service.ts';
 import type { ArtifactEpoch } from '../types.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../../eval/workspace-diff.ts';
 import { isErrno } from '../../core/errors.ts';
 import { isInsideOrEqual } from '../../core/paths.ts';
 
-export type NativePlaygroundHost = 'claude' | 'codex';
+export type { NativePlaygroundHost } from './native-playground-types.ts';
 
 /** The exact browser shape accepted only after route-level strict decoding. */
 export interface NativePlaygroundRequest {
@@ -198,7 +200,7 @@ class DiscardingTrialWriter implements EvalTrialWriter {
   }
 }
 
-const nativeHosts = new Set<NativePlaygroundHost>(['claude', 'codex']);
+const nativeHosts = new Set<NativePlaygroundHost>(NATIVE_HOSTS);
 const catalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
 const maximumCatalogSelections = 256;
 const maximumCatalogSnapshotBytes = 8 * 1_024 * 1_024;

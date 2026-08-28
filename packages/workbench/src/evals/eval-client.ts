@@ -7,7 +7,7 @@ import type {
   EvalSuiteListing,
 } from '../../../agent-bundle/src/contracts/eval.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
-import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
+import type { EvalHarnessName, EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
 import { awaitWithAbort, type ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import {
   nonnegativeIntegerSchema,
@@ -20,7 +20,7 @@ export interface EvalClientOptions {
   readonly foreground: ForegroundRequestAuthority;
 }
 
-export type EvalHarness = 'claude' | 'codex' | 'deterministic';
+export type EvalHarness = EvalHarnessName;
 
 /** Exactly what a browser may choose: authored suites, authored cases, and a trial count. */
 export interface EvalRunStart extends EvalRunSelection {
