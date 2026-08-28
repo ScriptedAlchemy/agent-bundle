@@ -37,7 +37,7 @@ it('publishes one locked package preview for pull requests', async () => {
   expect(parsed.permissions).toEqual({});
   expect(steps.map((step) => step.uses ?? step.run)).toEqual([
     'actions/checkout@v7',
-    'pnpm/setup@v1',
+    'pnpm/setup@v2',
     'pnpm install --frozen-lockfile',
     'pnpm build',
     'pnpm preview:publish',

@@ -58,5 +58,5 @@ it('keeps source and installed-tarball native smokes in the manual self-hosted m
   expect(launcher).toContain("spawn(npm, args, { env: environment, stdio: 'inherit' })");
   expect(launcher).not.toMatch(/(?:^|\s)AGENT_BUNDLE_PACKED_NATIVE_[A-Z_]+=1\s+npm/u);
   expect(workflow).not.toMatch(/\bcorepack\b/u);
-  expect(workflow).toContain('uses: pnpm/setup@v1');
+  expect(workflow).toContain('uses: pnpm/setup@v2');
 });
