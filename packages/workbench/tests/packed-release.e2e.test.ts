@@ -1145,7 +1145,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
             const url = new URL(response.url());
             return response.request().method() === 'GET' && url.origin === origin &&
               url.pathname === '/api/logs/stream' && hasCanonicalAfterCursor(url);
-          }, { timeout: 0 })
+          // Wider than the interaction budget for a loaded runner, but finite:
+          // a stream that never responds must fail the test, not hang the job.
+          }, { timeout: browserTimeout * 5 })
           : undefined;
         await page.getByRole('link', { name: route.label, exact: true }).click();
         await expect(page.getByRole('heading', { name: route.heading })).toBeVisible({ timeout: browserTimeout });
