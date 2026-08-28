@@ -141,7 +141,7 @@ const waitForNewGeneration = async (page, identity, before) => {
       return typeof value === 'string' && value !== '' && value !== expected ? value : false;
     },
     { expected: before, selector: '[data-runtime-provider-session]' },
-    { timeout: browserTimeout },
+    { timeout: 0 },
   );
   const after = await handle.jsonValue();
   if (typeof after !== 'string' || after === before) throw new Error('Runtime generation did not advance.');
