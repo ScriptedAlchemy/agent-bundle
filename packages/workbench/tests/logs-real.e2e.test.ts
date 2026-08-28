@@ -44,8 +44,18 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.goto(`${server.url}#logs`);
     await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.logs-entries > li')).not.toHaveCount(0, { timeout: browserTimeout });
-    const reconnectedSequences = await page.locator('.logs-entries > li').evaluateAll((rows) => rows.map((row) => row.querySelector('.logs-entry-sequence')?.textContent));
+    const replayedSequences = await page.waitForFunction(
+      ({ count, selector }) => {
+        const rows = [...globalThis.document.querySelectorAll(selector)];
+        return rows.length >= count
+          ? rows.map((row) => row.querySelector('.logs-entry-sequence')?.textContent ?? null)
+          : false;
+      },
+      { count: replayCount, selector: '.logs-entries > li' },
+      { timeout: browserTimeout },
+    );
+    const reconnectedSequences = await replayedSequences.jsonValue();
+    if (reconnectedSequences === false) throw new Error('Logs replay readiness returned before the replay was complete.');
     expect(reconnectedSequences.length).toBeGreaterThanOrEqual(replayCount);
     expect(new Set(reconnectedSequences).size).toBe(reconnectedSequences.length);
 
