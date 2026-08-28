@@ -32,7 +32,8 @@ it('publishes one locked package preview for pull requests', async () => {
   };
   const steps = parsed.jobs?.publish?.steps ?? [];
 
-  expect(Object.keys(parsed.on ?? {})).toEqual(['pull_request']);
+  expect(Object.keys(parsed.on ?? {})).toEqual(['pull_request', 'push']);
+  expect((parsed.on as Readonly<Record<string, unknown>>)['push']).toEqual({ branches: ['main'] });
   expect(parsed.permissions).toEqual({});
   expect(steps.map((step) => step.uses ?? step.run)).toEqual([
     'actions/checkout@v7',
