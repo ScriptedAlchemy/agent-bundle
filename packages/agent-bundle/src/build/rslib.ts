@@ -111,6 +111,11 @@ export const buildWithRslib = async (options: {
           bundle: true,
           dts: false,
           format: 'esm',
+          // Copied projects can share one node_modules tree, so a cache keyed
+          // by this stable library id would give concurrent builds one lock.
+          performance: {
+            buildCache: false,
+          },
           // Rsbuild 2.x deprecated performance.chunkSplit 'all-in-one'; the
           // documented migration is top-level splitChunks: false, which also
           // guards against the node-target splitting default added in v2.2.

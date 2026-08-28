@@ -82,6 +82,53 @@ const importPublishedHook = async (wrapper: string) =>
     cwd: dirname(wrapper),
   });
 
+it('does not share a persistent Rslib cache between generated executables', async () => {
+  const createOptions: unknown[] = [];
+  const rslib = {
+    build: async () => ({
+      close: async () => undefined,
+      stats: {
+        toJson: () => ({
+          assets: [{ name: 'hooks/cache-probe.mjs' }],
+          modules: [],
+        }),
+      },
+    }),
+    inspectConfig: async () => ({
+      origin: {
+        bundlerConfigs: [{
+          output: { asyncChunks: false, path: '/tmp/agent-bundle-rslib-cache-output' },
+          performance: { buildCache: false },
+          target: 'node',
+        }],
+      },
+    }),
+  };
+
+  await buildWithRslib({
+    cwd: '/tmp',
+    entries: [{
+      name: 'cache-probe',
+      outputRelativePath: 'hooks/cache-probe.mjs',
+      source: '/tmp/hook.ts',
+      sourceInputs: ['/tmp/hook.ts'],
+    }],
+    outputRoot: '/tmp/agent-bundle-rslib-cache-output',
+  }, {
+    createRslib: async (options) => {
+      createOptions.push(options);
+      return rslib as never;
+    },
+  });
+
+  const [{ config }] = createOptions as [{
+    readonly config: {
+      readonly lib: readonly [{ readonly performance?: { readonly buildCache?: boolean } }];
+    };
+  }];
+  expect(config.lib[0].performance).toEqual({ buildCache: false });
+});
+
 it('closes the Rslib build result after building a virtual hook entry', async () => {
   const close = rs.fn(async () => undefined);
   const buildResult = {
