@@ -65,7 +65,13 @@ const claudeToolResults = (event) => {
   );
 };
 
-const claudeRuntimeToolName = (toolName) => `mcp__rsc-agent-runtime__${toolName}`;
+// Claude Code 2.1.250 names plugin MCP tools mcp__plugin_<plugin>_<server>__<tool>;
+// the 2.1.232-era short form stays accepted for hosts at the supported floor.
+const claudeRuntimeToolNames = (toolName) => [
+  `mcp__rsc-agent-runtime__${toolName}`,
+  `mcp__plugin_rsc-agent-runtime_rsc-agent-runtime__${toolName}`,
+];
+const isClaudeRuntimeTool = (candidate, toolName) => claudeRuntimeToolNames(toolName).includes(candidate);
 
 const completedClaudeToolUses = (events) => {
   const uses = events.flatMap(claudeToolUses);
@@ -99,8 +105,8 @@ const stateHasMarker = (host, records, marker) =>
 
 const claudeEvidence = (events, marker, finalMarker) => {
   const completed = completedClaudeToolUses(events);
-  const recentEdits = completed.filter(({ toolUse }) => toolUse.name === claudeRuntimeToolName('recent_edits'));
-  const renderTimeline = completed.filter(({ toolUse }) => toolUse.name === claudeRuntimeToolName('render_edit_timeline'));
+  const recentEdits = completed.filter(({ toolUse }) => isClaudeRuntimeTool(toolUse.name, 'recent_edits'));
+  const renderTimeline = completed.filter(({ toolUse }) => isClaudeRuntimeTool(toolUse.name, 'render_edit_timeline'));
   const finalMarkerObserved = events.some(
     (event) => event.type === 'result' && event.is_error === false && markerOnOwnLine(event.result, finalMarker),
   );

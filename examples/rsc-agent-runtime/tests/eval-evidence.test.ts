@@ -186,6 +186,33 @@ test('accepts only correlated Claude tool-use and successful result events', asy
   });
 });
 
+test('accepts Claude 2.1.250 plugin-qualified MCP tool names', async () => {
+  const transcript = [
+    JSON.stringify({
+      message: { content: [{ id: 'tool-recent', name: 'mcp__plugin_rsc-agent-runtime_rsc-agent-runtime__recent_edits', type: 'tool_use' }], role: 'assistant' },
+      type: 'assistant',
+    }),
+    JSON.stringify({
+      message: { content: [{ id: 'tool-render', name: 'mcp__plugin_rsc-agent-runtime_rsc-agent-runtime__render_edit_timeline', type: 'tool_use' }], role: 'assistant' },
+      type: 'assistant',
+    }),
+    JSON.stringify({
+      message: { content: [{ content: 'snapshot', is_error: false, tool_use_id: 'tool-recent', type: 'tool_result' }], role: 'user' },
+      type: 'user',
+    }),
+    JSON.stringify({
+      message: { content: [{ content: 'rendered', is_error: false, tool_use_id: 'tool-render', type: 'tool_result' }], role: 'user' },
+      type: 'user',
+    }),
+  ].join('\n');
+
+  await expect(parseEvidence('claude', transcript)).resolves.toMatchObject({
+    eventCounts: { mcp: 1, rscRender: 1 },
+    mcpReadObserved: true,
+    rscRenderToolObserved: true,
+  });
+});
+
 test('rejects Claude tool uses without matching successful tool results', async () => {
   const transcript = [
     JSON.stringify({
