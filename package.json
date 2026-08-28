@@ -60,7 +60,7 @@
     "pkg-pr-new": "0.0.88",
     "playwright": "1.62.1",
     "playwright-core": "1.62.1",
-    "publint": "0.3.23",
+    "publint": "0.3.24",
     "typescript": "7.0.2"
   }
 }
