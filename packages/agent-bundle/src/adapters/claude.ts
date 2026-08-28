@@ -14,7 +14,7 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
-import capabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
+import capabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import {
   mergeHookDocuments,
   encodeNativeHookPlaygroundInput,
@@ -83,7 +83,7 @@ const hookContract = Object.freeze({
 const metadata = Object.freeze({
   adapterRevision: '1.0.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'ebab02950c9b5b82f9eed7210b8b12b0ba11dc6271d1e93155bd25a2b42377c3',
+  capabilitySha256: 'a1d90db5f605e76dad541a1ba37ba06283aa24f8b55f10ce7d197b5c6b5ac9f2',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });

@@ -19,7 +19,7 @@
     "stdio": true,
     "streamableHttp": true
   },
-  "observedCliVersion": "2.1.232",
+  "observedCliVersion": "2.1.250",
   "plugin": {
     "manifest": ".claude-plugin/plugin.json",
     "marketplace": ".claude-plugin/marketplace.json",

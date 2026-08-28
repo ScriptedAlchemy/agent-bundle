@@ -101,29 +101,29 @@ it('records exact immutable metadata for every built-in target', () => {
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
     adapterRevision: '1.0.0',
-    capabilityRevision: '2.1.232',
-    capabilitySha256: 'ebab02950c9b5b82f9eed7210b8b12b0ba11dc6271d1e93155bd25a2b42377c3',
-    observedVersion: '2.1.232',
+    capabilityRevision: '2.1.250',
+    capabilitySha256: 'a1d90db5f605e76dad541a1ba37ba06283aa24f8b55f10ce7d197b5c6b5ac9f2',
+    observedVersion: '2.1.250',
     schemas: [
       {
         name: 'hooks',
-        revision: '2.1.232',
-        sha256: 'a122f0e3b83f8222186bfac6965795b75f8f50716c6d76b105864ac1a578306a',
+        revision: '2.1.250',
+        sha256: '3c6f3e4391f3dca939d75bd0b200ea88e68db939a2cb885d46f0b143293efb84',
       },
       {
         name: 'marketplace',
-        revision: '2.1.232',
-        sha256: 'eba6a3ab555d40926168adecf381f449d64f1b6a5635a53e67d730dd57d5faf7',
+        revision: '2.1.250',
+        sha256: '5a08f241f9e856bb59489a265d9bf4db9c905e874d720f46def59fdb6f3ca257',
       },
       {
         name: 'mcp',
-        revision: '2.1.232',
-        sha256: '5c885bb78328a0f47e2bd769de653c6c9f4479ac79eba0dbcd4d4fdc011b4d17',
+        revision: '2.1.250',
+        sha256: '76ccf02c7bfe2d57945ba18e84da8d655529bd68b4d692f72bce28238c99067e',
       },
       {
         name: 'plugin',
-        revision: '2.1.232',
-        sha256: '55f81e2b772afcdb4f9439b5ea09f0584257175d4ed953a0104261f1114d37cc',
+        revision: '2.1.250',
+        sha256: 'd145d370f5ad16fb9f29a6f1b5c9cb3ae8a6b9c33b3a11513eea324e8feb17c5',
       },
     ],
   });
@@ -134,7 +134,7 @@ it('rehashes every declared capability and schema snapshot against its pinned pr
   const targets = [
     { capabilityFile: 'portable-1.0.0.json', provenanceFile: 'portable/PROVENANCE.json', target: 'portable', versionKey: 'version' },
     { capabilityFile: 'codex-0.147.0.json', provenanceFile: 'codex/PROVENANCE.json', target: 'codex', versionKey: 'observedCliVersion' },
-    { capabilityFile: 'claude-2.1.232.json', provenanceFile: 'claude/PROVENANCE.json', target: 'claude', versionKey: 'observedCliVersion' },
+    { capabilityFile: 'claude-2.1.250.json', provenanceFile: 'claude/PROVENANCE.json', target: 'claude', versionKey: 'observedCliVersion' },
   ] as const;
 
   for (const { capabilityFile, provenanceFile, target, versionKey } of targets) {

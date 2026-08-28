@@ -12,7 +12,7 @@ import { sanitizedHostEnvironment } from './eval-host-environment.mjs';
 import { exampleRootFromModule } from './eval-host-paths.mjs';
 
 const exampleRoot = exampleRootFromModule(import.meta.url);
-const expectedVersions = { claude: '2.1.232', codex: '0.147.0' };
+const expectedVersions = { claude: '2.1.250', codex: '0.147.0' };
 
 const parseHost = (argv) => {
   const hostIndex = argv.indexOf('--host');

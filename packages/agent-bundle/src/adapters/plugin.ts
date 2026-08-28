@@ -12,7 +12,7 @@ import {
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import { pathTokens, type NormalizedMcpServer } from '../core/types.ts';
-import claudeCapabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
+import claudeCapabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import { claudeAdapter, claudeArtifactPaths, claudeHooksValidator, planClaudeArtifacts } from './claude.ts';
 import { codexAdapter, codexArtifactPaths, codexPluginDocumentValidator, planCodexArtifacts } from './codex.ts';
