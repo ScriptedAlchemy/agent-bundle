@@ -39,11 +39,11 @@ agent-bundle build --root . --output dist
 installs into multiple hosts from the same root: `.claude-plugin/` (Claude
 Code), `.codex-plugin/` (Codex), and `.cursor-plugin/` (Cursor) manifests over
 shared `skills/`, `hooks/`, `mcp/`, `scripts/`, and `assets/` directories,
-plus a generated `AGENTS.md` install matrix. Hooks compile once into
-host-detecting wrappers that serve Claude Code and Codex; Cursor consumes the
-skills and MCP servers. Per-host artifacts remain available as `claude`,
-`codex`, `cursor`, and `portable` targets when a host-specific layout is
-required.
+plus a generated `AGENTS.md` install matrix. Hooks compile into host-detecting
+wrappers shared by Claude Code and Codex plus dedicated Cursor-codec wrappers,
+so one authored hook serves all three hosts. Per-host artifacts remain
+available as `claude`, `codex`, `cursor`, and `portable` targets when a
+host-specific layout is required.
 
 ## Install and build
 
@@ -247,12 +247,13 @@ artifact/
     .cursor-plugin/plugin.json
     mcp.json
     scripts/<name>.mjs
+    hooks/<name>.mjs
     skills/<skill>/...
 ```
 
 `agent-bundle.manifest.json` records each emitted file's path, byte length, and SHA-256 digest. This allows `validate --artifact` and artifact operations to run after the source project is no longer present.
 
-Portable artifacts contain portable plugin, skills, MCP, and App-resource files. Codex and Claude artifacts contain their respective native metadata and generated hook wrappers. Cursor artifacts contain the `.cursor-plugin/plugin.json` manifest, the auto-discovered `mcp.json` (Cursor's typeless server format), and shared skills, scripts, and assets; hooks stay Claude/Codex-only until Cursor's hook stdin contract is pinned. Terminal hosts can use normal MCP tools and resources; visual rendering of an MCP App depends on the host supporting the standard resource metadata.
+Portable artifacts contain portable plugin, skills, MCP, and App-resource files. Codex and Claude artifacts contain their respective native metadata and generated hook wrappers. Cursor artifacts contain the `.cursor-plugin/plugin.json` manifest, the auto-discovered `mcp.json` (Cursor's typeless server format), the flat versioned `hooks/hooks.json` with Cursor-codec wrappers, and shared skills, scripts, and assets. Terminal hosts can use normal MCP tools and resources; visual rendering of an MCP App depends on the host supporting the standard resource metadata.
 
 ## Public examples
 

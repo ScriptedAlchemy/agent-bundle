@@ -13,6 +13,7 @@ import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type
 import { claudeAdapter, claudeArtifactPaths, claudeHooksValidator, planClaudeArtifacts } from './claude.ts';
 import { codexAdapter, codexArtifactPaths, codexPluginDocumentValidator, planCodexArtifacts } from './codex.ts';
 import {
+  createCursorHookContract,
   cursorAdapter,
   cursorHooksValidator,
   cursorManifest,
@@ -39,6 +40,7 @@ import {
   type TargetArtifactEntry,
   type TargetArtifactLayout,
   type TargetArtifactPlan,
+  type TargetHookEntry,
 } from './types.ts';
 
 const pluginName = 'plugin';
@@ -62,9 +64,11 @@ const pluginName = 'plugin';
  * `skills/` as-is, an explicit pointer to a Cursor-format MCP document (its
  * auto-discovery reads `mcp.json`, never the Claude-convention `.mcp.json`),
  * and - because Cursor auto-discovers `hooks/hooks.json` with an incompatible
- * schema - an explicit pointer to a Cursor-format hooks document. That
- * document stays empty until Cursor's hook stdin contract is pinned; hooks
- * currently serve Claude Code and Codex.
+ * schema - an explicit pointer to a Cursor-format hooks document. Cursor's
+ * hook stdin/stdout envelope is not the shared Claude/Codex format, so that
+ * document points at dedicated per-hook `hooks/<name>.cursor.mjs` wrappers
+ * carrying the Cursor codec; the empty document remains only as a
+ * schema-collision guard when no hook lowers to Cursor.
  *
  * An Agent Plugins v1 root `plugin.json` is deliberately not emitted: Codex
  * selects it ahead of `.codex-plugin/plugin.json` and, under that format,
@@ -224,7 +228,7 @@ const agentsDocument = (model: NormalizedPlugin): string => {
     '- `.codex-plugin/` — Codex manifest and host documents.',
     '- `.cursor-plugin/` — Cursor manifest and its MCP document.',
     '- `.mcp.json` — Claude Code MCP configuration (plugin-root convention).',
-    '- `hooks/` — one `hooks.json` and one host-detecting wrapper per hook (Claude Code and Codex; the Cursor hooks document stays empty until its contract is pinned).',
+    '- `hooks/` — one `hooks.json` with a host-detecting wrapper per hook (Claude Code and Codex), plus `hooks-cursor.json` with per-hook Cursor wrappers (`<name>.cursor.mjs`).',
     '- `skills/` — agent skills (`SKILL.md` per skill), shared by every host.',
     '- `scripts/`, `mcp/`, `mcp-apps/`, `assets/` — compiled shared surfaces.',
     '',
@@ -267,6 +271,12 @@ const mergeEntries = (
 };
 
 const cursorMcpPlanContext = Object.freeze({ codePrefix: 'plugin.cursor', errorDiagnostic });
+
+const cursorBundleHookContract = createCursorHookContract({
+  indexedWrappers: false,
+  manifestPath: cursorPaths.hooks,
+  wrapperPath: (hook: NormalizedHook) => `hooks/${hook.name}.cursor.mjs`,
+});
 
 const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const diagnostics: Diagnostic[] = [];
@@ -319,6 +329,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const cursorMcpValid = cursorMcp !== undefined && cursorMcpValidator(cursorMcp);
   if (cursorMcp !== undefined) diagnostics.push(...schemaDiagnostics('cursor-mcp', cursorMcpValid, cursorMcpValidator.errors));
 
+  let cursorHookEntries: readonly TargetHookEntry[] = Object.freeze([]);
   if (!isValidCursorPluginName(model.metadata.name)) {
     diagnostics.push(errorDiagnostic(
       'plugin.cursor.name',
@@ -326,6 +337,23 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     ));
   } else {
     const emitCursorHooks = hookDocument !== undefined && hookDocumentValid;
+    // Cursor's envelope is not the shared Claude/Codex format, so its hooks
+    // lower separately: a Cursor-shaped document over dedicated
+    // `hooks/<name>.cursor.mjs` wrappers. The empty document remains as a
+    // schema-collision guard when no hook lowers to Cursor.
+    let cursorHooksDocument: Record<string, unknown> = emptyCursorHooksDocument;
+    if (emitCursorHooks) {
+      const cursorHooks = planHooks(model, pluginName, cursorBundleHookContract);
+      diagnostics.push(...cursorHooks.diagnostics);
+      if (cursorHooks.document !== undefined) {
+        const cursorHooksDocumentValid = cursorHooksValidator(cursorHooks.document);
+        diagnostics.push(...schemaDiagnostics('cursor-hooks', cursorHooksDocumentValid, cursorHooksValidator.errors));
+        if (cursorHooksDocumentValid) {
+          cursorHooksDocument = cursorHooks.document;
+          cursorHookEntries = cursorHooks.hookEntries;
+        }
+      }
+    }
     const manifest = cursorManifest(model, {
       ...(emitCursorHooks ? { hooks: `./${cursorPaths.hooks}` } : {}),
       ...(cursorMcp !== undefined && cursorMcpValid ? { mcp: `./${cursorPaths.mcp}` } : {}),
@@ -349,15 +377,16 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
         });
       }
       if (emitCursorHooks) {
-        // Empty until Cursor's hook stdin contract is pinned; the explicit
-        // pointer keeps Cursor away from the Claude-format hooks/hooks.json.
+        const cursorHookSourceInputs = cursorHookEntries.map((entry) => entry.hook.provenance.sourcePath);
         entries.push({
-          content: `${stableJson(emptyCursorHooksDocument)}\n`,
+          content: `${stableJson(cursorHooksDocument)}\n`,
           kind: 'write',
           relativePath: cursorPaths.hooks,
-          sourceInputs: sourceInputs(...targetSourceInputs),
+          sourceInputs: sourceInputs(...targetSourceInputs, ...cursorHookSourceInputs),
         });
       }
+    } else {
+      cursorHookEntries = Object.freeze([]);
     }
   }
 
@@ -371,7 +400,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     entries: sortedEntries(entries),
-    hookEntries: hookDocumentValid ? generatedHooks.hookEntries : Object.freeze([]),
+    hookEntries: hookDocumentValid
+      ? Object.freeze([...generatedHooks.hookEntries, ...cursorHookEntries])
+      : Object.freeze([]),
   });
 };
 

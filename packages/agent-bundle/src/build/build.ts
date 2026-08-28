@@ -301,7 +301,10 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     ));
     await writeHookIndex({
       artifactRoot: stageRoot,
-      hooks: compiledHooks.map((entry) => ({
+      // Host-document wrapper variants stay out of the canonical index: it
+      // keeps exactly one entry per hook and target, pointing at the
+      // canonical wrapper their target contract simulates.
+      hooks: compiledHooks.filter((entry) => entry.indexed !== false).map((entry) => ({
         event: entry.event,
         id: entry.id,
         name: entry.name,

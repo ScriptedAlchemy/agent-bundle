@@ -25,6 +25,8 @@ interface PlannedScriptEntry extends CompiledEntry {
 export interface CompiledHookEntry extends CompiledEntry {
   readonly event: TargetHookEntry['event'];
   readonly id: string;
+  /** False when this wrapper is a host-document variant excluded from the canonical hook index. */
+  readonly indexed?: false;
   readonly target: string;
   /** Native hook timeout in seconds. Omit it to use the host default. */
   readonly timeout?: number;
@@ -197,6 +199,7 @@ export const planCompiledHooks = (
 ): readonly CompiledHookEntry[] => Object.freeze(entries.map((entry) => Object.freeze({
   event: entry.event,
   id: entry.hook.id,
+  ...(entry.indexed === false ? { indexed: false as const } : {}),
   name: entry.hook.name,
   output: resolveArtifactDestination(options.outDir, entry.relativePath),
   outputKind: 'bundle',
@@ -214,7 +217,10 @@ export const compileHooks = async (
   const evidence = await buildWithRslib({
     cwd: options.cwd,
     entries: compiled.map((entry, index) => ({
-      name: entry.name,
+      // One hook can compile into several host wrappers (for example a shared
+      // Claude/Codex wrapper plus a Cursor-codec wrapper), so the bundler
+      // library id derives from the unique output path, not the hook name.
+      name: entries[index]!.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
       outputRelativePath: entries[index]!.relativePath,
       source: entry.source,
       sourceInputs: entry.sourceInputs,
