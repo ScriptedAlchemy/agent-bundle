@@ -12,7 +12,7 @@
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
-    "@mantine/core": "9.5.1",
+    "@mantine/core": "9.5.2",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "1.30.0",
