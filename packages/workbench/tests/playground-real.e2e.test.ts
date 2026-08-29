@@ -7,11 +7,12 @@ import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { buildWorkbench, workbenchUrl } from './support/workbench-e2e.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
-const browserTimeout = 8_000;
+const browserTimeout = 8_000 * timeScale;
 const nativePathFallback = `${dirname(process.execPath)}:/usr/bin:/bin`;
 
 const e2e = test.extend({

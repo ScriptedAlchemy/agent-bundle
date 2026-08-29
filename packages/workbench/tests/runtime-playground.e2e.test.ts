@@ -1,9 +1,10 @@
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { workbenchUrl } from './support/workbench-e2e.ts';
 
-const browserTimeout = 12_000;
+const browserTimeout = 12_000 * timeScale;
 
 const e2e = test.extend({
   playwright: {

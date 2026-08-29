@@ -28,6 +28,9 @@ export default defineConfig({
   extends: withAgentBundleRslibConfig(),
   include: [...parallelIntegrationTestFiles],
   pool: { maxWorkers },
+  // Concurrent Chrome + dev-server + rsbuild pairs contend for cores, so
+  // parallel runs double the polling budgets (see tests/support/time-scale.ts).
+  env: { AGENT_BUNDLE_TEST_TIME_SCALE: maxWorkers > 1 ? '2' : '1' },
   // isolate: false would cut Playwright startup cost, but the log pipeline
   // suites rely on per-file module isolation (verified: logs-real.e2e fails
   // when sharing a worker with the other log suites).
