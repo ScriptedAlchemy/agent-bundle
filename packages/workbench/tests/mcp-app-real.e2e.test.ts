@@ -1297,6 +1297,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: 15_000 * timeScale });
     await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
     expect(runtimeCreates()).toHaveLength(2);
+    const appMessagesBeforeThirdCreate = appMessages.length;
     await page.evaluate(() => { window.location.hash = '#runtime'; });
     await expect.poll(runtimeCreates, { timeout: 15_000 * timeScale }).toHaveLength(3);
     const thirdCreate = runtimeCreates()[2];
@@ -1336,6 +1337,17 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (thirdController === null) throw new Error('Third Runtime App trusted controller frame was unavailable.');
     const thirdFrameHref = thirdController.url();
     const thirdDeletePath = `/api/runtime/apps/${encodeURIComponent(thirdBinding.id)}`;
+    // The App can acknowledge ui/resource-teardown only once its SDK
+    // transport is connected, evidenced by its ui/initialize request reaching
+    // the host. The rendered heading alone does not prove that: navigating
+    // away earlier relays teardown into a frame that cannot answer yet, the
+    // host's bounded grace elapses, the frame is destroyed, and the
+    // acknowledgement becomes unobservable forever (the third-teardown ack
+    // poll timed out this way on contended two-core runners).
+    await expect.poll(() => appMessages.slice(appMessagesBeforeThirdCreate).filter((entry) =>
+      new URL(entry.href).origin === fixture.url && entry.senderOrigin === thirdOrigin &&
+      entry.message !== null && typeof entry.message === 'object' &&
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 * timeScale }).toBeGreaterThan(0);
     await page.evaluate(() => { window.location.hash = '#mcp'; });
     const teardownRequestForThird = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
       entry.href === thirdFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&

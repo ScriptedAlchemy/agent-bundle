@@ -422,10 +422,14 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     const finiteConfig = sourceConfig.replace('  codex: {},', `  codex: { configReconcileMarker: '${finiteConfigMarker}' },`);
     expect(finiteConfig).not.toBe(sourceConfig);
     await replaceWatchedSource(fixture.root, fixture.configSource, finiteConfig);
+    // Config reconcile polls scale with contention: each reconcile recompiles
+    // the config plus the rsc/widget/app bundles (~4s apiece on a pinned
+    // two-core runner), so a raw 15s budget fails deterministically under
+    // taskset -c 0,1 while the change itself is delivered fine.
     await expect.poll(async () => {
       const source = await readProjectSource();
       return source.state === 'ready' && source.revision !== sourceRevision ? source.revision : undefined;
-    }, { timeout: 15_000 }).toEqual(expect.any(String));
+    }, { timeout: browserTimeout }).toEqual(expect.any(String));
     const finiteSource = await readProjectSource();
     const finiteSourceRevision = finiteSource.revision;
     if (finiteSourceRevision === undefined) throw new Error('Finite configuration update did not expose a source revision.');
@@ -443,7 +447,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       return source.state === 'invalid' && diagnostic?.message === 'A registered config extension must contain strict finite JSON data.'
         ? source
         : undefined;
-    }, { timeout: 15_000 }).toMatchObject({
+    }, { timeout: browserTimeout }).toMatchObject({
       diagnostics: [expect.objectContaining({
         code: 'AB4500',
         message: 'A registered config extension must contain strict finite JSON data.',
@@ -520,7 +524,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     await expect.poll(async () => {
       const source = await readProjectSource();
       return source.state === 'ready' && source.revision !== finiteSourceRevision ? source.revision : undefined;
-    }, { timeout: 15_000 }).toEqual(expect.any(String));
+    }, { timeout: browserTimeout }).toEqual(expect.any(String));
     const repairedSource = await readProjectSource();
     const repairedSourceRevision = repairedSource.revision;
     if (repairedSourceRevision === undefined) throw new Error('Repaired configuration update did not expose a source revision.');
@@ -986,7 +990,11 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'detached', timeout: 15_000 });
     expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(0);
     await expect(page.locator('.connection-content')).toHaveAttribute('data-recovery-probe', 'same-instance');
-    await expect(page.getByText('Interactive App rendering is unavailable (registry-replay-gap). Showing the ordinary tool result instead.')).toBeVisible();
+    // Scaled budget: the fallback section renders after the invalidation
+    // cleanup settles, which lags the iframe detach on a contended runner.
+    // toHaveText also reports the actual reason if the wrong invalidation won.
+    await expect(page.locator('.runtime-stage .mcp-app-preview__fallback > p[role="status"]'))
+      .toHaveText('Interactive App rendering is unavailable (registry-replay-gap). Showing the ordinary tool result instead.', { timeout: browserTimeout });
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toEqual([]);
     await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe(2);
 
