@@ -871,8 +871,16 @@ it('creates session state only after setup succeeds and always inherits the stdi
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-stdio-options-'));
   const inheritedKey = 'AGENT_BUNDLE_TEST_MCP_INHERITED';
   const previousInherited = process.env[inheritedKey];
+  // McpService creates session state via mkdtemp('agent-bundle-mcp-') in
+  // os.tmpdir(), and other files in the parallel integration pool create
+  // identically-prefixed directories there concurrently, so scanning the
+  // shared OS tmpdir races with sibling workers. Point TMPDIR (which
+  // os.tmpdir() re-reads on every call) at a directory this test owns and
+  // scan only that.
+  const sessionTmp = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-stdio-options-sessions-'));
+  const previousTmpdir = process.env['TMPDIR'];
   const sessionDirectories = async (): Promise<readonly string[]> =>
-    (await readdir(tmpdir())).filter((name) => name.startsWith('agent-bundle-mcp-')).sort();
+    (await readdir(sessionTmp)).filter((name) => name.startsWith('agent-bundle-mcp-')).sort();
   try {
     process.env[inheritedKey] = 'inherited-sentinel';
     await mkdir(join(root, 'src'), { recursive: true });
@@ -898,6 +906,7 @@ it('creates session state only after setup succeeds and always inherits the stdi
     const artifact = join(root, 'dist');
     await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
 
+    process.env['TMPDIR'] = sessionTmp;
     const beforeInvalidTimeout = await sessionDirectories();
     await expect(new McpService().list({
       artifact,
@@ -942,11 +951,17 @@ it('creates session state only after setup succeeds and always inherits the stdi
     });
     expect(stdio[1]?.env).toMatchObject({ [inheritedKey]: 'inherited-sentinel' });
   } finally {
+    if (previousTmpdir === undefined) {
+      delete process.env['TMPDIR'];
+    } else {
+      process.env['TMPDIR'] = previousTmpdir;
+    }
     if (previousInherited === undefined) {
       delete process.env[inheritedKey];
     } else {
       process.env[inheritedKey] = previousInherited;
     }
+    await rm(sessionTmp, { force: true, recursive: true });
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);
