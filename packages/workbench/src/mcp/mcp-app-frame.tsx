@@ -8,7 +8,7 @@ import type {
 } from './mcp-app-client.ts';
 import { assertCurrentMcpAppDocumentPolicy, type McpAppRuntimeClient, type McpAppTrustedDocumentPolicy } from './mcp-app-client.ts';
 import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
-import { AppRenderer, type BridgeFactory, type AppRendererProps } from '../inspector/adapter/inspector-closure-vendor.js';
+import { AppRenderer, type BridgeFactory, type AppRendererProps } from './app-renderer.tsx';
 
 const proxyReadyMethod = 'ui/notifications/sandbox-proxy-ready';
 const resourceReadyMethod = 'ui/notifications/sandbox-resource-ready';

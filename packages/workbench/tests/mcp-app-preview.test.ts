@@ -25,7 +25,7 @@ import type {
 } from '../src/mcp/mcp-app-client.ts';
 import type { McpAppFrameIframe, McpAppFrameRelayOptions, McpAppFrameWindow } from '../src/mcp/mcp-app-frame.tsx';
 import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
-import type { RuntimeAppBridgeFactory } from '../src/inspector/adapter/runtime-app-bridge.ts';
+import type { RuntimeAppBridgeFactory } from '../src/mcp/runtime-app-bridge.ts';
 
 const host: McpAppHostContext = Object.freeze({
   availableDisplayModes: Object.freeze(['inline']),

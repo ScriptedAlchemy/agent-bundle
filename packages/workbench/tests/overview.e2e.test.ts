@@ -658,7 +658,7 @@ e2e('retains the exact Runtime App owner when its handoff close rejects, then re
   }
 });
 
-e2e('keeps runtime Inspector routing constrained after direct MCP navigation from a bound source', { timeout: 120_000 }, async ({ page }) => {
+e2e('keeps runtime MCP routing constrained after direct navigation from a bound source', { timeout: 120_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   let clientPage: Page | undefined;
   let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
@@ -698,11 +698,6 @@ e2e('keeps runtime Inspector routing constrained after direct MCP navigation fro
     await expect(page.locator('#mcp-epoch')).toHaveCount(0, { timeout: 15_000 });
     await expect(page.getByRole('button', { name: 'Open MCP session' })).toHaveCount(0, { timeout: 15_000 });
     expect(artifactMcpSessionRequests).toEqual([]);
-    await page.getByRole('tab', { name: 'Inspector' }).click();
-    await expect(page.getByRole('button', { name: 'Prompts' })).toBeDisabled({ timeout: 15_000 });
-    await expect(page.getByText('Prompts are unavailable for this runtime session.')).toBeVisible({ timeout: 15_000 });
-    await page.getByRole('button', { name: 'Resources' }).click();
-    await expect(page.getByText('Resource templates are unavailable for this runtime session.')).toBeVisible({ timeout: 15_000 });
     await expect.poll(() => unsupportedOperationRequests.length, { timeout: 15_000 }).toBe(0);
   } finally {
     await clientPage?.close();

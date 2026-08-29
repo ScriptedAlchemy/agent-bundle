@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { timeScale } from './support/time-scale.ts';
 import {
   PlaygroundStore as PlaygroundService,
   PlaygroundServiceCloseError,
@@ -2166,7 +2167,9 @@ it('evicts the oldest settled sessions from memory while every by-id operation s
   }
 });
 
-it('retains a settled session while a subscription is attached and evicts it after the subscription closes', async () => {
+// Settles ~22 real sessions sequentially; the default 5s budget starves on
+// 2-core CI runners.
+it('retains a settled session while a subscription is attached and evicts it after the subscription closes', { timeout: 30_000 * timeScale }, async () => {
   const fixture = await createFixture();
   try {
     await settleSession(fixture.service, 'subscribed-retention');

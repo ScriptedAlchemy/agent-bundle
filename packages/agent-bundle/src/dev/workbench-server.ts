@@ -11,6 +11,7 @@ import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogge
 import { EpochStore } from './epoch-store.ts';
 import { EvalService } from './eval/eval-service.ts';
 import { ProjectEventHub } from './events.ts';
+import { createInspectorLauncher } from './inspector-launcher.ts';
 import { HookPlaygroundService } from './playground/hook-playground-service.ts';
 import {
   startForegroundServer,
@@ -66,7 +67,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'logs' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
+  readonly resource: 'coordinator' | 'inspector' | 'logs' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -396,6 +397,7 @@ export interface DevServerLifecycleOptions {
   readonly detachProjectLogs?: () => void;
   readonly logs?: DevLogService;
   readonly mcpApps?: Closeable;
+  readonly inspector?: Closeable;
   readonly mcpSessions: Closeable;
   readonly playground?: Closeable;
   readonly runtimeResources?: DevServerRuntimeLifecycleResources;
@@ -405,6 +407,7 @@ export interface DevServerLifecycleOptions {
 export const closeDevServerLifecycle = async ({
   coordinator,
   detachProjectLogs,
+  inspector,
   logs,
   mcpApps,
   mcpSessions,
@@ -420,6 +423,7 @@ export const closeDevServerLifecycle = async ({
     summary: 'Development workbench shutdown started.',
   });
   const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
+  const inspectorResults = inspector === undefined ? [] : await Promise.allSettled([inspector.close()]);
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const clientSurfaceResults = runtimeResources?.clientSurfaces === undefined
     ? []
@@ -435,6 +439,11 @@ export const closeDevServerLifecycle = async ({
     ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
+        : [],
+    ),
+    ...inspectorResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'inspector' as const })]
         : [],
     ),
     ...appResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
@@ -492,12 +501,14 @@ const withMcpSessionLifecycle = (
   playground: Closeable,
   logs: DevLogService,
   detachProjectLogs: () => void,
+  inspector: Closeable,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
     clientSurfaces.beginClose();
     return closeDevServerLifecycle({
       coordinator,
       detachProjectLogs,
+      inspector,
       logs,
       mcpApps: mcpApps(),
       mcpSessions,
@@ -725,6 +736,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     skillDocuments,
     trace,
   });
+  const inspector = createInspectorLauncher({ projectRoot: root });
   const agentApi = agentApiEnabled
     ? new AgentApi({
       artifacts,
@@ -757,11 +769,13 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       playground,
       logs,
       detachProjectLogs,
+      inspector,
     ),
     evals,
     evalLifecycle: evals,
     eventHub,
     hookPlayground,
+    inspector,
     logs,
     mcpAppPreviews: appPreviews,
     mcpSessions,

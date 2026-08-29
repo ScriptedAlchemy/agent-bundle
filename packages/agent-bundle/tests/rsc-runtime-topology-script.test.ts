@@ -32,7 +32,7 @@ const expectedTree = `packages/
     tests/playground-service.test.ts
     tests/runtime-provider.test.ts
   workbench/
-    src/inspector/adapter/runtime-app-bridge.ts
+    src/mcp/runtime-app-bridge.ts
     src/mcp/runtime-consent-dialog.tsx
     src/mcp/runtime-consent-queue.ts
     src/runtime-model.ts
@@ -83,7 +83,7 @@ describe('rsc runtime topology script', () => {
         'packages/agent-bundle/tests/normalization.test.ts',
         'packages/agent-bundle/tests/playground-service.test.ts',
         'packages/agent-bundle/tests/runtime-provider.test.ts',
-        'packages/workbench/src/inspector/adapter/runtime-app-bridge.ts',
+        'packages/workbench/src/mcp/runtime-app-bridge.ts',
         'packages/workbench/src/mcp/runtime-consent-dialog.tsx',
         'packages/workbench/src/mcp/runtime-consent-queue.ts',
         'packages/workbench/src/runtime-model.ts',

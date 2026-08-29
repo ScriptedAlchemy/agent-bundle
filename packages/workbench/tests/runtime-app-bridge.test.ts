@@ -10,7 +10,7 @@ import {
   createBindingMcpClient,
   createRuntimeAppBridgeFactory,
   type RuntimeAppBridgeFactory,
-} from '../src/inspector/adapter/runtime-app-bridge.ts';
+} from '../src/mcp/runtime-app-bridge.ts';
 
 const eventually = async (predicate: () => boolean, timeout = 300): Promise<void> => {
   const deadline = Date.now() + timeout;

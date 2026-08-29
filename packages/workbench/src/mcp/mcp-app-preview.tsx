@@ -30,8 +30,8 @@ import type {
   McpAppPreviewSnapshot,
   McpAppRuntimeInvalidationDetails,
 } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
-import type { AppRendererHandle, McpAppRendererTool } from '../inspector/adapter/inspector-closure-vendor.js';
-import type { RuntimeAppBridgeFactory, RuntimeAppBridgeOperationTrace } from '../inspector/adapter/runtime-app-bridge.ts';
+import type { AppRendererHandle, McpAppRendererTool } from './app-renderer.tsx';
+import type { RuntimeAppBridgeFactory, RuntimeAppBridgeOperationTrace } from './runtime-app-bridge.ts';
 import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
 import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
 
