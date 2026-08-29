@@ -121,6 +121,16 @@ test('settles every capture cleanup action without masking the primary failure',
   }
 });
 
+test('bounds a wedged cleanup step instead of holding the capture process open', async () => {
+  const cleanup = await cleanupCaptureResources({
+    browser: { close: async () => new Promise(() => {}) },
+    fixture: { close: async () => {} },
+    restores: [async () => new Promise(() => {})],
+    stepTimeout: 50,
+  });
+  expect(cleanup).toEqual({ attemptedRestores: 1, failedSteps: ['restore-1', 'browser.close'] });
+});
+
 test('captures identity-backed HMR, last-good, recovery, and desktop browser evidence', { timeout: 600_000 }, async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-capture-'));
   const outputs = Object.freeze({
