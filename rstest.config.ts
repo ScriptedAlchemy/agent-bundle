@@ -6,7 +6,6 @@ export default defineConfig({
   extends: withAgentBundleRslibConfig(),
   include: [
     'packages/**/tests/**/*.test.ts',
-    'packages/workbench/src/inspector/vendor/clients/web/src/utils/inspectorTabs.test.ts',
   ],
   // Several integration tests run Rslib, whose build cache and configured
   // output paths are process-shared. Keep those builds from racing each other.

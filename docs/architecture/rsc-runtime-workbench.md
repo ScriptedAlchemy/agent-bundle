@@ -65,7 +65,6 @@ packages/
     tests/mcp-app-sandbox.test.ts
     tests/mcp-session-routes.test.ts
     tests/mcp-session-service.test.ts
-    tests/native-host-smoke-workflow.test.ts
     tests/normalization.test.ts
     tests/playground-service.test.ts
     tests/portable-adapter.test.ts
@@ -81,12 +80,6 @@ packages/
   workbench/
     rsbuild.config.ts
     scripts/capture-runtime-playground.mjs
-    src/inspector/adapter/inspector-session-adapter-entry.ts
-    src/inspector/adapter/inspector-session-adapter-model.ts
-    src/inspector/adapter/inspector-session-adapter.css
-    src/inspector/adapter/inspector-session-adapter.tsx
-    src/inspector/adapter/protocol-screen-without-replay.tsx
-    src/inspector/adapter/runtime-app-bridge.ts
     src/main.tsx
     src/mcp/mcp-app-client.ts
     src/mcp/mcp-app-frame.tsx
@@ -94,6 +87,7 @@ packages/
     src/mcp/mcp-page.tsx
     src/mcp/mcp-session-controller.ts
     src/mcp/mcp-session-model.ts
+    src/mcp/runtime-app-bridge.ts
     src/mcp/runtime-consent-dialog.tsx
     src/mcp/runtime-consent-queue.ts
     src/mcp/runtime-mcp-handoff.ts
@@ -105,10 +99,6 @@ packages/
     src/runtime-stage.tsx
     src/styles.css
     tests/helpers/runtime-playground-fixture.ts
-    tests/inspector-modern-mcp-types.test.ts
-    tests/inspector-session-adapter-fixture.test.ts
-    tests/inspector-session-adapter.test.ts
-    tests/inspector-shell.e2e.test.ts
     tests/mcp-app-client.test.ts
     tests/mcp-app-frame.test.ts
     tests/mcp-app-preview-browser.test.ts
@@ -215,7 +205,9 @@ and HMR lane. `AgentBundleDevRuntimeConfig.provider` is loaded by
 
 The Workbench has one `Workbench` root and navigation authority. Runtime is the
 optional fourth top-level `WorkbenchPage` (`overview`, `skills`, `mcp`,
-`runtime`); Inspector is a nested MCP presentation, not a fifth shell sibling.
+`runtime`); the MCP page renders a single playground presentation, and protocol
+inspection is delegated to the standalone MCP Inspector app that the dev server
+spawns on demand via the opt-in `/api/inspector/*` routes.
 The root owns one `ProjectClient` and EventSource, one `McpAppClient`, and one
 shared `McpSessionController`. It creates one Runtime controller only when the
 project status advertises the configured runtime capability. `WorkbenchScreen`
@@ -268,5 +260,5 @@ flowchart LR
 `npm run docs:runtime-topology` regenerates only the marked file tree from a
 fixed Git allowlist. `npm run check:runtime-topology` compares bytes without
 writing. The generator intentionally excludes generated output, dependencies,
-runtime state, unrelated historical tests, and the vendored Inspector source so
-the map remains an implementation boundary rather than a repository inventory.
+runtime state, and unrelated historical tests so the map remains an
+implementation boundary rather than a repository inventory.

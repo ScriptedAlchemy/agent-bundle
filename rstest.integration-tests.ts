@@ -50,9 +50,6 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/comparisons-page-client-scope-browser.test.ts',
   'packages/workbench/tests/evals-real.e2e.test.ts',
   'packages/workbench/tests/examples-real.e2e.test.ts',
-  'packages/workbench/tests/inspector-modern-mcp-types.test.ts',
-  'packages/workbench/tests/inspector-session-adapter-fixture.test.ts',
-  'packages/workbench/tests/inspector-shell.e2e.test.ts',
   'packages/workbench/tests/logs-real.e2e.test.ts',
   'packages/workbench/tests/mcp-app-preview-browser.test.ts',
   'packages/workbench/tests/mcp-app-frame.test.ts',
@@ -70,6 +67,5 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/runtime-playground-capture.test.ts',
   'packages/workbench/tests/runtime-playground.e2e.test.ts',
   'packages/workbench/tests/runtime-playground-hmr.e2e.test.ts',
-  'packages/workbench/tests/sync-inspector.test.ts',
   'packages/workbench/tests/workbench-dev-command.test.ts',
 ];

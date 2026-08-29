@@ -1,7 +1,5 @@
 import { type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MantineProvider } from '@mantine/core';
-
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
 import type { ArtifactInspection } from '../../agent-bundle/src/contracts/artifacts.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-bundle/src/contracts/mcp-apps.ts';
@@ -19,13 +17,12 @@ import { EvalsPage } from './evals/evals-page.tsx';
 import { ArtifactsPage } from './artifacts/artifacts-page.tsx';
 import { HookClient } from './hooks/hook-client.ts';
 import { HooksPage } from './hooks/hooks-page.tsx';
-import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
 import {
   createRuntimeAppBridgeFactory,
   type RuntimeAppBridgeFactory,
   type RuntimeAppBridgeOperationTrace,
   type RuntimeAppBridgeTrace,
-} from './inspector/adapter/runtime-app-bridge.ts';
+} from './mcp/runtime-app-bridge.ts';
 import { McpAppClient, type McpAppConsentChallenge } from './mcp/mcp-app-client.ts';
 import type { McpAppConsentChallenge as RuntimeMcpAppConsentChallenge } from '../../agent-bundle/src/contracts/mcp-apps.ts';
 import { RuntimeConsentDialog } from './mcp/runtime-consent-dialog.tsx';
@@ -305,8 +302,6 @@ const StateMark = ({ state }: { readonly state: string }) => (
 
 type WorkbenchPage = GeneralWorkbenchPage | 'runtime';
 type RuntimeCapability = 'available' | 'unavailable' | 'unknown';
-type McpPresentation = 'inspector' | 'playground';
-
 type CapabilityState =
   | Readonly<{ readonly state: 'empty' }>
   | Readonly<{ readonly buildId: string; readonly state: 'loading' }>
@@ -634,7 +629,7 @@ const HooksScreen = ({ connectionError, hookClient, onNavigate, pages, runtimeDi
   <HooksPage client={hookClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, pages, presentation, registerPreviewClose, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
+const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, pages, registerPreviewClose, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
@@ -648,9 +643,7 @@ const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controll
   readonly runtimeDiagnostic?: string;
   readonly runtimeHandoff?: RuntimeMcpHandoff;
   readonly runtimePreviewDependencies: McpPageRuntimePreviewDependencies;
-  readonly presentation: McpPresentation;
   readonly registerPreviewClose: (close: () => Promise<void>) => () => void;
-  readonly setPresentation: (presentation: McpPresentation) => void;
   readonly status: ProjectStatus;
 }) => {
   useEffect(() => {
@@ -685,113 +678,32 @@ const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controll
     sameRuntimeMcpAppBinding(runtimeHandoff.source.binding, runtimeSource.binding)
     ? runtimeHandoff.initialPreview
     : undefined;
-  const runtimeAvailability = !isRuntimeModelBinding(model.binding) ? undefined : Object.freeze({
-    prompts: 'not-routed' as const,
-    resourceTemplates: 'not-routed' as const,
-    resources: 'available' as const,
-    tools: 'available' as const,
-  });
-  const presentationTabs = useRef<Partial<Record<McpPresentation, HTMLButtonElement | null>>>({});
-  const selectPresentation = (next: McpPresentation): void => {
-    setPresentation(next);
-    presentationTabs.current[next]?.focus();
-  };
-  const onPresentationKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, current: McpPresentation): void => {
-    const presentations: readonly McpPresentation[] = ['playground', 'inspector'];
-    const index = presentations.indexOf(current);
-    const next = event.key === 'ArrowRight' || event.key === 'ArrowDown'
-      ? presentations[(index + 1) % presentations.length]
-      : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-        ? presentations[(index + presentations.length - 1) % presentations.length]
-        : event.key === 'Home'
-          ? presentations[0]
-          : event.key === 'End'
-            ? presentations[presentations.length - 1]
-            : undefined;
-    if (next === undefined) return;
-    event.preventDefault();
-    selectPresentation(next);
-  };
-  const exportInspectorTrace = (entries: typeof model.timeline.entries): void => {
-    downloadMcpFile(mcpProtocolTraceDownload({
-      history: controller.history,
-      model: { ...model, timeline: { ...model.timeline, entries } },
-    }));
-  };
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
     <div className="mcp-content">
       {mcpDepartureDiagnostic === undefined ? undefined : <p role="alert">{mcpDepartureDiagnostic}</p>}
-      <div aria-label="MCP presentation" className="mcp-presentation-tabs" role="tablist">
-        <button
-          aria-controls="mcp-playground-presentation"
-          aria-selected={presentation === 'playground'}
-          className={presentation === 'playground' ? 'mcp-presentation-tab mcp-presentation-tab--active' : 'mcp-presentation-tab'}
-          id="mcp-playground-tab"
-          onClick={() => selectPresentation('playground')}
-          onKeyDown={(event) => onPresentationKeyDown(event, 'playground')}
-          ref={(element) => { presentationTabs.current.playground = element; }}
-          role="tab"
-          tabIndex={presentation === 'playground' ? 0 : -1}
-          type="button"
-        >
-          Playground
-        </button>
-        <button
-          aria-controls="mcp-inspector-presentation"
-          aria-selected={presentation === 'inspector'}
-          className={presentation === 'inspector' ? 'mcp-presentation-tab mcp-presentation-tab--active' : 'mcp-presentation-tab'}
-          id="mcp-inspector-tab"
-          onClick={() => selectPresentation('inspector')}
-          onKeyDown={(event) => onPresentationKeyDown(event, 'inspector')}
-          ref={(element) => { presentationTabs.current.inspector = element; }}
-          role="tab"
-          tabIndex={presentation === 'inspector' ? 0 : -1}
-          type="button"
-        >
-          Inspector
-        </button>
-      </div>
-      <section
-        aria-labelledby="mcp-playground-tab"
-        hidden={presentation !== 'playground'}
-        id="mcp-playground-presentation"
-        inert={presentation !== 'playground'}
-        role="tabpanel"
-      >
-        {runtimeSource === undefined
-          ? <McpPage
-              appPreviewClient={appPreviewClient}
-              controller={controller}
-              epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
-              initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
-              onDownloadConfig={downloadMcpFile}
-              onDownloadTrace={downloadMcpFile}
-              onResetSession={onResetSession}
-              presentationActive={presentation === 'playground'}
-              registerPreviewClose={registerPreviewClose}
-              serverCatalogState={serverCatalogState}
-              serverOptions={serverOptions}
-              targetOptions={targetOptions}
-            />
-          : <MantineProvider><McpPage
-              controller={controller}
-              initialPreview={runtimeInitialPreview}
-              onResetSession={onResetSession}
-              registerPreviewClose={registerPreviewClose}
-              runtimePreviewDependencies={runtimePreviewDependencies}
-              source={runtimeSource}
-            /></MantineProvider>}
-      </section>
-      <section
-        aria-labelledby="mcp-inspector-tab"
-        className="inspector-content"
-        hidden={presentation !== 'inspector'}
-        id="mcp-inspector-presentation"
-        inert={presentation !== 'inspector'}
-        role="tabpanel"
-      >
-        <InspectorSessionAdapter availability={runtimeAvailability} controller={controller} model={model} onExportTrace={exportInspectorTrace} />
-      </section>
+      {runtimeSource === undefined
+        ? <McpPage
+            appPreviewClient={appPreviewClient}
+            controller={controller}
+            epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
+            initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
+            onDownloadConfig={downloadMcpFile}
+            onDownloadTrace={downloadMcpFile}
+            onResetSession={onResetSession}
+            presentationActive={true}
+            registerPreviewClose={registerPreviewClose}
+            serverCatalogState={serverCatalogState}
+            serverOptions={serverOptions}
+            targetOptions={targetOptions}
+          />
+        : <McpPage
+            controller={controller}
+            initialPreview={runtimeInitialPreview}
+            onResetSession={onResetSession}
+            registerPreviewClose={registerPreviewClose}
+            runtimePreviewDependencies={runtimePreviewDependencies}
+            source={runtimeSource}
+          />}
     </div>
   </WorkbenchScreen>;
 };
@@ -870,7 +782,6 @@ const Workbench = () => {
   if (runtimeConsentQueue.current === undefined) {
     runtimeConsentQueue.current = createRuntimeConsentQueue(setRuntimeConsent);
   }
-  const [mcpPresentation, setMcpPresentation] = useState<McpPresentation>('playground');
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
   const [runtimeOperationTraces, setRuntimeOperationTraces] = useState<readonly RuntimeAppBridgeOperationTrace[]>(emptyRuntimeOperationTraces);
@@ -947,7 +858,6 @@ const Workbench = () => {
     }
     const hash = `#${available}`;
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
-    if (available === 'mcp') setMcpPresentation('playground');
     setPage(available);
   }, []);
 
@@ -1113,7 +1023,7 @@ const Workbench = () => {
     const authority = prepareRuntimeMcpHandoffAuthority(props, runtimeProfileId);
     const appClient = mcpAppClient.current;
     if (authority === undefined || appClient === undefined) return undefined;
-    return <MantineProvider><McpAppPreview
+    return <McpAppPreview
       client={appClient}
       createBridgeFactory={createBridgeFactory}
       kind="runtime"
@@ -1126,7 +1036,7 @@ const Workbench = () => {
       }}
       run={props.run}
       surface={props.surface}
-    /></MantineProvider>;
+    />;
   }, [createBridgeFactory, runtimeOperationTraces]);
 
   const liveMcpPageAdapter = useMemo<RuntimeLiveMcpPageAdapter>(() => Object.freeze({
@@ -1336,7 +1246,6 @@ const Workbench = () => {
       const next = pageForHash(runtimeAvailable, pages);
       if (!fromHashChange && next === pageRef.current) return;
       navigate(next);
-      if (fromHashChange && next === 'mcp' && pageRef.current !== 'mcp') setMcpPresentation('playground');
     };
     const onHashChange = () => updatePage(true);
     updatePage(false);
@@ -1388,8 +1297,6 @@ const Workbench = () => {
         runtimeDiagnostic={runtimeError}
         runtimeHandoff={runtimeHandoff}
         runtimePreviewDependencies={runtimePreviewDependencies}
-        presentation={mcpPresentation}
-        setPresentation={setMcpPresentation}
         status={status}
       />);
     }

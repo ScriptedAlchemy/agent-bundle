@@ -19,8 +19,5 @@
     "src/**/*.tsx",
     "tests/**/*.ts",
     "tests/**/*.tsx"
-  ],
-  "exclude": [
-    "src/inspector/vendor/**"
   ]
 }

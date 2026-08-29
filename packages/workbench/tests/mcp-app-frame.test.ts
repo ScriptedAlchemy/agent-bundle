@@ -10,7 +10,7 @@ import { describe, expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
-import { mantineEsmEntry, workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
 import { chromium } from 'playwright';
 
 import {
@@ -106,7 +106,6 @@ const mountedSecureRendererFixture = async () => {
   await writeFile(entry, [
     "import React from 'react';",
     "import { createRoot } from 'react-dom/client';",
-    "import { MantineProvider } from '@mantine/core';",
     `import { SecureAppRenderer } from ${JSON.stringify(secureRendererSource)};`,
     `import { McpAppClient } from ${JSON.stringify(runtimeClientSource)};`,
     `import { ForegroundRouteClient } from ${JSON.stringify(runtimeRouteClientSource)};`,
@@ -123,7 +122,7 @@ const mountedSecureRendererFixture = async () => {
     "const bridge = { addEventListener: () => undefined, close: async () => undefined, sendHostContextChange: async () => undefined, sendToolCancelled: async () => undefined, sendToolInput: async () => undefined, sendToolInputPartial: async () => undefined, sendToolResult: async () => undefined, teardownResource: async () => ({}) };",
     "let factories = 0; const bridgeFactory = () => { factories += 1; return bridge; }; const tool = { inputSchema: { type: 'object' }, name: 'weather' }; const root = createRoot(document.getElementById('root'));",
     "class Boundary extends React.Component { state = { error: undefined }; static getDerivedStateFromError(error) { return { error: String(error?.message ?? error) }; } render() { return this.state.error ? React.createElement('div', { id: 'policy-error' }, this.state.error) : this.props.children; } }",
-    "let trusted; const mount = (candidate, key) => root.render(React.createElement(MantineProvider, null, React.createElement(React.StrictMode, null, React.createElement(Boundary, { key }, React.createElement(SecureAppRenderer, { bindingId: 'runtime-binding', bootstrapUrl, bridgeFactory, documentPolicy: candidate, policyClient: runtime, rendererProps: { tool } })))));",
+    "let trusted; const mount = (candidate, key) => root.render(React.createElement(React.StrictMode, null, React.createElement(Boundary, { key }, React.createElement(SecureAppRenderer, { bindingId: 'runtime-binding', bootstrapUrl, bridgeFactory, documentPolicy: candidate, policyClient: runtime, rendererProps: { tool } }))));",
     "await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' }); trusted = runtime.currentDocumentPolicy('runtime-binding'); mount(trusted, 'trusted');",
     "globalThis.__secureRendererFixture = { copied: () => mount(Object.freeze({ bindingId: trusted.bindingId, snapshot: trusted.snapshot }), 'copied'), widened: () => mount(Object.freeze({ bindingId: trusted.bindingId, snapshot: Object.freeze({ ...trusted.snapshot, allow: 'camera' }) }), 'widened'), stale: async () => { await runtime.closeRuntime('runtime-binding'); mount(trusted, 'stale'); }, stats: () => ({ factories, iframeNodes: iframeNodes.size, trace: [...trace] }) };",
     '',
@@ -138,10 +137,7 @@ const mountedSecureRendererFixture = async () => {
       },
       plugins: [pluginReact()],
       resolve: {
-        alias: {
-          ...workbenchBrowserAliases,
-          '@mantine/core': mantineEsmEntry,
-        },
+        alias: { ...workbenchBrowserAliases },
       },
       source: {
         define: { 'process.env.NODE_ENV': JSON.stringify('production') },

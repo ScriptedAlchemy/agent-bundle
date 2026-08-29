@@ -99,15 +99,10 @@ const workbenchSource = new Set([
   'packages/workbench/src/mcp/runtime-consent-dialog.tsx',
   'packages/workbench/src/mcp/runtime-consent-queue.ts',
   'packages/workbench/src/mcp/runtime-mcp-handoff.ts',
-  'packages/workbench/src/inspector/adapter/inspector-session-adapter-entry.ts',
-  'packages/workbench/src/inspector/adapter/inspector-session-adapter-model.ts',
-  'packages/workbench/src/inspector/adapter/inspector-session-adapter.tsx',
-  'packages/workbench/src/inspector/adapter/protocol-screen-without-replay.tsx',
-  'packages/workbench/src/inspector/adapter/runtime-app-bridge.ts',
-  'packages/workbench/src/inspector/adapter/inspector-session-adapter.css',
+  'packages/workbench/src/mcp/runtime-app-bridge.ts',
 ]);
 
-const workbenchTests = /^(?:packages\/workbench\/tests\/(?:helpers\/runtime-playground-fixture\.ts|(?:mcp-app|mcp-page|mcp-session|runtime-|project-client|inspector-|rsbuild-workbench|runtime-playground).+\.(?:test|e2e\.test|browser\.test)\.(?:ts|tsx))|packages\/workbench\/scripts\/capture-runtime-playground\.mjs)$/u;
+const workbenchTests = /^(?:packages\/workbench\/tests\/(?:helpers\/runtime-playground-fixture\.ts|(?:mcp-app|mcp-page|mcp-session|runtime-|project-client|rsbuild-workbench|runtime-playground).+\.(?:test|e2e\.test|browser\.test)\.(?:ts|tsx))|packages\/workbench\/scripts\/capture-runtime-playground\.mjs)$/u;
 const agentBundleTests = /^packages\/agent-bundle\/tests\/(?:normalization|duplicate-key|public-api|canonical-digest|emitted-host|native-host|target-registry|portable|codex|claude|dev-artifact|host-adapters|runtime-|mcp-app|mcp-session|foreground-server|project-service|dev-workbench|rsc-runtime-(?:optional-packaging|topology-script)|playground-service).*\.test\.ts$/u;
 const exampleRuntime = /^examples\/rsc-agent-runtime\/(?:package\.json|rsbuild\.config\.ts|tsconfig\.json|src\/definition\.ts$|src\/(?:build|dev|flight|hook|mcp|rsc|runtime|widget|types)\/|scripts\/(?:capture-widget|eval-evidence|eval-host-environment|eval-hosts|package-hosts)\.mjs$|tests\/(?:dev-provider|generation-materializer|dev-invocation|host-artifacts|runtime-artifact-manifest|mcp-transports|mcp-lowering|rsc-hook|state-and-definition|http-security|eval-evidence|host-extensions|widget-accessibility|docs-contract).+\.(?:ts|tsx)$)/u;
 
@@ -150,7 +145,6 @@ const isWithin = (root, candidate) => {
 const retained = (path, generatedOutput) => {
   if (path === generatedOutput || path.includes('/node_modules/') || path.includes('/dist/') || path.includes('/.agent-bundle/')) return false;
   if (/\.(?:png|jpe?g|webp)$/iu.test(path) && !path.startsWith('docs/assets/rsc-runtime-workbench/')) return false;
-  if (path.startsWith('packages/workbench/src/inspector/vendor/')) return false;
   return agentBundleSource.has(path)
     || agentBundleBuild.has(path)
     || agentBundleDev.has(path)

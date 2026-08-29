@@ -25,7 +25,7 @@ import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { McpAppPreview, type McpAppPreviewClient, type McpAppPreviewProps } from '../src/mcp/mcp-app-preview.tsx';
 import type { McpJsonInputProps } from '../src/mcp/mcp-json-input.tsx';
 import { McpProtocolEvidence, type McpProtocolEvidenceProps } from '../src/mcp/mcp-page.tsx';
-import type { InspectorRuntimeEvidenceProps } from '../src/inspector/adapter/inspector-session-adapter-entry.ts';
+import type { RuntimeEvidenceProps } from '../src/runtime-evidence.tsx';
 import { RuntimeClient, RuntimeClientError, type RuntimeBootstrap } from '../src/runtime-client.ts';
 import type { RuntimeInspectorProps } from '../src/runtime-inspector.tsx';
 import { createRuntimePlaygroundController, type RuntimePlaygroundProps } from '../src/runtime-playground.tsx';
@@ -195,7 +195,7 @@ const controlledInput: McpJsonInputProps = {
   id: 'runtime-input', label: 'Runtime input', onChange: () => undefined, onRawDraftChange: () => undefined, onSubmit: () => undefined, rawDraft: '{"city":', value: { city: 'London' },
 };
 const protocolEvidence: McpProtocolEvidenceProps = { ariaLabel: 'Provider protocol', protocol: inspection.protocol, trace: [trace] };
-const inspectorEvidence: InspectorRuntimeEvidenceProps = { evidence: { kind: 'protocol', protocol: inspection.protocol, trace: [trace] } };
+const runtimeEvidence: RuntimeEvidenceProps = { evidence: { kind: 'protocol', protocol: inspection.protocol, trace: [trace] } };
 const stageProps: RuntimeStageProps = { profile: profiles[0], profileId: 'portable', renderAppPreview: appPreviewRenderer, run, surface };
 const inspectorProps: RuntimeInspectorProps = { run, surface, tab: 'tree' };
 
@@ -243,7 +243,7 @@ it('compiles RuntimeClient against the exact provider wire contract', async () =
     controlledInput,
     error,
     invocation,
-    inspectorEvidence,
+    runtimeEvidence,
     inspectorProps,
     McpProtocolEvidence,
     protocolEvidence,

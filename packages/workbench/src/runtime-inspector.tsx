@@ -1,7 +1,7 @@
 import React, { useRef, useState, type KeyboardEvent } from 'react';
 
 import type { DevRuntimeDiagnostic, DevRuntimeRun, DevRuntimeStatus, DevRuntimeSurface, DevRuntimeTreeNode } from '../../agent-bundle/src/contracts/runtime.ts';
-import { InspectorRuntimeEvidence } from './inspector/adapter/inspector-session-adapter.tsx';
+import { RuntimeEvidence } from './runtime-evidence.tsx';
 import type { RuntimeInspectorTab } from './runtime-model.ts';
 
 export interface RuntimeInspectorProps {
@@ -110,14 +110,14 @@ export const RuntimeInspector = ({ onDownloadFlight, onTabChange, run, status, s
         {selected?.flight === undefined ? <p>No Flight payload is available.</p> : <><p>{selected.flight.bytes} bytes{selected.flight.truncated ? ' (preview truncated)' : ''}</p><pre><code>{selected.flight.preview}</code></pre>{selected.flight.downloadPath === undefined || onDownloadFlight === undefined || run === undefined ? undefined : <button onClick={() => onDownloadFlight(run)} type="button">Download Flight payload</button>}</>}
       </> : undefined}
       {selectedTab === 'protocol' ? (surface?.kind === 'mcp-tool' || surface?.kind === 'mcp-resource' || surface?.kind === 'mcp-app')
-        ? <InspectorRuntimeEvidence evidence={{ kind: 'protocol', protocol: selected?.protocol, trace: selected?.trace ?? [] }} />
+        ? <RuntimeEvidence evidence={{ kind: 'protocol', protocol: selected?.protocol, trace: selected?.trace ?? [] }} />
         : <><h2>Protocol</h2><pre><code>{display(selected?.protocol)}</code></pre></> : undefined}
       {selectedTab === 'state' ? <>
         <h2>State</h2>
         {selected === undefined ? <p>No state evidence is available.</p> : <dl className="runtime-inspector-state"><div><dt>State store</dt><dd>{selected.state.identity.stateStoreId}</dd></div><div><dt>State version</dt><dd>{selected.state.identity.stateVersion}</dd></div></dl>}
         {selected?.state.snapshot === undefined ? undefined : <pre><code>{display(selected.state.snapshot)}</code></pre>}
       </> : undefined}
-      {selectedTab === 'diagnostics' ? <><InspectorRuntimeEvidence evidence={{ diagnostics, kind: 'diagnostics' }} />{selected === undefined ? undefined : <InspectorRuntimeEvidence evidence={{ expansion: traceExpansion, kind: 'trace', trace: selected.trace }} />}</> : undefined}
+      {selectedTab === 'diagnostics' ? <><RuntimeEvidence evidence={{ diagnostics, kind: 'diagnostics' }} />{selected === undefined ? undefined : <RuntimeEvidence evidence={{ expansion: traceExpansion, kind: 'trace', trace: selected.trace }} />}</> : undefined}
     </section>
   </section>;
 };
