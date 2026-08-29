@@ -1,6 +1,8 @@
 # `@agent-bundle/rsc-runtime`
 
 Small React primitives for producing Agent Bundle hook and MCP protocol results with JSX.
+No npm release is cut yet; install the pkg.pr.new preview of any `main` commit or pull
+request — see [Preview packages](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md).
 
 ```tsx
 import { Mcp, lowerMcpResult } from '@agent-bundle/rsc-runtime';

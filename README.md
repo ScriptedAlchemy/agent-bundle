@@ -318,4 +318,6 @@ Repository-owned Chromium E2E runs independently of a connected ChatGPT Chrome e
 extension is for the separate final manual visual pass, not a substitute for repository or packed
 consumer verification. Package versions and release PRs use Changesets. Add a changeset with
 `pnpm changeset`; merges to `main` update or publish through the standard Changesets action. Pull
-requests publish `agent-bundle` and `@agent-bundle/rsc-runtime` canaries through pkg.pr.new.
+requests and every push to `main` publish `agent-bundle` and `@agent-bundle/rsc-runtime` canaries
+through pkg.pr.new — the interim release channel while npm publishing waits on the final package
+name (see [Preview packages](docs/preview-packages.md)).

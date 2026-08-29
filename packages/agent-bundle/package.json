@@ -16,6 +16,9 @@
     "type": "git",
     "url": "git+https://github.com/ScriptedAlchemy/agent-bundle.git"
   },
+  "publishConfig": {
+    "provenance": true
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
