@@ -100,6 +100,7 @@ const runtimeFactory = (
     readonly installedHandlers?: Parameters<typeof createRuntimeAppBridgeFactory>[0]['installedHandlers'];
     readonly policy?: Readonly<{ readonly bindingId: string; readonly snapshot: Readonly<{ readonly allow: string; readonly approvedPermissions: Readonly<Record<string, unknown>>; readonly revision: number; readonly warnings: readonly unknown[] }> }>;
     readonly requestConsent?: Parameters<typeof createRuntimeAppBridgeFactory>[0]['requestConsent'];
+    readonly teardownAckTimeoutMs?: number;
   }> = {},
 ): RuntimeAppBridgeFactory => {
   const policy = options.policy ?? Object.freeze({
@@ -134,6 +135,7 @@ const runtimeFactory = (
     }) as never,
     requestConsent: options.requestConsent ?? (async () => 'deny'),
     simulationFeatures: Object.freeze({ chatGptWidgetState: 'disabled' as const }),
+    ...(options.teardownAckTimeoutMs === undefined ? {} : { teardownAckTimeoutMs: options.teardownAckTimeoutMs }),
   });
 };
 
@@ -533,7 +535,10 @@ it('keeps inbound App messages at 256 KiB while admitting a 1 MiB host result en
 it('bounds an unresponsive resource-teardown before the factory releases transport and access', async () => {
   await withBrowser(async (browser) => {
     let accessCloses = 0;
-    const factory = runtimeFactory(async () => appAccess(async () => { accessCloses += 1; }));
+    // The production ack budget is deliberately generous (a contended runner
+    // must not permanently lose the ack); the seam keeps this bounded-timeout
+    // proof fast without weakening the production window.
+    const factory = runtimeFactory(async () => appAccess(async () => { accessCloses += 1; }), { teardownAckTimeoutMs: 500 });
     const bridge = await invokeBridgeFactory(factory, browser);
     const started = Date.now();
     const teardown = bridge.teardownResource({});

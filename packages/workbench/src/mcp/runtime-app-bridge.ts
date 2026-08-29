@@ -56,6 +56,8 @@ export interface RuntimeAppBridgeOptions {
   readonly preview: McpAppPreviewSnapshot;
   readonly requestConsent: (challenge: McpAppConsentChallenge, signal?: AbortSignal) => Promise<'allow-once' | 'deny'>;
   readonly simulationFeatures: McpAppSimulationFeatures;
+  /** Test seam for the graceful `ui/resource-teardown` ack budget. Production always uses the module default. */
+  readonly teardownAckTimeoutMs?: number;
 }
 
 interface BrowserMessageEvent {
@@ -117,7 +119,18 @@ const maximumInboundMessageBytes = runtimeAppMessageLimits.appToHostBytes;
 const maximumOutboundMessageBytes = runtimeAppMessageLimits.hostToAppBytes;
 const maximumQueuedMessages = 32;
 const maximumFailures = 3;
-const gracefulTeardownTimeoutMs = 1_000;
+/**
+ * The ack budget for `ui/resource-teardown` before the host proceeds to
+ * revoke the binding and unmount the frame. Missing this window is
+ * unrecoverable: the frame is destroyed, so a late acknowledgement can never
+ * be delivered. The round trip crosses two postMessage hops (the client
+ * surface queues it until the App's initialize handshake settles) plus the
+ * sandboxed app's event loop; a healthy app answers in milliseconds, but a
+ * contended two-core runner was observed missing a 1s window during a
+ * dev-compile storm (PR #29 Verify), so the budget only bounds an app that
+ * cannot answer at all — it never delays a responsive one.
+ */
+const gracefulTeardownTimeoutMs = 10_000;
 
 const aggregateFailure = (message: string, reasons: readonly unknown[]): Error =>
   new AggregateError(reasons, message);
@@ -548,11 +561,12 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
       }) as unknown as RuntimeAppBridge;
       rawBridgeClose = bridge.close.bind(bridge);
       const rawTeardownResource = bridge.teardownResource.bind(bridge);
+      const teardownAckTimeoutMs = options.teardownAckTimeoutMs ?? gracefulTeardownTimeoutMs;
       Object.defineProperty(bridge, 'teardownResource', {
         configurable: false,
         value: (params: Readonly<Record<string, never>>): Promise<Readonly<Record<string, never>>> => rawTeardownResource(params, {
-          maxTotalTimeout: gracefulTeardownTimeoutMs,
-          timeout: gracefulTeardownTimeoutMs,
+          maxTotalTimeout: teardownAckTimeoutMs,
+          timeout: teardownAckTimeoutMs,
         }),
         writable: false,
       });

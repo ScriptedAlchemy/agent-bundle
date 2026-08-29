@@ -1297,6 +1297,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: 15_000 * timeScale });
     await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
     expect(runtimeCreates()).toHaveLength(2);
+    const appMessagesBeforeThirdCreate = appMessages.length;
     await page.evaluate(() => { window.location.hash = '#runtime'; });
     await expect.poll(runtimeCreates, { timeout: 15_000 * timeScale }).toHaveLength(3);
     const thirdCreate = runtimeCreates()[2];
@@ -1336,6 +1337,17 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (thirdController === null) throw new Error('Third Runtime App trusted controller frame was unavailable.');
     const thirdFrameHref = thirdController.url();
     const thirdDeletePath = `/api/runtime/apps/${encodeURIComponent(thirdBinding.id)}`;
+    // The App can acknowledge ui/resource-teardown only once its SDK
+    // transport is connected, evidenced by its ui/initialize request reaching
+    // the host. The rendered heading alone does not prove that: navigating
+    // away earlier relays teardown into a frame that cannot answer yet, the
+    // host's bounded grace elapses, the frame is destroyed, and the
+    // acknowledgement becomes unobservable forever (the third-teardown ack
+    // poll timed out this way on contended two-core runners).
+    await expect.poll(() => appMessages.slice(appMessagesBeforeThirdCreate).filter((entry) =>
+      new URL(entry.href).origin === fixture.url && entry.senderOrigin === thirdOrigin &&
+      entry.message !== null && typeof entry.message === 'object' &&
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 * timeScale }).toBeGreaterThan(0);
     await page.evaluate(() => { window.location.hash = '#mcp'; });
     const teardownRequestForThird = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
       entry.href === thirdFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
@@ -1348,7 +1360,21 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (typeof thirdTeardownId !== 'string' && typeof thirdTeardownId !== 'number') throw new Error('Third Runtime App teardown request omitted its JSON-RPC id.');
     const thirdAcknowledgement = () => messageFor(fixture.url, thirdOrigin, (message) =>
       message.id === thirdTeardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
-    await expect.poll(thirdAcknowledgement, { timeout: 15_000 * timeScale }).toBeDefined();
+    try {
+      await expect.poll(thirdAcknowledgement, { timeout: 15_000 * timeScale }).toBeDefined();
+    } catch {
+      throw new Error(`Third Runtime App teardown was never acknowledged: ${JSON.stringify({
+        deletes: runtimeAppRequests.filter((entry) => entry.method === 'DELETE').map((entry) => entry.path),
+        frames: page.frames().map((frame) => frame.url()),
+        hmrSockets: runtimePreviewSockets,
+        messagesSinceThirdCreate: appMessages.slice(appMessagesBeforeThirdCreate).map((entry) => Object.freeze({
+          method: (entry.message as Readonly<{ readonly method?: unknown }>).method,
+          id: (entry.message as Readonly<{ readonly id?: unknown }>).id,
+          receiver: new URL(entry.href).origin,
+          sender: entry.senderOrigin,
+        })),
+      })}`);
+    }
     await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === thirdDeletePath), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const thirdDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === thirdDeletePath);
     expect(lifecycleIndex('message', thirdAcknowledgement()!)).toBeGreaterThan(lifecycleIndex('message', thirdTeardown!));

@@ -191,6 +191,8 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   const allowedKeys = new Set(['error', 'id', 'jsonrpc', 'method', 'params', 'result']);
   let initializeId;
   let lifecycle = 'created';
+  const maxPendingHostMessages = 32;
+  let pendingHostMessages = [];
   let hmr;
   let hmrReconnectAttempts = 0;
   let hmrReconnectTimer;
@@ -296,14 +298,23 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   addEventListener('message', (event) => {
     if (lifecycle === 'closed') return;
     if (event.source === parent) {
-      if (!isRpc(event.data, maxHostToAppMessageBytes)) return;
-      if (lifecycle === 'initializing') {
-        if (event.origin !== hostOrigin || !isInitializeResponse(event.data)) return;
+      if (event.origin !== hostOrigin || !isRpc(event.data, maxHostToAppMessageBytes)) return;
+      if (lifecycle === 'initializing' && isInitializeResponse(event.data)) {
         lifecycle = 'initialize-responded';
         post(app.contentWindow, '*', event.data, event.ports, maxHostToAppMessageBytes);
         return;
       }
-      if (lifecycle !== 'initialized' || event.origin !== hostOrigin) return;
+      if (lifecycle !== 'initialized') {
+        // Queue instead of dropping: a host request relayed into the
+        // handshake window (ui/resource-teardown racing the App's
+        // ui/notifications/initialized) would otherwise vanish, its sender
+        // would burn its bounded grace waiting for an answer that can never
+        // arrive, and the acknowledgement evidence would be lost forever.
+        // The queue also survives an HMR entry reload, so a request sent to
+        // the retiring App instance is answered by its replacement.
+        if (pendingHostMessages.length < maxPendingHostMessages) pendingHostMessages.push({ data: event.data, ports: event.ports });
+        return;
+      }
       post(app.contentWindow, '*', event.data, event.ports, maxHostToAppMessageBytes);
       return;
     }
@@ -317,12 +328,14 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
     if (lifecycle === 'initialize-responded' && isNotification(event.data, 'ui/notifications/initialized', maxAppToHostMessageBytes)) {
       lifecycle = 'initialized';
       post(parent, hostOrigin, event.data, event.ports, maxAppToHostMessageBytes);
+      for (const pending of pendingHostMessages.splice(0)) post(app.contentWindow, '*', pending.data, pending.ports, maxHostToAppMessageBytes);
       return;
     }
     if (lifecycle === 'initialized') post(parent, hostOrigin, event.data, event.ports, maxAppToHostMessageBytes);
   });
   addEventListener('pagehide', () => {
     lifecycle = 'closed';
+    pendingHostMessages = [];
     if (hmrReconnectTimer !== undefined) clearTimeout(hmrReconnectTimer);
     hmrReconnectTimer = undefined;
     const activeHmr = hmr;

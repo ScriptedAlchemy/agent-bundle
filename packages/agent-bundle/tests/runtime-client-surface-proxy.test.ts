@@ -518,7 +518,7 @@ it('uses a one-use bootstrap capability before proxying only the declared app an
     expect(shell).toContain('<iframe id="app" sandbox="allow-scripts"');
     expect(shell).toContain(`const maxAppToHostMessageBytes = ${runtimeAppMessageLimits.appToHostBytes};`);
     expect(shell).toContain(`const maxHostToAppMessageBytes = ${runtimeAppMessageLimits.hostToAppBytes};`);
-    expect(shell).toContain("if (!isRpc(event.data, maxHostToAppMessageBytes)) return;");
+    expect(shell).toContain("if (event.origin !== hostOrigin || !isRpc(event.data, maxHostToAppMessageBytes)) return;");
     expect(shell).toContain("!isRpc(event.data, maxAppToHostMessageBytes)");
 
     const second = await fetch(binding.bootstrapUrl, { redirect: 'manual' });

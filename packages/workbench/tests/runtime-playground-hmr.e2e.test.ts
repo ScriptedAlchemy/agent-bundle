@@ -1,29 +1,13 @@
-import { readFile, rename, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { replaceWatchedSource } from './support/watched-files.ts';
 import { workbenchUrl } from './support/workbench-e2e.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 
 const browserTimeout = 30_000 * timeScale;
-
-/**
- * Replaces a watched source atomically through a rename staged OUTSIDE the
- * watched project. An in-place write is truncate-then-append: the dev
- * compiler can start a compile off the truncation event, read incomplete
- * content, and then drop the append event because both operations land
- * within the same mtime tick, so the final content never compiles and the
- * expected generation never activates. The temp file lives in the project's
- * parent (same filesystem, never watched) so the rename into place is the
- * only event the watcher observes.
- */
-const replaceWatchedSource = async (projectRoot: string, path: string, content: string): Promise<void> => {
-  const temporary = join(projectRoot, '..', `.${basename(path)}.${process.pid}.tmp`);
-  await writeFile(temporary, content);
-  await rename(temporary, path);
-};
 
 const e2e = test.extend({
   playwright: {
