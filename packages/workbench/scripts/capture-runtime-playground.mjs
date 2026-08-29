@@ -6,7 +6,7 @@ import { chromium } from 'playwright';
 
 import { startRuntimePlaygroundFixture } from '../tests/helpers/runtime-playground-fixture.ts';
 
-const browserTimeout = 30_000;
+const browserTimeout = 30_000 * (process.env.CI === undefined ? 1 : 4);
 const desktopViewport = Object.freeze({ height: 900, width: 1440 });
 const mobileViewport = Object.freeze({ height: 844, width: 390 });
 const outputFlags = Object.freeze([
