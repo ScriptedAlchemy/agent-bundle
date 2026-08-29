@@ -653,7 +653,8 @@ describe('MCP page', () => {
     expect(markup).toContain('for="mcp-session-timeout"');
     expect(markup).toContain('Session timeout (ms)');
     expect(markup).toContain('id="mcp-session-timeout"');
-    expect(markup).toContain('value="5000"');
+    expect(markup).toContain('placeholder="Server default"');
+    expect(markup).not.toContain('value="5000"');
   });
 
   it('renders an initial runtime selection with immutable binding evidence and no artifact-open controls', () => {
