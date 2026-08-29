@@ -20,6 +20,13 @@ export interface RuntimeStateTestAdapter {
   readonly beforeRepair?: (signal: AbortSignal) => Promise<void>;
   readonly criticalSectionMs?: number;
   readonly fatalOwnerTeardown?: (error: Error) => void;
+  /**
+   * Observes every settled lock-acquisition attempt: 'held' when the lock
+   * was refused because another owner holds it, 'acquired' when the attempt
+   * won the lease. Lets exclusion tests order assertions on observed
+   * contender attempts instead of fixed sleeps that race the retry loop.
+   */
+  readonly onLockAttempt?: (outcome: 'acquired' | 'held') => void;
   readonly ownerSettlementMs?: number;
   readonly platform?: NodeJS.Platform;
   readonly prepareStateFile?: (input: Readonly<{ stateFile: string }>) => Promise<string>;
@@ -44,10 +51,17 @@ export const createTestFileRuntimeKernel = ({ adapter = {}, ...options }: TestFi
   const native = createNodeStateStorage({ platform: adapter.platform, syncParent: adapter.syncParent });
   const storage: StateStorage = {
     ...native,
-    acquire: async (input) => wrapRelease(
-      await (adapter.acquireLock === undefined ? native.acquire(input) : adapter.acquireLock(input)),
-      adapter,
-    ),
+    acquire: async (input) => {
+      let release: StateLeaseRelease;
+      try {
+        release = await (adapter.acquireLock === undefined ? native.acquire(input) : adapter.acquireLock(input));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code === 'ELOCKED') adapter.onLockAttempt?.('held');
+        throw error;
+      }
+      adapter.onLockAttempt?.('acquired');
+      return wrapRelease(release, adapter);
+    },
     async append(stateFile, contents, signal) {
       await adapter.beforeAppend?.(signal);
       if (signal.aborted) {

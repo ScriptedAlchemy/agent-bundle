@@ -10,7 +10,7 @@ import { serializeRuntimeDefinition } from '../src/build/serialize-definition.js
 import { runtimeDefinition } from '../src/definition.js';
 import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
 import { createTestFileRuntimeKernel } from '../src/runtime/state-file-test-support.js';
-import { timeScale } from '../../../packages/agent-bundle/tests/support/time-scale.ts';
+import { timeScale } from './support/time-scale.ts';
 
 const readOnlyAnnotations = {
   destructiveHint: false,
@@ -42,6 +42,30 @@ const observeCancellation = (signal: AbortSignal, onCancelled: () => void): void
     return;
   }
   signal.addEventListener('abort', onCancelled, { once: true });
+};
+
+/**
+ * Observes a contender kernel's settled lock-acquisition attempts. A fixed
+ * sleep before asserting the contender has not settled races the retry loop:
+ * on a loaded runner a wrongly released lease can take longer than the sleep
+ * to be noticed, so the assertion passes without testing anything. Waiting
+ * for an observed refusal proves the lease was actually held when the
+ * contender asked.
+ */
+const observeLockAttempts = () => {
+  let waiters: Array<(outcome: 'acquired' | 'held') => void> = [];
+  return {
+    /** Resolves with the outcome of the next attempt settled from now on. */
+    next: async (): Promise<'acquired' | 'held'> =>
+      new Promise((resolve) => {
+        waiters.push(resolve);
+      }),
+    record: (outcome: 'acquired' | 'held'): void => {
+      const settled = waiters;
+      waiters = [];
+      for (const waiter of settled) waiter(outcome);
+    },
+  };
 };
 
 const eagerPromise = <T>(value: T): Promise<T> => ({
@@ -619,7 +643,8 @@ test('retains the lease until a timed-out mutation phase actually settles', { ti
       ownerSettlementMs: 30_000,
     },
   });
-  const second = createTestFileRuntimeKernel({ stateFile });
+  const lockAttempts = observeLockAttempts();
+  const second = createTestFileRuntimeKernel({ stateFile, adapter: { onLockAttempt: lockAttempts.record } });
 
   const firstMutation = first.recordEdit({
     host: 'claude',
@@ -644,13 +669,17 @@ test('retains the lease until a timed-out mutation phase actually settles', { ti
   ).finally(() => {
     contenderSettled = true;
   });
-  await wait(40);
+  await expect(lockAttempts.next()).resolves.toBe('held');
   expect(contenderSettled).toBe(false);
 
   // The deadline has cancelled the mutation, but the lease must stay held
-  // while the phase is unsettled.
+  // while the phase is unsettled. The first observed refusal may belong to
+  // an attempt already in flight when the cancellation landed; the second
+  // necessarily started after it, so a wrongly released lease would surface
+  // here as 'acquired'.
   await phaseCancelled;
-  await wait(40);
+  await expect(lockAttempts.next()).resolves.toBe('held');
+  await expect(lockAttempts.next()).resolves.toBe('held');
   expect(contenderSettled).toBe(false);
 
   settle();
@@ -703,7 +732,8 @@ for (const phase of ['truncate', 'append', 'fsync'] as const) {
         ownerSettlementMs: 30_000,
       },
     });
-    const second = createTestFileRuntimeKernel({ stateFile });
+    const lockAttempts = observeLockAttempts();
+    const second = createTestFileRuntimeKernel({ stateFile, adapter: { onLockAttempt: lockAttempts.record } });
     const firstMutation = first.recordEdit({
       host: 'claude',
       idempotencyKey: `test:state:${phase}-owner`,
@@ -727,13 +757,17 @@ for (const phase of ['truncate', 'append', 'fsync'] as const) {
     ).finally(() => {
       contenderSettled = true;
     });
-    await wait(40);
+    await expect(lockAttempts.next()).resolves.toBe('held');
     expect(contenderSettled).toBe(false);
 
     // The deadline has cancelled the mutation, but the lease must stay held
-    // while the phase is unsettled.
+    // while the phase is unsettled. The first observed refusal may belong to
+    // an attempt already in flight when the cancellation landed; the second
+    // necessarily started after it, so a wrongly released lease would
+    // surface here as 'acquired'.
     await phaseCancelled;
-    await wait(40);
+    await expect(lockAttempts.next()).resolves.toBe('held');
+    await expect(lockAttempts.next()).resolves.toBe('held');
     expect(contenderSettled).toBe(false);
 
     settle();
@@ -765,7 +799,8 @@ test('keeps contenders excluded until a delayed release settles', async () => {
       releaseMs: 200,
     },
   });
-  const second = createTestFileRuntimeKernel({ stateFile });
+  const lockAttempts = observeLockAttempts();
+  const second = createTestFileRuntimeKernel({ stateFile, adapter: { onLockAttempt: lockAttempts.record } });
   const firstMutation = first.recordEdit({
     host: 'claude',
     idempotencyKey: 'test:state:delayed-release-owner',
@@ -787,7 +822,7 @@ test('keeps contenders excluded until a delayed release settles', async () => {
   ).finally(() => {
     contenderSettled = true;
   });
-  await wait(40);
+  await expect(lockAttempts.next()).resolves.toBe('held');
   expect(contenderSettled).toBe(false);
   settleRelease();
   await expect(firstMutation).resolves.toMatchObject({ stateVersion: 1 });
