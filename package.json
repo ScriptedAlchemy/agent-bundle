@@ -40,7 +40,7 @@
     "examples:check": "pnpm build && pnpm --filter './examples/*' --workspace-concurrency=1 check"
   },
   "devDependencies": {
-    "@changesets/cli": "2.29.7",
+    "@changesets/cli": "3.0.1",
     "@arethetypeswrong/cli": "0.18.5",
     "@modelcontextprotocol/server": "2.0.0",
     "@rsbuild/core": "2.2.1",
