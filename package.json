@@ -13,7 +13,7 @@
     "test": "pnpm test:unit && pnpm test:integration",
     "test:unit": "rstest --config rstest.unit.config.ts",
     "test:integration": "pnpm --filter agent-bundle-workbench build && pnpm test:integration:run",
-    "test:integration:run": "AGENT_BUNDLE_WORKBENCH_PREBUILT=1 rstest --config rstest.integration.config.ts --pool.maxWorkers 1",
+    "test:integration:run": "AGENT_BUNDLE_WORKBENCH_PREBUILT=1 rstest --config rstest.integration.config.ts && AGENT_BUNDLE_WORKBENCH_PREBUILT=1 rstest --config rstest.integration-serial.config.ts",
     "test:watch": "rstest --config rstest.config.ts --watch",
     "lint": "rslint .",
     "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json",
