@@ -1,7 +1,5 @@
-import { execFile as executeFile } from 'node:child_process';
 import { chmod, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
@@ -9,9 +7,8 @@ import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { workbenchUrl } from './support/workbench-e2e.ts';
+import { buildWorkbench, workbenchUrl } from './support/workbench-e2e.ts';
 
-const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 8_000;
@@ -23,16 +20,6 @@ const e2e = test.extend({
     contextOptions: { viewport: { height: 900, width: 1440 } },
   } satisfies PlaywrightOptions,
 });
-
-let workbenchBuild: Promise<void> | undefined;
-
-const buildWorkbench = (): Promise<void> => workbenchBuild ??= (async (): Promise<void> => {
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('pnpm', ['--filter', 'agent-bundle-workbench', 'build'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
-  });
-})();
 
 const writeFakeClaude = async (directory: string): Promise<void> => {
   const executable = join(directory, 'claude');

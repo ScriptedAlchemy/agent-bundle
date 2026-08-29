@@ -72,27 +72,19 @@ export const integrationTestFiles: readonly string[] = [
  *
  * - inspector-shell.e2e rewrites `packages/workbench/dist` with an explicit
  *   development-mode artifact (the build itself is under test).
- * - packed-release.e2e runs a root `pnpm build` (rewriting
- *   `packages/{agent-bundle,rsc-runtime,workbench}/dist`) and `npm pack`.
- * - cli.test runs a root `pnpm build` and `npm pack` against the shared
- *   package dist.
- * - overview.e2e, mcp-app-real.e2e, and playground-real.e2e rebuild
- *   `packages/workbench/dist` with local build helpers that ignore
- *   AGENT_BUNDLE_WORKBENCH_PREBUILT.
+ * - packed-release.e2e can run a root `pnpm build` (rewriting
+ *   `packages/{agent-bundle,rsc-runtime,workbench}/dist`) when
+ *   AGENT_BUNDLE_PACKAGE_PREBUILT is unset, and always runs `npm pack`
+ *   plus a packed dev server on a pre-reserved (not ephemeral) port.
  *
  * They run on one worker via rstest.integration-serial.config.ts after the
  * parallel pool finishes (rstest orders files alphabetically, so
- * inspector-shell's development artifact lands after cli.test has used the
- * production CLI dist, and packed-release packs the agent-bundle dist copy
- * that is unaffected by the workbench dist rewrite).
+ * packed-release packs the agent-bundle dist copy that is unaffected by
+ * inspector-shell's workbench dist rewrite).
  */
 export const serialIntegrationTestFiles: readonly string[] = [
-  'packages/agent-bundle/tests/cli.test.ts',
   'packages/workbench/tests/inspector-shell.e2e.test.ts',
-  'packages/workbench/tests/mcp-app-real.e2e.test.ts',
-  'packages/workbench/tests/overview.e2e.test.ts',
   'packages/workbench/tests/packed-release.e2e.test.ts',
-  'packages/workbench/tests/playground-real.e2e.test.ts',
 ];
 
 /**
