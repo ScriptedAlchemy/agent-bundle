@@ -31,6 +31,7 @@ import {
   workspaceRoot,
   writeFakeClaude,
 } from './support/packed-release-harness.ts';
+import { replaceWatchedSource } from './support/watched-files.ts';
 import { workbenchUrl } from './support/workbench-e2e.ts';
 
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
@@ -558,7 +559,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'good edit rebuild B';
       const epochBMarker = 'Epoch B changed the packed review guidance.';
-      await writeFile(skillSource, `${originalSkill}\n\n${epochBMarker}\n`);
+      await replaceWatchedSource(project, skillSource, `${originalSkill}\n\n${epochBMarker}\n`);
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromOverview('epoch B');
@@ -611,7 +612,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expectGeneratedSkill('last-good epoch B', lastGoodEpochB, epochBMarker);
       const invalidConfig = originalConfig.replace('ui://packed-release/dashboard.html', 'https://packed-release.example/dashboard.html');
       if (invalidConfig === originalConfig) throw new Error('The packed fixture did not contain the resource URI used for the invalid rebuild.');
-      await writeFile(configSource, invalidConfig);
+      await replaceWatchedSource(project, configSource, invalidConfig);
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromOverview('invalid epoch B');
@@ -627,8 +628,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       phase = 'repaired edit rebuild C';
       const epochCMarker = 'Epoch C repaired the packed review guidance.';
       await Promise.all([
-        writeFile(configSource, originalConfig),
-        writeFile(skillSource, `${originalSkill}\n\n${epochCMarker}\n`),
+        replaceWatchedSource(project, configSource, originalConfig),
+        replaceWatchedSource(project, skillSource, `${originalSkill}\n\n${epochCMarker}\n`),
       ]);
       await rebuildFromOverview('epoch C');
       const epochCStatus = activeEpochFrom(await call('project_status'), 'epoch C');

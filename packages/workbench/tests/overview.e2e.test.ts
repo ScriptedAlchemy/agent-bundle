@@ -19,6 +19,7 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { replaceWatchedSource } from './support/watched-files.ts';
 import { buildWorkbench } from './support/workbench-e2e.ts';
 
 const workspaceRoot = process.cwd();
@@ -356,8 +357,8 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     const editedStyles = `${styles}\n.timeline__header [data-testid="runtime-hmr-marker"] { color: rgb(1, 2, 3); }\n`;
     expect(editedSource).not.toBe(source);
     await Promise.all([
-      writeFile(fixture.widgetAppSource, editedSource),
-      writeFile(fixture.appStyles, editedStyles),
+      replaceWatchedSource(fixture.root, fixture.widgetAppSource, editedSource),
+      replaceWatchedSource(fixture.root, fixture.appStyles, editedStyles),
     ]);
     await expect.poll(() => runtimePreviewHmrMessages.some((message) => message === JSON.stringify({ type: 'full-reload' })), { timeout: 15_000 })
       .toBe(true);
@@ -420,7 +421,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     const finiteConfigMarker = `config-reconcile-finite-${Math.random().toString(36).slice(2)}`;
     const finiteConfig = sourceConfig.replace('  codex: {},', `  codex: { configReconcileMarker: '${finiteConfigMarker}' },`);
     expect(finiteConfig).not.toBe(sourceConfig);
-    await writeFile(fixture.configSource, finiteConfig);
+    await replaceWatchedSource(fixture.root, fixture.configSource, finiteConfig);
     await expect.poll(async () => {
       const source = await readProjectSource();
       return source.state === 'ready' && source.revision !== sourceRevision ? source.revision : undefined;
@@ -435,7 +436,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       'configReconcileMarker: Number.NaN',
     );
     expect(invalidConfig).not.toBe(finiteConfig);
-    await writeFile(fixture.configSource, invalidConfig);
+    await replaceWatchedSource(fixture.root, fixture.configSource, invalidConfig);
     await expect.poll(async () => {
       const source = await readProjectSource();
       const diagnostic = source.diagnostics.find((candidate) => candidate.code === 'AB4500');
@@ -515,7 +516,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       'configReconcileMarker: Number.NaN',
       `configReconcileMarker: '${repairedConfigMarker}'`,
     );
-    await writeFile(fixture.configSource, repairedConfig);
+    await replaceWatchedSource(fixture.root, fixture.configSource, repairedConfig);
     await expect.poll(async () => {
       const source = await readProjectSource();
       return source.state === 'ready' && source.revision !== finiteSourceRevision ? source.revision : undefined;
@@ -870,7 +871,7 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     );
     expect(changedDefinition).not.toBe(definitionSource);
     const definitionEventStart = runtimeEvents.length;
-    await writeFile(fixture.definitionSource, changedDefinition);
+    await replaceWatchedSource(fixture.root, fixture.definitionSource, changedDefinition);
     await expect.poll(() => eventsSince(definitionEventStart, 'runtime.mcp.restarting', initial), { timeout: 15_000 }).not.toEqual([]);
     await expect.poll(() => eventsSince(definitionEventStart, 'runtime.mcp.ready', initial), { timeout: 15_000 }).not.toEqual([]);
     expect(runtimeEvents.findIndex((event, index) => index >= definitionEventStart && event.payload.type === 'runtime.mcp.restarting')).toBeLessThan(
@@ -930,7 +931,7 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     fixture.disconnectProjectEventStream();
     await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 })
       .toBe(serverOwnedProjectSubscriptions);
-    await writeFile(fixture.configSource, changedTransport);
+    await replaceWatchedSource(fixture.root, fixture.configSource, changedTransport);
     const definitionOperationPath = `/api/runtime/apps/${encodeURIComponent(definitionRun.id)}/operations`;
     await expect.poll(async () => {
       const response = await fetch(new URL(definitionOperationPath, fixture.url), {
@@ -1224,7 +1225,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     const sourceConfig = await readFile(configPath, 'utf8');
     const changedConfig = sourceConfig.replace(initialConfigValue, changedConfigValue);
     expect(changedConfig).not.toBe(sourceConfig);
-    await writeFile(configPath, changedConfig);
+    await replaceWatchedSource(project.root, configPath, changedConfig);
     await expect.poll(() => {
       const next = server!.status().artifact;
       return next.state === 'active' && next.activeEpoch.id !== epochId && next.activeEpoch.modelDigest !== modelDigest
@@ -1492,7 +1493,7 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
       });
     });
 
-    await writeFile(join(project.skillDir, 'SKILL.md'), `${project.skillMarkdown}\n\nThe source refresh failure fixture changed.\n`);
+    await replaceWatchedSource(project.root, join(project.skillDir, 'SKILL.md'), `${project.skillMarkdown}\n\nThe source refresh failure fixture changed.\n`);
 
     await expect.poll(() => failedStatusRequests, { timeout: browserTimeout }).toBe(1);
     await expect(page.getByRole('status')).toContainText('Foreground server unavailable', { timeout: browserTimeout });
