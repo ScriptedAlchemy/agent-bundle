@@ -43,8 +43,11 @@ When installing both previews into the same project with npm, add
 `.github/workflows/package-preview.yml` runs
 `pnpm preview:publish` (`pkg-pr-new publish --previewVersion --no-compact
 --no-template './packages/agent-bundle' './packages/rsc-runtime'`) after a
-full build, on every pull request and on every push to `main`, so every
-`main` commit has an installable snapshot. The "Publish pkg.pr.new preview"
+full build, on every pull request and on every push to `main`. Runs for
+`main` pushes use a per-commit concurrency group, so overlapping pushes
+cannot cancel one another and every `main` commit has an installable
+snapshot. (PR runs cancel superseded builds for the same PR — only the
+latest preview of a PR matters.) The "Publish pkg.pr.new preview"
 check on a PR or commit links to the exact URLs for that build. Previews are
 built from the same `pnpm build` output the release gates verify; they are
 not npm releases and carry preview version strings.
