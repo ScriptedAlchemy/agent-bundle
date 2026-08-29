@@ -19,12 +19,13 @@ import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
-const browserTimeout = 15_000;
+const browserTimeout = 15_000 * timeScale;
 
 interface RuntimeAppOperation {
   readonly body: unknown;
