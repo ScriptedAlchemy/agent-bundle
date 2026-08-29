@@ -1360,7 +1360,21 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (typeof thirdTeardownId !== 'string' && typeof thirdTeardownId !== 'number') throw new Error('Third Runtime App teardown request omitted its JSON-RPC id.');
     const thirdAcknowledgement = () => messageFor(fixture.url, thirdOrigin, (message) =>
       message.id === thirdTeardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
-    await expect.poll(thirdAcknowledgement, { timeout: 15_000 * timeScale }).toBeDefined();
+    try {
+      await expect.poll(thirdAcknowledgement, { timeout: 15_000 * timeScale }).toBeDefined();
+    } catch {
+      throw new Error(`Third Runtime App teardown was never acknowledged: ${JSON.stringify({
+        deletes: runtimeAppRequests.filter((entry) => entry.method === 'DELETE').map((entry) => entry.path),
+        frames: page.frames().map((frame) => frame.url()),
+        hmrSockets: runtimePreviewSockets,
+        messagesSinceThirdCreate: appMessages.slice(appMessagesBeforeThirdCreate).map((entry) => Object.freeze({
+          method: (entry.message as Readonly<{ readonly method?: unknown }>).method,
+          id: (entry.message as Readonly<{ readonly id?: unknown }>).id,
+          receiver: new URL(entry.href).origin,
+          sender: entry.senderOrigin,
+        })),
+      })}`);
+    }
     await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === thirdDeletePath), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const thirdDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === thirdDeletePath);
     expect(lifecycleIndex('message', thirdAcknowledgement()!)).toBeGreaterThan(lifecycleIndex('message', thirdTeardown!));

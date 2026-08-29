@@ -123,10 +123,12 @@ const maximumFailures = 3;
  * The ack budget for `ui/resource-teardown` before the host proceeds to
  * revoke the binding and unmount the frame. Missing this window is
  * unrecoverable: the frame is destroyed, so a late acknowledgement can never
- * be delivered. The round trip crosses two postMessage hops and the
+ * be delivered. The round trip crosses two postMessage hops (the client
+ * surface queues it until the App's initialize handshake settles) plus the
  * sandboxed app's event loop; a healthy app answers in milliseconds, but a
- * contended two-core CI runner was observed missing a 1s window (PR #29
- * Verify), so the budget only bounds a genuinely hung app.
+ * contended two-core runner was observed missing a 1s window during a
+ * dev-compile storm (PR #29 Verify), so the budget only bounds an app that
+ * cannot answer at all — it never delays a responsive one.
  */
 const gracefulTeardownTimeoutMs = 10_000;
 
