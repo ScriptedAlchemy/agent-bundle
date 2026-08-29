@@ -66,20 +66,15 @@ export const integrationTestFiles: readonly string[] = [
  * Integration files that WRITE to workspace-shared locations and therefore
  * cannot run alongside other integration files:
  *
- * - inspector-shell.e2e rewrites `packages/workbench/dist` with an explicit
- *   development-mode artifact (the build itself is under test).
  * - packed-release.e2e can run a root `pnpm build` (rewriting
  *   `packages/{agent-bundle,rsc-runtime,workbench}/dist`) when
  *   AGENT_BUNDLE_PACKAGE_PREBUILT is unset, and always runs `npm pack`
  *   plus a packed dev server on a pre-reserved (not ephemeral) port.
  *
  * They run on one worker via rstest.integration-serial.config.ts after the
- * parallel pool finishes (rstest orders files alphabetically, so
- * packed-release packs the agent-bundle dist copy that is unaffected by
- * inspector-shell's workbench dist rewrite).
+ * parallel pool finishes.
  */
 export const serialIntegrationTestFiles: readonly string[] = [
-  'packages/workbench/tests/inspector-shell.e2e.test.ts',
   'packages/workbench/tests/packed-release.e2e.test.ts',
 ];
 
