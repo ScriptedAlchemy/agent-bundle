@@ -648,7 +648,7 @@ const capture = async (outputs) => {
 const run = async () => {
   const outputs = parseArguments(process.argv.slice(2));
   const evidence = await capture(outputs);
-  process.stdout.write(`${JSON.stringify(evidence)}\n`);
+  await new Promise((resolveWrite) => process.stdout.write(`${JSON.stringify(evidence)}\n`, resolveWrite));
 };
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -657,11 +657,21 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
   // stderr when it exits, so an in-process deadline beats an opaque outer
   // test timeout. unref keeps healthy runs exiting naturally.
   setTimeout(() => {
-    process.stderr.write(`Capture watchdog: run exceeded ${captureDeadline}ms during phase ${currentPhase}.\n`);
-    process.exit(1);
+    process.stderr.write(
+      `Capture watchdog: run exceeded ${captureDeadline}ms during phase ${currentPhase}.\n`,
+      () => process.exit(1),
+    );
   }, captureDeadline).unref();
-  run().catch((error) => {
-    process.stderr.write(`${formatCaptureFailure(error)}\n`);
-    process.exitCode = 1;
-  });
+  run().then(
+    // Force the exit once the run settles: a lingering handle (a wedged
+    // child process or socket surviving a bounded-but-failed cleanup) must
+    // not hold the process open until the watchdog fires.
+    () => process.exit(0),
+    (error) => {
+      process.stderr.write(
+        `${formatCaptureFailure(error)}\nLast capture phase: ${currentPhase}.\n`,
+        () => process.exit(1),
+      );
+    },
+  );
 }
