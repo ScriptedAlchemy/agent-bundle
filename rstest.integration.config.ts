@@ -29,8 +29,11 @@ export default defineConfig({
   include: [...parallelIntegrationTestFiles],
   pool: { maxWorkers },
   // Concurrent Chrome + dev-server + rsbuild pairs contend for cores, so
-  // parallel runs double the polling budgets (see tests/support/time-scale.ts).
+  // parallel runs double the polling budgets (see tests/support/time-scale.ts)
+  // and raise the 5s default test timeout, which real in-process builds can
+  // exceed when workers share the machine. Explicit per-test timeouts win.
   env: { AGENT_BUNDLE_TEST_TIME_SCALE: maxWorkers > 1 ? '2' : '1' },
+  testTimeout: 30_000,
   // isolate: false would cut Playwright startup cost, but the log pipeline
   // suites rely on per-file module isolation (verified: logs-real.e2e fails
   // when sharing a worker with the other log suites).
