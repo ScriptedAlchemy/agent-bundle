@@ -17,7 +17,6 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/build.test.ts',
   'packages/agent-bundle/tests/cli.test.ts',
   'packages/agent-bundle/tests/dev-artifact-service.test.ts',
-  'packages/agent-bundle/tests/dev-workbench-packaging.test.ts',
   'packages/agent-bundle/tests/dev-workbench.test.ts',
   'packages/agent-bundle/tests/epoch-atomicity-spike.test.ts',
   'packages/agent-bundle/tests/eval-claude-harness.test.ts',
@@ -35,13 +34,9 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/mcp-session-service.test.ts',
   'packages/agent-bundle/tests/mcp.test.ts',
   'packages/agent-bundle/tests/micro-eval-spot-check.test.ts',
-  'packages/agent-bundle/tests/packed-consumer.test.ts',
-  'packages/agent-bundle/tests/packed-native-smoke.test.ts',
   'packages/agent-bundle/tests/path-token-resolver.test.ts',
   'packages/agent-bundle/tests/plugin-bundle.test.ts',
   'packages/agent-bundle/tests/public-api.test.ts',
-  'packages/agent-bundle/tests/release-audit.test.ts',
-  'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-topology-script.test.ts',
   'packages/agent-bundle/tests/script-playground-service.test.ts',
   'packages/agent-bundle/tests/target-hook-contract.test.ts',
@@ -71,4 +66,21 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/runtime-playground-hmr.e2e.test.ts',
   'packages/workbench/tests/sync-inspector.test.ts',
   'packages/workbench/tests/workbench-dev-command.test.ts',
+];
+
+/**
+ * Pack-and-install tests: each one runs `npm pack` (and usually a clean
+ * `npm install` of the tarball), which dominates the serialized integration
+ * pool. They run through the root `test:packed` / `test:packed:native`
+ * scripts instead — CI's release-gates job (`check:release`) and the
+ * native-host-smoke workflow keep them covered — and stay excluded from the
+ * parallel unit pool.
+ */
+export const packedTestFiles: readonly string[] = [
+  'packages/agent-bundle/tests/dev-workbench-packaging.test.ts',
+  'packages/agent-bundle/tests/packed-consumer.test.ts',
+  'packages/agent-bundle/tests/packed-native-smoke.test.ts',
+  'packages/agent-bundle/tests/public-api-packed.test.ts',
+  'packages/agent-bundle/tests/release-audit.test.ts',
+  'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
 ];

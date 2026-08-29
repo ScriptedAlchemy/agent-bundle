@@ -1,6 +1,6 @@
 import { defineConfig } from '@rstest/core';
 
-import { integrationTestFiles } from './rstest.integration-tests.ts';
+import { integrationTestFiles, packedTestFiles } from './rstest.integration-tests.ts';
 import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 /** Build-free, process-free tests only; safe on parallel workers. `pnpm test` runs this before the integration config. */
@@ -10,5 +10,5 @@ export default defineConfig({
     'packages/**/tests/**/*.test.ts',
     'packages/workbench/src/inspector/vendor/clients/web/src/utils/inspectorTabs.test.ts',
   ],
-  exclude: [...integrationTestFiles],
+  exclude: [...integrationTestFiles, ...packedTestFiles],
 });
