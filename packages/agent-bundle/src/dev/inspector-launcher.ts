@@ -267,6 +267,10 @@ export const createInspectorLauncher = (options: InspectorLauncherOptions): Insp
         fail(inspectorLauncherError('INSPECTOR_LAUNCH_FAILED', error.message));
       });
       spawned.once('close', () => {
+        // A timed-out launch rejects before its child finishes closing, so a
+        // retry may have replaced `child` by the time this exit arrives; the
+        // stale cleanup must not touch the replacement process.
+        if (child !== spawned) return;
         if (state === 'running' && closePromise === undefined) {
           state = 'exited';
           url = undefined;

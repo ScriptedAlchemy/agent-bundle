@@ -28,11 +28,13 @@ class FakeChild extends EventEmitter {
   readonly stderr = new PassThrough();
   readonly stdout = new PassThrough();
   readonly signals: NodeJS.Signals[] = [];
+  autoCloseOnKill = true;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
 
   kill = (signal: NodeJS.Signals = 'SIGTERM'): boolean => {
     this.signals.push(signal);
+    if (!this.autoCloseOnKill) return true;
     this.signalCode = signal;
     queueMicrotask(() => this.emit('close', 0, signal));
     return true;
@@ -167,6 +169,28 @@ it('rejects when the child exits before a URL is published', async () => {
     name: InspectorLauncherError.name,
   }));
   expect(launcher.status()).toEqual({ state: 'exited' });
+});
+
+it('ignores a superseded child exit after a timed-out launch is retried', async () => {
+  const spawned = fakeSpawn();
+  const launcher = createInspectorLauncher(withSeams({
+    projectRoot: '/work/project',
+    spawn: spawned.spawn,
+  }, { startupTimeoutMs: 20, terminateGraceMs: 5 }));
+
+  const first = launcher.launch();
+  spawned.children[0]!.autoCloseOnKill = false;
+  await expect(first).rejects.toEqual(expect.objectContaining({
+    code: 'INSPECTOR_STARTUP_TIMEOUT',
+    name: InspectorLauncherError.name,
+  }));
+
+  const retried = launcher.launch();
+  expect(spawned.invocations).toHaveLength(2);
+  spawned.children[0]!.emit('close', 1, null);
+  spawned.children[1]!.stdout.write(`${tokenUrl}\n`);
+  await expect(retried).resolves.toEqual({ url: tokenUrl });
+  expect(launcher.status()).toEqual({ state: 'running', url: tokenUrl });
 });
 
 it('closes the child tree idempotently and can launch again afterwards', async () => {
