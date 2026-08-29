@@ -18,7 +18,8 @@
     "directory": "packages/rsc-runtime"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "type": "module",
   "engines": {

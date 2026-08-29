@@ -7,8 +7,11 @@ on:
 
 permissions: {}
 
+# PR builds cancel superseded runs (only the latest preview matters), but each
+# push to main gets a SHA-keyed group so overlapping pushes never cancel a
+# main preview publish — every main commit must stay installable by SHA.
 concurrency:
-  group: package-preview-${{ github.event.pull_request.number || github.ref }}
+  group: package-preview-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:

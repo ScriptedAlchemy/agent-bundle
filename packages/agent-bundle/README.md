@@ -236,5 +236,6 @@ Run the complete local delivery gate with `pnpm check && pnpm check:release`.
 `pnpm pack:dry-run`, `pnpm audit:release`, and `pnpm test:packed`, and it does not replace
 `pnpm check`.
 Native Claude/Codex smokes stay intentionally opt-in and skipped in ordinary CI.
-Publication is deliberately not scripted here: the release owner must decide the npm package
-name/scope, license, and `publishConfig` before publishing.
+npm publishing is deferred until the release owner picks the final package name/scope and
+license; pkg.pr.new previews are the interim channel, and the first npm release will use npm
+package provenance (`publishConfig.provenance` is already set).
