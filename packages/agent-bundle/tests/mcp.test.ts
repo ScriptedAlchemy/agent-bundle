@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process';
 import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { expect, it } from '@rstest/core';
 import { Client } from '@modelcontextprotocol/client';
@@ -19,7 +21,7 @@ import {
   type NormalizationTargetRegistry,
 } from '../src/core/types.ts';
 
-import { agentBundleNodeModules, workbenchNodeModules } from './helpers/workspace-paths.ts';
+import { agentBundleNodeModules, agentBundlePackageRoot, workbenchNodeModules } from './helpers/workspace-paths.ts';
 import { loadedProject } from './support/loaded-project.ts';
 
 const registry: NormalizationTargetRegistry = {
@@ -792,6 +794,34 @@ it('rejects the MCP Apps virtual module outside Agent Bundle compilation', async
   await expect(import('../src/mcp-apps.ts')).rejects.toThrow(
     'agent-bundle/mcp-apps is available only while Agent Bundle compiles a local MCP server.',
   );
+});
+
+it('rejects the built MCP Apps entrypoint with the intended error, not a TDZ ReferenceError', async () => {
+  // The rslib bundle reorders module statements (`export default` above the
+  // const initializers), so the stub's contract must hold against dist, not
+  // just src. Import in a child process: module evaluation errors are cached
+  // per realm, so an in-process import could observe another test's result.
+  const distEntry = join(agentBundlePackageRoot, 'dist', 'mcp-apps.js');
+  const { code, stderr } = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+    const child = spawn(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      `await import(${JSON.stringify(pathToFileURL(distEntry).href)});`,
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let output = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      output += chunk;
+    });
+    child.on('close', (exitCode) => {
+      resolve({ code: exitCode, stderr: output });
+    });
+  });
+  expect(code).toBe(1);
+  expect(stderr).toContain(
+    'agent-bundle/mcp-apps is available only while Agent Bundle compiles a local MCP server.',
+  );
+  expect(stderr).not.toContain('ReferenceError');
 });
 
 it('uses the selected streamable HTTP manifest with propagated cancellation and cleans data before rejecting tampering', async () => {

@@ -11,10 +11,18 @@ export interface McpAppResource {
   readonly resourceUri: string;
 }
 
-export const mcpApps: readonly McpAppResource[] = Object.freeze([]);
+/**
+ * Every export must throw through a hoisted function declaration: the rslib
+ * bundle emits `export default <binding>;` above the const initializers, so a
+ * top-level `throw` or a `const`-backed default export surfaces a TDZ
+ * ReferenceError instead of this message (see the mcp-apps dist test).
+ */
+function throwUnavailableEntrypoint(): readonly McpAppResource[] {
+  throw new Error(
+    'agent-bundle/mcp-apps is available only while Agent Bundle compiles a local MCP server.',
+  );
+}
 
-export default mcpApps;
+export const mcpApps: readonly McpAppResource[] = throwUnavailableEntrypoint();
 
-throw new Error(
-  'agent-bundle/mcp-apps is available only while Agent Bundle compiles a local MCP server.',
-);
+export default throwUnavailableEntrypoint();
