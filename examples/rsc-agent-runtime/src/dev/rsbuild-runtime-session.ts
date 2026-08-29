@@ -115,6 +115,23 @@ const claudePostToolUseFixture: DevRuntimeFixture = Object.freeze({
 const claudeFixtures: readonly DevRuntimeFixture[] = Object.freeze([claudePostToolUseFixture]);
 const fixturesForHook = (host: 'claude' | 'codex'): readonly DevRuntimeFixture[] => host === 'claude' ? claudeFixtures : noFixtures;
 
+/**
+ * Activation budgets mirror the repository's test time-scale rule: CI runners
+ * share two cores between Chrome, dev servers, and compiles, so fixed budgets
+ * tuned on many-core machines starve there. Scaling costs nothing on green
+ * runs - the activation resolves long before the deadline - while a wedged
+ * materialization or MCP reconcile becomes a loud `runtime.generation.failed`
+ * (with the phase in its diagnostic) instead of a silent permanent hang that
+ * also blocks `close()` behind the provider tail (#38).
+ */
+const localTimeScale = Number(process.env['AGENT_BUNDLE_TEST_TIME_SCALE'] ?? '');
+const runtimeTimeScale = process.env['CI'] !== undefined
+  ? 4
+  : Number.isSafeInteger(localTimeScale) && localTimeScale >= 1 ? localTimeScale : 1;
+const defaultActivationPhaseBudgetMs = 30_000 * runtimeTimeScale;
+
+type ActivationPhase = 'activation-guard' | 'generation-store' | 'mcp-registry' | 'prepared-runtime-reconcile';
+
 const withinDeadline = <T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> =>
   new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
@@ -585,6 +602,12 @@ export interface RsbuildRuntimeSessionStartTesting {
     readonly phase: 'store' | 'registry';
     readonly session: RsbuildRuntimeSession;
   }>) => Promise<void> | void;
+  /**
+   * Test-only barrier between the final activation-guard wait and the commit
+   * check, so supersession races (a newer attempt registering or failing
+   * while an activation is in flight) can be injected deterministically.
+   */
+  readonly beforeActivationCommit?: () => Promise<void> | void;
   readonly beforeAssetRead?: (input: Readonly<{
     readonly request: DevRuntimeAssetRequest;
     readonly runtimeGenerationId: string;
@@ -610,6 +633,12 @@ export interface RsbuildRuntimeSessionStartTesting {
    * `defaultMaximumRunHistory` runs.
    */
   readonly maximumRunHistory?: number;
+  /**
+   * Test-only activation phase budget override so bounded-wedge suites do not
+   * need to wait out the scaled production budget; the public provider always
+   * uses `defaultActivationPhaseBudgetMs`.
+   */
+  readonly activationPhaseBudgetMs?: number;
 }
 
 /**
@@ -654,10 +683,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #failureTail: Promise<void> = Promise.resolve();
   #hmrReady = false;
   #latestAttemptSequence = 0;
-  #latestSupersedingAttemptSequence = 0;
   #latestPreparedRuntime: DevRuntimePreparedProject;
   #latestRscCohortRevision = 0;
   #invocationReservations = 0;
+  readonly #activationPhaseBudgetMs: number;
   #providerTail: Promise<void> = Promise.resolve();
   #server: StartDevServerResult['server'] | undefined;
   #status: DevRuntimeStatus;
@@ -678,6 +707,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#latestPreparedRuntime = input.preparedRuntime;
     this.#testing = input.testing;
     this.#maximumRunHistory = input.testing.maximumRunHistory ?? defaultMaximumRunHistory;
+    this.#activationPhaseBudgetMs = input.testing.activationPhaseBudgetMs ?? defaultActivationPhaseBudgetMs;
     this.#ownedRunsRoot = input.ownedRunsRoot;
     this.#runRoot = input.ownedRunsRoot.root;
     this.#stateFile = join(resolve(input.context.storageRoot), 'state', `${stateStoreId}.jsonl`);
@@ -2202,7 +2232,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       barrier.settle();
       return undefined;
     }
-    this.#latestSupersedingAttemptSequence = Math.max(this.#latestSupersedingAttemptSequence, barrier.sequence);
     const cohortRevision = ++this.#latestRscCohortRevision;
     const preparedRuntime = this.#latestPreparedRuntime;
     barrier.settle();
@@ -2259,7 +2288,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   ): Promise<void> {
     if (this.#failedAttempts.has(attemptId)) return;
     this.#failedAttempts.add(attemptId);
-    this.#latestSupersedingAttemptSequence = Math.max(this.#latestSupersedingAttemptSequence, this.#sequenceFor(attemptId));
     const barrier = this.#attempts.get(attemptId);
     barrier?.settle();
     const candidate = barrier?.candidate ?? this.#candidatesByAttempt.get(attemptId);
@@ -2278,21 +2306,21 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   #activationGuard(snapshot: RscRuntimeCapturedGenerationSnapshot): RuntimeGenerationActivationGuard<RscRuntimeGenerationMetadata> {
     const preparedAuthorityDigest = preparedRuntimeAuthorityDigest(snapshot.preparedRuntime);
-    let waitedSequence = -1;
     return Object.freeze({
+      // Supersession tie-breaks on monotonic ordinals only: a newer captured
+      // cohort (`#latestRscCohortRevision`) or a prepared-runtime authority
+      // change may discard this activation. Attempts that are merely live, or
+      // that failed or settled as no-ops, never produce a generation, so
+      // judging them as superseding would drop the newest successful compile
+      // with nothing to replace it - the permanent-staleness wedge in #38.
       check: () => !this.#closed &&
-        waitedSequence === this.#latestSupersedingAttemptSequence &&
-        ![...this.#attempts.values()].some((attempt) => attempt.sequence > this.#sequenceFor(snapshot.attemptId)) &&
         snapshot.rscCohortRevision === this.#latestRscCohortRevision &&
         preparedAuthorityDigest === preparedRuntimeAuthorityDigest(this.#latestPreparedRuntime),
       wait: async () => {
         while (!this.#closed) {
           const sequence = this.#sequenceFor(snapshot.attemptId);
           const pending = [...this.#attempts.values()].filter((attempt) => attempt.sequence > sequence);
-          if (pending.length === 0) {
-            waitedSequence = this.#latestSupersedingAttemptSequence;
-            return;
-          }
+          if (pending.length === 0) return;
           await Promise.all(pending.map((attempt) => attempt.settled));
         }
         throw new Error('RSC runtime session is closed.');
@@ -2300,27 +2328,57 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     });
   }
 
+  /**
+   * Bounds one activation step with the scaled budget. A step that outlives
+   * its budget fails the attempt loudly (the page recovers through its
+   * `runtime.generation.failed` bootstrap path) instead of silently wedging
+   * the provider tail; if the abandoned step settles later, its resources are
+   * released so a stray success cannot leak store or registry reservations.
+   */
+  async #boundedActivationPhase<T>(
+    phase: ActivationPhase,
+    work: Promise<T>,
+    abandon?: (value: T) => Promise<void>,
+  ): Promise<T> {
+    const budget = this.#activationPhaseBudgetMs;
+    try {
+      return await withinDeadline(work, budget, `RSC runtime ${phase} activation step exceeded ${String(budget)}ms.`);
+    } catch (error) {
+      if (abandon !== undefined) void work.then(abandon, () => undefined).catch(() => undefined);
+      throw error;
+    }
+  }
+
   async #activate(snapshot: RscRuntimeCapturedGenerationSnapshot): Promise<'activated' | 'failed'> {
     const guard = this.#activationGuard(snapshot);
     let preparedGeneration: RuntimeGenerationPreparedActivation<RscRuntimeGenerationMetadata> | undefined;
     let preparedRegistry: RuntimeMcpPreparedActivationReconcile | undefined;
     try {
-      preparedGeneration = await materializeRuntimeGeneration({
-        guard,
-        snapshot,
-        stateStoreId,
-        store: this.#generationStore,
-      });
+      preparedGeneration = await this.#boundedActivationPhase(
+        'generation-store',
+        materializeRuntimeGeneration({
+          guard,
+          snapshot,
+          stateStoreId,
+          store: this.#generationStore,
+        }),
+        (prepared) => this.#generationStore.abort(prepared),
+      );
       await this.#testing.afterActivationPrepare?.(Object.freeze({ phase: 'store', session: this }));
       const metadata = preparedGeneration.generation.manifest.metadata;
-      preparedRegistry = await this.#mcpRegistry.prepareActivationReconcile({
-        definitionDigest: metadata.definitionDigest,
-        runtimeGenerationId: preparedGeneration.generation.id,
-        servers: metadata.servers,
-        transportDigest: metadata.transportDigest,
-      });
+      preparedRegistry = await this.#boundedActivationPhase(
+        'mcp-registry',
+        this.#mcpRegistry.prepareActivationReconcile({
+          definitionDigest: metadata.definitionDigest,
+          runtimeGenerationId: preparedGeneration.generation.id,
+          servers: metadata.servers,
+          transportDigest: metadata.transportDigest,
+        }),
+        (prepared) => this.#mcpRegistry.abortActivationReconcile(prepared),
+      );
       await this.#testing.afterActivationPrepare?.(Object.freeze({ phase: 'registry', session: this }));
-      await guard.wait(preparedGeneration.generation.manifest);
+      await this.#boundedActivationPhase('activation-guard', guard.wait(preparedGeneration.generation.manifest));
+      await this.#testing.beforeActivationCommit?.();
       if (!guard.check(preparedGeneration.generation.manifest) || !this.#generationStore.canCommit(preparedGeneration)) {
         throw new Error('RSC runtime generation activation was superseded.');
       }
@@ -2380,7 +2438,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     });
     this.#setStatus('compiling');
     try {
-      await this.#mcpRegistry.reconcile(input);
+      await this.#boundedActivationPhase('prepared-runtime-reconcile', this.#mcpRegistry.reconcile(input));
       this.#updateSurfaces({ definition }, prepared);
       this.#updateSurfaceAssetApps(prepared);
       this.#setStatus('active');

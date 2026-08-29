@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { expect, test } from '@rstest/core';
-import type { createRsbuild, StartDevServerResult } from '@rsbuild/core';
+import { createRsbuild, type StartDevServerResult } from '@rsbuild/core';
 
 import {
   ArtifactService,
@@ -19,16 +19,19 @@ import {
 import { createDevRuntimeProvider } from '../src/dev/provider.js';
 import { ResourceLedger, RsbuildRuntimeSession } from '../src/dev/rsbuild-runtime-session.js';
 import { copyExample, type CopiedExample } from './support/copy-example.ts';
+import { timeScale } from './support/time-scale.ts';
 
 const exampleRoot = process.cwd();
 
-const waitFor = async (predicate: () => boolean): Promise<void> => {
-  const deadline = Date.now() + 15_000;
+const waitForWithin = async (predicate: () => boolean, budgetMs: number): Promise<void> => {
+  const deadline = Date.now() + budgetMs;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for the RSC runtime provider.');
     await new Promise<void>((resolve) => { setTimeout(resolve, 25); });
   }
 };
+
+const waitFor = async (predicate: () => boolean): Promise<void> => waitForWithin(predicate, 15_000);
 
 const deferred = <T>() => {
   let reject!: (reason?: unknown) => void;
@@ -67,6 +70,51 @@ const compileObserver = (onCompile: NonNullable<Parameters<typeof createRscRunti
         },
       });
     },
+  });
+};
+
+/**
+ * Wraps the real Rsbuild factory to steal the compile-observer plugin's dev
+ * hooks. Registering the plugin against a second minimal API shares its
+ * closure state (attempt FIFO, captured cohort) with the real compiler, so a
+ * test can drive additional attempt lifecycles deterministically while the
+ * real watcher is idle.
+ */
+const interceptCompileObserver = () => {
+  let before: (() => void) | undefined;
+  let after: ((input: unknown) => Promise<void>) | undefined;
+  const create = (async (input: Parameters<typeof createRsbuild>[0]) => {
+    const plugins = (input?.config as Readonly<{ readonly plugins?: readonly unknown[] }> | undefined)?.plugins ?? [];
+    const plugin = plugins.find((candidate): candidate is Readonly<{
+      readonly name: string;
+      setup(api: unknown): void;
+    }> => typeof candidate === 'object' && candidate !== null &&
+      (candidate as { readonly name?: unknown }).name === 'agent-bundle:rsc-runtime-compile-observer');
+    if (plugin === undefined) throw new Error('RSC compile observer plugin is unavailable.');
+    plugin.setup({
+      onAfterDevCompile: (callback: unknown) => { after = callback as (input: unknown) => Promise<void>; },
+      onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
+    });
+    return createRsbuild(input);
+  }) as typeof createRsbuild;
+  return Object.freeze({
+    beginAttempt: (): void => {
+      if (before === undefined) throw new Error('RSC compile observer hooks are unavailable.');
+      before();
+    },
+    async completeAttempt(input: Readonly<{
+      readonly children?: readonly Readonly<{ readonly hash: string; readonly name: string }>[];
+      readonly hasErrors?: boolean;
+    }> = {}): Promise<void> {
+      if (after === undefined) throw new Error('RSC compile observer hooks are unavailable.');
+      await after({
+        stats: {
+          hasErrors: () => input.hasErrors ?? false,
+          toJson: () => ({ children: input.children ?? [] }),
+        },
+      });
+    },
+    create,
   });
 };
 
@@ -1289,6 +1337,180 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
         diagnostics: [],
         state: 'active',
       });
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});
+
+test('commits an activation while a later attempt is still live at the commit check', { timeout: 90_000 }, async () => {
+  const copied = await copyProviderExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const observer = interceptCompileObserver();
+    const commitReached = deferred<void>();
+    const allowCommit = deferred<void>();
+    let armCommitBarrier = false;
+    const events: Array<{ readonly runtimeGenerationId?: string; readonly type: string }> = [];
+    const session = await RsbuildRuntimeSession.start({
+      ...startContext({
+        projectRoot: copied.projectRoot,
+        preparedRuntime: prepared.devRuntime!,
+        providerSessionId: 'provider-live-attempt-commit',
+        signal: new AbortController().signal,
+        storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-live-attempt-commit'),
+      }),
+      emit: (event) => { events.push(event); },
+    }, {
+      beforeActivationCommit: async () => {
+        if (!armCommitBarrier) return;
+        armCommitBarrier = false;
+        commitReached.resolve();
+        await allowCommit.promise;
+      },
+      createRsbuild: observer.create,
+    });
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const firstGeneration = session.status().activeVector!.runtimeGenerationId;
+      armCommitBarrier = true;
+      observer.beginAttempt();
+      await observer.completeAttempt({ children: [{ hash: 'live-race-rsc', name: 'rsc' }, { hash: 'live-race-widget', name: 'widget' }] });
+      await commitReached.promise;
+      // The #38 wedge: an undecided later attempt registers while the newest
+      // compile sits between its final guard wait and the commit check. It
+      // must not supersede the activation - it may still settle as a no-op or
+      // a failure, which would leave nothing to activate and no retrigger.
+      observer.beginAttempt();
+      allowCommit.resolve();
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration);
+      const committed = session.status().activeVector?.runtimeGenerationId;
+      expect(committed).toEqual(expect.any(String));
+      expect(session.status()).toMatchObject({ diagnostics: [], state: 'active' });
+      expect(events.filter((event) => event.type === 'runtime.generation.activated' && event.runtimeGenerationId === committed)).toHaveLength(1);
+      await observer.completeAttempt({ hasErrors: true });
+      expect(session.status().activeVector?.runtimeGenerationId).toBe(committed);
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});
+
+test('commits an activation after a later broken attempt fails inside the commit window', { timeout: 90_000 }, async () => {
+  const copied = await copyProviderExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const observer = interceptCompileObserver();
+    const commitReached = deferred<void>();
+    const allowCommit = deferred<void>();
+    let armCommitBarrier = false;
+    const events: Array<{ readonly runtimeGenerationId?: string; readonly type: string }> = [];
+    const session = await RsbuildRuntimeSession.start({
+      ...startContext({
+        projectRoot: copied.projectRoot,
+        preparedRuntime: prepared.devRuntime!,
+        providerSessionId: 'provider-failed-attempt-commit',
+        signal: new AbortController().signal,
+        storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-failed-attempt-commit'),
+      }),
+      emit: (event) => { events.push(event); },
+    }, {
+      beforeActivationCommit: async () => {
+        if (!armCommitBarrier) return;
+        armCommitBarrier = false;
+        commitReached.resolve();
+        await allowCommit.promise;
+      },
+      createRsbuild: observer.create,
+    });
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const firstGeneration = session.status().activeVector!.runtimeGenerationId;
+      armCommitBarrier = true;
+      observer.beginAttempt();
+      await observer.completeAttempt({ children: [{ hash: 'failed-race-rsc', name: 'rsc' }, { hash: 'failed-race-widget', name: 'widget' }] });
+      await commitReached.promise;
+      // A later broken compile fails and settles entirely inside the commit
+      // window. A failed attempt produces no generation, so it must not
+      // supersede the newest successful compile (#38) - discarding it here
+      // left the runtime permanently on the stale first generation.
+      observer.beginAttempt();
+      await observer.completeAttempt({ hasErrors: true });
+      allowCommit.resolve();
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration);
+      const committed = session.status().activeVector?.runtimeGenerationId;
+      expect(committed).toEqual(expect.any(String));
+      expect(session.status()).toMatchObject({ state: 'active' });
+      expect(events.filter((event) => event.type === 'runtime.generation.activated' && event.runtimeGenerationId === committed)).toHaveLength(1);
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});
+
+test('fails a wedged activation reconcile within the budget and releases its late reservation', { timeout: 120_000 }, async () => {
+  const copied = await copyProviderExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const wedgeReached = deferred<void>();
+    const releaseWedge = deferred<void>();
+    let armWedge = false;
+    const activationBudgetMs = 4_000 * timeScale;
+    const events: Array<{ readonly runtimeGenerationId?: string; readonly type: string }> = [];
+    const session = await RsbuildRuntimeSession.start({
+      ...startContext({
+        projectRoot: copied.projectRoot,
+        preparedRuntime: prepared.devRuntime!,
+        providerSessionId: 'provider-wedged-reconcile',
+        signal: new AbortController().signal,
+        storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-wedged-reconcile'),
+      }),
+      emit: (event) => { events.push(event); },
+    }, {
+      activationPhaseBudgetMs: activationBudgetMs,
+      beforeMcpRelist: async () => {
+        if (!armWedge) return;
+        wedgeReached.resolve();
+        await releaseWedge.promise;
+      },
+    });
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const firstGeneration = session.status().activeVector!.runtimeGenerationId;
+      const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
+      try {
+        armWedge = true;
+        await changeDefinition(copied.projectRoot, 'Read state after a wedged activation reconcile.');
+        await wedgeReached.promise;
+        // A wedged MCP reconcile must become a loud, phase-attributed failure
+        // within the scaled budget instead of the silent permanent hang from
+        // #38; the page recovers through its failed-event bootstrap path.
+        await waitForWithin(
+          () => session.status().diagnostics.some((diagnostic) => diagnostic.message.includes('mcp-registry activation step exceeded')),
+          activationBudgetMs + 15_000,
+        );
+        expect(events.some((event) => event.type === 'runtime.generation.failed')).toBe(true);
+        expect(session.status().activeVector?.runtimeGenerationId).toBe(firstGeneration);
+        // Releasing the wedge lets the abandoned preparation settle late; its
+        // registry reservation must be released, or every later activation
+        // would wedge behind it.
+        armWedge = false;
+        releaseWedge.resolve();
+        await changeWorkerImplementation(copied.projectRoot, 'post-wedge-activation');
+        await waitForWithin(
+          () => session.status().activeVector?.runtimeGenerationId !== firstGeneration,
+          activationBudgetMs + 15_000,
+        );
+        expect(session.status().activeVector?.runtimeGenerationId).not.toBe(firstGeneration);
+      } finally {
+        await mcp.close();
+      }
     } finally {
       await session.close();
     }
