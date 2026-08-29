@@ -839,8 +839,11 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     if (previewCreateCount === undefined) throw new Error('Runtime App preview response lacks a create count.');
     expect(runtimeAppCreates).toHaveLength(previewCreateCount);
     expect(runtimeAppCreates.filter((candidate) => candidate.response !== undefined)).toHaveLength(previewCreateCount);
-    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'attached', timeout: browserTimeout });
-    expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(1);
+    // A restart can satisfy waitFor(attached) with the outgoing binding's
+    // iframe and then unmount it before the replacement mounts, so an instant
+    // count() reads a transient 0 on contended runners. toHaveCount retries
+    // until exactly one preview iframe is attached (still failing duplicates).
+    await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(1, { timeout: browserTimeout });
     return Object.freeze({ binding: binding(previewCreateCount - 1), run: outcome });
   };
   try {
