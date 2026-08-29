@@ -14,6 +14,7 @@ import { expect, test } from '@rstest/core';
 
 import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
 import { createRscRuntimeRsbuildConfig } from '../rsbuild.config.js';
+import { ensureExampleBuilt } from './support/ensure-built.js';
 
 const createStateFile = async (): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-mcp-'));
@@ -91,6 +92,7 @@ const expectStaticSurface = async (client: Client) => {
 };
 
 test('built stdio MCP serves static tools, file-backed data, Flight results, and inline widget', async () => {
+  await ensureExampleBuilt();
   const stateFile = await createStateFile();
   const client = createClient();
   const transport = new StdioClientTransport({
@@ -144,6 +146,7 @@ test('built stdio MCP serves static tools, file-backed data, Flight results, and
 });
 
 test('implicit hook and MCP callers share one external workspace identity', async () => {
+  await ensureExampleBuilt();
   const runtimeRoot = join(process.cwd(), 'dist/runtime');
   const workspace = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-shared-workspace-'));
   const stateHome = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-shared-state-'));
@@ -199,6 +202,7 @@ test('implicit hook and MCP callers share one external workspace identity', asyn
 });
 
 test('built Streamable HTTP MCP reports its one JSON startup line and closes cleanly', async () => {
+  await ensureExampleBuilt();
   const stateFile = await createStateFile();
   const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/mcp/http.js')], {
     env: { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile, PORT: '0' },
@@ -245,6 +249,7 @@ test('built Streamable HTTP MCP reports its one JSON startup line and closes cle
 });
 
 test('built Streamable HTTP MCP accepts only explicitly allowed public tunnel origins', async () => {
+  await ensureExampleBuilt();
   const stateFile = await createStateFile();
   const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/mcp/http.js')], {
     env: {
@@ -280,6 +285,7 @@ test('built Streamable HTTP MCP accepts only explicitly allowed public tunnel or
 });
 
 test('adds an explicit public MCP URL domain only to returned resource content', async () => {
+  await ensureExampleBuilt();
   const stateFile = await createStateFile();
   const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/mcp/http.js')], {
     env: {
@@ -315,6 +321,7 @@ test('adds an explicit public MCP URL domain only to returned resource content',
 });
 
 test('runtime manifest declares every Node entry and dynamic chunk in its artifact root', async () => {
+  await ensureExampleBuilt();
   const entries = ['hook/index.js', 'rsc/index.js', 'mcp/stdio.js', 'mcp/http.js'];
   const runtimeRoot = join(process.cwd(), 'dist/runtime');
   const manifest = JSON.parse(await readFile(join(runtimeRoot, 'runtime-assets.json'), 'utf8')) as {
@@ -344,6 +351,7 @@ test('runtime manifest declares every Node entry and dynamic chunk in its artifa
 });
 
 test('production and development runtime graphs exclude state test controls', async () => {
+  await ensureExampleBuilt();
   const forbidden = [
     'state-file-test-support',
     'createFileRuntimeKernelForTesting',

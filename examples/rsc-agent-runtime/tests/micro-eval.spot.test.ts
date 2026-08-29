@@ -8,6 +8,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { expect, test } from '@rstest/core';
 
+import { ensureExampleBuilt } from './support/ensure-built.js';
+
 // This is the ordinary-CI micro-eval spot-check (`npm run eval:spot`): one
 // deterministic pass over the built production artifacts, with no real Claude
 // or Codex host. It proves the end-to-end runtime path in a small way: a
@@ -15,6 +17,7 @@ import { expect, test } from '@rstest/core';
 // state, and the MCP server then RSC-lowers that same shared state for a tool
 // call while linking the MCP App resource.
 test('micro-eval spot-check: built hook and MCP server share one RSC-rendered runtime', async () => {
+  await ensureExampleBuilt();
   const workspace = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-micro-eval-'));
   const stateFile = join(workspace, 'events.jsonl');
   const client = new Client({ name: 'rsc-agent-runtime-micro-eval', version: '1.0.0' });

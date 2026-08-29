@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
 import { normalizeClaudeHook, normalizeCodexHook } from '../src/hook/normalize.js';
+import { ensureExampleBuilt } from './support/ensure-built.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -21,6 +22,7 @@ const runHook = async (
   stateFile: string | undefined,
   additionalEnvironment: Record<string, string> = {},
 ) => {
+  await ensureExampleBuilt();
   const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/hook/index.js'), '--host', host], {
     env: {
       ...process.env,
@@ -61,6 +63,7 @@ const runHook = async (
 };
 
 const runRscWorker = async (request: Record<string, unknown>) => {
+  await ensureExampleBuilt();
   const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/rsc/index.js')], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });

@@ -10,10 +10,13 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { expect, test } from '@rstest/core';
 
+import { ensureExampleBuilt } from './support/ensure-built.js';
+
 const exampleRoot = process.cwd();
 const pluginsRoot = join(exampleRoot, 'dist/plugins');
 
 const runPackageHosts = async (): Promise<void> => {
+  await ensureExampleBuilt();
   const child = spawn(process.execPath, ['scripts/package-hosts.mjs'], { cwd: exampleRoot, stdio: 'pipe' });
   const [exitCode, signal] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
   expect(signal).toBeNull();
