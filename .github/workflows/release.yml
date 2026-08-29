@@ -32,11 +32,17 @@ jobs:
           runtime: node@22.19.0
       - if: steps.gate.outputs.enabled == 'true'
         run: pnpm install --frozen-lockfile
+      # changesets/action v2 no longer writes .npmrc from an NPM_TOKEN env
+      # variable; expose the token via npm config so `changeset publish`
+      # (pnpm publish) can authenticate. The ${NPM_TOKEN} placeholder is kept
+      # literal here and expanded by npm/pnpm from the step environment.
       - if: steps.gate.outputs.enabled == 'true'
-        uses: changesets/action@v1
+        run: echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' >> "$HOME/.npmrc"
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: changesets/action@v2
         with:
-          publish: pnpm release
-          version: pnpm version-packages
+          publish-script: pnpm release
+          version-script: pnpm version-packages
+          github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
