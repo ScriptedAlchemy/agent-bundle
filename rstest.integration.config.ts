@@ -7,15 +7,21 @@ import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 /**
  * Worker count for the parallel integration pool. Half the cores keeps
- * browser + dev-server pairs from starving each other, the cap of 4 bounds
- * memory on large machines, and two-core CI still resolves to one worker.
- * AGENT_BUNDLE_INTEGRATION_MAX_WORKERS overrides the computed value (e.g. to
- * force a serial run when measuring or bisecting).
+ * browser + dev-server pairs from starving each other and the cap of 4 bounds
+ * memory on large machines. CI pins one worker explicitly: hosted runners
+ * report 4 cores (which would compute 2 workers), but each Chrome +
+ * dev-server + rsbuild pair already saturates them, and 2-worker matrix runs
+ * flaked on a rotating test per leg even at timeScale 4. Parallelism is a
+ * development-machine speedup; CI keeps the serialized shape it was tuned
+ * for. AGENT_BUNDLE_INTEGRATION_MAX_WORKERS overrides the computed value
+ * (e.g. to measure a parallel CI run or bisect locally in serial).
  */
 const overrideWorkers = Number(process.env['AGENT_BUNDLE_INTEGRATION_MAX_WORKERS'] ?? '');
 const maxWorkers = Number.isSafeInteger(overrideWorkers) && overrideWorkers >= 1
   ? overrideWorkers
-  : Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2)));
+  : process.env['CI'] !== undefined
+    ? 1
+    : Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2)));
 
 /**
  * Build- and process-running tests that only read workspace-shared artifacts;
