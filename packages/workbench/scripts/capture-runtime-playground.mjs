@@ -67,6 +67,22 @@ export const atomically = async (path, write) => {
 
 const screenshot = (page, path) => atomically(path, async (temporary) => page.screenshot({ path: temporary }));
 
+/**
+ * Replaces a watched source atomically through a rename staged OUTSIDE the
+ * watched project. An in-place write is truncate-then-append: the dev
+ * compiler can start a compile off the truncation event, read incomplete
+ * content, and then drop the append event because both operations land
+ * within the same mtime tick, so the final content never compiles and the
+ * expected generation never activates. The temp file lives in the project's
+ * parent (same filesystem, never watched) so the rename into place is the
+ * only event the watcher observes.
+ */
+const replaceWatchedSource = async (projectRoot, path, content) => {
+  const temporary = join(projectRoot, '..', `.${basename(path)}.${process.pid}.${temporaryOutputSequence += 1}.tmp`);
+  await writeFile(temporary, content, 'utf8');
+  await rename(temporary, path);
+};
+
 const writeEvidence = (path, evidence) => atomically(path, async (temporary) => {
   await writeFile(temporary, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
 });
@@ -331,8 +347,8 @@ const captureCompileErrorLayout = async (page, generation) => {
   return Object.freeze({ diagnostics, diagnosticsVisible, lastGood, lastGoodVisible });
 };
 
-const restore = async (path, contents) => {
-  await writeFile(path, contents, 'utf8');
+const restore = async (projectRoot, path, contents) => {
+  await replaceWatchedSource(projectRoot, path, contents);
   if (await readFile(path, 'utf8') !== contents) throw new Error(`Capture fixture did not restore ${basename(path)}.`);
 };
 
@@ -386,7 +402,7 @@ const capture = async (outputs) => {
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
     const historyBeforeHmr = await history.count();
     const runIdsBeforeHmr = await runtimeRunIds(page);
-    await writeFile(fixture.serverComponentSource, editedServer, 'utf8');
+    await replaceWatchedSource(fixture.root, fixture.serverComponentSource, editedServer);
     const generationAfter = await waitForNewGeneration(page, generationBefore);
     await page.waitForFunction(
       ({ expected, selector }) => globalThis.document.querySelectorAll(selector).length > expected,
@@ -415,7 +431,7 @@ const capture = async (outputs) => {
     const historyBeforeError = await history.count();
     const eventSequenceBeforeError = Number((await attributes(identity))['data-runtime-event-sequence']);
     if (!Number.isFinite(eventSequenceBeforeError)) throw new Error('Runtime identity omitted its event sequence.');
-    await writeFile(fixture.serverComponentSource, `${editedServer}\nconst = ;\n`, 'utf8');
+    await replaceWatchedSource(fixture.root, fixture.serverComponentSource, `${editedServer}\nconst = ;\n`);
     await page.waitForFunction(
       ({ expected, selector }) => Number(globalThis.document.querySelector(selector)?.getAttribute('data-runtime-event-sequence')) > expected,
       { expected: eventSequenceBeforeError, selector: '[data-runtime-provider-session]' },
@@ -447,7 +463,7 @@ const capture = async (outputs) => {
     const compileErrorLayout = await captureCompileErrorLayout(page, compactRunGeneration);
     await screenshot(page, outputs.compileError);
 
-    await writeFile(fixture.serverComponentSource, repairedServer, 'utf8');
+    await replaceWatchedSource(fixture.root, fixture.serverComponentSource, repairedServer);
     const generationRecovered = await waitForNewGeneration(page, lastGoodGenerationDuringError);
     await page.waitForFunction(
       ({ expected, selector }) => globalThis.document.querySelectorAll(selector).length > expected,
@@ -481,8 +497,8 @@ const capture = async (outputs) => {
     if (editedWidget === originals[1]) throw new Error('Capture fixture App source did not contain the expected heading.');
     const editedStyles = `${originals[2]}\n.timeline__header [data-testid="runtime-capture-marker"] { color: rgb(1, 2, 3); }\n`;
     await Promise.all([
-      writeFile(fixture.widgetAppSource, editedWidget, 'utf8'),
-      writeFile(fixture.appStyles, editedStyles, 'utf8'),
+      replaceWatchedSource(fixture.root, fixture.widgetAppSource, editedWidget),
+      replaceWatchedSource(fixture.root, fixture.appStyles, editedStyles),
     ]);
     let appFrame;
     const deadline = Date.now() + browserTimeout;
@@ -525,9 +541,9 @@ const capture = async (outputs) => {
     await screenshot(page, outputs.desktop);
 
     await Promise.all([
-      restore(fixture.serverComponentSource, originals[0]),
-      restore(fixture.widgetAppSource, originals[1]),
-      restore(fixture.appStyles, originals[2]),
+      restore(fixture.root, fixture.serverComponentSource, originals[0]),
+      restore(fixture.root, fixture.widgetAppSource, originals[1]),
+      restore(fixture.root, fixture.appStyles, originals[2]),
     ]);
     if (pageErrors.length > 0) throw new Error('Runtime capture encountered a browser page error.');
     evidence = Object.freeze({
@@ -571,9 +587,9 @@ const capture = async (outputs) => {
     browser,
     fixture,
     restores: fixture === undefined || originals.length !== 3 ? [] : [
-      () => restore(fixture.serverComponentSource, originals[0]),
-      () => restore(fixture.widgetAppSource, originals[1]),
-      () => restore(fixture.appStyles, originals[2]),
+      () => restore(fixture.root, fixture.serverComponentSource, originals[0]),
+      () => restore(fixture.root, fixture.widgetAppSource, originals[1]),
+      () => restore(fixture.root, fixture.appStyles, originals[2]),
     ],
   });
   const failure = captureFailureAfterCleanup(primaryFailure, cleanup);
