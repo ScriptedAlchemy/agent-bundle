@@ -69,3 +69,45 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/runtime-playground-hmr.e2e.test.ts',
   'packages/workbench/tests/workbench-dev-command.test.ts',
 ];
+
+/**
+ * Integration files that WRITE to workspace-shared locations and therefore
+ * cannot run alongside other integration files:
+ *
+ * - packed-release.e2e can run a root `pnpm build` (rewriting
+ *   `packages/{agent-bundle,rsc-runtime,workbench}/dist`) when
+ *   AGENT_BUNDLE_PACKAGE_PREBUILT is unset, and always runs `npm pack`
+ *   plus a packed dev server on a pre-reserved (not ephemeral) port.
+ *
+ * They run on one worker via rstest.integration-serial.config.ts after the
+ * parallel pool finishes.
+ */
+export const serialIntegrationTestFiles: readonly string[] = [
+  'packages/workbench/tests/packed-release.e2e.test.ts',
+];
+
+/**
+ * Integration files safe on parallel workers: they create per-test fixtures
+ * with `mkdtemp`, bind servers on ephemeral ports (`port: 0` or rsbuild's
+ * silent free-port fallback), and only READ the prebuilt shared artifacts
+ * (`packages/workbench/dist`, `packages/agent-bundle/dist`).
+ */
+export const parallelIntegrationTestFiles: readonly string[] =
+  integrationTestFiles.filter((file) => !serialIntegrationTestFiles.includes(file));
+
+/**
+ * Pack-and-install tests: each one runs `npm pack` (and usually a clean
+ * `npm install` of the tarball), which dominates the serialized integration
+ * pool. They run through the root `test:packed` / `test:packed:native`
+ * scripts instead — CI's release-gates job (`check:release`) and the
+ * native-host-smoke workflow keep them covered — and stay excluded from the
+ * parallel unit pool.
+ */
+export const packedTestFiles: readonly string[] = [
+  'packages/agent-bundle/tests/dev-workbench-packaging.test.ts',
+  'packages/agent-bundle/tests/packed-consumer.test.ts',
+  'packages/agent-bundle/tests/packed-native-smoke.test.ts',
+  'packages/agent-bundle/tests/public-api-packed.test.ts',
+  'packages/agent-bundle/tests/release-audit.test.ts',
+  'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
+];

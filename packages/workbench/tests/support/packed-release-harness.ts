@@ -31,6 +31,7 @@ export const availablePort = async (): Promise<number> => {
 };
 
 export const buildPackage = (): Promise<void> => builtPackage ??= (async (): Promise<void> => {
+  if (process.env['AGENT_BUNDLE_PACKAGE_PREBUILT'] === '1') return;
   const { RSTEST: _rstest, ...environment } = process.env;
   await execFile('pnpm', ['build'], {
     cwd: workspaceRoot,

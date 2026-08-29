@@ -14,11 +14,12 @@ import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/t
 import { seedEvalProject, writeEvalSuite } from '../../agent-bundle/tests/support/eval-project.ts';
 import { readFinalizedEvalRun } from '../src/evals/evals-page.tsx';
 import { closeServer } from './support/http.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
 import { buildWorkbench, e2e, workbenchAssets, workspaceRoot, workbenchUrl } from './support/workbench-e2e.ts';
 
 const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
-const browserTimeout = 12_000;
+const browserTimeout = 12_000 * timeScale;
 const runCompletionTimeout = 60_000;
 
 e2e('retries a terminal canonical read until the durable run finalization is visible', async () => {
