@@ -764,7 +764,8 @@ const Workbench = () => {
   const [capabilityRetry, setCapabilityRetry] = useState(0);
   const [capabilityState, setCapabilityState] = useState<CapabilityState>({ state: 'empty' });
   if (foreground.current === undefined) foreground.current = new ForegroundRouteClient();
-  if (mcpRoutes.current === undefined) mcpRoutes.current = new WorkbenchMcpRouteClient({ foreground: foreground.current });
+  const foregroundClient = foreground.current;
+  if (mcpRoutes.current === undefined) mcpRoutes.current = new WorkbenchMcpRouteClient({ foreground: foregroundClient });
 
   const [mcpController, setMcpController] = useState(() => createMcpController(mcpRoutes.current!));
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
@@ -820,20 +821,20 @@ const Workbench = () => {
         setMcpController(replacement);
         setMcpModel(replacement.model);
       },
-      foreground: foreground.current!,
+      foreground: foregroundClient,
     });
   }
   if (mcpAppClient.current === undefined) {
-    mcpAppClient.current = new McpAppClient({ foreground: foreground.current!, projectClient: client.current });
+    mcpAppClient.current = new McpAppClient({ foreground: foregroundClient, projectClient: client.current });
   }
   if (mcpControllerRef.current !== mcpController) mcpControllerRef.current = mcpController;
-  if (runtimeClient.current === undefined) runtimeClient.current = new RuntimeClient(foreground.current);
-  if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient({ foreground: foreground.current! });
-  if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient({ foreground: foreground.current! });
-  if (evalClient.current === undefined) evalClient.current = new EvalClient({ foreground: foreground.current! });
-  if (hookClient.current === undefined) hookClient.current = new HookClient({ foreground: foreground.current! });
-  if (logClient.current === undefined) logClient.current = new LogClient({ foreground: foreground.current! });
-  if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ foreground: foreground.current! });
+  if (runtimeClient.current === undefined) runtimeClient.current = new RuntimeClient(foregroundClient);
+  if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient({ foreground: foregroundClient });
+  if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient({ foreground: foregroundClient });
+  if (evalClient.current === undefined) evalClient.current = new EvalClient({ foreground: foregroundClient });
+  if (hookClient.current === undefined) hookClient.current = new HookClient({ foreground: foregroundClient });
+  if (logClient.current === undefined) logClient.current = new LogClient({ foreground: foregroundClient });
+  if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ foreground: foregroundClient });
 
   const runtimeAvailable = runtimeCapability === 'available';
   const buildId = status === undefined ? undefined : activeEpochId(status);

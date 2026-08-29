@@ -4,9 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 import { chromium } from 'playwright';
 
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { startRuntimePlaygroundFixture } from '../tests/helpers/runtime-playground-fixture.ts';
 
-const browserTimeout = 30_000 * (process.env.CI === undefined ? 1 : 4);
+const browserTimeout = 30_000 * timeScale;
 const desktopViewport = Object.freeze({ height: 900, width: 1440 });
 const mobileViewport = Object.freeze({ height: 844, width: 390 });
 const outputFlags = Object.freeze([
