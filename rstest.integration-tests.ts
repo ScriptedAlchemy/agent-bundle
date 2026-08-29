@@ -1,13 +1,15 @@
 /**
- * Test files that run real builds (Rslib/Rsbuild), pack and install the
- * package, spawn child processes, or drive a browser. These share
- * process-wide build caches and output paths, so they run serialized on one
- * worker while every other file runs on the parallel unit pool.
+ * Test files that run real builds (Rslib/Rsbuild), spawn child processes, or
+ * drive a browser. They run through rstest.integration.config.ts: per-test
+ * fixtures via `mkdtemp`, servers on ephemeral ports, and only READS of the
+ * prebuilt shared artifacts (`packages/{agent-bundle,workbench}/dist`), so
+ * the pool can use multiple workers.
  *
  * A new test file belongs here the moment it runs `build()` from src/api or
  * src/build (directly or via tests/support/build.ts), imports
- * tests/support/workbench-e2e.ts or packed-release-harness.ts, spawns a
- * process, or launches a browser; otherwise it defaults to the unit pool.
+ * tests/support/workbench-e2e.ts, spawns a process, or launches a browser;
+ * otherwise it defaults to the unit pool. Files that `npm pack` the package
+ * or import packed-release-harness.ts belong in packedTestFiles below.
  */
 export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/agent-api.test.ts',
@@ -50,7 +52,6 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/mcp-page-app-browser.test.ts',
   'packages/workbench/tests/mcp-session-timeout.e2e.test.ts',
   'packages/workbench/tests/overview.e2e.test.ts',
-  'packages/workbench/tests/packed-release.e2e.test.ts',
   'packages/workbench/tests/playground-real.e2e.test.ts',
   'packages/workbench/tests/rsbuild-closure.test.ts',
   'packages/workbench/tests/rsbuild-workbench.test.ts',
@@ -63,37 +64,14 @@ export const integrationTestFiles: readonly string[] = [
 ];
 
 /**
- * Integration files that WRITE to workspace-shared locations and therefore
- * cannot run alongside other integration files:
- *
- * - packed-release.e2e can run a root `pnpm build` (rewriting
- *   `packages/{agent-bundle,rsc-runtime,workbench}/dist`) when
- *   AGENT_BUNDLE_PACKAGE_PREBUILT is unset, and always runs `npm pack`
- *   plus a packed dev server on a pre-reserved (not ephemeral) port.
- *
- * They run on one worker via rstest.integration-serial.config.ts after the
- * parallel pool finishes.
- */
-export const serialIntegrationTestFiles: readonly string[] = [
-  'packages/workbench/tests/packed-release.e2e.test.ts',
-];
-
-/**
- * Integration files safe on parallel workers: they create per-test fixtures
- * with `mkdtemp`, bind servers on ephemeral ports (`port: 0` or rsbuild's
- * silent free-port fallback), and only READ the prebuilt shared artifacts
- * (`packages/workbench/dist`, `packages/agent-bundle/dist`).
- */
-export const parallelIntegrationTestFiles: readonly string[] =
-  integrationTestFiles.filter((file) => !serialIntegrationTestFiles.includes(file));
-
-/**
  * Pack-and-install tests: each one runs `npm pack` (and usually a clean
  * `npm install` of the tarball), which dominates the serialized integration
  * pool. They run through the root `test:packed` / `test:packed:native`
  * scripts instead — CI's release-gates job (`check:release`) and the
  * native-host-smoke workflow keep them covered — and stay excluded from the
- * parallel unit pool.
+ * parallel unit pool. packed-release.e2e lives here (not in the integration
+ * pool) so `pnpm test` and `check:release` don't each run the same long
+ * packed-browser suite; `rstest.config.ts` keeps `test:packed` on one worker.
  */
 export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/dev-workbench-packaging.test.ts',
@@ -102,4 +80,5 @@ export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/public-api-packed.test.ts',
   'packages/agent-bundle/tests/release-audit.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
+  'packages/workbench/tests/packed-release.e2e.test.ts',
 ];

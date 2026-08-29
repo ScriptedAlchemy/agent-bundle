@@ -2,7 +2,7 @@ import { availableParallelism } from 'node:os';
 
 import { defineConfig } from '@rstest/core';
 
-import { parallelIntegrationTestFiles } from './rstest.integration-tests.ts';
+import { integrationTestFiles } from './rstest.integration-tests.ts';
 import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 /**
@@ -25,14 +25,12 @@ const maxWorkers = Number.isSafeInteger(overrideWorkers) && overrideWorkers >= 1
 
 /**
  * Build- and process-running tests that only read workspace-shared artifacts;
- * files that WRITE shared locations run serialized afterwards through
- * rstest.integration-serial.config.ts (rstest has no per-project pool or
- * isolate settings, so the split lives in two configs chained by
- * `test:integration:run`).
+ * files that WRITE shared locations (root builds, `npm pack`) run through the
+ * single-worker `test:packed` script instead (see rstest.integration-tests.ts).
  */
 export default defineConfig({
   extends: withAgentBundleRslibConfig(),
-  include: [...parallelIntegrationTestFiles],
+  include: [...integrationTestFiles],
   pool: { maxWorkers },
   // Concurrent Chrome + dev-server + rsbuild pairs contend for cores, so
   // parallel runs double the polling budgets (see tests/support/time-scale.ts)

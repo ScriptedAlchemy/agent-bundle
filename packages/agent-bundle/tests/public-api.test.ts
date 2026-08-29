@@ -40,6 +40,10 @@ const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
 let buildPromise: Promise<void> | undefined;
 
 const buildPackage = async (): Promise<void> => {
+  // The integration pool runs this file on parallel workers that share the
+  // built dist directories, so a root rebuild here would race every reader.
+  // `test:integration:run` builds once up front and sets the prebuilt seam.
+  if (process.env['AGENT_BUNDLE_PACKAGE_PREBUILT'] === '1') return;
   buildPromise ??= execFile('pnpm', ['build'], {
     cwd: workspaceRoot,
   }).then(() => undefined);
