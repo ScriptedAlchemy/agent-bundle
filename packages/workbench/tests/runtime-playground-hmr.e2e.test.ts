@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
@@ -7,6 +8,22 @@ import { workbenchUrl } from './support/workbench-e2e.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 
 const browserTimeout = 30_000 * timeScale;
+
+/**
+ * Replaces a watched source atomically through a rename staged OUTSIDE the
+ * watched project. An in-place write is truncate-then-append: the dev
+ * compiler can start a compile off the truncation event, read incomplete
+ * content, and then drop the append event because both operations land
+ * within the same mtime tick, so the final content never compiles and the
+ * expected generation never activates. The temp file lives in the project's
+ * parent (same filesystem, never watched) so the rename into place is the
+ * only event the watcher observes.
+ */
+const replaceWatchedSource = async (projectRoot: string, path: string, content: string): Promise<void> => {
+  const temporary = join(projectRoot, '..', `.${basename(path)}.${process.pid}.tmp`);
+  await writeFile(temporary, content);
+  await rename(temporary, path);
+};
 
 const e2e = test.extend({
   playwright: {
@@ -268,7 +285,7 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     const editedSource = hookEditedSource.replace('Runtime state contains', 'Live runtime state contains');
     expect(hookEditedSource).not.toBe(source);
     expect(editedSource).not.toBe(hookEditedSource);
-    await writeFile(fixture.serverComponentSource, editedSource);
+    await replaceWatchedSource(fixture.root, fixture.serverComponentSource, editedSource);
     expect(await readFile(fixture.serverComponentSource, 'utf8')).toBe(editedSource);
     await expect.poll(async () => identity.getAttribute('data-runtime-generation'), { timeout: browserTimeout }).not.toBe(before.attributes['data-runtime-generation']);
     await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(historyCountBeforeActivation + 1);
@@ -298,7 +315,7 @@ e2e('activates an edited RSC generation and replays the selected hook without re
       .filter((attribute) => attribute.name.startsWith('data-runtime-'))
       .map((attribute) => [attribute.name, attribute.value])));
     const historyBeforeSourceBuildFailure = await history.count();
-    await writeFile(fixture.serverComponentSource, `${editedSource}\nconst = ;\n`);
+    await replaceWatchedSource(fixture.root, fixture.serverComponentSource, `${editedSource}\nconst = ;\n`);
     await expect.poll(async () => Number(await identity.getAttribute('data-runtime-event-sequence')), { timeout: browserTimeout })
       .toBeGreaterThan(Number(sourceBuildFailed['data-runtime-event-sequence']));
     await expect(page.locator('.runtime-announcement[role="alert"]').last()).toHaveText(
@@ -337,7 +354,7 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     const repairedSource = repairedHookSource.replace('Live runtime state contains', 'Repaired runtime state contains');
     expect(repairedHookSource).not.toBe(editedSource);
     expect(repairedSource).not.toBe(repairedHookSource);
-    await writeFile(fixture.serverComponentSource, repairedSource);
+    await replaceWatchedSource(fixture.root, fixture.serverComponentSource, repairedSource);
     expect(await readFile(fixture.serverComponentSource, 'utf8')).toBe(repairedSource);
     await expect.poll(async () => identity.getAttribute('data-runtime-generation'), { timeout: browserTimeout })
       .not.toBe(sourceBuildFailed['data-runtime-generation']);

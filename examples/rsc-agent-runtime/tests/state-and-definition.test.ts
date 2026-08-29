@@ -10,6 +10,7 @@ import { serializeRuntimeDefinition } from '../src/build/serialize-definition.js
 import { runtimeDefinition } from '../src/definition.js';
 import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
 import { createTestFileRuntimeKernel } from '../src/runtime/state-file-test-support.js';
+import { timeScale } from '../../../packages/agent-bundle/tests/support/time-scale.ts';
 
 const readOnlyAnnotations = {
   destructiveHint: false,
@@ -33,6 +34,14 @@ const errorMessages = (value: unknown, seen = new Set<Error>()): readonly string
     ...(value instanceof AggregateError ? value.errors.flatMap((error) => errorMessages(error, seen)) : []),
     ...errorMessages(value.cause, seen),
   ];
+};
+
+const observeCancellation = (signal: AbortSignal, onCancelled: () => void): void => {
+  if (signal.aborted) {
+    onCancelled();
+    return;
+  }
+  signal.addEventListener('abort', onCancelled, { once: true });
 };
 
 const eagerPromise = <T>(value: T): Promise<T> => ({
@@ -398,15 +407,26 @@ test('rejects malformed middle records and non-monotonic durable versions', asyn
   await expect(createFileRuntimeKernel({ stateFile: versionStateFile }).readSnapshot()).rejects.toThrow('monotonic state version');
 });
 
-test('excludes a live heartbeat owner and recovers its stale lock only after SIGKILL', async () => {
+// Real lock heartbeats and staleness windows put the nominal runtime near
+// the 5s default budget; contended 2-core runners starve it.
+test('excludes a live heartbeat owner and recovers its stale lock only after SIGKILL', { timeout: 30_000 * timeScale }, async () => {
   const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
   await writeFile(stateFile, '', 'utf8');
   const owner = await startLockOwner(stateFile);
   try {
     const lockDirectory = `${stateFile}.lock`;
     const firstMtime = (await stat(lockDirectory)).mtimeMs;
-    await wait(1_100);
-    expect((await stat(lockDirectory)).mtimeMs).toBeGreaterThan(firstMtime);
+    // The heartbeat touches the lock from a 1s timer in the owner CHILD
+    // process. A fixed 1.1s sleep races that timer with only 100ms of
+    // scheduling margin, which a loaded runner blows through. Poll for the
+    // touch instead of assuming timer punctuality.
+    const heartbeatDeadline = Date.now() + 15_000 * timeScale;
+    let touchedMtime = firstMtime;
+    while (touchedMtime <= firstMtime && Date.now() < heartbeatDeadline) {
+      await wait(50);
+      touchedMtime = (await stat(lockDirectory)).mtimeMs;
+    }
+    expect(touchedMtime).toBeGreaterThan(firstMtime);
 
     const aborted = new AbortController();
     setTimeout(() => aborted.abort(new Error('test abort')), 50);
@@ -498,13 +518,19 @@ test('releases a lease acquired after an expired absolute acquisition deadline',
   expect(releases).toBe(1);
 });
 
-test('cancels a never-settling active phase at the hard critical-section deadline', async () => {
+// The critical-section deadline arms at lock acquisition, so a deadline
+// shorter than a loaded runner's read phase can fire BEFORE the hung append
+// is entered; the read then settles fast and the rejection becomes 'exceeded
+// … critical-section limit' instead of the settlement timeout. A 1s deadline
+// lets the read always finish first, so the cancellation deterministically
+// lands in the never-settling append.
+test('cancels a never-settling active phase at the hard critical-section deadline', { timeout: 30_000 * timeScale }, async () => {
   const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
   const kernel = createTestFileRuntimeKernel({
     stateFile,
     adapter: {
       beforeAppend: () => new Promise<void>(() => undefined),
-      criticalSectionMs: 10,
+      criticalSectionMs: 1_000,
     },
   });
 
@@ -561,25 +587,36 @@ test('exits promptly after a timed-out phase settles before its owner-settlement
   expect(Date.now() - startedAt).toBeLessThan(500);
 });
 
-test('retains the lease until a timed-out mutation phase actually settles', async () => {
+// The critical-section deadline arms at lock acquisition, so a 20ms deadline
+// could fire before the instrumented phase was entered on a loaded runner;
+// the phase barrier then never resolved and the test hung to its budget. A
+// 1s deadline lets the read phase always finish first, and the barrier
+// observes the cancellation so settlement is ordered on events rather than
+// wall-clock margins.
+test('retains the lease until a timed-out mutation phase actually settles', { timeout: 30_000 * timeScale }, async () => {
   const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
   let entered!: () => void;
   let settle!: () => void;
+  let cancelled!: () => void;
   const phaseEntered = new Promise<void>((resolve) => {
     entered = resolve;
   });
   const phaseSettlement = new Promise<void>((resolve) => {
     settle = resolve;
   });
+  const phaseCancelled = new Promise<void>((resolve) => {
+    cancelled = resolve;
+  });
   const first = createTestFileRuntimeKernel({
     stateFile,
     adapter: {
-      beforeAppend: async () => {
+      beforeAppend: async (signal) => {
         entered();
+        observeCancellation(signal, cancelled);
         await phaseSettlement;
       },
-      criticalSectionMs: 20,
-      ownerSettlementMs: 200,
+      criticalSectionMs: 1_000,
+      ownerSettlementMs: 30_000,
     },
   });
   const second = createTestFileRuntimeKernel({ stateFile });
@@ -593,7 +630,6 @@ test('retains the lease until a timed-out mutation phase actually settles', asyn
   });
   void firstMutation.catch(() => undefined);
   await phaseEntered;
-  await wait(30);
 
   let contenderSettled = false;
   const contender = second.recordEdit(
@@ -604,15 +640,21 @@ test('retains the lease until a timed-out mutation phase actually settles', asyn
       sessionId: 'session-2',
       toolName: 'apply_patch',
     },
-    { lockAcquireTimeoutMs: 500 },
+    { lockAcquireTimeoutMs: 30_000 },
   ).finally(() => {
     contenderSettled = true;
   });
   await wait(40);
   expect(contenderSettled).toBe(false);
 
+  // The deadline has cancelled the mutation, but the lease must stay held
+  // while the phase is unsettled.
+  await phaseCancelled;
+  await wait(40);
+  expect(contenderSettled).toBe(false);
+
   settle();
-  await expect(firstMutation).rejects.toThrow('exceeded 20 ms critical-section limit');
+  await expect(firstMutation).rejects.toThrow('exceeded 1000 ms critical-section limit');
   await expect(contender).resolves.toMatchObject({ stateVersion: 1 });
   const settledContents = await readFile(stateFile, 'utf8');
   await wait(30);
@@ -622,21 +664,33 @@ test('retains the lease until a timed-out mutation phase actually settles', asyn
 });
 
 for (const phase of ['truncate', 'append', 'fsync'] as const) {
-  test(`does not unlock while a timed-out ${phase} phase is unsettled`, async () => {
+  // The critical-section deadline arms at lock acquisition, so a 20ms
+  // deadline could fire before the instrumented phase was entered on a
+  // loaded runner (observed 4/10 under taskset -c 0,1); the phase barrier
+  // then never resolved and the test hung to its budget. A 1s deadline lets
+  // the pre-phase work always finish first, and the barrier observes the
+  // cancellation so settlement is ordered on events rather than wall-clock
+  // margins.
+  test(`does not unlock while a timed-out ${phase} phase is unsettled`, { timeout: 30_000 * timeScale }, async () => {
     const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
     if (phase === 'truncate') {
       await writeFile(stateFile, '{"incomplete":true', 'utf8');
     }
     let entered!: () => void;
     let settle!: () => void;
+    let cancelled!: () => void;
     const phaseEntered = new Promise<void>((resolve) => {
       entered = resolve;
     });
     const phaseSettlement = new Promise<void>((resolve) => {
       settle = resolve;
     });
-    const barrier = async () => {
+    const phaseCancelled = new Promise<void>((resolve) => {
+      cancelled = resolve;
+    });
+    const barrier = async (signal: AbortSignal) => {
       entered();
+      observeCancellation(signal, cancelled);
       await phaseSettlement;
     };
     const first = createTestFileRuntimeKernel({
@@ -645,8 +699,8 @@ for (const phase of ['truncate', 'append', 'fsync'] as const) {
         ...(phase === 'truncate' ? { beforeRepair: barrier } : {}),
         ...(phase === 'append' ? { beforeAppendWrite: barrier } : {}),
         ...(phase === 'fsync' ? { beforeAppendSync: barrier } : {}),
-        criticalSectionMs: 20,
-        ownerSettlementMs: 200,
+        criticalSectionMs: 1_000,
+        ownerSettlementMs: 30_000,
       },
     });
     const second = createTestFileRuntimeKernel({ stateFile });
@@ -659,7 +713,6 @@ for (const phase of ['truncate', 'append', 'fsync'] as const) {
     });
     void firstMutation.catch(() => undefined);
     await phaseEntered;
-    await wait(30);
 
     let contenderSettled = false;
     const contender = second.recordEdit(
@@ -670,15 +723,21 @@ for (const phase of ['truncate', 'append', 'fsync'] as const) {
         sessionId: 'session-2',
         toolName: 'apply_patch',
       },
-      { lockAcquireTimeoutMs: 500 },
+      { lockAcquireTimeoutMs: 30_000 },
     ).finally(() => {
       contenderSettled = true;
     });
     await wait(40);
     expect(contenderSettled).toBe(false);
 
+    // The deadline has cancelled the mutation, but the lease must stay held
+    // while the phase is unsettled.
+    await phaseCancelled;
+    await wait(40);
+    expect(contenderSettled).toBe(false);
+
     settle();
-    await expect(firstMutation).rejects.toThrow('exceeded 20 ms critical-section limit');
+    await expect(firstMutation).rejects.toThrow('exceeded 1000 ms critical-section limit');
     await expect(contender).resolves.toMatchObject({ stateVersion: phase === 'fsync' ? 2 : 1 });
     const contentsAtUnlock = await readFile(stateFile, 'utf8');
     await wait(30);

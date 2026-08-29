@@ -11,12 +11,13 @@ import type { FileRuntimeKernelOptions } from './state-file.js';
 
 export interface RuntimeStateTestAdapter {
   readonly acquireLock?: StateStorage['acquire'];
-  readonly beforeAppend?: () => Promise<void>;
-  readonly beforeAppendSync?: () => Promise<void>;
-  readonly beforeAppendWrite?: () => Promise<void>;
+  /** Phase hooks receive the mutation's abort signal so barrier-style tests can order on the critical-section cancellation instead of wall-clock margins. */
+  readonly beforeAppend?: (signal: AbortSignal) => Promise<void>;
+  readonly beforeAppendSync?: (signal: AbortSignal) => Promise<void>;
+  readonly beforeAppendWrite?: (signal: AbortSignal) => Promise<void>;
   readonly beforeRead?: () => Promise<void>;
   readonly beforeRelease?: () => Promise<void>;
-  readonly beforeRepair?: () => Promise<void>;
+  readonly beforeRepair?: (signal: AbortSignal) => Promise<void>;
   readonly criticalSectionMs?: number;
   readonly fatalOwnerTeardown?: (error: Error) => void;
   readonly ownerSettlementMs?: number;
@@ -48,17 +49,17 @@ export const createTestFileRuntimeKernel = ({ adapter = {}, ...options }: TestFi
       adapter,
     ),
     async append(stateFile, contents, signal) {
-      await adapter.beforeAppend?.();
+      await adapter.beforeAppend?.(signal);
       if (signal.aborted) {
         throw signal.reason instanceof Error ? signal.reason : new Error('Runtime state mutation was aborted');
       }
       if (adapter.beforeAppendWrite !== undefined || adapter.beforeAppendSync !== undefined) {
         const handle = await open(stateFile, 'a');
         try {
-          await adapter.beforeAppendWrite?.();
+          await adapter.beforeAppendWrite?.(signal);
           if (signal.aborted) throw signal.reason;
           await handle.writeFile(contents);
-          await adapter.beforeAppendSync?.();
+          await adapter.beforeAppendSync?.(signal);
           if (signal.aborted) throw signal.reason;
           await handle.sync();
           return;
@@ -76,7 +77,7 @@ export const createTestFileRuntimeKernel = ({ adapter = {}, ...options }: TestFi
       return native.read(stateFile, signal);
     }),
     async repair(stateFile, completeBytes, signal) {
-      await adapter.beforeRepair?.();
+      await adapter.beforeRepair?.(signal);
       if (signal.aborted) throw signal.reason;
       return native.repair(stateFile, completeBytes, signal);
     },
