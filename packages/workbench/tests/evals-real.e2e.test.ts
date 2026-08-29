@@ -411,7 +411,6 @@ e2e('fails closed while replacing an active Eval client and ignores every late c
     }).__evalClientScopeFixture.stats().eventsB)).toEqual(['run-b']);
     expect(pageErrors).toEqual([]);
   } finally {
-    await page.goto('about:blank');
     await fixture.close();
   }
 });
