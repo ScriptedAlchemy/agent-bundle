@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 
@@ -314,18 +314,6 @@ test('adds an explicit public MCP URL domain only to returned resource content',
   }
 });
 
-test('built widget HTML is self-contained without external app bundle assets', async () => {
-  for (const name of ['edit-timeline-v1', 'standalone']) {
-    const artifact = join(process.cwd(), 'dist/app', `${name}.html`);
-    await access(artifact);
-    const html = await readFile(artifact, 'utf8');
-    expect(html).toContain('<script');
-    expect(html).toContain('<style');
-    expect(html).not.toMatch(/(?:src|href)=["'][^"']*\.js["']/);
-    expect(html).not.toMatch(/(?:src|href)=["'][^"']*\.css["']/);
-  }
-});
-
 test('runtime manifest declares every Node entry and dynamic chunk in its artifact root', async () => {
   const entries = ['hook/index.js', 'rsc/index.js', 'mcp/stdio.js', 'mcp/http.js'];
   const runtimeRoot = join(process.cwd(), 'dist/runtime');
@@ -401,26 +389,5 @@ test('production and development runtime graphs exclude state test controls', as
   } finally {
     await closeBuild();
     await rm(compilerRoot, { force: true, recursive: true });
-  }
-});
-
-test('a second multi-environment build removes stale app chunks', async () => {
-  const staleAsset = join(process.cwd(), 'dist/app/static/js/async/stale.js');
-  await mkdir(dirname(staleAsset), { recursive: true });
-  await writeFile(staleAsset, 'stale artifact', 'utf8');
-
-  try {
-    const child = spawn('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
-    const [exitCode, signal] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
-    expect(exitCode).toBe(0);
-    expect(signal).toBeNull();
-    await expect(access(staleAsset)).rejects.toThrow();
-    for (const name of ['edit-timeline-v1', 'standalone']) {
-      const html = await readFile(join(process.cwd(), 'dist/app', `${name}.html`), 'utf8');
-      expect(html).toContain('<style');
-      expect(html).not.toMatch(/(?:src|href)=["'][^"']*\.(?:js|css)["']/);
-    }
-  } finally {
-    await rm(staleAsset, { force: true });
   }
 });

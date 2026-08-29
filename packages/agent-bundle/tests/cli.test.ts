@@ -15,6 +15,7 @@ const cliPath = join(packageRoot, 'dist/cli.js');
 let buildPackage: Promise<void> | undefined;
 
 const buildCliPackage = async (): Promise<void> => {
+  if (process.env['AGENT_BUNDLE_PACKAGE_PREBUILT'] === '1') return;
   buildPackage ??= execFile('pnpm', ['build'], { cwd: workspaceRoot }).then(() => undefined);
   await buildPackage;
 };

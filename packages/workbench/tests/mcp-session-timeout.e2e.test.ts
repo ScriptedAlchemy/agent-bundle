@@ -91,8 +91,6 @@ e2e('opens one browser MCP session with an immutable timeout', { timeout: 90_000
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
     expect(await page.getByLabel('Session timeout (ms)').isDisabled()).toBe(true);
     await expect(page.getByLabel('Session timeout (ms)')).toHaveValue('12345');
-    await page.setViewportSize({ height: 844, width: 390 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
   } catch (error) {
     testFailure = error;

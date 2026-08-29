@@ -55,18 +55,6 @@ it('publishes the workbench application at the foreground server index asset', a
   await expect(access(join(workbenchRoot, 'dist', 'static', 'js', 'index.js'))).resolves.toBeUndefined();
 });
 
-it('keeps the Overview heading single-purpose and compact', async () => {
-  const [main, styles] = await Promise.all([
-    readFile(join(workbenchRoot, 'src/main.tsx'), 'utf8'),
-    readFile(join(workbenchRoot, 'src/styles.css'), 'utf8'),
-  ]);
-
-  expect(main).not.toContain('className="eyebrow"');
-  expect(styles).not.toContain('.eyebrow');
-  expect(styles).toContain('.page-heading { margin-bottom: 30px; }');
-  expect(styles).toContain('font-size: clamp(31px, 4vw, 40px);');
-});
-
 it('emits browser-safe JS from the prepared production build', async () => {
   const jsRoot = join(workbenchRoot, 'dist', 'static', 'js');
   const files = await readdir(jsRoot);

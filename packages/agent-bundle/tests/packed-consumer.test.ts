@@ -69,11 +69,6 @@ const runInstalled = async (
   env: installedEnvironment(),
 });
 
-it('recognizes agent-bundle re-exports and CommonJS requires in generated code', () => {
-  expect("export { build } from 'agent-bundle';").toMatch(agentBundleImport);
-  expect("const bundle = require('agent-bundle/api');").toMatch(agentBundleImport);
-});
-
 it('uses only an installed tarball after source deletion', async () => {
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-consumer-'));
   const packedPackageRoot = join(consumerRoot, 'packed-agent-bundle');

@@ -8,7 +8,6 @@ import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
-import { sha256Hex } from '../src/core/digest.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
@@ -116,25 +115,11 @@ const validateDocuments = async (
 };
 
 it('pins host help, capabilities, and every schema snapshot to the supported CLI versions', async () => {
+  // Schema snapshot hashes are pinned by adapter-metadata.test.ts's rehash
+  // test; this test pins the observed CLI versions and the redacted help text.
   const hosts = {
-    claude: {
-      hashes: {
-        'hooks.schema.json': '3c6f3e4391f3dca939d75bd0b200ea88e68db939a2cb885d46f0b143293efb84',
-        'marketplace.schema.json': '5a08f241f9e856bb59489a265d9bf4db9c905e874d720f46def59fdb6f3ca257',
-        'mcp.schema.json': '76ccf02c7bfe2d57945ba18e84da8d655529bd68b4d692f72bce28238c99067e',
-        'plugin.schema.json': 'd145d370f5ad16fb9f29a6f1b5c9cb3ae8a6b9c33b3a11513eea324e8feb17c5',
-      },
-      version: '2.1.250',
-    },
-    codex: {
-      hashes: {
-        'hooks.schema.json': 'e42eef736997b9abb8f28b2ee9262f5c7b1f7f11d8289e9c25da8cc94a504eff',
-        'marketplace.schema.json': '1d43c5ed19de401fb7455c5912e4c21113f6e387aef4c28d2eca121f7554c4e8',
-        'mcp.schema.json': '75bd50f9fcb85c2e8d43bc132d61c172a02f28ea8bb77389816ae77b14a4257e',
-        'plugin.schema.json': 'f6e8e7d2ecb48c50ffa850d1a8190ad85ceffec705b8f0f39bb44a1d10aca0d9',
-      },
-      version: '0.147.0',
-    },
+    claude: { version: '2.1.250' },
+    codex: { version: '0.147.0' },
   } as const;
 
   for (const [host, expected] of Object.entries(hosts)) {
@@ -142,7 +127,6 @@ it('pins host help, capabilities, and every schema snapshot to the supported CLI
     const contractRoot = new URL(`../fixtures/contracts/${host}/`, import.meta.url);
     const provenance = JSON.parse(await readFile(new URL('PROVENANCE.json', schemaRoot), 'utf8')) as {
       readonly observedCliVersion: string;
-      readonly schemas: Record<string, { readonly sha256: string }>;
     };
     const contract = JSON.parse(await readFile(new URL('capabilities.json', contractRoot), 'utf8')) as {
       readonly observedCliVersion: string;
@@ -153,11 +137,6 @@ it('pins host help, capabilities, and every schema snapshot to the supported CLI
     expect(contract.observedCliVersion).toBe(expected.version);
     expect(help).toContain(`version: ${expected.version}`);
     expect(help).not.toMatch(/(?:\/home\/|logged in|credential state|session id)/i);
-    for (const [name, hash] of Object.entries(expected.hashes)) {
-      const schema = await readFile(new URL(name, schemaRoot));
-      expect(sha256Hex(schema)).toBe(hash);
-      expect(provenance.schemas[name]?.sha256).toBe(hash);
-    }
   }
 
   const codexValidatorFixture = JSON.parse(

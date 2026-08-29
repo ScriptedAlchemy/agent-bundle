@@ -62,7 +62,6 @@ the published package:
 ```bash
 node packages/workbench/scripts/capture-runtime-playground.mjs \
   --desktop "$PWD/docs/assets/rsc-runtime-workbench/desktop.png" \
-  --mobile "$PWD/docs/assets/rsc-runtime-workbench/mobile.png" \
   --hmr-before "$PWD/docs/assets/rsc-runtime-workbench/hmr-before.png" \
   --hmr-after "$PWD/docs/assets/rsc-runtime-workbench/hmr-after.png" \
   --compile-error "$PWD/docs/assets/rsc-runtime-workbench/compile-error.png" \

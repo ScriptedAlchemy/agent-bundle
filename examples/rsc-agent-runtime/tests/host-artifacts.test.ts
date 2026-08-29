@@ -22,10 +22,19 @@ const runPackageHosts = async (): Promise<void> => {
 
 const runProductionBuild = async (): Promise<void> => {
   await rm(join(exampleRoot, 'dist/app'), { force: true, recursive: true });
-  const child = spawn('npm', ['run', 'build'], { cwd: exampleRoot, stdio: 'pipe' });
-  const [exitCode, signal] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
-  expect(signal).toBeNull();
-  expect(exitCode).toBe(0);
+  // Plant a leftover async chunk; the multi-environment build itself must remove stale app assets.
+  const staleAsset = join(exampleRoot, 'dist/app/static/js/async/stale.js');
+  await mkdir(dirname(staleAsset), { recursive: true });
+  await writeFile(staleAsset, 'stale artifact', 'utf8');
+  try {
+    const child = spawn('npm', ['run', 'build'], { cwd: exampleRoot, stdio: 'pipe' });
+    const [exitCode, signal] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
+    expect(signal).toBeNull();
+    expect(exitCode).toBe(0);
+    await expect(access(staleAsset)).rejects.toThrow();
+  } finally {
+    await rm(staleAsset, { force: true });
+  }
 };
 
 const readJson = async <T>(path: string): Promise<T> => JSON.parse(await readFile(path, 'utf8')) as T;
@@ -180,6 +189,8 @@ test('keeps fresh production App legal payload names stable and package-identica
         expect(await readFile(join(appRoot, target), 'utf8')).toBe(legalNoticeContent);
       }
       if (artifact.path.endsWith('.html')) {
+        expect(source).toContain('<script');
+        expect(source).toContain('<style');
         expect(source).not.toMatch(/<script[^>]+src=|<link[^>]+rel=["']stylesheet["']/iu);
       }
     }

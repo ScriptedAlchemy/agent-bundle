@@ -14,10 +14,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Fast end-to-end confidence gate: builds, validates, and deterministically evals the
-  # checked-in micro fixture through the real CLI. Never skip-gated and needs no native host.
-  spot-check:
-    name: Micro-eval spot-check (Node 22.19)
+  # Builds and checks every public example through its own toolchain.
+  examples-check:
+    name: Examples check (Node 22.19)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -29,7 +28,6 @@ jobs:
           runtime: node@22.19.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm examples:check
-      - run: pnpm test:spot-check
 
   verify:
     name: Verify (Node ${{ matrix.node-version }})

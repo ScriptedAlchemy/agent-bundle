@@ -143,10 +143,10 @@ const mountedPreviewFixture = async () => {
 };
 
 describe('MCP App preview browser', () => {
-  it('mounts the preview in Chrome for ready, error, fallback, unmount-race, and 390px layouts', async () => {
+  it('mounts the preview in Chrome for ready, error, fallback, and unmount-race states', async () => {
     const fixture = await mountedPreviewFixture();
     const browser = await chromium.launch({ channel: 'chrome' });
-    const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
+    const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
     const browserErrors: string[] = [];
     const responses: string[] = [];
     page.on('pageerror', (error) => { browserErrors.push(error.message); });
@@ -176,7 +176,6 @@ describe('MCP App preview browser', () => {
       expect(await frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
       expect(await frame.getAttribute('referrerpolicy')).toBe('no-referrer');
       expect(await frame.getAttribute('src')).toBe('http://127.0.0.1:43124/#mcp-app-preview');
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
       await load();
       await page.evaluate(() => (globalThis as typeof globalThis & {

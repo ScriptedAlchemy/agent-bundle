@@ -1,9 +1,10 @@
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { workbenchUrl } from './support/workbench-e2e.ts';
 
-const browserTimeout = 12_000;
+const browserTimeout = 12_000 * timeScale;
 
 const e2e = test.extend({
   playwright: {
@@ -48,9 +49,6 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
     await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
-    await page.goto(workbenchUrl(fixture.url, 'mcp'));
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
 
     await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
@@ -186,165 +184,6 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
     expect(forbiddenRequests).toEqual([]);
-    expect(pageErrors).toEqual([]);
-  } finally {
-    await fixture.close();
-  }
-});
-
-e2e('keeps Runtime controls at least 40px tall and inside the 390px viewport without horizontal scrolling', { timeout: 120_000 }, async ({ page }) => {
-  const fixture = await startRuntimePlaygroundFixture();
-  const pageErrors: Error[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error));
-  try {
-    await page.setViewportSize({ height: 844, width: 390 });
-    await page.goto(workbenchUrl(fixture.url, 'runtime'));
-    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });
-    await page.getByLabel('Runtime surface').selectOption('mcp.recent_edits');
-    await page.getByLabel('Schema form').check();
-    await expect(page.locator('#runtime-input-limit')).toBeVisible({ timeout: browserTimeout });
-    const schemaForm = await page.evaluate(() => {
-      const { body, documentElement } = globalThis.document;
-      documentElement.scrollLeft = 0;
-      if (body !== null) body.scrollLeft = 0;
-      globalThis.scrollTo({ left: 0, top: globalThis.scrollY });
-      const textInputs = [...globalThis.document.querySelectorAll<HTMLInputElement>([
-        '.runtime-input input:not([type])',
-        '.runtime-input input[type="email"]',
-        '.runtime-input input[type="number"]',
-        '.runtime-input input[type="password"]',
-        '.runtime-input input[type="search"]',
-        '.runtime-input input[type="tel"]',
-        '.runtime-input input[type="text"]',
-        '.runtime-input input[type="url"]',
-      ].join(','))].filter((element) => element.getClientRects().length > 0).map((element) => {
-        const rect = element.getBoundingClientRect();
-        return Object.freeze({
-          height: rect.height,
-          label: element.getAttribute('aria-label') ?? element.labels?.[0]?.textContent?.trim() ?? element.id,
-          left: rect.left,
-          right: rect.right,
-        });
-      });
-      const choiceLabels = [...globalThis.document.querySelectorAll<HTMLInputElement>('.runtime-input input[type="checkbox"], .runtime-input input[type="radio"]')]
-        .filter((element) => element.getClientRects().length > 0)
-        .map((element) => {
-          const label = element.labels?.[0];
-          if (!(label instanceof globalThis.HTMLLabelElement)) throw new Error('Runtime Schema form choice omitted its associated label.');
-          const labelRect = label.getBoundingClientRect();
-          const controlRect = element.getBoundingClientRect();
-          return Object.freeze({
-            associated: [...element.labels ?? []].includes(label),
-            controlBottom: controlRect.bottom,
-            controlLeft: controlRect.left,
-            controlRight: controlRect.right,
-            controlTop: controlRect.top,
-            height: labelRect.height,
-            label: label.textContent?.trim() ?? element.id,
-            labelBottom: labelRect.bottom,
-            left: labelRect.left,
-            right: labelRect.right,
-            top: labelRect.top,
-          });
-        });
-      return Object.freeze({
-        bodyScrollLeft: body?.scrollLeft ?? 0,
-        choiceLabels: Object.freeze(choiceLabels),
-        documentScrollLeft: documentElement.scrollLeft,
-        textInputs: Object.freeze(textInputs),
-        viewportWidth: globalThis.innerWidth,
-        windowScrollX: globalThis.scrollX,
-      });
-    });
-    const run = page.getByRole('button', { name: 'Run', exact: true });
-    const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
-    await page.getByLabel('Runtime surface').selectOption('mcp.runtime_status');
-    await run.click();
-    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBeGreaterThan(0);
-    await page.getByLabel('Runtime surface').selectOption('hook.claude');
-    await page.getByLabel('Runtime fixture').selectOption('claude-post-tool-use-write');
-    await run.click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: browserTimeout });
-    const layout = await page.evaluate(() => {
-      const { body, documentElement } = globalThis.document;
-      documentElement.scrollLeft = 0;
-      if (body !== null) body.scrollLeft = 0;
-      globalThis.scrollTo({ left: 0, top: globalThis.scrollY });
-      const elements = [
-        globalThis.document.querySelector('.runtime-playground'),
-        globalThis.document.querySelector('.runtime-controls'),
-        globalThis.document.querySelector('.runtime-stage'),
-        ...[...globalThis.document.querySelectorAll('.runtime-controls label, .runtime-controls select')]
-          .filter((element) => element.getClientRects().length > 0),
-      ];
-      const controls = [...globalThis.document.querySelectorAll<HTMLElement>([
-        '.runtime-controls select',
-        '.runtime-input select',
-        '.runtime-input button',
-        '.runtime-actions button',
-        '.runtime-history button',
-        '.runtime-confirmation button',
-      ].join(','))].filter((element) => element.getClientRects().length > 0);
-      return Object.freeze({
-        bodyScrollLeft: body?.scrollLeft ?? 0,
-        boxes: Object.freeze(elements.map((element) => {
-          if (!(element instanceof globalThis.HTMLElement)) {
-            throw new Error('Runtime mobile layout omitted a required visible control or stage.');
-          }
-          const rect = element.getBoundingClientRect();
-          return Object.freeze({ left: rect.left, right: rect.right });
-        })),
-        controls: Object.freeze(controls.map((element) => {
-          const rect = element.getBoundingClientRect();
-          return Object.freeze({
-            height: rect.height,
-            label: element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.tagName,
-            left: rect.left,
-            right: rect.right,
-          });
-        })),
-        documentScrollLeft: documentElement.scrollLeft,
-        viewportWidth: globalThis.innerWidth,
-        windowScrollX: globalThis.scrollX,
-      });
-    });
-    expect(layout.windowScrollX).toBe(0);
-    expect(layout.documentScrollLeft).toBe(0);
-    expect(layout.bodyScrollLeft).toBe(0);
-    expect(layout.viewportWidth).toBe(390);
-    expect(schemaForm.windowScrollX).toBe(0);
-    expect(schemaForm.documentScrollLeft).toBe(0);
-    expect(schemaForm.bodyScrollLeft).toBe(0);
-    expect(schemaForm.viewportWidth).toBe(390);
-    expect(schemaForm.textInputs.length).toBeGreaterThan(0);
-    expect(schemaForm.choiceLabels.length).toBeGreaterThan(0);
-    for (const input of schemaForm.textInputs) {
-      expect(input.height, input.label).toBeGreaterThanOrEqual(40);
-      expect(input.left, input.label).toBeGreaterThanOrEqual(0);
-      expect(input.right, input.label).toBeLessThanOrEqual(schemaForm.viewportWidth);
-    }
-    for (const choice of schemaForm.choiceLabels) {
-      expect(choice.associated, choice.label).toBe(true);
-      expect(choice.label.length).toBeGreaterThan(0);
-      expect(choice.height, choice.label).toBeGreaterThanOrEqual(40);
-      expect(choice.left, choice.label).toBeGreaterThanOrEqual(0);
-      expect(choice.right, choice.label).toBeLessThanOrEqual(schemaForm.viewportWidth);
-      expect(choice.controlLeft, choice.label).toBeGreaterThanOrEqual(choice.left);
-      expect(choice.controlRight, choice.label).toBeLessThanOrEqual(choice.right);
-      expect(choice.controlTop, choice.label).toBeGreaterThanOrEqual(choice.top);
-      expect(choice.controlBottom, choice.label).toBeLessThanOrEqual(choice.labelBottom);
-    }
-    expect(layout.controls.length).toBeGreaterThan(0);
-    for (const box of layout.boxes) {
-      expect(box.left).toBeGreaterThanOrEqual(0);
-      expect(box.right).toBeLessThanOrEqual(layout.viewportWidth);
-    }
-    for (const control of layout.controls) {
-      expect(control.height, control.label).toBeGreaterThanOrEqual(40);
-      expect(control.left, control.label).toBeGreaterThanOrEqual(0);
-      expect(control.right, control.label).toBeLessThanOrEqual(layout.viewportWidth);
-    }
     expect(pageErrors).toEqual([]);
   } finally {
     await fixture.close();

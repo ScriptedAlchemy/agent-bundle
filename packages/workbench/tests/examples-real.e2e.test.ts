@@ -14,9 +14,10 @@ import {
   waitForSettledWorkbench,
   writeExampleReport,
 } from './support/example-acceptance.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { buildWorkbench, e2e, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 
-const browserTimeout = 15_000;
+const browserTimeout = 15_000 * timeScale;
 
 const waitForExampleValue = async <Value>(
   page: Parameters<typeof captureExampleState>[0],

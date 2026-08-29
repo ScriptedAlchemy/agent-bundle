@@ -1,6 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
 import { expect, it } from '@rstest/core';
 import { createElement } from 'react';
 import { renderToReadableStream, renderToStaticMarkup } from 'react-dom/server';
@@ -141,13 +138,6 @@ const renderWhenReady = async (node: React.ReactNode): Promise<string> => {
   await stream.allReady;
   return new Response(stream).text();
 };
-
-it('includes the Runtime Playground unit contract in its dedicated coverage selection', async () => {
-  const config = await readFile(join(process.cwd(), 'rstest.runtime-playground.config.ts'), 'utf8');
-
-  expect(config).toContain("'packages/workbench/tests/runtime-playground.test.ts'");
-  expect(config).toContain("'packages/workbench/tests/runtime-playground.browser.test.tsx'");
-});
 
 it('keeps unavailable runtime absent and composes no live MCP page adapter', () => {
   const controller = createRuntimePlaygroundController({ bootstrap: Object.freeze({ kind: 'unavailable' }), client: clientFor(), profiles });

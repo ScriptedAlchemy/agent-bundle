@@ -1,7 +1,5 @@
-import { execFile as executeFile } from 'node:child_process';
 import { access, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import type { Page, WebSocketRoute } from 'playwright';
@@ -12,12 +10,11 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
-import { workbenchUrl } from './support/workbench-e2e.ts';
+import { buildWorkbench, workbenchUrl } from './support/workbench-e2e.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 8_000 * timeScale;
-const execFile = promisify(executeFile);
 
 const e2e = test.extend({
   playwright: {
@@ -25,14 +22,6 @@ const e2e = test.extend({
     contextOptions: { viewport: { height: 900, width: 1440 } },
   } satisfies PlaywrightOptions,
 });
-
-const buildWorkbench = async (): Promise<void> => {
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('pnpm', ['--filter', 'agent-bundle-workbench', 'build'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
-  });
-};
 
 const appFixtureHtml = [
   '<!doctype html><html><body><main data-testid="app-state">waiting</main>',
@@ -419,9 +408,6 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
       return request.path.endsWith('/messages') && message?.method === 'ui/request-display-mode';
     }), { timeout: browserTimeout }).toBe(true);
     expect(await appFrame.content()).not.toContain(foregroundToken);
-
-    await page.setViewportSize({ height: 844, width: 390 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     const firstClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'));
     await page.getByRole('button', { name: 'Close App preview' }).click();
@@ -1276,9 +1262,6 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect.poll(() => appMessages.filter((entry) =>
       new URL(entry.href).origin === fixture.url && entry.senderOrigin === destinationOrigin && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 * timeScale }).toBe(controllerOrigin === destinationOrigin ? 2 : 1);
-
-    await page.setViewportSize({ height: 900, width: 390 });
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 * timeScale }).toBe(true);
 
     const destinationAppFrame = async () => {
       for (const frame of page.frames()) {

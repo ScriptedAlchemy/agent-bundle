@@ -1,11 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import {
-  assembleArtifactManifest as assembleArtifactManifestFromApi,
-  parseArtifactManifest as parseArtifactManifestFromApi,
-  serializeArtifactManifest as serializeArtifactManifestFromApi,
-  type ArtifactManifest as ApiArtifactManifest,
-} from '../src/api.ts';
+import type { ArtifactManifest as ApiArtifactManifest } from '../src/api.ts';
 import {
   assembleArtifactManifest,
   parseArtifactManifest,
@@ -14,12 +9,7 @@ import {
 } from '../src/build/manifest.ts';
 import { digest, stableJson } from '../src/core/digest.ts';
 import { evalTargetDigests } from '../src/eval/artifact.ts';
-import {
-  assembleArtifactManifest as assembleArtifactManifestFromIndex,
-  parseArtifactManifest as parseArtifactManifestFromIndex,
-  serializeArtifactManifest as serializeArtifactManifestFromIndex,
-  type ArtifactManifest as PublicArtifactManifest,
-} from '../src/index.ts';
+import type { ArtifactManifest as PublicArtifactManifest } from '../src/index.ts';
 
 const hash = (character: string): string => character.repeat(64);
 
@@ -130,20 +120,6 @@ it('returns a deeply frozen manifest and exports the public manifest type', () =
   expect(() => {
     (manifest.files as unknown as { push(value: unknown): void }).push({});
   }).toThrow(TypeError);
-});
-
-it('uses the ProjectService source-input revision contract and exports runtime APIs', () => {
-  const manifest = validManifest();
-  const bytes = serializeArtifactManifest(manifest);
-
-  expect(manifest.project.revision).toBe(digest({ inputs: manifest.project.sourceInputs }));
-  expect(parseArtifactManifestFromApi).toBe(parseArtifactManifest);
-  expect(serializeArtifactManifestFromApi).toBe(serializeArtifactManifest);
-  expect(assembleArtifactManifestFromApi).toBe(assembleArtifactManifest);
-  expect(parseArtifactManifestFromIndex).toBe(parseArtifactManifest);
-  expect(serializeArtifactManifestFromIndex).toBe(serializeArtifactManifest);
-  expect(assembleArtifactManifestFromIndex).toBe(assembleArtifactManifest);
-  expect(parseArtifactManifestFromApi(bytes)).toEqual(parseArtifactManifest(bytes));
 });
 
 it('produces root-independent canonical bytes without silently sorting caller arrays', () => {

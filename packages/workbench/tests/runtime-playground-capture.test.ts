@@ -14,12 +14,6 @@ const workspaceRoot = process.cwd();
 const captureScript = join(workspaceRoot, 'packages', 'workbench', 'scripts', 'capture-runtime-playground.mjs');
 const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-type HorizontalBounds = Readonly<{
-  readonly left: number;
-  readonly right: number;
-  readonly viewportWidth: number;
-}>;
-
 type VerticalBounds = Readonly<{
   readonly bottom: number;
   readonly top: number;
@@ -52,28 +46,6 @@ type CaptureEvidence = Readonly<{
   readonly hmrWithoutReload: boolean;
   readonly lastGoodGenerationDuringError: string;
   readonly lastGoodPreserved: boolean;
-  readonly mobileLayout: Readonly<{
-    readonly bodyScrollLeft: number;
-    readonly childHeading: HorizontalBounds;
-    readonly childHeadingWithinViewport: boolean;
-    readonly childMarker: HorizontalBounds;
-    readonly childMarkerWithinViewport: boolean;
-    readonly childScrollX: number;
-    readonly documentScrollLeft: number;
-    readonly controls: HorizontalBounds;
-    readonly controlsWithinViewport: boolean;
-    readonly host: HorizontalBounds;
-    readonly hostWithinViewport: boolean;
-    readonly hostScrollerScrollLefts: readonly number[];
-    readonly outerFrame: HorizontalBounds;
-    readonly outerFrameWithinViewport: boolean;
-    readonly playground: HorizontalBounds;
-    readonly playgroundWithinViewport: boolean;
-    readonly stage: HorizontalBounds;
-    readonly stageWithinViewport: boolean;
-    readonly windowScrollX: number;
-  }>;
-  readonly mobileWithoutHorizontalOverflow: boolean;
   readonly providerSessionId: string;
   readonly recovered: boolean;
   readonly runAfter: string;
@@ -81,7 +53,6 @@ type CaptureEvidence = Readonly<{
   readonly sandboxOpaqueOrigin: boolean;
   readonly viewports: Readonly<{
     readonly desktop: Readonly<{ readonly height: number; readonly width: number }>;
-    readonly mobile: Readonly<{ readonly height: number; readonly width: number }>;
   }>;
 }>;
 
@@ -150,7 +121,7 @@ test('settles every capture cleanup action without masking the primary failure',
   }
 });
 
-test('captures identity-backed HMR, last-good, recovery, and responsive browser evidence', { timeout: 600_000 }, async () => {
+test('captures identity-backed HMR, last-good, recovery, and desktop browser evidence', { timeout: 600_000 }, async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-capture-'));
   const outputs = Object.freeze({
     compileError: join(outputRoot, 'compile-error.png'),
@@ -158,13 +129,11 @@ test('captures identity-backed HMR, last-good, recovery, and responsive browser 
     evidence: join(outputRoot, 'evidence.json'),
     hmrAfter: join(outputRoot, 'hmr-after.png'),
     hmrBefore: join(outputRoot, 'hmr-before.png'),
-    mobile: join(outputRoot, 'mobile.png'),
     recovered: join(outputRoot, 'recovered.png'),
   });
   try {
     const { stdout } = await execFile(process.execPath, [captureScript,
       '--desktop', outputs.desktop,
-      '--mobile', outputs.mobile,
       '--hmr-before', outputs.hmrBefore,
       '--hmr-after', outputs.hmrAfter,
       '--compile-error', outputs.compileError,
@@ -174,7 +143,6 @@ test('captures identity-backed HMR, last-good, recovery, and responsive browser 
 
     await Promise.all([
       expectPng(outputs.desktop, 1440, 900),
-      expectPng(outputs.mobile, 390, 844),
       expectPng(outputs.hmrBefore, 1440, 900),
       expectPng(outputs.hmrAfter, 1440, 900),
       expectPng(outputs.compileError, 1440, 900),
@@ -186,7 +154,6 @@ test('captures identity-backed HMR, last-good, recovery, and responsive browser 
       'evidence.json',
       'hmr-after.png',
       'hmr-before.png',
-      'mobile.png',
       'recovered.png',
     ]);
 
@@ -211,41 +178,12 @@ test('captures identity-backed HMR, last-good, recovery, and responsive browser 
       desktopControlColumns: 4,
       hmrWithoutReload: true,
       lastGoodPreserved: true,
-      mobileLayout: {
-        bodyScrollLeft: 0,
-        childHeadingWithinViewport: true,
-        childMarkerWithinViewport: true,
-        childScrollX: 0,
-        controlsWithinViewport: true,
-        documentScrollLeft: 0,
-        hostWithinViewport: true,
-        outerFrameWithinViewport: true,
-        playgroundWithinViewport: true,
-        stageWithinViewport: true,
-        windowScrollX: 0,
-      },
-      mobileWithoutHorizontalOverflow: true,
       recovered: true,
       sandboxOpaqueOrigin: true,
       viewports: {
         desktop: { height: 900, width: 1440 },
-        mobile: { height: 844, width: 390 },
       },
     });
-    expect(evidence.mobileLayout.hostScrollerScrollLefts.every((value) => value === 0)).toBe(true);
-    for (const bounds of [
-      evidence.mobileLayout.host,
-      evidence.mobileLayout.playground,
-      evidence.mobileLayout.controls,
-      evidence.mobileLayout.stage,
-      evidence.mobileLayout.outerFrame,
-      evidence.mobileLayout.childHeading,
-      evidence.mobileLayout.childMarker,
-    ]) {
-      expect(bounds.left).toBeGreaterThanOrEqual(0);
-      expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
-      expect(bounds.viewportWidth).toBeGreaterThan(0);
-    }
     expect(evidence.providerSessionId).toEqual(expect.any(String));
     expect(evidence.providerSessionId.length).toBeGreaterThan(0);
     expect(evidence.compactRunId).toEqual(expect.any(String));

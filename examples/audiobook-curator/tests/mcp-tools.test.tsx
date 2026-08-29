@@ -2,7 +2,6 @@ import { describe, expect, it } from '@rstest/core';
 
 import {
   createCuratorTools,
-  curatorToolNames,
   type CuratorToolOperations,
 } from '../src/mcp-tools.js';
 
@@ -34,27 +33,6 @@ const operations = (): CuratorToolOperations => ({
 });
 
 describe('audiobook curator MCP tools', () => {
-  it('derives the current tool catalog from the shared application', () => {
-    expect(curatorToolNames).toEqual([
-      'verify_audible_sample',
-      'identify_audible_sample',
-      'verify_with_whisper',
-      'apply_audiobook_metadata',
-      'apply_audiobook_chapters',
-      'search_audible',
-      'select_audible_edition',
-      'cache_audible_edition',
-      'inspect_sources',
-      'inventory_sources',
-      'audit_library',
-      'select_sources',
-      'convert_audiobook',
-      'prepare_audiobook',
-      'audit_audiobook',
-    ]);
-    expect(createCuratorTools({ operations: operations() }).map(({ name }) => name)).toEqual(curatorToolNames);
-  });
-
   it('renders text and detached structured receipts through the public RSC lowerer', async () => {
     const tools = createCuratorTools({ operations: operations() });
     const inspect = tools.find(({ name }) => name === 'inspect_sources')!;

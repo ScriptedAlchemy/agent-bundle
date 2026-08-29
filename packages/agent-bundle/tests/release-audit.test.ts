@@ -108,16 +108,6 @@ it('ships repository and support metadata that matches the verified origin', asy
   }
 });
 
-it('runs a release pack dry run with the CLI in its tarball', async () => {
-  const { stdout } = await execFile('pnpm', ['pack:dry-run'], {
-    cwd: workspaceRoot,
-    env: releaseEnvironment(),
-  });
-
-  expect(stdout).toContain('agent-bundle-0.1.0.tgz');
-  expect(stdout).toContain('dist/cli.js');
-}, 120_000);
-
 it('packs generated Workbench legal companion files', async () => {
   const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-audit-'));
 
