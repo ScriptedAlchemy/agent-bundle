@@ -11,6 +11,7 @@ import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogge
 import { EpochStore } from './epoch-store.ts';
 import { EvalService } from './eval/eval-service.ts';
 import { ProjectEventHub } from './events.ts';
+import { createInspectorLauncher } from './inspector-launcher.ts';
 import { HookPlaygroundService } from './playground/hook-playground-service.ts';
 import {
   startForegroundServer,
@@ -66,7 +67,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'logs' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
+  readonly resource: 'coordinator' | 'inspector' | 'logs' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -396,6 +397,7 @@ export interface DevServerLifecycleOptions {
   readonly detachProjectLogs?: () => void;
   readonly logs?: DevLogService;
   readonly mcpApps?: Closeable;
+  readonly inspector?: Closeable;
   readonly mcpSessions: Closeable;
   readonly playground?: Closeable;
   readonly runtimeResources?: DevServerRuntimeLifecycleResources;
@@ -405,6 +407,7 @@ export interface DevServerLifecycleOptions {
 export const closeDevServerLifecycle = async ({
   coordinator,
   detachProjectLogs,
+  inspector,
   logs,
   mcpApps,
   mcpSessions,
@@ -419,66 +422,35 @@ export const closeDevServerLifecycle = async ({
     producer: 'project',
     summary: 'Development workbench shutdown started.',
   });
-  const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
-  const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
-  const clientSurfaceResults = runtimeResources?.clientSurfaces === undefined
-    ? []
-    : await Promise.allSettled([runtimeResources.clientSurfaces.close()]);
-  const runtimeResults = runtimeResources?.runtime === undefined
-    ? []
-    : await Promise.allSettled([runtimeResources.runtime.close()]);
-  const sessionResults = await Promise.allSettled([mcpSessions.close()]);
-  const coordinatorResults = await Promise.allSettled([coordinator.close()]);
+  // Producers close strictly in this order, each awaited before the next;
+  // the ordering is load-bearing for the sessions the coordinator drains.
+  const producers: readonly (readonly [DevServerLifecycleCloseFailure['resource'], Closeable | undefined])[] = [
+    ['playground', playground],
+    ['inspector', inspector],
+    ['mcp-apps', mcpApps],
+    ['runtime-client-surfaces', runtimeResources?.clientSurfaces],
+    ['runtime', runtimeResources?.runtime],
+    ['mcp-sessions', mcpSessions],
+    ['coordinator', coordinator],
+  ];
+  const failures: DevServerLifecycleCloseFailure[] = [];
+  const closeResource = async (resource: DevServerLifecycleCloseFailure['resource'], closeable: Closeable): Promise<void> => {
+    const [result] = await Promise.allSettled([closeable.close()]);
+    if (result?.status === 'rejected') failures.push(Object.freeze({ error: result.reason, resource }));
+  };
+  for (const [resource, closeable] of producers) {
+    if (closeable !== undefined) await closeResource(resource, closeable);
+  }
   try { detachProjectLogs?.(); }
   catch { /* The subscription is observability-only and cannot hold shutdown. */ }
-  const producerFailures = [
-    ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
-        : [],
-    ),
-    ...appResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'mcp-apps' as const })]
-        : [],
-    ),
-    ...clientSurfaceResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'runtime-client-surfaces' as const })]
-        : [],
-    ),
-    ...runtimeResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'runtime' as const })]
-        : [],
-    ),
-    ...sessionResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'mcp-sessions' as const })]
-        : [],
-    ),
-    ...coordinatorResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'coordinator' as const })]
-        : [],
-    ),
-  ];
   logs?.log({
-    details: { failures: producerFailures.length },
+    details: { failures: failures.length },
     kind: 'dev.shutdown.completed',
-    level: producerFailures.length === 0 ? 'info' : 'warning',
+    level: failures.length === 0 ? 'info' : 'warning',
     producer: 'project',
-    summary: producerFailures.length === 0 ? 'Development workbench shutdown completed.' : 'Development workbench shutdown completed with failures.',
+    summary: failures.length === 0 ? 'Development workbench shutdown completed.' : 'Development workbench shutdown completed with failures.',
   });
-  const logsResults = logs === undefined ? [] : await Promise.allSettled([logs.close()]);
-  const failures = [
-    ...producerFailures,
-    ...logsResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'logs' as const })]
-        : [],
-    ),
-  ];
+  if (logs !== undefined) await closeResource('logs', logs);
   if (failures.length > 0) throw new DevServerLifecycleCloseError(failures);
 };
 
@@ -492,12 +464,14 @@ const withMcpSessionLifecycle = (
   playground: Closeable,
   logs: DevLogService,
   detachProjectLogs: () => void,
+  inspector: Closeable,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
     clientSurfaces.beginClose();
     return closeDevServerLifecycle({
       coordinator,
       detachProjectLogs,
+      inspector,
       logs,
       mcpApps: mcpApps(),
       mcpSessions,
@@ -725,6 +699,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     skillDocuments,
     trace,
   });
+  const inspector = createInspectorLauncher({ projectRoot: root });
   const agentApi = agentApiEnabled
     ? new AgentApi({
       artifacts,
@@ -757,11 +732,13 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       playground,
       logs,
       detachProjectLogs,
+      inspector,
     ),
     evals,
     evalLifecycle: evals,
     eventHub,
     hookPlayground,
+    inspector,
     logs,
     mcpAppPreviews: appPreviews,
     mcpSessions,

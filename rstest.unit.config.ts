@@ -8,7 +8,6 @@ export default defineConfig({
   extends: withAgentBundleRslibConfig(),
   include: [
     'packages/**/tests/**/*.test.ts',
-    'packages/workbench/src/inspector/vendor/clients/web/src/utils/inspectorTabs.test.ts',
   ],
   exclude: [...integrationTestFiles, ...packedTestFiles],
 });

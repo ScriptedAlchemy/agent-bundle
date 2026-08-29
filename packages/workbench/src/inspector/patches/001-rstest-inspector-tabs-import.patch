@@ -1,9 +1,0 @@
-diff --git a/clients/web/src/utils/inspectorTabs.test.ts b/clients/web/src/utils/inspectorTabs.test.ts
---- a/clients/web/src/utils/inspectorTabs.test.ts
-+++ b/clients/web/src/utils/inspectorTabs.test.ts
-@@ -1,4 +1,4 @@
--import { describe, it, expect } from "vitest";
-+import { describe, it, expect } from "@rstest/core";
- import {
-   INSPECTOR_SERVERS_TAB,
-   INSPECTOR_TAB_IDS,

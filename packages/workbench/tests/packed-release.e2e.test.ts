@@ -374,7 +374,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       });
       await expect(page.getByRole('heading', { name: 'Canonical result' })).toBeVisible({ timeout: browserTimeout });
 
-      phase = 'MCP, Inspector, and App pages';
+      phase = 'MCP and App pages';
       await page.goto(workbenchUrl(origin, 'mcp'));
       await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
       await page.locator('#mcp-target').selectOption('portable');
@@ -401,12 +401,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
       if (appFrame === undefined) throw new Error('The packed MCP App proxy did not create an App frame.');
       await expect(appFrame.locator('#view')).toHaveText('packed release dashboard', { timeout: browserTimeout });
-      await page.getByRole('tab', { name: 'Inspector' }).click();
-      await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
-      const inspector = page.locator('[aria-label="MCP Inspector presentation"]');
-      await expect(inspector.getByText('show-dashboard', { exact: true })).toBeVisible({ timeout: browserTimeout });
-      await page.getByRole('tab', { name: 'Playground' }).click();
-      await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
 
       phase = 'Logs, Evals, and Comparisons pages';
       await page.goto(workbenchUrl(origin, 'logs'));

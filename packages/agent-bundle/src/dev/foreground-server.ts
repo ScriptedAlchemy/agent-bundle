@@ -11,6 +11,7 @@ import { DevLogRoutes } from './logs/dev-log-routes.ts';
 import type { DevLogService } from './logs/dev-log-service.ts';
 import { EvalRoutes, type EvalRouteService } from './eval/eval-routes.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
+import { InspectorRoutes, type InspectorRouteService } from './inspector-routes.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playground/hook-playground-routes.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session/mcp-session-routes.ts';
@@ -126,6 +127,8 @@ export interface ForegroundServerOptions {
   readonly mcpAppPreviews?: McpAppRoutePreviewService;
   /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
   readonly hookPlayground?: HookPlaygroundRouteService;
+  /** Opt-in standalone MCP Inspector child; never auto-started. */
+  readonly inspector?: InspectorRouteService;
   /** Persistent MCP sessions are supplied by the workbench service, never by browser input. */
   readonly mcpSessions?: McpSessionService;
   readonly now?: () => Date;
@@ -421,6 +424,7 @@ export class ForegroundServer {
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
   readonly #host: string;
+  readonly #inspectorRoutes: InspectorRoutes;
   readonly #mcpAppPreviews: McpAppRoutePreviewService | undefined;
   readonly #mcpAppRoutes: McpAppRoutes;
   readonly #runtimeMcpRoutes: RuntimeMcpRoutes;
@@ -495,6 +499,10 @@ export class ForegroundServer {
     this.#hookPlaygroundRoutes = new HookPlaygroundRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.hookPlayground === undefined ? {} : { service: options.hookPlayground }),
+    });
+    this.#inspectorRoutes = new InspectorRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.inspector === undefined ? {} : { service: options.inspector }),
     });
     this.#playgroundRoutes = new PlaygroundRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -645,6 +653,7 @@ export class ForegroundServer {
     // records and reports the same rejection.
     void releaseHookPlayground.catch(() => undefined);
     this.#playgroundRoutes.close();
+    this.#inspectorRoutes.close();
     this.#artifactRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
     void releaseEvals.catch(() => undefined);
@@ -729,6 +738,7 @@ export class ForegroundServer {
     if (await this.#runtimeRoutes.handle(request, response)) return;
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
     if (await this.#playgroundRoutes.handle(request, response)) return;
+    if (await this.#inspectorRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;
     if (await this.#evalRoutes.handle(request, response)) return;
     if (await this.#devLogRoutes.handle(request, response)) return;

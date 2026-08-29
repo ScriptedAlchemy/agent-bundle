@@ -94,6 +94,7 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
     await page.goto(workbenchUrl(fixture.url, 'mcp'));
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveCount(0);
     await page.goto(workbenchUrl(fixture.url, 'runtime'));
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });

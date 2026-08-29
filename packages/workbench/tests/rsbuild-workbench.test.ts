@@ -26,9 +26,7 @@ it('builds workbench assets with stable unhashed names', () => {
     output: {
       copy: [
         { from: join(workbenchRoot, 'THIRD_PARTY_NOTICES'), to: 'THIRD_PARTY_NOTICES', toType: 'file' },
-        { from: join(workbenchRoot, 'src/inspector/UPSTREAM.json'), to: 'src/inspector/UPSTREAM.json', toType: 'file' },
-        { from: join(workbenchRoot, 'src/inspector/LICENSE.inspector'), to: 'src/inspector/LICENSE.inspector', toType: 'file' },
-        { from: join(workbenchRoot, 'src/inspector/PATCHES.md'), to: 'src/inspector/PATCHES.md', toType: 'file' },
+        { from: join(workbenchRoot, 'src/mcp/APP-RENDERER-LICENSE'), to: 'src/mcp/APP-RENDERER-LICENSE', toType: 'file' },
       ],
       filenameHash: false,
       filename: {

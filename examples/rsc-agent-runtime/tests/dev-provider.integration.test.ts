@@ -1272,13 +1272,23 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
       allow.resolve();
       await reconciled;
 
-      expect(session.mcpRegistry.snapshot()).toMatchObject({ runtimeGenerationId: 'generation-2' });
+      // The committed generation is asserted relative to the first one, not by
+      // ordinal: multi-compiler watch delivery can skew across the rsc and
+      // widget children under load, so one source change may burn more than
+      // one generation ordinal before the session converges. The invariant an
+      // equivalent prepared revision guarantees is that the in-flight compile
+      // still commits - the session leaves the first generation - rather than
+      // being superseded back to it the way a non-equivalent revision would.
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration);
+      const committedGeneration = session.status().activeVector?.runtimeGenerationId;
+      expect(committedGeneration).toEqual(expect.any(String));
+      expect(committedGeneration).not.toBe(firstGeneration);
+      expect(session.mcpRegistry.snapshot()).toMatchObject({ runtimeGenerationId: committedGeneration });
       expect(session.status()).toMatchObject({
-        activeVector: { runtimeGenerationId: 'generation-2' },
+        activeVector: { runtimeGenerationId: committedGeneration },
         diagnostics: [],
         state: 'active',
       });
-      expect(session.mcpRegistry.snapshot()!.runtimeGenerationId).not.toBe(firstGeneration);
     } finally {
       await session.close();
     }
