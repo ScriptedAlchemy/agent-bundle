@@ -2165,7 +2165,7 @@ it('evicts the oldest settled sessions from memory while every by-id operation s
   } finally {
     await fixture.close();
   }
-});
+}, 10_000 * timeScale);
 
 // Settles ~22 real sessions sequentially; the default 5s budget starves on
 // 2-core CI runners.
