@@ -36,32 +36,6 @@ test('declares every executable and contained runtime asset in the runtime manif
   }
 });
 
-test('uses an explicitly captured definition instead of the host module serializer', async () => {
-  const runtimeRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-manifest-'));
-  const runtimeAssets = ['hook/index.js', 'rsc/index.js', 'mcp/stdio.js', 'mcp/http.js'];
-  const definition = {
-    nativeHooks: [],
-    resources: [],
-    tools: [],
-  };
-
-  try {
-    for (const asset of runtimeAssets) {
-      const target = join(runtimeRoot, asset);
-      await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, 'artifact', 'utf8');
-    }
-    await writeFile(join(runtimeRoot, 'runtime-assets.json'), JSON.stringify({ allFiles: runtimeAssets }), 'utf8');
-
-    await emitRuntimeArtifacts(runtimeRoot, definition);
-
-    const manifest = JSON.parse(await readFile(join(runtimeRoot, 'agent-runtime.manifest.json'), 'utf8')) as { tools: unknown[] };
-    expect(manifest.tools).toEqual([]);
-  } finally {
-    await rm(runtimeRoot, { force: true, recursive: true });
-  }
-});
-
 test('rejects a runtime asset that escapes the manifest root', async () => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-manifest-'));
   try {

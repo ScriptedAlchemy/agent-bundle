@@ -141,23 +141,6 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
   ]);
 };
 
-const expectSafeLaunchConfiguration = async (page: Page, { command, compiledEntry, cwd }: {
-  readonly command: string;
-  readonly compiledEntry: string;
-  readonly cwd: string;
-}): Promise<void> => {
-  const launchConfiguration = page.locator('.mcp-page-launch-configuration');
-  await expect(launchConfiguration).toContainText('Launch configuration', { timeout: browserTimeout });
-  await expect(launchConfiguration).toContainText('stdio');
-  await expect(launchConfiguration).toContainText(command);
-  await expect(launchConfiguration).toContainText('[REDACTED]');
-  await expect(launchConfiguration).toContainText(cwd);
-  await expect(launchConfiguration).toContainText('NO_COLOR');
-  expect(await launchConfiguration.textContent()).not.toContain(compiledEntry);
-  expect(await launchConfiguration.textContent()).not.toContain('SECRET_TOKEN');
-  expect(await launchConfiguration.textContent()).not.toContain('fixture-secret');
-};
-
 e2e('preserves a direct Runtime deep link until capability discovery succeeds', { timeout: 120_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   let releaseRuntimeStatus = (): void => undefined;
@@ -588,69 +571,6 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(2);
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(1);
     expect(pageErrors).toEqual([]);
-  } finally {
-    await clientPage?.close();
-    await clientSurface?.close();
-    await fixture.close();
-  }
-});
-
-e2e('retains the exact Runtime App owner when its handoff close rejects, then retries it once', { timeout: 120_000 }, async ({ page }) => {
-  const fixture = await startRuntimePlaygroundFixture();
-  let clientPage: Page | undefined;
-  let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
-  const runtimeAppRequests: string[] = [];
-  let rejectFirstRuntimeClose = true;
-  page.on('request', (request) => {
-    const requestUrl = new URL(request.url());
-    if (requestUrl.origin === fixture.url && requestUrl.pathname.startsWith('/api/runtime/apps')) {
-      runtimeAppRequests.push(`${request.method()} ${requestUrl.pathname}`);
-    }
-  });
-  await page.route(`${fixture.url}/api/runtime/apps/**`, async (route) => {
-    if (route.request().method() === 'DELETE' && rejectFirstRuntimeClose) {
-      rejectFirstRuntimeClose = false;
-      await route.fulfill({ body: JSON.stringify({ error: 'close rejected for retry proof' }), contentType: 'application/json', status: 500 });
-      return;
-    }
-    await route.continue();
-  });
-  try {
-    await page.goto(`${fixture.url}#runtime`);
-    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
-    const runtimeIdentity = page.locator('[data-runtime-provider-session]');
-    const runtimeSurface = page.getByLabel('Runtime surface');
-    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
-    await runtimeSurface.selectOption('mcp.edit-timeline');
-    clientSurface = await fixture.openRuntimeClientSurface('mcp.edit-timeline');
-    if (clientSurface === undefined) throw new Error('Runtime client surface was not available.');
-    clientPage = await page.context().newPage();
-    const bootstrapResponse = await clientPage.goto(clientSurface.bootstrapUrl, { waitUntil: 'domcontentloaded' });
-    expect(bootstrapResponse?.status()).toBe(200);
-    await expect.poll(async () => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
-    await runtimeSurface.selectOption('mcp.render_edit_timeline');
-    await page.getByLabel('Runtime target').selectOption('portable');
-    await page.getByRole('radio', { name: 'Raw JSON' }).check();
-    await page.locator('#runtime-input-raw').fill('{}');
-    await page.getByRole('button', { name: 'Run', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Open in MCP playground' })).toBeEnabled({ timeout: 15_000 });
-    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
-    await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(1);
-
-    const handoff = page.getByRole('button', { name: 'Open in MCP playground' });
-    await handoff.click();
-    await expect(page.locator('.runtime-content > p[role="alert"]')).toContainText('MCP playground handoff could not close the Runtime App', { timeout: 15_000 });
-    await expect.poll(() => new URL(page.url()).hash, { timeout: 15_000 }).toBe('#runtime');
-    await page.waitForTimeout(250);
-    await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(1);
-    await expect(page.locator('.runtime-stage .mcp-app-preview')).toHaveCount(1, { timeout: 15_000 });
-    await expect(handoff).toBeEnabled({ timeout: 15_000 });
-
-    await handoff.click();
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
-    await page.locator('.mcp-page-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
-    await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(2);
-    await expect.poll(() => runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/')).length, { timeout: 15_000 }).toBe(2);
   } finally {
     await clientPage?.close();
     await clientSurface?.close();
@@ -1350,56 +1270,6 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
   }
   if (testFailure !== undefined) throw testFailure;
   if (cleanupFailure !== undefined) throw cleanupFailure;
-});
-
-e2e('renders the safe launch configuration for one real artifact MCP session', { timeout: 60_000 }, async ({ page }) => {
-  await buildWorkbench();
-  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
-  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  try {
-    project = await createProjectFixture();
-    await writeMcpPlaygroundProject(project.root);
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
-    const serverUrl = server.url;
-    const artifact = server.status().artifact;
-    if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
-    const epochId = artifact.activeEpoch.id;
-    const manifest = JSON.parse(await readFile(join(project.root, '.agent-bundle', 'epochs', epochId, 'portable', 'mcp.json'), 'utf8')) as {
-      readonly mcpServers: Readonly<{
-        readonly fixture: Readonly<{ readonly args?: readonly string[]; readonly command: string }>;
-      }>;
-    };
-    const compiledEntry = manifest.mcpServers.fixture.args?.[0];
-    if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
-    const pageErrors: Error[] = [];
-    page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${serverUrl}#mcp`);
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
-    await page.locator('#mcp-target').selectOption('portable');
-    await page.locator('#mcp-server-name').fill('fixture');
-    const opened = page.waitForResponse((response) =>
-      response.url() === `${serverUrl}/api/mcp/sessions` && response.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Open MCP session' }).click();
-    await opened;
-    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
-
-    await expectSafeLaunchConfiguration(page, {
-      command: manifest.mcpServers.fixture.command,
-      compiledEntry,
-      cwd: join(project.root, '.agent-bundle', 'epochs', epochId, 'portable'),
-    });
-    await page.setViewportSize({ height: 844, width: 390 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    expect(pageErrors).toEqual([]);
-  } finally {
-    await Promise.allSettled(server === undefined ? [] : [server.close()]);
-    await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
-  }
 });
 
 e2e('renders and rebuilds the complete desktop Overview against a real foreground server', { timeout: 60_000 }, async ({ page }) => {

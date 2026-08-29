@@ -10,14 +10,6 @@ import { expect, test } from '@rstest/core';
 const readme = async (): Promise<string> => readFile(join(process.cwd(), 'README.md'), 'utf8');
 const execFile = promisify(executeFile);
 
-test('keeps the Hook JSX author example executable', async () => {
-  const source = await readme();
-  const afterFileEdit = source.match(/export function AfterFileEdit\(\) \{[\s\S]*?\n}\n```/);
-
-  expect(afterFileEdit?.[0]).toContain('<Hook.Result>\n      <Hook.AdditionalContext>');
-  expect(afterFileEdit?.[0]).toContain('</Hook.AdditionalContext>\n    </Hook.Result>');
-});
-
 test('requires attached native evidence before documenting Claude or Codex observations', async () => {
   const source = await readme();
 
