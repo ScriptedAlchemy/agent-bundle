@@ -62,7 +62,7 @@
     "@rsbuild/core": "2.2.1",
     "@rsbuild/plugin-react": "2.1.0",
     "@rslib/core": "0.23.2",
-    "@rslint/core": "0.8.1",
+    "@rslint/core": "0.8.2",
     "@rspack/core": "2.2.1",
     "@rstackjs/load-config": "0.1.2",
     "acorn": "8.18.0",
