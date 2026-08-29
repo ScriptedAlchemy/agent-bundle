@@ -1088,7 +1088,7 @@ export const McpPage = (props: McpPageProps) => {
     });
   });
   const { epochId, serverName, target } = binding;
-  const [timeoutMs, setTimeoutMs] = useState('5000');
+  const [timeoutMs, setTimeoutMs] = useState('');
   const [timeoutError, setTimeoutError] = useState<string>();
   const [activeTimeoutMs, setActiveTimeoutMs] = useState(controller.session?.timeoutMs);
   const [toolName, setToolName] = useState('');
@@ -1324,8 +1324,9 @@ export const McpPage = (props: McpPageProps) => {
           targetOptions,
         });
         if (openBinding === undefined) return;
-        const parsedTimeoutMs = Number(timeoutMs);
-        if (!Number.isFinite(parsedTimeoutMs) || parsedTimeoutMs <= 0) {
+        const trimmedTimeoutMs = timeoutMs.trim();
+        const parsedTimeoutMs = trimmedTimeoutMs.length === 0 ? undefined : Number(trimmedTimeoutMs);
+        if (parsedTimeoutMs !== undefined && (!Number.isFinite(parsedTimeoutMs) || parsedTimeoutMs <= 0)) {
           setTimeoutError('Session timeout must be a positive finite number.');
           return;
         }
@@ -1381,6 +1382,7 @@ export const McpPage = (props: McpPageProps) => {
               setTimeoutMs(event.currentTarget.value);
               setTimeoutError(undefined);
             }}
+            placeholder="Server default"
             type="number"
             value={timeoutMs}
           />

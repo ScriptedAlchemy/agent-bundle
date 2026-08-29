@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { ScriptPlaygroundService } from '../src/dev/playground/script-playground-service.ts';
+import { timeScale } from './support/time-scale.ts';
 
 const temporaryScript = async (source: string): Promise<Readonly<{ readonly close: () => Promise<void>; readonly path: string }>> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-playground-test-'));
@@ -178,7 +179,7 @@ it('preserves timeout and cancellation identity when workspace release fails', a
   } finally {
     await Promise.allSettled([emitted.close(), rm(workspace, { force: true, recursive: true })]);
   }
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('terminates a script after the combined stdout and stderr cap is exceeded', async () => {
   const emitted = await temporaryScript("process.stdout.write('x'.repeat(512));\nsetInterval(() => undefined, 1_000);\n");
@@ -198,7 +199,7 @@ it('terminates a script after the combined stdout and stderr cap is exceeded', a
       stdout: 'x'.repeat(128),
     });
   } finally { await emitted.close(); }
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('terminates a script that exceeds its server-owned timeout with partial evidence', async () => {
   const emitted = await temporaryScript("process.stdout.write('before timeout'); process.stderr.write('timeout stderr'); setInterval(() => undefined, 1_000);\n");
@@ -218,7 +219,7 @@ it('terminates a script that exceeds its server-owned timeout with partial evide
       stdout: 'before timeout',
     });
   } finally { await emitted.close(); }
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('does not settle cancellation until its final process-tree cleanup attempt completes', async () => {
   const emitted = await temporaryScript('setInterval(() => undefined, 1_000);\n');
@@ -267,7 +268,7 @@ it('does not settle cancellation until its final process-tree cleanup attempt co
     finalCleanup.resolve();
     await emitted.close();
   }
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('reports a stable cleanup failure when Windows taskkill cannot finish', async () => {
   const emitted = await temporaryScript('setInterval(() => undefined, 1_000);\n');
@@ -295,7 +296,7 @@ it('reports a stable cleanup failure when Windows taskkill cannot finish', async
     });
     expect(taskkillCalls).toBeGreaterThan(0);
   } finally { await emitted.close(); }
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('accepts an already-absent final Windows taskkill after successful TERM cleanup', async () => {
   const emitted = await temporaryScript('setInterval(() => undefined, 1_000);\n');
@@ -321,7 +322,7 @@ it('accepts an already-absent final Windows taskkill after successful TERM clean
     } as unknown as Parameters<typeof service.run>[0])).rejects.toMatchObject({ code: 'timeout' });
     expect(taskkillCalls).toBe(2);
   } finally { await emitted.close(); }
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('accepts forced Windows cleanup after a failed TERM taskkill', async () => {
   const emitted = await temporaryScript('setInterval(() => undefined, 1_000);\n');
@@ -346,7 +347,7 @@ it('accepts forced Windows cleanup after a failed TERM taskkill', async () => {
     } as unknown as Parameters<typeof service.run>[0])).rejects.toMatchObject({ code: 'timeout' });
     expect(taskkillCalls).toBe(2);
   } finally { await emitted.close(); }
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('bounds a stalled Windows taskkill attempt as a stable cleanup failure', async () => {
   const emitted = await temporaryScript('setInterval(() => undefined, 1_000);\n');
@@ -367,7 +368,7 @@ it('bounds a stalled Windows taskkill attempt as a stable cleanup failure', asyn
       message: 'Script process tree cleanup could not be confirmed.',
     });
   } finally { await emitted.close(); }
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('reports a stable interpreter-unavailable failure without exposing a command path', async () => {
   const service = new ScriptPlaygroundService({
@@ -428,7 +429,7 @@ it('cancels and drains the emitted script process group before its workspace is 
   } finally {
     await Promise.allSettled([emitted.close(), rm(root, { force: true, recursive: true }), rm(workspace, { force: true, recursive: true })]);
   }
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('keeps SIGKILL process-group cleanup alive after the direct child closes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-playground-stubborn-tree-'));
@@ -468,7 +469,7 @@ it('keeps SIGKILL process-group cleanup alive after the direct child closes', as
     }
     await Promise.allSettled([emitted.close(), rm(root, { force: true, recursive: true })]);
   }
-}, 10_000);
+}, 10_000 * timeScale);
 
 const assertStubbornDescendantIsGoneAtSettlement = async (
   trigger: 'output-limit' | 'timeout',
@@ -515,8 +516,8 @@ const assertStubbornDescendantIsGoneAtSettlement = async (
 
 it('drains a TERM-ignoring descendant before timeout settlement', async () => {
   await assertStubbornDescendantIsGoneAtSettlement('timeout');
-}, 10_000);
+}, 10_000 * timeScale);
 
 it('drains a TERM-ignoring descendant before output-limit settlement', async () => {
   await assertStubbornDescendantIsGoneAtSettlement('output-limit');
-}, 10_000);
+}, 10_000 * timeScale);

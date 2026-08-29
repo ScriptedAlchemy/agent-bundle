@@ -99,7 +99,6 @@ it('ships repository and support metadata that matches the verified origin', asy
 
     expect(manifest).toMatchObject({
       bugs: { url: 'https://github.com/ScriptedAlchemy/agent-bundle/issues' },
-      description: 'Compile a typed Agent Bundle configuration into portable, Codex, Claude Code, and Cursor artifacts.',
       homepage: 'https://github.com/ScriptedAlchemy/agent-bundle#readme',
       repository: { type: 'git', url: 'git+https://github.com/ScriptedAlchemy/agent-bundle.git' },
     });

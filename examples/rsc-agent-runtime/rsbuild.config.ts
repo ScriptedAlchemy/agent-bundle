@@ -218,6 +218,11 @@ export const createRscRuntimeRsbuildConfig = (
           manifest: 'runtime-assets.json',
           target: 'node',
         },
+        // Rsbuild 2.2 enabled sync chunk splitting for node targets by
+        // default. Worker-spawning modules here resolve sibling entries from
+        // their own preserved `import.meta.url`, so hoisting them into a
+        // shared chunk at the dist root breaks those relative paths.
+        splitChunks: false,
       },
       widget: {
         source: {

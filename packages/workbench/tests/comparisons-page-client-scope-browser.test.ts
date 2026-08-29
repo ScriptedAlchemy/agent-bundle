@@ -10,10 +10,11 @@ import { pluginReact } from '@rsbuild/plugin-react';
 
 import { closeServer } from './support/http.ts';
 import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 
 const workspaceRoot = process.cwd();
 const comparisonsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'comparisons', 'comparisons-page.tsx');
-const browserTimeout = 8_000;
+const browserTimeout = 8_000 * timeScale;
 
 const e2e = test.extend({
   playwright: {
@@ -107,7 +108,7 @@ const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Prom
   };
 };
 
-e2e('aborts and hides a stale comparison synchronously when its client is replaced', { timeout: 45_000 }, async ({ page }) => {
+e2e('aborts and hides a stale comparison synchronously when its client is replaced', { timeout: 45_000 * timeScale }, async ({ page }) => {
   const fixture = await mountedComparisonsFixture();
   const pageErrors: Error[] = [];
   page.on('pageerror', (error) => pageErrors.push(error));
@@ -160,7 +161,7 @@ e2e('aborts and hides a stale comparison synchronously when its client is replac
   }
 });
 
-e2e('aborts an active comparison when only its Eval client is replaced', { timeout: 45_000 }, async ({ page }) => {
+e2e('aborts an active comparison when only its Eval client is replaced', { timeout: 45_000 * timeScale }, async ({ page }) => {
   const fixture = await mountedComparisonsFixture();
   try {
     await page.goto(fixture.url);

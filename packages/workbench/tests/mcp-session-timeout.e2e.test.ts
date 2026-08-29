@@ -8,8 +8,9 @@ import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { buildWorkbench, e2e, workbenchAssets } from './support/workbench-e2e.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 
-const browserTimeout = 8_000;
+const browserTimeout = 8_000 * timeScale;
 
 const writeTimeoutProject = async (root: string): Promise<void> => {
   await Promise.all([

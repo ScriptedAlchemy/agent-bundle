@@ -1,6 +1,9 @@
 packages:
   - packages/*
+  - packages/workbench/src/inspector
   - examples/*
 allowBuilds:
   '@google/genai': false
   protobufjs: false
+minimumReleaseAgeExclude:
+  - '@rsbuild/core@2.2.1'

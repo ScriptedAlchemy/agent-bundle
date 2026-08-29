@@ -229,7 +229,7 @@ For ordinary MCP Apps, prefer Agent Bundle's standard non-RSC `mcp.servers.<serv
 
 ## Limits and opt-in boundary
 
-The demo kernel is append-only JSONL: it is appropriate for a small local example, not concurrent/distributed production storage. The RSC-facing packages are exact pins because their framework-facing surface is not treated as stable here: React `19.2.8`, `react-dom` `19.2.8`, `react-server-dom-rspack` `0.0.3`, Rsbuild `2.1.13`, and `rsbuild-plugin-rsc` `0.1.1`.
+The demo kernel is append-only JSONL: it is appropriate for a small local example, not concurrent/distributed production storage. The RSC-facing packages are exact pins because their framework-facing surface is not treated as stable here: React `19.2.8`, `react-dom` `19.2.8`, `react-server-dom-rspack` `0.1.0`, Rsbuild `2.2.1`, and `rsbuild-plugin-rsc` `0.1.1`.
 
 Existing Agent Bundle skills, static MCPs, evaluations, and normal hooks neither require nor activate this runtime. Nothing under `packages/agent-bundle` imports the example or React/RSC runtime packages.
 

@@ -1,6 +1,6 @@
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { expect, test } from '@rstest/core';
 import type { createRsbuild, StartDevServerResult } from '@rsbuild/core';
@@ -98,25 +98,48 @@ const startContext = (input: Readonly<{
 const copyProviderExample = async (): Promise<CopiedExample> =>
   copyExample(exampleRoot, { linkPackages: true, prefix: 'rsc-agent-runtime-provider-' });
 
-const changeDefinition = async (projectRoot: string, replacement: string): Promise<void> => {
-  const path = join(projectRoot, 'src', 'definition.ts');
+/**
+ * Replaces source atomically through a rename staged OUTSIDE the watched
+ * project. An in-place write is truncate-then-append, which a loaded watcher
+ * observes as two change events and compiles twice; a temp file created
+ * inside the watched directory is just as bad, because the watcher also sees
+ * the temp file's creation as a directory change. Either duplicate compile
+ * supersedes the generation that ordinal-pinned assertions expect to commit.
+ * The temp file lives in the project's parent (the copied workspace root,
+ * same filesystem, never watched) so the rename into place is the only event.
+ */
+const replaceSource = async (projectRoot: string, path: string, replace: (source: string) => string): Promise<void> => {
   const source = await readFile(path, 'utf8');
-  await writeFile(path, source.replace('Read the current shared runtime state.', replacement));
+  const temporary = join(projectRoot, '..', `.${basename(path)}.${process.pid}.tmp`);
+  await writeFile(temporary, replace(source));
+  await rename(temporary, path);
+};
+
+const changeDefinition = async (projectRoot: string, replacement: string): Promise<void> => {
+  await replaceSource(
+    projectRoot,
+    join(projectRoot, 'src', 'definition.ts'),
+    (source) => source.replace('Read the current shared runtime state.', replacement),
+  );
 };
 
 const changeWorkerImplementation = async (projectRoot: string, marker: string): Promise<void> => {
-  const path = join(projectRoot, 'src', 'rsc', 'worker.tsx');
-  const source = await readFile(path, 'utf8');
-  await writeFile(path, source.replace(
-    /RSC worker received an invalid event(?: [^']*)?/u,
-    `RSC worker received an invalid event ${marker}`,
-  ));
+  await replaceSource(
+    projectRoot,
+    join(projectRoot, 'src', 'rsc', 'worker.tsx'),
+    (source) => source.replace(
+      /RSC worker received an invalid event(?: [^']*)?/u,
+      `RSC worker received an invalid event ${marker}`,
+    ),
+  );
 };
 
 const introduceWorkerSyntaxError = async (projectRoot: string): Promise<void> => {
-  const path = join(projectRoot, 'src', 'rsc', 'worker.tsx');
-  const source = await readFile(path, 'utf8');
-  await writeFile(path, `${source}\nconst = ;\n`);
+  await replaceSource(
+    projectRoot,
+    join(projectRoot, 'src', 'rsc', 'worker.tsx'),
+    (source) => `${source}\nconst = ;\n`,
+  );
 };
 
 test('captures the App compiler HMR credential only through the public Rsbuild environment hook', async () => {
@@ -1249,13 +1272,23 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
       allow.resolve();
       await reconciled;
 
-      expect(session.mcpRegistry.snapshot()).toMatchObject({ runtimeGenerationId: 'generation-2' });
+      // The committed generation is asserted relative to the first one, not by
+      // ordinal: multi-compiler watch delivery can skew across the rsc and
+      // widget children under load, so one source change may burn more than
+      // one generation ordinal before the session converges. The invariant an
+      // equivalent prepared revision guarantees is that the in-flight compile
+      // still commits - the session leaves the first generation - rather than
+      // being superseded back to it the way a non-equivalent revision would.
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration);
+      const committedGeneration = session.status().activeVector?.runtimeGenerationId;
+      expect(committedGeneration).toEqual(expect.any(String));
+      expect(committedGeneration).not.toBe(firstGeneration);
+      expect(session.mcpRegistry.snapshot()).toMatchObject({ runtimeGenerationId: committedGeneration });
       expect(session.status()).toMatchObject({
-        activeVector: { runtimeGenerationId: 'generation-2' },
+        activeVector: { runtimeGenerationId: committedGeneration },
         diagnostics: [],
         state: 'active',
       });
-      expect(session.mcpRegistry.snapshot()!.runtimeGenerationId).not.toBe(firstGeneration);
     } finally {
       await session.close();
     }

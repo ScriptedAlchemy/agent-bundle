@@ -14,6 +14,7 @@ import {
   validateOutageLedger,
   type ConsoleErrorRecord,
 } from './support/packed-outage-ledger.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import {
   availablePort,
   awaitReady,
@@ -33,8 +34,8 @@ import {
 import { workbenchUrl } from './support/workbench-e2e.ts';
 
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
-const browserTimeout = 12_000;
-const packedServerStartupBudget = 45_000;
+const browserTimeout = 12_000 * timeScale;
+const packedServerStartupBudget = 45_000 * timeScale;
 const productTemporaryRootPrefixes = [
   'agent-bundle-hook-playground-',
   'agent-bundle-mcp-',
@@ -68,7 +69,7 @@ const isAppRoute = (url: URL): boolean =>
   url.pathname.startsWith('/api/mcp/apps/') || /^\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(url.pathname);
 
 
-e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }, async ({ page }) => {
+e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 * timeScale }, async ({ page }) => {
   await buildPackage();
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-release-'));
   const forbiddenStagedPackage = join(consumer, 'staged-package');

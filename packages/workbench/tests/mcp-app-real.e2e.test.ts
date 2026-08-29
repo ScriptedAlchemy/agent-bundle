@@ -11,11 +11,12 @@ import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { workbenchUrl } from './support/workbench-e2e.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
-const browserTimeout = 8_000;
+const browserTimeout = 8_000 * timeScale;
 const execFile = promisify(executeFile);
 
 const e2e = test.extend({
@@ -208,7 +209,7 @@ const requestBody = (body: string | null): unknown => {
   }
 };
 
-e2e('runs a generated SDK-v2 App through the real foreground session and separate-origin sandbox', { timeout: 90_000 }, async ({ page }) => {
+e2e('runs a generated SDK-v2 App through the real foreground session and separate-origin sandbox', { timeout: 90_000 * timeScale }, async ({ page }) => {
   let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   let testFailure: unknown;
@@ -555,10 +556,10 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
   });
   try {
     await page.goto(workbenchUrl(fixture.url, 'runtime'));
-    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 * timeScale });
     const runtimeIdentity = page.locator('[data-runtime-provider-session]');
     const runtimeSurface = page.getByLabel('Runtime surface');
-    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
+    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 * timeScale });
     await runtimeSurface.selectOption('mcp.edit-timeline');
     clientSurface = await fixture.openRuntimeClientSurface('mcp.edit-timeline');
     if (clientSurface === undefined) throw new Error('Runtime client surface was not available.');
@@ -610,7 +611,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await page.getByRole('button', { name: 'Run', exact: true }).click();
     const [createdRequest, createdResponse] = await Promise.all([createRequest, createResponse]);
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
-    await expect(history).toHaveCount(1, { timeout: 15_000 });
+    await expect(history).toHaveCount(1, { timeout: 15_000 * timeScale });
     const runId = await history.first().getAttribute('data-runtime-run-id');
     const expectedGenerationId = await runtimeIdentity.getAttribute('data-runtime-generation');
     if (runId === null || expectedGenerationId === null) throw new Error('Expected selected Runtime run identity.');
@@ -646,10 +647,10 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     });
 
     const outerFrame = page.locator('.runtime-stage .mcp-app-preview iframe');
-    await expect(outerFrame).toBeVisible({ timeout: 15_000 });
+    await expect(outerFrame).toBeVisible({ timeout: 15_000 * timeScale });
     await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
     await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
-    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 * timeScale }).toBe('1');
     expect(runtimePreviewSockets).toEqual([`${created.preview.clientSurface.origin.replace('http:', 'ws:')}/rsbuild-hmr`]);
     const runtimeAppFrame = async () => {
       for (const frame of page.frames()) {
@@ -657,7 +658,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       }
       return undefined;
     };
-    await expect.poll(runtimeAppFrame, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(runtimeAppFrame, { timeout: 15_000 * timeScale }).toBeDefined();
     let appFrame = await runtimeAppFrame();
     if (appFrame === undefined) throw new Error('Runtime App frame was unavailable.');
     let controllerFrame = appFrame.parentFrame();
@@ -829,7 +830,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       await expect.poll(async () => currentController.evaluate(() => {
         const nested = [...document.querySelectorAll('iframe')];
         return Object.freeze({ nestedCount: nested.length, nestedSandbox: nested[0]?.getAttribute('sandbox') ?? undefined });
-      }), { timeout: 15_000 }).toEqual({ nestedCount: 1, nestedSandbox: 'allow-scripts' });
+      }), { timeout: 15_000 * timeScale }).toEqual({ nestedCount: 1, nestedSandbox: 'allow-scripts' });
       expect(await currentFrame.evaluate(() => Object.freeze({
         origin: window.origin,
         parentDom: (() => {
@@ -882,7 +883,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
         .sort((left, right) => left.index - right.index)
         .map(({ name }) => name);
     };
-    await expect.poll(protocolOrder, { timeout: 15_000 }).toEqual([
+    await expect.poll(protocolOrder, { timeout: 15_000 * timeScale }).toEqual([
       'ui/initialize request',
       'ui/initialize result',
       'ui/notifications/initialized',
@@ -914,14 +915,14 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(runtimePreviewHmrRoutes).toHaveLength(1);
     const initialInitializeCount = initializeRequests().length;
     await runtimePreviewHmrRoutes[0]!.close();
-    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('0');
-    await expect.poll(() => runtimePreviewHmrRoutes.length, { timeout: 15_000 }).toBe(2);
-    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 * timeScale }).toBe('0');
+    await expect.poll(() => runtimePreviewHmrRoutes.length, { timeout: 15_000 * timeScale }).toBe(2);
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 * timeScale }).toBe('1');
     runtimePreviewHmrRoutes[1]!.send(JSON.stringify({ type: 'full-reload' }));
-    await expect.poll(() => initializeRequests().length, { timeout: 15_000 }).toBe(initialInitializeCount + 1);
+    await expect.poll(() => initializeRequests().length, { timeout: 15_000 * timeScale }).toBe(initialInitializeCount + 1);
     await expect(outerFrame).toHaveCount(1);
-    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps').length, { timeout: 15_000 }).toBe(1);
-    await expect.poll(runtimeAppFrame, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps').length, { timeout: 15_000 * timeScale }).toBe(1);
+    await expect.poll(runtimeAppFrame, { timeout: 15_000 * timeScale }).toBeDefined();
     appFrame = await runtimeAppFrame();
     if (appFrame === undefined) throw new Error('Runtime App frame did not reinitialize after HMR recovery.');
 
@@ -971,19 +972,19 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       scope: 'action',
       summary: 'Call MCP App tool',
     });
-    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 * timeScale });
     const runtimeConsentDialog = page.getByRole('dialog', { name: 'Runtime App consent' });
     const denyRuntimeConsent = runtimeConsentDialog.getByRole('button', { name: 'Deny' });
     const allowRuntimeConsent = runtimeConsentDialog.getByRole('button', { name: 'Allow once' });
     await expect(runtimeConsentDialog).toHaveAttribute('aria-modal', 'true');
     await expect(page.locator('.workbench-shell')).toHaveAttribute('inert', '');
-    await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 });
+    await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 * timeScale });
     await page.keyboard.press('Tab');
-    await expect(allowRuntimeConsent).toBeFocused({ timeout: 15_000 });
+    await expect(allowRuntimeConsent).toBeFocused({ timeout: 15_000 * timeScale });
     await page.keyboard.press('Tab');
-    await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 });
+    await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 * timeScale });
     await page.keyboard.press('Shift+Tab');
-    await expect(allowRuntimeConsent).toBeFocused({ timeout: 15_000 });
+    await expect(allowRuntimeConsent).toBeFocused({ timeout: 15_000 * timeScale });
     await expect.poll(() => consentResponses('action')).toHaveLength(1);
     const consentCreated = consentResponses('action')[0];
     const challenge = (consentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
@@ -1005,10 +1006,10 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
 
     await allowRuntimeConsent.click();
     const decisionPath = `${consentPath}/${encodeURIComponent(challenge.id)}`;
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === decisionPath), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === decisionPath), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const consentDecision = runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === decisionPath);
     expect(consentDecision?.body).toEqual({ decision: 'allow-once' });
-    await expect.poll(() => runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === decisionPath), { timeout: 15_000 }).toBeDefined();
+    await expect.poll(() => runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === decisionPath), { timeout: 15_000 * timeScale }).toBeDefined();
     const consentDecided = runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === decisionPath);
     const grant = (consentDecided?.response as Readonly<{ readonly grant?: Readonly<{ readonly authorizationId?: unknown }> }> | undefined)?.grant;
     if (typeof grant?.authorizationId !== 'string') throw new Error('Runtime App consent decision response omitted its authorization identity.');
@@ -1030,7 +1031,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const operationResponses = (kind: string): readonly RuntimeAppRouteResponse[] => runtimeAppResponses.filter((entry) =>
       entry.method === 'POST' && entry.path === operationPath && entry.body !== null && typeof entry.body === 'object' &&
       (entry.body as Readonly<{ readonly kind?: unknown }>).kind === kind);
-    await expect.poll(() => operationRequests('tools/call'), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => operationRequests('tools/call'), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const operation = operationRequests('tools/call')[0];
     expect(operation?.body).toEqual({
       arguments: { limit: 10 },
@@ -1052,7 +1053,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       vector: created.preview.binding.runVector,
     });
     const implementationEvidence = page.getByLabel('Executed by current implementation');
-    await expect(implementationEvidence).toBeVisible({ timeout: 15_000 });
+    await expect(implementationEvidence).toBeVisible({ timeout: 15_000 * timeScale });
     const operationId = (operationResult as Readonly<{ readonly operationId?: unknown }>).operationId;
     if (typeof operationId !== 'string') throw new Error('Runtime App operation result omitted its public operation identity.');
     expect(await implementationEvidence.locator('dd').allTextContents()).toEqual([
@@ -1074,7 +1075,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       method: 'tools/call',
       params: { _meta: { progressToken: 1 }, arguments: { limit: 10 }, name: 'render_edit_timeline' },
     });
-    await expect.poll(() => messageFor(controllerOrigin, fixture.url, (message) => message.id === 1 && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    await expect.poll(() => messageFor(controllerOrigin, fixture.url, (message) => message.id === 1 && Object.hasOwn(message, 'result')), { timeout: 15_000 * timeScale }).toBeDefined();
     const refreshResult = messageFor(controllerOrigin, fixture.url, (message) => message.id === 1 && Object.hasOwn(message, 'result'));
     expect(refreshResult?.message).toEqual({ jsonrpc: '2.0', id: 1, result: (operationResult as Readonly<{ readonly value: unknown }>).value });
     await expect(appFrame.getByText('State version 0')).toBeVisible();
@@ -1087,7 +1088,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       new URL(entry.href).origin === fixture.url && entry.senderOrigin === controllerOrigin && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'tools/call');
     await appFrame.getByRole('button', { name: 'Refresh' }).click();
-    await expect.poll(() => consentRequests('action'), { timeout: 15_000 }).toHaveLength(2);
+    await expect.poll(() => consentRequests('action'), { timeout: 15_000 * timeScale }).toHaveLength(2);
     const deniedConsentCreate = consentRequests('action')[1];
     expect(deniedConsentCreate?.body).toEqual({
       actionFingerprint: 'runtime-app:call-tool:v1',
@@ -1112,26 +1113,26 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
         },
       },
     });
-    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
-    await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 });
+    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 * timeScale });
+    await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 * timeScale });
     await page.keyboard.press('Escape');
     const deniedDecisionPath = `${consentPath}/${encodeURIComponent(deniedChallenge.id)}`;
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath), { timeout: 15_000 * timeScale }).toHaveLength(1);
     expect(runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath)?.body).toEqual({ decision: 'deny' });
-    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const deniedDecision = runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath)?.response;
     expect(deniedDecision).toMatchObject({ documentPolicy: expect.any(Object) });
     expect(deniedDecision).not.toHaveProperty('grant');
-    await expect(runtimeConsentDialog).toBeHidden({ timeout: 15_000 });
+    await expect(runtimeConsentDialog).toBeHidden({ timeout: 15_000 * timeScale });
     await expect(page.locator('.workbench-shell')).not.toHaveAttribute('inert', '');
-    await expect(outerFrame).toBeFocused({ timeout: 15_000 });
-    await expect.poll(toolCallRequests, { timeout: 15_000 }).toHaveLength(2);
+    await expect(outerFrame).toBeFocused({ timeout: 15_000 * timeScale });
+    await expect.poll(toolCallRequests, { timeout: 15_000 * timeScale }).toHaveLength(2);
     const deniedToolCall = toolCallRequests()[1];
     const deniedToolCallId = deniedToolCall?.message !== null && typeof deniedToolCall?.message === 'object'
       ? (deniedToolCall.message as Readonly<Record<string, unknown>>).id
       : undefined;
     if (typeof deniedToolCallId !== 'string' && typeof deniedToolCallId !== 'number') throw new Error('Denied Runtime App tool request omitted its JSON-RPC id.');
-    await expect.poll(() => messageFor(controllerOrigin, fixture.url, (message) => message.id === deniedToolCallId && Object.hasOwn(message, 'error')), { timeout: 15_000 }).toBeDefined();
+    await expect.poll(() => messageFor(controllerOrigin, fixture.url, (message) => message.id === deniedToolCallId && Object.hasOwn(message, 'error')), { timeout: 15_000 * timeScale }).toBeDefined();
     expect(messageFor(controllerOrigin, fixture.url, (message) => message.id === deniedToolCallId && Object.hasOwn(message, 'error'))?.message).toMatchObject({
       error: { code: expect.any(Number), message: expect.any(String) },
       id: deniedToolCallId,
@@ -1172,10 +1173,10 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await appFrame.evaluate(({ id, uri }) => {
       window.parent.postMessage({ id, jsonrpc: '2.0', method: 'resources/read', params: { uri } }, '*');
     }, { id: resourceRequestId, uri: resourceUri });
-    await expect.poll(() => operationRequests('resources/read'), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => operationRequests('resources/read'), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const resourceOperation = operationRequests('resources/read')[0];
     expect(resourceOperation?.body).toEqual({ kind: 'resources/read', uri: resourceUri });
-    await expect.poll(() => operationResponses('resources/read'), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => operationResponses('resources/read'), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const resourceOperationResult = (operationResponses('resources/read')[0]?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result;
     expect(resourceOperationResult).toMatchObject({
       operationId: expect.any(String),
@@ -1206,7 +1207,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       method: 'resources/read',
       params: { uri: resourceUri },
     });
-    await expect.poll(() => messageFor(controllerOrigin, fixture.url, (message) => message.id === resourceRequestId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    await expect.poll(() => messageFor(controllerOrigin, fixture.url, (message) => message.id === resourceRequestId && Object.hasOwn(message, 'result')), { timeout: 15_000 * timeScale }).toBeDefined();
     const resourceResponse = messageFor(controllerOrigin, fixture.url, (message) => message.id === resourceRequestId && Object.hasOwn(message, 'result'));
     expect(resourceResponse?.message).toEqual({
       id: resourceRequestId,
@@ -1220,11 +1221,11 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const sourceFrameHref = controllerFrame.url();
     const sourceBindingId = created.preview.binding.id;
     await page.getByRole('button', { name: 'Open in MCP playground' }).click({ timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: 15_000 * timeScale });
     const teardownRequestForSource = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
       entry.href === sourceFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
-    await expect.poll(teardownRequestForSource, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(teardownRequestForSource, { timeout: 15_000 * timeScale }).toBeDefined();
     const teardownRequest = teardownRequestForSource();
     const teardownId = teardownRequest?.message !== null && typeof teardownRequest?.message === 'object'
       ? (teardownRequest.message as Readonly<Record<string, unknown>>).id
@@ -1232,29 +1233,29 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (typeof teardownId !== 'string' && typeof teardownId !== 'number') throw new Error('Runtime App teardown request omitted its JSON-RPC id.');
     const teardownAcknowledgementForSource = () => messageFor(fixture.url, controllerOrigin, (message) =>
       message.id === teardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
-    await expect.poll(teardownAcknowledgementForSource, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(teardownAcknowledgementForSource, { timeout: 15_000 * timeScale }).toBeDefined();
     const teardownAcknowledgement = teardownAcknowledgementForSource();
     expect(teardownAcknowledgement?.message).toEqual({ id: teardownId, jsonrpc: '2.0', result: {} });
 
     const sourceDeletePath = `/api/runtime/apps/${encodeURIComponent(sourceBindingId)}`;
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === sourceDeletePath), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === sourceDeletePath), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const sourceDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === sourceDeletePath);
     const lifecycleIndex = (kind: RuntimeAppLifecycleEvent['kind'], value: RuntimeAppMessage | RuntimeAppRouteRequest): number =>
       runtimeAppLifecycleEvents.findIndex((entry) => entry.kind === kind && entry.value === value);
     expect(lifecycleIndex('message', teardownRequest!)).toBeGreaterThan(-1);
     expect(lifecycleIndex('message', teardownAcknowledgement!)).toBeGreaterThan(lifecycleIndex('message', teardownRequest!));
     expect(lifecycleIndex('request', sourceDelete!)).toBeGreaterThan(lifecycleIndex('message', teardownAcknowledgement!));
-    await expect(outerFrame).toHaveCount(0, { timeout: 15_000 });
+    await expect(outerFrame).toHaveCount(0, { timeout: 15_000 * timeScale });
 
     const runtimeCreates = (): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps');
-    await expect.poll(runtimeCreates, { timeout: 15_000 }).toHaveLength(2);
+    await expect.poll(runtimeCreates, { timeout: 15_000 * timeScale }).toHaveLength(2);
     const destinationCreate = runtimeCreates()[1];
     expect(destinationCreate?.body).toEqual({ expectedGenerationId, profileId: 'portable', runId });
     const sourceDeleteIndex = runtimeAppRequests.indexOf(sourceDelete!);
     const destinationCreateIndex = runtimeAppRequests.indexOf(destinationCreate!);
     expect(sourceDeleteIndex).toBeGreaterThan(-1);
     expect(destinationCreateIndex).toBeGreaterThan(sourceDeleteIndex);
-    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps'), { timeout: 15_000 }).toHaveLength(2);
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps'), { timeout: 15_000 * timeScale }).toHaveLength(2);
     const destinationResponse = runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps')[1]?.response as Readonly<{ readonly preview?: Readonly<{
       readonly binding?: Readonly<{ readonly id?: unknown; readonly sessionId?: unknown; readonly sessionRevision?: unknown }>;
       readonly clientSurface?: Readonly<{ readonly origin?: unknown }>;
@@ -1270,14 +1271,14 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       sessionRevision: created.preview.binding.sessionRevision,
     });
     expect(destinationBinding.id).not.toBe(sourceBindingId);
-    await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(1, { timeout: 15_000 });
+    await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(1, { timeout: 15_000 * timeScale });
     await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(0);
     await expect.poll(() => appMessages.filter((entry) =>
       new URL(entry.href).origin === fixture.url && entry.senderOrigin === destinationOrigin && entry.message !== null && typeof entry.message === 'object' &&
-      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 }).toBe(controllerOrigin === destinationOrigin ? 2 : 1);
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 * timeScale }).toBe(controllerOrigin === destinationOrigin ? 2 : 1);
 
     await page.setViewportSize({ height: 900, width: 390 });
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 * timeScale }).toBe(true);
 
     const destinationAppFrame = async () => {
       for (const frame of page.frames()) {
@@ -1286,7 +1287,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       }
       return undefined;
     };
-    await expect.poll(destinationAppFrame, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(destinationAppFrame, { timeout: 15_000 * timeScale }).toBeDefined();
     const destinationFrame = await destinationAppFrame();
     if (destinationFrame === undefined) throw new Error('Destination Runtime App frame was unavailable.');
     const destinationController = destinationFrame.parentFrame();
@@ -1298,7 +1299,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const teardownRequestForDestination = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
       entry.href === destinationFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
-    await expect.poll(teardownRequestForDestination, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(teardownRequestForDestination, { timeout: 15_000 * timeScale }).toBeDefined();
     const destinationTeardown = teardownRequestForDestination();
     const destinationTeardownId = destinationTeardown?.message !== null && typeof destinationTeardown?.message === 'object'
       ? (destinationTeardown.message as Readonly<Record<string, unknown>>).id
@@ -1306,25 +1307,25 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (typeof destinationTeardownId !== 'string' && typeof destinationTeardownId !== 'number') throw new Error('Destination Runtime App teardown request omitted its JSON-RPC id.');
     const destinationAcknowledgement = () => messageFor(fixture.url, destinationOrigin, (message) =>
       message.id === destinationTeardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
-    await expect.poll(destinationAcknowledgement, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(destinationAcknowledgement, { timeout: 15_000 * timeScale }).toBeDefined();
     expect(destinationAcknowledgement()?.message).toEqual({ id: destinationTeardownId, jsonrpc: '2.0', result: {} });
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === destinationDeletePath), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === destinationDeletePath), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const destinationDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === destinationDeletePath);
-    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: 15_000 * timeScale });
     await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
     expect(runtimeCreates()).toHaveLength(2);
     await page.evaluate(() => { window.location.hash = '#runtime'; });
-    await expect.poll(runtimeCreates, { timeout: 15_000 }).toHaveLength(3);
+    await expect.poll(runtimeCreates, { timeout: 15_000 * timeScale }).toHaveLength(3);
     const thirdCreate = runtimeCreates()[2];
     expect(thirdCreate?.body).toEqual({ expectedGenerationId, profileId: 'portable', runId });
     expect(lifecycleIndex('message', destinationTeardown!)).toBeGreaterThan(-1);
     expect(lifecycleIndex('message', destinationAcknowledgement()!)).toBeGreaterThan(lifecycleIndex('message', destinationTeardown!));
     expect(lifecycleIndex('request', destinationDelete!)).toBeGreaterThan(lifecycleIndex('message', destinationAcknowledgement()!));
     expect(lifecycleIndex('request', thirdCreate!)).toBeGreaterThan(lifecycleIndex('request', destinationDelete!));
-    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 * timeScale });
     await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
-    await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(1, { timeout: 15_000 });
-    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps'), { timeout: 15_000 }).toHaveLength(3);
+    await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(1, { timeout: 15_000 * timeScale });
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps'), { timeout: 15_000 * timeScale }).toHaveLength(3);
     const thirdResponse = runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps')[2]?.response as Readonly<{ readonly preview?: Readonly<{
       readonly binding?: Readonly<{ readonly id?: unknown; readonly sessionId?: unknown; readonly sessionRevision?: unknown }>;
       readonly clientSurface?: Readonly<{ readonly origin?: unknown }>;
@@ -1345,7 +1346,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       }
       return undefined;
     };
-    await expect.poll(thirdAppFrame, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(thirdAppFrame, { timeout: 15_000 * timeScale }).toBeDefined();
     const thirdFrame = await thirdAppFrame();
     if (thirdFrame === undefined) throw new Error('Third Runtime App frame was unavailable.');
     const thirdController = thirdFrame.parentFrame();
@@ -1356,7 +1357,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const teardownRequestForThird = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
       entry.href === thirdFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
-    await expect.poll(teardownRequestForThird, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(teardownRequestForThird, { timeout: 15_000 * timeScale }).toBeDefined();
     const thirdTeardown = teardownRequestForThird();
     const thirdTeardownId = thirdTeardown?.message !== null && typeof thirdTeardown?.message === 'object'
       ? (thirdTeardown.message as Readonly<Record<string, unknown>>).id
@@ -1364,18 +1365,18 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (typeof thirdTeardownId !== 'string' && typeof thirdTeardownId !== 'number') throw new Error('Third Runtime App teardown request omitted its JSON-RPC id.');
     const thirdAcknowledgement = () => messageFor(fixture.url, thirdOrigin, (message) =>
       message.id === thirdTeardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
-    await expect.poll(thirdAcknowledgement, { timeout: 15_000 }).toBeDefined();
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === thirdDeletePath), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(thirdAcknowledgement, { timeout: 15_000 * timeScale }).toBeDefined();
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === thirdDeletePath), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const thirdDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === thirdDeletePath);
     expect(lifecycleIndex('message', thirdAcknowledgement()!)).toBeGreaterThan(lifecycleIndex('message', thirdTeardown!));
     expect(lifecycleIndex('request', thirdDelete!)).toBeGreaterThan(lifecycleIndex('message', thirdAcknowledgement()!));
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: 15_000 * timeScale });
     await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(0);
     await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
     await expect(page.getByLabel('Runtime-bound MCP session')).toContainText(`${created.preview.binding.sessionId} · revision ${created.preview.binding.sessionRevision}`);
     await expect(page.getByRole('region', { name: 'Invocation history' })).toHaveText(destinationHistory ?? '');
     expect(runtimeCreates()).toHaveLength(3);
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 * timeScale }).toBe(true);
 
     expect(artifactMcpSessionRequests).toEqual([]);
     expect(runtimeMcpSessionRequests).toEqual([]);
@@ -1432,11 +1433,11 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
   });
   try {
     await page.goto(workbenchUrl(fixture.url, 'runtime'));
-    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 * timeScale });
     const runtimeIdentity = page.locator('[data-runtime-provider-session]');
     const runtimeSurface = page.getByLabel('Runtime surface');
     const runtimeProfile = page.getByLabel('Runtime profile');
-    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
+    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 * timeScale });
     await runtimeSurface.selectOption('mcp.render_edit_timeline');
     await page.getByLabel('Runtime target').selectOption('portable');
     await expect(runtimeProfile).toHaveValue('portable');
@@ -1446,7 +1447,7 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
     await page.locator('#runtime-input-raw').fill('{}');
     await page.getByRole('button', { name: 'Run', exact: true }).click();
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
-    await expect(history).toHaveCount(1, { timeout: 15_000 });
+    await expect(history).toHaveCount(1, { timeout: 15_000 * timeScale });
     const runId = await history.first().getAttribute('data-runtime-run-id');
     const expectedGenerationId = await runtimeIdentity.getAttribute('data-runtime-generation');
     if (runId === null || expectedGenerationId === null) throw new Error('Runtime profile matrix did not expose the selected run authority.');
@@ -1496,23 +1497,23 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
         const teardown = () => appMessages.find((entry) =>
           entry.href === retiring.controllerHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
           (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
-        await expect.poll(teardown, { timeout: 15_000 }).toBeDefined();
+        await expect.poll(teardown, { timeout: 15_000 * timeScale }).toBeDefined();
         const teardownId = teardown()?.message !== null && typeof teardown()?.message === 'object'
           ? (teardown()!.message as Readonly<Record<string, unknown>>).id
           : undefined;
         if (typeof teardownId !== 'string' && typeof teardownId !== 'number') throw new Error('Retiring Runtime App teardown omitted its JSON-RPC id.');
         await expect.poll(() => messageFor(fixture.url, retiring.origin, (message) =>
-          message.id === teardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error'))), { timeout: 15_000 }).toBeDefined();
+          message.id === teardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error'))), { timeout: 15_000 * timeScale }).toBeDefined();
         const deletePath = `/api/runtime/apps/${encodeURIComponent(retiring.bindingId)}`;
-        await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === deletePath), { timeout: 15_000 }).toHaveLength(1);
-        await expect.poll(creates, { timeout: 15_000 }).toHaveLength(index + 1);
+        await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === deletePath), { timeout: 15_000 * timeScale }).toHaveLength(1);
+        await expect.poll(creates, { timeout: 15_000 * timeScale }).toHaveLength(index + 1);
         const replacement = creates()[index];
         const retired = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === deletePath);
         if (replacement === undefined || retired === undefined) throw new Error('Runtime profile replacement routes were not recorded.');
         expect(runtimeAppRequests.indexOf(retired)).toBeLessThan(runtimeAppRequests.indexOf(replacement));
       }
 
-      await expect.poll(createResponses, { timeout: 15_000 }).toHaveLength(index + 1);
+      await expect.poll(createResponses, { timeout: 15_000 * timeScale }).toHaveLength(index + 1);
       const create = creates()[index];
       expect(create?.body).toEqual({ expectedGenerationId, profileId: profile.id, runId });
       const snapshot = responseFor(index)?.preview;
@@ -1555,8 +1556,8 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
         expect(registeredText).not.toContain(hidden);
       }
 
-      await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(1, { timeout: 15_000 });
-      await expect.poll(() => runtimeFrameFor(origin), { timeout: 15_000 }).toBeDefined();
+      await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(1, { timeout: 15_000 * timeScale });
+      await expect.poll(() => runtimeFrameFor(origin), { timeout: 15_000 * timeScale }).toBeDefined();
       const appFrame = await runtimeFrameFor(origin);
       if (appFrame === undefined) throw new Error(`Runtime ${profile.id} profile App frame was unavailable.`);
       const controller = appFrame.parentFrame();
@@ -1592,12 +1593,12 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
       const resourceRequests = (): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) =>
         entry.method === 'POST' && entry.path === operationPath && entry.body !== null && typeof entry.body === 'object' &&
         (entry.body as Readonly<{ readonly kind?: unknown }>).kind === 'resources/read');
-      await expect.poll(resourceRequests, { timeout: 15_000 }).toHaveLength(1);
+      await expect.poll(resourceRequests, { timeout: 15_000 * timeScale }).toHaveLength(1);
       expect(resourceRequests()[0]?.body).toEqual({ kind: 'resources/read', uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' });
       const resourceResponses = (): readonly RuntimeAppRouteResponse[] => runtimeAppResponses.filter((entry) =>
         entry.method === 'POST' && entry.path === operationPath && entry.body !== null && typeof entry.body === 'object' &&
         (entry.body as Readonly<{ readonly kind?: unknown }>).kind === 'resources/read');
-      await expect.poll(resourceResponses, { timeout: 15_000 }).toHaveLength(1);
+      await expect.poll(resourceResponses, { timeout: 15_000 * timeScale }).toHaveLength(1);
       expect((resourceResponses()[0]?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result).toMatchObject({
         sessionId: binding.sessionId,
         sessionRevision: binding.sessionRevision,
@@ -1619,7 +1620,7 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
   }
 });
 
-e2e('renders a compiler-bundled App template through the canonical sandbox URL', { timeout: 90_000 }, async ({ page }) => {
+e2e('renders a compiler-bundled App template through the canonical sandbox URL', { timeout: 90_000 * timeScale }, async ({ page }) => {
   let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   let testFailure: unknown;
