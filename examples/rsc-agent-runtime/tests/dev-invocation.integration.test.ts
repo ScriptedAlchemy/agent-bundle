@@ -13,7 +13,7 @@ import { createElement, type ReactNode } from 'react';
 import { ProjectService } from '../../../packages/agent-bundle/src/dev/index.ts';
 import { createRscRuntimeRsbuildConfig } from '../rsbuild.config.js';
 import { createDevRuntimeProvider } from '../src/dev/provider.js';
-import { RsbuildRuntimeSession } from '../src/dev/rsbuild-runtime-session.js';
+import { defaultMaximumRunHistory, RsbuildRuntimeSession } from '../src/dev/rsbuild-runtime-session.js';
 import { serializeInspection } from '../src/dev/serialize-inspection.js';
 
 const readChildOutput = (stream: NodeJS.ReadableStream): Promise<Buffer> =>
@@ -1703,7 +1703,11 @@ process.stdout.end(JSON.stringify({
   }
 }, 30_000);
 
-test('drives the fifty-run eviction window through its happy, held-reader, failed-removal, and failed-release paths', async () => {
+test('drives the run-eviction window through its happy, held-reader, failed-removal, and failed-release paths', async () => {
+  // The retention window is injected small so the suite does not need fifty
+  // real invocations; production keeps the fifty-run default.
+  expect(defaultMaximumRunHistory).toBe(50);
+  const retentionWindow = 5;
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-eviction-'));
   const projectRoot = process.cwd();
   const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
@@ -1752,6 +1756,7 @@ test('drives the fifty-run eviction window through its happy, held-reader, faile
       readerEntered.resolve();
       await releaseReader.promise;
     },
+    maximumRunHistory: retentionWindow,
   });
 
   try {
@@ -1780,17 +1785,17 @@ test('drives the fifty-run eviction window through its happy, held-reader, faile
     await session.resetState({ expectedGenerationId: generationId, stateStoreId: 'playground' });
     expect(session.run(happyVictim.id)).toEqual(happyVictim);
 
-    for (let index = 0; index < 46; index += 1) await invokeSucceeded();
-    expect(session.runs(50)).toHaveLength(50);
+    for (let index = 0; index < retentionWindow - 4; index += 1) await invokeSucceeded();
+    expect(session.runs(retentionWindow)).toHaveLength(retentionWindow);
 
-    // Happy path: the fifty-first run evicts the oldest completed Flight.
+    // Happy path: the run beyond the window evicts the oldest completed Flight.
     await invokeSucceeded();
     expect(session.run(happyVictim.id)).toBeUndefined();
     await expect(session.readRunFlight(happyVictim.id)).resolves.toBeUndefined();
     await expect(session.readRunFlight('../flight.bin')).resolves.toBeUndefined();
-    expect(session.runs(50)).toHaveLength(50);
-    expect(session.runs(50)[0]!.id).not.toBe(happyVictim.id);
-    expect((await readdir(join(storageRoot, 'runs'))).filter((entry) => entry !== '.agent-bundle-runtime-owner')).toHaveLength(50);
+    expect(session.runs(retentionWindow)).toHaveLength(retentionWindow);
+    expect(session.runs(retentionWindow)[0]!.id).not.toBe(happyVictim.id);
+    expect((await readdir(join(storageRoot, 'runs'))).filter((entry) => entry !== '.agent-bundle-runtime-owner')).toHaveLength(retentionWindow);
 
     // Held reader: eviction reserves the terminal run before draining its admitted Flight reader.
     heldRunId = readerVictim.id;
