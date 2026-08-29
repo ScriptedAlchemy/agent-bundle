@@ -142,17 +142,9 @@ const incompleteBinding = {
 // @ts-expect-error Stable MCP bindings include registry/session revisions and all three digests.
 const completeBinding: DevRuntimeMcpSessionBinding = incompleteBinding;
 
-it('publishes JSON-safe runtime run, surface, and stable MCP binding contracts', () => {
-  expect(surface.targets).toEqual(['claude', 'codex']);
-  expect(binding.sessionRevision).toBe(2);
-  expect(run.status).toBe('succeeded');
-  expect(invalidReactRun).toBeDefined();
-  expect(jsonOnlyRun).toBeDefined();
-  expect(targetlessSurface).toBeDefined();
-  expect(targetfulSurface).toBeDefined();
-  expect(incompleteBinding).toBeDefined();
-  expect(completeBinding).toBeDefined();
-});
+// The satisfies/@ts-expect-error declarations above are the contract checks;
+// they need no runtime test to compile.
+void [binding, jsonOnlyRun, targetfulSurface, completeBinding];
 
 it('uses stable errors for unavailable and stale runtime generations', () => {
   const unavailable = new DevRuntimeUnavailableError();

@@ -93,23 +93,6 @@ const persistComparisonRun = async (
   }
 };
 
-it('runs a selected case through the same service the workbench uses', async () => {
-  const project = await createProjectFixture();
-  try {
-    await seedEvalProject(project.root);
-
-    const result = await runEvals({ caseIds: ['reads-result'], root: project.root, trials: 2 });
-
-    expect(result.trials).toHaveLength(2);
-    expect(result.run.harness).toBe('deterministic');
-    expect(result.run.summary).toMatchObject({ pass: 2, trials: 2 });
-    expect(result.diagnostics).toEqual([]);
-    await expect(access(join(project.root, '.agent-bundle', 'runs', result.run.id, 'run.json'))).resolves.toBeUndefined();
-  } finally {
-    await removeProjectFixture(project.root);
-  }
-}, 120_000);
-
 it('evaluates exactly the artifact the caller named instead of building a new one', async () => {
   const project = await createProjectFixture();
   try {

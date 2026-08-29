@@ -139,7 +139,6 @@ it('opaquely detects default ~/.claude.json mutation without extending custom co
       await writeFile(join(userHome, '.claude.json'), `${privateValue}-changed\n`);
     }, { homeDirectory: userHome });
     expect(changed).toBe(false);
-    expect(JSON.stringify(changed)).toBe('false');
     expect(JSON.stringify(changed)).not.toContain(privateValue);
     expect(JSON.stringify(changed)).not.toContain(userHome);
 

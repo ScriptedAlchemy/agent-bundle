@@ -235,9 +235,6 @@ Run the complete local delivery gate with `pnpm check && pnpm check:release`.
 `pnpm check:release` is release-only: its exact package-script components are
 `pnpm pack:dry-run`, `pnpm audit:release`, and `pnpm test:packed`, and it does not replace
 `pnpm check`.
-`pnpm test:spot-check` is the fast end-to-end confidence gate: it builds, validates, and runs
-one deterministic eval against the checked-in micro fixture through the real CLI, with no native
-host and no opt-in environment gate. Native Claude/Codex smokes stay intentionally opt-in and
-skipped in ordinary CI.
+Native Claude/Codex smokes stay intentionally opt-in and skipped in ordinary CI.
 Publication is deliberately not scripted here: the release owner must decide the npm package
 name/scope, license, and `publishConfig` before publishing.

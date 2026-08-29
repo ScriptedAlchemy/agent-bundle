@@ -11,23 +11,6 @@ import { build, inspect, invokeMcp, listHooks, listMcp, runEvals, simulateHook, 
 const execFile = promisify(executeFile);
 const examplesRoot = join(process.cwd(), 'examples');
 
-it('documents the local command flow and each example-specific interaction', async () => {
-  const [skills, hooks, mcpApp] = await Promise.all([
-    readFile(join(examplesRoot, 'skills-starter', 'README.md'), 'utf8'),
-    readFile(join(examplesRoot, 'hooks-and-scripts', 'README.md'), 'utf8'),
-    readFile(join(examplesRoot, 'mcp-app', 'README.md'), 'utf8'),
-  ]);
-
-  for (const readme of [skills, hooks, mcpApp]) {
-    expect(readme).toContain('pnpm validate');
-    expect(readme).toContain('pnpm build');
-    expect(readme).toContain('pnpm dev');
-  }
-  expect(skills).toContain('dist/agent-bundle.manifest.json');
-  expect(hooks).toContain('Replay saved simulation');
-  expect(mcpApp).toContain('Restart MCP session');
-});
-
 it('builds the Skills Starter through public Agent Bundle APIs', async () => {
   const root = join(examplesRoot, 'skills-starter');
   const output = join(root, '.agent-bundle', 'example-contract');

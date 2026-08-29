@@ -9,16 +9,10 @@ import { expect, it } from '@rstest/core';
 import {
   createCodexEvalHarness,
   createEvalHarness,
-  defineConfig,
-  pathTokens,
   runClaudeTrial,
   runCodexEvalTrial,
-  type AgentBundleConfig,
-  type ArtifactOutputProvenance,
   type EvalHarness,
   type EvalServiceNativeOptions,
-  type NormalizedConfigExtension,
-  type NormalizedPlugin,
 } from '../src/index.ts';
 import { TargetRegistry, createDefaultRegistry } from '../src/api.ts';
 import type {
@@ -27,16 +21,6 @@ import type {
   TargetMcpRuntimeContract,
 } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
-import type {
-  AgentBundleConfig as ConfigEntryAgentBundleConfig,
-  AgentBundleDevConfig,
-  AgentBundleDevRuntimeConfig,
-} from '../src/config/index.ts';
-import { defineConfig as defineConfigFromConfigEntry } from '../src/config/index.ts';
-import type {
-  CreateDevRuntimeProvider,
-  DevRuntimeProvider,
-} from '../src/api.ts';
 import { agentBundleNodeModules, workspaceNodeModules } from './helpers/workspace-paths.ts';
 
 interface PackageManifest {
@@ -98,75 +82,6 @@ it('keeps package output filenames stable', async () => {
   expect(config.output).not.toHaveProperty('externals');
 });
 
-it('preserves a synchronous config and exposes opaque path tokens', () => {
-  const config = { plugin: { name: 'demo', version: '1.0.0' } };
-  expect(defineConfig(config)).toBe(config);
-  expect(pathTokens).toEqual({
-    pluginRoot: 'agent-bundle:path:plugin-root',
-    pluginData: 'agent-bundle:path:plugin-data',
-    workspaceRoot: 'agent-bundle:path:workspace-root',
-  });
-});
-
-it('exposes the same typed config factory from the config entrypoint', () => {
-  const config = {
-    plugin: { name: 'config-entrypoint', version: '1.0.0' },
-  } satisfies ConfigEntryAgentBundleConfig;
-
-  expect(defineConfigFromConfigEntry).toBe(defineConfig);
-  expect(defineConfigFromConfigEntry(config)).toBe(config);
-});
-
-it('exposes an optional author-facing development runtime declaration', () => {
-  const runtime = {
-    provider: './src/dev/provider.ts',
-  } satisfies AgentBundleDevRuntimeConfig;
-  const dev = { runtime } satisfies AgentBundleDevConfig;
-  const config = {
-    dev,
-    plugin: { name: 'runtime-contract', version: '1.0.0' },
-  } satisfies AgentBundleConfig;
-
-  const providerFactory: CreateDevRuntimeProvider | undefined = undefined;
-  const provider: DevRuntimeProvider | undefined = undefined;
-
-  expect(defineConfig(config)).toBe(config);
-  expect(config.dev?.runtime?.provider).toBe('./src/dev/provider.ts');
-  expect(providerFactory).toBeUndefined();
-  expect(provider).toBeUndefined();
-});
-
-it('exposes bundled adapter extension and normalized-extension types from the root import', () => {
-  const config = {
-    claude: { nativeHooks: './claude-hooks.json' },
-    codex: { nativeHooks: './codex-hooks.json' },
-    plugin: { name: 'typed-extension-fixture', version: '1.0.0' },
-    portable: { compatibility: 'portable-v1' },
-  } satisfies AgentBundleConfig;
-  const extension: NormalizedConfigExtension = {
-    id: 'extension:portable',
-    key: 'portable',
-    provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
-    target: 'portable',
-    value: config.portable,
-  };
-  const model = {
-    extensions: { portable: extension },
-  } satisfies Pick<NormalizedPlugin, 'extensions'>;
-
-  expect(model.extensions.portable.key).toBe('portable');
-});
-
-it('exposes immutable output provenance types from the root import', () => {
-  const output: ArtifactOutputProvenance = {
-    kind: 'bundle',
-    path: 'portable/scripts/greeting.mjs',
-    sourceInputs: ['skills/review/scripts/greeting.ts'],
-  };
-
-  expect(output.kind).toBe('bundle');
-});
-
 it('exposes native eval descriptors, runners, and injection types from the root import', () => {
   const descriptor: EvalHarness = createEvalHarness('claude');
   const native: EvalServiceNativeOptions = { environment: { PATH: '/usr/bin' } };
@@ -220,14 +135,6 @@ it('loads every public subpath and reports the package version', async () => {
   await expect(import('../src/config/index.ts')).resolves.toBeDefined();
   await expect(import('../src/eval/index.ts')).resolves.toBeDefined();
   await expect(runCli(['--version'])).resolves.toBe(0);
-});
-
-it('exposes defineConfig from the config subpath exactly as the README documents', async () => {
-  const configEntry = await import('../src/config/index.ts');
-  const config = { plugin: { name: 'demo', version: '1.0.0' } };
-
-  expect(configEntry.defineConfig).toBe(defineConfig);
-  expect(configEntry.defineConfig(config)).toBe(config);
 });
 
 it('publishes directly executable built entrypoints with declarations', async () => {

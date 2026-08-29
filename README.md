@@ -308,11 +308,6 @@ pnpm check && pnpm check:release
 `pnpm check:release` is the release-only gate: it runs `pnpm pack:dry-run`,
 `pnpm audit:release`, and `pnpm test:packed`; it does not replace `pnpm check`.
 
-The micro-eval spot-check is the end-to-end CI confidence gate: `pnpm test:spot-check` builds,
-validates, and runs one deterministic eval against the checked-in `fixtures/integration/micro-eval`
-project through the real CLI. It also runs inside every default `pnpm test`, is never skip-gated,
-and needs no Claude or Codex installation.
-
 Native Claude/Codex host smokes are intentionally opt-in and stay skipped in CI. They run only on a
 machine with that CLI installed and signed in — via `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE=1` /
 `AGENT_BUNDLE_NATIVE_CODEX_SMOKE=1`, the packed variants `pnpm test:packed:native:claude` /

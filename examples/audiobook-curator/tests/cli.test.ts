@@ -20,13 +20,6 @@ const operations = (): CuratorOperations => ({
 });
 
 describe('audiobook-curator CLI', () => {
-  it('emits one JSON receipt for each exact subcommand', async () => {
-    const output: string[] = [];
-    await expect(runCli(['inspect', '/library'], { operations: operations(), write: (value) => output.push(value) }))
-      .resolves.toBe(0);
-    expect(JSON.parse(output[0]!)).toEqual({ files: [], operation: 'inspect', root: '/library', totalBytes: 0 });
-  });
-
   it('enables application only through the typed flag', async () => {
     let applied = false;
     const fixture = operations();

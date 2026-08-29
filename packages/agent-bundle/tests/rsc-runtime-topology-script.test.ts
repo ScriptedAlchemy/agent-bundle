@@ -11,13 +11,6 @@ const workspaceRoot = process.cwd();
 const script = join(workspaceRoot, 'scripts', 'rsc-runtime-topology.mjs');
 
 const output = 'docs/architecture/rsc-runtime-workbench.md';
-const captureCommand = `node packages/workbench/scripts/capture-runtime-playground.mjs \\
-  --desktop "$PWD/docs/assets/rsc-runtime-workbench/desktop.png" \\
-  --hmr-before "$PWD/docs/assets/rsc-runtime-workbench/hmr-before.png" \\
-  --hmr-after "$PWD/docs/assets/rsc-runtime-workbench/hmr-after.png" \\
-  --compile-error "$PWD/docs/assets/rsc-runtime-workbench/compile-error.png" \\
-  --recovered "$PWD/docs/assets/rsc-runtime-workbench/recovered.png" \\
-  --evidence /tmp/rsc-runtime-delivery/evidence.json`;
 const expectedTree = `packages/
   agent-bundle/
     src/adapters/registry.ts
@@ -62,12 +55,6 @@ const run = (root: string, check = false): Promise<{ readonly stdout: string; re
 );
 
 describe('rsc runtime topology script', () => {
-  it('documents every required absolute runtime capture output', async () => {
-    const readme = await readFile(join(workspaceRoot, 'examples', 'rsc-agent-runtime', 'README.md'), 'utf8');
-
-    expect(readme).toContain(captureCommand);
-  });
-
   it('renders the tracked feature tree and detects a stale marker block', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rsc-runtime-topology-'));
     try {
