@@ -8,7 +8,30 @@ import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { startRuntimePlaygroundFixture } from '../tests/helpers/runtime-playground-fixture.ts';
 
 const browserTimeout = 30_000 * timeScale;
+/**
+ * Hard ceiling for the whole capture, comfortably under the calling test's
+ * 600s budget so a wedge fails HERE with the current phase on stderr instead
+ * of as an opaque rstest timeout with no output at all.
+ */
+const captureDeadline = 480_000;
+/** Budget for each cleanup step; a wedged dev-server close must not hold the process. */
+const cleanupStepTimeout = 30_000;
 const desktopViewport = Object.freeze({ height: 900, width: 1440 });
+
+let currentPhase = 'parse-arguments';
+/** Marks capture progress so the watchdog and failures can say where the run was. */
+const phase = (name) => { currentPhase = name; };
+
+const boundedStep = async (name, promise) => {
+  let timer;
+  const timedOut = Symbol(name);
+  const outcome = await Promise.race([
+    promise,
+    new Promise((resolveTimeout) => { timer = setTimeout(() => resolveTimeout(timedOut), cleanupStepTimeout); }),
+  ]).finally(() => clearTimeout(timer));
+  if (outcome === timedOut) throw new Error(`Capture cleanup step ${name} exceeded ${cleanupStepTimeout}ms.`);
+  return outcome;
+};
 const outputFlags = Object.freeze([
   '--desktop',
   '--hmr-before',
@@ -88,18 +111,24 @@ const writeEvidence = (path, evidence) => atomically(path, async (temporary) => 
 });
 
 export const cleanupCaptureResources = async ({ browser, fixture, restores }) => {
-  const settledRestores = await Promise.allSettled(restores.map(async (restore) => restore()));
+  phase('cleanup');
+  const settledRestores = await Promise.allSettled(
+    restores.map(async (restore, index) => boundedStep(`restore-${index + 1}`, restore())),
+  );
   const failedSteps = settledRestores.flatMap((result, index) => result.status === 'rejected' ? [`restore-${index + 1}`] : []);
+  // Each close is bounded: a wedged dev-server or browser shutdown records a
+  // cleanup failure instead of holding the process open until the caller's
+  // test budget expires with no diagnostics.
   if (browser !== undefined) {
     try {
-      await browser.close();
+      await boundedStep('browser.close', browser.close());
     } catch {
       failedSteps.push('browser.close');
     }
   }
   if (fixture !== undefined) {
     try {
-      await fixture.close();
+      await boundedStep('fixture.close', fixture.close());
     } catch {
       failedSteps.push('fixture.close');
     }
@@ -359,17 +388,20 @@ const capture = async (outputs) => {
   let primaryFailure;
   let evidence;
   try {
+    phase('fixture-boot');
     fixture = await startRuntimePlaygroundFixture();
     originals = await Promise.all([
       readFile(fixture.serverComponentSource, 'utf8'),
       readFile(fixture.widgetAppSource, 'utf8'),
       readFile(fixture.appStyles, 'utf8'),
     ]);
+    phase('browser-launch');
     browser = await chromium.launch({ channel: 'chrome', headless: true });
     const context = await browser.newContext({ viewport: desktopViewport });
     const page = await context.newPage();
     const pageErrors = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
+    phase('initial-load');
     await page.goto(`${fixture.url}#runtime`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: 'Runtime Playground' }).waitFor({ state: 'visible', timeout: browserTimeout });
     const identity = page.locator('[data-runtime-provider-session]');
@@ -389,6 +421,7 @@ const capture = async (outputs) => {
     const documentMarker = 'runtime-capture-document';
     await page.evaluate((value) => { globalThis.document.documentElement.dataset.runtimeCaptureDocument = value; }, documentMarker);
 
+    phase('first-run');
     const runBefore = await runSurface(page, 'mcp.render_edit_timeline', {});
     await selectRun(page, runBefore);
     await showRuntimeApp(page, runBefore);
@@ -402,6 +435,7 @@ const capture = async (outputs) => {
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
     const historyBeforeHmr = await history.count();
     const runIdsBeforeHmr = await runtimeRunIds(page);
+    phase('hmr-edit');
     await replaceWatchedSource(fixture.root, fixture.serverComponentSource, editedServer);
     const generationAfter = await waitForNewGeneration(page, generationBefore);
     await page.waitForFunction(
@@ -416,6 +450,7 @@ const capture = async (outputs) => {
     const appVisibleAfter = true;
     await screenshot(page, outputs.hmrAfter);
 
+    phase('compact-run');
     const compactRunId = await runSurface(page, 'mcp.recent_edits', {});
     await selectRun(page, compactRunId);
     await page.waitForFunction(
@@ -431,6 +466,7 @@ const capture = async (outputs) => {
     const historyBeforeError = await history.count();
     const eventSequenceBeforeError = Number((await attributes(identity))['data-runtime-event-sequence']);
     if (!Number.isFinite(eventSequenceBeforeError)) throw new Error('Runtime identity omitted its event sequence.');
+    phase('compile-error');
     await replaceWatchedSource(fixture.root, fixture.serverComponentSource, `${editedServer}\nconst = ;\n`);
     await page.waitForFunction(
       ({ expected, selector }) => Number(globalThis.document.querySelector(selector)?.getAttribute('data-runtime-event-sequence')) > expected,
@@ -463,6 +499,7 @@ const capture = async (outputs) => {
     const compileErrorLayout = await captureCompileErrorLayout(page, compactRunGeneration);
     await screenshot(page, outputs.compileError);
 
+    phase('recovery');
     await replaceWatchedSource(fixture.root, fixture.serverComponentSource, repairedServer);
     const generationRecovered = await waitForNewGeneration(page, lastGoodGenerationDuringError);
     await page.waitForFunction(
@@ -476,6 +513,7 @@ const capture = async (outputs) => {
       { timeout: browserTimeout },
     );
 
+    phase('app-refresh');
     const runWithApp = await runSurface(page, 'mcp.render_edit_timeline', {});
     if (runWithApp === runAfter) throw new Error('Runtime App capture did not create a fresh explicit run after recovery.');
     await selectRun(page, runWithApp);
@@ -579,6 +617,7 @@ const capture = async (outputs) => {
       sandboxOpaqueOrigin,
       viewports: Object.freeze({ desktop: desktopViewport }),
     });
+    phase('evidence-write');
     await writeEvidence(outputs.evidence, evidence);
   } catch (error) {
     primaryFailure = error;
@@ -600,12 +639,31 @@ const capture = async (outputs) => {
 const run = async () => {
   const outputs = parseArguments(process.argv.slice(2));
   const evidence = await capture(outputs);
-  process.stdout.write(`${JSON.stringify(evidence)}\n`);
+  await new Promise((resolveWrite) => process.stdout.write(`${JSON.stringify(evidence)}\n`, resolveWrite));
 };
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  run().catch((error) => {
-    process.stderr.write(`${formatCaptureFailure(error)}\n`);
-    process.exitCode = 1;
-  });
+  // Watchdog: if anything wedges (fixture boot, a browser wait, cleanup),
+  // fail loudly with the phase that hung instead of letting the calling
+  // test's whole budget expire with no output. unref() keeps the timer from
+  // holding an otherwise finished process open.
+  const watchdog = setTimeout(() => {
+    process.stderr.write(
+      `Runtime capture watchdog fired after ${captureDeadline}ms during phase ${currentPhase}.\n`,
+      () => process.exit(1),
+    );
+  }, captureDeadline);
+  watchdog.unref();
+  run().then(
+    // Force the exit: a lingering handle (a wedged child process or socket
+    // surviving a bounded-but-failed cleanup) must not keep the process
+    // alive after the capture itself has settled.
+    () => process.exit(0),
+    (error) => {
+      process.stderr.write(
+        `${formatCaptureFailure(error)}\nLast capture phase: ${currentPhase}.\n`,
+        () => process.exit(1),
+      );
+    },
+  );
 }
