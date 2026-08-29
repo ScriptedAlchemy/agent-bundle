@@ -13,11 +13,12 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from '../../agent-bundle/tests/support/eval-project.ts';
 import { closeServer } from './support/http.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
 import { buildWorkbench, e2e, workbenchAssets, workspaceRoot, workbenchUrl } from './support/workbench-e2e.ts';
 
 const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
-const browserTimeout = 12_000;
+const browserTimeout = 12_000 * timeScale;
 const runCompletionTimeout = 60_000;
 
 const listen = async (server: Server): Promise<string> => {

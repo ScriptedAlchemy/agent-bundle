@@ -1,7 +1,5 @@
-import { execFile as executeFile } from 'node:child_process';
 import { mkdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import type { Locator, Page } from 'playwright';
@@ -20,11 +18,12 @@ import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
+import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
+import { buildWorkbench } from './support/workbench-e2e.ts';
 
-const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
-const browserTimeout = 15_000;
+const browserTimeout = 15_000 * timeScale;
 
 interface RuntimeAppOperation {
   readonly body: unknown;
@@ -53,14 +52,6 @@ const e2e = test.extend({
     contextOptions: { viewport: { height: 900, width: 1440 } },
   } satisfies PlaywrightOptions,
 });
-
-const buildWorkbench = async (): Promise<void> => {
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('pnpm', ['--filter', 'agent-bundle-workbench', 'build'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
-  });
-};
 
 const startFrozenEpochServer = async (root: string) => {
   const registry = createDefaultRegistry();

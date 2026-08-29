@@ -93,7 +93,8 @@ const maximumInvocationWorkers = 4;
 const maximumInvocationStdoutBytes = 4 * 1024 * 1024;
 const maximumInvocationFlightBytes = 4 * 1024 * 1024;
 const maximumInvocationStderrBytes = 256 * 1024;
-const maximumRunHistory = 50;
+/** Production terminal-run retention window; tests may shrink it through the start testing seam. */
+export const defaultMaximumRunHistory = 50;
 const invocationTimeoutMs = 10_000;
 const invocationTerminationGraceMs = 100;
 const flightPreviewBytes = 32 * 1024;
@@ -603,6 +604,12 @@ export interface RsbuildRuntimeSessionStartTesting {
   }>) => Promise<void> | void;
   /** Windows-only Job owner fault injection; never used by the public provider. */
   readonly windowsJobOwnerMode?: 'close-control' | 'hang-ready' | 'ignore-stop' | 'nonzero-after-drain' | 'normal';
+  /**
+   * Test-only terminal-run retention override so eviction suites do not need
+   * fifty real invocations; the public provider always keeps
+   * `defaultMaximumRunHistory` runs.
+   */
+  readonly maximumRunHistory?: number;
 }
 
 /**
@@ -633,6 +640,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #surfaceAssetApps = new Map<string, DevRuntimePreparedProject['apps'][number]>();
   readonly #surfaces = new Map<string, DevRuntimeSurface>();
   readonly #testing: RsbuildRuntimeSessionStartTesting;
+  readonly #maximumRunHistory: number;
   readonly #attempts = new Map<string, AttemptBarrier>();
   readonly #workers = new Map<string, InvocationWorker>();
   readonly #failedAttempts = new Set<string>();
@@ -669,6 +677,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#mcpRegistry = input.mcpRegistry;
     this.#latestPreparedRuntime = input.preparedRuntime;
     this.#testing = input.testing;
+    this.#maximumRunHistory = input.testing.maximumRunHistory ?? defaultMaximumRunHistory;
     this.#ownedRunsRoot = input.ownedRunsRoot;
     this.#runRoot = input.ownedRunsRoot.root;
     this.#stateFile = join(resolve(input.context.storageRoot), 'state', `${stateStoreId}.jsonl`);
@@ -1035,8 +1044,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   runs(limit: number): readonly DevRuntimeRun[] {
     if (this.#closed) return Object.freeze([]);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > maximumRunHistory) {
-      throw new RangeError(`Runtime run history limit must be an integer from 1 through ${maximumRunHistory}.`);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > this.#maximumRunHistory) {
+      throw new RangeError(`Runtime run history limit must be an integer from 1 through ${String(this.#maximumRunHistory)}.`);
     }
     return Object.freeze([...this.#terminalRuns.values()].reverse().slice(0, limit));
   }
@@ -1333,7 +1342,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   }
 
   async #evictTerminalRuns(): Promise<void> {
-    while (this.#terminalRuns.size > maximumRunHistory) {
+    while (this.#terminalRuns.size > this.#maximumRunHistory) {
       const oldestId = this.#terminalRuns.keys().next().value as string | undefined;
       if (oldestId === undefined) return;
       this.#evictingTerminalRuns.add(oldestId);

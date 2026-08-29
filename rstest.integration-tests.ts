@@ -67,6 +67,36 @@ export const integrationTestFiles: readonly string[] = [
 ];
 
 /**
+ * Integration files that WRITE to workspace-shared locations and therefore
+ * cannot run alongside other integration files:
+ *
+ * - inspector-shell.e2e rewrites `packages/workbench/dist` with an explicit
+ *   development-mode artifact (the build itself is under test).
+ * - packed-release.e2e can run a root `pnpm build` (rewriting
+ *   `packages/{agent-bundle,rsc-runtime,workbench}/dist`) when
+ *   AGENT_BUNDLE_PACKAGE_PREBUILT is unset, and always runs `npm pack`
+ *   plus a packed dev server on a pre-reserved (not ephemeral) port.
+ *
+ * They run on one worker via rstest.integration-serial.config.ts after the
+ * parallel pool finishes (rstest orders files alphabetically, so
+ * packed-release packs the agent-bundle dist copy that is unaffected by
+ * inspector-shell's workbench dist rewrite).
+ */
+export const serialIntegrationTestFiles: readonly string[] = [
+  'packages/workbench/tests/inspector-shell.e2e.test.ts',
+  'packages/workbench/tests/packed-release.e2e.test.ts',
+];
+
+/**
+ * Integration files safe on parallel workers: they create per-test fixtures
+ * with `mkdtemp`, bind servers on ephemeral ports (`port: 0` or rsbuild's
+ * silent free-port fallback), and only READ the prebuilt shared artifacts
+ * (`packages/workbench/dist`, `packages/agent-bundle/dist`).
+ */
+export const parallelIntegrationTestFiles: readonly string[] =
+  integrationTestFiles.filter((file) => !serialIntegrationTestFiles.includes(file));
+
+/**
  * Pack-and-install tests: each one runs `npm pack` (and usually a clean
  * `npm install` of the tarball), which dominates the serialized integration
  * pool. They run through the root `test:packed` / `test:packed:native`
