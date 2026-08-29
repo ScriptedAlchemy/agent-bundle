@@ -10,6 +10,7 @@ import { serializeRuntimeDefinition } from '../src/build/serialize-definition.js
 import { runtimeDefinition } from '../src/definition.js';
 import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
 import { createTestFileRuntimeKernel } from '../src/runtime/state-file-test-support.js';
+import { timeScale } from '../../../packages/agent-bundle/tests/support/time-scale.ts';
 
 const readOnlyAnnotations = {
   destructiveHint: false,
@@ -405,8 +406,17 @@ test('excludes a live heartbeat owner and recovers its stale lock only after SIG
   try {
     const lockDirectory = `${stateFile}.lock`;
     const firstMtime = (await stat(lockDirectory)).mtimeMs;
-    await wait(1_100);
-    expect((await stat(lockDirectory)).mtimeMs).toBeGreaterThan(firstMtime);
+    // The heartbeat touches the lock from a 1s timer in the owner CHILD
+    // process. A fixed 1.1s sleep races that timer with only 100ms of
+    // scheduling margin, which a loaded runner blows through. Poll for the
+    // touch instead of assuming timer punctuality.
+    const heartbeatDeadline = Date.now() + 15_000 * timeScale;
+    let touchedMtime = firstMtime;
+    while (touchedMtime <= firstMtime && Date.now() < heartbeatDeadline) {
+      await wait(50);
+      touchedMtime = (await stat(lockDirectory)).mtimeMs;
+    }
+    expect(touchedMtime).toBeGreaterThan(firstMtime);
 
     const aborted = new AbortController();
     setTimeout(() => aborted.abort(new Error('test abort')), 50);
