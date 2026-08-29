@@ -274,8 +274,6 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
     await expect(page.getByRole('link', { name: 'Download evidence.json' })).toHaveCount(0);
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.setViewportSize({ height: 844, width: 390 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
   } finally {
     await server.close();

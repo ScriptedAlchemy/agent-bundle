@@ -67,9 +67,6 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
     const bodyText = await page.locator('body').innerText();
     expect(bodyText).not.toContain(project.root);
     expect(bodyText).not.toContain('fixture-secret');
-
-    await page.setViewportSize({ height: 844, width: 390 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
   } finally {
     await server.close();

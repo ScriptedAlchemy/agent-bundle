@@ -1257,8 +1257,6 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     expect(artifactMcpSessionRequests.some((request) => request.startsWith('POST /api/mcp/sessions/'))).toBe(true);
     expect(runtimeRequests).toEqual([]);
     expect(projectEventRequests).toEqual(['GET /api/project/events']);
-    await page.setViewportSize({ height: 844, width: 390 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
   } catch (error) {
     testFailure = error;

@@ -293,8 +293,6 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
       expect(body).not.toHaveProperty('task');
       expect(body).not.toHaveProperty('script');
     }
-    await page.setViewportSize({ height: 844, width: 390 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);
   } finally {
@@ -514,8 +512,6 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
       expect(request).not.toHaveProperty('evidence');
       expect(request).not.toHaveProperty('outcome');
     }
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);

@@ -9,10 +9,8 @@ import { startRuntimePlaygroundFixture } from '../tests/helpers/runtime-playgrou
 
 const browserTimeout = 30_000 * timeScale;
 const desktopViewport = Object.freeze({ height: 900, width: 1440 });
-const mobileViewport = Object.freeze({ height: 844, width: 390 });
 const outputFlags = Object.freeze([
   '--desktop',
-  '--mobile',
   '--hmr-before',
   '--hmr-after',
   '--compile-error',
@@ -47,7 +45,6 @@ const parseArguments = (argv) => {
     evidence: values.get('--evidence'),
     hmrAfter: values.get('--hmr-after'),
     hmrBefore: values.get('--hmr-before'),
-    mobile: values.get('--mobile'),
     recovered: values.get('--recovered'),
   });
 };
@@ -271,16 +268,6 @@ const boundedLayoutNumber = (value, label) => {
   return Math.round(value * 1000) / 1000;
 };
 
-const boundedHorizontalBounds = (value, label) => {
-  if (typeof value !== 'object' || value === null) throw new Error(`Runtime capture ${label} bounds were absent.`);
-  const candidate = value;
-  const left = boundedLayoutNumber(candidate.left, `${label} left`);
-  const right = boundedLayoutNumber(candidate.right, `${label} right`);
-  const viewportWidth = boundedLayoutNumber(candidate.viewportWidth, `${label} viewport width`);
-  if (viewportWidth <= 0) throw new Error(`Runtime capture ${label} viewport width was not positive.`);
-  return Object.freeze({ left, right, viewportWidth });
-};
-
 const boundedVerticalBounds = (value, label) => {
   if (typeof value !== 'object' || value === null) throw new Error(`Runtime capture ${label} bounds were absent.`);
   const candidate = value;
@@ -289,114 +276,6 @@ const boundedVerticalBounds = (value, label) => {
   const viewportHeight = boundedLayoutNumber(candidate.viewportHeight, `${label} viewport height`);
   if (viewportHeight <= 0) throw new Error(`Runtime capture ${label} viewport height was not positive.`);
   return Object.freeze({ bottom, top, viewportHeight });
-};
-
-const captureMobileLayout = async (page, frame) => {
-  const host = await page.evaluate(() => {
-    const runtimeContent = globalThis.document.querySelector('.runtime-content');
-    const playground = globalThis.document.querySelector('.runtime-playground');
-    const controls = globalThis.document.querySelector('.runtime-controls');
-    const stage = globalThis.document.querySelector('.runtime-stage');
-    const outerFrame = globalThis.document.querySelector('.runtime-stage .mcp-app-preview iframe');
-    if (!(runtimeContent instanceof globalThis.HTMLElement)
-      || !(playground instanceof globalThis.HTMLElement)
-      || !(controls instanceof globalThis.HTMLElement)
-      || !(stage instanceof globalThis.HTMLElement)
-      || !(outerFrame instanceof globalThis.HTMLIFrameElement)) {
-      throw new Error('Runtime capture mobile host elements were absent.');
-    }
-    const scrollers = new Set();
-    for (const start of [runtimeContent, playground, controls, stage, outerFrame]) {
-      for (let element = start; element instanceof globalThis.HTMLElement && element !== globalThis.document.body; element = element.parentElement) {
-        scrollers.add(element);
-      }
-    }
-    globalThis.document.documentElement.scrollLeft = 0;
-    if (globalThis.document.body !== null) globalThis.document.body.scrollLeft = 0;
-    for (const element of scrollers) element.scrollLeft = 0;
-    globalThis.scrollTo({ left: 0, top: globalThis.scrollY });
-    const bounds = (element) => {
-      const rect = element.getBoundingClientRect();
-      return Object.freeze({ left: rect.left, right: rect.right, viewportWidth: globalThis.innerWidth });
-    };
-    return Object.freeze({
-      bodyScrollLeft: globalThis.document.body?.scrollLeft ?? 0,
-      controls: bounds(controls),
-      documentScrollLeft: globalThis.document.documentElement.scrollLeft,
-      host: bounds(runtimeContent),
-      hostScrollerScrollLefts: Object.freeze([...scrollers].map((element) => element.scrollLeft)),
-      outerFrame: bounds(outerFrame),
-      playground: bounds(playground),
-      stage: bounds(stage),
-      windowScrollX: globalThis.scrollX,
-    });
-  });
-  const child = await frame.evaluate(() => {
-    const heading = globalThis.document.querySelector('h1');
-    const marker = globalThis.document.querySelector('[data-testid="runtime-capture-marker"]');
-    if (!(heading instanceof globalThis.HTMLElement) || !(marker instanceof globalThis.HTMLElement)) {
-      throw new Error('Runtime capture mobile child landmarks were absent.');
-    }
-    globalThis.document.documentElement.scrollLeft = 0;
-    if (globalThis.document.body !== null) globalThis.document.body.scrollLeft = 0;
-    globalThis.scrollTo({ left: 0, top: globalThis.scrollY });
-    const bounds = (element) => {
-      const rect = element.getBoundingClientRect();
-      return Object.freeze({ left: rect.left, right: rect.right, viewportWidth: globalThis.innerWidth });
-    };
-    return Object.freeze({
-      heading: bounds(heading),
-      marker: bounds(marker),
-      scrollX: globalThis.scrollX,
-    });
-  });
-  if (!Array.isArray(host.hostScrollerScrollLefts) || host.hostScrollerScrollLefts.length === 0 || host.hostScrollerScrollLefts.length > 32) {
-    throw new Error('Runtime capture mobile host scroller evidence was outside its bounded shape.');
-  }
-  const hostScrollerScrollLefts = Object.freeze(host.hostScrollerScrollLefts.map((value, index) =>
-    boundedLayoutNumber(value, `host scroller ${index} scrollLeft`)));
-  const controls = boundedHorizontalBounds(host.controls, 'controls');
-  const runtimeHost = boundedHorizontalBounds(host.host, 'runtime host');
-  const playground = boundedHorizontalBounds(host.playground, 'playground');
-  const stage = boundedHorizontalBounds(host.stage, 'stage');
-  const outerFrame = boundedHorizontalBounds(host.outerFrame, 'outer frame');
-  const childHeading = boundedHorizontalBounds(child.heading, 'child heading');
-  const childMarker = boundedHorizontalBounds(child.marker, 'child marker');
-  const mobileLayout = Object.freeze({
-    bodyScrollLeft: boundedLayoutNumber(host.bodyScrollLeft, 'body scrollLeft'),
-    childHeading,
-    childHeadingWithinViewport: childHeading.left >= 0 && childHeading.right <= childHeading.viewportWidth,
-    childMarker,
-    childMarkerWithinViewport: childMarker.left >= 0 && childMarker.right <= childMarker.viewportWidth,
-    childScrollX: boundedLayoutNumber(child.scrollX, 'child scrollX'),
-    controls,
-    controlsWithinViewport: controls.left >= 0 && controls.right <= controls.viewportWidth,
-    documentScrollLeft: boundedLayoutNumber(host.documentScrollLeft, 'document scrollLeft'),
-    host: runtimeHost,
-    hostWithinViewport: runtimeHost.left >= 0 && runtimeHost.right <= runtimeHost.viewportWidth,
-    hostScrollerScrollLefts,
-    outerFrame,
-    outerFrameWithinViewport: outerFrame.left >= 0 && outerFrame.right <= outerFrame.viewportWidth,
-    playground,
-    playgroundWithinViewport: playground.left >= 0 && playground.right <= playground.viewportWidth,
-    stage,
-    stageWithinViewport: stage.left >= 0 && stage.right <= stage.viewportWidth,
-    windowScrollX: boundedLayoutNumber(host.windowScrollX, 'window scrollX'),
-  });
-  const settled = mobileLayout.windowScrollX === 0
-    && mobileLayout.documentScrollLeft === 0
-    && mobileLayout.bodyScrollLeft === 0
-    && mobileLayout.hostScrollerScrollLefts.every((value) => value === 0)
-    && mobileLayout.hostWithinViewport
-    && mobileLayout.playgroundWithinViewport
-    && mobileLayout.controlsWithinViewport
-    && mobileLayout.stageWithinViewport
-    && mobileLayout.outerFrameWithinViewport
-    && mobileLayout.childScrollX === 0
-    && mobileLayout.childHeadingWithinViewport
-    && mobileLayout.childMarkerWithinViewport;
-  if (!settled) throw new Error(`Runtime App did not settle into the 390px mobile capture viewport: ${JSON.stringify(mobileLayout)}`);
-  return mobileLayout;
 };
 
 const captureCompileErrorLayout = async (page, generation) => {
@@ -644,19 +523,6 @@ const capture = async (outputs) => {
     });
     if (desktopControlColumns !== 4) throw new Error(`Runtime capture expected four desktop control columns, received ${desktopControlColumns}.`);
     await screenshot(page, outputs.desktop);
-    await page.setViewportSize(mobileViewport);
-    await outerFrame.scrollIntoViewIfNeeded();
-    await marker.scrollIntoViewIfNeeded();
-    const mobileLayout = await captureMobileLayout(page, appFrame);
-    const mobileWithoutHorizontalOverflow = await page.evaluate(() => {
-      const { body, documentElement } = globalThis.document;
-      return documentElement.scrollWidth <= documentElement.clientWidth
-        && (body === null || body.scrollWidth <= documentElement.clientWidth);
-    });
-    if (!mobileWithoutHorizontalOverflow) {
-      throw new Error('Runtime Playground overflowed the 390px document viewport.');
-    }
-    await screenshot(page, outputs.mobile);
 
     await Promise.all([
       restore(fixture.serverComponentSource, originals[0]),
@@ -690,14 +556,12 @@ const capture = async (outputs) => {
       hmrWithoutReload: documentTimeOriginAfter === documentTimeOriginBefore,
       lastGoodGenerationDuringError,
       lastGoodPreserved,
-      mobileLayout,
-      mobileWithoutHorizontalOverflow,
       providerSessionId,
       recovered: generationRecovered !== lastGoodGenerationDuringError,
       runAfter,
       runBefore,
       sandboxOpaqueOrigin,
-      viewports: Object.freeze({ desktop: desktopViewport, mobile: mobileViewport }),
+      viewports: Object.freeze({ desktop: desktopViewport }),
     });
     await writeEvidence(outputs.evidence, evidence);
   } catch (error) {

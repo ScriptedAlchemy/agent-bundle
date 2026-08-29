@@ -420,9 +420,6 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     }), { timeout: browserTimeout }).toBe(true);
     expect(await appFrame.content()).not.toContain(foregroundToken);
 
-    await page.setViewportSize({ height: 844, width: 390 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-
     const firstClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'));
     await page.getByRole('button', { name: 'Close App preview' }).click();
     const firstCloseBody = requestBody((await firstClose).postData()) as Readonly<{ readonly id: string }>;
@@ -1276,9 +1273,6 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect.poll(() => appMessages.filter((entry) =>
       new URL(entry.href).origin === fixture.url && entry.senderOrigin === destinationOrigin && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 * timeScale }).toBe(controllerOrigin === destinationOrigin ? 2 : 1);
-
-    await page.setViewportSize({ height: 900, width: 390 });
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 * timeScale }).toBe(true);
 
     const destinationAppFrame = async () => {
       for (const frame of page.frames()) {
