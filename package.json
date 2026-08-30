@@ -29,7 +29,7 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "pnpm build && changeset publish",
-    "preview:publish": "pkg-pr-new publish --previewVersion --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime'",
+    "preview:publish": "pkg-pr-new publish --previewVersion --peerDeps --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime'",
     "pack:dry-run": "pnpm build && npm pack ./packages/agent-bundle --dry-run --json",
     "audit:release": "pnpm lint:package && attw --pack --profile esm-only packages/agent-bundle && node scripts/audit-packed-release.mjs",
     "check:release": "pnpm pack:dry-run && pnpm audit:release && pnpm test:packed",

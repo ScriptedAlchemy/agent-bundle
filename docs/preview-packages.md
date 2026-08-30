@@ -33,17 +33,22 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/rsc-runtime@
 
 pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`).
 
-Previews carry the version string `0.0.0-preview-<sha>`, which does not satisfy
-the `agent-bundle@^0.1.0` peer range declared by `@agent-bundle/rsc-runtime`.
-When installing both previews into the same project with npm, add
-`--legacy-peer-deps`; pnpm reports the mismatch as a warning and proceeds.
+Previews carry the version string `0.0.0-preview-<sha>`, and the publish
+rewrites the `agent-bundle` peer range inside the `@agent-bundle/rsc-runtime`
+preview tarball to that exact preview version (`--peerDeps`). Installing both
+packages from the same sha therefore works with stock npm — no
+`--legacy-peer-deps` needed. Mixing two different shas fails with `ERESOLVE`
+by design; use one sha (or one PR number) for both URLs. Previews published
+before the peer rewrite landed (PR #46) still carry the original
+`agent-bundle@^0.1.0` range, so pair-installing those older shas with npm
+still requires `--legacy-peer-deps`.
 
 ## Where previews come from
 
 `.github/workflows/package-preview.yml` runs
-`pnpm preview:publish` (`pkg-pr-new publish --previewVersion --no-compact
---no-template './packages/agent-bundle' './packages/rsc-runtime'`) after a
-full build, on every pull request and on every push to `main`. Runs for
+`pnpm preview:publish` (`pkg-pr-new publish --previewVersion --peerDeps
+--no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime'`)
+after a full build, on every pull request and on every push to `main`. Runs for
 `main` pushes use a per-commit concurrency group, so overlapping pushes
 cannot cancel one another and every `main` commit has an installable
 snapshot. (PR runs cancel superseded builds for the same PR — only the
