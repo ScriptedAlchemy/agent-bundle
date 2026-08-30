@@ -105,7 +105,7 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
   expect(mcp.mcpServers['status']).toEqual({
     args: ['--root', '${CURSOR_PLUGIN_ROOT}/tools/server.mjs'],
     command: 'node',
-    env: { CACHE_DIR: '${workspaceFolder}/cache' },
+    env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CURSOR_PLUGIN_ROOT}', CACHE_DIR: '${workspaceFolder}/cache' },
   });
   expect(mcp.mcpServers['remote']).toEqual({
     headers: { Authorization: 'Bearer literal' },

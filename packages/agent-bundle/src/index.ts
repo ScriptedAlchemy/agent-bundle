@@ -3,7 +3,7 @@ import type { CodexConfigExtension } from './adapters/codex.ts';
 import type { PortableConfigExtension } from './adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts';
 
-export { defineConfig, pathTokens } from './core/types.ts';
+export { defineConfig, pathTokens, pluginRootEnvAnchor } from './core/types.ts';
 export { compareEvals, runEvals, startDevServer } from './api.ts';
 export {
   createCodexEvalHarness,

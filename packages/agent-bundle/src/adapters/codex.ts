@@ -37,6 +37,7 @@ import {
   standardArtifactLayout,
   standardPluginArtifactPlan,
   validateJsonSchemaDocument,
+  withPluginRootEnvAnchor,
   type TargetAdapter,
   type TargetArtifactDocumentValidator,
   type TargetArtifactPlan,
@@ -107,7 +108,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.0.0',
+  adapterRevision: '1.1.0',
   capabilityRevision: capabilityTable.observedCliVersion,
   capabilitySha256: '4b08c8820ace59ca068677dcb1863a9fd4cb730b7e00733b994b0076958beaf0',
   observedVersion: capabilityTable.observedCliVersion,
@@ -248,13 +249,17 @@ const planMcpServer = (
     if (diagnostics.length > 0 || command === undefined || nativeArgs?.some((value) => value === undefined) || Object.values(env ?? {}).some((value) => value === undefined)) {
       return { diagnostics };
     }
+    // Codex has no path-token interpolation, so the plugin-root env anchor is
+    // representable only as `./` resolved against a plugin-root cwd; entries
+    // without one skip the anchor instead of emitting a misleading value.
+    const anchoredEnv = hasPluginRootCwd ? withPluginRootEnvAnchor(env, './') : env;
     return {
       diagnostics,
       value: {
         ...(nativeArgs === undefined ? {} : { args: nativeArgs }),
         command,
         ...(cwd === undefined ? {} : { cwd }),
-        ...(env === undefined ? {} : { env }),
+        ...(anchoredEnv === undefined ? {} : { env: anchoredEnv }),
         type: 'stdio',
       },
     };

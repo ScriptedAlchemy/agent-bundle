@@ -25,6 +25,19 @@ directory. Top-level `assets` replaces that convention with explicit entries: li
 whole directories, or globs, all resolved from the project root. Entries outside `assets/` keep
 their project-relative path under the artifact's `assets/` directory.
 
+Every emitted stdio MCP server entry carries an `AGENT_BUNDLE_PLUGIN_ROOT` environment variable
+holding the plugin install root in the target's native spelling: `${CLAUDE_PLUGIN_ROOT}` on Claude
+Code, `${PLUGIN_ROOT}` on portable, `${CURSOR_PLUGIN_ROOT}` on Cursor, and `./` on Codex, resolved
+against the entry's plugin-root `cwd`. Codex has no path-token interpolation, so a Codex stdio
+server without a plugin-root working directory omits the anchor; source-built (`entry:`) servers
+always have one on every target. Server runtime code should resolve persistent state and bundled
+assets against this anchor rather than the process working directory: Claude Code currently
+launches stdio servers from the host's own working directory and ignores the emitted `cwd` field
+(the Claude adapter still emits `cwd: "${CLAUDE_PLUGIN_ROOT}"` as documented, schema-valid
+future-proofing). A server's own `env` entries win over the injected value, so declaring
+`env: { AGENT_BUNDLE_PLUGIN_ROOT: ... }` replaces the anchor. The `pluginRootEnvAnchor` export
+names the variable for consumer code.
+
 Hook `tools` accept the canonical selectors (`shell`, `file.read`, `file.write`, `mcp`, `agent`)
 plus explicit host-native selectors such as `claude:WebSearch` or `codex:view_image`, which
 contribute only to that host's native matcher. A hook that selects tools must leave every selected

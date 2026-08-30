@@ -24,6 +24,7 @@ import {
   sourceInputs,
   validateJsonSchemaDocument,
   validateModernMcpDocument,
+  withPluginRootEnvAnchor,
   type TargetAdapter,
   type TargetArtifactEntry,
   type TargetArtifactPlan,
@@ -47,7 +48,7 @@ const schemaValidator = createAdapterValidator();
 const validatePlugin = schemaValidator.compile(pluginSchema);
 const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
-  adapterRevision: '1.0.0',
+  adapterRevision: '1.1.0',
   capabilityRevision: capabilityTable.observedSpecificationVersion,
   capabilitySha256: '642da9f921374a4d0143da21ed4b4b2260a2375a5eb33c4cbb4ef531f2bb7352',
   observedVersion: capabilityTable.observedSpecificationVersion,
@@ -141,7 +142,7 @@ const planMcpServer = (
       const diagnostic = unsupportedTokenDiagnostic(server.command, 'command');
       if (diagnostic !== undefined) diagnostics.push(diagnostic);
     }
-    const env = server.env === undefined ? undefined : Object.fromEntries(
+    const declaredEnv = server.env === undefined ? undefined : Object.fromEntries(
       Object.entries(server.env).map(([key, value]) => {
         const keyDiagnostic = unsupportedTokenDiagnostic(key, 'env-key');
         if (keyDiagnostic !== undefined) diagnostics.push(keyDiagnostic);
@@ -176,7 +177,7 @@ const planMcpServer = (
         ...(args === undefined ? {} : { args }),
         command: server.command,
         ...(cwd === undefined ? {} : { cwd }),
-        ...(env === undefined ? {} : { env }),
+        env: withPluginRootEnvAnchor(declaredEnv, expandPortableToken(pathTokens.pluginRoot)),
         type: transport,
       },
     };

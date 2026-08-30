@@ -184,7 +184,7 @@ it('plans portable MCP server variants with tokens expanded only where portable 
   expect(plan.diagnostics).toEqual([]);
   expect(mcp).toEqual({
     content:
-      '{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"streamable-http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","${PLUGIN_ROOT}/tool"],"command":"node","cwd":"${PLUGIN_DATA}/cache","env":{"CACHE_DIR":"${PLUGIN_DATA}/cache"},"type":"stdio"}}}\n',
+      '{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"streamable-http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","${PLUGIN_ROOT}/tool"],"command":"node","cwd":"${PLUGIN_DATA}/cache","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${PLUGIN_ROOT}","CACHE_DIR":"${PLUGIN_DATA}/cache"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: 'mcp.json',
     sourceInputs: ['/workspace/agent-bundle.config.ts'],
@@ -287,7 +287,7 @@ it('preserves a valid MCP server named __proto__', () => {
   expect(plan.diagnostics).toEqual([]);
   expect(plan.entries.find((entry) => entry.relativePath === 'mcp.json')).toEqual({
     content:
-      '{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"__proto__":{"command":"node","type":"stdio"}}}\n',
+      '{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"__proto__":{"command":"node","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${PLUGIN_ROOT}"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: 'mcp.json',
     sourceInputs: ['/workspace/agent-bundle.config.ts'],
