@@ -152,7 +152,7 @@ export const compileMcpEntries = async (
   const compiled = planCompiledMcpEntries(servers, options);
   const virtualSources = await Promise.all(compiled.map(async (entry) => {
     const records = await Promise.all((options.apps ?? [])
-      .filter((app) => app.serverId === entry.id)
+      .filter((app) => app.serverIds.includes(entry.id))
       .map(async (app) => ({
         ...(app._meta === undefined ? {} : { _meta: app._meta }),
         html: await readFile(app.output, 'utf8'),
@@ -176,7 +176,7 @@ export const compileMcpEntries = async (
       sourceInputs: Object.freeze([
         ...sourceInputs,
         ...(options.apps ?? [])
-          .filter((app) => app.serverId === id)
+          .filter((app) => app.serverIds.includes(id))
           .flatMap((app) => app.sourceInputs),
       ]),
       virtualModules: [{
