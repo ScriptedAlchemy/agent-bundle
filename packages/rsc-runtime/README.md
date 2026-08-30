@@ -21,6 +21,11 @@ transport, persistence, or host packaging. React 19 is a peer dependency and Nod
 
 Structured MCP metadata and content are copied through a strict finite-JSON
 boundary before being returned, so later caller mutations do not alter a result.
+The copy follows MCP SDK wire semantics for `undefined`: object properties whose
+value is `undefined` are dropped and `undefined` array elements lower to `null`,
+exactly as `JSON.stringify` serializes them. Values that cannot round-trip as
+JSON — cycles, accessors, sparse arrays, non-finite numbers, non-plain objects —
+are still rejected, and the error names the offending key path.
 
 ## Complete plugin applications
 
@@ -31,6 +36,7 @@ from the same typed operation registry:
 ```tsx
 import {
   AgentBundle,
+  McpApp,
   McpServer,
   Operation,
   Script,
@@ -55,10 +61,12 @@ const status = defineOperation({
   id: 'status',
   inputSchema,
   mcp: {
+    _meta: { ui: { resourceUri: 'ui://example/status.html' } },
     description: 'Read status.',
     name: 'runtime_status',
     readOnly: true,
     server: 'runtime',
+    title: 'Runtime status',
   },
   render: (result) => (
     <Mcp.Result structuredContent={result}>
@@ -72,7 +80,14 @@ export const application = defineRscAgentBundle(
   <AgentBundle name="example" targets={['claude', 'codex']} version="1.0.0">
     <Skill source="./skills/example" />
     <Script entry="./src/cli-entry.ts" name="example" />
-    <McpServer entry="./src/mcp-server.ts" name="runtime" />
+    <McpServer entry="./src/mcp-server.ts" name="runtime">
+      <McpApp
+        entry="./views/status-panel.ts"
+        name="status"
+        resourceUri="ui://example/status.html"
+        template="./views/status-panel.html"
+      />
+    </McpServer>
     <Operation definition={status} />
   </AgentBundle>,
 );
@@ -84,6 +99,25 @@ Export `application.config` from `agent-bundle.config.ts`, use
 implementations, output validation, and result renderers cannot drift between the
 two surfaces. Definition lowering rejects duplicate ownership and references to
 undeclared MCP servers before Agent Bundle compilation begins.
+
+The optional `mcp.title` and `mcp._meta` ride the tool listing verbatim —
+`_meta: { ui: { resourceUri } }` is how MCP Apps hosts bind a tool to its
+widget. `createRscMcpServer` registers exactly the annotation hints an
+operation declares (`readOnly`, plus `destructive` / `idempotent` /
+`openWorld` when present); absent hints stay absent on the wire, where they
+keep their MCP-spec default semantics.
+
+`<McpApp>` children of `<McpServer>` lower into the owning server's
+`mcp.servers[<name>].apps` record, so `application.config` stays the single
+source of truth for MCP Apps: the compiler bundles each view into a
+self-contained HTML resource served through `import apps from
+'agent-bundle/mcp-apps'`. App `targets` default to the owning server's
+targets. Several servers may serve one shared widget by declaring the same
+`<McpApp>` (identical `name`, `entry`, `resourceUri`, `template`, and
+`_meta`; per-server `targets` may differ) — it compiles once and lands in
+every declaring server's registry. Conflicting redeclarations of an app
+name, or one `resourceUri` spread across different app names, are rejected
+during lowering.
 
 This layer intentionally does not own transport persistence or application
 state. Those remain explicit dependencies of operation implementations.

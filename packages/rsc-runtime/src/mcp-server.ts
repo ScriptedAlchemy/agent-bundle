@@ -16,14 +16,19 @@ export const createRscMcpServer = (
   for (const operation of application.operations) {
     if (operation.mcp?.server !== serverName) continue;
     server.registerTool(operation.mcp.name, {
+      ...(operation.mcp._meta === undefined ? {} : { _meta: operation.mcp._meta }),
+      // Emit exactly the hints the author declared: an absent hint carries
+      // MCP-spec default semantics on the wire, so synthesizing values here
+      // would rewrite the author's contract.
       annotations: {
-        destructiveHint: operation.mcp.destructive ?? false,
-        idempotentHint: operation.mcp.idempotent ?? operation.mcp.readOnly,
-        openWorldHint: operation.mcp.openWorld ?? false,
+        ...(operation.mcp.destructive === undefined ? {} : { destructiveHint: operation.mcp.destructive }),
+        ...(operation.mcp.idempotent === undefined ? {} : { idempotentHint: operation.mcp.idempotent }),
+        ...(operation.mcp.openWorld === undefined ? {} : { openWorldHint: operation.mcp.openWorld }),
         readOnlyHint: operation.mcp.readOnly,
       },
       description: operation.mcp.description,
       inputSchema: operation.inputSchema,
+      ...(operation.mcp.title === undefined ? {} : { title: operation.mcp.title }),
     }, async (input, context) => {
       const result = await operation.execute(input, { signal: context.mcpReq.signal });
       return lowerMcpResult(operation.render(result));

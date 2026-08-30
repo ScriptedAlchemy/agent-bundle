@@ -95,6 +95,19 @@ test('rejects malformed or nested MCP protocol result trees', () => {
   ).toThrow('mcp-result structuredContent must be JSON-serializable');
 });
 
+test('follows JSON wire semantics for undefined instead of rejecting it', () => {
+  // Matches MCP SDK serialization: JSON.stringify drops undefined-valued
+  // properties and lowers undefined array elements to null.
+  const result = lowerMcpResult(
+    <Mcp.Result structuredContent={{ edits: [undefined, 'recorded'], note: undefined, stateVersion: 2 }}>
+      <Mcp.Text>ok</Mcp.Text>
+    </Mcp.Result>,
+  );
+
+  expect(result.structuredContent).toEqual({ edits: [null, 'recorded'], stateVersion: 2 });
+  expect(Object.hasOwn(result.structuredContent as object, 'note')).toBe(false);
+});
+
 test('rejects non-JSON structured content instead of normalizing it', () => {
   const cyclic: Record<string, unknown> = {};
   cyclic.self = cyclic;
@@ -102,7 +115,6 @@ test('rejects non-JSON structured content instead of normalizing it', () => {
   sparse[1] = 'present';
 
   for (const value of [
-    undefined,
     () => undefined,
     Symbol('value'),
     Number.NaN,
@@ -110,7 +122,6 @@ test('rejects non-JSON structured content instead of normalizing it', () => {
     new Date('2026-08-14T00:00:00.000Z'),
     new Map(),
     sparse,
-    [undefined],
     cyclic,
   ]) {
     expect(() =>

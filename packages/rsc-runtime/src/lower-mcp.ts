@@ -53,14 +53,17 @@ const isArrayIndex = (key: string, length: number): boolean => {
   return Number.isSafeInteger(index) && index < length;
 };
 
-const cloneJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
+const jsonPathError = (reason: string, path: string): Error =>
+  new Error(path === '' ? reason : `${reason} at ${path}`);
+
+const cloneJsonValue = (value: unknown, ancestors: Set<object>, path: string): JsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new Error('non-finite number');
+    if (!Number.isFinite(value)) throw jsonPathError('non-finite number', path);
     return value;
   }
-  if (typeof value !== 'object') throw new Error('non-JSON value');
-  if (ancestors.has(value)) throw new Error('cyclic value');
+  if (typeof value !== 'object') throw jsonPathError('non-JSON value', path);
+  if (ancestors.has(value)) throw jsonPathError('cyclic value', path);
 
   ancestors.add(value);
   try {
@@ -70,29 +73,34 @@ const cloneJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
         keys.length !== value.length + 1 ||
         keys.some((key) => key !== 'length' && (typeof key !== 'string' || !isArrayIndex(key, value.length)))
       ) {
-        throw new Error('sparse or decorated array');
+        throw jsonPathError('sparse or decorated array', path);
       }
 
       const clone: JsonValue[] = [];
       for (let index = 0; index < value.length; index += 1) {
-        if (!Object.hasOwn(value, index)) throw new Error('sparse array');
+        const elementPath = `${path}[${index}]`;
+        if (!Object.hasOwn(value, index)) throw jsonPathError('sparse array', elementPath);
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-        if (descriptor === undefined || !('value' in descriptor)) throw new Error('array accessor');
-        clone.push(cloneJsonValue(descriptor.value, ancestors));
+        if (descriptor === undefined || !('value' in descriptor)) throw jsonPathError('array accessor', elementPath);
+        // JSON.stringify serializes undefined array elements as null; match the SDK wire shape.
+        clone.push(descriptor.value === undefined ? null : cloneJsonValue(descriptor.value, ancestors, elementPath));
       }
       return clone;
     }
 
     const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) throw new Error('non-plain object');
+    if (prototype !== Object.prototype && prototype !== null) throw jsonPathError('non-plain object', path);
     const clone: { [key: string]: JsonValue } = Object.create(null) as { [key: string]: JsonValue };
     for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string') throw new Error('symbol key');
+      if (typeof key !== 'string') throw jsonPathError('symbol key', path);
+      const propertyPath = path === '' ? key : `${path}.${key}`;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
-        throw new Error('non-enumerable or accessor property');
+        throw jsonPathError('non-enumerable or accessor property', propertyPath);
       }
-      clone[key] = cloneJsonValue(descriptor.value, ancestors);
+      // JSON.stringify drops undefined-valued properties; match the SDK wire shape.
+      if (descriptor.value === undefined) continue;
+      clone[key] = cloneJsonValue(descriptor.value, ancestors, propertyPath);
     }
     return clone;
   } finally {
@@ -103,16 +111,35 @@ const cloneJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
 const jsonRecord = (value: unknown, message: string): Record<string, JsonValue> => {
   try {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error('structured content must be an object');
+      throw new Error('not a plain object');
     }
-    const clone = cloneJsonValue(value, new Set());
+    const clone = cloneJsonValue(value, new Set(), '');
     if (Array.isArray(clone) || clone === null || typeof clone !== 'object') {
-      throw new Error('structured content must be an object');
+      throw new Error('not a plain object');
     }
     return clone;
-  } catch {
-    throw new Error(message);
+  } catch (error) {
+    throw new Error(`${message} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
   }
+};
+
+const deepFreezeJson = (value: JsonValue): JsonValue => {
+  if (typeof value === 'object' && value !== null) {
+    for (const child of Object.values(value)) deepFreezeJson(child);
+    Object.freeze(value);
+  }
+  return value;
+};
+
+/**
+ * Copies declaration-level metadata through the same JSON wire boundary as
+ * MCP results and deep-freezes the copy, so frozen definitions cannot be
+ * mutated through their metadata after the fact.
+ */
+export const frozenJsonRecord = (value: unknown, message: string): Readonly<Record<string, JsonValue>> => {
+  const clone = jsonRecord(value, message);
+  deepFreezeJson(clone);
+  return clone;
 };
 
 const lowerContent = (node: ReactNode): CallToolResult['content'][number] => {
