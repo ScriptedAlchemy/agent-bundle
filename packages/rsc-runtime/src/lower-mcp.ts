@@ -123,6 +123,25 @@ const jsonRecord = (value: unknown, message: string): Record<string, JsonValue> 
   }
 };
 
+const deepFreezeJson = (value: JsonValue): JsonValue => {
+  if (typeof value === 'object' && value !== null) {
+    for (const child of Object.values(value)) deepFreezeJson(child);
+    Object.freeze(value);
+  }
+  return value;
+};
+
+/**
+ * Copies declaration-level metadata through the same JSON wire boundary as
+ * MCP results and deep-freezes the copy, so frozen definitions cannot be
+ * mutated through their metadata after the fact.
+ */
+export const frozenJsonRecord = (value: unknown, message: string): Readonly<Record<string, JsonValue>> => {
+  const clone = jsonRecord(value, message);
+  deepFreezeJson(clone);
+  return clone;
+};
+
 const lowerContent = (node: ReactNode): CallToolResult['content'][number] => {
   const element = asMcpElement(node);
   const { props } = element;

@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import type { ZodType } from 'zod';
 
+import { frozenJsonRecord } from './lower-mcp.js';
+
 export interface RscOperationContext {
   readonly signal: AbortSignal;
 }
@@ -14,6 +16,8 @@ export interface RscCliDefinition<TInput, TResult> {
 }
 
 export interface RscMcpDefinition {
+  /** Listing-level metadata forwarded verbatim to tool registration, e.g. `{ ui: { resourceUri } }` for MCP Apps widget binding. */
+  readonly _meta?: Readonly<Record<string, unknown>>;
   readonly destructive?: boolean;
   readonly description: string;
   readonly idempotent?: boolean;
@@ -21,6 +25,8 @@ export interface RscMcpDefinition {
   readonly openWorld?: boolean;
   readonly readOnly: boolean;
   readonly server: string;
+  /** Human-readable tool listing title. */
+  readonly title?: string;
 }
 
 export interface RscOperationInput<TInput, TResult> {
@@ -79,6 +85,9 @@ export const defineOperation = <TInput, TResult>(
   const mcp = input.mcp === undefined
     ? undefined
     : Object.freeze<RscMcpDefinition>({
+        ...(input.mcp._meta === undefined
+          ? {}
+          : { _meta: frozenJsonRecord(input.mcp._meta, `Operation ${id} MCP _meta must be JSON-serializable`) }),
         ...(input.mcp.destructive === undefined ? {} : { destructive: input.mcp.destructive }),
         description: requireText(input.mcp.description, `Operation ${id} MCP description`),
         ...(input.mcp.idempotent === undefined ? {} : { idempotent: input.mcp.idempotent }),
@@ -86,6 +95,7 @@ export const defineOperation = <TInput, TResult>(
         ...(input.mcp.openWorld === undefined ? {} : { openWorld: input.mcp.openWorld }),
         readOnly: input.mcp.readOnly,
         server: requireName(input.mcp.server, `Operation ${id} MCP server`),
+        ...(input.mcp.title === undefined ? {} : { title: requireText(input.mcp.title, `Operation ${id} MCP title`) }),
       });
 
   return Object.freeze<RscOperationDefinition>({

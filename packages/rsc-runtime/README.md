@@ -60,10 +60,12 @@ const status = defineOperation({
   id: 'status',
   inputSchema,
   mcp: {
+    _meta: { ui: { resourceUri: 'ui://example/status.html' } },
     description: 'Read status.',
     name: 'runtime_status',
     readOnly: true,
     server: 'runtime',
+    title: 'Runtime status',
   },
   render: (result) => (
     <Mcp.Result structuredContent={result}>
@@ -89,6 +91,13 @@ Export `application.config` from `agent-bundle.config.ts`, use
 implementations, output validation, and result renderers cannot drift between the
 two surfaces. Definition lowering rejects duplicate ownership and references to
 undeclared MCP servers before Agent Bundle compilation begins.
+
+The optional `mcp.title` and `mcp._meta` ride the tool listing verbatim —
+`_meta: { ui: { resourceUri } }` is how MCP Apps hosts bind a tool to its
+widget. `createRscMcpServer` registers exactly the annotation hints an
+operation declares (`readOnly`, plus `destructive` / `idempotent` /
+`openWorld` when present); absent hints stay absent on the wire, where they
+keep their MCP-spec default semantics.
 
 This layer intentionally does not own transport persistence or application
 state. Those remain explicit dependencies of operation implementations.

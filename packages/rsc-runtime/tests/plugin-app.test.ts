@@ -126,6 +126,38 @@ describe('RSC plugin applications', () => {
     }
   });
 
+  it('preserves listing title and _meta on the frozen MCP definition without sharing the caller object', () => {
+    const metadata: Record<string, unknown> = { ui: { resourceUri: 'ui://curator/widget.html' } };
+    const withExtras = (mcp: Record<string, unknown>) => defineOperation({
+      execute: async () => ({ ok: true }),
+      id: 'extras',
+      inputSchema: z.object({}).strict(),
+      mcp: {
+        description: 'Extras probe.',
+        name: 'extras',
+        readOnly: true,
+        server: 'curator',
+        ...mcp,
+      },
+      render: () => createElement('mcp-result', null, createElement('mcp-text', null, 'ok')),
+      resultSchema: z.object({ ok: z.boolean() }).strict(),
+    });
+
+    const operation = withExtras({ _meta: metadata, title: 'Extras' });
+    (metadata.ui as Record<string, unknown>).resourceUri = 'ui://curator/changed.html';
+    expect(operation.mcp?.title).toBe('Extras');
+    expect(operation.mcp?._meta).toEqual({ ui: { resourceUri: 'ui://curator/widget.html' } });
+    expect(Object.isFrozen(operation.mcp?._meta)).toBe(true);
+    expect(Object.isFrozen(operation.mcp?._meta?.ui)).toBe(true);
+
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => withExtras({ _meta: cyclic })).toThrow(
+      'Operation extras MCP _meta must be JSON-serializable (cyclic value at self)',
+    );
+    expect(() => withExtras({ title: '   ' })).toThrow('Operation extras MCP title must be non-empty and bounded');
+  });
+
   it('rejects operations whose MCP owner does not exist', () => {
     expect(() => defineRscAgentBundle(
       createElement(
