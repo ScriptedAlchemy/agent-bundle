@@ -255,6 +255,8 @@ artifact/
 
 Portable artifacts contain portable plugin, skills, MCP, and App-resource files. Codex and Claude artifacts contain their respective native metadata and generated hook wrappers. Cursor artifacts contain the `.cursor-plugin/plugin.json` manifest, the auto-discovered `mcp.json` (Cursor's typeless server format), the flat versioned `hooks/hooks.json` with Cursor-codec wrappers, and shared skills, scripts, and assets. Terminal hosts can use normal MCP tools and resources; visual rendering of an MCP App depends on the host supporting the standard resource metadata.
 
+Every emitted stdio MCP server entry carries an `AGENT_BUNDLE_PLUGIN_ROOT` environment variable holding the plugin install root in the target's native spelling (`${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`, `${CURSOR_PLUGIN_ROOT}`, or Codex's `./` resolved against the entry's plugin-root `cwd`); server runtime code should resolve persistent state against this anchor rather than the process working directory, and a server's own `env` entries win over the injected value. See the [package README](packages/agent-bundle/README.md) for the exact per-target semantics.
+
 ## Public examples
 
 The repository includes credential-free public example workspaces. Each

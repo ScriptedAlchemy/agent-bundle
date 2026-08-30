@@ -101,11 +101,19 @@ it('lays both host manifests over one shared bundle root', () => {
     skills: './skills/',
   });
 
-  const claudeMcp = JSON.parse(documents['.mcp.json']!) as { readonly mcpServers: Record<string, { readonly args: readonly string[] }> };
+  const claudeMcp = JSON.parse(documents['.mcp.json']!) as {
+    readonly mcpServers: Record<string, { readonly args: readonly string[]; readonly cwd?: string; readonly env?: Record<string, string> }>;
+  };
   expect(claudeMcp.mcpServers['status']!.args[0]).toBe('${CLAUDE_PLUGIN_ROOT}/mcp/server.mjs');
+  expect(claudeMcp.mcpServers['status']!.cwd).toBe('${CLAUDE_PLUGIN_ROOT}');
+  expect(claudeMcp.mcpServers['status']!.env).toEqual({ AGENT_BUNDLE_PLUGIN_ROOT: '${CLAUDE_PLUGIN_ROOT}' });
 
-  const codexMcp = JSON.parse(documents['.codex-plugin/mcp.json']!) as { readonly mcpServers: Record<string, { readonly args: readonly string[]; readonly cwd?: string }> };
+  const codexMcp = JSON.parse(documents['.codex-plugin/mcp.json']!) as {
+    readonly mcpServers: Record<string, { readonly args: readonly string[]; readonly cwd?: string; readonly env?: Record<string, string> }>;
+  };
   expect(codexMcp.mcpServers['status']!.args[0]).toBe('./mcp/server.mjs');
+  expect(codexMcp.mcpServers['status']!.cwd).toBe('./');
+  expect(codexMcp.mcpServers['status']!.env).toEqual({ AGENT_BUNDLE_PLUGIN_ROOT: './' });
 
   const hooks = documents['hooks/hooks.json']!;
   expect(hooks).toContain('${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs');
@@ -129,9 +137,12 @@ it('lays both host manifests over one shared bundle root', () => {
     skills: './skills/',
     version: '2.0.0',
   });
-  const cursorMcp = JSON.parse(documents['.cursor-plugin/mcp.json']!) as { readonly mcpServers: Record<string, { readonly args: readonly string[] }> };
+  const cursorMcp = JSON.parse(documents['.cursor-plugin/mcp.json']!) as {
+    readonly mcpServers: Record<string, { readonly args: readonly string[]; readonly env?: Record<string, string> }>;
+  };
   expect(cursorMcp.mcpServers['status']!.args[0]).toBe('${CURSOR_PLUGIN_ROOT}/mcp/server.mjs');
   expect(cursorMcp.mcpServers['status']).not.toHaveProperty('type');
+  expect(cursorMcp.mcpServers['status']!.env).toEqual({ AGENT_BUNDLE_PLUGIN_ROOT: '${CURSOR_PLUGIN_ROOT}' });
   expect(JSON.parse(documents['hooks/hooks-cursor.json']!)).toEqual({
     hooks: {
       postToolUse: [{
