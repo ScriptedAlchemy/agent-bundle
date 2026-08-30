@@ -8,7 +8,7 @@ import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
-import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
+import { pathTokens, pluginRootEnvAnchor, type NormalizedPlugin } from '../src/core/types.ts';
 
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
 
@@ -224,7 +224,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
       relativePath: '.codex-plugin/plugin.json',
     },
     {
-      content: '{"mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"streamable-http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","./tools/server.mjs"],"command":"node","cwd":"./","env":{"CACHE_DIR":"cache"},"type":"stdio"}}}\n',
+      content: '{"mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"streamable-http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","./tools/server.mjs"],"command":"node","cwd":"./","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"./","CACHE_DIR":"cache"},"type":"stdio"}}}\n',
       kind: 'write',
       relativePath: '.mcp.json',
     },
@@ -244,7 +244,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
       relativePath: '.claude-plugin/plugin.json',
     },
     {
-      content: '{"mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","${CLAUDE_PLUGIN_ROOT}/tools/server.mjs"],"command":"node","cwd":"${CLAUDE_PLUGIN_ROOT}","env":{"CACHE_DIR":"cache"},"type":"stdio"}}}\n',
+      content: '{"mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","${CLAUDE_PLUGIN_ROOT}/tools/server.mjs"],"command":"node","cwd":"${CLAUDE_PLUGIN_ROOT}","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","CACHE_DIR":"cache"},"type":"stdio"}}}\n',
       kind: 'write',
       relativePath: '.mcp.json',
     },
@@ -272,7 +272,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
   await validateDocuments('claude', writeContents(plugin, 'claude'));
 });
 
-it('embeds the Claude plugin root in compiled MCP entry arguments', () => {
+it('anchors compiled Claude MCP entries with absolute arguments, plugin-root cwd, and the env anchor', () => {
   const compiled = {
     ...plugin,
     mcpServers: Object.freeze([Object.freeze({
@@ -284,12 +284,58 @@ it('embeds the Claude plugin root in compiled MCP entry arguments', () => {
   const entry = planEntries(compiled, 'claude').find((candidate) => candidate.relativePath === '.mcp.json');
   expect(entry?.kind).toBe('write');
   const document = JSON.parse(entry?.kind === 'write' ? entry.content : '{}') as {
-    mcpServers: Record<string, { args?: string[]; cwd?: string }>;
+    mcpServers: Record<string, { args?: string[]; cwd?: string; env?: Record<string, string> }>;
   };
+  // The absolute entry path stays as the hedge against Claude Code ignoring
+  // cwd at runtime; cwd is emitted anyway as schema-valid future-proofing,
+  // and the env anchor is the guaranteed working-directory-independent root.
   expect(document.mcpServers.stdio).toMatchObject({
     args: ['${CLAUDE_PLUGIN_ROOT}/mcp/compiled-server.mjs'],
+    cwd: '${CLAUDE_PLUGIN_ROOT}',
+    env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CLAUDE_PLUGIN_ROOT}', CACHE_DIR: 'cache' },
   });
-  expect(document.mcpServers.stdio).not.toHaveProperty('cwd');
+});
+
+it.each(['codex', 'claude'] as const)(
+  'keeps a user-declared plugin-root env anchor over the injected %s value',
+  (target) => {
+    const overridden = {
+      ...plugin,
+      mcpServers: Object.freeze([Object.freeze({
+        ...plugin.mcpServers[0]!,
+        env: Object.freeze({ [pluginRootEnvAnchor]: 'declared-root' }),
+      })]),
+    } satisfies NormalizedPlugin;
+    const entry = planEntries(overridden, target).find((candidate) => candidate.relativePath === '.mcp.json');
+    const document = JSON.parse(entry?.kind === 'write' ? entry.content : '{}') as {
+      mcpServers: Record<string, { env?: Record<string, string> }>;
+    };
+    expect(document.mcpServers.stdio?.env).toEqual({ [pluginRootEnvAnchor]: 'declared-root' });
+  },
+);
+
+it('omits the Codex env anchor when a stdio server has no plugin-root cwd to resolve it against', () => {
+  const unanchored = {
+    ...plugin,
+    mcpServers: Object.freeze([Object.freeze({
+      args: Object.freeze(['serve']),
+      command: 'external-tool',
+      env: Object.freeze({ CACHE_DIR: 'cache' }),
+      id: 'mcp:external',
+      name: 'external',
+      provenance: Object.freeze({ kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' }),
+      targets: Object.freeze(['codex', 'claude']),
+      transport: 'stdio' as const,
+    })]),
+  } satisfies NormalizedPlugin;
+  const read = (target: 'codex' | 'claude') => {
+    const entry = planEntries(unanchored, target).find((candidate) => candidate.relativePath === '.mcp.json');
+    return (JSON.parse(entry?.kind === 'write' ? entry.content : '{}') as {
+      mcpServers: Record<string, { env?: Record<string, string> }>;
+    }).mcpServers.external?.env;
+  };
+  expect(read('codex')).toEqual({ CACHE_DIR: 'cache' });
+  expect(read('claude')).toEqual({ [pluginRootEnvAnchor]: '${CLAUDE_PLUGIN_ROOT}', CACHE_DIR: 'cache' });
 });
 
 it.each(['codex', 'claude'] as const)(
@@ -510,7 +556,7 @@ it('applies only native path-token semantics and surfaces exact capability diagn
     'claude.mcp.token.headers.key',
   ]);
   expect(claude.entries.find((entry) => entry.relativePath === '.mcp.json')).toEqual({
-    content: '{"mcpServers":{"workspace":{"args":["${CLAUDE_PROJECT_DIR}/tool"],"command":"${CLAUDE_PLUGIN_ROOT}","cwd":"${CLAUDE_PLUGIN_DATA}","env":{"WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
+    content: '{"mcpServers":{"workspace":{"args":["${CLAUDE_PROJECT_DIR}/tool"],"command":"${CLAUDE_PLUGIN_ROOT}","cwd":"${CLAUDE_PLUGIN_DATA}","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: '.mcp.json',
     sourceInputs: ['/workspace/agent-bundle.config.ts'],
@@ -591,7 +637,7 @@ it('rejects Claude path tokens in environment keys while expanding values in a v
 
   expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['claude.mcp.token.env.key']);
   expect(plan.entries.find((entry) => entry.relativePath === '.mcp.json')).toEqual({
-    content: '{"mcpServers":{"valid-env":{"command":"node","env":{"DATA":"${CLAUDE_PLUGIN_DATA}","ROOT":"${CLAUDE_PLUGIN_ROOT}","WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
+    content: '{"mcpServers":{"valid-env":{"command":"node","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","DATA":"${CLAUDE_PLUGIN_DATA}","ROOT":"${CLAUDE_PLUGIN_ROOT}","WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: '.mcp.json',
     sourceInputs: ['/workspace/agent-bundle.config.ts'],

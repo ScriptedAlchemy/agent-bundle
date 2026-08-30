@@ -52,6 +52,11 @@ export interface AgentBundleMcpServer {
   command?: string;
   cwd?: string;
   entry?: string;
+  /**
+   * Extra environment for stdio servers. Adapters inject the well-known
+   * plugin-root anchor (see pluginRootEnvAnchor) beneath these entries, so a
+   * declared key with that name wins over the injected value.
+   */
   env?: Readonly<Record<string, string>>;
   headers?: Readonly<Record<string, string>>;
   targets?: readonly string[];
@@ -326,3 +331,15 @@ export const pathTokens = Object.freeze({
   pluginData: 'agent-bundle:path:plugin-data',
   workspaceRoot: 'agent-bundle:path:workspace-root',
 } as const);
+
+/**
+ * Well-known environment variable every adapter injects into emitted stdio
+ * MCP server entries, holding the plugin install root in the target's native
+ * representation (`${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`,
+ * `${CURSOR_PLUGIN_ROOT}`, or Codex's `./` resolved against the entry's
+ * plugin-root cwd). Server runtime code should resolve persistent state and
+ * bundled assets against it instead of the process working directory, which
+ * not every host anchors to the plugin root. A user-declared env entry with
+ * this key always wins over the injected value.
+ */
+export const pluginRootEnvAnchor = 'AGENT_BUNDLE_PLUGIN_ROOT';

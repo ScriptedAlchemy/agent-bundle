@@ -34,6 +34,7 @@ import {
   standardPluginArtifactPlan,
   validateJsonSchemaDocument,
   validateModernMcpDocument,
+  withPluginRootEnvAnchor,
   type TargetAdapter,
   type TargetArtifactPlan,
 } from './types.ts';
@@ -152,7 +153,7 @@ export const planCursorMcpServer = (
     if (server.source !== undefined && server.cwd === pathTokens.pluginRoot && args?.[0] !== undefined) {
       args[0] = `\${CURSOR_PLUGIN_ROOT}/${args[0]}`;
     }
-    const env = server.env === undefined
+    const declaredEnv = server.env === undefined
       ? undefined
       : Object.fromEntries(Object.entries(server.env).map(([key, value]) => [key, expandCursorToken(value)]));
     return {
@@ -160,7 +161,7 @@ export const planCursorMcpServer = (
       value: {
         ...(args === undefined ? {} : { args }),
         command: expandCursorToken(server.command),
-        ...(env === undefined ? {} : { env }),
+        env: withPluginRootEnvAnchor(declaredEnv, expandCursorToken(pathTokens.pluginRoot)),
       },
     };
   }
@@ -202,7 +203,7 @@ export const cursorManifest = (
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.0.0',
+  adapterRevision: '1.1.0',
   capabilityRevision: capabilityTable.observedCliVersion,
   capabilitySha256: 'b8990776721f3e2cf4707364812586a0043b8a1247899a47f256302739c00443',
   observedVersion: capabilityTable.observedCliVersion,

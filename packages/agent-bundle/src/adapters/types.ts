@@ -6,6 +6,7 @@ import { stableJson } from '../core/digest.ts';
 import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import {
   pathTokens,
+  pluginRootEnvAnchor,
   type AgentBundleConfig,
   type NormalizedPlugin,
 } from '../core/types.ts';
@@ -85,6 +86,16 @@ export const schemaDescriptorsFrom = (
 /** True when a value embeds any canonical Agent Bundle path token. */
 export const hasPathToken = (value: string): boolean =>
   value.includes(pathTokens.pluginRoot) || value.includes(pathTokens.pluginData) || value.includes(pathTokens.workspaceRoot);
+
+/**
+ * Injects the well-known plugin-root env anchor beneath a stdio server's
+ * declared environment. The declared entries spread after the anchor, so a
+ * user-declared `AGENT_BUNDLE_PLUGIN_ROOT` key always wins.
+ */
+export const withPluginRootEnvAnchor = <Value extends string | undefined>(
+  env: Readonly<Record<string, Value>> | undefined,
+  pluginRoot: string,
+): Record<string, Value | string> => ({ [pluginRootEnvAnchor]: pluginRoot, ...env });
 
 export interface StandardPluginArtifactsInput {
   readonly diagnostics: readonly Diagnostic[];

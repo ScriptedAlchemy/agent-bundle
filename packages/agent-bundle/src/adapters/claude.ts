@@ -38,6 +38,7 @@ import {
   standardPluginArtifactPlan,
   validateJsonSchemaDocument,
   validateModernMcpDocument,
+  withPluginRootEnvAnchor,
   type TargetAdapter,
   type TargetArtifactPlan,
 } from './types.ts';
@@ -81,7 +82,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.0.0',
+  adapterRevision: '1.1.0',
   capabilityRevision: capabilityTable.observedCliVersion,
   capabilitySha256: 'a1d90db5f605e76dad541a1ba37ba06283aa24f8b55f10ce7d197b5c6b5ac9f2',
   observedVersion: capabilityTable.observedCliVersion,
@@ -137,7 +138,7 @@ const planMcpServer = (
       diagnostics.push(errorDiagnostic('claude.mcp.command.required', `Claude MCP server "${server.name}" requires a command.`));
       return { diagnostics };
     }
-    const env = server.env === undefined
+    const declaredEnv = server.env === undefined
       ? undefined
       : Object.fromEntries(Object.entries(server.env).map(([key, value]) => {
           if (hasPathToken(key)) {
@@ -150,6 +151,11 @@ const planMcpServer = (
         }));
     if (diagnostics.length > 0) return { diagnostics };
     const args = server.args?.map(expandClaudeToken);
+    // Claude Code currently ignores stdio cwd at runtime (see
+    // anthropics/claude-code#17565), so the absolute entry path stays as the
+    // script-resolution hedge and the env anchor carries the working
+    // plugin-root guarantee; cwd is still emitted below as documented,
+    // schema-valid future-proofing.
     if (server.source !== undefined && server.cwd === pathTokens.pluginRoot && args?.[0] !== undefined) {
       args[0] = `${hookContract.commandRoot}/${args[0]}`;
     }
@@ -158,8 +164,8 @@ const planMcpServer = (
       value: {
         ...(args === undefined ? {} : { args }),
         command: expandClaudeToken(server.command),
-        ...(server.cwd === undefined || server.source !== undefined ? {} : { cwd: expandClaudeToken(server.cwd) }),
-        ...(env === undefined ? {} : { env }),
+        ...(server.cwd === undefined ? {} : { cwd: expandClaudeToken(server.cwd) }),
+        env: withPluginRootEnvAnchor(declaredEnv, expandClaudeToken(pathTokens.pluginRoot)),
         type: 'stdio',
       },
     };
