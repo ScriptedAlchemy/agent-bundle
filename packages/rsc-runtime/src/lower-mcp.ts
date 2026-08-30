@@ -119,7 +119,7 @@ const jsonRecord = (value: unknown, message: string): Record<string, JsonValue> 
     }
     return clone;
   } catch (error) {
-    throw new Error(`${message} (${error instanceof Error ? error.message : String(error)})`);
+    throw new Error(`${message} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
   }
 };
 

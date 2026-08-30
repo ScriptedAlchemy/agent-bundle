@@ -2,6 +2,7 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { stableJson } from '../core/digest.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
   defaultGeneratedRuntime,
@@ -382,12 +383,31 @@ const validUiUri = (value: string): boolean => {
   }
 };
 
+/**
+ * The declaration identity that lets several servers share one app name as
+ * one compiled app. Targets stay out of it: each declaring server selects
+ * its own hosts for the shared output.
+ */
+const mcpAppIdentity = (app: AgentBundleMcpApp): string | undefined => {
+  try {
+    return stableJson({
+      ...(app._meta === undefined ? {} : { _meta: app._meta }),
+      entry: app.entry,
+      resourceUri: app.resourceUri,
+      ...(app.template === undefined ? {} : { template: app.template }),
+    });
+  } catch {
+    // Non-JSON _meta is separately rejected by AB4338; never treat it as shareable.
+    return undefined;
+  }
+};
+
 const validateMcpApps = (
   name: string,
   server: AgentBundleMcpServer,
   loaded: LoadedConfig,
-  seenNames: Set<string>,
-  seenUris: Set<string>,
+  seenApps: Map<string, string | undefined>,
+  seenUris: Map<string, string>,
 ): Diagnostic[] => {
   if (server.apps === undefined) return [];
   const diagnostics: Diagnostic[] = [];
@@ -408,20 +428,22 @@ const validateMcpApps = (
     return diagnostics;
   }
   for (const [appName, value] of Object.entries(server.apps)) {
+    const identity = isRecord(value) ? mcpAppIdentity(value as AgentBundleMcpApp) : undefined;
     if (!/^[a-z][a-z0-9-]*$/u.test(appName)) {
       diagnostics.push(sourceDiagnostic(
         'AB4324',
         `MCP App name ${JSON.stringify(appName)} must use stable lowercase kebab-case.`,
         loaded.configPath,
       ));
-    } else if (seenNames.has(appName)) {
+    } else if (seenApps.has(appName) && (identity === undefined || seenApps.get(appName) !== identity)) {
       diagnostics.push(sourceDiagnostic(
         'AB4325',
-        `MCP App name ${JSON.stringify(appName)} is duplicated.`,
+        `MCP App name ${JSON.stringify(appName)} is duplicated with a conflicting definition; `
+        + 'servers may share an app name only with an identical declaration.',
         loaded.configPath,
       ));
     }
-    seenNames.add(appName);
+    if (!seenApps.has(appName)) seenApps.set(appName, identity);
     if (!isRecord(value)) {
       diagnostics.push(sourceDiagnostic(
         'AB4326',
@@ -450,14 +472,16 @@ const validateMcpApps = (
         `MCP App ${JSON.stringify(appName)} resourceUri must use ui:// with a nonempty host.`,
         loaded.configPath,
       ));
-    } else if (seenUris.has(app.resourceUri)) {
+    } else if (seenUris.has(app.resourceUri) && seenUris.get(app.resourceUri) !== appName) {
       diagnostics.push(sourceDiagnostic(
         'AB4330',
-        `MCP App resourceUri ${JSON.stringify(app.resourceUri)} is duplicated.`,
+        `MCP App resourceUri ${JSON.stringify(app.resourceUri)} is declared by more than one app name.`,
         loaded.configPath,
       ));
     }
-    if (typeof app.resourceUri === 'string') seenUris.add(app.resourceUri);
+    if (typeof app.resourceUri === 'string' && !seenUris.has(app.resourceUri)) {
+      seenUris.set(app.resourceUri, appName);
+    }
     if (app.template !== undefined) {
       if (!nonemptyString(app.template)) {
         diagnostics.push(sourceDiagnostic(
@@ -649,8 +673,8 @@ const validateMcp = (loaded: LoadedConfig): Diagnostic[] => {
   if (!isRecord(mcp.servers)) {
     return [sourceDiagnostic('AB4301', 'MCP configuration must define a servers object.', loaded.configPath)];
   }
-  const names = new Set<string>();
-  const uris = new Set<string>();
+  const names = new Map<string, string | undefined>();
+  const uris = new Map<string, string>();
   return Object.entries(mcp.servers).flatMap(([name, server]) => {
     const diagnostics = validateMcpServer(name, server, loaded);
     return isRecord(server)

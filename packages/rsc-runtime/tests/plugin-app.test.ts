@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import {
   AgentBundle,
+  McpApp,
   McpServer,
   Operation,
   Script,
@@ -11,6 +12,7 @@ import {
   defineOperation,
   defineRscAgentBundle,
   runRscCli,
+  type McpAppProps,
 } from '../src/index.js';
 
 const statusOperation = defineOperation({
@@ -124,6 +126,110 @@ describe('RSC plugin applications', () => {
         ),
       )).toThrow(/duplicate/iu);
     }
+  });
+
+  it('lowers McpApp children into the owning server apps record', () => {
+    const application = defineRscAgentBundle(createElement(
+      AgentBundle,
+      { name: 'widget-host', targets: ['claude', 'codex'], version: '1.0.0' },
+      createElement(
+        McpServer,
+        { entry: './src/mcp-server.ts', name: 'library' },
+        createElement(McpApp, {
+          _meta: { ui: { prefersBorder: true } },
+          entry: './views/widget.ts',
+          name: 'widget',
+          resourceUri: 'ui://widget-host/widget.html',
+          targets: ['claude'],
+          template: './views/widget.html',
+        }),
+      ),
+    ));
+
+    expect(application.config.mcp).toEqual({
+      servers: {
+        library: {
+          apps: {
+            widget: {
+              _meta: { ui: { prefersBorder: true } },
+              entry: './views/widget.ts',
+              resourceUri: 'ui://widget-host/widget.html',
+              targets: ['claude'],
+              template: './views/widget.html',
+            },
+          },
+          entry: './src/mcp-server.ts',
+          targets: ['claude', 'codex'],
+        },
+      },
+    });
+    const apps = application.config.mcp?.servers['library']?.apps;
+    expect(Object.isFrozen(apps)).toBe(true);
+    expect(Object.isFrozen(apps?.['widget'])).toBe(true);
+    expect(Object.isFrozen(apps?.['widget']?._meta)).toBe(true);
+  });
+
+  it('shares one identical app across servers and rejects conflicting redeclarations', () => {
+    const widget = (overrides: Partial<McpAppProps> = {}) => createElement(McpApp, {
+      entry: './views/widget.ts',
+      name: 'widget',
+      resourceUri: 'ui://widget-host/widget.html',
+      ...overrides,
+    });
+    const bundle = (...serverChildren: readonly (readonly [string, ReturnType<typeof widget>])[]) =>
+      defineRscAgentBundle(createElement(
+        AgentBundle,
+        { name: 'widget-host', targets: ['claude'], version: '1.0.0' },
+        ...serverChildren.map(([name, app]) => createElement(McpServer, { entry: `./src/${name}.ts`, name }, app)),
+      ));
+
+    const shared = bundle(['library', widget()], ['public', widget()]);
+    expect(shared.config.mcp?.servers['library']?.apps?.['widget']).toEqual(
+      shared.config.mcp?.servers['public']?.apps?.['widget'],
+    );
+
+    expect(() => bundle(['library', widget()], ['public', widget({ entry: './views/other.ts' })])).toThrow(
+      'MCP app widget on server public does not match its declaration on another server',
+    );
+    expect(() => bundle(['library', widget()], ['public', widget({ name: 'copycat' })])).toThrow(
+      'MCP app resource URI ui://widget-host/widget.html is already declared by app widget',
+    );
+  });
+
+  it('rejects malformed app declarations at lowering time', () => {
+    const appHost = (...children: readonly ReturnType<typeof createElement>[]) => () => defineRscAgentBundle(createElement(
+      AgentBundle,
+      { name: 'widget-host', targets: ['claude'], version: '1.0.0' },
+      createElement(McpServer, { entry: './src/mcp-server.ts', name: 'library' }, ...children),
+    ));
+    const app = (overrides: Partial<McpAppProps>) => createElement(McpApp, {
+      entry: './views/widget.ts',
+      name: 'widget',
+      resourceUri: 'ui://widget-host/widget.html',
+      ...overrides,
+    });
+
+    expect(appHost(app({}), app({ resourceUri: 'ui://widget-host/other.html' }))).toThrow(
+      'RSC plugin definition contains a duplicate MCP app name on server library',
+    );
+    expect(appHost(createElement(Skill, { source: './skills/misplaced' }))).toThrow(
+      'MCP server library contains unsupported child rsc-agent-skill',
+    );
+    expect(appHost(app({ name: 'Widget' }))).toThrow(
+      'MCP server library app name must be a stable lowercase kebab-case identifier',
+    );
+    expect(appHost(app({ resourceUri: 'https://example.test/widget.html' }))).toThrow(
+      'MCP app widget resourceUri must use ui:// with a nonempty host',
+    );
+    expect(appHost(app({ targets: ['codex'] }))).toThrow('MCP app widget targets selects an undeclared target');
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(appHost(app({ _meta: cyclic }))).toThrow(
+      'MCP app widget _meta must be JSON-serializable (cyclic value at self)',
+    );
+    expect(appHost(app({ entry: '../views/widget.ts' }))).toThrow(
+      'MCP app widget entry must be a contained project-relative path',
+    );
   });
 
   it('preserves listing title and _meta on the frozen MCP definition without sharing the caller object', () => {

@@ -36,6 +36,7 @@ from the same typed operation registry:
 ```tsx
 import {
   AgentBundle,
+  McpApp,
   McpServer,
   Operation,
   Script,
@@ -79,7 +80,14 @@ export const application = defineRscAgentBundle(
   <AgentBundle name="example" targets={['claude', 'codex']} version="1.0.0">
     <Skill source="./skills/example" />
     <Script entry="./src/cli-entry.ts" name="example" />
-    <McpServer entry="./src/mcp-server.ts" name="runtime" />
+    <McpServer entry="./src/mcp-server.ts" name="runtime">
+      <McpApp
+        entry="./views/status-panel.ts"
+        name="status"
+        resourceUri="ui://example/status.html"
+        template="./views/status-panel.html"
+      />
+    </McpServer>
     <Operation definition={status} />
   </AgentBundle>,
 );
@@ -98,6 +106,18 @@ widget. `createRscMcpServer` registers exactly the annotation hints an
 operation declares (`readOnly`, plus `destructive` / `idempotent` /
 `openWorld` when present); absent hints stay absent on the wire, where they
 keep their MCP-spec default semantics.
+
+`<McpApp>` children of `<McpServer>` lower into the owning server's
+`mcp.servers[<name>].apps` record, so `application.config` stays the single
+source of truth for MCP Apps: the compiler bundles each view into a
+self-contained HTML resource served through `import apps from
+'agent-bundle/mcp-apps'`. App `targets` default to the owning server's
+targets. Several servers may serve one shared widget by declaring the same
+`<McpApp>` (identical `name`, `entry`, `resourceUri`, `template`, and
+`_meta`; per-server `targets` may differ) — it compiles once and lands in
+every declaring server's registry. Conflicting redeclarations of an app
+name, or one `resourceUri` spread across different app names, are rejected
+during lowering.
 
 This layer intentionally does not own transport persistence or application
 state. Those remain explicit dependencies of operation implementations.

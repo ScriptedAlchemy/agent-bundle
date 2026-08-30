@@ -353,6 +353,7 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
     await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
     await writeFile(join(root, 'src', 'other.ts'), 'export {};\n');
     await writeFile(join(root, 'views', 'dashboard.ts'), 'document.body.textContent = "dashboard";\n');
+    await writeFile(join(root, 'views', 'other-dashboard.ts'), 'document.body.textContent = "other";\n');
 
     const malformed = {
       mcp: {
@@ -377,8 +378,14 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
           },
           other: {
             apps: {
-              dashboard: {
+              // AB4330: the resource URI already belongs to app "dashboard".
+              copycat: {
                 entry: './views/dashboard.ts',
+                resourceUri: 'ui://agent-bundle/dashboard.html',
+              },
+              // AB4325: same app name as on "fixture" with a conflicting definition.
+              dashboard: {
+                entry: './views/other-dashboard.ts',
                 resourceUri: 'ui://agent-bundle/dashboard.html',
               },
             },
@@ -742,7 +749,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
       name: 'dashboard',
       output: join(outputRoot, target, 'mcp-apps', 'dashboard.html'),
       resourceUri: 'ui://agent-bundle/dashboard.html',
-      serverId: 'mcp:fixture',
+      serverIds: ['mcp:fixture'],
       source: join(root, 'views', 'dashboard.ts'),
       sourceInputs,
       target,
@@ -785,6 +792,116 @@ it('builds one deterministic self-contained MCP App view and injects it through 
         'views/shell.html',
       ],
     });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('compiles one shared MCP App once and serves it from every identically declaring server', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-shared-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    await symlink(workbenchNodeModules, join(root, 'node_modules'), 'dir');
+    const serverSource = [
+      "import apps from 'agent-bundle/mcp-apps';",
+      'export const bundledApps = apps;',
+      '',
+    ].join('\n');
+    await writeFile(join(root, 'src', 'library.ts'), serverSource);
+    await writeFile(join(root, 'src', 'public.ts'), serverSource);
+    await writeFile(join(root, 'views', 'widget.ts'), 'document.body.textContent = "widget-ready";\n');
+
+    const widget = {
+      _meta: { ui: { prefersBorder: true } },
+      entry: './views/widget.ts',
+      resourceUri: 'ui://agent-bundle/widget.html',
+    };
+    const config = {
+      mcp: {
+        servers: {
+          library: { apps: { widget }, entry: './src/library.ts' },
+          public: { apps: { widget: { ...widget } }, entry: './src/public.ts' },
+        },
+      },
+      plugin: { name: 'mcp-app-shared', version: '1.0.0' },
+      targets: ['portable'],
+    };
+    expect(validateSource(loadedProject(root, config), { skills: [] }, registry)).toEqual([]);
+
+    const model = await normalizeProject(loadedProject(root, config), { skills: [] }, registry);
+    const outputRoot = join(root, 'dist');
+    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    const compiled = (result as unknown as {
+      readonly compiledMcpApps: readonly { readonly name: string; readonly serverIds: readonly string[] }[];
+    }).compiledMcpApps;
+    expect(compiled).toEqual([expect.objectContaining({
+      name: 'widget',
+      resourceUri: 'ui://agent-bundle/widget.html',
+      serverIds: ['mcp:library', 'mcp:public'],
+    })]);
+    expect(await readdir(join(outputRoot, 'portable', 'mcp-apps'))).toEqual(['widget.html']);
+
+    const bundleNames = await readdir(join(outputRoot, 'portable', 'mcp'));
+    for (const serverName of ['library', 'public']) {
+      const bundleName = bundleNames.find((entry) => entry.startsWith(`mcp-${serverName}-`));
+      expect(bundleName).toBeDefined();
+      const bundle = await readFile(join(outputRoot, 'portable', 'mcp', bundleName!), 'utf8');
+      expect(bundle).toContain('ui://agent-bundle/widget.html');
+      expect(bundle).toContain('widget-ready');
+      expect(bundle).toContain('prefersBorder');
+    }
+    expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('rejects conflicting same-name MCP App declarations at compilation planning', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-conflict-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    await writeFile(join(root, 'src', 'library.ts'), 'export {};\n');
+    await writeFile(join(root, 'src', 'public.ts'), 'export {};\n');
+    await writeFile(join(root, 'views', 'widget.ts'), 'export {};\n');
+    await writeFile(join(root, 'views', 'other.ts'), 'export {};\n');
+
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            library: {
+              apps: {
+                widget: { entry: './views/widget.ts', resourceUri: 'ui://agent-bundle/widget.html' },
+              },
+              entry: './src/library.ts',
+            },
+            public: {
+              apps: {
+                widget: { entry: './views/other.ts', resourceUri: 'ui://agent-bundle/widget.html' },
+              },
+              entry: './src/public.ts',
+            },
+          },
+        },
+        plugin: { name: 'mcp-app-conflict', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    await expect(build({
+      model,
+      outputRoot: join(root, 'dist'),
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+    })).rejects.toThrow(
+      'Duplicate compiled MCP App destination "mcp-apps/widget.html"; servers may share an app name only with an identical declaration.',
+    );
   } finally {
     await rm(root, { force: true, recursive: true });
   }

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
 
 import type { NormalizedMcpApp } from '../core/types.ts';
+import { stableJson } from '../core/digest.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
 
@@ -16,7 +17,8 @@ export interface CompiledMcpApp {
   readonly name: string;
   readonly output: string;
   readonly resourceUri: string;
-  readonly serverId: string;
+  /** Every server serving this compiled app; several when servers share one identical declaration. */
+  readonly serverIds: readonly string[];
   readonly source: string;
   readonly sourceInputs: readonly string[];
   readonly target: string;
@@ -74,35 +76,54 @@ const assertSelfContainedViews = async (
   }
 };
 
+/**
+ * The compile-relevant identity of an app declaration. Server declarations
+ * that agree on it describe one shared app compiled into one output; targets
+ * may differ because each server selects its own hosts.
+ */
+const appIdentity = (app: NormalizedMcpApp): string => stableJson({
+  ...(app._meta === undefined ? {} : { _meta: app._meta }),
+  resourceUri: app.resourceUri,
+  source: app.source,
+  ...(app.template === undefined ? {} : { template: app.template }),
+});
+
 export const planCompiledMcpApps = (
   apps: readonly NormalizedMcpApp[],
   options: { readonly outDir: string; readonly target: string },
 ): readonly CompiledMcpApp[] => {
-  const names = new Set<string>();
-  return Object.freeze(apps
-    .filter((app) => app.targets.includes(options.target))
-    .map((app) => {
-      if (names.has(app.name)) {
-        throw new Error(`Duplicate compiled MCP App destination ${JSON.stringify(`mcp-apps/${app.name}.html`)}.`);
+  const planned = new Map<string, { identity: string; serverIds: string[]; app: NormalizedMcpApp }>();
+  for (const app of apps.filter((candidate) => candidate.targets.includes(options.target))) {
+    const identity = appIdentity(app);
+    const existing = planned.get(app.name);
+    if (existing !== undefined) {
+      if (existing.identity !== identity) {
+        throw new Error(
+          `Duplicate compiled MCP App destination ${JSON.stringify(`mcp-apps/${app.name}.html`)}; `
+          + 'servers may share an app name only with an identical declaration.',
+        );
       }
-      names.add(app.name);
-      return Object.freeze({
-        ...(app._meta === undefined ? {} : { _meta: app._meta }),
-        id: app.id,
-        mimeType: mcpAppMimeType,
-        name: app.name,
-        output: resolveArtifactDestination(resolve(options.outDir, 'mcp-apps'), `${app.name}.html`),
-        resourceUri: app.resourceUri,
-        serverId: app.serverId,
-        source: app.source,
-        sourceInputs: Object.freeze([
-          app.provenance.sourcePath,
-          app.source,
-          ...(app.template === undefined ? [] : [app.template]),
-        ]),
-        target: options.target,
-      });
-    }));
+      if (!existing.serverIds.includes(app.serverId)) existing.serverIds.push(app.serverId);
+      continue;
+    }
+    planned.set(app.name, { app, identity, serverIds: [app.serverId] });
+  }
+  return Object.freeze([...planned.values()].map(({ app, serverIds }) => Object.freeze({
+    ...(app._meta === undefined ? {} : { _meta: app._meta }),
+    id: app.id,
+    mimeType: mcpAppMimeType,
+    name: app.name,
+    output: resolveArtifactDestination(resolve(options.outDir, 'mcp-apps'), `${app.name}.html`),
+    resourceUri: app.resourceUri,
+    serverIds: Object.freeze([...serverIds].sort((left, right) => left.localeCompare(right))),
+    source: app.source,
+    sourceInputs: Object.freeze([
+      app.provenance.sourcePath,
+      app.source,
+      ...(app.template === undefined ? [] : [app.template]),
+    ]),
+    target: options.target,
+  })));
 };
 
 export const compileMcpApps = async (
