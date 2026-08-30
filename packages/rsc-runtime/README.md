@@ -21,6 +21,11 @@ transport, persistence, or host packaging. React 19 is a peer dependency and Nod
 
 Structured MCP metadata and content are copied through a strict finite-JSON
 boundary before being returned, so later caller mutations do not alter a result.
+The copy follows MCP SDK wire semantics for `undefined`: object properties whose
+value is `undefined` are dropped and `undefined` array elements lower to `null`,
+exactly as `JSON.stringify` serializes them. Values that cannot round-trip as
+JSON — cycles, accessors, sparse arrays, non-finite numbers, non-plain objects —
+are still rejected, and the error names the offending key path.
 
 ## Complete plugin applications
 
