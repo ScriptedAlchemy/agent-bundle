@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { open, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 
@@ -22,6 +23,84 @@ export const audibleHosts = Object.freeze({
 export class CuratorError extends Error {}
 
 export const utcNow = (): string => new Date().toISOString();
+
+/** Narrows an unknown value to a plain record, or returns an empty one. */
+export const asRecord = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
+  ? value as Record<string, unknown>
+  : {};
+
+/** Extracts `name` strings from catalog contributor rows such as `product.authors`. */
+export const contributorNames = (value: unknown): string[] => Array.isArray(value)
+  ? value.flatMap((row) => {
+      const name = asRecord(row).name;
+      return typeof name === 'string' ? [name] : [];
+    })
+  : [];
+
+/** Escapes one value for an `;FFMETADATA1` document. */
+export const escapeFfmetadata = (value: string): string => value
+  .replaceAll('\\', '\\\\')
+  .replaceAll('=', '\\=')
+  .replaceAll(';', '\\;')
+  .replaceAll('#', '\\#')
+  .replaceAll('\n', '\\n');
+
+export const sha256File = async (path: string): Promise<string> => {
+  const handle = await open(path, 'r');
+  try {
+    const hash = createHash('sha256');
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let position = 0;
+    while (true) {
+      const result = await handle.read(buffer, 0, buffer.length, position);
+      if (result.bytesRead === 0) break;
+      hash.update(buffer.subarray(0, result.bytesRead));
+      position += result.bytesRead;
+    }
+    return hash.digest('hex');
+  } finally {
+    await handle.close();
+  }
+};
+
+export const mapWithConcurrency = async <T, R>(
+  values: readonly T[],
+  concurrency: number,
+  operation: (value: T) => Promise<R>,
+): Promise<R[]> => {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, Math.max(values.length, 1)) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await operation(values[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+};
+
+export const syncFile = async (path: string): Promise<void> => {
+  const file = await open(path, 'r');
+  try {
+    await file.sync();
+  } finally {
+    await file.close();
+  }
+};
+
+/** Directory fsync is best-effort: some filesystems refuse it with EACCES or EINVAL. */
+export const syncDirectory = async (path: string): Promise<void> => {
+  const directory = await open(path, 'r');
+  try {
+    await directory.sync();
+  } catch (error) {
+    if (!['EACCES', 'EINVAL'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+  } finally {
+    await directory.close();
+  }
+};
 
 const naturalCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
@@ -103,21 +182,9 @@ export const writeReceipt = async (
   const staged = join(staging, 'receipt.json');
   try {
     await writeFile(staged, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    const file = await open(staged, 'r');
-    try {
-      await file.sync();
-    } finally {
-      await file.close();
-    }
+    await syncFile(staged);
     await rename(staged, target);
-    const directory = await open(parent, 'r');
-    try {
-      await directory.sync();
-    } catch (error) {
-      if (!['EACCES', 'EINVAL'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-    } finally {
-      await directory.close();
-    }
+    await syncDirectory(parent);
     return target;
   } finally {
     await rm(staging, { force: true, recursive: true });

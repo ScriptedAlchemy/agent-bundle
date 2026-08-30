@@ -1,5 +1,4 @@
-import { Mcp, lowerMcpResult } from '@agent-bundle/rsc-runtime';
-import type { CallToolResult } from '@modelcontextprotocol/server';
+import { Mcp } from '@agent-bundle/rsc-runtime';
 import React from 'react';
 
 import type { AudibleCacheReceipt, AudibleSearchReceipt, AudibleSelectionReceipt } from './audible.ts';
@@ -63,6 +62,10 @@ const summary = (receipt: CuratorReceipt): string => {
       return receipt.status === 'planned'
         ? `Planned ${receipt.audioMode} output at ${receipt.output}; sources remain unchanged.`
         : `Converted and verified ${receipt.output}; sources remain unchanged.`;
+    default: {
+      const unhandled: never = receipt;
+      throw new Error(`Unhandled receipt operation: ${JSON.stringify(unhandled)}`);
+    }
   }
 };
 
@@ -71,6 +74,3 @@ export const CuratorResult = ({ receipt }: { readonly receipt: CuratorReceipt })
     <Mcp.Text>{summary(receipt)}</Mcp.Text>
   </Mcp.Result>
 );
-
-export const renderCuratorResult = (receipt: CuratorReceipt): CallToolResult =>
-  lowerMcpResult(CuratorResult({ receipt }));
