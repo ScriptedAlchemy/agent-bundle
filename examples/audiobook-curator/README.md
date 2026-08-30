@@ -38,6 +38,24 @@ including each host's plugin metadata, Skill, bundled CLI script, and bundled MC
 server. The example uses only public `agent-bundle` and
 `@agent-bundle/rsc-runtime` exports with `workspace:*` dependencies.
 
+## Source layout
+
+- `src/application.tsx` — composition only: merges the feature modules'
+  defaults and declares the `<AgentBundle>` tree (Skill, CLI Script, MCP
+  server, operations).
+- `src/operations/` — the operation catalog, grouped by workflow stage:
+  `discovery` (inspect/inventory/library-audit/select), `audible`
+  (search/select/cache), `evidence` (acoustic/whisper), `media-mutation`
+  (apply-metadata/apply-chapters), and `output` (convert/prepare/audit), with
+  shared `cli-arguments.ts` and `schemas.ts`.
+- Domain logic lives beside them in `src/` (`library.ts`, `audible.ts`,
+  `evidence.ts`, `conversion.ts`, `media-mutation.ts`, `integrity-audit.ts`,
+  `curator-core.ts`) over the shared `foundation.ts` and `media-process.ts`
+  primitives; `result.tsx` renders every receipt for MCP.
+- `src/cli.ts`, `src/cli-entry.ts`, `src/mcp-server.ts`, and
+  `bin/audiobook-curator.js` are the entry shims for the CLI (test-injectable
+  runner, bundled `<Script>` entry, npm bin) and the stdio MCP server.
+
 ## Complete workflow
 
 The original thirteen commands are present:
@@ -77,3 +95,16 @@ signal rather than hidden deadlines.
 
 The completion contract and real-volume checklist are in
 [`docs/parity-ledger.md`](docs/parity-ledger.md).
+
+## Maintainer notes
+
+This example carries two bundler configs: `agent-bundle.config.ts` (the
+application, consumed by `agent-bundle build` for the `artifact/` host
+outputs) and `rslib.config.ts` (a hand-written second build producing
+`dist/` for the npm `bin`/`exports`, plus its `tsconfig.build.json`). The
+duplication is a known framework gap — `agent-bundle build` does not yet emit
+a node-consumable package build, so the same CLI is bundled twice from two
+configs. When the framework owns the package build, delete `rslib.config.ts`,
+`tsconfig.build.json`, and the `build:cli` script; `bin/audiobook-curator.js`
+should then point at the framework's output. See the note at the top of
+`rslib.config.ts`.
