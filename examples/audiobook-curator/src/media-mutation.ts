@@ -1,10 +1,20 @@
-import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdtemp, open, rename, rm, utimes, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { chapterMappingIssues, type ChapterRow } from './conversion.ts';
-import { CuratorError, readJson, utcNow, writeReceipt } from './foundation.ts';
-import { probeMediaDetails, probeMediaRecord, type LibraryDependencies, type MediaDetails } from './library.ts';
+import {
+  CuratorError,
+  asRecord,
+  contributorNames,
+  escapeFfmetadata,
+  readJson,
+  sha256File,
+  syncDirectory,
+  syncFile,
+  utcNow,
+  writeReceipt,
+} from './foundation.ts';
+import { probeMediaDetails, type LibraryDependencies, type MediaDetails } from './library.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
 export interface MetadataInput {
@@ -77,28 +87,24 @@ export interface MediaMutationDependencies extends LibraryDependencies {
   readonly process?: MediaProcess;
 }
 
-const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
-  ? value as Record<string, unknown>
-  : {};
-
 const streams = (details: MediaDetails): Record<string, unknown>[] => {
   if (!Array.isArray(details.streams) || details.streams.length > 256) throw new CuratorError('ffprobe returned invalid streams.');
-  return details.streams.map(object);
+  return details.streams.map(asRecord);
 };
 
 const chaptersFromDetails = (details: MediaDetails): Omit<ChapterRow, 'number'>[] => {
   if (!Array.isArray(details.chapters) || details.chapters.length > 16_384) throw new CuratorError('ffprobe returned invalid chapters.');
   return details.chapters.map((chapter) => {
-    const row = object(chapter);
+    const row = asRecord(chapter);
     return Object.freeze({
       endSeconds: Number(row.end_time ?? 0),
       startSeconds: Number(row.start_time ?? 0),
-      title: String(object(row.tags).title ?? '').trim(),
+      title: String(asRecord(row.tags).title ?? '').trim(),
     });
   });
 };
 
-const duration = (details: MediaDetails): number => Number(object(details.format).duration ?? 0);
+const duration = (details: MediaDetails): number => Number(asRecord(details.format).duration ?? 0);
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : 'Media mutation failed.';
 
@@ -117,8 +123,8 @@ export const chapterRowsFromPayload = (
   payload: unknown,
   durationSeconds: number,
 ): readonly Omit<ChapterRow, 'number'>[] => {
-  const payloadObject = object(payload);
-  const nested = object(object(payloadObject.content_metadata).chapter_info).chapters;
+  const payloadObject = asRecord(payload);
+  const nested = asRecord(asRecord(payloadObject.content_metadata).chapter_info).chapters;
   const chapterData = Array.isArray(payload) ? payload : Array.isArray(payloadObject.chapters) ? payloadObject.chapters : nested;
   if (!Array.isArray(chapterData) || chapterData.length === 0 || chapterData.length > 16_384) {
     throw new CuratorError('chapter document contains no chapters');
@@ -186,7 +192,7 @@ interface StreamSignature {
 }
 
 const streamSignature = (details: MediaDetails, includeArtwork = true): readonly StreamSignature[] => Object.freeze(streams(details).flatMap((stream) => {
-  const artwork = Boolean(object(stream.disposition).attached_pic);
+  const artwork = Boolean(asRecord(stream.disposition).attached_pic);
   if (stream.codec_type === 'data' && stream.codec_tag_string === 'text') return [];
   if (artwork && !includeArtwork) return [];
   return [Object.freeze({
@@ -201,32 +207,14 @@ const streamSignature = (details: MediaDetails, includeArtwork = true): readonly
 }));
 
 const stableFormatTags = (details: MediaDetails): Readonly<Record<string, string>> => Object.freeze(Object.fromEntries(
-  Object.entries(object(object(details.format).tags))
+  Object.entries(asRecord(asRecord(details.format).tags))
     .filter(([key]) => key.toLowerCase() !== 'encoder')
     .map(([key, value]) => [key.toLowerCase(), String(value)]),
 ));
 
-const fileHash = async (path: string): Promise<string> => {
-  const handle = await open(path, 'r');
-  try {
-    const hash = createHash('sha256');
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    let position = 0;
-    while (true) {
-      const result = await handle.read(buffer, 0, buffer.length, position);
-      if (result.bytesRead === 0) break;
-      hash.update(buffer.subarray(0, result.bytesRead));
-      position += result.bytesRead;
-    }
-    return hash.digest('hex');
-  } finally { await handle.close(); }
-};
-
-const escapeMetadata = (value: string): string => value.replaceAll('\\', '\\\\').replaceAll('=', '\\=').replaceAll(';', '\\;').replaceAll('#', '\\#').replaceAll('\n', '\\n');
-
 const chapterMetadata = (rows: readonly Omit<ChapterRow, 'number'>[]): string => `${[
   ';FFMETADATA1',
-  ...rows.flatMap((row) => ['[CHAPTER]', 'TIMEBASE=1/1000', `START=${Math.round(row.startSeconds * 1000)}`, `END=${Math.round(row.endSeconds * 1000)}`, `title=${escapeMetadata(row.title)}`]),
+  ...rows.flatMap((row) => ['[CHAPTER]', 'TIMEBASE=1/1000', `START=${Math.round(row.startSeconds * 1000)}`, `END=${Math.round(row.endSeconds * 1000)}`, `title=${escapeFfmetadata(row.title)}`]),
 ].join('\n')}\n`;
 
 const publishReplacement = async (source: string, temporary: string, before: Awaited<ReturnType<typeof lstat>>): Promise<void> => {
@@ -236,19 +224,12 @@ const publishReplacement = async (source: string, temporary: string, before: Awa
   }
   await chmod(temporary, Number(before.mode));
   await utimes(temporary, before.atime, before.mtime);
-  const file = await open(temporary, 'r');
-  try { await file.sync(); } finally { await file.close(); }
+  await syncFile(temporary);
   await rename(temporary, source);
-  const directory = await open(dirname(source), 'r');
-  try { await directory.sync(); } catch (error) {
-    if (!['EACCES', 'EINVAL'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-  } finally { await directory.close(); }
+  await syncDirectory(dirname(source));
 };
 
-const names = (value: unknown): string => Array.isArray(value) ? value.flatMap((row) => {
-  const name = object(row).name;
-  return typeof name === 'string' && name !== '' ? [name] : [];
-}).join(' & ') : '';
+const names = (value: unknown): string => contributorNames(value).filter((name) => name !== '').join(' & ');
 
 export const applyAudiobookMetadata = async (
   input: MetadataInput,
@@ -256,7 +237,7 @@ export const applyAudiobookMetadata = async (
 ): Promise<MetadataReceipt> => {
   const path = resolve(input.file);
   const productPath = resolve(input.product);
-  const product = object(await readJson(productPath));
+  const product = asRecord(await readJson(productPath));
   const authors = names(product.authors);
   const narrators = names(product.narrators);
   const title = input.title ?? String(product.title ?? '');
@@ -317,16 +298,16 @@ export const applyAudiobookMetadata = async (
       || Math.abs(duration(after) - beforeDuration) > 0.01) {
       throw new CuratorError('chapter structure or duration changed during metadata update; original left untouched');
     }
-    const afterTags = Object.fromEntries(Object.entries(object(object(after.format).tags)).map(([key, value]) => [key.toLowerCase(), String(value)]));
+    const afterTags = Object.fromEntries(Object.entries(asRecord(asRecord(after.format).tags)).map(([key, value]) => [key.toLowerCase(), String(value)]));
     const missingKeys = Object.entries(metadata).filter(([key, value]) => value !== '' && afterTags[key.toLowerCase()] !== value).map(([key]) => key);
     if (missingKeys.length > 0) throw new CuratorError(`metadata verification failed for: ${missingKeys.join(', ')}; original left untouched`);
     const afterStreams = streams(after);
     const firstAudio = afterStreams.find((stream) => stream.codec_type === 'audio');
-    if (input.language !== undefined && String(object(firstAudio?.tags).language ?? '').toLowerCase() !== input.language.toLowerCase()) {
+    if (input.language !== undefined && String(asRecord(firstAudio?.tags).language ?? '').toLowerCase() !== input.language.toLowerCase()) {
       throw new CuratorError('audio language metadata verification failed; original left untouched');
     }
-    const beforeArtwork = streams(before).filter((stream) => Boolean(object(stream.disposition).attached_pic)).length;
-    const afterArtwork = afterStreams.filter((stream) => Boolean(object(stream.disposition).attached_pic)).length;
+    const beforeArtwork = streams(before).filter((stream) => Boolean(asRecord(stream.disposition).attached_pic)).length;
+    const afterArtwork = afterStreams.filter((stream) => Boolean(asRecord(stream.disposition).attached_pic)).length;
     if (afterArtwork < (input.artwork === undefined ? beforeArtwork : 1)) throw new CuratorError('artwork verification failed; original left untouched');
     if (JSON.stringify(streamSignature(before, input.artwork === undefined)) !== JSON.stringify(streamSignature(after, input.artwork === undefined))) {
       throw new CuratorError('non-artwork stream inventory changed; original left untouched');
@@ -340,7 +321,7 @@ export const applyAudiobookMetadata = async (
       audioStreamHashesAfter: afterHashes,
       bytesAfter: final.size,
       chapterCountAfter: afterRows.length,
-      sha256After: await fileHash(path),
+      sha256After: await sha256File(path),
       status: 'applied-verified',
       streamCountAfter: afterStreams.length,
       verifiedMetadataKeys: Object.freeze([...Object.entries(metadata).filter(([, value]) => value !== '').map(([key]) => key), ...(input.language === undefined ? [] : ['audio.language'])]),
@@ -411,7 +392,7 @@ export const applyAudiobookChapters = async (
       bytesAfter: final.size,
       chapterCountAfter: afterRows.length,
       durationSeconds: duration(after),
-      sha256After: await fileHash(path),
+      sha256After: await sha256File(path),
       status: 'applied-verified',
       verifiedBoundaries: true,
     });

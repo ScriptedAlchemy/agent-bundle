@@ -1,10 +1,13 @@
-import { mkdir, mkdtemp, open, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 
 import {
   CuratorError,
   audibleHosts,
+  contributorNames,
   normalizedIdentity,
+  syncDirectory,
+  syncFile,
   utcNow,
   writeReceipt,
 } from './foundation.ts';
@@ -107,15 +110,13 @@ const objects = (value: unknown): Record<string, unknown>[] => Array.isArray(val
   ? value.filter((row): row is Record<string, unknown> => row !== null && typeof row === 'object' && !Array.isArray(row))
   : [];
 
-const names = (value: unknown): string[] => objects(value).flatMap((row) => typeof row.name === 'string' ? [row.name] : []);
-
 export const audibleCandidateEvidence = (
   query: AudibleQuery,
   product: Readonly<Record<string, unknown>>,
 ): AudibleCandidateEvidence => {
   const actualTitle = `${String(product.title ?? '')} ${String(product.subtitle ?? '')}`;
-  const authors = names(product.authors);
-  const narrators = names(product.narrators);
+  const authors = contributorNames(product.authors);
+  const narrators = contributorNames(product.narrators);
   const candidateSeconds = Number(product.runtime_length_min ?? 0) * 60;
   const difference = query.durationSeconds !== undefined && query.durationSeconds > 0 && candidateSeconds > 0
     ? Math.abs(candidateSeconds - query.durationSeconds) / query.durationSeconds * 100
@@ -181,7 +182,7 @@ export const defaultCuratorHttpClient: CuratorHttpClient = async (url, options =
   return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
 };
 
-const request = async (
+export const requestWithAttempts = async (
   http: CuratorHttpClient,
   url: string,
   attempts: number,
@@ -221,7 +222,7 @@ export const searchAudible = async (
       title: input.title,
     });
     try {
-      const payload = await request(http, url, attempts, { signal: dependencies.signal });
+      const payload = await requestWithAttempts(http, url, attempts, { signal: dependencies.signal });
       const rows = objects((payload as Record<string, unknown> | null)?.products).slice(0, limit);
       candidates.push(...rows.map((product) => Object.freeze({
         ...product,
@@ -278,13 +279,9 @@ const writeBinary = async (path: string, bytes: Buffer): Promise<void> => {
   const staged = join(staging, 'payload');
   try {
     await writeFile(staged, bytes, { mode: 0o600 });
-    const file = await open(staged, 'r');
-    try { await file.sync(); } finally { await file.close(); }
+    await syncFile(staged);
     await rename(staged, path);
-    const directory = await open(parent, 'r');
-    try { await directory.sync(); } catch (error) {
-      if (!['EACCES', 'EINVAL'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-    } finally { await directory.close(); }
+    await syncDirectory(parent);
   } finally {
     await rm(staging, { force: true, recursive: true });
   }
@@ -301,7 +298,7 @@ export const cacheAudibleEdition = async (
   const productUrl = audibleUrl(region, `/1.0/catalog/products/${encodeURIComponent(input.asin)}`, {
     response_groups: 'contributors,category_ladders,media,product_desc,product_extended_attrs,sample',
   });
-  const productPayload = await request(http, productUrl, attempts, { signal: dependencies.signal });
+  const productPayload = await requestWithAttempts(http, productUrl, attempts, { signal: dependencies.signal });
   const product = (productPayload as Record<string, unknown> | null)?.product;
   if (product === null || typeof product !== 'object' || Array.isArray(product)) throw new CuratorError('Audible product response is invalid.');
   const productRecord = product as Record<string, unknown>;
@@ -313,7 +310,7 @@ export const cacheAudibleEdition = async (
   let chapterPath: string | undefined;
   let chapterError: string | undefined;
   try {
-    const chapters = await request(http, chapterUrl, attempts, { signal: dependencies.signal });
+    const chapters = await requestWithAttempts(http, chapterUrl, attempts, { signal: dependencies.signal });
     chapterPath = join(cache, 'chapters.json');
     await writeReceipt(chapterPath, chapters);
   } catch (error) {
@@ -325,7 +322,7 @@ export const cacheAudibleEdition = async (
     : undefined;
   let artworkPath: string | undefined;
   if (imageUrl !== undefined) {
-    const bytes = await request(http, imageUrl, attempts, { binary: true, signal: dependencies.signal });
+    const bytes = await requestWithAttempts(http, imageUrl, attempts, { binary: true, signal: dependencies.signal });
     if (!Buffer.isBuffer(bytes)) throw new CuratorError('Audible artwork response is not binary.');
     artworkPath = join(cache, extname(new URL(imageUrl).pathname).toLowerCase() === '.png' ? 'cover.png' : 'cover.jpg');
     await writeBinary(artworkPath, bytes);

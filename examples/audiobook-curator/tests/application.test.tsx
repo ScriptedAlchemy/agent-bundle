@@ -1,3 +1,4 @@
+import { lowerMcpResult } from '@agent-bundle/rsc-runtime';
 import { describe, expect, it } from '@rstest/core';
 
 import {
@@ -115,6 +116,17 @@ describe('audiobook curator RSC application', () => {
 
     expect(result).toMatchObject({ applied: true, operation: 'prepare' });
     expect(signal).toBe(controller.signal);
+  });
+
+  it('renders text and detached structured receipts through the public RSC lowerer', async () => {
+    const application = createAudiobookCuratorApplication({ operations: operations() });
+    const inspect = application.operations.find((operation) => operation.mcp?.name === 'inspect_sources')!;
+    const receipt = await inspect.execute({ root: '/library' }, { signal: new AbortController().signal });
+
+    expect(lowerMcpResult(inspect.render(receipt))).toEqual({
+      content: [{ text: 'Inspected 0 audio files (0 bytes).', type: 'text' }],
+      structuredContent: { files: [], operation: 'inspect', root: '/library', totalBytes: 0 },
+    });
   });
 
   it('provides root and command help through the installed CLI adapter', async () => {

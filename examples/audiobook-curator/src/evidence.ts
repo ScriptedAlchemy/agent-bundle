@@ -4,10 +4,11 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 import {
   defaultCuratorHttpClient,
+  requestWithAttempts,
   type AudibleRegion,
   type CuratorHttpClient,
 } from './audible.ts';
-import { CuratorError, audibleHosts, readJson, utcNow, writeReceipt } from './foundation.ts';
+import { CuratorError, asRecord, audibleHosts, contributorNames, readJson, utcNow, writeReceipt } from './foundation.ts';
 import { probeMediaRecord, type LibraryDependencies } from './library.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
@@ -122,30 +123,6 @@ export interface EvidenceDependencies extends LibraryDependencies {
   readonly process?: MediaProcess;
 }
 
-const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
-  ? value as Record<string, unknown>
-  : {};
-
-const names = (value: unknown): string[] => Array.isArray(value) ? value.flatMap((row) => {
-  const name = object(row).name;
-  return typeof name === 'string' ? [name] : [];
-}) : [];
-
-const boundedRequest = async (
-  http: CuratorHttpClient,
-  url: string,
-  attempts: number,
-  binary: boolean,
-  signal?: AbortSignal,
-): Promise<unknown> => {
-  let failure: unknown;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    signal?.throwIfAborted();
-    try { return await http(url, { binary, signal }); } catch (error) { failure = error; }
-  }
-  throw new CuratorError(failure instanceof Error ? failure.message : `Request failed: ${url}`);
-};
-
 const pythonMatcher = (python: string, process: MediaProcess): AcousticMatcher => async (source, sample, options) => {
   const resultMarker = '__AGENT_BUNDLE_AUDIOLOCATE_RESULT__';
   const script = [
@@ -158,7 +135,7 @@ const pythonMatcher = (python: string, process: MediaProcess): AcousticMatcher =
     const result = await process(python, ['-c', script, source, sample, String(options.chunkSeconds), options.verbose ? '1' : '0'], { signal: options.signal });
     const line = result.stdout.split(/\r?\n/u).findLast((candidate) => candidate.startsWith(resultMarker));
     if (line === undefined) throw new CuratorError('Audiolocate emitted no structured result.');
-    return Object.freeze(object(JSON.parse(line.slice(resultMarker.length))));
+    return Object.freeze(asRecord(JSON.parse(line.slice(resultMarker.length))));
   } catch (error) {
     throw new CuratorError(`Audiolocate is optional; install it for ${python}, or inject an acoustic matcher. ${error instanceof Error ? error.message : ''}`.trim());
   }
@@ -179,18 +156,18 @@ const sampleMatch = async (
   let sampleUrl = input.sampleUrl;
   let audible: Record<string, unknown> = { sampleUrl };
   if (sampleUrl === undefined) {
-    const payload = object(await boundedRequest(http, productUrl(region, input.asin), attempts, false, dependencies.signal));
-    const product = object(payload.product);
+    const payload = asRecord(await requestWithAttempts(http, productUrl(region, input.asin), attempts, { signal: dependencies.signal }));
+    const product = asRecord(payload.product);
     sampleUrl = typeof product.sample_url === 'string' ? product.sample_url : undefined;
     audible = {
-      authors: names(product.authors),
-      narrators: names(product.narrators),
+      authors: contributorNames(product.authors),
+      narrators: contributorNames(product.narrators),
       sampleUrl,
       title: product.title,
     };
   }
   if (sampleUrl === undefined || sampleUrl === '') throw new CuratorError('Audible candidate has no sample URL');
-  const bytes = await boundedRequest(http, sampleUrl, attempts, true, dependencies.signal);
+  const bytes = await requestWithAttempts(http, sampleUrl, attempts, { binary: true, signal: dependencies.signal });
   if (!Buffer.isBuffer(bytes)) throw new CuratorError('Audible sample response is not binary.');
   const work = await mkdtemp(join(tmpdir(), 'audiobook-curator-acoustic-'));
   const sample = join(work, 'sample.mp3');
@@ -240,7 +217,7 @@ export const identifyAudibleSample = async (
   dependencies: EvidenceDependencies = {},
 ): Promise<AcousticIdentifyReceipt> => {
   const ranked = [...input.candidates].filter((candidate) => candidate !== null && typeof candidate === 'object')
-    .sort((left, right) => Number(object(right.evidence).score ?? 0) - Number(object(left.evidence).score ?? 0));
+    .sort((left, right) => Number(asRecord(right.evidence).score ?? 0) - Number(asRecord(left.evidence).score ?? 0));
   const seen = new Set<string>();
   const unique = ranked.filter((candidate) => {
     const asin = String(candidate.asin ?? '');
@@ -257,7 +234,7 @@ export const identifyAudibleSample = async (
   for (const candidate of selected) {
     const asin = String(candidate.asin ?? '');
     const region = String(candidate.region ?? 'us') as AudibleRegion;
-    const base = { asin: asin || undefined, region, score: object(candidate.evidence).score, title: candidate.title };
+    const base = { asin: asin || undefined, region, score: asRecord(candidate.evidence).score, title: candidate.title };
     if (asin === '') {
       attempts.push({ ...base, reason: 'candidate has no ASIN', status: 'skipped' });
       continue;
@@ -308,10 +285,10 @@ export const identifyAudibleSample = async (
 };
 
 export const whisperText = (payload: unknown): string => {
-  const row = object(payload);
+  const row = asRecord(payload);
   if (typeof row.transcription === 'string') return row.transcription.trim();
-  if (Array.isArray(row.transcription)) return row.transcription.map((item) => String(object(item).text ?? '')).join(' ').trim();
-  return String(object(row.result).transcription ?? '').trim();
+  if (Array.isArray(row.transcription)) return row.transcription.map((item) => String(asRecord(item).text ?? '')).join(' ').trim();
+  return String(asRecord(row.result).transcription ?? '').trim();
 };
 
 export const whisperSamplingFractions = (maximumWindows: number): readonly number[] => Object.freeze(

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   access,
   copyFile,
@@ -6,7 +5,6 @@ import {
   lstat,
   mkdir,
   mkdtemp,
-  open,
   opendir,
   rename,
   rm,
@@ -15,7 +13,20 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 
-import { CuratorError, naturalCompare, readJson, safeFilename, utcNow, writeReceipt } from './foundation.ts';
+import {
+  CuratorError,
+  asRecord,
+  escapeFfmetadata,
+  mapWithConcurrency,
+  naturalCompare,
+  readJson,
+  safeFilename,
+  sha256File,
+  syncDirectory,
+  syncFile,
+  utcNow,
+  writeReceipt,
+} from './foundation.ts';
 import {
   probeMediaDetails,
   probeMediaRecord,
@@ -159,19 +170,15 @@ const chapterTitle = (path: string, root: string): string => {
   return parts.join(' - ');
 };
 
-const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
-  ? value as Record<string, unknown>
-  : {};
-
 export const chapterRows = (details: MediaDetails): readonly ChapterRow[] => {
   const chapters = Array.isArray(details.chapters) ? details.chapters : [];
   return Object.freeze(chapters.map((chapter, index) => {
-    const row = object(chapter);
+    const row = asRecord(chapter);
     return Object.freeze({
       endSeconds: Number(row.end_time ?? 0),
       number: index + 1,
       startSeconds: Number(row.start_time ?? 0),
-      title: String(object(row.tags).title ?? '').trim(),
+      title: String(asRecord(row.tags).title ?? '').trim(),
     });
   }));
 };
@@ -194,13 +201,6 @@ export const chapterMappingIssues = (
   return Object.freeze(issues);
 };
 
-const metadataEscape = (value: unknown): string => String(value)
-  .replaceAll('\\', '\\\\')
-  .replaceAll('=', '\\=')
-  .replaceAll(';', '\\;')
-  .replaceAll('#', '\\#')
-  .replaceAll('\n', '\\n');
-
 const metadataDocument = (
   inputs: readonly string[],
   root: string,
@@ -208,11 +208,11 @@ const metadataDocument = (
   durations: readonly number[],
 ): string => {
   const lines = [';FFMETADATA1'];
-  for (const [key, value] of Object.entries(metadata)) if (value !== undefined && value !== '') lines.push(`${key}=${metadataEscape(value)}`);
+  for (const [key, value] of Object.entries(metadata)) if (value !== undefined && value !== '') lines.push(`${key}=${escapeFfmetadata(value)}`);
   let start = 0;
   for (let index = 0; index < inputs.length; index += 1) {
     const end = start + Math.max(Math.round(durations[index]! * 1000), 1);
-    lines.push('[CHAPTER]', 'TIMEBASE=1/1000', `START=${start}`, `END=${end}`, `title=${metadataEscape(chapterTitle(inputs[index]!, root))}`);
+    lines.push('[CHAPTER]', 'TIMEBASE=1/1000', `START=${start}`, `END=${end}`, `title=${escapeFfmetadata(chapterTitle(inputs[index]!, root))}`);
     start = end;
   }
   return `${lines.join('\n')}\n`;
@@ -223,14 +223,14 @@ const chapterMetadataDocument = (
   chapters: readonly ChapterRow[],
 ): string => {
   const lines = [';FFMETADATA1'];
-  for (const [key, value] of Object.entries(metadata)) if (value !== undefined && value !== '') lines.push(`${key}=${metadataEscape(value)}`);
+  for (const [key, value] of Object.entries(metadata)) if (value !== undefined && value !== '') lines.push(`${key}=${escapeFfmetadata(value)}`);
   for (const chapter of chapters) {
     lines.push(
       '[CHAPTER]',
       'TIMEBASE=1/1000',
       `START=${Math.max(0, Math.round(chapter.startSeconds * 1000))}`,
       `END=${Math.max(1, Math.round(chapter.endSeconds * 1000))}`,
-      `title=${metadataEscape(chapter.title)}`,
+      `title=${escapeFfmetadata(chapter.title)}`,
     );
   }
   return `${lines.join('\n')}\n`;
@@ -239,24 +239,6 @@ const chapterMetadataDocument = (
 const concatDocument = (paths: readonly string[]): string => paths.map((path) => (
   `file '${resolve(path).replaceAll("'", "'\\''")}'\n`
 )).join('');
-
-const hashFile = async (path: string): Promise<string> => {
-  const handle = await open(path, 'r');
-  try {
-    const hash = createHash('sha256');
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    let position = 0;
-    while (true) {
-      const result = await handle.read(buffer, 0, buffer.length, position);
-      if (result.bytesRead === 0) break;
-      hash.update(buffer.subarray(0, result.bytesRead));
-      position += result.bytesRead;
-    }
-    return hash.digest('hex');
-  } finally {
-    await handle.close();
-  }
-};
 
 const audioHash = async (path: string, process: MediaProcess, ffmpeg: string, signal?: AbortSignal): Promise<string> => {
   const result = await process(ffmpeg, [
@@ -278,17 +260,6 @@ const findM4b = async (root: string): Promise<string[]> => {
     }
   }
   return results.sort(naturalCompare);
-};
-
-const parallel = async (tasks: readonly (() => Promise<void>)[], concurrency: number): Promise<void> => {
-  let cursor = 0;
-  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(tasks.length, 1)) }, async () => {
-    while (cursor < tasks.length) {
-      const index = cursor;
-      cursor += 1;
-      await tasks[index]!();
-    }
-  }));
 };
 
 const assertConversionProperties = (records: readonly MediaRecord[], codec: 'aac' | 'alac'): void => {
@@ -429,13 +400,13 @@ export const convertAudiobook = async (
         workSources.push(...found.map((path) => ({ owner: index, path })));
       }
       const segments = workSources.map((_, index) => join(segmentRoot, `${String(index + 1).padStart(6, '0')}.m4a`));
-      await parallel(segments.map((segment, index) => async () => {
-        const args = ['-v', 'error', '-xerror', '-i', workSources[index]!.path, '-map', '0:a:0'];
+      await mapWithConcurrency(workSources.map((source, index) => ({ segment: segments[index]!, source })), jobs, async ({ segment, source }) => {
+        const args = ['-v', 'error', '-xerror', '-i', source.path, '-map', '0:a:0'];
         if (codec === 'alac') args.push('-c:a', 'alac');
         else args.push('-c:a', 'aac', '-b:a', input.audioBitrate ?? '128k', '-use_editlist', '0');
         args.push(segment);
         await process(ffmpeg, args, { signal: dependencies.signal });
-      }), jobs);
+      });
       const segmentRecords = await Promise.all(segments.map((segment) => probeMediaRecord(segment, segmentRoot, dependencies)));
       uniformAudioProperties(segmentRecords, ['codec', 'sampleRate', 'channels', 'channelLayout', 'bitDepth', 'sampleFormat'], 'conversion segments');
       const concat = join(work, 'concat.txt');
@@ -468,27 +439,15 @@ export const convertAudiobook = async (
       throw new CuratorError('Single-M4B stream copy changed audio; destination left untouched.');
     }
     await rename(temporary, output);
-    const outputHandle = await open(output, 'r');
-    try {
-      await outputHandle.sync();
-    } finally {
-      await outputHandle.close();
-    }
-    const outputDirectory = await open(dirname(output), 'r');
-    try {
-      await outputDirectory.sync();
-    } catch (error) {
-      if (!['EACCES', 'EINVAL'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-    } finally {
-      await outputDirectory.close();
-    }
+    await syncFile(output);
+    await syncDirectory(dirname(output));
     const outputMetadata = await lstat(output);
     const receipt = Object.freeze<ConvertReceipt>({
       ...base,
       audioSha256: stagedAudioHash,
       durationDeltaSeconds: durationDelta,
       outputBytes: outputMetadata.size,
-      outputSha256: await hashFile(output),
+      outputSha256: await sha256File(output),
       probe: staged,
       status: 'converted-verified',
     });

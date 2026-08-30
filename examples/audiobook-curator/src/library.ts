@@ -1,7 +1,7 @@
 import { lstat, opendir } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 
-import { audioExtensions, naturalCompare, normalizedIdentity, utcNow } from './foundation.ts';
+import { audioExtensions, mapWithConcurrency, naturalCompare, normalizedIdentity, utcNow } from './foundation.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
 const maximumEntries = 65_536;
@@ -284,24 +284,6 @@ const auditFile = async (path: string, root: string, dependencies: LibraryDepend
   }
 };
 
-const parallelMap = async <T, R>(
-  values: readonly T[],
-  concurrency: number,
-  operation: (value: T) => Promise<R>,
-): Promise<R[]> => {
-  const results = new Array<R>(values.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(concurrency, Math.max(values.length, 1)) }, async () => {
-    while (cursor < values.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await operation(values[index]!);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-};
-
 export const auditLibrary = async (
   input: { readonly concurrency?: number; readonly sources: readonly string[]; readonly strict?: boolean },
   dependencies: LibraryDependencies = {},
@@ -315,7 +297,7 @@ export const auditLibrary = async (
     candidates.push(...discovered.files.map((path) => ({ path, root: discovered.root })));
   }
   candidates.sort((left, right) => naturalCompare(left.path, right.path));
-  const files = await parallelMap(candidates, concurrency, ({ path, root }) => auditFile(path, root, dependencies));
+  const files = await mapWithConcurrency(candidates, concurrency, ({ path, root }) => auditFile(path, root, dependencies));
   const duplicates = new Map<string, string[]>();
   const multipart = new Map<string, Array<{ part: number; path: string; total: number | null }>>();
   for (const file of files) {

@@ -20,8 +20,9 @@ import {
 import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
+  numberOption,
   onePath,
-  optionValue,
+  optionalField,
   positionalArguments,
   requiredOption,
 } from './cli-arguments.ts';
@@ -93,9 +94,8 @@ export const discoveryOperations = (operations: Required<DiscoveryOperations>) =
       parse: (args) => {
         const valued = new Set(['--max-files']);
         assertOptions(args, new Set(), valued);
-        const maximum = optionValue(args, '--max-files');
         return {
-          ...(maximum === undefined ? {} : { maxFiles: Number(maximum) }),
+          ...optionalField('maxFiles', numberOption(args, '--max-files')),
           root: onePath(args, valued, 'inspect'),
         };
       },
@@ -149,11 +149,10 @@ export const discoveryOperations = (operations: Required<DiscoveryOperations>) =
       parse: (args) => {
         const valued = new Set(['--concurrency', '--report']);
         assertOptions(args, new Set(['--strict']), valued);
-        const concurrency = optionValue(args, '--concurrency');
         const sources = positionalArguments(args, valued);
         if (sources.length === 0) throw new Error('library-audit requires at least one source path.');
         return {
-          ...(concurrency === undefined ? {} : { concurrency: Number(concurrency) }),
+          ...optionalField('concurrency', numberOption(args, '--concurrency')),
           report: requiredOption(args, '--report', 'library-audit'),
           sources,
           ...(args.includes('--strict') ? { strict: true } : {}),

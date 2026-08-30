@@ -18,9 +18,11 @@ import {
 import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
+  numberOption,
   onePath,
   optionChoice,
   optionValue,
+  optionalField,
   positionalArguments,
   requiredOption,
 } from './cli-arguments.ts';
@@ -65,27 +67,24 @@ export const outputOperations = (operations: Required<OutputOperations>) => [
         ]);
         assertOptions(args, new Set(['--apply', '--overwrite']), valued);
         if (positionalArguments(args, valued).length > 0) throw new Error('convert accepts only named options.');
-        const audioCodec = optionChoice(args, '--audio-codec', ['aac', 'alac'] as const);
-        const engine = optionChoice(args, '--engine', ['audiobook-forge', 'ffmpeg'] as const);
-        const jobs = optionValue(args, '--jobs');
         return {
           ...(args.includes('--apply') ? { apply: true } : {}),
           ...(args.includes('--overwrite') ? { overwrite: true } : {}),
-          ...(optionValue(args, '--artwork') === undefined ? {} : { artwork: optionValue(args, '--artwork') }),
-          ...(optionValue(args, '--audio-bitrate') === undefined ? {} : { audioBitrate: optionValue(args, '--audio-bitrate') }),
-          ...(audioCodec === undefined ? {} : { audioCodec }),
+          ...optionalField('artwork', optionValue(args, '--artwork')),
+          ...optionalField('audioBitrate', optionValue(args, '--audio-bitrate')),
+          ...optionalField('audioCodec', optionChoice(args, '--audio-codec', ['aac', 'alac'] as const)),
           author: requiredOption(args, '--author', 'convert'),
-          ...(engine === undefined ? {} : { engine }),
-          ...(optionValue(args, '--forge-aac-encoder') === undefined ? {} : { forgeAacEncoder: optionValue(args, '--forge-aac-encoder') }),
-          ...(optionValue(args, '--forge-cli') === undefined ? {} : { forgeCli: optionValue(args, '--forge-cli') }),
-          ...(jobs === undefined ? {} : { jobs: Number(jobs) }),
-          ...(optionValue(args, '--language') === undefined ? {} : { language: optionValue(args, '--language') }),
-          ...(optionValue(args, '--narrator') === undefined ? {} : { narrator: optionValue(args, '--narrator') }),
+          ...optionalField('engine', optionChoice(args, '--engine', ['audiobook-forge', 'ffmpeg'] as const)),
+          ...optionalField('forgeAacEncoder', optionValue(args, '--forge-aac-encoder')),
+          ...optionalField('forgeCli', optionValue(args, '--forge-cli')),
+          ...optionalField('jobs', numberOption(args, '--jobs')),
+          ...optionalField('language', optionValue(args, '--language')),
+          ...optionalField('narrator', optionValue(args, '--narrator')),
           output: requiredOption(args, '--output', 'convert'),
           receipt: requiredOption(args, '--receipt', 'convert'),
           selection: requiredOption(args, '--selection', 'convert'),
           title: requiredOption(args, '--title', 'convert'),
-          ...(optionValue(args, '--year') === undefined ? {} : { year: optionValue(args, '--year') }),
+          ...optionalField('year', optionValue(args, '--year')),
         };
       },
       summary: 'Plan or apply a verified conversion to one chaptered M4B.',
@@ -119,10 +118,9 @@ export const outputOperations = (operations: Required<OutputOperations>) => [
         assertOptions(args, new Set(['--apply']), valued);
         const outputRoot = optionValue(args, '--output');
         if (outputRoot === undefined) throw new Error('prepare requires --output.');
-        const outputName = optionValue(args, '--name');
         return {
           ...(args.includes('--apply') ? { apply: true } : {}),
-          ...(outputName === undefined ? {} : { outputName }),
+          ...optionalField('outputName', optionValue(args, '--name')),
           outputRoot,
           source: onePath(args, valued, 'prepare'),
         };
@@ -152,7 +150,7 @@ export const outputOperations = (operations: Required<OutputOperations>) => [
         assertOptions(args, new Set(['--full-decode']), valued);
         if (positionalArguments(args, valued).length > 0) throw new Error('audit accepts only named options.');
         return {
-          ...(optionValue(args, '--conversion-receipt') === undefined ? {} : { conversionReceipt: optionValue(args, '--conversion-receipt') }),
+          ...optionalField('conversionReceipt', optionValue(args, '--conversion-receipt')),
           file: requiredOption(args, '--file', 'audit'),
           ...(args.includes('--full-decode') ? { fullDecode: true } : {}),
           receipt: requiredOption(args, '--receipt', 'audit'),

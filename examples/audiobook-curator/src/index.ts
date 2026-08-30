@@ -1,4 +1,4 @@
-export { auditAudiobook, inspectSources, prepareAudiobook } from './curator-core.js';
+export { inspectSources, prepareAudiobook } from './curator-core.js';
 export {
   audibleCandidateEvidence,
   cacheAudibleEdition,
@@ -22,8 +22,6 @@ export type {
 } from './audible.js';
 export type {
   AudioProbe,
-  AuditInput,
-  AuditReceipt,
   CuratorDependencies,
   InspectedAudioFile,
   InspectionReceipt,

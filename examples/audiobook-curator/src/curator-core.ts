@@ -1,24 +1,20 @@
-import { createHash } from 'node:crypto';
 import {
-  constants,
   link,
   lstat,
   mkdir,
   mkdtemp,
-  open,
   opendir,
   rm,
 } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 
+import { syncFile } from './foundation.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
 const supportedExtensions = new Set(['.aac', '.flac', '.m4a', '.m4b', '.mp3', '.ogg', '.opus', '.wav']);
 const safeOutputName = /^[a-z0-9][a-z0-9._ -]{0,199}\.m4b$/iu;
 const maximumTraversalEntries = 4096;
 const maximumInventoryFiles = 256;
-const hashChunkBytes = 1024 * 1024;
-const readOnlyFlags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
 
 export interface CuratorDependencies {
   readonly ffmpeg?: string;
@@ -60,20 +56,6 @@ export interface PrepareReceipt {
   readonly operation: 'prepare';
   readonly output: string;
   readonly probe: AudioProbe;
-  readonly source: string;
-}
-
-export interface AuditInput {
-  readonly fullDecode?: boolean;
-  readonly source: string;
-}
-
-export interface AuditReceipt {
-  readonly bytes: number;
-  readonly fullDecode: boolean;
-  readonly operation: 'audit';
-  readonly probe: AudioProbe;
-  readonly sha256: string;
   readonly source: string;
 }
 
@@ -242,55 +224,9 @@ export const prepareAudiobook = async (
       }
       throw error;
     }
-    const outputHandle = await open(output, 'r');
-    try {
-      await outputHandle.sync();
-    } finally {
-      await outputHandle.close();
-    }
+    await syncFile(output);
     return Object.freeze({ applied: true, operation: 'prepare', output, probe: outputProbe, source });
   } finally {
     await rm(temporaryRoot, { force: true, recursive: true });
   }
-};
-
-const hashFile = async (path: string): Promise<{ bytes: number; sha256: string }> => {
-  const handle = await open(path, readOnlyFlags);
-  try {
-    const before = await handle.stat();
-    if (!before.isFile() || before.nlink !== 1) throw new Error('Audit source must be one regular file.');
-    const hash = createHash('sha256');
-    const buffer = Buffer.allocUnsafe(hashChunkBytes);
-    let bytes = 0;
-    while (true) {
-      const result = await handle.read(buffer, 0, buffer.byteLength, bytes);
-      if (result.bytesRead === 0) break;
-      hash.update(buffer.subarray(0, result.bytesRead));
-      bytes += result.bytesRead;
-    }
-    const after = await handle.stat();
-    if (after.dev !== before.dev || after.ino !== before.ino || after.size !== bytes) {
-      throw new Error('Audit source changed while it was being hashed.');
-    }
-    return { bytes, sha256: hash.digest('hex') };
-  } finally {
-    await handle.close();
-  }
-};
-
-export const auditAudiobook = async (
-  input: AuditInput,
-  options: CuratorDependencies = {},
-): Promise<AuditReceipt> => {
-  const source = resolve(input.source);
-  await regularFileSize(source);
-  const probe = await probeAudio(source, options);
-  const hashed = await hashFile(source);
-  if (input.fullDecode === true) {
-    const selected = dependencies(options);
-    await selected.process(selected.ffmpeg, [
-      '-nostdin', '-v', 'error', '-i', source, '-map', '0:a:0', '-f', 'null', '-',
-    ], { signal: selected.signal });
-  }
-  return Object.freeze({ ...hashed, fullDecode: input.fullDecode === true, operation: 'audit', probe, source });
 };

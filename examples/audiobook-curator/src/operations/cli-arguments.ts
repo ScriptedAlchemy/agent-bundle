@@ -61,3 +61,12 @@ export const optionChoice = <T extends string>(
   if (!choices.includes(value as T)) throw new Error(`${option} must be one of: ${choices.join(', ')}.`);
   return value as T;
 };
+
+export const numberOption = (args: readonly string[], option: string): number | undefined => {
+  const value = optionValue(args, option);
+  return value === undefined ? undefined : Number(value);
+};
+
+/** Spread helper that omits the key entirely when the option is absent, so parsed inputs never carry explicit `undefined` entries. */
+export const optionalField = <K extends string, V>(key: K, value: V | undefined): Readonly<Partial<Record<K, V>>> =>
+  (value === undefined ? {} : { [key]: value }) as Partial<Record<K, V>>;

@@ -22,8 +22,10 @@ import { readJson, writeReceipt } from '../foundation.ts';
 import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
+  numberOption,
   optionChoice,
   optionValue,
+  optionalField,
   positionalArguments,
   requiredOption,
 } from './cli-arguments.ts';
@@ -85,16 +87,13 @@ export const audibleOperations = (operations: Required<AudibleOperations>) => [
         const valued = new Set(['--attempts', '--author', '--duration', '--limit', '--narrator', '--regions', '--report', '--title']);
         assertOptions(args, new Set(), valued);
         if (positionalArguments(args, valued).length > 0) throw new Error('audible-search accepts only named options.');
-        const attempts = optionValue(args, '--attempts');
-        const duration = optionValue(args, '--duration');
-        const limit = optionValue(args, '--limit');
         const regions = optionValue(args, '--regions');
         return {
-          ...(attempts === undefined ? {} : { attempts: Number(attempts) }),
-          ...(optionValue(args, '--author') === undefined ? {} : { author: optionValue(args, '--author') }),
-          ...(duration === undefined ? {} : { durationSeconds: Number(duration) }),
-          ...(limit === undefined ? {} : { limit: Number(limit) }),
-          ...(optionValue(args, '--narrator') === undefined ? {} : { narrator: optionValue(args, '--narrator') }),
+          ...optionalField('attempts', numberOption(args, '--attempts')),
+          ...optionalField('author', optionValue(args, '--author')),
+          ...optionalField('durationSeconds', numberOption(args, '--duration')),
+          ...optionalField('limit', numberOption(args, '--limit')),
+          ...optionalField('narrator', optionValue(args, '--narrator')),
           ...(regions === undefined ? {} : { regions: audibleRegionList(regions) }),
           report: requiredOption(args, '--report', 'audible-search'),
           title: requiredOption(args, '--title', 'audible-search'),
@@ -125,7 +124,7 @@ export const audibleOperations = (operations: Required<AudibleOperations>) => [
         return {
           candidate: Number(requiredOption(args, '--candidate', 'audible-select')),
           candidates: requiredOption(args, '--candidates', 'audible-select'),
-          ...(optionValue(args, '--note') === undefined ? {} : { note: optionValue(args, '--note') }),
+          ...optionalField('note', optionValue(args, '--note')),
           receipt: requiredOption(args, '--receipt', 'audible-select'),
         };
       },
@@ -146,13 +145,12 @@ export const audibleOperations = (operations: Required<AudibleOperations>) => [
         const valued = new Set(['--asin', '--attempts', '--cache-dir', '--receipt', '--region']);
         assertOptions(args, new Set(), valued);
         if (positionalArguments(args, valued).length > 0) throw new Error('audible-cache accepts only named options.');
-        const attempts = optionValue(args, '--attempts');
         return {
           asin: requiredOption(args, '--asin', 'audible-cache'),
-          ...(attempts === undefined ? {} : { attempts: Number(attempts) }),
+          ...optionalField('attempts', numberOption(args, '--attempts')),
           cacheDirectory: requiredOption(args, '--cache-dir', 'audible-cache'),
           receipt: requiredOption(args, '--receipt', 'audible-cache'),
-          ...(optionChoice(args, '--region', audibleRegions) === undefined ? {} : { region: optionChoice(args, '--region', audibleRegions) }),
+          ...optionalField('region', optionChoice(args, '--region', audibleRegions)),
         };
       },
       summary: 'Cache one reviewed Audible product, chapters, artwork, and source URLs.',

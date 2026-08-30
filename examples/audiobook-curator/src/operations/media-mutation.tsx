@@ -18,6 +18,7 @@ import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
   optionValue,
+  optionalField,
   positionalArguments,
   requiredOption,
 } from './cli-arguments.ts';
@@ -46,15 +47,15 @@ export const mediaMutationOperations = (operations: Required<MediaMutationOperat
         if (positionalArguments(args, valued).length > 0) throw new Error('apply-metadata accepts only named options.');
         return {
           ...(args.includes('--apply') ? { apply: true } : {}),
-          ...(optionValue(args, '--artwork') === undefined ? {} : { artwork: optionValue(args, '--artwork') }),
-          ...(optionValue(args, '--author') === undefined ? {} : { author: optionValue(args, '--author') }),
+          ...optionalField('artwork', optionValue(args, '--artwork')),
+          ...optionalField('author', optionValue(args, '--author')),
           file: requiredOption(args, '--file', 'apply-metadata'),
-          ...(optionValue(args, '--language') === undefined ? {} : { language: optionValue(args, '--language') }),
-          ...(optionValue(args, '--narrator') === undefined ? {} : { narrator: optionValue(args, '--narrator') }),
+          ...optionalField('language', optionValue(args, '--language')),
+          ...optionalField('narrator', optionValue(args, '--narrator')),
           product: requiredOption(args, '--product', 'apply-metadata'),
           receipt: requiredOption(args, '--receipt', 'apply-metadata'),
-          ...(optionValue(args, '--title') === undefined ? {} : { title: optionValue(args, '--title') }),
-          ...(optionValue(args, '--year') === undefined ? {} : { year: optionValue(args, '--year') }),
+          ...optionalField('title', optionValue(args, '--title')),
+          ...optionalField('year', optionValue(args, '--year')),
         };
       },
       summary: 'Plan or apply verified Audible metadata and artwork without changing encoded audio.',

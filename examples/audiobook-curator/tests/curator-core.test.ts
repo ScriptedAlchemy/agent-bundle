@@ -1,11 +1,10 @@
-import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import {
-  auditAudiobook,
   inspectSources,
   prepareAudiobook,
   type MediaProcess,
@@ -19,7 +18,6 @@ const makeRoot = async (): Promise<string> => {
 };
 
 afterEach(async () => {
-  const { rm } = await import('node:fs/promises');
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
@@ -80,19 +78,6 @@ describe('audiobook curator core', () => {
       { apply: true, outputName: 'book.m4b', outputRoot, source },
       { process: processFixture(calls) },
     )).rejects.toThrow('already exists');
-  });
-
-  it('audits content with a stable hash and an optional full decode', async () => {
-    const root = await makeRoot();
-    const source = join(root, 'book.m4b');
-    const calls: Array<{ args: readonly string[]; executable: string }> = [];
-    await writeFile(source, 'audited audio');
-
-    const receipt = await auditAudiobook({ fullDecode: true, source }, { process: processFixture(calls) });
-
-    expect(receipt).toMatchObject({ fullDecode: true, operation: 'audit', source });
-    expect(receipt.sha256).toMatch(/^[a-f0-9]{64}$/u);
-    expect(calls.some(({ executable }) => basename(executable).includes('ffmpeg'))).toBe(true);
   });
 
   it('rejects output names that can escape the selected output root', async () => {

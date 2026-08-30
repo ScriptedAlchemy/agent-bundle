@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto';
-import { lstat, open } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import { chapterMappingIssues, type ChapterRow } from './conversion.ts';
-import { CuratorError, readJson, utcNow, writeReceipt } from './foundation.ts';
+import { CuratorError, asRecord, readJson, sha256File, utcNow, writeReceipt } from './foundation.ts';
 import { probeMediaDetails, probeMediaRecord, type LibraryDependencies, type MediaDetails, type MediaRecord } from './library.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
@@ -40,37 +39,17 @@ export interface IntegrityAuditDependencies extends LibraryDependencies {
   readonly process?: MediaProcess;
 }
 
-const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
-  ? value as Record<string, unknown>
-  : {};
-
-const fileHash = async (path: string): Promise<string> => {
-  const handle = await open(path, 'r');
-  try {
-    const hash = createHash('sha256');
-    const bytes = Buffer.allocUnsafe(1024 * 1024);
-    let position = 0;
-    while (true) {
-      const result = await handle.read(bytes, 0, bytes.length, position);
-      if (result.bytesRead === 0) break;
-      hash.update(bytes.subarray(0, result.bytesRead));
-      position += result.bytesRead;
-    }
-    return hash.digest('hex');
-  } finally { await handle.close(); }
-};
-
 const chapterEvidence = (details: MediaDetails): { readonly issues: string[]; readonly rows: ChapterRow[] } => {
   const source = details.chapters;
   if (!Array.isArray(source) || source.length > 16_384) throw new CuratorError('ffprobe returned invalid chapters.');
-  const mediaDuration = Number(object(details.format).duration ?? 0);
+  const mediaDuration = Number(asRecord(details.format).duration ?? 0);
   const rows = source.map((chapter, index) => {
-    const row = object(chapter);
+    const row = asRecord(chapter);
     return {
       endSeconds: Number(row.end_time ?? 0),
       number: index + 1,
       startSeconds: Number(row.start_time ?? 0),
-      title: String(object(row.tags).title ?? '').trim(),
+      title: String(asRecord(row.tags).title ?? '').trim(),
     };
   });
   const issues: string[] = [];
@@ -90,10 +69,10 @@ const chapterEvidence = (details: MediaDetails): { readonly issues: string[]; re
 };
 
 const expectedChapters = (value: unknown): ChapterRow[] => {
-  const rows = object(value).expectedChapters;
+  const rows = asRecord(value).expectedChapters;
   if (!Array.isArray(rows) || rows.length > 16_384) throw new CuratorError('Conversion receipt has invalid expected chapters.');
   return rows.map((entry, index) => {
-    const row = object(entry);
+    const row = asRecord(entry);
     const result = {
       endSeconds: Number(row.endSeconds),
       number: Number(row.number ?? index + 1),
@@ -158,7 +137,7 @@ export const auditAudiobookIntegrity = async (
     mutation: false,
     operation: 'audit',
     probe,
-    sha256: await fileHash(file),
+    sha256: await sha256File(file),
     sourceChapterMapping: mapping,
     status,
   });

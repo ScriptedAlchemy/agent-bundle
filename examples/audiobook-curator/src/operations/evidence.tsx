@@ -20,8 +20,10 @@ import { readJson } from '../foundation.ts';
 import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
+  numberOption,
   optionChoice,
   optionValue,
+  optionalField,
   positionalArguments,
   requiredOption,
 } from './cli-arguments.ts';
@@ -63,17 +65,15 @@ export const evidenceOperations = (operations: Required<EvidenceOperations>) => 
         const valued = new Set(['--asin', '--attempts', '--audiolocate-python', '--chunk-seconds', '--file', '--receipt', '--region', '--sample-url']);
         assertOptions(args, new Set(['--verbose']), valued);
         if (positionalArguments(args, valued).length > 0) throw new Error('acoustic-verify accepts only named options.');
-        const attempts = optionValue(args, '--attempts');
-        const chunks = optionValue(args, '--chunk-seconds');
         return {
           asin: requiredOption(args, '--asin', 'acoustic-verify'),
-          ...(attempts === undefined ? {} : { attempts: Number(attempts) }),
-          ...(optionValue(args, '--audiolocate-python') === undefined ? {} : { audiolocatePython: optionValue(args, '--audiolocate-python') }),
-          ...(chunks === undefined ? {} : { chunkSeconds: Number(chunks) }),
+          ...optionalField('attempts', numberOption(args, '--attempts')),
+          ...optionalField('audiolocatePython', optionValue(args, '--audiolocate-python')),
+          ...optionalField('chunkSeconds', numberOption(args, '--chunk-seconds')),
           file: requiredOption(args, '--file', 'acoustic-verify'),
           receipt: requiredOption(args, '--receipt', 'acoustic-verify'),
-          ...(optionChoice(args, '--region', audibleRegions) === undefined ? {} : { region: optionChoice(args, '--region', audibleRegions) }),
-          ...(optionValue(args, '--sample-url') === undefined ? {} : { sampleUrl: optionValue(args, '--sample-url') }),
+          ...optionalField('region', optionChoice(args, '--region', audibleRegions)),
+          ...optionalField('sampleUrl', optionValue(args, '--sample-url')),
           ...(args.includes('--verbose') ? { verbose: true } : {}),
         };
       },
@@ -99,17 +99,14 @@ export const evidenceOperations = (operations: Required<EvidenceOperations>) => 
         const valued = new Set(['--attempts', '--candidates', '--chunk-seconds', '--file', '--receipt', '--top']);
         assertOptions(args, new Set(['--all', '--verbose']), valued);
         if (positionalArguments(args, valued).length > 0) throw new Error('acoustic-identify accepts only named options.');
-        const attempts = optionValue(args, '--attempts');
-        const chunks = optionValue(args, '--chunk-seconds');
-        const top = optionValue(args, '--top');
         return {
           ...(args.includes('--all') ? { all: true } : {}),
-          ...(attempts === undefined ? {} : { attempts: Number(attempts) }),
+          ...optionalField('attempts', numberOption(args, '--attempts')),
           candidates: requiredOption(args, '--candidates', 'acoustic-identify'),
-          ...(chunks === undefined ? {} : { chunkSeconds: Number(chunks) }),
+          ...optionalField('chunkSeconds', numberOption(args, '--chunk-seconds')),
           file: requiredOption(args, '--file', 'acoustic-identify'),
           receipt: requiredOption(args, '--receipt', 'acoustic-identify'),
-          ...(top === undefined ? {} : { top: Number(top) }),
+          ...optionalField('top', numberOption(args, '--top')),
           ...(args.includes('--verbose') ? { verbose: true } : {}),
         };
       },
@@ -136,17 +133,17 @@ export const evidenceOperations = (operations: Required<EvidenceOperations>) => 
         assertOptions(args, new Set(), valued);
         if (positionalArguments(args, valued).length > 0) throw new Error('whisper-verify accepts only named options.');
         return {
-          ...(optionValue(args, '--author') === undefined ? {} : { author: optionValue(args, '--author') }),
+          ...optionalField('author', optionValue(args, '--author')),
           file: requiredOption(args, '--file', 'whisper-verify'),
-          ...(optionValue(args, '--language') === undefined ? {} : { language: optionValue(args, '--language') }),
-          ...(optionValue(args, '--max-windows') === undefined ? {} : { maxWindows: Number(optionValue(args, '--max-windows')) }),
-          ...(optionValue(args, '--minimum-chars') === undefined ? {} : { minimumChars: Number(optionValue(args, '--minimum-chars')) }),
+          ...optionalField('language', optionValue(args, '--language')),
+          ...optionalField('maxWindows', numberOption(args, '--max-windows')),
+          ...optionalField('minimumChars', numberOption(args, '--minimum-chars')),
           model: requiredOption(args, '--model', 'whisper-verify'),
           receipt: requiredOption(args, '--receipt', 'whisper-verify'),
-          ...(optionValue(args, '--threads') === undefined ? {} : { threads: Number(optionValue(args, '--threads')) }),
-          ...(optionValue(args, '--title') === undefined ? {} : { title: optionValue(args, '--title') }),
-          ...(optionValue(args, '--whisper-cli') === undefined ? {} : { whisperCli: optionValue(args, '--whisper-cli') }),
-          ...(optionValue(args, '--window-seconds') === undefined ? {} : { windowSeconds: Number(optionValue(args, '--window-seconds')) }),
+          ...optionalField('threads', numberOption(args, '--threads')),
+          ...optionalField('title', optionValue(args, '--title')),
+          ...optionalField('whisperCli', optionValue(args, '--whisper-cli')),
+          ...optionalField('windowSeconds', numberOption(args, '--window-seconds')),
         };
       },
       summary: 'Transcribe distributed audiobook windows for human language and identity review.',
