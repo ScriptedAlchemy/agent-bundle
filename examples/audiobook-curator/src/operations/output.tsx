@@ -1,0 +1,176 @@
+/**
+ * Output production and verification operations: `convert`, `prepare`, and
+ * `audit`, backed by `../conversion.ts`, `../curator-core.ts`, and
+ * `../integrity-audit.ts`. Conversion and preparation plan by default and
+ * mutate only a derived destination; the audit never mutates.
+ */
+import { defineOperation, type RscOperationContext } from '@agent-bundle/rsc-runtime/plugin';
+import React from 'react';
+import { z } from 'zod';
+
+import { convertAudiobook, type ConvertInput, type ConvertReceipt } from '../conversion.ts';
+import { prepareAudiobook, type PrepareInput, type PrepareReceipt } from '../curator-core.ts';
+import {
+  auditAudiobookIntegrity,
+  type IntegrityAuditInput,
+  type IntegrityAuditReceipt,
+} from '../integrity-audit.ts';
+import { CuratorResult } from '../result.tsx';
+import {
+  assertOptions,
+  onePath,
+  optionChoice,
+  optionValue,
+  positionalArguments,
+  requiredOption,
+} from './cli-arguments.ts';
+import { parityReceiptSchema, pathSchema, probeSchema } from './schemas.ts';
+
+export interface OutputOperations {
+  readonly audit: (input: IntegrityAuditInput, options: RscOperationContext) => Promise<IntegrityAuditReceipt>;
+  readonly convert?: (input: ConvertInput, options: RscOperationContext) => Promise<ConvertReceipt>;
+  readonly prepare: (input: PrepareInput, options: RscOperationContext) => Promise<PrepareReceipt>;
+}
+
+export const defaultOutputOperations: Required<OutputOperations> = {
+  audit: (input, options) => auditAudiobookIntegrity(input, options),
+  convert: (input, options) => convertAudiobook(input, options),
+  prepare: (input, options) => prepareAudiobook(input, options),
+};
+
+const convertResultSchema = parityReceiptSchema<ConvertReceipt>('convert');
+const auditResultSchema = parityReceiptSchema<IntegrityAuditReceipt>('audit');
+const prepareInputSchema = z.object({
+  apply: z.boolean().optional(),
+  outputName: z.string().min(5).max(204).optional(),
+  outputRoot: pathSchema,
+  source: pathSchema,
+}).strict();
+const prepareResultSchema = z.object({
+  applied: z.boolean(),
+  operation: z.literal('prepare'),
+  output: pathSchema,
+  probe: probeSchema,
+  source: pathSchema,
+}).strict();
+
+export const outputOperations = (operations: Required<OutputOperations>) => [
+  defineOperation({
+    cli: {
+      name: 'convert',
+      parse: (args) => {
+        const valued = new Set([
+          '--artwork', '--audio-bitrate', '--audio-codec', '--author', '--engine', '--forge-aac-encoder',
+          '--forge-cli', '--jobs', '--language', '--narrator', '--output', '--receipt', '--selection', '--title', '--year',
+        ]);
+        assertOptions(args, new Set(['--apply', '--overwrite']), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('convert accepts only named options.');
+        const audioCodec = optionChoice(args, '--audio-codec', ['aac', 'alac'] as const);
+        const engine = optionChoice(args, '--engine', ['audiobook-forge', 'ffmpeg'] as const);
+        const jobs = optionValue(args, '--jobs');
+        return {
+          ...(args.includes('--apply') ? { apply: true } : {}),
+          ...(args.includes('--overwrite') ? { overwrite: true } : {}),
+          ...(optionValue(args, '--artwork') === undefined ? {} : { artwork: optionValue(args, '--artwork') }),
+          ...(optionValue(args, '--audio-bitrate') === undefined ? {} : { audioBitrate: optionValue(args, '--audio-bitrate') }),
+          ...(audioCodec === undefined ? {} : { audioCodec }),
+          author: requiredOption(args, '--author', 'convert'),
+          ...(engine === undefined ? {} : { engine }),
+          ...(optionValue(args, '--forge-aac-encoder') === undefined ? {} : { forgeAacEncoder: optionValue(args, '--forge-aac-encoder') }),
+          ...(optionValue(args, '--forge-cli') === undefined ? {} : { forgeCli: optionValue(args, '--forge-cli') }),
+          ...(jobs === undefined ? {} : { jobs: Number(jobs) }),
+          ...(optionValue(args, '--language') === undefined ? {} : { language: optionValue(args, '--language') }),
+          ...(optionValue(args, '--narrator') === undefined ? {} : { narrator: optionValue(args, '--narrator') }),
+          output: requiredOption(args, '--output', 'convert'),
+          receipt: requiredOption(args, '--receipt', 'convert'),
+          selection: requiredOption(args, '--selection', 'convert'),
+          title: requiredOption(args, '--title', 'convert'),
+          ...(optionValue(args, '--year') === undefined ? {} : { year: optionValue(args, '--year') }),
+        };
+      },
+      summary: 'Plan or apply a verified conversion to one chaptered M4B.',
+      usage: 'convert --selection FILE --output PATH --receipt FILE --title TITLE --author AUTHOR [--apply] [--overwrite]',
+    },
+    execute: operations.convert,
+    id: 'convert',
+    inputSchema: z.object({
+      apply: z.boolean().optional(), artwork: pathSchema.optional(), audioBitrate: z.string().min(2).max(32).optional(),
+      audioCodec: z.enum(['aac', 'alac']).optional(), author: z.string().min(1).max(512),
+      engine: z.enum(['audiobook-forge', 'ffmpeg']).optional(), forgeAacEncoder: z.string().min(1).max(128).optional(),
+      forgeCli: pathSchema.optional(), jobs: z.number().int().min(0).max(256).optional(), language: z.string().min(1).max(64).optional(),
+      narrator: z.string().min(1).max(512).optional(), output: pathSchema, overwrite: z.boolean().optional(), receipt: pathSchema.optional(),
+      selection: pathSchema, title: z.string().min(1).max(1024), year: z.string().min(1).max(64).optional(),
+    }).strict(),
+    mcp: {
+      description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
+      destructive: true,
+      name: 'convert_audiobook',
+      readOnly: false,
+      server: 'curator',
+    },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: convertResultSchema,
+  }),
+  defineOperation({
+    cli: {
+      name: 'prepare',
+      parse: (args) => {
+        const valued = new Set(['--name', '--output']);
+        assertOptions(args, new Set(['--apply']), valued);
+        const outputRoot = optionValue(args, '--output');
+        if (outputRoot === undefined) throw new Error('prepare requires --output.');
+        const outputName = optionValue(args, '--name');
+        return {
+          ...(args.includes('--apply') ? { apply: true } : {}),
+          ...(outputName === undefined ? {} : { outputName }),
+          outputRoot,
+          source: onePath(args, valued, 'prepare'),
+        };
+      },
+      summary: 'Plan an M4B output or apply the plan when explicitly requested.',
+      usage: 'prepare [--apply] [--name FILE] --output DIR <source>',
+    },
+    execute: operations.prepare,
+    id: 'prepare',
+    inputSchema: prepareInputSchema,
+    mcp: {
+      description: 'Plan an M4B output, or apply the plan only when apply is explicitly true.',
+      destructive: true,
+      name: 'prepare_audiobook',
+      readOnly: false,
+      server: 'curator',
+    },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: prepareResultSchema,
+  }),
+  defineOperation({
+    cli: {
+      exitCode: (receipt) => receipt.exitCode,
+      name: 'audit',
+      parse: (args) => {
+        const valued = new Set(['--conversion-receipt', '--file', '--receipt']);
+        assertOptions(args, new Set(['--full-decode']), valued);
+        if (positionalArguments(args, valued).length > 0) throw new Error('audit accepts only named options.');
+        return {
+          ...(optionValue(args, '--conversion-receipt') === undefined ? {} : { conversionReceipt: optionValue(args, '--conversion-receipt') }),
+          file: requiredOption(args, '--file', 'audit'),
+          ...(args.includes('--full-decode') ? { fullDecode: true } : {}),
+          receipt: requiredOption(args, '--receipt', 'audit'),
+        };
+      },
+      summary: 'Validate metadata, chapters, source mapping, hashes, and optional complete decode.',
+      usage: 'audit --file FILE --receipt FILE [--conversion-receipt FILE] [--full-decode]',
+    },
+    execute: operations.audit,
+    id: 'audit',
+    inputSchema: z.object({ conversionReceipt: pathSchema.optional(), file: pathSchema, fullDecode: z.boolean().optional(), receipt: pathSchema.optional() }).strict(),
+    mcp: {
+      description: 'Validate chapter structure, optional conversion mapping, file/audio hashes, probe facts, and optional full decode.',
+      name: 'audit_audiobook',
+      readOnly: false,
+      server: 'curator',
+    },
+    render: (receipt) => <CuratorResult receipt={receipt} />,
+    resultSchema: auditResultSchema,
+  }),
+];
