@@ -321,6 +321,102 @@ it('refreshes only for owned reload frames with advancing generations while reco
   }
 });
 
+it('applies a reload announced while a refresh fetch is in flight once that fetch settles', async () => {
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    subscribeReload: noopSubscribeReload,
+  }, () => undefined);
+  const pendingFetches: Array<(response: Response) => void> = [];
+  try {
+    const shell = await runtimeProxyShellHarness(binding, {
+      fetch: async () => new Promise<Response>((resolvePromise) => { pendingFetches.push(resolvePromise); }),
+    });
+    shell.sockets[0]!.emit('open');
+    shell.sockets[0]!.emit('message', { data: reloadFrame(1) });
+    expect(pendingFetches).toHaveLength(1);
+    // A newer reload lands while the generation-1 fetch is still in flight.
+    // The single-flight refresh must not swallow it: that fetch may predate
+    // the newer compilation's output.
+    shell.sockets[0]!.emit('message', { data: reloadFrame(2) });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(pendingFetches).toHaveLength(1);
+    pendingFetches[0]!(new Response('<!doctype html><main>generation one</main>', {
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    }));
+    // Settling the in-flight fetch installs its entry, then immediately runs
+    // a catch-up refresh for the generation announced mid-flight.
+    await expect.poll(() => pendingFetches.length, { timeout: 5_000 }).toBe(2);
+    expect(shell.entries).toHaveLength(2);
+    pendingFetches[1]!(new Response('<!doctype html><main>generation two</main>', {
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    }));
+    await expect.poll(() => shell.entries.length, { timeout: 5_000 }).toBe(3);
+    expect(shell.entries[2]).toContain('generation two');
+    // The catch-up refresh proved generation 2, so replaying it stays inert.
+    shell.sockets[0]!.emit('message', { data: reloadFrame(2) });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(pendingFetches).toHaveLength(2);
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('retries a reload whose refresh failed when the channel replays that generation', async () => {
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    subscribeReload: noopSubscribeReload,
+  }, () => undefined);
+  let attempts = 0;
+  try {
+    const shell = await runtimeProxyShellHarness(binding, {
+      fetch: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('transient refresh failure');
+        return new Response('<!doctype html><main>recovered</main>', {
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        });
+      },
+    });
+    shell.sockets[0]!.emit('open');
+    shell.sockets[0]!.emit('message', { data: reloadFrame(1) });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // The failed refresh leaves the admitted child intact and the reload
+    // unapplied — a failure must not burn the generation.
+    expect(shell.entries).toHaveLength(1);
+    // The channel drops and reconnects; the server replays generation 1 on
+    // every accepted connection, which retries the unapplied reload.
+    shell.sockets[0]!.emit('close');
+    shell.runTimers();
+    shell.sockets[1]!.emit('open');
+    shell.sockets[1]!.emit('message', { data: reloadFrame(1) });
+    await expect.poll(() => shell.entries.length, { timeout: 5_000 }).toBe(2);
+    expect(shell.entries[1]).toContain('recovered');
+    expect(attempts).toBe(2);
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
 it('prefixes every opaque child entry with the closed CSP supplied by its trusted binding', async () => {
   const initialEntry = '<style>main{color:green}</style><script>window.inline=true</script><img src="data:image/png;base64,AA==">';
   const refreshedEntry = '<style>main{color:blue}</style><script>window.refreshed=true</script><img src="data:image/png;base64,AA==">';

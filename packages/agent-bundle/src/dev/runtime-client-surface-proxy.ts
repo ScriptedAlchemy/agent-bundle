@@ -207,6 +207,7 @@ const runtimeProxyShell = (
   let reloadReconnectAttempts = 0;
   let reloadReconnectTimer;
   let reloadGeneration = ${String(initialReloadGeneration)};
+  let appliedReloadGeneration = reloadGeneration;
   let refreshController;
   let refreshGeneration = 0;
   let refreshing = false;
@@ -243,6 +244,9 @@ const runtimeProxyShell = (
     if (refreshing || lifecycle === 'closed') return;
     refreshing = true;
     const generation = refreshGeneration;
+    // The requested generation this attempt can prove: the fetch starts now,
+    // so its response reflects at least every reload announced before now.
+    const target = reloadGeneration;
     const controller = new AbortController();
     refreshController = controller;
     const current = () => lifecycle !== 'closed' && refreshGeneration === generation && refreshController === controller && !controller.signal.aborted;
@@ -255,13 +259,19 @@ const runtimeProxyShell = (
       if (!/^text\\/html(?:;|$)/i.test(type)) return;
       const entry = await response.text();
       if (!current()) return;
-      installEntry(entry);
+      if (installEntry(entry)) appliedReloadGeneration = target;
     } catch {
-      // A failed reload must leave the already-admitted child and its bridge intact.
+      // A failed reload must leave the already-admitted child and its bridge
+      // intact. appliedReloadGeneration stays behind, so the next frame — the
+      // server replays its current generation on every reconnect — retries.
     } finally {
       if (refreshController === controller) {
         refreshController = undefined;
         refreshing = false;
+        // A reload announced while this refresh was in flight must not be
+        // swallowed: this fetch may predate that compilation's output, so
+        // run another refresh for the newer generation.
+        if (lifecycle !== 'closed' && reloadGeneration > target) void refreshEntry();
       }
     }
   };
@@ -296,14 +306,16 @@ const runtimeProxyShell = (
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
       // The proxy authors this channel end to end; only its owned reload kind
-      // exists. The strictly increasing generation makes duplicate frames and
-      // the on-connect resync idempotent, and it catches up on reloads that
-      // fired while the socket was down: the server replays its current
-      // generation on every accepted connection.
+      // exists. Generations already applied stay inert, so duplicate frames
+      // and the on-connect resync are idempotent, while a generation newer
+      // than the last applied one always drives a refresh — catching up on
+      // reloads that fired while the socket was down (the server replays its
+      // current generation on every accepted connection), that arrived while
+      // a refresh fetch was already in flight, or whose refresh failed.
       if (!isRecord(message) || message.kind !== reloadMessageKind) return;
       const generation = message.generation;
-      if (typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation <= reloadGeneration) return;
-      reloadGeneration = generation;
+      if (typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation <= appliedReloadGeneration) return;
+      if (generation > reloadGeneration) reloadGeneration = generation;
       void refreshEntry();
     });
     socket.addEventListener('close', reconnect);
