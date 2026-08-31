@@ -1,4 +1,5 @@
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -65,6 +66,16 @@ it('rebuilds the package build inside the dev loop when its entries change', asy
     });
     expect(rebuilt.outcome).toBe('succeeded');
     expect(await readFile(binOutput, 'utf8')).toContain('rebuilt-marker');
+
+    // Removing the last package entry removes the outputs this session published.
+    await rm(join(root, 'src', 'cli.ts'));
+    const removed = await coordinator.rebuild({
+      occurredAt: new Date().toISOString(),
+      paths: ['src/cli.ts'],
+      reason: 'source-change',
+    });
+    expect(removed.outcome).toBe('succeeded');
+    expect(existsSync(binOutput)).toBe(false);
   } finally {
     await coordinator.close();
     await removeProjectFixture(root);

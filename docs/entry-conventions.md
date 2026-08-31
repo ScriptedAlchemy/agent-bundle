@@ -176,10 +176,15 @@ debounced, serialized rebuild pass that publishes artifact epochs, with a
 provenance-based incremental boundary: after a successful package build, the
 sorted source inputs of every emitted file (recorded from bundler stats) are
 kept, and the next rebuild is skipped unless an invalidated path was one of
-those inputs, `package.json` or `tsconfig.json` changed, the normalized
-`bin`/`lib` declaration changed, the invalidation was manual or initial, or
-the previous package build failed. A package build failure never invalidates
-the committed artifact epoch — it surfaces as one `AB7103` warning on the
+those inputs, the configuration file, `package.json`, or `tsconfig.json`
+changed, the rebuild identity changed — the normalized `bin`/`lib`
+declaration plus the `tools` escape hatch, with hatch functions compared by
+source text — the invalidation was manual or initial, or the previous
+package build failed. When every package entry disappears within a live
+session (entries removed or opted out), the outputs that session previously
+published are removed; outputs from earlier sessions are untouched, matching
+`agent-bundle build`. A package build failure never invalidates the
+committed artifact epoch — it surfaces as one `AB7103` warning on the
 succeeded attempt and retries on the next invalidation. The boundary this
 does **not** cover: a brand-new file that changes module resolution without
 touching a tracked input is picked up on the next tracked change, not
