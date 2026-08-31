@@ -657,6 +657,7 @@ export const normalizeProject = async (
       dir: skill.dir,
       frontmatter,
       id: `skill:${name}`,
+      ...(skill.rendered === true ? { markdown: skill.markdown } : {}),
       name,
       provenance: skillProvenance(loaded, skill.source),
       resources: skill.resources.map((resource) => ({ ...resource })),

@@ -1,19 +1,11 @@
 /**
- * The audiobook-curator application: one `defineRscAgentBundle` tree that
- * composes the Skill, the CLI Script, the MCP server, and the operation
- * catalog. The operations themselves live in feature modules under
- * `./operations/`; this file only merges their defaults and declares the
- * bundle.
+ * The audiobook-curator application: runtime identity plus the operation
+ * catalog. Structure — targets, the Skill, the CLI script, the MCP server —
+ * lives in `agent-bundle.config.ts` and file conventions; the operations
+ * themselves live in feature modules under `./operations/`, and this file
+ * only merges their defaults.
  */
-import {
-  AgentBundle,
-  McpServer,
-  Operation,
-  Script,
-  Skill,
-  defineRscAgentBundle,
-} from '@agent-bundle/rsc-runtime/plugin';
-import React from 'react';
+import { defineRscApplication } from '@agent-bundle/rsc-runtime/plugin';
 
 import {
   audibleOperations,
@@ -62,32 +54,18 @@ const operationDefinitions = (operations: Required<AudiobookCuratorOperations>) 
 
 export const createAudiobookCuratorApplication = (
   options: { readonly operations?: AudiobookCuratorOperations } = {},
-) => {
-  const definitions = operationDefinitions({
+) => defineRscApplication({
+  description: 'Complete plan-first audiobook inventory, matching, conversion, repair, and integrity audit.',
+  name: 'audiobook-curator',
+  operations: operationDefinitions({
     ...defaultAudibleOperations,
     ...defaultDiscoveryOperations,
     ...defaultEvidenceOperations,
     ...defaultMediaMutationOperations,
     ...defaultOutputOperations,
     ...options.operations,
-  });
-  return defineRscAgentBundle(
-    <AgentBundle
-      description="Complete plan-first audiobook inventory, matching, conversion, repair, and integrity audit."
-      marketplace
-      name="audiobook-curator"
-      node="22.19.0"
-      targets={['claude', 'codex']}
-      version="1.0.0"
-    >
-      <Skill source="./skills/curate-audiobooks" />
-      {/* The framework process envelope invokes the exported `main`; no
-          hand-written self-executing entry file is needed. */}
-      <Script entry="./src/cli.ts" name="audiobook-curator" />
-      <McpServer entry="./src/mcp-server.ts" name="curator" />
-      {definitions.map((definition) => <Operation definition={definition} key={definition.id} />)}
-    </AgentBundle>,
-  );
-};
+  }),
+  version: '1.0.0',
+});
 
 export const audiobookCuratorApplication = createAudiobookCuratorApplication();
