@@ -68,6 +68,7 @@ packages/
     tests/normalization.test.ts
     tests/playground-service.test.ts
     tests/portable-adapter.test.ts
+    tests/public-api-packed.test.ts
     tests/public-api.test.ts
     tests/rsc-runtime-optional-packaging.test.ts
     tests/rsc-runtime-topology-script.test.ts

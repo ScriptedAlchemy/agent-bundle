@@ -73,7 +73,11 @@ The published Agent Bundle library is built with Rslib. This example's separate
 production RSC/runtime artifacts are built by its explicit Rsbuild production
 command (`pnpm --filter @agent-bundle/rsc-agent-runtime-demo build`); its provider
 uses a separate long-lived Rsbuild development/HMR session only when an
-`agent-bundle dev` project opts into `dev.runtime.provider`. Installing
+`agent-bundle dev` project opts into `dev.runtime.provider`. The stdio MCP
+entry stays self-built inside those Rsbuild artifacts but consumes the
+framework's stdio lifecycle (console-to-stderr guard, SIGINT/SIGTERM exit
+codes, stdin-EOF shutdown) through the public `agent-bundle/mcp-entry` API.
+Installing
 `agent-bundle` alone does not install or activate this example provider. See
 [the optional RSC Runtime topology](../../docs/architecture/rsc-runtime-workbench.md)
 for the full ownership boundary.
