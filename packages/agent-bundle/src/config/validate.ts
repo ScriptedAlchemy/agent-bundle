@@ -28,9 +28,10 @@ import {
   conventionalCliEntrySource,
   conventionalIndexEntrySource,
   conventionalMcpEntrySource,
+  owningPayload,
   reservedPayloadDestinations,
 } from './normalize.ts';
-import type { DiscoveredProject } from './discover.ts';
+import { type DiscoveredProject, payloadDeclarationEntry, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import type { SkillDocument } from './skill.ts';
 import { referencedResources } from './skill-references.ts';
@@ -90,9 +91,10 @@ const validateHooks = (
       const handler = entry.handler;
       const prebuilt = isPrebuiltEntryInput(handler);
       if (prebuilt) {
-        const hookTargets = Array.isArray(entry.targets) && entry.targets.every(nonemptyString)
-          ? entry.targets
-          : selectedTargets.filter((target) => registry.supports(target, 'hooks'));
+        const hookTargets = declaredTargetsOr(
+          entry.targets,
+          selectedTargets.filter((target) => registry.supports(target, 'hooks')),
+        );
         diagnostics.push(...validatePrebuiltReference(
           `Hook ${event}`,
           handler,
@@ -242,6 +244,13 @@ const isProtocolJsonValue = (value: unknown, ancestors = new Set<object>()): boo
 
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
+
+/** A declared targets restriction when it is a well-shaped string array, otherwise the fallback selection. */
+const declaredTargetsOr = (
+  targets: unknown,
+  fallback: readonly string[],
+): readonly string[] =>
+  Array.isArray(targets) && targets.every(nonemptyString) ? targets : fallback;
 
 const validateStringList = (
   value: unknown,
@@ -675,9 +684,7 @@ const validateMcpServer = (
 
   if (entry !== undefined || conventionalEntry !== undefined) {
     if (isPrebuiltEntryInput(entry)) {
-      const serverTargets = Array.isArray(server.targets) && server.targets.every(nonemptyString)
-        ? server.targets
-        : selectedTargetNamesFor(loaded, registry);
+      const serverTargets = declaredTargetsOr(server.targets, selectedTargetNamesFor(loaded, registry));
       diagnostics.push(...validatePrebuiltReference(
         `MCP server ${JSON.stringify(name)}`,
         entry,
@@ -1023,17 +1030,13 @@ const declaredPayloads = (
   const selectedTargets = selectedTargetNamesFor(loaded, registry);
   const payloads: DeclaredPayload[] = [];
   for (const [name, declaration] of Object.entries(configured)) {
-    const entry = typeof declaration === 'string'
-      ? declaration
-      : isRecord(declaration) ? declaration.source : undefined;
-    if (!nonemptyString(entry)) continue;
-    const source = resolve(loaded.context.projectRoot, entry);
-    if (!isInside(loaded.context.projectRoot, source)) continue;
+    const source = payloadDeclarationSource(loaded.context.projectRoot, declaration);
+    if (source === undefined) continue;
     const targets = typeof declaration === 'string' ? undefined : declaration.targets;
     payloads.push({
       name,
       source,
-      targets: Array.isArray(targets) && targets.every(nonemptyString) ? targets : selectedTargets,
+      targets: declaredTargetsOr(targets, selectedTargets),
     });
   }
   return payloads;
@@ -1112,6 +1115,7 @@ const payloadTargetDiagnostics = (
 const validatePayload = (
   loaded: LoadedConfig,
   registry: NormalizationTargetRegistry,
+  freshness: boolean,
 ): Diagnostic[] => {
   const configured = loaded.config.payload;
   if (configured === undefined) return [];
@@ -1128,10 +1132,8 @@ const validatePayload = (
         loaded.configPath,
       ));
     }
-    const entry = typeof declaration === 'string'
-      ? declaration
-      : isRecord(declaration) ? declaration.source : undefined;
-    if (!nonemptyString(entry)) {
+    const entry = payloadDeclarationEntry(declaration);
+    if (entry === undefined) {
       diagnostics.push(sourceDiagnostic(
         'AB4740',
         `Payload ${JSON.stringify(name)} must be a source directory path or an object with a source path.`,
@@ -1142,8 +1144,8 @@ const validatePayload = (
     if (typeof declaration !== 'string') {
       diagnostics.push(...payloadTargetDiagnostics(name, declaration.targets, loaded, registry));
     }
-    const source = resolve(loaded.context.projectRoot, entry);
-    if (!isInside(loaded.context.projectRoot, source)) {
+    const source = payloadDeclarationSource(loaded.context.projectRoot, declaration);
+    if (source === undefined) {
       diagnostics.push(sourceDiagnostic(
         'AB4742',
         `Payload ${JSON.stringify(name)} source must resolve inside the project root.`,
@@ -1191,7 +1193,9 @@ const validatePayload = (
       ));
     }
   }
-  const existing = sources.filter((payload) => existsSync(payload.source));
+  // The freshness nudge walks every project and payload file's mtime, so
+  // flows that discard non-error source diagnostics skip it entirely.
+  const existing = freshness ? sources.filter((payload) => existsSync(payload.source)) : [];
   if (existing.length > 0) {
     const newestSource = newestFileMtime(
       loaded.context.projectRoot,
@@ -1237,9 +1241,7 @@ const validatePrebuiltReference = (
   if (!isInside(loaded.context.projectRoot, source)) {
     return [sourceDiagnostic('AB4744', `${label} prebuilt entry must resolve inside the project root.`, loaded.configPath)];
   }
-  const payload = payloads
-    .filter((candidate) => isInside(candidate.source, source))
-    .sort((left, right) => right.source.length - left.source.length)[0];
+  const payload = owningPayload(payloads, source);
   if (payload === undefined) {
     diagnostics.push(sourceDiagnostic(
       'AB4744',
@@ -1321,10 +1323,20 @@ const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
   return diagnostics;
 };
 
+export interface ValidateSourceOptions {
+  /**
+   * Compute the AB4750 payload-freshness nudge, a full-project mtime walk.
+   * Defaults to true; flows that discard non-error source diagnostics pass
+   * false to skip the walk.
+   */
+  readonly payloadFreshness?: boolean;
+}
+
 export const validateSource = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
   registry: NormalizationTargetRegistry,
+  options?: ValidateSourceOptions,
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   const plugin = loaded.config.plugin as unknown;
@@ -1379,7 +1391,7 @@ export const validateSource = (
   diagnostics.push(...validateHooks(loaded, registry, payloads));
   diagnostics.push(...validateLib(loaded));
   diagnostics.push(...validateMcp(loaded, registry, payloads));
-  diagnostics.push(...validatePayload(loaded, registry));
+  diagnostics.push(...validatePayload(loaded, registry, options?.payloadFreshness !== false));
   diagnostics.push(...validateRuntime(loaded));
   diagnostics.push(...validateScripts(loaded, registry));
   diagnostics.push(...validateTools(loaded));

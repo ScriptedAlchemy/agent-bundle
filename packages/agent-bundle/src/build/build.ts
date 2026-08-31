@@ -75,12 +75,15 @@ interface StagedTarget extends PlannedTarget {
   readonly root: string;
 }
 
-const prebuiltReferenceExists = (
-  model: NormalizedPlugin,
-  artifactPath: string,
-): boolean => (model.payloads ?? []).some((payload) =>
-  artifactPath.startsWith(`${payload.name}/`) &&
-  payload.files.some((file) => `${payload.name}/${file.relativePath}` === artifactPath));
+const prebuiltArtifactPaths = (model: NormalizedPlugin): ReadonlySet<string> =>
+  new Set((model.payloads ?? []).flatMap((payload) =>
+    payload.files.map((file) => `${payload.name}/${file.relativePath}`)));
+
+const missingPrebuiltDiagnostic = (subject: string, artifactPath: string): Diagnostic => ({
+  code: 'AB4748',
+  message: `${subject} ${JSON.stringify(artifactPath)} is not present in its declared payload; run the project's own build before "agent-bundle build".`,
+  severity: 'error',
+});
 
 /**
  * AB4747-AB4749: an artifact build packages prebuilt payloads exactly as
@@ -112,28 +115,21 @@ const prebuiltPayloadDiagnostics = (
       });
     }
   }
+  const artifactPaths = prebuiltArtifactPaths(model);
   const tokenPrefix = `${pathTokens.pluginRoot}/`;
   for (const server of model.mcpServers) {
     if (server.provenance.kind !== 'prebuilt') continue;
     const entry = server.args?.[0];
     if (typeof entry !== 'string' || !entry.startsWith(tokenPrefix)) continue;
     const artifactPath = entry.slice(tokenPrefix.length);
-    if (!prebuiltReferenceExists(model, artifactPath)) {
-      diagnostics.push({
-        code: 'AB4748',
-        message: `MCP server ${JSON.stringify(server.name)} prebuilt entry ${JSON.stringify(artifactPath)} is not present in its declared payload; run the project's own build before "agent-bundle build".`,
-        severity: 'error',
-      });
+    if (!artifactPaths.has(artifactPath)) {
+      diagnostics.push(missingPrebuiltDiagnostic(`MCP server ${JSON.stringify(server.name)} prebuilt entry`, artifactPath));
     }
   }
   for (const hook of model.hooks) {
     if (hook.prebuiltPath === undefined) continue;
-    if (!prebuiltReferenceExists(model, hook.prebuiltPath)) {
-      diagnostics.push({
-        code: 'AB4748',
-        message: `Hook ${JSON.stringify(hook.name)} prebuilt handler ${JSON.stringify(hook.prebuiltPath)} is not present in its declared payload; run the project's own build before "agent-bundle build".`,
-        severity: 'error',
-      });
+    if (!artifactPaths.has(hook.prebuiltPath)) {
+      diagnostics.push(missingPrebuiltDiagnostic(`Hook ${JSON.stringify(hook.name)} prebuilt handler`, hook.prebuiltPath));
     }
   }
   return diagnostics;

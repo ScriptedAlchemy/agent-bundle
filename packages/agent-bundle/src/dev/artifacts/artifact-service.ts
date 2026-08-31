@@ -25,7 +25,7 @@ import {
   type NativePlaygroundCatalogPublicationOptions,
   type NativePlaygroundCatalogPublicationReceipt,
 } from '../playground/native-playground-service.ts';
-import { snapshotProjectSource, type PreparedProject } from '../project-service.ts';
+import type { PreparedProject } from '../project-service.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch, type DiagnosticSummary } from '../types.ts';
 
 export interface SucceededArtifactEpochResult {
@@ -228,11 +228,7 @@ export class ArtifactService {
       buildDiagnostics = freezeDiagnostics([...prepared.diagnostics, ...validationDiagnostics]);
       if (hasErrors(buildDiagnostics)) throw new DiagnosticError(buildDiagnostics);
 
-      const currentSource = await (prepared.snapshotSource ?? (() => snapshotProjectSource(
-        prepared.root,
-        prepared.configPath,
-        prepared.outputRoots,
-      )))();
+      const currentSource = await prepared.snapshotSource();
       if (!sameInputs(projectContext.sourceInputs, currentSource.inputs)) {
         throw new DiagnosticError([projectSourceChangedDiagnostic(prepared.configPath)]);
       }
