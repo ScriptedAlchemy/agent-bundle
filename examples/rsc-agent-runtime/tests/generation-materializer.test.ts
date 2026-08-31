@@ -230,7 +230,7 @@ const compilerObserver = (input: Readonly<{
   readonly enqueued: string[];
   readonly failed: unknown[];
 }>) => activateCompilerObserver({
-      beforeAttempt: () => 'attempt-1',
+      beginCompletedCohort: () => 'attempt-1',
       capture: async (value) => {
         input.capture.push(value);
         return {
@@ -243,6 +243,7 @@ const compilerObserver = (input: Readonly<{
       },
       enqueue: (snapshot) => input.enqueued.push(snapshot.attemptId),
       failAttempt: (_attemptId, error) => input.failed.push(error),
+      observeCompileStart: () => undefined,
 });
 
 test('resolves the coherent development compiler configuration through Rsbuild', async () => {
@@ -743,10 +744,11 @@ test('passes exact per-environment hashes to capture alongside the rsc and widge
 test('stages a checkpoint for every successful environment compilation and skips unusable ones', async () => {
   const staged: Array<Readonly<Record<string, unknown>>> = [];
   const observer = activateCompilerObserver({
-    beforeAttempt: () => 'attempt-stage',
+    beginCompletedCohort: () => 'attempt-stage',
     capture: async () => undefined,
     enqueue: () => undefined,
     failAttempt: () => undefined,
+    observeCompileStart: () => undefined,
     stageEnvironmentCheckpoint: async (input) => { staged.push(input); },
   });
 
@@ -778,7 +780,7 @@ test('recaptures an identical cohort from its immutable checkpoints after an enq
   let index = 0;
   let enqueueCount = 0;
   const observer = activateCompilerObserver({
-    beforeAttempt: () => `attempt-${String(index)}`,
+    beginCompletedCohort: () => `attempt-${String(index)}`,
     capture: async (input) => {
       captures.push({ cohortChanged: input.cohortChanged });
       const snapshot = snapshots[index];
@@ -791,6 +793,7 @@ test('recaptures an identical cohort from its immutable checkpoints after an enq
       if (enqueueCount === 2) throw new Error('enqueue failed');
     },
     failAttempt: (_attemptId, error) => failed.push(error),
+    observeCompileStart: () => undefined,
   });
 
   await observer.compile(cohortChildren('a'));
@@ -898,7 +901,7 @@ test('recaptures a stale known compiler chunk cohort through the observer after 
   try {
     await writeCompilerCohort(compilerRoot);
     const observer = activateCompilerObserver({
-      beforeAttempt: () => `attempt-${String(candidateNumber)}`,
+      beginCompletedCohort: () => `attempt-${String(candidateNumber)}`,
       capture: async (input) => {
         candidateNumber += 1;
         const candidate = await store.begin({ id: `candidate-${String(candidateNumber)}`, sourceRevision: input.sourceRevision });
@@ -930,6 +933,7 @@ test('recaptures a stale known compiler chunk cohort through the observer after 
         if (enqueueNumber === 2) throw new Error('enqueue rejects B');
       },
       failAttempt: (_attemptId, error) => failed.push(error),
+      observeCompileStart: () => undefined,
       stageEnvironmentCheckpoint: (input) => checkpointStore.stage({
         environment: input.environmentName,
         hash: input.statsHash,
