@@ -180,7 +180,12 @@ export const createRscRuntimeRsbuildConfig = (
   return {
     ...(development ? {
       dev: { writeToDisk: true },
-      server: { host: '127.0.0.1', printUrls: false },
+      // Port 0 lets the OS assign the listener. Rsbuild's default (3000 with an
+      // incrementing probe) makes every concurrent runtime session on a host
+      // race for the same first candidate, which surfaces as EADDRINUSE when
+      // suites run in parallel. Consumers read the resolved port back from
+      // `rsbuild.context.devServer`.
+      server: { host: '127.0.0.1', port: 0, printUrls: false },
     } : {}),
     plugins: [
       pluginReact(),
