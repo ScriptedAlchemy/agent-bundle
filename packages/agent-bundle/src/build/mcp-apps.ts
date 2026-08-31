@@ -42,6 +42,8 @@ const assertResolvedViewConfig = (
   }
   for (const environment of Object.values(environments)) {
     if (
+      // Cleaning the shared staged target root would delete sibling outputs.
+      environment.output.cleanDistPath !== false ||
       environment.output.filenameHash !== false ||
       environment.output.inlineScripts !== true ||
       environment.output.inlineStyles !== true ||
@@ -150,7 +152,6 @@ export const composeMcpAppsRsbuildConfig = (
     logLevel: 'silent' as const,
     mode: 'production' as const,
     output: {
-      cleanDistPath: false,
       dataUriLimit: Number.MAX_SAFE_INTEGER,
       distPath: { html: 'mcp-apps', root: options.outDir },
       filename: { css: '[name].css', html: '[name].html', js: '[name].js' },
@@ -172,7 +173,10 @@ export const composeMcpAppsRsbuildConfig = (
     profile,
     ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild]),
     ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } }]),
-    { tools: { rspack: enforceInvariants } },
+    // Merged last so the hatch cannot reach either invariant: dist cleaning
+    // would delete sibling outputs already emitted into the shared staged
+    // target root, so it stays off no matter what the consumer asks for.
+    { output: { cleanDistPath: false }, tools: { rspack: enforceInvariants } },
   );
 };
 

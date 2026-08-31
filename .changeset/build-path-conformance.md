@@ -22,6 +22,12 @@ surfaces (Rspack/Rslib/Rsbuild conformance audit).
   registry name) fails the build with a hard diagnostic — statically for
   string/RegExp/object externals, and via a post-build residual-import scan
   of every emitted bundle for function-form externals.
+- Dist cleaning is now a framework invariant rather than a profile default:
+  because generated sources are materialized under the output root, a
+  `tools.rsbuild.output.cleanDistPath: true` hatch would delete this build's
+  own entry modules and any sibling entry already emitted into the shared
+  staged root. It is pinned off after the hatch merge and asserted on the
+  resolved environment config.
 - Pre-build inspection assertions are keyed by the documented Rslib `lib.id`
   (`origin.environmentConfigs[id]` and the Rspack config `name`) instead of
   relying on undocumented array ordering, and reserved aliases use Rspack's

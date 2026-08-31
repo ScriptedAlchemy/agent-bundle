@@ -288,6 +288,10 @@ const aliasRecordOf = (config: InspectedBundlerConfig): Readonly<Record<string, 
   return typeof alias === 'object' && alias !== null ? alias as Readonly<Record<string, unknown>> : undefined;
 };
 
+interface InspectedEnvironmentConfig {
+  readonly output?: { readonly cleanDistPath?: unknown };
+}
+
 const assertExecutableConfig = (
   entries: readonly RslibEntry[],
   inspection: {
@@ -304,8 +308,15 @@ const assertExecutableConfig = (
   }
   for (const entry of entries) {
     const id = entryLibId(entry);
-    if (inspection.environmentConfigs[id] === undefined) {
+    const environment = inspection.environmentConfigs[id] as InspectedEnvironmentConfig | undefined;
+    if (environment === undefined) {
       throw new Error('Rslib did not resolve one environment for every generated executable.');
+    }
+    // Dist cleaning would delete this build's own materialized generated
+    // sources and any sibling entry already emitted into the shared staged
+    // root, so the composed invariant pins it off after the hatch merge.
+    if (environment.output?.cleanDistPath !== false) {
+      throw new Error('Rslib resolved a generated executable environment that would clean its own output root.');
     }
     // Rslib documents lib.id as the generated environment key and names each
     // Rspack config after it; array position carries no documented meaning.
@@ -426,7 +437,6 @@ export const composeEntryLibConfig = (
     splitChunks: false,
     syntax: 'es2022',
     output: {
-      cleanDistPath: false,
       distPath: { root: options.outputRoot },
       filename: { js: entry.outputRelativePath },
       filenameHash: false,
@@ -450,7 +460,13 @@ export const composeEntryLibConfig = (
     options.tools?.rspack === undefined
       ? undefined
       : { lib: [{ id: libId, tools: { rspack: asRslibRspackHatch(options.tools.rspack) } }] },
-    { lib: [{ id: libId, tools: { rspack: enforceInvariants } }] },
+    // Merged last so the hatch cannot reach either invariant. Dist cleaning
+    // would delete this build's own materialized generated sources (they live
+    // under the output root) and any sibling entry already emitted into the
+    // shared staged root, so it stays off no matter what the consumer asks
+    // for; the emitted output is published atomically from a staged root
+    // instead.
+    { lib: [{ id: libId, output: { cleanDistPath: false }, tools: { rspack: enforceInvariants } }] },
   );
   const lib = merged.lib?.[0];
   if (merged.lib?.length !== 1 || lib === undefined) {

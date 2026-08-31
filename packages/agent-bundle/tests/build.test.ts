@@ -1141,6 +1141,27 @@ it('inlines reserved specifiers through exact-match aliases and materialized gen
   }
 }, 20_000);
 
+it('keeps materialized generated modules alive under a tools hatch that asks to clean the output root', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  try {
+    // Dist cleaning runs when the build starts, after the generated wrapper
+    // and registry sources are written into that same tree, so an honored
+    // hatch would delete this build's own entry modules. Sibling entries
+    // already emitted into a shared staged root would go with them.
+    await buildWithRslib({
+      cwd: root,
+      entries: [entry],
+      outputRoot: join(root, 'dist'),
+      tools: { rsbuild: { output: { cleanDistPath: true } } },
+    });
+    const bundle = await readFile(join(root, 'dist', 'scripts', 'reserved-probe.mjs'), 'utf8');
+    expect(bundle).toContain('inlined-runtime-shell');
+    expect(bundle).toContain('generated-registry');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
 it('rejects a tools hatch that externalizes a reserved specifier statically', async () => {
   const { entry, root } = await reservedSpecifierProject();
   try {

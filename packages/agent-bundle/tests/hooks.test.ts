@@ -155,7 +155,7 @@ it('does not share a persistent Rslib cache between generated executables', asyn
           performance: { buildCache: false },
           target: 'node',
         }],
-        environmentConfigs: { 'agent-bundle-cache-probe': {} },
+        environmentConfigs: { 'agent-bundle-cache-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -220,7 +220,7 @@ it('closes the Rslib build result and removes materialized generated modules aft
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
         }],
-        environmentConfigs: { 'agent-bundle-close-probe': {} },
+        environmentConfigs: { 'agent-bundle-close-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -268,7 +268,7 @@ it('fails closed when an emitted bundle retains a residual reserved import', asy
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
         }],
-        environmentConfigs: { 'agent-bundle-residual-probe': {} },
+        environmentConfigs: { 'agent-bundle-residual-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -306,7 +306,7 @@ it('closes the Rslib build result when provenance stats are unavailable', async 
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
         }],
-        environmentConfigs: { 'agent-bundle-close-error-probe': {} },
+        environmentConfigs: { 'agent-bundle-close-error-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
