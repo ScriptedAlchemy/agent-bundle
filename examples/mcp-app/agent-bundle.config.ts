@@ -27,6 +27,5 @@ export default defineConfig({
   scripts: {
     'check-service-fixture': './src/scripts/check-service-fixture.ts',
   },
-  skills: ['skills/service-readiness'],
   targets: ['portable', 'codex', 'claude'],
 });
