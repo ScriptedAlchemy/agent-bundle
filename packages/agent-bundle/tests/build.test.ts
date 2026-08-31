@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { createJiti } from 'jiti';
 
 import { build as buildArtifact, type BuildOptions as LowLevelBuildOptions, type BuildResult } from '../src/build/build.ts';
+import { buildWithRslib, type RslibEntry } from '../src/build/rslib.ts';
 import { publishArtifact } from '../src/build/emit.ts';
 import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { parseArtifactManifest, serializeArtifactManifest } from '../src/build/manifest.ts';
@@ -1075,3 +1076,149 @@ it('restores the existing artifact when publication fails after backup', async (
     await rm(root, { force: true, recursive: true });
   }
 });
+
+/**
+ * A minimal project exercising both reserved-specifier mechanisms of one
+ * generated executable: an alias onto an on-disk runtime module and a
+ * materialized generated registry module.
+ */
+const reservedSpecifierProject = async (): Promise<{ readonly entry: RslibEntry; readonly root: string }> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-reserved-specifiers-'));
+  const sourceRoot = join(root, 'src');
+  await mkdir(sourceRoot, { recursive: true });
+  await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+  await writeFile(join(sourceRoot, 'shell.ts'), "export const marker = 'inlined-runtime-shell';\n");
+  await writeFile(join(sourceRoot, 'entry.ts'), [
+    "import { marker } from 'agent-bundle/mcp-entry';",
+    "import registry from 'agent-bundle/mcp-apps';",
+    // A reserved specifier mentioned as data, not imported: the residual-import
+    // scan parses the emitted bundle instead of grepping it, so this survives
+    // into the output without failing the self-containment check.
+    "const mentioned = 'agent-bundle/mcp-entry';",
+    'console.log(marker, registry, mentioned);',
+    '',
+  ].join('\n'));
+  return {
+    entry: {
+      aliases: { 'agent-bundle/mcp-entry': join(sourceRoot, 'shell.ts') },
+      name: 'reserved-probe',
+      outputRelativePath: 'scripts/reserved-probe.mjs',
+      source: join(sourceRoot, 'entry.ts'),
+      sourceInputs: [join(sourceRoot, 'entry.ts')],
+      virtualModules: [{ name: 'agent-bundle/mcp-apps', source: "export default 'generated-registry';\n" }],
+    },
+    root,
+  };
+};
+
+it('inlines reserved specifiers through exact-match aliases and materialized generated modules', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  try {
+    const evidence = await buildWithRslib({
+      cwd: root,
+      entries: [entry],
+      outputRoot: join(root, 'dist'),
+      // A hatch external naming a non-reserved module is legal: the
+      // invariant rejects reserved specifiers, not the externals mechanism.
+      tools: { rspack: { externals: { fsevents: 'node-commonjs fsevents' } } },
+    });
+    const bundle = await readFile(join(root, 'dist', 'scripts', 'reserved-probe.mjs'), 'utf8');
+    expect(bundle).toContain('inlined-runtime-shell');
+    expect(bundle).toContain('generated-registry');
+    expect(bundle).not.toMatch(/from\s*["']agent-bundle\//u);
+    // The scan tolerates a reserved specifier that is only mentioned as a
+    // string literal; only a live import fails the build.
+    expect(bundle).toContain('agent-bundle/mcp-entry');
+    // Materialized generated modules never survive into the artifact and
+    // never count as authored source evidence.
+    await expect(readdir(join(root, 'dist', '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(evidence).toEqual([{
+      path: 'scripts/reserved-probe.mjs',
+      sourceInputs: [join(root, 'src', 'entry.ts'), join(root, 'src', 'shell.ts')],
+    }]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
+it('keeps materialized generated modules alive under a tools hatch that asks to clean the output root', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  try {
+    // Dist cleaning runs when the build starts, after the generated wrapper
+    // and registry sources are written into that same tree, so an honored
+    // hatch would delete this build's own entry modules. Sibling entries
+    // already emitted into a shared staged root would go with them.
+    await buildWithRslib({
+      cwd: root,
+      entries: [entry],
+      outputRoot: join(root, 'dist'),
+      tools: { rsbuild: { output: { cleanDistPath: true } } },
+    });
+    const bundle = await readFile(join(root, 'dist', 'scripts', 'reserved-probe.mjs'), 'utf8');
+    expect(bundle).toContain('inlined-runtime-shell');
+    expect(bundle).toContain('generated-registry');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
+it('rejects a tools hatch that externalizes a reserved specifier statically', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  try {
+    await expect(buildWithRslib({
+      cwd: root,
+      entries: [entry],
+      outputRoot: join(root, 'dist'),
+      tools: { rspack: { externals: { 'agent-bundle/mcp-entry': 'module agent-bundle/mcp-entry' } } },
+    })).rejects.toThrow(/must not externalize the reserved specifier "agent-bundle\/mcp-entry"/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
+it('rejects a tools hatch that externalizes a reserved specifier through function externals', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  try {
+    await expect(buildWithRslib({
+      cwd: root,
+      entries: [entry],
+      outputRoot: join(root, 'dist'),
+      tools: {
+        // Function externals cannot be inspected statically; the build-time
+        // guard intercepts them. The remap to a bare variable leaves no
+        // reserved text in the output, so only the guard can catch it.
+        rspack: (config) => {
+          config.externals = [
+            ...(Array.isArray(config.externals) ? config.externals : config.externals === undefined ? [] : [config.externals]),
+            ({ request }, callback) => {
+              if (request === 'agent-bundle/mcp-apps') {
+                callback(undefined, 'var Registry');
+                return;
+              }
+              callback();
+            },
+          ];
+        },
+      },
+    })).rejects.toThrow(/must not externalize the reserved specifier "agent-bundle\/mcp-apps"/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
+it('rejects a tools hatch alias that shadows a reserved specifier', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  try {
+    await writeFile(join(root, 'src', 'evil.ts'), "export default 'shadowed-registry';\n");
+    await expect(buildWithRslib({
+      cwd: root,
+      entries: [entry],
+      outputRoot: join(root, 'dist'),
+      // A plain (non-$) consumer alias for a reserved specifier would win
+      // over the framework's exact-match alias by insertion order.
+      tools: { rspack: { resolve: { alias: { 'agent-bundle/mcp-apps': join(root, 'src', 'evil.ts') } } } },
+    })).rejects.toThrow(/must not alias the reserved specifier/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);

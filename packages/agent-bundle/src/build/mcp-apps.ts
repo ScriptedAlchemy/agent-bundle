@@ -1,4 +1,4 @@
-import { createRsbuild, mergeRsbuildConfig, type RsbuildConfig } from '@rsbuild/core';
+import { createRsbuild, mergeRsbuildConfig, type RsbuildConfig, type Rspack } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
@@ -42,6 +42,8 @@ const assertResolvedViewConfig = (
   }
   for (const environment of Object.values(environments)) {
     if (
+      // Cleaning the shared staged target root would delete sibling outputs.
+      environment.output.cleanDistPath !== false ||
       environment.output.filenameHash !== false ||
       environment.output.inlineScripts !== true ||
       environment.output.inlineStyles !== true ||
@@ -140,7 +142,7 @@ export const composeMcpAppsRsbuildConfig = (
   sources: readonly Pick<NormalizedMcpApp, 'name' | 'source' | 'template'>[],
   options: { readonly outDir: string; readonly tools?: AgentBundleToolsConfig },
 ): RsbuildConfig => {
-  const profile = {
+  const profile: RsbuildConfig = {
     environments: Object.fromEntries(sources.map((source) => [source.name, {
       ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
       html: {
@@ -152,7 +154,6 @@ export const composeMcpAppsRsbuildConfig = (
     logLevel: 'silent' as const,
     mode: 'production' as const,
     output: {
-      cleanDistPath: false,
       dataUriLimit: Number.MAX_SAFE_INTEGER,
       distPath: { html: 'mcp-apps', root: options.outDir },
       filename: { css: '[name].css', html: '[name].html', js: '[name].js' },
@@ -166,15 +167,19 @@ export const composeMcpAppsRsbuildConfig = (
     server: { publicDir: false },
     splitChunks: false,
   };
-  const enforceInvariants = (config: { output: { asyncChunks?: boolean } }): void => {
-    config.output.asyncChunks = false;
+  const enforceInvariants = (config: Rspack.Configuration): Rspack.Configuration => {
+    config.output = { ...config.output, asyncChunks: false };
+    return config;
   };
-  return mergeRsbuildConfig(
-    profile as never,
-    ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild as never]),
-    ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } } as never]),
-    { tools: { rspack: enforceInvariants } } as never,
-  ) as RsbuildConfig;
+  return mergeRsbuildConfig<RsbuildConfig>(
+    profile,
+    ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild]),
+    ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } }]),
+    // Merged last so the hatch cannot reach either invariant: dist cleaning
+    // would delete sibling outputs already emitted into the shared staged
+    // target root, so it stays off no matter what the consumer asks for.
+    { output: { cleanDistPath: false }, tools: { rspack: enforceInvariants } },
+  );
 };
 
 export const compileMcpApps = async (
