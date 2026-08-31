@@ -1,6 +1,9 @@
 import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
+  // Kept deliberately: the empty per-target sections are not redundant with
+  // `targets:` — normalization materializes each one as a `model.extensions`
+  // entry with config provenance, and dropping them changes the inspect model.
   claude: {},
   codex: {},
   dev: { runtime: { provider: './src/dev/provider.ts' } },
@@ -36,6 +39,5 @@ export default defineConfig({
     name: 'rsc-agent-runtime-demo',
     version: '1.0.0',
   },
-  skills: [],
   targets: ['portable', 'claude', 'codex'],
 });
