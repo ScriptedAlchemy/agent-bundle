@@ -157,7 +157,7 @@ const createRuntimeFixture = (options: Readonly<{
       openedClientSurfacePolicies.push(policy[0]);
       if (options.failProxyOpen === true) throw new Error('proxy open failed');
       if (options.openRuntimeClientSurface !== undefined) return options.openRuntimeClientSurface(surfaceId, ...policy);
-      return Object.freeze({ bootstrapUrl: `http://proxy.test/${surfaceId}`, close: options.closeProxy ?? (async () => undefined), origin: 'http://proxy.test', surfaceId, webSocketPath: '/rsbuild-hmr' });
+      return Object.freeze({ bootstrapUrl: `http://proxy.test/${surfaceId}`, close: options.closeProxy ?? (async () => undefined), origin: 'http://proxy.test', surfaceId });
     },
     runtime,
     ...(options.operationClock === undefined ? {} : { operationClock: options.operationClock }),
@@ -234,7 +234,7 @@ it('derives an Apps preview only from one stored succeeded run and opens its dis
 
   expect(preview).toMatchObject({
     binding: { sessionId: 'session-a', sessionRevision: 2 },
-    clientSurface: { bootstrapUrl: 'http://proxy.test/mcp.edit-weather', origin: 'http://proxy.test', webSocketPath: '/rsbuild-hmr' },
+    clientSurface: { bootstrapUrl: 'http://proxy.test/mcp.edit-weather', origin: 'http://proxy.test' },
     kind: 'apps',
     result: { isError: false, modelVisible: { content: [{ text: 'Sunny', type: 'text' }] } },
     session: { state: 'ready' },
@@ -510,7 +510,6 @@ it('joins a late runtime client-surface acquisition before manual session cleanu
     close: async () => { proxyCloseCalls += 1; },
     origin: 'http://proxy.test',
     surfaceId: 'app.weather',
-    webSocketPath: '/rsbuild-hmr',
   }));
   await closing;
   await expect(creating).rejects.toThrow('stable session changed');

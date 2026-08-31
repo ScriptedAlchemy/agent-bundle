@@ -6,6 +6,7 @@ import type { Page, WebSocketRoute } from 'playwright';
 
 import { agentBundleNodeModules, workbenchNodeModules } from '../../agent-bundle/tests/helpers/workspace-paths.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
+import { runtimeClientSurfaceReloadChannelPath } from '../../agent-bundle/src/dev/index.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
@@ -515,7 +516,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await route.abort();
   });
   page.on('websocket', (socket) => {
-    if (new URL(socket.url()).pathname === '/rsbuild-hmr') runtimePreviewSockets.push(socket.url());
+    if (new URL(socket.url()).pathname === runtimeClientSurfaceReloadChannelPath) runtimePreviewSockets.push(socket.url());
   });
   page.on('request', (request) => {
     const url = new URL(request.url());
@@ -553,7 +554,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     clientPage.on('pageerror', (error) => pageErrors.push(error));
     clientPage.on('console', (message) => { clientSurfaceConsole.push(`${message.type()}:${message.text()}`); });
     clientPage.on('request', (request) => {
-      if (new URL(request.url()).pathname !== '/rsbuild-hmr') return;
+      if (new URL(request.url()).pathname !== runtimeClientSurfaceReloadChannelPath) return;
       clientSurfaceHmrRequests.push(Object.freeze({ headers: request.headers(), url: request.url() }));
     });
     clientPage.on('response', (response) => {
@@ -575,13 +576,13 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
         sockets: clientSurfaceSockets,
       })}`);
     }
-    expect(clientSurfaceSockets).toEqual([`${clientSurface.origin.replace('http:', 'ws:')}/rsbuild-hmr`]);
+    expect(clientSurfaceSockets).toEqual([`${clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
     expect(clientSurfaceSockets.every((socket) => new URL(socket).search.length === 0)).toBe(true);
     expect(clientSurfaceHmrRequests.every((request) => new URL(request.url).search.length === 0)).toBe(true);
     await clientPage.close();
     clientPage = undefined;
     await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 }).toBe('0');
-    await page.routeWebSocket((url) => url.pathname === '/rsbuild-hmr', (route) => {
+    await page.routeWebSocket((url) => url.pathname === runtimeClientSurfaceReloadChannelPath, (route) => {
       runtimePreviewHmrRoutes.push(route);
       route.connectToServer();
     });
@@ -637,7 +638,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
     await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
     await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 * timeScale }).toBe('1');
-    expect(runtimePreviewSockets).toEqual([`${created.preview.clientSurface.origin.replace('http:', 'ws:')}/rsbuild-hmr`]);
+    expect(runtimePreviewSockets).toEqual([`${created.preview.clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
     const runtimeAppFrame = async () => {
       for (const frame of page.frames()) {
         if (await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
@@ -904,7 +905,10 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 * timeScale }).toBe('0');
     await expect.poll(() => runtimePreviewHmrRoutes.length, { timeout: 15_000 * timeScale }).toBe(2);
     await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 * timeScale }).toBe('1');
+    // Simulate an upgraded relay frame: only the owned reload protocol with a
+    // strictly newer generation may reinstall the App child.
     runtimePreviewHmrRoutes[1]!.send(JSON.stringify({ type: 'full-reload' }));
+    runtimePreviewHmrRoutes[1]!.send(JSON.stringify({ generation: 1_000_000, kind: 'runtime-app-reload' }));
     await expect.poll(() => initializeRequests().length, { timeout: 15_000 * timeScale }).toBe(initialInitializeCount + 1);
     await expect(outerFrame).toHaveCount(1);
     await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps').length, { timeout: 15_000 * timeScale }).toBe(1);

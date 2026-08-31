@@ -137,7 +137,7 @@ const runtimePreview = Object.freeze({
     target: 'weather',
     transportDigest: 'transport-weather',
   }),
-  clientSurface: Object.freeze({ bootstrapUrl: 'http://127.0.0.1:43124/runtime-app', origin: 'http://127.0.0.1:43124', webSocketPath: '/rsbuild-hmr' as const }),
+  clientSurface: Object.freeze({ bootstrapUrl: 'http://127.0.0.1:43124/runtime-app', origin: 'http://127.0.0.1:43124' }),
   documentPolicy: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
   kind: 'apps' as const,
   metadata: Object.freeze({ resource: Object.freeze({}), result: Object.freeze({}), tool: Object.freeze({}) }),
