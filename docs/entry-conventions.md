@@ -5,6 +5,9 @@ libraries: one `agent-bundle.config.ts`, one CLI, framework-owned entry
 lifecycles, and a single blessed escape hatch into the bundler. This document
 is the contract for the package build (`bin` / `lib`), the entry-file
 conventions, the generated entry shells, and the `tools` escape hatch.
+[Framework mode](framework-mode.md) is the one-screen authoring model these
+conventions serve: structure in config and conventions, JSX only for
+rendering.
 
 ## The package build
 

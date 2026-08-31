@@ -1,17 +1,21 @@
 import { McpServer as ProtocolMcpServer } from '@modelcontextprotocol/server';
 
+import type { RscApplication } from './application.js';
 import { lowerMcpResult } from './lower-mcp.js';
-import type { RscAgentBundleApplication } from './plugin-definition.js';
 
 export const createRscMcpServer = (
-  application: Readonly<RscAgentBundleApplication>,
+  application: Readonly<RscApplication>,
   serverName: string,
 ): ProtocolMcpServer => {
-  const serverDefinition = application.config.mcp?.servers[serverName];
-  if (serverDefinition === undefined) throw new Error(`Unknown RSC MCP server: ${serverName}`);
+  // The server's structural declaration (entry, targets) lives in
+  // agent-bundle.config.ts; here the name only selects which operations to
+  // serve, so a name no operation references is a wiring mistake.
+  if (!application.operations.some((operation) => operation.mcp?.server === serverName)) {
+    throw new Error(`Unknown RSC MCP server: ${serverName}`);
+  }
   const server = new ProtocolMcpServer({
-    name: application.config.plugin.name,
-    version: application.config.plugin.version,
+    name: application.name,
+    version: application.version,
   });
   for (const operation of application.operations) {
     if (operation.mcp?.server !== serverName) continue;

@@ -11,6 +11,11 @@ import {
   readProjectIgnoreRules,
   toPosixPath,
 } from './ignore.ts';
+import {
+  compileRenderedSkill,
+  isRenderedSkillSourceName,
+  renderedSkillSourceAt,
+} from './rendered-skill.ts';
 import { parseSkillMarkdown } from './skill-references.ts';
 
 export interface SkillResource {
@@ -26,6 +31,12 @@ export interface SkillDocument {
   frontmatter: Record<string, unknown>;
   /** Exact authored/emitted Markdown; splitting remains server-owned. */
   markdown: string;
+  /**
+   * Present when the document was compiled from the rendered-skill convention
+   * (`SKILL.tsx`/`SKILL.ts`): `source` names the component module, and
+   * `markdown` holds the compiled document the build must emit as SKILL.md.
+   */
+  rendered?: true;
   resources: SkillResource[];
   source: string;
 }
@@ -64,7 +75,10 @@ const resourceList = async (
     onlyFiles: true,
   });
   const includedSources = sources.filter(
-    (source) => !isProjectPathIgnored(rules, root, source),
+    (source) =>
+      !isProjectPathIgnored(rules, root, source) &&
+      // The rendered-skill source files are build inputs, never shipped resources.
+      !isRenderedSkillSourceName(toPosixPath(relative(skillDir, source))),
   );
 
   return Promise.all(
@@ -96,6 +110,44 @@ const malformedFrontmatter = (source: string, error: unknown): Diagnostic => ({
   sourcePath: source,
 });
 
+const renderedSourceShadowNudge = (source: string, renderedSource: string): Diagnostic => ({
+  code: 'AB4735',
+  severity: 'info',
+  message: `${renderedSource} is present but the hand-authored SKILL.md wins; the rendered skill source is shadowed.`,
+  recovery: 'Optional: remove SKILL.md to adopt the rendered skill, or remove the component module to silence this nudge.',
+  sourcePath: source,
+});
+
+const parseRenderedSkill = async (
+  dir: string,
+  renderedSource: string,
+  resources: SkillResource[],
+): Promise<SkillDocument> => {
+  const compiled = await compileRenderedSkill(renderedSource);
+  if (compiled.status === 'failed') {
+    return {
+      body: '',
+      diagnostics: [compiled.diagnostic],
+      dir,
+      frontmatter: {},
+      markdown: '',
+      rendered: true,
+      resources,
+      source: renderedSource,
+    };
+  }
+  return {
+    body: compiled.document.body,
+    diagnostics: [],
+    dir,
+    frontmatter: compiled.document.frontmatter,
+    markdown: compiled.document.markdown,
+    rendered: true,
+    resources,
+    source: renderedSource,
+  };
+};
+
 export const parseSkill = async (
   skillDir: string,
   projectRoot?: string,
@@ -107,11 +159,15 @@ export const parseSkill = async (
   const root = projectRoot === undefined ? await findProjectRoot(dir) : resolve(projectRoot);
   const rules = projectIgnoreRules ?? await readProjectIgnoreRules(root);
   const resources = await resourceList(dir, root, rules);
+  const renderedSource = renderedSkillSourceAt(dir);
 
   let markdown: string;
   try {
     markdown = await readFile(source, 'utf8');
   } catch (error: unknown) {
+    if (renderedSource !== undefined && isErrno(error, 'ENOENT')) {
+      return parseRenderedSkill(dir, renderedSource, resources);
+    }
     return {
       body: '',
       diagnostics: [
@@ -130,11 +186,12 @@ export const parseSkill = async (
     };
   }
 
+  const shadowNudges = renderedSource === undefined ? [] : [renderedSourceShadowNudge(source, renderedSource)];
   const parsed = parseSkillMarkdown(markdown);
   if (parsed.status === 'missing-frontmatter') {
     return {
       body: parsed.body,
-      diagnostics: [missingFrontmatter(source)],
+      diagnostics: [missingFrontmatter(source), ...shadowNudges],
       dir,
       frontmatter: {},
       markdown,
@@ -146,7 +203,7 @@ export const parseSkill = async (
   if (parsed.status === 'valid') {
     return {
       body: parsed.body,
-      diagnostics: [],
+      diagnostics: [...shadowNudges],
       dir,
       frontmatter: parsed.frontmatter,
       markdown,
@@ -157,7 +214,7 @@ export const parseSkill = async (
 
   return {
     body: parsed.body,
-    diagnostics: [malformedFrontmatter(source, parsed.message)],
+    diagnostics: [malformedFrontmatter(source, parsed.message), ...shadowNudges],
     dir,
     frontmatter: {},
     markdown,

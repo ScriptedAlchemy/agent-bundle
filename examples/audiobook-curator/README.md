@@ -1,10 +1,17 @@
 # Audiobook Curator
 
-A complete TypeScript recreation of the original `audiobook-curator`, authored
-as one React Server Component plugin application. The same typed operation tree
-produces a globally installable CLI, one stdio MCP server, one Skill, and native
-Claude Code and Codex plugin artifacts. It has no hooks and does not call the old
-Python curator.
+From the repository root, launch this example with:
+
+```bash
+pnpm example:audiobook
+```
+
+A complete TypeScript recreation of the original `audiobook-curator`, built in
+framework mode: `agent-bundle.config.ts` plus file conventions declare the
+structure, and one typed operation catalog produces a globally installable
+CLI, one stdio MCP server, one Skill, and native Claude Code and Codex plugin
+artifacts. JSX appears only where something is rendered — the MCP result
+receipts. It has no hooks and does not call the old Python curator.
 
 The package requires Node 22.19+, `ffprobe`, and `ffmpeg`. Optional features call
 the foreign tools that actually provide the evidence: Audiobook Forge,
@@ -43,9 +50,12 @@ dependencies.
 
 ## Source layout
 
-- `src/application.tsx` — composition only: merges the feature modules'
-  defaults and declares the `<AgentBundle>` tree (Skill, CLI Script, MCP
-  server, operations).
+- `agent-bundle.config.ts` — the structure: plugin identity, targets, the CLI
+  script, and the MCP server (whose entry is the `src/mcp/curator.ts`
+  convention). The Skill needs no declaration at all:
+  `skills/curate-audiobooks/SKILL.md` ships by convention.
+- `src/application.ts` — composition only: merges the feature modules'
+  defaults into one `defineRscApplication` operation catalog.
 - `src/operations/` — the operation catalog, grouped by workflow stage:
   `discovery` (inspect/inventory/library-audit/select), `audible`
   (search/select/cache), `evidence` (acoustic/whisper), `media-mutation`
@@ -56,8 +66,8 @@ dependencies.
   `curator-core.ts`) over the shared `foundation.ts` and `media-process.ts`
   primitives; `result.tsx` renders every receipt for MCP.
 - `src/cli.ts` exports `main`; the framework's generated process envelope
-  turns it into both the bundled `<Script>` artifact entry and the npm bin.
-  `src/mcp-server.ts` default-exports a server factory served under the
+  turns it into both the bundled script artifact entry and the npm bin.
+  `src/mcp/curator.ts` default-exports a server factory served under the
   framework's stdio lifecycle shell. No hand-written entry shims remain.
 
 ## Complete workflow
@@ -87,6 +97,22 @@ The original thirteen commands are present:
 operation also has an MCP tool with the same implementation and result renderer;
 run `audiobook-curator --help` for exact CLI forms.
 
+## Run the MCP server
+
+From this example's directory, run the built `curator` server in the
+foreground on stdio:
+
+```bash
+cd examples/audiobook-curator
+pnpm exec agent-bundle mcp run --server curator --target claude
+```
+
+The command resolves the generated entry from the Claude target's MCP
+manifest, building a temporary artifact first; pass `--artifact artifact` to
+reuse the `pnpm build` output instead. Closing stdin exits 0 and Ctrl-C
+exits 130, and per-server state persists under
+`.agent-bundle/mcp-run/claude/curator`.
+
 ## Safety
 
 Sources are immutable. Planning never mutates media. Conversion publishes a
@@ -103,12 +129,8 @@ The completion contract and real-volume checklist are in
 ## Maintainer notes
 
 This example is the reference consumer of the framework-owned package build
-("one config, agent-bundle owns the build"): `agent-bundle.config.ts` is a
-pure pass-through of the RSC application's config, and the `src/cli.ts` /
-`src/index.ts` conventions provide the npm bin and library outputs under
-`dist/`. The former second bundler config (`rslib.config.ts`), its
-`tsconfig.build.json`, the hand-written `bin/audiobook-curator.js` shim, the
-self-executing `src/cli-entry.ts`, and the dual `build:cli`/`build:bundle`
-script chain were all deleted when the framework took ownership. See
-[`docs/entry-conventions.md`](../../docs/entry-conventions.md) for the
-contract.
+("one config, agent-bundle owns the build"): `agent-bundle.config.ts` declares
+the structure directly, and the `src/cli.ts` / `src/index.ts` conventions
+provide the npm bin and library outputs under `dist/`. See
+[`docs/entry-conventions.md`](../../docs/entry-conventions.md)
+for the contract.

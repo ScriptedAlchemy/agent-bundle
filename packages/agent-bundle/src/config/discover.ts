@@ -5,7 +5,12 @@ import fastGlob from 'fast-glob';
 
 import type { AgentBundleConfig } from '../core/types.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from './ignore.ts';
+import { isRenderedSkillSourceName } from './rendered-skill.ts';
 import { parseSkill, type SkillDocument } from './skill.ts';
+
+/** A skill directory is identified by SKILL.md or a rendered-skill source module. */
+const isSkillDocumentName = (name: string): boolean =>
+  name === 'SKILL.md' || isRenderedSkillSourceName(name);
 
 /** One discovered project-level asset file with its artifact destination under `assets/`. */
 export interface DiscoveredAsset {
@@ -31,6 +36,13 @@ export interface DiscoveredPayload {
 export interface DiscoveredProject {
   assets?: DiscoveredAsset[];
   payloads?: DiscoveredPayload[];
+  /**
+   * Conventional `skills/<name>/SKILL.md` documents that explicit `skills`
+   * configuration leaves uncovered — the confusable shadowed state surfaced
+   * by the AB4734 migration nudge. Absent when config is silent (the
+   * convention itself applies) or when every conventional skill is covered.
+   */
+  shadowedConventionalSkills?: readonly string[];
   skills: SkillDocument[];
 }
 
@@ -46,7 +58,7 @@ const expandConfiguredSkill = async (projectRoot: string, skill: string): Promis
     onlyFiles: false,
   });
   return matches
-    .filter((match) => match.dirent.isDirectory() || match.name === 'SKILL.md')
+    .filter((match) => match.dirent.isDirectory() || isSkillDocumentName(match.name))
     .map((match) => match.path);
 };
 
@@ -173,25 +185,38 @@ export const discoverProject = async (
   const projectRoot = resolve(root);
   const rules = await readProjectIgnoreRules(projectRoot);
   const configuredSkills = config.skills;
+  const conventionalSources = (await fastGlob('skills/*/SKILL.{md,ts,tsx}', {
+    absolute: true,
+    cwd: projectRoot,
+    dot: true,
+    followSymbolicLinks: false,
+    onlyFiles: true,
+  })).filter((source) => !isProjectPathIgnored(rules, projectRoot, source));
   const sources =
     configuredSkills === undefined
-      ? await fastGlob('skills/*/SKILL.md', {
-          absolute: true,
-          cwd: projectRoot,
-          dot: true,
-          followSymbolicLinks: false,
-          onlyFiles: true,
-        })
+      ? conventionalSources
       : (await Promise.all(configuredSkills.map((skill) => expandConfiguredSkill(projectRoot, skill)))).flat();
   const skillDirs = [...new Set(sources
     .filter((source) => !isProjectPathIgnored(rules, projectRoot, source))
-    .map((source) => (basename(source) === 'SKILL.md' ? dirname(source) : source)))]
+    .map((source) => (isSkillDocumentName(basename(source)) ? dirname(source) : source)))]
     .sort((left, right) => left.localeCompare(right));
+  const coveredDirs = new Set(skillDirs);
+  const shadowedByDir = new Map<string, string>();
+  if (configuredSkills !== undefined) {
+    for (const source of [...conventionalSources].sort((left, right) => left.localeCompare(right))) {
+      const skillDir = dirname(source);
+      if (!coveredDirs.has(skillDir) && !shadowedByDir.has(skillDir)) {
+        shadowedByDir.set(skillDir, source);
+      }
+    }
+  }
+  const shadowedConventionalSkills = [...shadowedByDir.values()];
 
   const payloads = await discoverPayloads(projectRoot, config.payload);
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
     ...(payloads.length === 0 ? {} : { payloads }),
+    ...(shadowedConventionalSkills.length === 0 ? {} : { shadowedConventionalSkills }),
     skills: await Promise.all(
       skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules)),
     ),

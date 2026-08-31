@@ -233,6 +233,15 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
   }
   for (const skill of input.sharedCopyEntries === false ? [] : model.skills) {
     if (!isSelected(skill.targets)) continue;
+    if (skill.markdown !== undefined) {
+      // A rendered skill's SKILL.md is compiled from its component module.
+      entries.push({
+        content: skill.markdown,
+        kind: 'write',
+        relativePath: `skills/${skill.name}/SKILL.md`,
+        sourceInputs: sourceInputs(skill.source),
+      });
+    }
     for (const resource of skill.resources) {
       entries.push({
         bytes: resource.bytes,

@@ -12,13 +12,10 @@ import { createElement } from 'react';
 import { z } from 'zod';
 
 import {
-  AgentBundle,
-  McpServer,
   Mcp,
-  Operation,
   createRscMcpServer,
   defineOperation,
-  defineRscAgentBundle,
+  defineRscApplication,
 } from '../src/index.js';
 
 const widgetResourceUri = 'ui://demo/widget.html';
@@ -63,13 +60,11 @@ const removeOperation = defineOperation({
   resultSchema: z.object({ removed: z.boolean() }).strict(),
 });
 
-const application = defineRscAgentBundle(createElement(
-  AgentBundle,
-  { name: 'wire-demo', targets: ['claude'], version: '1.0.0' },
-  createElement(McpServer, { entry: './src/mcp-server.ts', name: 'demo' }),
-  createElement(Operation, { definition: searchOperation }),
-  createElement(Operation, { definition: removeOperation }),
-));
+const application = defineRscApplication({
+  name: 'wire-demo',
+  operations: [searchOperation, removeOperation],
+  version: '1.0.0',
+});
 
 interface WireTool {
   readonly _meta?: Record<string, unknown>;

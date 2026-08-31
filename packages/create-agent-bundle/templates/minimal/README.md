@@ -16,7 +16,8 @@ npm run check      # validate + build + typecheck + test
 
 - `agent-bundle.config.ts` — the one typed config.
 - `skills/getting-started/` — a Skill: `SKILL.md` frontmatter plus optional
-  `references/` and `assets/`.
+  `references/` and `assets/`. Every `skills/<name>/SKILL.md` directory is
+  discovered automatically; add a folder and it ships.
 - `tests/` — run with `npm run test`.
 
 ## The agent-bundle dependency

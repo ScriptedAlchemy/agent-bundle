@@ -6,6 +6,7 @@
     "build": "rsbuild build --mode production && agent-bundle build --json --output dist/plugins",
     "test": "rstest --config rstest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "validate": "agent-bundle validate",
     "check": "pnpm build && pnpm test && pnpm typecheck",
     "eval:hosts": "node scripts/eval-hosts.mjs",
     "capture:widget": "node scripts/capture-widget.mjs"

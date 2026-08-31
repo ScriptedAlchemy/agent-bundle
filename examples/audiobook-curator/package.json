@@ -2,7 +2,7 @@
   "name": "@agent-bundle-example/audiobook-curator",
   "version": "1.0.0",
   "private": true,
-  "description": "A complete RSC-authored Claude and Codex audiobook-curation plugin, CLI, Skill, and MCP server.",
+  "description": "A complete framework-mode Claude and Codex audiobook-curation plugin, CLI, Skill, and MCP server.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -22,7 +22,7 @@
   },
   "scripts": {
     "build": "agent-bundle build --json --output artifact",
-    "check": "pnpm test && pnpm typecheck && pnpm build",
+    "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test",
     "dev": "agent-bundle dev",
     "test": "rstest tests",
     "typecheck": "tsc -p tsconfig.json --noEmit",

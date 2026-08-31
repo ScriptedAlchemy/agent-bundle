@@ -265,6 +265,12 @@ export interface NormalizedSkill {
   readonly dir: string;
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly id: string;
+  /**
+   * The compiled SKILL.md document of a rendered skill (`SKILL.tsx`
+   * convention). When present, adapters emit it as a generated write entry;
+   * static skills ship their authored SKILL.md as a copied resource instead.
+   */
+  readonly markdown?: string;
   readonly name: string;
   readonly provenance: SourceProvenance;
   readonly resources: readonly NormalizedSkillResource[];
