@@ -5,8 +5,7 @@
   "license": "MIT",
   "keywords": [
     "agent-bundle",
-    "mcp",
-    "react-server-components"
+    "mcp"
   ],
   "homepage": "https://github.com/ScriptedAlchemy/agent-bundle#readme",
   "bugs": {
