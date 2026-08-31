@@ -70,7 +70,7 @@ const compileObserver = (
     onAfterEnvironmentCompile: () => undefined,
     onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
   });
-  const beginAttempt = (): void => {
+  const observeCompileStart = (): void => {
     if (before === undefined) throw new Error('RSC compiler observer before hook is unavailable.');
     before();
   };
@@ -93,24 +93,24 @@ const compileObserver = (
     });
   };
   return Object.freeze({
-    beginAttempt,
     async compile(input: Readonly<{
       readonly children?: readonly unknown[];
       readonly hasErrors?: boolean;
     }> = {}): Promise<void> {
-      beginAttempt();
+      observeCompileStart();
       await completeAttempt(input);
     },
     completeAttempt,
+    observeCompileStart,
   });
 };
 
 /**
  * Wraps the real Rsbuild factory to steal the compile-observer plugin's dev
  * hooks. Registering the plugin against a second minimal API shares its
- * closure state (attempt FIFO, captured cohort) with the real compiler, so a
- * test can drive additional attempt lifecycles deterministically while the
- * real watcher is idle.
+ * closure state (captured cohort) with the real compiler, so a test can
+ * drive additional compile lifecycles deterministically while the real
+ * watcher is idle.
  */
 const interceptCompileObserver = () => {
   let before: (() => void) | undefined;
@@ -132,10 +132,6 @@ const interceptCompileObserver = () => {
     return createRsbuild(input);
   }) as typeof createRsbuild;
   return Object.freeze({
-    beginAttempt: (): void => {
-      if (before === undefined) throw new Error('RSC compile observer hooks are unavailable.');
-      before();
-    },
     async completeAttempt(input: Readonly<{
       readonly children?: readonly Readonly<{ readonly hash: string; readonly name: string }>[];
       readonly hasErrors?: boolean;
@@ -149,6 +145,10 @@ const interceptCompileObserver = () => {
       });
     },
     create,
+    observeCompileStart: (): void => {
+      if (before === undefined) throw new Error('RSC compile observer hooks are unavailable.');
+      before();
+    },
     /**
      * Drives the plugin's per-environment staging hook against the session's
      * real compiler output roots, staging an immutable checkpoint under a
@@ -612,13 +612,14 @@ test('retries an identical compiler cohort after an asynchronous provider activa
   const captures: boolean[] = [];
   let enqueueCount = 0;
   const observer = compileObserver({
-    beforeAttempt: () => `attempt-${String(captures.length + 1)}`,
+    beginCompletedCohort: () => `attempt-${String(captures.length + 1)}`,
     capture: async (input) => {
       captures.push(input.cohortChanged);
       return input.cohortChanged ? snapshotFor(input.attemptId, input.sourceRevision) : undefined;
     },
     enqueue: () => outcomes[enqueueCount++]!.promise,
     failAttempt: () => undefined,
+    observeCompileStart: () => undefined,
   });
 
   await observer.compile();
@@ -639,7 +640,7 @@ test('classifies a same-hash compiler cohort as unchanged while its activation i
   let attempts = 0;
   let enqueueCount = 0;
   const observer = compileObserver({
-    beforeAttempt: () => `attempt-${String(++attempts)}`,
+    beginCompletedCohort: () => `attempt-${String(++attempts)}`,
     capture: async (input) => {
       captures.push(input.cohortChanged);
       return input.cohortChanged ? snapshotFor(input.attemptId, input.sourceRevision) : undefined;
@@ -649,6 +650,7 @@ test('classifies a same-hash compiler cohort as unchanged while its activation i
       return activation.promise;
     },
     failAttempt: () => undefined,
+    observeCompileStart: () => undefined,
   });
 
   await observer.compile();
@@ -664,7 +666,7 @@ test('classifies direct compiler errors as source build failures without capture
   const enqueued: string[] = [];
   const failures: unknown[][] = [];
   const observer = compileObserver({
-    beforeAttempt: () => 'attempt-source-build',
+    beginCompletedCohort: () => 'attempt-source-build',
     capture: async (input) => {
       captured.push(input.attemptId);
       return snapshotFor(input.attemptId, input.sourceRevision);
@@ -674,6 +676,7 @@ test('classifies direct compiler errors as source build failures without capture
       return 'activated';
     },
     failAttempt: (...input: unknown[]) => { failures.push(input); },
+    observeCompileStart: () => undefined,
   });
 
   await observer.compile({ hasErrors: true });
@@ -688,13 +691,14 @@ test('classifies direct compiler errors as source build failures without capture
 test('recaptures an unchanged successful cohort after a source build failure', async () => {
   const captured: boolean[] = [];
   const observer = compileObserver({
-    beforeAttempt: () => `attempt-${String(captured.length + 1)}`,
+    beginCompletedCohort: () => `attempt-${String(captured.length + 1)}`,
     capture: async (input) => {
       captured.push(input.cohortChanged);
       return snapshotFor(input.attemptId, input.sourceRevision);
     },
     enqueue: () => 'activated',
     failAttempt: () => undefined,
+    observeCompileStart: () => undefined,
   });
 
   await observer.compile();
@@ -707,10 +711,11 @@ test('recaptures an unchanged successful cohort after a source build failure', a
 test('keeps malformed compiler stats in the provider lifecycle failure lane', async () => {
   const failures: unknown[][] = [];
   const observer = compileObserver({
-    beforeAttempt: () => 'attempt-malformed-stats',
+    beginCompletedCohort: () => 'attempt-malformed-stats',
     capture: async (input) => snapshotFor(input.attemptId, input.sourceRevision),
     enqueue: () => 'activated',
     failAttempt: (...input: unknown[]) => { failures.push(input); },
+    observeCompileStart: () => undefined,
   });
 
   await observer.compile({ children: [] });
@@ -720,42 +725,104 @@ test('keeps malformed compiler stats in the provider lifecycle failure lane', as
   expect(failures[0]?.[2]).toBe('provider-lifecycle');
 });
 
-test('retains FIFO pairing when MultiCompiler emits overlapping before hooks', async () => {
-  let attempts = 0;
+test('derives identity from completed cohorts when before callbacks are coalesced, missing, or duplicated', async () => {
+  let cohorts = 0;
+  let observedStarts = 0;
   const captures: string[] = [];
   const failures: unknown[][] = [];
   const observer = compileObserver({
-    beforeAttempt: () => `attempt-${String(++attempts)}`,
+    beginCompletedCohort: () => `cohort-${String(++cohorts)}`,
     capture: async (input) => {
       captures.push(input.attemptId);
       return undefined;
     },
     enqueue: () => undefined,
     failAttempt: (...input: unknown[]) => { failures.push(input); },
+    observeCompileStart: () => { observedStarts += 1; },
   });
 
-  observer.beginAttempt();
-  observer.beginAttempt();
+  // Coalesced invalidation: two pre-compile callbacks, one completion.
+  observer.observeCompileStart();
+  observer.observeCompileStart();
   await observer.completeAttempt();
-  await observer.completeAttempt();
+  // Missing pre-compile callback: a completion with no before callback at
+  // all still allocates the next identity and is processed normally.
+  await observer.completeAttempt({ children: [{ hash: 'rsc-2', name: 'rsc' }, { hash: 'widget-2', name: 'widget' }, { hash: 'app-2', name: 'app' }] });
+  // Duplicated pre-compile callback after everything settled: advisory only.
+  observer.observeCompileStart();
 
-  expect(captures).toEqual(['attempt-1', 'attempt-2']);
+  expect(observedStarts).toBe(3);
+  expect(captures).toEqual(['cohort-1', 'cohort-2']);
   expect(failures).toEqual([]);
 });
 
-test('fails duplicate pending attempt identities loudly instead of silently mispairing them', () => {
+test('assigns ascending completed-cohort identity to duplicated and reordered completion callbacks', async () => {
+  let cohorts = 0;
+  const captures: Array<Readonly<{ readonly attemptId: string; readonly cohortChanged: boolean; readonly sourceRevision: string }>> = [];
+  const enqueued: string[] = [];
   const failures: unknown[][] = [];
   const observer = compileObserver({
-    beforeAttempt: () => 'attempt-duplicate',
-    capture: async () => undefined,
-    enqueue: () => undefined,
+    beginCompletedCohort: () => `cohort-${String(++cohorts)}`,
+    capture: async (input) => {
+      captures.push(Object.freeze({ attemptId: input.attemptId, cohortChanged: input.cohortChanged, sourceRevision: input.sourceRevision }));
+      return input.cohortChanged ? snapshotFor(input.attemptId, input.sourceRevision) : undefined;
+    },
+    enqueue: (snapshot) => {
+      enqueued.push(snapshot.attemptId);
+      return 'activated';
+    },
     failAttempt: (...input: unknown[]) => { failures.push(input); },
+    observeCompileStart: () => undefined,
   });
 
-  observer.beginAttempt();
-  expect(() => observer.beginAttempt()).toThrow('duplicate pending attempt identity');
-  expect(failures.map(([attemptId]) => attemptId)).toEqual(['attempt-duplicate', 'attempt-duplicate']);
-  expect(failures.every((failure) => failure[2] === 'provider-lifecycle')).toBe(true);
+  const newer = [{ hash: 'rsc-newer', name: 'rsc' }, { hash: 'widget-newer', name: 'widget' }, { hash: 'app-newer', name: 'app' }];
+  const older = [{ hash: 'rsc-older', name: 'rsc' }, { hash: 'widget-older', name: 'widget' }, { hash: 'app-older', name: 'app' }];
+  // Reordered delivery: the completion for the newer compile arrives first.
+  // Identity binds to completion arrival, so the last-delivered cohort is
+  // the authoritative one - there is no queue to pair either callback with
+  // an older observation.
+  await observer.completeAttempt({ children: newer });
+  await observer.completeAttempt({ children: older });
+  // Duplicated completion: the same MultiStats delivered again is an
+  // unchanged cohort no-op under a fresh identity, never a mispair.
+  await observer.completeAttempt({ children: older });
+
+  expect(captures.map((capture) => capture.attemptId)).toEqual(['cohort-1', 'cohort-2', 'cohort-3']);
+  expect(captures.map((capture) => capture.cohortChanged)).toEqual([true, true, false]);
+  expect(captures[0]!.sourceRevision).not.toBe(captures[1]!.sourceRevision);
+  expect(captures[1]!.sourceRevision).toBe(captures[2]!.sourceRevision);
+  expect(enqueued).toEqual(['cohort-1', 'cohort-2']);
+  expect(failures).toEqual([]);
+});
+
+test('treats skewed child invalidations as distinct completed cohorts in completion order', async () => {
+  let cohorts = 0;
+  const captures: Array<Readonly<{ readonly attemptId: string; readonly cohortChanged: boolean }>> = [];
+  const failures: unknown[][] = [];
+  const observer = compileObserver({
+    beginCompletedCohort: () => `cohort-${String(++cohorts)}`,
+    capture: async (input) => {
+      captures.push(Object.freeze({ attemptId: input.attemptId, cohortChanged: input.cohortChanged }));
+      return input.cohortChanged ? snapshotFor(input.attemptId, input.sourceRevision) : undefined;
+    },
+    enqueue: () => 'activated',
+    failAttempt: (...input: unknown[]) => { failures.push(input); },
+    observeCompileStart: () => undefined,
+  });
+
+  // MultiCompiler children invalidating at different times surface as
+  // overlapping before callbacks and completions whose child hashes advance
+  // one child at a time. Every distinct completed pair is a fresh cohort.
+  observer.observeCompileStart();
+  await observer.completeAttempt({ children: [{ hash: 'rsc-1', name: 'rsc' }, { hash: 'widget-1', name: 'widget' }, { hash: 'app-1', name: 'app' }] });
+  observer.observeCompileStart();
+  observer.observeCompileStart();
+  await observer.completeAttempt({ children: [{ hash: 'rsc-2', name: 'rsc' }, { hash: 'widget-1', name: 'widget' }, { hash: 'app-1', name: 'app' }] });
+  await observer.completeAttempt({ children: [{ hash: 'rsc-2', name: 'rsc' }, { hash: 'widget-2', name: 'widget' }, { hash: 'app-2', name: 'app' }] });
+
+  expect(captures.map((capture) => capture.attemptId)).toEqual(['cohort-1', 'cohort-2', 'cohort-3']);
+  expect(captures.map((capture) => capture.cohortChanged)).toEqual([true, true, true]);
+  expect(failures).toEqual([]);
 });
 
 test('aggregates owned resource closer failures', async () => {
@@ -1442,7 +1509,7 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
   }
 });
 
-test('commits an activation while a later attempt is still live at the commit check', { timeout: 90_000 * timeScale }, async () => {
+test('commits an activation while a later compile is still in flight at the commit check', { timeout: 90_000 * timeScale }, async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
@@ -1474,14 +1541,16 @@ test('commits an activation while a later attempt is still live at the commit ch
       const firstGeneration = session.status().activeVector!.runtimeGenerationId;
       armCommitBarrier = true;
       const raceChildren = await stageSyntheticCohort(observer, join(copied.projectRoot, '.agent-bundle', 'runtime-live-attempt-commit'), 'live-race');
-      observer.beginAttempt();
+      observer.observeCompileStart();
       await observer.completeAttempt({ children: raceChildren });
       await commitReached.promise;
-      // The #38 wedge: an undecided later attempt registers while the newest
-      // compile sits between its final guard wait and the commit check. It
-      // must not supersede the activation - it may still settle as a no-op or
-      // a failure, which would leave nothing to activate and no retrigger.
-      observer.beginAttempt();
+      // The #38 wedge: a later compile starts while the newest completed
+      // cohort sits between its final guard wait and the commit check.
+      // Pre-compile observation is advisory and owns no identity, so it must
+      // neither supersede nor delay the activation - it may still settle as
+      // a no-op or a failure, which would leave nothing to activate and no
+      // retrigger.
+      observer.observeCompileStart();
       allowCommit.resolve();
       await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration);
       const committed = session.status().activeVector?.runtimeGenerationId;
@@ -1530,14 +1599,15 @@ test('commits an activation after a later broken attempt fails inside the commit
       const firstGeneration = session.status().activeVector!.runtimeGenerationId;
       armCommitBarrier = true;
       const raceChildren = await stageSyntheticCohort(observer, join(copied.projectRoot, '.agent-bundle', 'runtime-failed-attempt-commit'), 'failed-race');
-      observer.beginAttempt();
+      observer.observeCompileStart();
       await observer.completeAttempt({ children: raceChildren });
       await commitReached.promise;
       // A later broken compile fails and settles entirely inside the commit
-      // window. A failed attempt produces no generation, so it must not
-      // supersede the newest successful compile (#38) - discarding it here
-      // left the runtime permanently on the stale first generation.
-      observer.beginAttempt();
+      // window. A failed completed cohort never bumps the cohort ordinal, so
+      // it must not supersede the newest successful compile (#38) -
+      // discarding it here left the runtime permanently on the stale first
+      // generation.
+      observer.observeCompileStart();
       await observer.completeAttempt({ hasErrors: true });
       allowCommit.resolve();
       await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration);
@@ -1545,6 +1615,58 @@ test('commits an activation after a later broken attempt fails inside the commit
       expect(committed).toEqual(expect.any(String));
       expect(session.status()).toMatchObject({ state: 'active' });
       expect(events.filter((event) => event.type === 'runtime.generation.activated' && event.runtimeGenerationId === committed)).toHaveLength(1);
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});
+
+test('activates from unpaired completion callbacks and never wedges behind a dangling pre-compile observation', { timeout: 90_000 * timeScale }, async () => {
+  const copied = await copyProviderExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const observer = interceptCompileObserver();
+    const events: Array<{ readonly type: string }> = [];
+    const session = await RsbuildRuntimeSession.start({
+      ...startContext({
+        projectRoot: copied.projectRoot,
+        preparedRuntime: prepared.devRuntime!,
+        providerSessionId: 'provider-unpaired-completion',
+        signal: new AbortController().signal,
+        storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-unpaired-completion'),
+      }),
+      emit: (event) => { events.push(event); },
+    }, { createRsbuild: observer.create });
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const firstGeneration = session.status().activeVector!.runtimeGenerationId;
+      // A completion with no paired pre-compile callback (a coalesced or
+      // dropped onBeforeDevCompile) is a complete authoritative cohort.
+      const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-unpaired-completion');
+      const unpairedChildren = await stageSyntheticCohort(observer, storageRoot, 'unpaired');
+      await observer.completeAttempt({ children: unpairedChildren });
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration);
+      const unpairedGeneration = session.status().activeVector!.runtimeGenerationId;
+      expect(session.status()).toMatchObject({ diagnostics: [], state: 'active' });
+
+      // A pre-compile observation whose completion never arrives owns no
+      // identity or barrier, so the next completed cohort activates without
+      // waiting on it.
+      observer.observeCompileStart();
+      const postDanglingChildren = await stageSyntheticCohort(observer, storageRoot, 'post-dangling');
+      await observer.completeAttempt({ children: postDanglingChildren });
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== unpairedGeneration);
+      expect(session.status()).toMatchObject({ diagnostics: [], state: 'active' });
+
+      // Redelivering the same completed MultiStats is an unchanged-cohort
+      // no-op under a fresh identity, never a mispair or a failure.
+      const committed = session.status().activeVector!.runtimeGenerationId;
+      await observer.completeAttempt({ children: postDanglingChildren });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
+      expect(session.status().activeVector?.runtimeGenerationId).toBe(committed);
+      expect(events.filter((event) => event.type === 'runtime.generation.failed')).toHaveLength(0);
     } finally {
       await session.close();
     }
