@@ -1104,8 +1104,8 @@ it('prepares the optional runtime once with the development config context befor
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   let failedServer: Awaited<ReturnType<typeof startDevServer>> | undefined;
   const boundOrigins: string[] = [];
-  let resolveSurface: ((binding: { readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string; readonly webSocketPath: '/rsbuild-hmr' }) => void) | undefined;
-  const pendingSurface = new Promise<{ readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string; readonly webSocketPath: '/rsbuild-hmr' }>((resolvePromise) => {
+  let resolveSurface: ((binding: { readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string }) => void) | undefined;
+  const pendingSurface = new Promise<{ readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string }>((resolvePromise) => {
     resolveSurface = resolvePromise;
   });
   let proxyCalls = 0;
@@ -1129,7 +1129,7 @@ it('prepares the optional runtime once with the development config context befor
       '      storageRoot: context.storageRoot,',
       '    }));',
       '    return {',
-      "      clientSurface: (surfaceId) => surfaceId === 'timeline' ? { entryPath: '/', httpOrigin: 'http://127.0.0.1:41111', httpPathPrefixes: ['/'], surfaceId, webSocketOrigin: 'ws://127.0.0.1:41111', webSocketPath: '/rsbuild-hmr', webSocketToken: 'rsbuild-token-1234' } : undefined,",
+      "      clientSurface: (surfaceId) => surfaceId === 'timeline' ? { entryPath: '/', httpOrigin: 'http://127.0.0.1:41111', httpPathPrefixes: ['/'], subscribeReload: () => () => undefined, surfaceId } : undefined,",
       '      close: async () => undefined,',
       '      mcpRegistry: {},',
       '      providerSessionId: context.providerSessionId,',
@@ -1204,7 +1204,6 @@ it('prepares the optional runtime once with the development config context befor
       close: async () => { surfaceCloseCalls += 1; },
       origin: 'http://127.0.0.1:41112',
       surfaceId: 'timeline',
-      webSocketPath: '/rsbuild-hmr',
     });
     await expect(opening).rejects.toThrow('closed');
     await expect(closing).resolves.toBeUndefined();
@@ -1223,7 +1222,6 @@ it('prepares the optional runtime once with the development config context befor
           close: async () => { failedCloseCalls += 1; throw new Error('Completed client surface close failed.'); },
           origin: 'http://127.0.0.1:41113',
           surfaceId: 'timeline',
-          webSocketPath: '/rsbuild-hmr',
         }),
       },
     });

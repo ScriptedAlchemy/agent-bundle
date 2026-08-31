@@ -24,11 +24,13 @@ export type RscRuntimeCompileFailureKind = 'provider-lifecycle' | 'source-build'
 export interface RscRuntimeRsbuildConfigOptions {
   readonly compilerRoot?: string;
   readonly mode: 'development' | 'production';
-  /** Receives the App environment's server-only Rsbuild HMR credential. */
-  readonly onAppWebSocketToken?: (input: Readonly<{
-    readonly path: string;
-    readonly token: string;
-  }>) => void;
+  /**
+   * Provider-owned reload signal: invoked once for each later successful,
+   * changed App environment compilation. This callback replaces
+   * `hot.send('full-reload')`, so no consumer has to parse Rsbuild's private
+   * WebSocket envelope to learn that the App surface changed.
+   */
+  readonly onAppReload?: () => void;
   readonly onCompile?: Readonly<{
     beforeAttempt(): string;
     capture(input: {
@@ -43,21 +45,18 @@ export interface RscRuntimeRsbuildConfigOptions {
   }>;
 }
 
-const runtimeAppHmrTokenPlugin = (
-  capture: NonNullable<RscRuntimeRsbuildConfigOptions['onAppWebSocketToken']>,
+const runtimeAppReloadPlugin = (
+  onAppReload: NonNullable<RscRuntimeRsbuildConfigOptions['onAppReload']>,
 ): RsbuildPlugin => {
   let devServer: RsbuildDevServer | undefined;
   let lastAppCompilation: object | string | undefined;
   return {
-    name: 'agent-bundle:rsc-runtime-app-hmr-token',
+    name: 'agent-bundle:rsc-runtime-app-reload',
     setup(api) {
       api.onAfterCreateCompiler(({ environments }) => {
-        const app = environments.app;
-        const token = app?.webSocketToken;
-        if (typeof token !== 'string') throw new Error('RSC runtime App compiler did not expose an HMR credential.');
-        const path = app?.config.dev.client.path;
-        if (typeof path !== 'string') throw new Error('RSC runtime App compiler did not expose a normalized HMR path.');
-        capture(Object.freeze({ path, token }));
+        if (environments.app === undefined) {
+          throw new Error('RSC runtime compiler did not expose the App environment.');
+        }
       });
       api.onBeforeStartDevServer(({ server }) => {
         devServer = server;
@@ -73,7 +72,7 @@ const runtimeAppHmrTokenPlugin = (
         if (lastAppCompilation === compilation) return;
         lastAppCompilation = compilation;
         if (isFirstCompile) return;
-        devServer?.environments.app.hot.send('full-reload');
+        onAppReload();
       });
     },
   };
@@ -221,7 +220,7 @@ export const createRscRuntimeRsbuildConfig = (
       pluginReact(),
       pluginRSC({ environments: { server: 'rsc', client: 'widget' } }),
       emitRuntimeManifest(),
-      ...(options.onAppWebSocketToken === undefined ? [] : [runtimeAppHmrTokenPlugin(options.onAppWebSocketToken)]),
+      ...(options.onAppReload === undefined ? [] : [runtimeAppReloadPlugin(options.onAppReload)]),
       ...(options.onCompile === undefined ? [] : [runtimeCompileObserverPlugin(options.onCompile)]),
     ],
     environments: {
