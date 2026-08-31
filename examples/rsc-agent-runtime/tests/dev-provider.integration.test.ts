@@ -57,19 +57,32 @@ const compileObserver = (onCompile: NonNullable<Parameters<typeof createRscRunti
     onAfterDevCompile: (callback: unknown) => { after = callback as (input: unknown) => Promise<void>; },
     onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
   });
+  const beginAttempt = (): void => {
+    if (before === undefined) throw new Error('RSC compiler observer before hook is unavailable.');
+    before();
+  };
+  const completeAttempt = async (input: Readonly<{
+    readonly children?: readonly unknown[];
+    readonly hasErrors?: boolean;
+  }> = {}): Promise<void> => {
+    if (after === undefined) throw new Error('RSC compiler observer after hook is unavailable.');
+    await after({
+      stats: {
+        hasErrors: () => input.hasErrors ?? false,
+        toJson: () => ({ children: input.children ?? [{ hash: 'rsc-hash', name: 'rsc' }, { hash: 'widget-hash', name: 'widget' }] }),
+      },
+    });
+  };
   return Object.freeze({
+    beginAttempt,
     async compile(input: Readonly<{
       readonly children?: readonly unknown[];
       readonly hasErrors?: boolean;
     }> = {}): Promise<void> {
-      before?.();
-      await after?.({
-        stats: {
-          hasErrors: () => input.hasErrors ?? false,
-          toJson: () => ({ children: input.children ?? [{ hash: 'rsc-hash', name: 'rsc' }, { hash: 'widget-hash', name: 'widget' }] }),
-        },
-      });
+      beginAttempt();
+      await completeAttempt(input);
     },
+    completeAttempt,
   });
 };
 
@@ -191,11 +204,11 @@ const introduceWorkerSyntaxError = async (projectRoot: string): Promise<void> =>
 };
 
 test('captures the App compiler HMR credential only through the public Rsbuild environment hook', async () => {
-  const captured: string[] = [];
+  const captured: Array<Readonly<{ readonly path: string; readonly token: string }>> = [];
   const config = createRscRuntimeRsbuildConfig({
     compilerRoot: join(tmpdir(), 'rsc-provider-hmr-token'),
     mode: 'development',
-    onAppWebSocketToken: (token: string) => { captured.push(token); },
+    onAppWebSocketToken: (input) => { captured.push(input); },
   } as Parameters<typeof createRscRuntimeRsbuildConfig>[0]);
   const plugin = (config.plugins as readonly unknown[]).find((candidate): candidate is Readonly<{
     readonly name: string;
@@ -210,8 +223,8 @@ test('captures the App compiler HMR credential only through the public Rsbuild e
     onBeforeStartDevServer: () => undefined,
     onCloseDevServer: () => undefined,
   });
-  afterCreate?.({ environments: { app: { webSocketToken: 'rsbuild-token-1234' } } });
-  expect(captured).toEqual(['rsbuild-token-1234']);
+  afterCreate?.({ environments: { app: { config: { dev: { client: { path: '/custom-hmr' } } }, webSocketToken: 'rsbuild-token-1234' } } });
+  expect(captured).toEqual([{ path: '/custom-hmr', token: 'rsbuild-token-1234' }]);
 });
 
 test('sends one App-only full reload for each later successful App compilation', async () => {
@@ -219,7 +232,7 @@ test('sends one App-only full reload for each later successful App compilation',
   const config = createRscRuntimeRsbuildConfig({
     compilerRoot: join(tmpdir(), 'rsc-provider-app-reload'),
     mode: 'development',
-    onAppWebSocketToken: (token: string) => { captured.push(token); },
+    onAppWebSocketToken: ({ token }) => { captured.push(token); },
   } as Parameters<typeof createRscRuntimeRsbuildConfig>[0]);
   const plugin = (config.plugins as readonly unknown[]).find((candidate): candidate is Readonly<{
     readonly name: string;
@@ -249,7 +262,12 @@ test('sends one App-only full reload for each later successful App compilation',
   const failedAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => true } });
   const nonAppUpdate = Object.freeze({ environment: { name: 'widget' }, isFirstCompile: false, stats: { hasErrors: () => false } });
 
-  afterCompiler?.({ environments: { app: { webSocketToken: 'rsbuild-app-token-1234' }, widget: { webSocketToken: 'widget-token-must-not-leak' } } });
+  afterCompiler?.({
+    environments: {
+      app: { config: { dev: { client: { path: '/rsbuild-hmr' } } }, webSocketToken: 'rsbuild-app-token-1234' },
+      widget: { webSocketToken: 'widget-token-must-not-leak' },
+    },
+  });
   afterEnvironmentCompile?.(appBUpdate);
   expect(appSends).toEqual([]);
   beforeStartDevServer?.({
@@ -659,6 +677,29 @@ test('keeps malformed compiler stats in the provider lifecycle failure lane', as
   expect(failures).toHaveLength(1);
   expect(failures[0]?.[0]).toBe('attempt-malformed-stats');
   expect(failures[0]?.[2]).toBe('provider-lifecycle');
+});
+
+test('fails every live attempt loudly when global compile hooks violate FIFO pairing', async () => {
+  let attempts = 0;
+  const captures: string[] = [];
+  const failures: unknown[][] = [];
+  const observer = compileObserver({
+    beforeAttempt: () => `attempt-${String(++attempts)}`,
+    capture: async (input) => {
+      captures.push(input.attemptId);
+      return snapshotFor(input.attemptId, input.sourceRevision);
+    },
+    enqueue: () => 'activated',
+    failAttempt: (...input: unknown[]) => { failures.push(input); },
+  });
+
+  observer.beginAttempt();
+  observer.beginAttempt();
+  await expect(observer.completeAttempt()).rejects.toThrow('exactly one pending attempt');
+
+  expect(captures).toEqual([]);
+  expect(failures.map(([attemptId]) => attemptId)).toEqual(['attempt-1', 'attempt-2']);
+  expect(failures.every((failure) => failure[2] === 'provider-lifecycle')).toBe(true);
 });
 
 test('aggregates owned resource closer failures', async () => {
@@ -1610,6 +1651,43 @@ test('aborts a deferred Rsbuild creation before starting its dev server', async 
   }
 });
 
+test('returns a compiling session without treating provider activation work as a startup barrier', async () => {
+  const copied = await copyProviderExample();
+  const activationReached = deferred<void>();
+  const releaseActivation = deferred<void>();
+  let session: RsbuildRuntimeSession | undefined;
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const starting = RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-compiling-startup',
+      signal: new AbortController().signal,
+      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-compiling-startup'),
+    }), {
+      afterActivationPrepare: async (input) => {
+        if (input.phase !== 'store') return;
+        activationReached.resolve();
+        await releaseActivation.promise;
+      },
+    });
+    let returnedSession: RsbuildRuntimeSession | undefined;
+    void starting.then((started) => { returnedSession = started; });
+    await activationReached.promise;
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+    const returnedBeforeActivation = returnedSession;
+    releaseActivation.resolve();
+    session = await starting;
+
+    expect(returnedBeforeActivation?.status()).toMatchObject({ state: 'compiling' });
+    await waitFor(() => session?.status().state === 'active');
+  } finally {
+    releaseActivation.resolve();
+    await session?.close();
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 60_000);
+
 test('uses the bound Rsbuild dev-server context instead of a stale port-zero start result', async () => {
   const copied = await copyProviderExample();
   try {
@@ -1629,7 +1707,14 @@ test('uses the bound Rsbuild dev-server context instead of a stale port-zero sta
         onBeforeStartDevServer: () => undefined,
         onCloseDevServer: () => undefined,
       });
-      afterCreate?.({ environments: { app: { webSocketToken: 'rsbuild-token-1234' } } });
+      afterCreate?.({
+        environments: {
+          app: {
+            config: { dev: { client: { path: '/custom-runtime-hmr' } } },
+            webSocketToken: 'token with /?+%= punctuation',
+          },
+        },
+      });
       return Object.freeze({
         context: Object.freeze({
           devServer: Object.freeze({ hostname: '127.0.0.1', https: false, port: 41_103 }),
@@ -1652,6 +1737,8 @@ test('uses the bound Rsbuild dev-server context instead of a stale port-zero sta
       expect(session.clientSurface('mcp.edit-timeline')).toMatchObject({
         httpOrigin: 'http://127.0.0.1:41103',
         webSocketOrigin: 'ws://127.0.0.1:41103',
+        webSocketPath: '/custom-runtime-hmr',
+        webSocketToken: 'token with /?+%= punctuation',
       });
     } finally {
       await session.close();

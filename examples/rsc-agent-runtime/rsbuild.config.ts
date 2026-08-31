@@ -25,7 +25,10 @@ export interface RscRuntimeRsbuildConfigOptions {
   readonly compilerRoot?: string;
   readonly mode: 'development' | 'production';
   /** Receives the App environment's server-only Rsbuild HMR credential. */
-  readonly onAppWebSocketToken?: (token: string) => void;
+  readonly onAppWebSocketToken?: (input: Readonly<{
+    readonly path: string;
+    readonly token: string;
+  }>) => void;
   readonly onCompile?: Readonly<{
     beforeAttempt(): string;
     capture(input: {
@@ -49,9 +52,12 @@ const runtimeAppHmrTokenPlugin = (
     name: 'agent-bundle:rsc-runtime-app-hmr-token',
     setup(api) {
       api.onAfterCreateCompiler(({ environments }) => {
-        const token = environments.app?.webSocketToken;
+        const app = environments.app;
+        const token = app?.webSocketToken;
         if (typeof token !== 'string') throw new Error('RSC runtime App compiler did not expose an HMR credential.');
-        capture(token);
+        const path = app?.config.dev.client.path;
+        if (typeof path !== 'string') throw new Error('RSC runtime App compiler did not expose a normalized HMR path.');
+        capture(Object.freeze({ path, token }));
       });
       api.onBeforeStartDevServer(({ server }) => {
         devServer = server;
@@ -96,13 +102,22 @@ const runtimeCompileObserverPlugin = (
     name: 'agent-bundle:rsc-runtime-compile-observer',
     setup(api) {
       api.onBeforeDevCompile(() => {
+        // Rsbuild documents global hook order, but not one before/after pair
+        // per MultiCompiler cohort. FIFO pairing is only empirical in 2.2.1;
+        // retain all observed IDs so the after hook can reject skew loudly.
         pendingAttemptIds.push(observer.beforeAttempt());
       });
       api.onAfterDevCompile(async ({ stats }) => {
-        const attemptId = pendingAttemptIds.shift();
-        if (attemptId === undefined) {
-          throw new Error('RSC runtime compile completed without a matching attempt.');
+        if (pendingAttemptIds.length !== 1) {
+          const pairingError = new Error(
+            `RSC runtime compile requires exactly one pending attempt; observed ${String(pendingAttemptIds.length)}.`,
+          );
+          for (const unmatchedAttemptId of pendingAttemptIds.splice(0)) {
+            observer.failAttempt(unmatchedAttemptId, pairingError, 'provider-lifecycle');
+          }
+          throw pairingError;
         }
+        const attemptId = pendingAttemptIds.shift() as string;
         let snapshot: RscRuntimeCompileSnapshot | undefined;
         try {
           if (stats.hasErrors()) {
@@ -112,6 +127,10 @@ const runtimeCompileObserverPlugin = (
           }
           const json = stats.toJson({ all: false, children: true, hash: true });
           const cohortHashes = new Map<'rsc' | 'widget', string>();
+          // Rspack documents optional Stats child names, but Rsbuild does not
+          // promise they equal environment keys. We explicitly name each
+          // compiler below; the name-based cohort match is otherwise only an
+          // empirical Rsbuild 2.2.1 behavior.
           for (const child of json.children ?? []) {
             if (child.name !== 'rsc' && child.name !== 'widget') continue;
             if (typeof child.hash !== 'string' || child.hash.length === 0) {
@@ -203,6 +222,7 @@ export const createRscRuntimeRsbuildConfig = (
         },
         tools: {
           rspack: {
+            name: 'rsc',
             module: {
               rules: [{
                 parser: { importMeta: { url: false } },
@@ -240,6 +260,9 @@ export const createRscRuntimeRsbuildConfig = (
           distPath: { root: root('widget', 'dist/widget') },
           filename: { js: '[name].js' },
           target: 'web',
+        },
+        tools: {
+          rspack: { name: 'widget' },
         },
       },
       app: {
@@ -280,6 +303,7 @@ export const createRscRuntimeRsbuildConfig = (
         },
         tools: {
           rspack: {
+            name: 'app',
             module: { parser: { javascript: { dynamicImportMode: 'eager' } } },
           },
         },

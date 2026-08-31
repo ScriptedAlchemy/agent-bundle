@@ -221,8 +221,15 @@ const compilerObserver = (input: Readonly<{
 test('resolves the coherent development compiler configuration through Rsbuild', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-compiler-'));
   try {
+    const developmentConfig = createRscRuntimeRsbuildConfig({ compilerRoot, mode: 'development' });
+    const configuredEnvironments = developmentConfig.environments as Readonly<Record<string, Readonly<{
+      readonly tools?: Readonly<{ readonly rspack?: Readonly<{ readonly name?: string }> }>;
+    }>>>;
+    expect(configuredEnvironments.rsc?.tools?.rspack?.name).toBe('rsc');
+    expect(configuredEnvironments.widget?.tools?.rspack?.name).toBe('widget');
+    expect(configuredEnvironments.app?.tools?.rspack?.name).toBe('app');
     const rsbuild = await createRsbuild({
-      config: createRscRuntimeRsbuildConfig({ compilerRoot, mode: 'development' }),
+      config: developmentConfig,
       cwd: process.cwd(),
     });
     const inspection = await rsbuild.inspectConfig({ mode: 'development' });
