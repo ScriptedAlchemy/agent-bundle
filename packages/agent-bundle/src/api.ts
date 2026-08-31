@@ -33,6 +33,8 @@ export {
   parseArtifactManifest,
   serializeArtifactManifest,
 } from './build/manifest.ts';
+import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
+export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
 import { validateArtifact } from './build/validate-artifact.ts';
 import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 export type { Diagnostic, DiagnosticSeverity } from './core/diagnostics.ts';
@@ -197,7 +199,7 @@ export interface InspectionPlan {
 }
 
 export interface InspectOptions extends ProjectOptions {
-  readonly focus?: 'hooks' | 'skills';
+  readonly focus?: 'bundler' | 'hooks' | 'skills';
   readonly target?: string;
 }
 
@@ -207,6 +209,7 @@ export interface ReadyInspectResult {
   readonly plans: readonly InspectionPlan[];
   readonly projectContext: ProjectContext;
   readonly selected?: {
+    readonly bundler?: BundlerInspection;
     readonly hooks?: NormalizedPlugin['hooks'];
     readonly skills?: NormalizedPlugin['skills'];
   };
@@ -434,9 +437,29 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
       ),
     ]));
   }
+  let bundler: BundlerInspection | undefined;
+  if (options.focus === 'bundler') {
+    try {
+      bundler = await composeBundlerInspection({
+        model,
+        targets: plans.map((plan) => ({ hookEntries: plan.hookEntries, name: plan.target })),
+        ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
+      });
+    } catch {
+      return invalidInspection(freezeDiagnostics([
+        ...prepared.diagnostics,
+        projectDiagnostic(
+          'AB7001',
+          'Unable to compose the bundler inspection.',
+          { sourcePath: prepared.configPath },
+        ),
+      ]));
+    }
+  }
   const selected = options.focus === undefined
     ? undefined
     : Object.freeze({
+      ...(bundler === undefined ? {} : { bundler }),
       ...(options.focus === 'hooks' ? { hooks: model.hooks } : {}),
       ...(options.focus === 'skills' ? { skills: model.skills } : {}),
     });

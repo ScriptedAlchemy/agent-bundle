@@ -1,6 +1,7 @@
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
+import { scanEntryExportsSource } from '../build/entry-exports.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
@@ -22,7 +23,11 @@ import type {
   NormalizationTargetRegistry,
   NormalizedPlugin,
 } from '../core/types.ts';
-import { conventionalMcpEntrySource } from './normalize.ts';
+import {
+  conventionalCliEntrySource,
+  conventionalIndexEntrySource,
+  conventionalMcpEntrySource,
+} from './normalize.ts';
 import type { DiscoveredProject } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import type { SkillDocument } from './skill.ts';
@@ -34,6 +39,18 @@ const sourceDiagnostic = (
   message: string,
   sourcePath: string,
 ): Diagnostic => ({ code, message, severity: 'error', sourcePath });
+
+/**
+ * Informational migration nudges (AB473x): they surface pre-convention
+ * patterns the entry conventions now replace, and they must never gate a
+ * build — migrations stay optional, so the severity is always `info`.
+ */
+const nudgeDiagnostic = (
+  code: string,
+  message: string,
+  sourcePath: string,
+  recovery: string,
+): Diagnostic => ({ code, message, recovery, severity: 'info', sourcePath });
 
 const hookEvents: readonly CanonicalHookEvent[] = [
   'sessionStart',
@@ -531,6 +548,41 @@ const validateMcpApps = (
   return diagnostics;
 };
 
+const relativePosix = (root: string, path: string): string =>
+  relative(root, path).replaceAll('\\', '/');
+
+/**
+ * AB4730: a local stdio entry whose module never default-exports a factory
+ * is self-connecting, so the build cannot wrap it in the framework stdio
+ * lifecycle shell. The detection is the same static export scan the build
+ * uses to decide the wrap, so the nudge and the build always agree.
+ */
+const selfConnectingEntryNudge = (
+  name: string,
+  entry: string | undefined,
+  conventionalEntry: string | undefined,
+  loaded: LoadedConfig,
+): Diagnostic[] => {
+  const source = entry !== undefined
+    ? nonemptyString(entry) && localEntryExists(loaded.context.projectRoot, entry)
+      ? resolve(loaded.context.projectRoot, entry)
+      : undefined
+    : conventionalEntry;
+  if (source === undefined || !bundleScriptExtensions.has(extname(source).toLowerCase())) return [];
+  try {
+    if (scanEntryExportsSource(readFileSync(source, 'utf8')).hasDefaultExport) return [];
+  } catch {
+    // An unreadable entry is already reported by the existence diagnostics.
+    return [];
+  }
+  return [nudgeDiagnostic(
+    'AB4730',
+    `MCP server ${JSON.stringify(name)} stdio entry is self-connecting; a default-exported server factory would receive the framework stdio lifecycle shell.`,
+    source,
+    'Optional: default-export a server factory from the entry module to adopt the framework lifecycle; self-connecting entries keep their current behavior.',
+  )];
+};
+
 const validateMcpServer = (
   name: string,
   value: unknown,
@@ -569,6 +621,20 @@ const validateMcpServer = (
     ));
     return diagnostics;
   }
+  if (variants.length === 1) {
+    const shadowed = conventionalMcpEntrySource(loaded.context.projectRoot, name);
+    if (
+      shadowed !== undefined &&
+      !(typeof entry === 'string' && entry.trim().length > 0 && resolve(loaded.context.projectRoot, entry) === shadowed)
+    ) {
+      diagnostics.push(nudgeDiagnostic(
+        'AB4733',
+        `MCP server ${JSON.stringify(name)} has the conventional stdio entry ${JSON.stringify(relativePosix(loaded.context.projectRoot, shadowed))}, but explicit configuration points elsewhere; the conventional file is shadowed.`,
+        shadowed,
+        'Optional: drop the explicit entry, command, or url to adopt the conventional stdio entry, or remove the shadowed file to silence this nudge.',
+      ));
+    }
+  }
   diagnostics.push(...validateStringList(server.targets, 'targets', 'AB4305', loaded));
 
   if (entry !== undefined || conventionalEntry !== undefined) {
@@ -588,6 +654,7 @@ const validateMcpServer = (
     }
     diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
     diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
+    diagnostics.push(...selfConnectingEntryNudge(name, entry, conventionalEntry, loaded));
     return diagnostics;
   }
 
@@ -820,6 +887,55 @@ const validateLib = (loaded: LoadedConfig): Diagnostic[] => {
   return diagnostics;
 };
 
+/**
+ * AB4731 / AB4732: a conventional package entry file exists but explicit
+ * `bin` / `lib` configuration never references it, so the convention is
+ * silently shadowed — a confusable state worth one informational nudge.
+ * `bin: false` / `lib: false` are deliberate opt-outs and stay silent.
+ */
+const packageConventionShadowNudges = (loaded: LoadedConfig): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  const root = loaded.context.projectRoot;
+
+  const bin = loaded.config.bin;
+  if (bin !== undefined && bin !== false && isRecord(bin)) {
+    const conventional = conventionalCliEntrySource(root);
+    const referenced = conventional !== undefined && Object.values(bin).some((declaration) => {
+      const entry = typeof declaration === 'string'
+        ? declaration
+        : isRecord(declaration) ? (declaration as AgentBundleBinEntry).entry : undefined;
+      return nonemptyString(entry) && resolve(root, entry) === conventional;
+    });
+    if (conventional !== undefined && !referenced) {
+      diagnostics.push(nudgeDiagnostic(
+        'AB4731',
+        `${relativePosix(root, conventional)} is present but explicit bin configuration does not reference it; the conventional package bin is shadowed.`,
+        conventional,
+        'Optional: remove the explicit bin configuration to adopt the src/cli.ts convention, reference the file from a bin entry, or remove the file to silence this nudge.',
+      ));
+    }
+  }
+
+  const lib = loaded.config.lib;
+  if (lib !== undefined && lib !== false && (typeof lib === 'string' || isRecord(lib))) {
+    const conventional = conventionalIndexEntrySource(root);
+    const entry = typeof lib === 'string' ? lib : (lib as AgentBundleLibEntry).entry;
+    if (
+      conventional !== undefined &&
+      !(nonemptyString(entry) && resolve(root, entry) === conventional)
+    ) {
+      diagnostics.push(nudgeDiagnostic(
+        'AB4732',
+        `${relativePosix(root, conventional)} is present but explicit lib configuration does not reference it; the conventional library entry is shadowed.`,
+        conventional,
+        'Optional: remove the explicit lib configuration to adopt the src/index.ts convention, point it at the file, or remove the file to silence this nudge.',
+      ));
+    }
+  }
+
+  return diagnostics;
+};
+
 const isRspackHatchValue = (value: unknown): boolean =>
   typeof value === 'function' || isRecord(value);
 
@@ -918,6 +1034,7 @@ export const validateSource = (
   diagnostics.push(...validateRuntime(loaded));
   diagnostics.push(...validateScripts(loaded, registry));
   diagnostics.push(...validateTools(loaded));
+  diagnostics.push(...packageConventionShadowNudges(loaded));
 
   return diagnostics;
 };

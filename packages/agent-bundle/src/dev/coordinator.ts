@@ -7,6 +7,7 @@ import { DiagnosticService, type DiagnosticReport } from './diagnostic-service.t
 import { acquireDevLock, type DevLockOptions } from './dev-lock.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectEventHub } from './events.ts';
+import { DevPackageBuildService, type DevPackageBuilder } from './package-build-service.ts';
 import { ProjectService, type PreparedProject, type ProjectCommand } from './project-service.ts';
 import { ProjectWatcher, type ProjectWatcherOptions } from './watcher.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
@@ -82,6 +83,8 @@ export interface DevCoordinatorOptions {
   readonly ignoredPaths?: readonly string[];
   readonly onPreparedProject?: (prepared: PreparedProject) => Promise<void>;
   readonly outputPaths?: readonly string[];
+  /** Rebuilds the framework-owned package build (bin/lib) after successful artifact rebuilds. */
+  readonly packageBuildService?: DevPackageBuilder;
   readonly prepareCommand?: 'build' | 'dev';
   readonly projectService?: ProjectPreparer;
   readonly root: string;
@@ -199,6 +202,7 @@ export class DevCoordinator {
   readonly #ignoredPaths: readonly string[];
   readonly #outputPaths: readonly string[];
   readonly #onPreparedProject: ((prepared: PreparedProject) => Promise<void>) | undefined;
+  readonly #packageBuildService: DevPackageBuilder;
   readonly #prepareCommand: 'build' | 'dev';
   readonly #projectService: ProjectPreparer;
   readonly #root: string;
@@ -236,6 +240,7 @@ export class DevCoordinator {
     this.#now = options.now ?? (() => new Date());
     this.#nextPreparedProject = options.initialPreparedProject;
     this.#onPreparedProject = options.onPreparedProject;
+    this.#packageBuildService = options.packageBuildService ?? new DevPackageBuildService();
     this.#outputPaths = Object.freeze([...new Set([
       ...(options.outputPaths ?? ['dist']),
       ...(options.initialPreparedProject?.outputRoots ?? []),
@@ -484,7 +489,13 @@ export class DevCoordinator {
         phaseDiagnostic('artifact', error),
       ]);
     }
-    const diagnostics = freezeDiagnostics([...lintDiagnostics, ...result.diagnostics]);
+    // The package build (bin/lib) rebuilds inside the same serialized pass,
+    // after the artifact epoch committed: its failure never invalidates the
+    // epoch and surfaces as warning diagnostics on the succeeded attempt.
+    const packageDiagnostics = result.outcome === 'succeeded'
+      ? (await this.#packageBuildService.build(prepared, invalidation)).diagnostics
+      : Object.freeze([]);
+    const diagnostics = freezeDiagnostics([...lintDiagnostics, ...result.diagnostics, ...packageDiagnostics]);
     if (result.outcome === 'succeeded') {
       const completed: SucceededBuildAttempt = Object.freeze({
         completedAt: this.#now().toISOString(),

@@ -18,10 +18,11 @@ node-consumable package build under `dist/` — the outputs `package.json`
 | `bin: { '<name>': './src/cli.ts' }` | `dist/bin/<name>.js` | Self-executing ESM bundle, `#!/usr/bin/env node` shebang, executable bit. |
 | `lib: { entry: './src/index.ts', dts: true }` | `dist/<stem>.js` + `dist/**/*.d.ts` | Single-entry ESM profile, node target, es2022 syntax. |
 
-- The package build runs only for `agent-bundle build` (CLI, or
-  `build({ packageOutputs: true })` through the API). Programmatic artifact
-  operations — temporary artifacts, the dev workbench, evals — never write
-  `dist/`.
+- The package build runs for `agent-bundle build` (CLI, or
+  `build({ packageOutputs: true })` through the API) and inside the
+  `agent-bundle dev` rebuild loop (see “Dev-watch of the package build”
+  below). Other programmatic artifact operations — temporary artifacts,
+  evals — never write `dist/`.
 - Outputs are staged and published atomically, and their provenance
   (bytes, SHA-256, sorted project-relative source inputs) is reported on the
   build result exactly like artifact files.
@@ -55,6 +56,16 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/mcp/<server-id>.ts` | Stdio entry for the declared MCP server `<server-id>` that names no `entry`, `command`, or `url`. | Declare `entry` explicitly |
 
 Conventions match `.ts` and `.tsx` files exactly.
+
+### Migration nudges
+
+Source validation reports **informational** nudges (never errors — migrations
+stay optional) when a project exhibits a pre-convention pattern: `AB4730` for
+a self-connecting stdio entry that a default-exported factory would upgrade
+to the framework lifecycle shell, and `AB4731`/`AB4732`/`AB4733` when
+`src/cli.ts`, `src/index.ts`, or `src/mcp/<server-id>.ts` exists but explicit
+configuration shadows it. `bin: false` / `lib: false` opt-outs stay silent.
+See `docs/diagnostics.md` for each trigger and how to adopt or silence it.
 
 ## Generated entry shells
 
@@ -132,6 +143,52 @@ A hatch value that breaks an artifact contract (async chunks, output roots,
 self-containment) fails the build with a hard diagnostic instead of silently
 overriding the contract. The hatch customizes *how code compiles*, never
 *what the artifact promises*.
+
+### `agent-bundle inspect --bundler`
+
+```sh
+agent-bundle inspect --bundler [--target <t>] [--json]
+```
+
+Dumps the synthesized bundler configuration for every output the build
+composes — artifact scripts, MCP entries, hook wrappers, the per-target MCP
+Apps Rsbuild config, and the `dist/` package build — exactly as the build
+lowers it: the framework profile with the consumer `tools` hatch merged over
+it and the invariant hook appended last (functions render as
+`[function <name>]`). Entries the framework wraps also carry the generated
+wrapper module source (`generatedEntry`). The composition comes from the same
+functions the build uses, so the dump cannot drift from what compiles.
+
+Nothing is redacted (this is a local debugging surface), but two build-time
+values are replaced with stable tokens so output is deterministic for one
+project: the artifact output root (chosen per build) appears as
+`<output>/<target>`, and the synthesized declaration tsconfig (a temporary
+file generated per package build) appears as `<generated-dts-tsconfig>`. The
+package build's output root appears as its published destination, `dist`,
+although each real build stages outputs before publishing them atomically.
+Resolved post-bundler internals stay Rslib's domain; this surfaces
+agent-bundle's own composition, which is where the `tools` hatch lands.
+
+## Dev-watch of the package build
+
+`agent-bundle dev` rebuilds the `dist/` bin and lib outputs inside the same
+debounced, serialized rebuild pass that publishes artifact epochs, with a
+provenance-based incremental boundary: after a successful package build, the
+sorted source inputs of every emitted file (recorded from bundler stats) are
+kept, and the next rebuild is skipped unless an invalidated path was one of
+those inputs, the configuration file, `package.json`, or `tsconfig.json`
+changed, the rebuild identity changed — the normalized `bin`/`lib`
+declaration plus the `tools` escape hatch, with hatch functions compared by
+source text — the invalidation was manual or initial, or the previous
+package build failed. When every package entry disappears within a live
+session (entries removed or opted out), the outputs that session previously
+published are removed; outputs from earlier sessions are untouched, matching
+`agent-bundle build`. A package build failure never invalidates the
+committed artifact epoch — it surfaces as one `AB7103` warning on the
+succeeded attempt and retries on the next invalidation. The boundary this
+does **not** cover: a brand-new file that changes module resolution without
+touching a tracked input is picked up on the next tracked change, not
+instantly.
 
 ## `agent-bundle mcp run`
 

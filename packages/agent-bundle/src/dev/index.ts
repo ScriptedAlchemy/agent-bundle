@@ -25,6 +25,13 @@ export {
   type ProjectPreparer,
 } from './coordinator.ts';
 export {
+  DevPackageBuildService,
+  type DevPackageBuilder,
+  type DevPackageBuildOutcome,
+  type DevPackageBuildServiceOptions,
+  type DevPackageBuildState,
+} from './package-build-service.ts';
+export {
   ProjectWatcher,
   type ProjectWatcherOptions,
   type SourceWatcher,
