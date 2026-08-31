@@ -7,10 +7,12 @@ request — see [Preview packages](https://github.com/ScriptedAlchemy/agent-bund
 Despite the name, this package is **not a React Server Components renderer
 or runtime, and no Flight transport is involved**. It is a synchronous
 React-element protocol DSL — an *MCP result DSL*: `lowerMcpResult` walks an
-element tree (calling function components as it goes) and lowers it into a
-plain MCP `CallToolResult`; `lowerHookResult` does the same for hook
-results. Nothing streams components, hydrates, or holds server component
-state.
+element tree, calling your function components as it goes, and lowers it
+into a plain MCP `CallToolResult`. `lowerHookResult` lowers a `Hook.Result`
+tree into a native `PostToolUse` output the same way, except that it
+resolves only the `Hook` elements themselves — a hook tree returned from
+your own component is rejected. Nothing streams components, hydrates, or
+holds server component state.
 
 ```tsx
 import { Mcp, lowerMcpResult } from '@agent-bundle/rsc-runtime';
@@ -90,11 +92,11 @@ An operation is a host-neutral use-case definition, not a CLI command: the
 shared core (`id`, `inputSchema`, `execute`, `resultSchema`) is what both
 projections run — `inputSchema.parse` → `execute` → `resultSchema.parse` —
 while `cli` and `mcp` are optional per-surface declarations. `render` is
-consumed only by the MCP projection, where `lowerMcpResult` synchronously
-lowers its element tree into the `CallToolResult`; the CLI never renders
-JSX and instead prints the validated result as one line of JSON. Operation
-modules are `.tsx` only because `render` returns JSX. The end-to-end
-walkthrough lives in
+required on every operation but consumed only by the MCP projection, where
+`lowerMcpResult` synchronously lowers its element tree into the
+`CallToolResult`; the CLI never renders JSX and instead prints the
+validated result as one line of JSON. Operation modules are `.tsx` only
+because `render` returns JSX. The end-to-end walkthrough lives in
 [Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md).
 
 Use `runRscCli(application, argv)` in the conventional `src/cli.ts` entry and

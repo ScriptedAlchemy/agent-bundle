@@ -60,11 +60,11 @@ to serve.
 ## One operation, end to end
 
 An **operation** is a host-neutral use-case definition: one named unit of
-work with a validated input, an implementation, and a validated result. It
-is *not* a CLI command — the CLI command and the MCP tool are optional
-projections declared alongside the shared core, and either (or both) may be
-present. The `status` operation used above looks like this in full,
-including the JSX:
+work with a validated input, an implementation, a validated result, and a
+result renderer. It is *not* a CLI command — the CLI command and the MCP
+tool are optional projections declared alongside the shared core, and
+either (or both) may be present. The `status` operation used above looks
+like this in full, including the JSX:
 
 ```tsx
 // src/operations/status.tsx
@@ -88,8 +88,9 @@ export const status = defineOperation({
     usage: 'status [--verbose]',
   },
 
-  // MCP projection — tool metadata plus the result renderer. `render` is
-  // consumed only here.
+  // MCP projection — tool metadata plus the result renderer. Only MCP
+  // consumes `render`, but it is a required field: a CLI-only operation
+  // still has to declare one.
   mcp: {
     description: 'Read runtime status.',
     name: 'runtime_status',
@@ -109,10 +110,11 @@ Both projections run the identical pipeline —
 `resultSchema.parse(result)` — so inputs, implementation, and output
 validation cannot drift between surfaces. Only the last step differs:
 
-- **CLI** (`runRscCli`): `cli.parse(argv)` produces the input; the validated
-  result is written to stdout as one line of JSON (`JSON.stringify`), and
-  `cli.exitCode(result)` (default `0`) becomes the process exit code. The
-  CLI never touches `render` and never renders JSX.
+- **CLI** (`runRscCli`): `cli.parse` receives the arguments after the
+  command name and produces the input; the validated result is written to
+  stdout as one line of JSON (`JSON.stringify`), and `cli.exitCode(result)`
+  (default `0`) is returned to the entry, which sets it as the process exit
+  code. The CLI never touches `render` and never renders JSX.
 - **MCP** (`createRscMcpServer`): the tool handler calls `render(result)`
   and `lowerMcpResult` synchronously lowers the returned React element tree
   (`Mcp.Result`, `Mcp.Text`, `Mcp.Image`, `Mcp.Audio`, `Mcp.ResourceLink`,
@@ -140,12 +142,13 @@ application module that only composes operation arrays) stay `.ts`.
 For a new reader, in one breath:
 
 1. **What is an operation?** A host-neutral use-case definition — id, input
-   schema, `execute`, result schema — with optional CLI and MCP projections.
+   schema, `execute`, result schema, `render` — with optional CLI and MCP
+   projections.
 2. **Which parts are shared by CLI and MCP?** The core four: `id`,
    `inputSchema`, `execute`, `resultSchema` (plus the validation pipeline
    around them).
-3. **Which projection consumes `render`?** Only MCP. The CLI serializes the
-   validated result as JSON.
+3. **Which projection consumes `render`?** Only MCP, though every operation
+   must declare one. The CLI serializes the validated result as JSON.
 4. **Is any React Server Components renderer or Flight transport
    involved?** No. `lowerMcpResult` is a synchronous element-tree lowering,
    not a renderer or transport.

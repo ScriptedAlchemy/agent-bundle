@@ -51,12 +51,13 @@ dependencies.
 ## Operation model
 
 Every command is one `defineOperation` definition: a host-neutral use case —
-`id`, input schema, `execute`, result schema — with two projections declared
-beside it. The shared core runs identically on both surfaces
-(`inputSchema.parse` → `execute` → `resultSchema.parse`); `cli` adds argv
-parsing and exit codes, and `mcp` adds tool metadata plus the `render`
-callback. `render` is consumed only by the MCP projection: the CLI prints
-each validated receipt as one line of JSON and never renders JSX.
+`id`, input schema, `execute`, result schema, `render` — with two
+projections declared beside it. The shared core runs identically on both
+surfaces (`inputSchema.parse` → `execute` → `resultSchema.parse`); `cli`
+adds argv parsing and exit codes, and `mcp` adds tool metadata. `render` is
+a sibling of both, required on every operation but consumed only by the MCP
+projection: the CLI prints each validated receipt as one line of JSON and
+never renders JSX.
 
 The runtime JSX for every operation is `<CuratorResult>` in
 [`src/result.tsx`](src/result.tsx), which wraps the receipt in the MCP
