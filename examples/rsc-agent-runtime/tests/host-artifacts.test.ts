@@ -17,8 +17,7 @@ const pluginsRoot = join(exampleRoot, 'dist/plugins');
 
 const runPackageHosts = async (): Promise<void> => {
   await ensureExampleBuilt();
-  // Repackaging the existing prebuilt payload is agent-bundle's job now; the
-  // command must be independently rerunnable against the current dist trees.
+  // Packaging must be independently rerunnable against the current dist trees.
   const child = spawn('pnpm', ['exec', 'agent-bundle', 'build', '--json', '--output', 'dist/plugins'], {
     cwd: exampleRoot,
     stdio: 'pipe',
@@ -125,9 +124,7 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
     join(codexRoot, 'hooks/hooks.json'),
   );
 
-  // Host manifests are generated from agent-bundle.config.ts now, so the
-  // plugin identity is the config's plugin block rather than the previously
-  // hand-rolled name/version pair.
+  // The generated identity is the config's `plugin` block.
   expect(claudeManifest).toMatchObject({ name: 'rsc-agent-runtime-demo', version: '1.0.0' });
   expect(codexManifest).toMatchObject({
     hooks: './hooks/hooks.json',
@@ -171,9 +168,8 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
     const appHtml = await readFile(join(exampleRoot, relative), 'utf8');
     expect(appHtml).not.toMatch(/<script[^>]+src=|<link[^>]+rel=["']stylesheet["']/iu);
   }
-  // The generated layout has no empty skills directory for this skill-less
-  // plugin; the manifest's `./skills/` pointer stays, matching every other
-  // framework-built Codex artifact.
+  // A skill-less plugin emits no `skills/` directory, while the manifest's
+  // `./skills/` pointer stays — as in every framework-built Codex artifact.
   for (const relative of ['.agents/plugins/marketplace.json', '.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json']) {
     await access(join(codexRoot, relative));
   }

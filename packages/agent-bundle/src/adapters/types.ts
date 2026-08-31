@@ -104,11 +104,10 @@ export const withPluginRootEnvAnchor = <Value extends string | undefined>(
 ): Record<string, Value | string> => ({ [pluginRootEnvAnchor]: pluginRoot, ...env });
 
 /**
- * Copy entries for every selected prebuilt payload file: exact relative
- * paths under the payload's declared destination, byte-for-byte, no
- * content-hashing — the compiler did not produce these files and cannot
- * rewrite the sibling references inside them, so stable names are the
- * packaging contract. Shared by every target plan that emits payloads.
+ * Copy entries for every selected prebuilt payload file, at its exact
+ * relative path under the payload's declared destination (see
+ * AgentBundlePayloadConfig for why the names stay stable). Shared by every
+ * target plan that emits payloads.
  */
 export const payloadCopyEntries = (
   model: NormalizedPlugin,

@@ -1,15 +1,17 @@
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, extname, relative, resolve } from 'node:path';
 
 import { digest } from '../core/digest.ts';
+import { isInside } from '../core/paths.ts';
 import {
   defaultGeneratedRuntime,
   formatRuntimeVersion,
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { isPrebuiltEntryInput, parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
 import type {
   AgentBundleBinEntry,
@@ -19,7 +21,6 @@ import type {
   AgentBundleLibEntry,
   AgentBundleMcpApp,
   AgentBundleMcpServer,
-  AgentBundlePayloadEntry,
   AgentBundleScriptInput,
   CanonicalHookEvent,
   CanonicalHookTool,
@@ -225,12 +226,10 @@ const normalizePayloads = (
   targetNames: readonly string[],
 ): readonly NormalizedPayload[] => {
   const configured = loaded.config.payload;
-  if (configured === undefined || typeof configured !== 'object' || Array.isArray(configured)) return [];
+  if (configured === undefined || !isRecord(configured)) return [];
   const discoveredByName = new Map((discovered.payloads ?? []).map((payload) => [payload.name, payload]));
   const payloads: NormalizedPayload[] = [];
-  for (const [name, rawDeclaration] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
-    const declaration = rawDeclaration as string | AgentBundlePayloadEntry | undefined;
-    if (declaration === undefined) continue;
+  for (const [name, declaration] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
     const entry = typeof declaration === 'string' ? declaration : declaration.source;
     if (typeof entry !== 'string' || entry.trim().length === 0) continue;
     payloads.push({
@@ -243,11 +242,6 @@ const normalizePayloads = (
     });
   }
   return payloads;
-};
-
-const isInsidePath = (root: string, candidate: string): boolean => {
-  const relativePath = relative(root, candidate);
-  return relativePath.length > 0 && relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
 };
 
 /**
@@ -263,7 +257,7 @@ export const prebuiltArtifactPath = (
 ): string => {
   let best: NormalizedPayload | undefined;
   for (const payload of payloads) {
-    if (!isInsidePath(payload.source, source)) continue;
+    if (!isInside(payload.source, source)) continue;
     if (best === undefined || payload.source.length > best.source.length) best = payload;
   }
   return best === undefined
@@ -307,8 +301,9 @@ const normalizeHook = (
   payloads: readonly NormalizedPayload[],
 ): NormalizedHook => {
   const entry = typeof input === 'string' ? { handler: input } : input;
-  const prebuilt = isPrebuiltEntryInput(entry.handler);
-  const source = resolve(root, prebuilt ? (entry.handler as { prebuilt: string }).prebuilt : entry.handler as string);
+  const handlerInput = entry.handler;
+  const prebuilt = isPrebuiltEntryInput(handlerInput);
+  const source = resolve(root, prebuilt ? handlerInput.prebuilt : handlerInput);
   const handler = relative(root, source).replaceAll('\\', '/');
   const prebuiltPath = prebuilt ? prebuiltArtifactPath(payloads, root, source) : undefined;
   const args = prebuilt && entry.args !== undefined
@@ -515,9 +510,7 @@ const normalizeMcpApps = (
 
   for (const [serverName, rawServer] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
     const server = serverByName.get(serverName);
-    // Apps require a local server entry: a compiled source entry, or a
-    // prebuilt one — whose payload already carries the served resource, so
-    // the app stays a development surface the compiler never re-emits.
+    // Apps require a local server entry: a compiled source entry, or a prebuilt one.
     const prebuilt = isPrebuiltEntryInput(rawServer.entry);
     if (server === undefined || (server.source === undefined && !prebuilt) || rawServer.apps === undefined) continue;
     for (const [name, app] of Object.entries(rawServer.apps).sort(([left], [right]) => left.localeCompare(right))) {

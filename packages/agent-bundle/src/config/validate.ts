@@ -18,7 +18,6 @@ import type {
   AgentBundleLibEntry,
   AgentBundleMcpApp,
   AgentBundleMcpServer,
-  AgentBundlePayloadEntry,
   AgentBundlePrebuiltEntry,
   AgentBundleScriptInput,
   CanonicalHookEvent,
@@ -88,19 +87,20 @@ const validateHooks = (
     if (input === undefined) continue;
     for (const rawEntry of asHookEntries(input)) {
       const entry = typeof rawEntry === 'string' ? { handler: rawEntry } : rawEntry;
-      const prebuilt = isPrebuiltEntryInput(entry.handler);
+      const handler = entry.handler;
+      const prebuilt = isPrebuiltEntryInput(handler);
       if (prebuilt) {
         const hookTargets = Array.isArray(entry.targets) && entry.targets.every(nonemptyString)
           ? entry.targets
           : selectedTargets.filter((target) => registry.supports(target, 'hooks'));
         diagnostics.push(...validatePrebuiltReference(
           `Hook ${event}`,
-          entry.handler as AgentBundlePrebuiltEntry,
+          handler,
           hookTargets,
           loaded,
           payloads,
         ));
-      } else if (typeof entry.handler !== 'string' || entry.handler.trim().length === 0) {
+      } else if (typeof handler !== 'string' || handler.trim().length === 0) {
         diagnostics.push(sourceDiagnostic(
           'AB4200',
           `Hook ${event} requires a nonempty handler path.`,
@@ -1022,8 +1022,7 @@ const declaredPayloads = (
   if (configured === undefined || !isRecord(configured)) return [];
   const selectedTargets = selectedTargetNamesFor(loaded, registry);
   const payloads: DeclaredPayload[] = [];
-  for (const [name, rawDeclaration] of Object.entries(configured)) {
-    const declaration = rawDeclaration as string | AgentBundlePayloadEntry;
+  for (const [name, declaration] of Object.entries(configured)) {
     const entry = typeof declaration === 'string'
       ? declaration
       : isRecord(declaration) ? declaration.source : undefined;
@@ -1079,6 +1078,30 @@ const newestFileMtime = (root: string, skipDirectory: (name: string) => boolean)
 
 const ignoredSourceDirectoryNames = new Set(['.agent-bundle', '.git', 'dist', 'node_modules']);
 
+/** AB4740: one payload declaration's optional `targets` restriction. */
+const payloadTargetDiagnostics = (
+  name: string,
+  targets: unknown,
+  loaded: LoadedConfig,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  if (targets === undefined) return [];
+  if (!Array.isArray(targets) || !targets.every(nonemptyString)) {
+    return [sourceDiagnostic(
+      'AB4740',
+      `Payload ${JSON.stringify(name)} targets must be an array of nonempty strings.`,
+      loaded.configPath,
+    )];
+  }
+  return targets
+    .filter((target: string) => !registry.has(target))
+    .map((target: string) => sourceDiagnostic(
+      'AB4740',
+      `Payload ${JSON.stringify(name)} selects unknown target ${JSON.stringify(target)}.`,
+      loaded.configPath,
+    ));
+};
+
 /**
  * AB4740-AB4743 and the AB4750 freshness nudge: shape, destination-name,
  * source-path, and existence checks for the prebuilt `payload` block.
@@ -1097,7 +1120,7 @@ const validatePayload = (
   }
   const diagnostics: Diagnostic[] = [];
   const sources: { name: string; source: string }[] = [];
-  for (const [name, rawDeclaration] of Object.entries(configured)) {
+  for (const [name, declaration] of Object.entries(configured)) {
     if (!isSafePayloadName(name) || reservedPayloadDestinations.has(name)) {
       diagnostics.push(sourceDiagnostic(
         'AB4741',
@@ -1105,7 +1128,6 @@ const validatePayload = (
         loaded.configPath,
       ));
     }
-    const declaration = rawDeclaration as string | AgentBundlePayloadEntry;
     const entry = typeof declaration === 'string'
       ? declaration
       : isRecord(declaration) ? declaration.source : undefined;
@@ -1117,24 +1139,8 @@ const validatePayload = (
       ));
       continue;
     }
-    if (typeof declaration !== 'string' && declaration.targets !== undefined) {
-      if (!Array.isArray(declaration.targets) || declaration.targets.some((target) => !nonemptyString(target))) {
-        diagnostics.push(sourceDiagnostic(
-          'AB4740',
-          `Payload ${JSON.stringify(name)} targets must be an array of nonempty strings.`,
-          loaded.configPath,
-        ));
-      } else {
-        for (const target of declaration.targets) {
-          if (!registry.has(target)) {
-            diagnostics.push(sourceDiagnostic(
-              'AB4740',
-              `Payload ${JSON.stringify(name)} selects unknown target ${JSON.stringify(target)}.`,
-              loaded.configPath,
-            ));
-          }
-        }
-      }
+    if (typeof declaration !== 'string') {
+      diagnostics.push(...payloadTargetDiagnostics(name, declaration.targets, loaded, registry));
     }
     const source = resolve(loaded.context.projectRoot, entry);
     if (!isInside(loaded.context.projectRoot, source)) {

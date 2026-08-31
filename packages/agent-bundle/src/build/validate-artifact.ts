@@ -445,10 +445,8 @@ const validateArtifactOwnership = (options: {
     if (artifactRootMetadata.has(file.path)) continue;
     const target = pathTarget(file.path, targets);
     if (target !== undefined && isTargetArtifactPath(file.path, target, options.registry)) continue;
-    // Prebuilt payload files are consumer-shaped by definition: they live in
-    // config-named directories under their target namespace, are declared
-    // with the `prebuilt` manifest kind, and stay hash-locked to the
-    // manifest like every other file.
+    // Prebuilt payload files live in config-named directories under their
+    // target namespace, so no emitted layout describes them.
     if (target !== undefined && manifestKinds.get(file.path) === 'prebuilt') continue;
     diagnostics.push(diagnostic(
       'AB6014',

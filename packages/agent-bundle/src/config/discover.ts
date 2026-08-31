@@ -1,8 +1,10 @@
 import { stat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
 
+import { isInside } from '../core/paths.ts';
+import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from './ignore.ts';
 import { isRenderedSkillSourceName } from './rendered-skill.ts';
@@ -109,11 +111,6 @@ const discoverAssets = async (
   })));
 };
 
-const isInsideRoot = (root: string, candidate: string): boolean => {
-  const relativePath = relative(root, candidate);
-  return relativePath.length > 0 && relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
-};
-
 /**
  * The absolute source directories of well-shaped payload declarations.
  * Source snapshots use this to include payload files in the project
@@ -124,13 +121,13 @@ export const configuredPayloadRoots = (
   config: Readonly<AgentBundleConfig>,
 ): readonly string[] => {
   const configured = config.payload;
-  if (configured === undefined || typeof configured !== 'object' || Array.isArray(configured)) return [];
+  if (configured === undefined || !isRecord(configured)) return [];
   const roots: string[] = [];
   for (const declaration of Object.values(configured)) {
     const entry = typeof declaration === 'string' ? declaration : declaration?.source;
     if (typeof entry !== 'string' || entry.trim().length === 0) continue;
     const source = resolve(projectRoot, entry);
-    if (isInsideRoot(projectRoot, source)) roots.push(source);
+    if (isInside(projectRoot, source)) roots.push(source);
   }
   return [...new Set(roots)].sort((left, right) => left.localeCompare(right));
 };
@@ -146,21 +143,20 @@ const discoverPayloads = async (
   projectRoot: string,
   configured: AgentBundleConfig['payload'],
 ): Promise<DiscoveredPayload[]> => {
-  if (configured === undefined || typeof configured !== 'object' || Array.isArray(configured)) return [];
+  if (configured === undefined || !isRecord(configured)) return [];
   const payloads: DiscoveredPayload[] = [];
   for (const [name, declaration] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
     const entry = typeof declaration === 'string' ? declaration : declaration?.source;
     if (typeof entry !== 'string' || entry.trim().length === 0) continue;
     const source = resolve(projectRoot, entry);
-    if (!isInsideRoot(projectRoot, source)) continue;
+    if (!isInside(projectRoot, source)) continue;
     let stats;
     try {
       stats = await stat(source);
     } catch {
-      payloads.push({ files: [], name, source });
-      continue;
+      // A payload the consumer's own build has not produced yet has no files.
     }
-    if (!stats.isDirectory()) {
+    if (stats?.isDirectory() !== true) {
       payloads.push({ files: [], name, source });
       continue;
     }

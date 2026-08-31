@@ -1239,7 +1239,7 @@ const Workbench = () => {
     setCapabilityState((current) => {
       if (current.state === 'ready' && current.value.buildId === buildId) return current;
       const previous = staleCapabilities(current);
-      return previous === undefined ? { buildId, state: 'loading' } : { buildId, previous, state: 'loading' };
+      return { buildId, ...(previous === undefined ? {} : { previous }), state: 'loading' };
     });
     void loadWorkbenchCapabilities({
       artifactClient: artifactClient.current!,
@@ -1253,9 +1253,12 @@ const Workbench = () => {
         if (request.signal.aborted) return;
         setCapabilityState((current) => {
           const previous = staleCapabilities(current);
-          return previous === undefined
-            ? { buildId, message: errorMessage(reason), state: 'error' }
-            : { buildId, message: errorMessage(reason), previous, state: 'error' };
+          return {
+            buildId,
+            message: errorMessage(reason),
+            ...(previous === undefined ? {} : { previous }),
+            state: 'error',
+          };
         });
       },
     );

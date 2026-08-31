@@ -334,8 +334,8 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       provider: './src/dev/provider.ts',
       servers: [expect.objectContaining({ name: 'timeline', transport: 'stdio' })],
     });
-    // One prebuilt hook declaration per host (each carries its own
-    // `--host` argument), replacing the previous dual-target declaration.
+    // One prebuilt hook declaration per host, each carrying its own `--host`
+    // argument.
     expect(prepared.model?.hooks).toEqual(expect.arrayContaining([
       expect.objectContaining({ prebuiltPath: 'runtime/hook/index.js', targets: ['claude'] }),
       expect.objectContaining({ prebuiltPath: 'runtime/hook/index.js', targets: ['codex'] }),
