@@ -297,9 +297,6 @@ importers:
       '@types/react':
         specifier: 19.2.18
         version: 19.2.18
-      agent-bundle:
-        specifier: workspace:*
-        version: link:../agent-bundle
       react:
         specifier: 19.2.8
         version: 19.2.8

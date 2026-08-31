@@ -2,7 +2,7 @@ import { describe, expect, it } from '@rstest/core';
 import { createElement } from 'react';
 import { z } from 'zod';
 
-import { createRscMcpServer, defineOperation, defineRscApplication } from '../src/index.js';
+import { createRscMcpServer, defineOperation, defineRscApplication, runRscCli } from '../src/index.js';
 
 const operation = (id: string, overrides: { readonly cliName?: string; readonly mcpName?: string } = {}) =>
   defineOperation({
@@ -79,6 +79,92 @@ describe('defineRscApplication', () => {
       operations: [{ ...operation('status') }],
       version: '1.0.0',
     })).toThrow('RSC application operations must come from defineOperation');
+  });
+});
+
+describe('runRscCli', () => {
+  it('runs root help, command help, and execution from the shared operation', async () => {
+    const status = defineOperation({
+      cli: {
+        name: 'status',
+        parse: (argv) => ({ subject: argv[0] ?? 'library' }),
+        summary: 'Read curator status.',
+        usage: 'status [subject]',
+      },
+      execute: async (input: { readonly subject: string }) => ({
+        message: `${input.subject} ready`,
+        operation: 'status' as const,
+      }),
+      id: 'status',
+      inputSchema: z.object({ subject: z.string().min(1) }).strict(),
+      mcp: {
+        description: 'Read curator status.',
+        name: 'curator_status',
+        readOnly: true,
+        server: 'curator',
+      },
+      render: (result) => createElement(
+        'mcp-result',
+        { structuredContent: result },
+        createElement('mcp-text', null, result.message),
+      ),
+      resultSchema: z.object({
+        message: z.string(),
+        operation: z.literal('status'),
+      }).strict(),
+    });
+    const application = defineRscApplication({
+      description: 'Curate audiobooks.',
+      name: 'audiobook-curator',
+      operations: [status],
+      version: '1.0.0',
+    });
+    const output: string[] = [];
+
+    await expect(runRscCli(application, ['--help'], { write: (value) => output.push(value) })).resolves.toBe(0);
+    expect(output.join('')).toContain('status [subject]');
+
+    output.length = 0;
+    await expect(runRscCli(application, ['status', '--help'], { write: (value) => output.push(value) })).resolves.toBe(0);
+    expect(output.join('')).toContain('Read curator status.');
+
+    output.length = 0;
+    await expect(runRscCli(application, ['status', 'collection'], { write: (value) => output.push(value) })).resolves.toBe(0);
+    expect(JSON.parse(output.join(''))).toEqual({ message: 'collection ready', operation: 'status' });
+  });
+});
+
+describe('defineOperation MCP extras', () => {
+  it('preserves listing title and _meta on the frozen MCP definition without sharing the caller object', () => {
+    const metadata: Record<string, unknown> = { ui: { resourceUri: 'ui://curator/widget.html' } };
+    const withExtras = (mcp: Record<string, unknown>) => defineOperation({
+      execute: async () => ({ ok: true }),
+      id: 'extras',
+      inputSchema: z.object({}).strict(),
+      mcp: {
+        description: 'Extras probe.',
+        name: 'extras',
+        readOnly: true,
+        server: 'curator',
+        ...mcp,
+      },
+      render: () => createElement('mcp-result', null, createElement('mcp-text', null, 'ok')),
+      resultSchema: z.object({ ok: z.boolean() }).strict(),
+    });
+
+    const operation = withExtras({ _meta: metadata, title: 'Extras' });
+    (metadata.ui as Record<string, unknown>).resourceUri = 'ui://curator/changed.html';
+    expect(operation.mcp?.title).toBe('Extras');
+    expect(operation.mcp?._meta).toEqual({ ui: { resourceUri: 'ui://curator/widget.html' } });
+    expect(Object.isFrozen(operation.mcp?._meta)).toBe(true);
+    expect(Object.isFrozen(operation.mcp?._meta?.ui)).toBe(true);
+
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => withExtras({ _meta: cyclic })).toThrow(
+      'Operation extras MCP _meta must be JSON-serializable (cyclic value at self)',
+    );
+    expect(() => withExtras({ title: '   ' })).toThrow('Operation extras MCP title must be non-empty and bounded');
   });
 });
 
