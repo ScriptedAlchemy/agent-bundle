@@ -6,16 +6,11 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
+import { sharedPackedTarball } from './support/shared-pack.ts';
+
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
-const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const skillsOnlyFixture = join(workspaceRoot, 'fixtures', 'integration', 'skills-only');
-let built: Promise<void> | undefined;
-
-const buildPackage = async (): Promise<void> => {
-  built ??= execFile('npm', ['run', 'build'], { cwd: workspaceRoot }).then(() => undefined);
-  await built;
-};
 
 type InstalledDependencyTree = Readonly<{
   readonly dependencies?: Readonly<Record<string, InstalledDependencyTree>>;
@@ -42,15 +37,11 @@ const namedFiles = async (root: string, name: string): Promise<readonly string[]
 
 describe.sequential('optional RSC runtime package boundary', () => {
   it('runs an ordinary skills-only project from a fresh installed tarball without the RSC runtime', async () => {
-    await buildPackage();
+    const { tarball } = await sharedPackedTarball('agent-bundle');
     const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-rsc-optional-consumer-'));
     const project = join(consumer, 'project');
     const artifact = join(project, '.agent-bundle', 'artifact');
     try {
-      const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', consumer], { cwd: packageRoot });
-      const [packed] = JSON.parse(stdout) as readonly Readonly<{ readonly filename: string }>[];
-      if (packed === undefined) throw new Error('npm pack did not produce an Agent Bundle tarball.');
-      const tarball = join(consumer, packed.filename);
       const tarListing = (await execFile('tar', ['-tf', tarball])).stdout;
       expect(tarListing).not.toMatch(/examples\/rsc-agent-runtime|react-server-dom-rspack|rsbuild-plugin-rsc/u);
 

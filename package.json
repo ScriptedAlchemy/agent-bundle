@@ -22,7 +22,7 @@
     "eval:spot": "pnpm build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec rstest run tests/micro-eval.spot.test.ts --config rstest.config.ts",
     "check:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md --check",
     "test:examples:browser": "rstest --config rstest.config.ts packages/workbench/tests/examples-real.e2e.test.ts",
-    "test:packed": "rstest --config rstest.config.ts packages/agent-bundle/tests/release-audit.test.ts packages/agent-bundle/tests/packed-consumer.test.ts packages/agent-bundle/tests/dev-workbench-packaging.test.ts packages/agent-bundle/tests/public-api-packed.test.ts packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts packages/agent-bundle/tests/packed-native-smoke.test.ts packages/create-agent-bundle/tests/scaffold-packed.e2e.test.ts packages/workbench/tests/packed-release.e2e.test.ts",
+    "test:packed": "pnpm build && node scripts/run-packed-tests.mjs",
     "test:packed:native": "rstest --config rstest.config.ts packages/agent-bundle/tests/packed-native-smoke.test.ts",
     "test:packed:native:claude": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CLAUDE_SMOKE=1 pnpm test:packed:native",
     "test:packed:native:codex": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CODEX_SMOKE=1 pnpm test:packed:native",

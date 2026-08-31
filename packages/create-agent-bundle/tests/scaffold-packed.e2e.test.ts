@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -7,8 +7,9 @@ import { promisify } from 'node:util';
 
 import { afterAll, expect, it } from '@rstest/core';
 
+import { sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
+
 const execFile = promisify(executeFile);
-const workspaceRoot = process.cwd();
 
 const installedEnvironment = (): NodeJS.ProcessEnv => {
   const { NODE_PATH: _nodePath, ...environment } = process.env;
@@ -23,30 +24,19 @@ interface PackedFixture {
 }
 
 /**
- * Build and `npm pack` agent-bundle and create-agent-bundle once (the
- * packed-consumer mechanism: copy the package, `rslib build --dist-path`
- * into the copy, pack the copy), then install the scaffolder tarball into a
- * clean runner project. Every template test drives the installed bin and
- * pins the framework with `--framework-version file:<tarball>`, so the run
- * never depends on pkg.pr.new.
+ * Take the run-level agent-bundle and create-agent-bundle release tarballs
+ * (packed once per `test:packed` run — see tests/support/shared-pack.ts),
+ * then install the scaffolder tarball into a clean runner project. Every
+ * template test drives the installed bin and pins the framework with
+ * `--framework-version file:<tarball>`, so the run never depends on
+ * pkg.pr.new.
  */
 const packFixture = async (): Promise<PackedFixture> => {
   const root = await mkdtemp(join(tmpdir(), 'create-agent-bundle-e2e-'));
-  const pack = async (packageName: string): Promise<string> => {
-    const packageRoot = join(workspaceRoot, 'packages', packageName);
-    const packedRoot = join(root, `packed-${packageName}`);
-    await cp(packageRoot, packedRoot, { recursive: true });
-    await execFile(join(workspaceRoot, 'node_modules', '.bin', 'rslib'), [
-      'build', '--config', join(packageRoot, 'rslib.config.ts'), '--dist-path', join(packedRoot, 'dist'),
-    ], { cwd: workspaceRoot, env: installedEnvironment() });
-    const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', root], {
-      cwd: packedRoot,
-      env: installedEnvironment(),
-    });
-    return join(root, (JSON.parse(stdout) as [{ readonly filename: string }])[0].filename);
-  };
-  const frameworkTarball = await pack('agent-bundle');
-  const scaffolderTarball = await pack('create-agent-bundle');
+  const [{ tarball: frameworkTarball }, { tarball: scaffolderTarball }] = await Promise.all([
+    sharedPackedTarball('agent-bundle'),
+    sharedPackedTarball('create-agent-bundle'),
+  ]);
 
   const runnerRoot = join(root, 'runner');
   await mkdir(runnerRoot, { recursive: true });

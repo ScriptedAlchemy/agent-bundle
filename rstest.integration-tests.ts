@@ -73,7 +73,8 @@ export const integrationTestFiles: readonly string[] = [
  * native-host-smoke workflow keep them covered — and stay excluded from the
  * parallel unit pool. packed-release.e2e lives here (not in the integration
  * pool) so `pnpm test` and `check:release` don't each run the same long
- * packed-browser suite; `rstest.config.ts` keeps `test:packed` on one worker.
+ * packed-browser suite; `rstest.packed.config.ts` keeps `test:packed` on one
+ * worker.
  */
 export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/dev-workbench-packaging.test.ts',

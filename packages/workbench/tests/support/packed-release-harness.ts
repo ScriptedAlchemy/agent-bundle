@@ -8,7 +8,6 @@ export const execFile = promisify((await import('node:child_process')).execFile)
 export const workspaceRoot = process.cwd();
 export const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const packedServerStartupBudget = 45_000;
-let builtPackage: Promise<void> | undefined;
 
 export const installedEnvironment = (): NodeJS.ProcessEnv => {
   const { NODE_PATH: _nodePath, ...environment } = process.env;
@@ -29,15 +28,6 @@ export const availablePort = async (): Promise<number> => {
   }));
   return address.port;
 };
-
-export const buildPackage = (): Promise<void> => builtPackage ??= (async (): Promise<void> => {
-  if (process.env['AGENT_BUNDLE_PACKAGE_PREBUILT'] === '1') return;
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('pnpm', ['build'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
-  });
-})();
 
 export const awaitReady = async (origin: string, child: ChildProcess, output: () => string): Promise<void> => {
   const startedAt = Date.now();

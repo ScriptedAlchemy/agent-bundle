@@ -14,18 +14,17 @@ import {
   validateOutageLedger,
   type ConsoleErrorRecord,
 } from './support/packed-outage-ledger.ts';
+import { sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import {
   availablePort,
   awaitReady,
-  buildPackage,
   closeChild,
   descendantProcessIds,
   execFile,
   firstRecord,
   installedEnvironment,
   isWithin,
-  packageRoot,
   record,
   string,
   workspaceRoot,
@@ -71,7 +70,7 @@ const isAppRoute = (url: URL): boolean =>
 
 
 e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 * timeScale }, async ({ page }) => {
-  await buildPackage();
+  const { tarball } = await sharedPackedTarball('agent-bundle');
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-release-'));
   const forbiddenStagedPackage = join(consumer, 'staged-package');
   const project = join(consumer, 'project');
@@ -84,12 +83,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
   let cleanupFailure: AggregateError | undefined;
   let primaryFailure: Error | undefined;
   try {
-    const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', consumer], {
-      cwd: packageRoot,
-      env: installedEnvironment(),
-    });
-    const [packed] = JSON.parse(stdout) as Array<{ readonly filename: string }>;
-    const tarball = join(consumer, packed.filename);
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
     await execFile('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', tarball], {
       cwd: consumer,
