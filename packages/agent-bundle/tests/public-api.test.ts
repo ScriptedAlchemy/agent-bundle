@@ -1,7 +1,8 @@
 import { execFile as executeFile } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
@@ -212,15 +213,22 @@ it('keeps bundled config extension types in emitted root declarations', async ()
     );
     // The tools escape hatch types the Rsbuild environment-config surface, so
     // the declaration graph resolves the bundler packages exactly as
-    // installed consumers do (both are runtime dependencies of the package).
+    // installed consumers do. @rsbuild/core is a runtime dependency; the
+    // @rspack/core types it references resolve through it (Rslib guidance:
+    // never install @rspack/core directly), so the consumer fixture links
+    // the copy @rsbuild/core itself resolves.
     await symlink(
       join(agentBundleNodeModules, '@rsbuild'),
       join(consumerRoot, 'node_modules', '@rsbuild'),
       'dir',
     );
+    const requireFromRsbuildCore = createRequire(
+      join(agentBundleNodeModules, '@rsbuild', 'core', 'package.json'),
+    );
+    await mkdir(join(consumerRoot, 'node_modules', '@rspack'));
     await symlink(
-      join(agentBundleNodeModules, '@rspack'),
-      join(consumerRoot, 'node_modules', '@rspack'),
+      dirname(requireFromRsbuildCore.resolve('@rspack/core/package.json')),
+      join(consumerRoot, 'node_modules', '@rspack', 'core'),
       'dir',
     );
     // The bundler-inspection surface types the composed Rslib lib config, so

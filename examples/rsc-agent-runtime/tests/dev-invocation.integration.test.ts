@@ -93,7 +93,8 @@ const buildInvocationEntry = async (compilerRoot: string, cwd = process.cwd()): 
     config: createRscRuntimeRsbuildConfig({ compilerRoot, mode: 'development' }),
     cwd,
   });
-  await rsbuild.build();
+  const buildResult = await rsbuild.build();
+  await buildResult.close();
   return join(compilerRoot, 'rsc', 'dev', 'invoke.js');
 };
 

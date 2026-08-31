@@ -1,4 +1,4 @@
-import { createRsbuild, mergeRsbuildConfig, type RsbuildConfig } from '@rsbuild/core';
+import { createRsbuild, mergeRsbuildConfig, type RsbuildConfig, type Rspack } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
@@ -138,7 +138,7 @@ export const composeMcpAppsRsbuildConfig = (
   sources: readonly Pick<NormalizedMcpApp, 'name' | 'source' | 'template'>[],
   options: { readonly outDir: string; readonly tools?: AgentBundleToolsConfig },
 ): RsbuildConfig => {
-  const profile = {
+  const profile: RsbuildConfig = {
     environments: Object.fromEntries(sources.map((source) => [source.name, {
       ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
       html: {
@@ -164,15 +164,16 @@ export const composeMcpAppsRsbuildConfig = (
     server: { publicDir: false },
     splitChunks: false,
   };
-  const enforceInvariants = (config: { output: { asyncChunks?: boolean } }): void => {
-    config.output.asyncChunks = false;
+  const enforceInvariants = (config: Rspack.Configuration): Rspack.Configuration => {
+    config.output = { ...config.output, asyncChunks: false };
+    return config;
   };
-  return mergeRsbuildConfig(
-    profile as never,
-    ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild as never]),
-    ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } } as never]),
-    { tools: { rspack: enforceInvariants } } as never,
-  ) as RsbuildConfig;
+  return mergeRsbuildConfig<RsbuildConfig>(
+    profile,
+    ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild]),
+    ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } }]),
+    { tools: { rspack: enforceInvariants } },
+  );
 };
 
 export const compileMcpApps = async (

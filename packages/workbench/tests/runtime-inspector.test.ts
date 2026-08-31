@@ -71,8 +71,9 @@ describe('Runtime inspector', () => {
       entry: { 'runtime-inspector-fixture': entry },
     };
     config.output = { ...config.output, distPath: { root: output } };
-    const rsbuild = await createRsbuild({ rsbuildConfig: config });
-    await rsbuild.build();
+    const rsbuild = await createRsbuild({ config });
+    const buildResult = await rsbuild.build();
+    await buildResult.close();
     const { server, url } = await startStaticServer(output);
     const browser = await chromium.launch({ channel: 'chrome' });
     try {

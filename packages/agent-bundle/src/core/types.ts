@@ -117,7 +117,11 @@ export type AgentBundleBinConfig = false | Readonly<Record<string, AgentBundleBi
 
 /** The single-entry ESM+dts library profile of the framework-owned package build. */
 export interface AgentBundleLibEntry {
-  /** Emit bundled type declarations next to the library output. Defaults to true. */
+  /**
+   * Emit type declarations next to the library output — Rslib's bundleless
+   * dts mode, a `.d.ts` graph beside the bundle rather than one rolled-up
+   * file. Defaults to true.
+   */
   dts?: boolean;
   entry: string;
 }
@@ -138,6 +142,17 @@ export type AgentBundleLibConfig = false | string | AgentBundleLibEntry;
  * invariant assertions still run after the merge, so a hatch value that
  * breaks an artifact contract is a hard diagnostic, never a silent override.
  * Consumers never need a second bundler config file.
+ *
+ * Dual-engine reality: the hatch executes under two bundler engine copies.
+ * Artifact scripts, MCP entries, hooks, and the package build compile
+ * through Rslib and run under the Rsbuild/Rspack versions nested in
+ * `@rslib/core` (currently the 2.1.x line); MCP App views compile through
+ * the workspace-pinned `@rsbuild/core` (2.2.x). These types come from the
+ * latter. Hatch authors must therefore never construct plugins or perform
+ * `instanceof` checks against an imported `@rspack/core` — use the utils
+ * argument Rslib/Rsbuild pass to `tools.rspack` mutator functions
+ * (`(config, { rspack }) => ...`), which always hands the executing
+ * engine's own `rspack` object.
  */
 export interface AgentBundleToolsConfig {
   /** Rsbuild environment-config fragment merged after the synthesized profile. */

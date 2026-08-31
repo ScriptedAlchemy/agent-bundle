@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { rspack } from '@rslib/core';
 import { expect, it, rs } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
@@ -136,6 +135,7 @@ const importPublishedHook = async (wrapper: string) =>
   });
 
 it('does not share a persistent Rslib cache between generated executables', async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-cache-output-'));
   const createOptions: unknown[] = [];
   const rslib = {
     build: async () => ({
@@ -150,29 +150,37 @@ it('does not share a persistent Rslib cache between generated executables', asyn
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          output: { asyncChunks: false, path: '/tmp/agent-bundle-rslib-cache-output' },
+          name: 'agent-bundle-cache-probe',
+          output: { asyncChunks: false, path: outputRoot },
           performance: { buildCache: false },
           target: 'node',
         }],
+        environmentConfigs: { 'agent-bundle-cache-probe': {} },
       },
     }),
   };
 
-  await buildWithRslib({
-    cwd: '/tmp',
-    entries: [{
-      name: 'cache-probe',
-      outputRelativePath: 'hooks/cache-probe.mjs',
-      source: '/tmp/hook.ts',
-      sourceInputs: ['/tmp/hook.ts'],
-    }],
-    outputRoot: '/tmp/agent-bundle-rslib-cache-output',
-  }, {
-    createRslib: async (options) => {
-      createOptions.push(options);
-      return rslib as never;
-    },
-  });
+  try {
+    await mkdir(join(outputRoot, 'hooks'), { recursive: true });
+    await writeFile(join(outputRoot, 'hooks', 'cache-probe.mjs'), 'export default undefined;\n');
+    await buildWithRslib({
+      cwd: '/tmp',
+      entries: [{
+        name: 'cache-probe',
+        outputRelativePath: 'hooks/cache-probe.mjs',
+        source: '/tmp/hook.ts',
+        sourceInputs: ['/tmp/hook.ts'],
+      }],
+      outputRoot,
+    }, {
+      createRslib: async (options) => {
+        createOptions.push(options);
+        return rslib as never;
+      },
+    });
+  } finally {
+    await rm(outputRoot, { force: true, recursive: true });
+  }
 
   const [{ config }] = createOptions as [{
     readonly config: {
@@ -182,7 +190,8 @@ it('does not share a persistent Rslib cache between generated executables', asyn
   expect(config.lib[0].performance).toEqual({ buildCache: false });
 });
 
-it('closes the Rslib build result after building a virtual hook entry', async () => {
+it('closes the Rslib build result and removes materialized generated modules after building a virtual hook entry', async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-close-output-'));
   const close = rs.fn(async () => undefined);
   const buildResult = {
     close,
@@ -193,60 +202,86 @@ it('closes the Rslib build result after building a virtual hook entry', async ()
       }),
     },
   };
+  let materializedEntry: string | undefined;
   const rslib = {
-    build: async () => buildResult,
+    build: async () => {
+      // The generated wrapper entry must exist as a real on-disk module for
+      // the duration of the build (no virtual-module plugin involved).
+      materializedEntry = await readFile(
+        join(outputRoot, '.agent-bundle-virtual', 'close-probe-entry.mjs'),
+        'utf8',
+      );
+      return buildResult;
+    },
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          output: { asyncChunks: false, path: '/tmp/agent-bundle-rslib-close-output' },
-          plugins: [new rspack.experiments.VirtualModulesPlugin({})],
+          name: 'agent-bundle-close-probe',
+          output: { asyncChunks: false, path: outputRoot },
           target: 'node',
         }],
+        environmentConfigs: { 'agent-bundle-close-probe': {} },
       },
     }),
   };
 
-  await buildWithRslib({
-    cwd: '/tmp',
-    entries: [{
-      name: 'close-probe',
-      outputRelativePath: 'hooks/close-probe.mjs',
-      source: '/tmp/hook.ts',
-      sourceInputs: ['/tmp/hook.ts'],
-      virtualSource: 'export default undefined;',
-    }],
-    outputRoot: '/tmp/agent-bundle-rslib-close-output',
-  }, { createRslib: async () => rslib as never });
+  try {
+    await mkdir(join(outputRoot, 'hooks'), { recursive: true });
+    await writeFile(join(outputRoot, 'hooks', 'close-probe.mjs'), 'export default undefined;\n');
+    await buildWithRslib({
+      cwd: '/tmp',
+      entries: [{
+        name: 'close-probe',
+        outputRelativePath: 'hooks/close-probe.mjs',
+        source: '/tmp/hook.ts',
+        sourceInputs: ['/tmp/hook.ts'],
+        virtualSource: 'export default undefined;',
+      }],
+      outputRoot,
+    }, { createRslib: async () => rslib as never });
 
-  expect(close).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(materializedEntry).toBe('export default undefined;');
+    // The reserved directory never survives into artifact listing.
+    await expect(readdir(join(outputRoot, '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(outputRoot, { force: true, recursive: true });
+  }
 });
 
 it('closes the Rslib build result when provenance stats are unavailable', async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-close-error-output-'));
   const close = rs.fn(async () => undefined);
   const rslib = {
     build: async () => ({ close }),
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          output: { asyncChunks: false, path: '/tmp/agent-bundle-rslib-close-error-output' },
+          name: 'agent-bundle-close-error-probe',
+          output: { asyncChunks: false, path: outputRoot },
           target: 'node',
         }],
+        environmentConfigs: { 'agent-bundle-close-error-probe': {} },
       },
     }),
   };
 
-  await expect(buildWithRslib({
-    cwd: '/tmp',
-    entries: [{
-      name: 'close-error-probe',
-      outputRelativePath: 'hooks/close-error-probe.mjs',
-      source: '/tmp/hook.ts',
-      sourceInputs: ['/tmp/hook.ts'],
-    }],
-    outputRoot: '/tmp/agent-bundle-rslib-close-error-output',
-  }, { createRslib: async () => rslib as never })).rejects.toThrow(/stats/i);
+  try {
+    await expect(buildWithRslib({
+      cwd: '/tmp',
+      entries: [{
+        name: 'close-error-probe',
+        outputRelativePath: 'hooks/close-error-probe.mjs',
+        source: '/tmp/hook.ts',
+        sourceInputs: ['/tmp/hook.ts'],
+      }],
+      outputRoot,
+    }, { createRslib: async () => rslib as never })).rejects.toThrow(/stats/i);
 
-  expect(close).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    await rm(outputRoot, { force: true, recursive: true });
+  }
 });
 
 it('normalizes a shorthand session-start hook into a frozen stable record', async () => {
