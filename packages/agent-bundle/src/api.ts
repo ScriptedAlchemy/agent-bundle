@@ -4,7 +4,11 @@ import { join, resolve } from 'node:path';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
+import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
+import { isInsideOrEqual } from './core/paths.ts';
+import { runMcpForeground } from './services/mcp-run.ts';
 export type { BuildResult } from './build/build.ts';
+export type { PackageBuildResult, PackageOutputFile } from './build/package-build.ts';
 export type { ArtifactOutputKind, ArtifactOutputProvenance } from './build/provenance.ts';
 export type { ProjectContext, ProjectSourceInput, ProjectSourceSnapshotInput } from './core/project-context.ts';
 export type {
@@ -219,12 +223,20 @@ export type InspectResult = ReadyInspectResult | InvalidInspectResult;
 
 export interface BuildOptions extends ProjectOptions {
   readonly output?: string;
+  /**
+   * Also produce the framework-owned npm package build (`dist/` bin + lib
+   * outputs) when the project declares or conventionally provides one. The
+   * CLI `build` command always requests this; programmatic artifact
+   * operations (temporary artifacts, dev, evals) never do.
+   */
+  readonly packageOutputs?: boolean;
 }
 
 export interface BuildProjectResult {
   readonly build: BuildResult;
   readonly diagnostics: readonly Diagnostic[];
   readonly model: NormalizedPlugin;
+  readonly packageBuild?: PackageBuildResult;
   readonly projectContext: ProjectContext;
 }
 
@@ -252,6 +264,13 @@ export interface RunEvalsOptions extends ArtifactOperationOptions, EvalRunSelect
 export interface CompareEvalsOptions extends ProjectOptions {
   readonly baseRunId: string;
   readonly candidateRunId: string;
+}
+
+export interface RunMcpOptions extends ArtifactOperationOptions {
+  readonly server: string;
+  /** Injectable only to make foreground process behavior deterministic in tests. */
+  readonly spawnProcess?: Parameters<typeof runMcpForeground>[0]['spawnProcess'];
+  readonly target: string;
 }
 
 export interface ListHooksOptions extends ArtifactOperationOptions {
@@ -431,6 +450,20 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
   });
 };
 
+const assertPackageOutputSources = (
+  packageBuild: PackageBuildResult,
+  projectContext: ProjectContext,
+): void => {
+  const declaredSources = new Set(projectContext.sourceInputs.map((input) => input.path));
+  for (const file of packageBuild.files) {
+    for (const sourceInput of file.sourceInputs) {
+      if (!declaredSources.has(sourceInput)) {
+        throw new Error(`Package output source ${JSON.stringify(sourceInput)} is not declared in the project context.`);
+      }
+    }
+  }
+};
+
 export const build = async (options: BuildOptions): Promise<BuildProjectResult> => {
   const root = resolve(options.root);
   const output = resolveOutput(root, options.output);
@@ -438,6 +471,16 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   const model = requirePreparedModel(prepared);
   const projectContext = prepared.projectContext;
   if (projectContext === undefined) throw new DiagnosticError(prepared.diagnostics);
+  const packageOutputRoot = model.packageBuild === undefined || options.packageOutputs !== true
+    ? undefined
+    : resolve(prepared.root, model.packageBuild.outputDir);
+  if (packageOutputRoot !== undefined && (isInsideOrEqual(packageOutputRoot, output) || isInsideOrEqual(output, packageOutputRoot))) {
+    throw new DiagnosticError([{
+      code: 'AB4706',
+      message: `Artifact output ${JSON.stringify(output)} overlaps the package build output ${JSON.stringify(packageOutputRoot)}; pass a different --output.`,
+      severity: 'error',
+    }]);
+  }
   log(options.logger, 'artifact.build', { output, root: prepared.root });
   const result = await buildArtifact({
     model,
@@ -445,8 +488,24 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     projectContext,
     projectRoot: prepared.root,
     registry: prepared.registry,
+    ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
   });
-  return Object.freeze({ build: result, diagnostics: prepared.diagnostics, model, projectContext });
+  let packageBuild: PackageBuildResult | undefined;
+  if (packageOutputRoot !== undefined) {
+    packageBuild = await buildPackageOutputs({
+      model,
+      projectRoot: prepared.root,
+      ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
+    });
+    if (packageBuild !== undefined) assertPackageOutputSources(packageBuild, projectContext);
+  }
+  return Object.freeze({
+    build: result,
+    diagnostics: prepared.diagnostics,
+    model,
+    ...(packageBuild === undefined ? {} : { packageBuild }),
+    projectContext,
+  });
 };
 
 /** Every eval refusal reaches a caller as one actionable diagnostic, never a raw service error. */
@@ -584,6 +643,26 @@ export const invokeMcp = async (options: InvokeMcpOptions): Promise<McpInvokeRes
     tool: options.tool,
     workspaceRoot: resolve(options.root),
   } satisfies McpInvokeOptions));
+};
+
+/**
+ * Runs one built stdio MCP server in the foreground with inherited stdio,
+ * resolving its content-hashed generated entry from the target manifest.
+ * Server state anchored on the plugin-data token persists under
+ * `.agent-bundle/mcp-run/<target>/<server>` in the project root.
+ */
+export const runMcp = async (options: RunMcpOptions): Promise<number> => {
+  const registry = registryFor(options);
+  const workspaceRoot = resolve(options.root);
+  return temporaryArtifact({ ...options, registry }, async (artifact) => runMcpForeground({
+    artifact,
+    pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', options.target, options.server),
+    registry,
+    server: options.server,
+    ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }),
+    target: options.target,
+    workspaceRoot,
+  }));
 };
 
 export const listHooks = async (options: ListHooksOptions) => {

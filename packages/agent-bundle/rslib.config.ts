@@ -34,6 +34,7 @@ export default defineConfig({
       eval: './src/eval/index.ts',
       index: './src/index.ts',
       'mcp-apps': './src/mcp-apps.ts',
+      'mcp-entry': './src/mcp-entry.ts',
     },
   },
 });

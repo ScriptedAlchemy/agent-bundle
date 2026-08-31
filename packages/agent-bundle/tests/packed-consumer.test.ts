@@ -9,6 +9,7 @@ import {
   realpath,
   rm,
   stat,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -280,6 +281,99 @@ it('uses only an installed tarball after source deletion', async () => {
       },
     });
 
+    // The framework-owned package build and generated stdio lifecycle must
+    // work from the installed tarball alone: bin/lib/dts outputs under dist/,
+    // a factory-exporting conventional MCP entry served by the packaged
+    // runtime shell, and foreground resolution of the hashed entry.
+    const frameworkRoot = join(consumerRoot, 'framework-build-project');
+    await mkdir(join(frameworkRoot, 'src', 'mcp'), { recursive: true });
+    await Promise.all([
+      writeFile(join(frameworkRoot, 'package.json'), '{"name":"framework-build-fixture","type":"module","private":true}\n'),
+      writeFile(join(frameworkRoot, 'tsconfig.json'), JSON.stringify({
+        compilerOptions: {
+          module: 'esnext',
+          moduleResolution: 'bundler',
+          strict: true,
+          target: 'es2022',
+          types: ['node'],
+        },
+      })),
+      writeFile(join(frameworkRoot, 'agent-bundle.config.ts'), [
+        'export default {',
+        '  mcp: { servers: { greeter: {} } },',
+        "  plugin: { name: 'framework-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n')),
+      writeFile(join(frameworkRoot, 'src', 'cli.ts'), [
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  process.stdout.write(`packed bin ran:${argv.join(',')}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n')),
+      writeFile(join(frameworkRoot, 'src', 'index.ts'), [
+        'export interface PackedAnswer { readonly value: number }',
+        'export const packedAnswer: PackedAnswer = { value: 42 };',
+        '',
+      ].join('\n')),
+      writeFile(join(frameworkRoot, 'src', 'mcp', 'greeter.ts'), [
+        "import { McpServer } from '@modelcontextprotocol/server';",
+        '',
+        'export default () => {',
+        "  const server = new McpServer({ name: 'framework-build-fixture', version: '1.0.0' });",
+        "  server.registerTool('greet', { description: 'Greets from the packaged runtime shell.' }, async () => ({",
+        "    content: [{ text: 'hello from the framework shell', type: 'text' }],",
+        '  }));',
+        '  return server;',
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+    await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], {
+      cwd: frameworkRoot,
+      env: installedEnvironment(),
+    });
+    // Declaration generation resolves typescript and ambient node types from
+    // the consumer project, exactly like a real devDependency install.
+    await Promise.all([
+      symlink(join(workspaceRoot, 'node_modules', 'typescript'), join(frameworkRoot, 'node_modules', 'typescript'), 'dir'),
+      symlink(join(workspaceRoot, 'node_modules', '@types'), join(frameworkRoot, 'node_modules', '@types'), 'dir'),
+    ]);
+    const frameworkCli = join(frameworkRoot, 'node_modules', '.bin', 'agent-bundle');
+    const frameworkArtifact = join(frameworkRoot, 'artifact');
+    await runInstalled(frameworkCli, frameworkRoot, ['build', '--root', frameworkRoot, '--output', frameworkArtifact]);
+
+    const packedBin = join(frameworkRoot, 'dist', 'bin', 'framework-build-fixture.js');
+    expect((await stat(packedBin)).mode & 0o111).not.toBe(0);
+    expect((await readFile(packedBin, 'utf8')).startsWith('#!/usr/bin/env node\n')).toBe(true);
+    await expect(execFile(packedBin, ['alpha'], { cwd: frameworkRoot, env: installedEnvironment() }))
+      .resolves.toMatchObject({ stdout: 'packed bin ran:alpha\n' });
+    const packedLib = await import(pathToFileURL(join(frameworkRoot, 'dist', 'index.js')).href) as {
+      readonly packedAnswer: { readonly value: number };
+    };
+    expect(packedLib.packedAnswer.value).toBe(42);
+    await expect(readFile(join(frameworkRoot, 'dist', 'index.d.ts'), 'utf8')).resolves.toContain('PackedAnswer');
+
+    const greeterManifest = JSON.parse(await readFile(join(frameworkArtifact, 'portable', 'mcp.json'), 'utf8')) as {
+      readonly mcpServers: { readonly greeter: { readonly args: readonly [string, ...string[]] } };
+    };
+    const greeterEntry = join(frameworkArtifact, 'portable', greeterManifest.mcpServers.greeter.args[0]);
+    const greeterBundle = await readFile(greeterEntry, 'utf8');
+    expect(greeterBundle).not.toMatch(agentBundleImport);
+    expect(greeterBundle).toContain('stdio heartbeat');
+    // The packaged lifecycle shell exits 0 on stdin EOF so clients can respawn.
+    await expect(execFile(process.execPath, [greeterEntry], {
+      cwd: frameworkRoot,
+      env: installedEnvironment(),
+      timeout: 30_000,
+    })).resolves.toMatchObject({ stdout: '' });
+    const { stdout: greeterTools } = await runInstalled(frameworkCli, frameworkRoot, [
+      'mcp', 'list', '--json', '--root', frameworkRoot, '--artifact', frameworkArtifact, '--target', 'portable', '--server', 'greeter',
+    ]);
+    expect(JSON.parse(greeterTools)).toMatchObject({ tools: [{ name: 'greet' }] });
+
     const reader = join(projectRoot, 'read-resource.mjs');
     await writeFile(reader, [
       "import { Client } from '@modelcontextprotocol/client';",
@@ -304,4 +398,4 @@ it('uses only an installed tarball after source deletion', async () => {
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }
-}, 120_000);
+}, 240_000);

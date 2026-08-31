@@ -22,6 +22,7 @@ import type {
   AgentBundleConfig,
   AgentBundleDevConfig,
   AgentBundleDevRuntimeConfig,
+  AgentBundleToolsConfig,
   NormalizedMcpApp,
   NormalizedMcpServer,
   NormalizedPlugin,
@@ -60,6 +61,8 @@ export interface PreparedProject {
   readonly root: string;
   readonly snapshotSource?: () => Promise<ProjectSourceSnapshot>;
   readonly source: SourceStatus;
+  /** The consumer bundler escape hatch, passed through for build lowering. */
+  readonly tools?: AgentBundleToolsConfig;
 }
 
 export type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../core/project-context.ts';
@@ -489,6 +492,7 @@ const preparedProject = (
   devRuntime?: DevRuntimePreparedProject,
   devRuntimeDiagnostic?: Diagnostic,
   devAgentApiEnabled?: boolean,
+  tools?: AgentBundleToolsConfig,
 ): PreparedProject => Object.freeze({
   configPath,
   ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
@@ -501,6 +505,7 @@ const preparedProject = (
   registry,
   root,
   source,
+  ...(tools === undefined ? {} : { tools }),
 });
 
 export type ProjectDiagnosticCode = 'AB4500' | 'AB7000' | 'AB7001' | 'AB7002' | 'AB7003' | 'AB7004';
@@ -769,6 +774,10 @@ export class ProjectService {
     if (supplementalMetadataFailure) {
       devRuntimeDiagnostic = sourceDiagnostic('Development runtime MCP App metadata must contain only finite JSON data.', loaded.configPath);
     }
+    const toolsValue = loaded.config.tools;
+    const tools = typeof toolsValue === 'object' && toolsValue !== null && !Array.isArray(toolsValue)
+      ? toolsValue as AgentBundleToolsConfig
+      : undefined;
     return preparedProject(
       loaded.configPath,
       snapshot,
@@ -782,6 +791,7 @@ export class ProjectService {
       devRuntime,
       devRuntimeDiagnostic,
       devAgentApiEnabled,
+      tools,
     );
   }
 }

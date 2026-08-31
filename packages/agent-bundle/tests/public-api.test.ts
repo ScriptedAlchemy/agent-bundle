@@ -210,6 +210,19 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       join(consumerRoot, 'node_modules', 'ajv'),
       'dir',
     );
+    // The tools escape hatch types the Rsbuild environment-config surface, so
+    // the declaration graph resolves the bundler packages exactly as
+    // installed consumers do (both are runtime dependencies of the package).
+    await symlink(
+      join(agentBundleNodeModules, '@rsbuild'),
+      join(consumerRoot, 'node_modules', '@rsbuild'),
+      'dir',
+    );
+    await symlink(
+      join(agentBundleNodeModules, '@rspack'),
+      join(consumerRoot, 'node_modules', '@rspack'),
+      'dir',
+    );
     await writeFile(join(emittedPackageRoot, 'package.json'), JSON.stringify({
       exports: { '.': { types: './dist/index.d.ts' } },
       name: 'agent-bundle',

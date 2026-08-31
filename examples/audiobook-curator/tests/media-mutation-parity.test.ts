@@ -13,7 +13,7 @@ import {
 } from '../src/index.js';
 
 const roots: string[] = [];
-afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true }))));
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true }))); });
 
 const fixture = async () => {
   const root = await mkdtemp(join(tmpdir(), 'curator-mutation-'));

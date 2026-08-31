@@ -1,0 +1,309 @@
+import { describe, expect, it } from '@rstest/core';
+
+import {
+  createHeartbeat,
+  redirectConsoleToStderr,
+  runGeneratedStdioMcpEntry,
+  runStdioServer,
+  type LifecycleServer,
+  type LifecycleSignalSource,
+  type LifecycleStdin,
+  type LifecycleTransport,
+} from '../src/mcp-entry.ts';
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+interface FakeTransport extends LifecycleTransport {
+  readonly closed: () => number;
+}
+
+const fakeTransport = (close: () => Promise<void> | void = () => undefined): FakeTransport => {
+  let closed = 0;
+  return {
+    close: () => {
+      closed += 1;
+      return close();
+    },
+    closed: () => closed,
+    onclose: undefined,
+    onmessage: undefined,
+  };
+};
+
+interface FakeServer extends LifecycleServer {
+  readonly closed: () => number;
+  readonly connected: () => readonly LifecycleTransport[];
+}
+
+const fakeServer = (): FakeServer => {
+  const connected: LifecycleTransport[] = [];
+  let closed = 0;
+  return {
+    close: () => {
+      closed += 1;
+    },
+    closed: () => closed,
+    connect: async (transport) => {
+      const lifecycleTransport = transport as LifecycleTransport;
+      // The real SDK installs onmessage during connect; the lifecycle wraps it.
+      lifecycleTransport.onmessage = () => undefined;
+      connected.push(lifecycleTransport);
+    },
+    connected: () => connected,
+  };
+};
+
+class FakeSignals implements LifecycleSignalSource {
+  readonly #listeners = new Map<'SIGINT' | 'SIGTERM', Set<() => void>>();
+
+  emit(signal: 'SIGINT' | 'SIGTERM'): void {
+    for (const listener of this.#listeners.get(signal) ?? []) listener();
+  }
+
+  listenerCount(signal: 'SIGINT' | 'SIGTERM'): number {
+    return this.#listeners.get(signal)?.size ?? 0;
+  }
+
+  off(signal: 'SIGINT' | 'SIGTERM', listener: () => void): void {
+    this.#listeners.get(signal)?.delete(listener);
+  }
+
+  on(signal: 'SIGINT' | 'SIGTERM', listener: () => void): void {
+    const listeners = this.#listeners.get(signal) ?? new Set<() => void>();
+    listeners.add(listener);
+    this.#listeners.set(signal, listeners);
+  }
+}
+
+interface FakeStdin extends LifecycleStdin {
+  emitEnd(): void;
+  listenerCount(): number;
+}
+
+const fakeStdin = (): FakeStdin => {
+  const listeners = new Set<() => void>();
+  return {
+    emitEnd: () => {
+      for (const listener of [...listeners]) listener();
+    },
+    listenerCount: () => listeners.size,
+    off: (_event, listener) => listeners.delete(listener),
+    once: (_event, listener) => listeners.add(listener),
+  };
+};
+
+interface Harness {
+  readonly exitCodes: number[];
+  readonly lines: string[];
+  readonly server: FakeServer;
+  readonly signals: FakeSignals;
+  readonly stdin: FakeStdin;
+  readonly transport: FakeTransport;
+}
+
+const startLifecycle = async (
+  overrides: Partial<Parameters<typeof runStdioServer>[0]> = {},
+): Promise<Harness & { readonly handle: Awaited<ReturnType<typeof runStdioServer>> }> => {
+  const harness: Harness = {
+    exitCodes: [],
+    lines: [],
+    server: fakeServer(),
+    signals: new FakeSignals(),
+    stdin: fakeStdin(),
+    transport: fakeTransport(),
+  };
+  const handle = await runStdioServer({
+    exit: (code) => harness.exitCodes.push(code),
+    heartbeat: false,
+    server: harness.server,
+    shutdownTimeoutMs: 100,
+    signals: harness.signals,
+    stdin: harness.stdin,
+    transport: harness.transport,
+    writeLine: (line) => harness.lines.push(line),
+    ...overrides,
+  });
+  return { ...harness, handle };
+};
+
+describe('runStdioServer lifecycle', () => {
+  it('connects the server and wraps onmessage for activity tracking', async () => {
+    const { handle, server, transport } = await startLifecycle();
+    expect(server.connected()).toEqual([transport]);
+    expect(typeof transport.onmessage).toBe('function');
+    await handle.shutdown();
+  });
+
+  it('exits 130 on SIGINT and unregisters every listener', async () => {
+    const { exitCodes, server, signals, stdin, transport } = await startLifecycle();
+    expect(signals.listenerCount('SIGINT')).toBe(1);
+    signals.emit('SIGINT');
+    await wait(10);
+    expect(exitCodes).toEqual([130]);
+    expect(transport.closed()).toBe(1);
+    expect(server.closed()).toBe(1);
+    expect(signals.listenerCount('SIGINT')).toBe(0);
+    expect(signals.listenerCount('SIGTERM')).toBe(0);
+    expect(stdin.listenerCount()).toBe(0);
+  });
+
+  it('exits 143 on SIGTERM', async () => {
+    const { exitCodes, signals } = await startLifecycle();
+    signals.emit('SIGTERM');
+    await wait(10);
+    expect(exitCodes).toEqual([143]);
+  });
+
+  it('exits 0 on stdin EOF so the client can respawn', async () => {
+    const { exitCodes, stdin } = await startLifecycle();
+    stdin.emitEnd();
+    await wait(10);
+    expect(exitCodes).toEqual([0]);
+  });
+
+  it('exits 0 when the transport closes underneath the server', async () => {
+    const { exitCodes, transport } = await startLifecycle();
+    transport.onclose?.();
+    await wait(10);
+    expect(exitCodes).toEqual([0]);
+  });
+
+  it('races a wedged transport close against the bounded shutdown timer', async () => {
+    const wedged = fakeTransport(() => new Promise<void>(() => undefined));
+    const { exitCodes, handle } = await startLifecycle({ shutdownTimeoutMs: 30, transport: wedged });
+    const started = Date.now();
+    await handle.shutdown(9);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(exitCodes).toEqual([9]);
+  });
+
+  it('runs shutdown exactly once across concurrent triggers', async () => {
+    const { exitCodes, handle, server, signals, stdin } = await startLifecycle();
+    signals.emit('SIGINT');
+    signals.emit('SIGTERM');
+    stdin.emitEnd();
+    await handle.shutdown(0);
+    await wait(10);
+    expect(exitCodes).toEqual([130]);
+    expect(server.closed()).toBe(1);
+  });
+});
+
+describe('heartbeat', () => {
+  it('logs on the interval and throttles activity logging', async () => {
+    const lines: string[] = [];
+    const heartbeat = createHeartbeat({
+      activityThrottleMs: 10_000,
+      intervalMs: 20,
+      name: 'curator',
+      writeLine: (line) => lines.push(line),
+    });
+    heartbeat.noteActivity();
+    heartbeat.noteActivity();
+    heartbeat.noteActivity();
+    await wait(70);
+    heartbeat.stop();
+    const activity = lines.filter((line) => line.includes('(activity)'));
+    const interval = lines.filter((line) => line.includes('(interval)'));
+    expect(activity).toHaveLength(1);
+    expect(interval.length).toBeGreaterThanOrEqual(2);
+    expect(lines[0]).toContain('[curator] stdio heartbeat');
+  });
+
+  it('feeds request activity from the wrapped transport onmessage', async () => {
+    const lines: string[] = [];
+    const { handle, transport } = await startLifecycle({
+      heartbeat: true,
+      heartbeatIntervalMs: 60_000,
+      writeLine: (line) => lines.push(line),
+    });
+    (transport.onmessage as (message: never) => void)(undefined as never);
+    expect(lines.some((line) => line.includes('(activity)'))).toBe(true);
+    await handle.shutdown();
+  });
+});
+
+describe('stdout protocol guard', () => {
+  it('redirects console and raw stdout to stderr, then restores stdout only', () => {
+    const originalConsole = { error: console.error, log: console.log };
+    const originalStdoutWrite = process.stdout.write;
+    const originalStderrWrite = process.stderr.write;
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrChunks.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      const guard = redirectConsoleToStderr();
+      console.log('module side effect');
+      process.stdout.write('stray raw write');
+      expect(stdoutChunks).toEqual([]);
+      expect(stderrChunks.join('')).toContain('module side effect');
+      expect(stderrChunks.join('')).toContain('stray raw write');
+
+      guard.restoreProtocolStdout();
+      process.stdout.write('{"jsonrpc":"2.0"}');
+      console.log('still stderr');
+      expect(stdoutChunks).toEqual(['{"jsonrpc":"2.0"}']);
+      expect(stderrChunks.join('')).toContain('still stderr');
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
+      console.error = originalConsole.error;
+      console.log = originalConsole.log;
+    }
+  });
+});
+
+describe('runGeneratedStdioMcpEntry', () => {
+  const withGuardedStreams = async (run: () => Promise<void>): Promise<void> => {
+    const originalConsole = {
+      debug: console.debug, dir: console.dir, error: console.error, info: console.info,
+      log: console.log, trace: console.trace, warn: console.warn,
+    };
+    const originalStdoutWrite = process.stdout.write;
+    try {
+      await run();
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      Object.assign(console, originalConsole);
+    }
+  };
+
+  it('rejects entries whose default export is not a factory', async () => {
+    await withGuardedStreams(async () => {
+      await expect(runGeneratedStdioMcpEntry({
+        loadEntry: async () => ({ default: 42 }),
+        serverName: 'broken',
+      })).rejects.toThrow('must default-export a server factory');
+    });
+  });
+
+  it('builds the server from the factory and serves it under the lifecycle', async () => {
+    await withGuardedStreams(async () => {
+      const server = fakeServer();
+      const exitCodes: number[] = [];
+      const signals = new FakeSignals();
+      const handle = await runGeneratedStdioMcpEntry({
+        lifecycle: {
+          exit: (code) => exitCodes.push(code),
+          heartbeat: false,
+          shutdownTimeoutMs: 50,
+          signals,
+          stdin: fakeStdin(),
+        },
+        loadEntry: async () => ({ default: () => server }),
+        serverName: 'curator',
+      });
+      expect(server.connected()).toHaveLength(1);
+      await handle.shutdown(0);
+      expect(exitCodes).toEqual([0]);
+    });
+  });
+});
