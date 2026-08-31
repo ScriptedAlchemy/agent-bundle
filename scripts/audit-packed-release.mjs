@@ -157,6 +157,10 @@ const auditPackedRelease = async () => {
       '--pack-destination', tarballs,
     ], { cwd: packageRoot, env: productionEnvironment })).stdout);
     const tarball = join(tarballs, asString(filename, 'npm pack did not produce a tarball filename'));
+    // No `--prefer-offline` here (unlike the packed test pool's shared install
+    // flags): the tree this install produces is what `npm audit`, `npm audit
+    // signatures`, and `npm sbom` below report on, so it has to resolve against
+    // live registry metadata rather than whatever the cache last saw.
     await execNpm([
       'install',
       '--omit=dev',

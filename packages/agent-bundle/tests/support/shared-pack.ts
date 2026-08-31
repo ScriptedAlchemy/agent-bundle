@@ -26,8 +26,16 @@ export const installedEnvironment = (): NodeJS.ProcessEnv => {
   return environment;
 };
 
-/** Canonical flags for installing a packed tarball into a consumer fixture. */
-export const npmInstallArguments = ['--ignore-scripts', '--no-audit', '--no-fund'] as const;
+/**
+ * Canonical flags for installing a packed tarball into a consumer fixture.
+ * `--prefer-offline` serves cached registry metadata without revalidating it:
+ * the tarball under test is always read from disk, and uncached dependencies
+ * are still fetched, so only the staleness round-trips are skipped. The
+ * release audit (scripts/audit-packed-release.mjs) deliberately does not use
+ * these flags — its install feeds `npm audit`/`npm audit signatures`, which
+ * must resolve against live registry metadata.
+ */
+export const npmInstallArguments = ['--ignore-scripts', '--no-audit', '--no-fund', '--prefer-offline'] as const;
 
 const packs = new Map<SharedPackPackage, Promise<SharedPack>>();
 let fallbackBuild: Promise<void> | undefined;
