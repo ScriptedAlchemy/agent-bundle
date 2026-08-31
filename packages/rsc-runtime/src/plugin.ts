@@ -1,3 +1,5 @@
+export { defineRscApplication } from './application.js';
+export type { RscApplication, RscApplicationOptions } from './application.js';
 export { runRscCli } from './cli.js';
 export type { RscCliOptions } from './cli.js';
 export { createRscMcpServer } from './mcp-server.js';

@@ -1,20 +1,19 @@
-import type { RscAgentBundleApplication } from './plugin-definition.js';
+import type { RscApplication } from './application.js';
 
 export interface RscCliOptions {
   readonly signal?: AbortSignal;
   readonly write?: (value: string) => void;
 }
 
-const help = (application: Readonly<RscAgentBundleApplication>): string => {
-  const plugin = application.config.plugin;
+const help = (application: Readonly<RscApplication>): string => {
   const commands = application.operations.flatMap((operation) => operation.cli === undefined
     ? []
     : [`  ${operation.cli.usage.padEnd(34)} ${operation.cli.summary}`]);
-  return `${plugin.name}${plugin.description === undefined ? '' : ` - ${plugin.description}`}\n\nCommands:\n${commands.join('\n')}\n`;
+  return `${application.name}${application.description === undefined ? '' : ` - ${application.description}`}\n\nCommands:\n${commands.join('\n')}\n`;
 };
 
 export const runRscCli = async (
-  application: Readonly<RscAgentBundleApplication>,
+  application: Readonly<RscApplication>,
   argv: readonly string[],
   options: RscCliOptions = {},
 ): Promise<0 | 1 | 2> => {

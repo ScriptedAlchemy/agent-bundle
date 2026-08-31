@@ -11,6 +11,7 @@ import {
   Skill,
   defineOperation,
   defineRscAgentBundle,
+  defineRscApplication,
   runRscCli,
   type McpAppProps,
 } from '../src/index.js';
@@ -93,7 +94,12 @@ describe('RSC plugin applications', () => {
   });
 
   it('runs root help, command help, and execution from the shared operation', async () => {
-    const application = defineRscAgentBundle(applicationNode());
+    const application = defineRscApplication({
+      description: 'Curate audiobooks.',
+      name: 'audiobook-curator',
+      operations: [statusOperation],
+      version: '1.0.0',
+    });
     const output: string[] = [];
 
     await expect(runRscCli(application, ['--help'], { write: (value) => output.push(value) })).resolves.toBe(0);
