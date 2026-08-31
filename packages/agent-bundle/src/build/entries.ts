@@ -2,10 +2,17 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 
 import type { TargetHookEntry } from '../adapters/types.ts';
-import type { NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
+import type { AgentBundleToolsConfig, NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
 import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
+import { scanEntryExports } from './entry-exports.ts';
+import {
+  generatedExecutableEntrySource,
+  generatedStdioMcpEntrySource,
+  mcpEntryRuntimePath,
+  mcpEntryRuntimeSpecifier,
+} from './entry-shell.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
 import { buildWithRslib } from './rslib.ts';
@@ -67,19 +74,29 @@ export const planCompiledEntries = (
 
 export const compileEntries = async (
   entries: readonly NormalizedScript[],
-  options: { readonly cwd: string; readonly outDir: string },
+  options: { readonly cwd: string; readonly outDir: string; readonly tools?: AgentBundleToolsConfig },
 ): Promise<readonly CompiledEntry[]> => {
   const compiled = planCompiledEntries(entries, options);
   const bundled = compiled.filter((entry) => entry.mode === 'bundle');
   const evidence = await buildWithRslib({
     cwd: options.cwd,
-    entries: bundled.map(({ name, source, sourceInputs }) => ({
-      name,
-      outputRelativePath: `scripts/${name}.mjs`,
-      source,
-      sourceInputs,
+    entries: await Promise.all(bundled.map(async ({ name, source, sourceInputs }) => {
+      // A Script whose module exports `main` receives the framework process
+      // envelope (argv, numeric exit codes); self-executing modules keep
+      // today's direct-bundle behavior byte for byte.
+      const exports = await scanEntryExports(source);
+      return {
+        name,
+        outputRelativePath: `scripts/${name}.mjs`,
+        source,
+        sourceInputs,
+        ...(exports.hasMainExport
+          ? { virtualSource: generatedExecutableEntrySource({ entrySource: source, exportName: 'main' }) }
+          : {}),
+      };
     })),
     outputRoot: options.outDir,
+    ...(options.tools === undefined ? {} : { tools: options.tools }),
   });
   await emitPlanEntries({
     entries: await Promise.all(compiled
@@ -147,6 +164,7 @@ export const compileMcpEntries = async (
     readonly cwd: string;
     readonly outDir: string;
     readonly target: string;
+    readonly tools?: AgentBundleToolsConfig;
   },
 ): Promise<readonly CompiledMcpEntry[]> => {
   const compiled = planCompiledMcpEntries(servers, options);
@@ -167,9 +185,27 @@ export const compileMcpEntries = async (
       '',
     ].join('\n');
   }));
+  // Factory-exporting entries (default export) are wrapped in the framework
+  // stdio lifecycle shell; self-connecting entries keep today's behavior byte
+  // for byte. The shell is aliased onto the local runtime module so emitted
+  // bundles stay self-contained (no residual `agent-bundle` import).
+  const entryShells = await Promise.all(compiled.map(async (entry) =>
+    (await scanEntryExports(entry.source)).hasDefaultExport
+      ? generatedStdioMcpEntrySource({
+        entrySource: entry.source,
+        serverName: entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name,
+      })
+      : undefined));
+  const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
   const evidence = await buildWithRslib({
     cwd: options.cwd,
     entries: compiled.map(({ id, name, source, sourceInputs }, index) => ({
+      ...(entryShells[index] === undefined || runtimeShell === undefined
+        ? {}
+        : {
+          aliases: { [mcpEntryRuntimeSpecifier]: runtimeShell },
+          virtualSource: entryShells[index],
+        }),
       name,
       outputRelativePath: `mcp/${name}.mjs`,
       source,
@@ -184,7 +220,9 @@ export const compileMcpEntries = async (
         source: virtualSources[index]!,
       }],
     })),
+    ...(runtimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeShell] }),
     outputRoot: options.outDir,
+    ...(options.tools === undefined ? {} : { tools: options.tools }),
   });
   const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
   return Object.freeze(compiled.map((entry) => Object.freeze({
@@ -211,7 +249,7 @@ export const planCompiledHooks = (
 
 export const compileHooks = async (
   entries: readonly TargetHookEntry[],
-  options: { readonly cwd: string; readonly outDir: string },
+  options: { readonly cwd: string; readonly outDir: string; readonly tools?: AgentBundleToolsConfig },
 ): Promise<readonly CompiledHookEntry[]> => {
   const compiled = planCompiledHooks(entries, options);
   const evidence = await buildWithRslib({
@@ -227,6 +265,7 @@ export const compileHooks = async (
       virtualSource: entries[index]!.virtualSource,
     })),
     outputRoot: options.outDir,
+    ...(options.tools === undefined ? {} : { tools: options.tools }),
   });
   const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
   return Object.freeze(compiled.map((entry, index) => Object.freeze({

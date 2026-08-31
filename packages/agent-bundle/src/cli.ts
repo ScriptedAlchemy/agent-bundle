@@ -195,6 +195,9 @@ const writeMachine = (output: Output, result: unknown): void => {
 
 const writeHumanBuild = (output: Output, result: Awaited<ReturnType<typeof build>>): void => {
   output.write(`Built ${result.model.metadata.name} to ${result.build.outputRoot}\n`);
+  if (result.packageBuild !== undefined) {
+    output.write(`Package build (${result.packageBuild.files.length} file(s)) at ${result.packageBuild.outputRoot}\n`);
+  }
 };
 
 const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof inspect>>): void => {
@@ -329,7 +332,7 @@ export const runCli = async (
   ).option('--output <path>', 'Artifact output path relative to --root');
   buildCommand.action(async (options: BuildCommandOptions) => {
     const { build } = await import('./api.ts');
-    const result = await build({ ...projectOptions(options), output: options.output });
+    const result = await build({ ...projectOptions(options), output: options.output, packageOutputs: true });
     if (options.json === true) writeMachine(stdout, result);
     else writeHumanBuild(stdout, result);
   });
@@ -449,6 +452,21 @@ export const runCli = async (
     });
     if (options.json === true) writeMachine(stdout, result);
     else stdout.write(`Invoked ${options.tool} on ${options.server}\n`);
+  });
+
+  const mcpRunCommand = configureArtifactOptions(
+    mcpCommand.command('run').description('Run one stdio MCP server in the foreground from an artifact'),
+    true,
+  ).requiredOption('--server <server>', 'MCP server name');
+  mcpRunCommand.action(async (options: ArtifactCommandOptions & { readonly server: string; readonly target: string }) => {
+    const { runMcp } = await import('./api.ts');
+    // No stdout writes here: with inherited stdio the server owns the
+    // JSON-RPC channel for the whole foreground run.
+    exitCode = await runMcp({
+      ...artifactOptions(options),
+      server: options.server,
+      target: options.target,
+    });
   });
 
   const hooksCommand = program.command('hooks').description('Inspect and simulate generated hooks');

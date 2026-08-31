@@ -39,13 +39,15 @@ npx agent-bundle dev --root .                   # local workbench with live rebu
 
 `targets: ['plugin']` emits one multi-host bundle at `dist/plugin/`: `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared `skills/`, `hooks/`, `mcp/`, and `scripts/` directories. The bundle's generated `AGENTS.md` explains how to install it into each host. Per-host layouts are available as the `claude`, `codex`, `cursor`, and `portable` targets.
 
+The same config also owns the npm package build — no second bundler config, bin shims, or hand-rolled stdio lifecycles. `bin` and `lib` entries (or the conventions `src/cli.ts`, `src/index.ts`, and `src/mcp/<server-id>.ts`) emit executable `dist/bin/<name>.js` bundles and a library output alongside the host artifacts; an MCP entry that default-exports a server factory runs under a framework-owned stdio lifecycle; `tools.rsbuild` / `tools.rspack` is the one bundler escape hatch. [Entry conventions](docs/entry-conventions.md) is the full contract.
+
 ## Commands
 
-- `build` — validate the project and write an artifact
+- `build` — validate the project and write an artifact (plus the `bin`/`lib` package build when declared)
 - `validate` — check project source, or a built artifact with `--artifact <dir>`
 - `inspect` — show the normalized configuration and per-target plans
 - `dev` — serve the local development workbench
-- `mcp list` / `mcp invoke` — operate an artifact's MCP server locally
+- `mcp list` / `mcp invoke` / `mcp run` — list, invoke, or run an artifact's MCP servers locally
 - `hooks list` / `hooks simulate` — inspect and simulate generated hooks
 - `eval` — run eval suites against a built artifact
 

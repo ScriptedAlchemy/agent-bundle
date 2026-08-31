@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, extname, relative, resolve } from 'node:path';
 
@@ -11,8 +12,11 @@ import {
 } from '../core/runtime.ts';
 import { parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
 import type {
+  AgentBundleBinEntry,
+  AgentBundleConfig,
   AgentBundleHookEntry,
   AgentBundleHookInput,
+  AgentBundleLibEntry,
   AgentBundleMcpApp,
   AgentBundleMcpServer,
   AgentBundleScriptInput,
@@ -21,11 +25,14 @@ import type {
   NativeHookToolSelector,
   NormalizationTargetRegistry,
   NormalizedAsset,
+  NormalizedBinEntry,
   NormalizedConfigExtension,
   NormalizedHook,
+  NormalizedLibEntry,
   NormalizedMcpApp,
   NormalizedMcpServer,
   NormalizedNativeHook,
+  NormalizedPackageBuild,
   NormalizedPlugin,
   NormalizedRuntime,
   NormalizedScript,
@@ -73,6 +80,121 @@ const mcpEntryName = (name: string): string => {
 
 /** Anchored alias contract for generated target-local MCP entry modules. */
 export const mcpEntryAliasPattern = /^mcp\/(mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs)$/u;
+
+const conventionalEntryExtensions = ['.ts', '.tsx'] as const;
+
+const conventionalEntryAt = (root: string, ...segments: string[]): string | undefined => {
+  const stem = resolve(root, ...segments);
+  for (const extension of conventionalEntryExtensions) {
+    const candidate = `${stem}${extension}`;
+    try {
+      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+    } catch {
+      // A racing deletion means the convention does not apply.
+    }
+  }
+  return undefined;
+};
+
+/**
+ * The `src/mcp/<server-id>.ts` convention: the stdio entry for a declared MCP
+ * server that names no entry, command, or url. Config always wins — an
+ * explicit `entry` suppresses the lookup entirely.
+ */
+export const conventionalMcpEntrySource = (root: string, serverName: string): string | undefined =>
+  /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(serverName)
+    ? conventionalEntryAt(root, 'src', 'mcp', serverName)
+    : undefined;
+
+const safePackageOutputName = (name: string): boolean =>
+  /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(name);
+
+/**
+ * The framework-owned package build output directory, relative to the project
+ * root. `dist` is one of the mandatory-ignored directory names, so package
+ * outputs never enter project source snapshots or skill/asset discovery.
+ */
+export const packageBuildOutputDir = 'dist';
+
+const normalizeBinEntries = (
+  config: Readonly<AgentBundleConfig>,
+  root: string,
+  configPath: string,
+): readonly NormalizedBinEntry[] => {
+  if (config.bin === false) return [];
+  if (config.bin !== undefined) {
+    return Object.entries(config.bin)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, input]) => {
+        const declaration = input as string | AgentBundleBinEntry;
+        const entry = typeof declaration === 'string' ? declaration : declaration.entry;
+        return {
+          id: `bin:${name}`,
+          name,
+          provenance: { kind: 'config' as const, sourcePath: configPath },
+          source: resolve(root, entry),
+        };
+      });
+  }
+  const conventional = conventionalEntryAt(root, 'src', 'cli');
+  if (conventional === undefined || !safePackageOutputName(config.plugin.name)) return [];
+  return [{
+    id: `bin:${config.plugin.name}`,
+    name: config.plugin.name,
+    provenance: { kind: 'conventional' as const, sourcePath: conventional },
+    source: conventional,
+  }];
+};
+
+const normalizeLibEntry = (
+  config: Readonly<AgentBundleConfig>,
+  root: string,
+  configPath: string,
+): NormalizedLibEntry | undefined => {
+  if (config.lib === false) return undefined;
+  if (config.lib !== undefined) {
+    const declaration = config.lib as string | AgentBundleLibEntry;
+    const entry = typeof declaration === 'string' ? declaration : declaration.entry;
+    const source = resolve(root, entry);
+    const name = basename(source, extname(source));
+    return {
+      dts: typeof declaration === 'string' ? true : declaration.dts !== false,
+      id: `lib:${name}`,
+      name,
+      provenance: { kind: 'config', sourcePath: configPath },
+      source,
+    };
+  }
+  const conventional = conventionalEntryAt(root, 'src', 'index');
+  if (conventional === undefined) return undefined;
+  return {
+    dts: true,
+    id: 'lib:index',
+    name: 'index',
+    provenance: { kind: 'conventional', sourcePath: conventional },
+    source: conventional,
+  };
+};
+
+/**
+ * The framework-owned npm package build: explicit `bin`/`lib` config wins,
+ * the `src/cli.ts` and `src/index.ts` conventions fill the gaps, and `false`
+ * opts a project out of a convention entirely.
+ */
+export const normalizePackageBuild = (
+  config: Readonly<AgentBundleConfig>,
+  root: string,
+  configPath: string,
+): NormalizedPackageBuild | undefined => {
+  const bins = normalizeBinEntries(config, root, configPath);
+  const lib = normalizeLibEntry(config, root, configPath);
+  if (bins.length === 0 && lib === undefined) return undefined;
+  return {
+    bins,
+    ...(lib === undefined ? {} : { lib }),
+    outputDir: packageBuildOutputDir,
+  };
+};
 
 const isHookEntryList = (
   input: AgentBundleHookInput,
@@ -214,14 +336,20 @@ const normalizeMcpServer = (
   provenance: SourceProvenance,
 ): NormalizedMcpServer => {
   const targets = sortedUnique(server.targets ?? defaultTargets);
+  const conventionalEntry =
+    server.entry === undefined && server.command === undefined && server.url === undefined
+      ? conventionalMcpEntrySource(root, name)
+      : undefined;
   const common = {
     id: `mcp:${name}`,
     name,
-    provenance: { ...provenance },
+    provenance: conventionalEntry === undefined
+      ? { ...provenance }
+      : { kind: 'conventional' as const, sourcePath: conventionalEntry },
     targets,
   };
 
-  if (server.entry !== undefined) {
+  if (server.entry !== undefined || conventionalEntry !== undefined) {
     const entryName = mcpEntryName(name);
     return {
       ...common,
@@ -229,7 +357,7 @@ const normalizeMcpServer = (
       args: [`mcp/${entryName}`, ...(server.args ?? [])],
       command: 'node',
       cwd: pathTokens.pluginRoot,
-      source: resolve(root, server.entry),
+      source: server.entry === undefined ? conventionalEntry! : resolve(root, server.entry),
       transport: 'stdio',
     };
   }
@@ -533,6 +661,7 @@ export const normalizeProject = async (
   const mcpServers = normalizeMcpServers(loaded, targetNames);
   const scripts = normalizeScripts(loaded, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
+  const packageBuild = normalizePackageBuild(loaded.config, loaded.context.projectRoot, loaded.configPath);
   const model: NormalizedPlugin = {
     ...(assets.length === 0 ? {} : { assets }),
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
@@ -548,6 +677,7 @@ export const normalizeProject = async (
     mcpServers,
     hooks: normalizeHooks(loaded, targetNames, registry),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
+    ...(packageBuild === undefined ? {} : { packageBuild }),
     runtime: normalizeRuntime(loaded),
     scripts,
     skills,

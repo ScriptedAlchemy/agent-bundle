@@ -1,3 +1,5 @@
+import type { EnvironmentConfig } from '@rsbuild/core';
+
 export interface AgentBundlePluginConfig {
   description?: string;
   name: string;
@@ -98,6 +100,52 @@ export interface AgentBundleScriptEntry {
   targets?: readonly string[];
 }
 
+/** One npm-facing CLI binary compiled into the framework-owned package build. */
+export interface AgentBundleBinEntry {
+  entry: string;
+}
+
+export type AgentBundleBinInput = string | AgentBundleBinEntry;
+
+/**
+ * npm-facing CLI binaries. Key = bin name, value = entry module. `false`
+ * disables the `src/cli.ts` convention. Each entry becomes a self-executing
+ * `dist/bin/<name>.js` bundle (shebang + executable bit) that `package.json`
+ * `bin` can reference directly.
+ */
+export type AgentBundleBinConfig = false | Readonly<Record<string, AgentBundleBinInput>>;
+
+/** The single-entry ESM+dts library profile of the framework-owned package build. */
+export interface AgentBundleLibEntry {
+  /** Emit bundled type declarations next to the library output. Defaults to true. */
+  dts?: boolean;
+  entry: string;
+}
+
+/**
+ * Optional npm library output. `false` disables the `src/index.ts`
+ * convention. The profile is deliberately thin (one ESM entry, node target,
+ * optional dts); packages needing a multi-format matrix have outgrown it and
+ * should use Rslib directly.
+ */
+export type AgentBundleLibConfig = false | string | AgentBundleLibEntry;
+
+/**
+ * THE bundler escape hatch. Both fragments are merged last-but-bounded into
+ * every bundler config agent-bundle synthesizes (artifact scripts, MCP
+ * entries, hooks, MCP Apps, and the package build), mirroring Rslib's
+ * user-config priority and Rspress's `builderConfig` position. The artifact
+ * invariant assertions still run after the merge, so a hatch value that
+ * breaks an artifact contract is a hard diagnostic, never a silent override.
+ * Consumers never need a second bundler config file.
+ */
+export interface AgentBundleToolsConfig {
+  /** Rsbuild environment-config fragment merged after the synthesized profile. */
+  rsbuild?: EnvironmentConfig;
+  /** Rspack config fragment or mutator(s), Rslib `tools.rspack` semantics, applied after `rsbuild`. */
+  rspack?: NonNullable<NonNullable<EnvironmentConfig['tools']>['rspack']>;
+}
+
 export type AgentBundleScriptInput = string | AgentBundleScriptEntry;
 
 export type AgentBundleHookInput =
@@ -116,8 +164,10 @@ export interface AgentBundleDevConfig {
 export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   /** Project-level static files copied byte-for-byte into every target artifact under `assets/`. */
   assets?: string[];
+  bin?: AgentBundleBinConfig;
   dev?: AgentBundleDevConfig;
   hooks?: Partial<Record<CanonicalHookEvent, AgentBundleHookInput>>;
+  lib?: AgentBundleLibConfig;
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
   plugin: AgentBundlePluginConfig;
@@ -125,6 +175,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   scripts?: Readonly<Record<string, AgentBundleScriptInput>>;
   skills?: string[];
   targets?: string[];
+  tools?: AgentBundleToolsConfig;
   [key: string]: unknown;
 }
 
@@ -221,6 +272,32 @@ export interface NormalizedScript {
   readonly targets: readonly string[];
 }
 
+/** One normalized npm-facing CLI binary in the framework-owned package build. */
+export interface NormalizedBinEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  readonly source: string;
+}
+
+/** The normalized single-entry ESM+dts library output of the package build. */
+export interface NormalizedLibEntry {
+  readonly dts: boolean;
+  readonly id: string;
+  /** The output stem: `<name>.js` (+ `<name>.d.ts`) under the package output directory. */
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  readonly source: string;
+}
+
+/** The node-consumable package build agent-bundle owns alongside target artifacts. */
+export interface NormalizedPackageBuild {
+  readonly bins: readonly NormalizedBinEntry[];
+  readonly lib?: NormalizedLibEntry;
+  /** POSIX path of the package output directory relative to the project root. */
+  readonly outputDir: string;
+}
+
 export interface NormalizedHook {
   readonly event: CanonicalHookEvent;
   readonly id: string;
@@ -274,6 +351,12 @@ export interface NormalizedPlugin {
    */
   readonly mcpApps?: readonly NormalizedMcpApp[];
   readonly nativeHooks?: readonly NormalizedNativeHook[];
+  /**
+   * The framework-owned npm package build (bin + lib outputs). Present only
+   * when configured or discovered by convention; optional so hand-constructed
+   * models predating the package build stay valid.
+   */
+  readonly packageBuild?: NormalizedPackageBuild;
   /** The generated-executable runtime floor selected during normalization. */
   readonly runtime: NormalizedRuntime;
   readonly scripts: readonly NormalizedScript[];

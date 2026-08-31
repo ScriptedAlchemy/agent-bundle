@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 import { auditAudiobookIntegrity, type MediaProcess } from '../src/index.js';
 
 const roots: string[] = [];
-afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true }))));
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true }))); });
 
 describe('complete audiobook integrity audit', () => {
   it('verifies chapter mapping, file/audio hashes, probe facts, and optional full decode', async () => {

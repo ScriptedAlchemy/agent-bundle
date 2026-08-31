@@ -56,6 +56,10 @@
     "./mcp-apps": {
       "types": "./dist/mcp-apps.d.ts",
       "import": "./dist/mcp-apps.js"
+    },
+    "./mcp-entry": {
+      "types": "./dist/mcp-entry.d.ts",
+      "import": "./dist/mcp-entry.js"
     }
   },
   "dependencies": {

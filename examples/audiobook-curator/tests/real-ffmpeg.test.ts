@@ -17,7 +17,7 @@ import {
 } from '../src/index.js';
 
 const roots: string[] = [];
-afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true }))));
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true }))); });
 
 const sha256 = async (path: string): Promise<string> => createHash('sha256').update(await readFile(path)).digest('hex');
 

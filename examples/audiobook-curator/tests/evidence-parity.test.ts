@@ -16,7 +16,7 @@ import {
 } from '../src/index.js';
 
 const roots: string[] = [];
-afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true }))));
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true }))); });
 
 describe('optional identity evidence parity', () => {
   it('keeps the reviewed distributed Whisper sampling sequence', () => {

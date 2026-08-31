@@ -24,19 +24,22 @@ pnpm --filter @agent-bundle-example/audiobook-curator build
 Build and globally link the workspace package without a tarball:
 
 ```sh
-pnpm --filter @agent-bundle-example/audiobook-curator build:cli
+pnpm --filter @agent-bundle-example/audiobook-curator build
 cd examples/audiobook-curator
-ln -s "$(pwd)/bin/audiobook-curator.js" ~/.local/bin/audiobook-curator
+ln -s "$(pwd)/dist/bin/audiobook-curator.js" ~/.local/bin/audiobook-curator
 audiobook-curator --help
 ```
 
 Choose any writable directory already on `PATH` in place of `~/.local/bin`.
 This is a direct workspace link; it does not pack or install a tarball.
 
-`build:bundle` writes complete Claude and Codex outputs beneath `artifact/`,
-including each host's plugin metadata, Skill, bundled CLI script, and bundled MCP
-server. The example uses only public `agent-bundle` and
-`@agent-bundle/rsc-runtime` exports with `workspace:*` dependencies.
+One `agent-bundle build` produces everything: complete Claude and Codex
+outputs beneath `artifact/` (each host's plugin metadata, Skill, bundled CLI
+script, and lifecycle-wrapped MCP server) plus the npm package build beneath
+`dist/` (`dist/bin/audiobook-curator.js` for `package.json` `bin`,
+`dist/index.js` and declarations for `exports`). The example uses only public
+`agent-bundle` and `@agent-bundle/rsc-runtime` exports with `workspace:*`
+dependencies.
 
 ## Source layout
 
@@ -52,9 +55,10 @@ server. The example uses only public `agent-bundle` and
   `evidence.ts`, `conversion.ts`, `media-mutation.ts`, `integrity-audit.ts`,
   `curator-core.ts`) over the shared `foundation.ts` and `media-process.ts`
   primitives; `result.tsx` renders every receipt for MCP.
-- `src/cli.ts`, `src/cli-entry.ts`, `src/mcp-server.ts`, and
-  `bin/audiobook-curator.js` are the entry shims for the CLI (test-injectable
-  runner, bundled `<Script>` entry, npm bin) and the stdio MCP server.
+- `src/cli.ts` exports `main`; the framework's generated process envelope
+  turns it into both the bundled `<Script>` artifact entry and the npm bin.
+  `src/mcp-server.ts` default-exports a server factory served under the
+  framework's stdio lifecycle shell. No hand-written entry shims remain.
 
 ## Complete workflow
 
@@ -98,13 +102,13 @@ The completion contract and real-volume checklist are in
 
 ## Maintainer notes
 
-This example carries two bundler configs: `agent-bundle.config.ts` (the
-application, consumed by `agent-bundle build` for the `artifact/` host
-outputs) and `rslib.config.ts` (a hand-written second build producing
-`dist/` for the npm `bin`/`exports`, plus its `tsconfig.build.json`). The
-duplication is a known framework gap — `agent-bundle build` does not yet emit
-a node-consumable package build, so the same CLI is bundled twice from two
-configs. When the framework owns the package build, delete `rslib.config.ts`,
-`tsconfig.build.json`, and the `build:cli` script; `bin/audiobook-curator.js`
-should then point at the framework's output. See the note at the top of
-`rslib.config.ts`.
+This example is the reference consumer of the framework-owned package build
+("one config, agent-bundle owns the build"): `agent-bundle.config.ts` is a
+pure pass-through of the RSC application's config, and the `src/cli.ts` /
+`src/index.ts` conventions provide the npm bin and library outputs under
+`dist/`. The former second bundler config (`rslib.config.ts`), its
+`tsconfig.build.json`, the hand-written `bin/audiobook-curator.js` shim, the
+self-executing `src/cli-entry.ts`, and the dual `build:cli`/`build:bundle`
+script chain were all deleted when the framework took ownership. See
+[`docs/entry-conventions.md`](../../docs/entry-conventions.md) for the
+contract.

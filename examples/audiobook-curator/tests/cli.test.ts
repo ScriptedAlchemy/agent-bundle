@@ -24,9 +24,9 @@ describe('audiobook-curator CLI', () => {
     let applied = false;
     const fixture = operations();
     await runCli(['prepare', '/source/book.mp3', '--output', '/curated', '--apply'], {
-      operations: { ...fixture, prepare: async (input) => {
+      operations: { ...fixture, prepare: async (input, options) => {
         applied = input.apply === true;
-        return fixture.prepare(input);
+        return fixture.prepare(input, options);
       } },
       write: () => undefined,
     });

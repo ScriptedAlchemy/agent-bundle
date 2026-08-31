@@ -1,11 +1,13 @@
 // Rslib re-exports its own rspack; installing @rspack/core separately risks
 // version conflicts (https://rslib.rs/api/javascript-api/core).
-import { createRslib, rspack } from '@rslib/core';
+import { mergeRsbuildConfig } from '@rsbuild/core';
+import { createRslib, rspack, type LibConfig } from '@rslib/core';
 import { readFile, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { isErrno } from '../core/errors.ts';
+import type { AgentBundleToolsConfig } from '../core/types.ts';
 import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
 
 export interface RslibVirtualModule {
@@ -14,15 +16,24 @@ export interface RslibVirtualModule {
 }
 
 export interface RslibEntry {
+  /** Module specifiers aliased onto existing on-disk modules (e.g. the mcp-entry runtime shell). */
+  readonly aliases?: Readonly<Record<string, string>>;
+  /** Raw JS banner prepended to the emitted bundle (e.g. a bin shebang). */
+  readonly banner?: string;
+  /** Emit type declarations for this entry's program. Defaults to false. */
+  readonly dts?: boolean;
   readonly name: string;
   readonly outputRelativePath: string;
   readonly source: string;
   readonly sourceInputs: readonly string[];
+  /** TypeScript project driving declaration generation and compiler options. */
+  readonly tsconfigPath?: string;
   readonly virtualModules?: readonly RslibVirtualModule[];
   readonly virtualSource?: string;
 }
 
 type RslibInstance = Awaited<ReturnType<typeof createRslib>>;
+type RslibLibConfig = LibConfig;
 
 interface RslibDependencies {
   readonly createRslib?: (options: Parameters<typeof createRslib>[0]) => Promise<Pick<RslibInstance, 'build' | 'inspectConfig'>>;
@@ -62,18 +73,18 @@ const assertExecutableConfig = (
   configs: readonly { readonly output?: { readonly asyncChunks?: boolean; readonly path?: string }; readonly plugins?: readonly unknown[]; readonly target?: false | string | readonly string[] }[],
   outputRoot: string,
 ): void => {
-  const virtualEntries = entries.filter(
-    (entry) => entry.virtualSource !== undefined || (entry.virtualModules?.length ?? 0) > 0,
-  );
   if (configs.length !== entries.length) {
     throw new Error('Rslib did not resolve one environment for every generated executable.');
   }
-  for (const config of configs) {
+  for (const [index, config] of configs.entries()) {
+    const entry = entries[index]!;
     const target = Array.isArray(config.target) ? config.target : [config.target];
     if (config.output?.asyncChunks !== false || config.output.path !== outputRoot || !target.some((value) => value === 'node')) {
       throw new Error('Rslib resolved an invalid generated executable configuration.');
     }
-    if (virtualEntries.length > 0) {
+    const entryHasVirtualModules =
+      entry.virtualSource !== undefined || (entry.virtualModules?.length ?? 0) > 0;
+    if (entryHasVirtualModules) {
       const hasVirtualModule = config.plugins?.some(
         (plugin) => plugin instanceof rspack.experiments.VirtualModulesPlugin,
       );
@@ -87,7 +98,13 @@ const assertExecutableConfig = (
 export const buildWithRslib = async (options: {
   readonly cwd: string;
   readonly entries: readonly RslibEntry[];
+  /** Extra module roots excluded from authored-source evidence (e.g. the aliased runtime shell). */
+  readonly ignoredSourcePaths?: readonly string[];
+  /** 'error' lets declaration-generation failures reach the consumer's terminal. */
+  readonly logLevel?: 'error' | 'silent';
   readonly outputRoot: string;
+  /** The consumer escape hatch, merged last-but-bounded into every synthesized entry. */
+  readonly tools?: AgentBundleToolsConfig;
 }, dependencies: RslibDependencies = {}): Promise<readonly BundledOutputEvidence[]> => {
   if (options.entries.length === 0) {
     return Object.freeze([]);
@@ -97,7 +114,7 @@ export const buildWithRslib = async (options: {
   const rslib = await (dependencies.createRslib ?? createRslib)({
     cwd: options.cwd,
     config: {
-      logLevel: 'silent',
+      logLevel: options.logLevel ?? 'silent',
       lib: options.entries.map((entry) => {
         const virtualSource = entry.virtualSource;
         const virtualModules = (entry.virtualModules ?? []).map((module, index) => ({
@@ -105,11 +122,33 @@ export const buildWithRslib = async (options: {
           path: resolve(options.outputRoot, '.agent-bundle-virtual', `${entry.name}-${index}.mjs`),
         }));
         const hasVirtualModules = virtualSource !== undefined || virtualModules.length > 0;
-        return {
+        const aliases = entry.aliases ?? {};
+        const enforceInvariants = (config: {
+          output: { asyncChunks?: boolean };
+          plugins: unknown[];
+          resolve: { alias?: Record<string, unknown> };
+        }): void => {
+          config.output.asyncChunks = false;
+          if (hasVirtualModules || Object.keys(aliases).length > 0) {
+            config.resolve.alias = {
+              ...config.resolve.alias,
+              ...aliases,
+              ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
+            };
+          }
+          if (hasVirtualModules) {
+            config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
+              ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
+              ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
+            }));
+          }
+        };
+        const profile: RslibLibConfig = {
           id: `agent-bundle-${entry.name}`,
           autoExternal: false,
+          ...(entry.banner === undefined ? {} : { banner: { js: entry.banner } }),
           bundle: true,
-          dts: false,
+          dts: entry.dts === true,
           format: 'esm',
           // Copied projects can share one node_modules tree, so a cache keyed
           // by this stable library id would give concurrent builds one lock.
@@ -135,23 +174,18 @@ export const buildWithRslib = async (options: {
             entry: {
               [entry.name]: virtualSource === undefined ? entry.source : entryAnchor,
             },
-          },
-          tools: {
-            rspack: (config) => {
-              config.output.asyncChunks = false;
-              if (hasVirtualModules) {
-                config.resolve.alias = {
-                  ...config.resolve.alias,
-                  ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
-                };
-                config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
-                  ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
-                  ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
-                }));
-              }
-            },
+            ...(entry.tsconfigPath === undefined ? {} : { tsconfigPath: entry.tsconfigPath }),
           },
         };
+        // The escape hatch merges over the synthesized profile (Rslib's
+        // "raw user config highest" priority); the invariant enforcer hook is
+        // appended last, and the post-resolution assertions bound the hatch.
+        return mergeRsbuildConfig(
+          profile as never,
+          ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild as never]),
+          ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } } as never]),
+          { tools: { rspack: enforceInvariants } } as never,
+        ) as RslibLibConfig;
       }),
     },
   });
@@ -166,7 +200,12 @@ export const buildWithRslib = async (options: {
         path: entry.outputRelativePath,
         sourceInputs: entry.sourceInputs,
       })),
-      ignoredSourcePaths: [entryAnchor, resolve(options.outputRoot, '.agent-bundle-virtual'), ...dependencyRoots],
+      ignoredSourcePaths: [
+        entryAnchor,
+        resolve(options.outputRoot, '.agent-bundle-virtual'),
+        ...(options.ignoredSourcePaths ?? []),
+        ...dependencyRoots,
+      ],
       projectRoot: options.cwd,
       stats: result.stats,
     });

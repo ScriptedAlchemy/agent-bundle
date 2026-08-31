@@ -11,8 +11,10 @@ import {
 } from '../core/runtime.ts';
 import { parseNativeHookToolSelector } from '../core/types.ts';
 import type {
+  AgentBundleBinEntry,
   AgentBundleHookEntry,
   AgentBundleHookInput,
+  AgentBundleLibEntry,
   AgentBundleMcpApp,
   AgentBundleMcpServer,
   AgentBundleScriptInput,
@@ -20,6 +22,7 @@ import type {
   NormalizationTargetRegistry,
   NormalizedPlugin,
 } from '../core/types.ts';
+import { conventionalMcpEntrySource } from './normalize.ts';
 import type { DiscoveredProject } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import type { SkillDocument } from './skill.ts';
@@ -411,7 +414,11 @@ const validateMcpApps = (
 ): Diagnostic[] => {
   if (server.apps === undefined) return [];
   const diagnostics: Diagnostic[] = [];
-  if (server.entry === undefined) {
+  const hasLocalEntry = server.entry !== undefined || (
+    server.command === undefined && server.url === undefined &&
+    conventionalMcpEntrySource(loaded.context.projectRoot, name) !== undefined
+  );
+  if (!hasLocalEntry) {
     diagnostics.push(sourceDiagnostic(
       'AB4322',
       `MCP server ${JSON.stringify(name)} can declare Apps only with a local entry.`,
@@ -542,7 +549,19 @@ const validateMcpServer = (
   const command = server.command;
   const url = server.url;
   const variants = [entry, command, url].filter((candidate) => candidate !== undefined);
-  if (variants.length !== 1) {
+  const conventionalEntry = variants.length === 0
+    ? conventionalMcpEntrySource(loaded.context.projectRoot, name)
+    : undefined;
+  if (variants.length !== 1 && conventionalEntry === undefined) {
+    diagnostics.push(sourceDiagnostic(
+      'AB4304',
+      `MCP server ${JSON.stringify(name)} must define exactly one of entry, command, or url, `
+      + `or provide the conventional stdio entry src/mcp/${name}.ts.`,
+      loaded.configPath,
+    ));
+    return diagnostics;
+  }
+  if (variants.length > 1) {
     diagnostics.push(sourceDiagnostic(
       'AB4304',
       `MCP server ${JSON.stringify(name)} must define exactly one of entry, command, or url.`,
@@ -552,10 +571,10 @@ const validateMcpServer = (
   }
   diagnostics.push(...validateStringList(server.targets, 'targets', 'AB4305', loaded));
 
-  if (entry !== undefined) {
-    if (!nonemptyString(entry)) {
+  if (entry !== undefined || conventionalEntry !== undefined) {
+    if (entry !== undefined && !nonemptyString(entry)) {
       diagnostics.push(sourceDiagnostic('AB4306', `MCP server ${JSON.stringify(name)} entry must be a nonempty path.`, loaded.configPath));
-    } else if (!localEntryExists(loaded.context.projectRoot, entry)) {
+    } else if (entry !== undefined && !localEntryExists(loaded.context.projectRoot, entry)) {
       diagnostics.push(sourceDiagnostic('AB4307', `MCP server ${JSON.stringify(name)} entry does not exist.`, loaded.configPath));
     }
     if (server.transport !== undefined && server.transport !== 'stdio') {
@@ -722,6 +741,123 @@ const validateSkill = (skill: SkillDocument): Diagnostic[] => {
   return diagnostics;
 };
 
+const isSafePackageOutputName = (name: string): boolean =>
+  /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(name);
+
+const validatePackageEntryPath = (
+  label: string,
+  entry: unknown,
+  code: { readonly empty: string; readonly extension: string; readonly missing: string; readonly outside: string },
+  loaded: LoadedConfig,
+): Diagnostic[] => {
+  if (!nonemptyString(entry)) {
+    return [sourceDiagnostic(code.empty, `${label} entry must be a nonempty path.`, loaded.configPath)];
+  }
+  const source = resolve(loaded.context.projectRoot, entry);
+  if (!isInside(loaded.context.projectRoot, source)) {
+    return [sourceDiagnostic(code.outside, `${label} entry must resolve inside the project root.`, loaded.configPath)];
+  }
+  const diagnostics: Diagnostic[] = [];
+  if (!bundleScriptExtensions.has(extname(source).toLowerCase())) {
+    diagnostics.push(sourceDiagnostic(code.extension, `${label} entry has an unsupported extension.`, loaded.configPath));
+  }
+  if (!localEntryExists(loaded.context.projectRoot, entry)) {
+    diagnostics.push(sourceDiagnostic(code.missing, `${label} entry must name an existing regular file.`, loaded.configPath));
+  }
+  return diagnostics;
+};
+
+const validateBin = (loaded: LoadedConfig): Diagnostic[] => {
+  const bin = loaded.config.bin;
+  if (bin === undefined || bin === false) return [];
+  if (!isRecord(bin)) {
+    return [sourceDiagnostic('AB4700', 'Bin configuration must be false or an object of bin entries.', loaded.configPath)];
+  }
+  const diagnostics: Diagnostic[] = [];
+  for (const [name, rawDeclaration] of Object.entries(bin)) {
+    if (!isSafePackageOutputName(name)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4701',
+        `Bin name ${JSON.stringify(name)} must be a safe stable output name.`,
+        loaded.configPath,
+      ));
+    }
+    if (typeof rawDeclaration !== 'string' && !isRecord(rawDeclaration)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4702',
+        `Bin ${JSON.stringify(name)} must be an entry path or an object with an entry path.`,
+        loaded.configPath,
+      ));
+      continue;
+    }
+    const declaration = rawDeclaration as string | AgentBundleBinEntry;
+    diagnostics.push(...validatePackageEntryPath(
+      `Bin ${JSON.stringify(name)}`,
+      typeof declaration === 'string' ? declaration : declaration.entry,
+      { empty: 'AB4702', extension: 'AB4704', missing: 'AB4705', outside: 'AB4703' },
+      loaded,
+    ));
+  }
+  return diagnostics;
+};
+
+const validateLib = (loaded: LoadedConfig): Diagnostic[] => {
+  const lib = loaded.config.lib;
+  if (lib === undefined || lib === false) return [];
+  if (typeof lib !== 'string' && !isRecord(lib)) {
+    return [sourceDiagnostic('AB4710', 'Lib configuration must be false, an entry path, or an object with an entry path.', loaded.configPath)];
+  }
+  const declaration = lib as string | AgentBundleLibEntry;
+  const diagnostics = validatePackageEntryPath(
+    'Lib',
+    typeof declaration === 'string' ? declaration : declaration.entry,
+    { empty: 'AB4711', extension: 'AB4713', missing: 'AB4714', outside: 'AB4712' },
+    loaded,
+  );
+  if (typeof declaration !== 'string' && declaration.dts !== undefined && typeof declaration.dts !== 'boolean') {
+    diagnostics.push(sourceDiagnostic('AB4715', 'Lib dts must be a boolean.', loaded.configPath));
+  }
+  return diagnostics;
+};
+
+const isRspackHatchValue = (value: unknown): boolean =>
+  typeof value === 'function' || isRecord(value);
+
+const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
+  const tools = loaded.config.tools;
+  if (tools === undefined) return [];
+  if (!isRecord(tools)) {
+    return [sourceDiagnostic('AB4720', 'Tools configuration must be an object.', loaded.configPath)];
+  }
+  const diagnostics: Diagnostic[] = [];
+  for (const key of Object.keys(tools)) {
+    if (key !== 'rsbuild' && key !== 'rspack') {
+      diagnostics.push(sourceDiagnostic(
+        'AB4721',
+        `Tools configuration key ${JSON.stringify(key)} is not a supported escape hatch; use rsbuild or rspack.`,
+        loaded.configPath,
+      ));
+    }
+  }
+  const rsbuild = (tools as Record<string, unknown>).rsbuild;
+  if (rsbuild !== undefined && !isRecord(rsbuild)) {
+    diagnostics.push(sourceDiagnostic('AB4722', 'Tools rsbuild must be an Rsbuild environment-config object.', loaded.configPath));
+  }
+  const rspack = (tools as Record<string, unknown>).rspack;
+  if (
+    rspack !== undefined &&
+    !isRspackHatchValue(rspack) &&
+    !(Array.isArray(rspack) && rspack.every(isRspackHatchValue))
+  ) {
+    diagnostics.push(sourceDiagnostic(
+      'AB4723',
+      'Tools rspack must be an Rspack config object, a mutator function, or an array of both.',
+      loaded.configPath,
+    ));
+  }
+  return diagnostics;
+};
+
 export const validateSource = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -775,10 +911,13 @@ export const validateSource = (
   }
 
   diagnostics.push(...validateAssets(loaded));
+  diagnostics.push(...validateBin(loaded));
   diagnostics.push(...validateHooks(loaded, registry));
+  diagnostics.push(...validateLib(loaded));
   diagnostics.push(...validateMcp(loaded));
   diagnostics.push(...validateRuntime(loaded));
   diagnostics.push(...validateScripts(loaded, registry));
+  diagnostics.push(...validateTools(loaded));
 
   return diagnostics;
 };
@@ -812,6 +951,8 @@ export const validateModel = (
     ...(model.mcpApps ?? []),
     ...model.scripts,
     ...(model.assets ?? []),
+    ...(model.packageBuild?.bins ?? []),
+    ...(model.packageBuild?.lib === undefined ? [] : [model.packageBuild.lib]),
   ];
   for (const component of components) {
     const firstSource = ids.get(component.id);

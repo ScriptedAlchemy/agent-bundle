@@ -1,9 +1,9 @@
-import { createRsbuild } from '@rsbuild/core';
+import { createRsbuild, mergeRsbuildConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
 
-import type { NormalizedMcpApp } from '../core/types.ts';
+import type { AgentBundleToolsConfig, NormalizedMcpApp } from '../core/types.ts';
 import { stableJson } from '../core/digest.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
@@ -128,7 +128,12 @@ export const planCompiledMcpApps = (
 
 export const compileMcpApps = async (
   apps: readonly NormalizedMcpApp[],
-  options: { readonly cwd: string; readonly outDir: string; readonly target: string },
+  options: {
+    readonly cwd: string;
+    readonly outDir: string;
+    readonly target: string;
+    readonly tools?: AgentBundleToolsConfig;
+  },
 ): Promise<readonly CompiledMcpApp[]> => {
   const compiled = planCompiledMcpApps(apps, { outDir: options.outDir, target: options.target });
   if (compiled.length === 0) {
@@ -144,40 +149,50 @@ export const compileMcpApps = async (
   });
 
   // One Rsbuild instance with one environment per app compiles every view in
-  // a single parallel run instead of a sequential per-app build loop.
+  // a single parallel run instead of a sequential per-app build loop. The
+  // consumer escape hatch merges over this synthesized profile with the
+  // framework invariant hook appended last; the resolved-config assertions
+  // below bound what the hatch may change.
+  const profile = {
+    environments: Object.fromEntries(sources.map((source) => [source.name, {
+      ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
+      html: {
+        inject: 'body' as const,
+        ...(source.template === undefined ? {} : { template: source.template }),
+      },
+      source: { entry: { [source.name]: source.source } },
+    }])),
+    logLevel: 'silent' as const,
+    mode: 'production' as const,
+    output: {
+      cleanDistPath: false,
+      dataUriLimit: Number.MAX_SAFE_INTEGER,
+      distPath: { html: 'mcp-apps', root: options.outDir },
+      filename: { css: '[name].css', html: '[name].html', js: '[name].js' },
+      filenameHash: false,
+      inlineScripts: true,
+      inlineStyles: true,
+      legalComments: 'inline' as const,
+      sourceMap: false,
+      target: 'web' as const,
+    },
+    server: { publicDir: false },
+    splitChunks: false,
+  };
   const rsbuild = await createRsbuild({
     cwd: options.cwd,
-    config: {
-      environments: Object.fromEntries(sources.map((source) => [source.name, {
-        ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
-        html: {
-          inject: 'body' as const,
-          ...(source.template === undefined ? {} : { template: source.template }),
+    config: mergeRsbuildConfig(
+      profile as never,
+      ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild as never]),
+      ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } } as never]),
+      {
+        tools: {
+          rspack: (config: { output: { asyncChunks?: boolean } }) => {
+            config.output.asyncChunks = false;
+          },
         },
-        source: { entry: { [source.name]: source.source } },
-      }])),
-      logLevel: 'silent',
-      mode: 'production',
-      output: {
-        cleanDistPath: false,
-        dataUriLimit: Number.MAX_SAFE_INTEGER,
-        distPath: { html: 'mcp-apps', root: options.outDir },
-        filename: { css: '[name].css', html: '[name].html', js: '[name].js' },
-        filenameHash: false,
-        inlineScripts: true,
-        inlineStyles: true,
-        legalComments: 'inline',
-        sourceMap: false,
-        target: 'web',
-      },
-      server: { publicDir: false },
-      splitChunks: false,
-      tools: {
-        rspack: (config) => {
-          config.output.asyncChunks = false;
-        },
-      },
-    },
+      } as never,
+    ),
   });
   const inspection = await rsbuild.inspectConfig({ mode: 'production' });
   assertResolvedViewConfig(inspection, compiled.map((app) => app.name), options.outDir);
