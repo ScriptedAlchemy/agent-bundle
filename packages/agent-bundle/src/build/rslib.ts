@@ -7,6 +7,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { isErrno } from '../core/errors.ts';
+import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import { mcpEntryRuntimeSpecifier } from './entry-shell.ts';
 import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
@@ -101,13 +102,10 @@ const generatedEntryModulePath = (outputRoot: string, entry: RslibEntry): string
 
 /** The import requests of one named entry in a lowered Rspack entry record. */
 const entryImportsOf = (entryRecord: unknown, name: string): readonly string[] => {
-  if (entryRecord === null || typeof entryRecord !== 'object' || Array.isArray(entryRecord)) return [];
-  const description = (entryRecord as Record<string, unknown>)[name];
-  if (typeof description === 'string') return [description];
-  if (Array.isArray(description)) return description.filter((item): item is string => typeof item === 'string');
-  if (description !== null && typeof description === 'object') {
-    return entryImportsOf({ [name]: (description as { readonly import?: unknown }).import }, name);
-  }
+  const description = isRecord(entryRecord) ? entryRecord[name] : undefined;
+  const imports = isRecord(description) ? description.import : description;
+  if (typeof imports === 'string') return [imports];
+  if (Array.isArray(imports)) return imports.filter((item): item is string => typeof item === 'string');
   return [];
 };
 
@@ -119,17 +117,6 @@ const virtualRegistryModules = (
     ...module,
     path: join(outputRoot, generatedModulesDirname, `${entry.name}-${index}.mjs`),
   }));
-
-/** Every generated module one entry serves virtually during its build. */
-const plannedVirtualModules = (
-  entry: RslibEntry,
-  outputRoot: string,
-): readonly { readonly path: string; readonly source: string }[] => [
-  ...(entry.virtualSource === undefined
-    ? []
-    : [{ path: generatedEntryModulePath(outputRoot, entry), source: entry.virtualSource }]),
-  ...virtualRegistryModules(outputRoot, entry).map(({ path, source }) => ({ path, source })),
-];
 
 /**
  * The module specifiers one entry's emitted bundle must inline: the runtime
@@ -369,7 +356,8 @@ const assertExecutableConfig = (
     // The generated environment must retain the virtual-module source: a
     // resolved config without the plugin instance would resolve the
     // guaranteed-nonexistent generated paths against the real filesystem.
-    if (plannedVirtualModules(entry, outputRoot).length > 0) {
+    const registryModules = virtualRegistryModules(outputRoot, entry);
+    if (entry.virtualSource !== undefined || registryModules.length > 0) {
       const constructor = virtualModulesPluginConstructor();
       if (config.plugins?.some((plugin) => plugin instanceof constructor) !== true) {
         throw new Error('Rslib resolved a generated executable environment without its virtual modules.');
@@ -381,8 +369,7 @@ const assertExecutableConfig = (
     }
     const expectedAliases = {
       ...entry.aliases,
-      ...Object.fromEntries(virtualRegistryModules(outputRoot, entry)
-        .map((module) => [module.name, module.path])),
+      ...Object.fromEntries(registryModules.map((module) => [module.name, module.path])),
     };
     const alias = aliasRecordOf(config);
     const frameworkAliasKeys = new Set(Object.keys(expectedAliases).map((name) => `${name}$`));
@@ -425,7 +412,14 @@ export const composeEntryLibConfig = (
   const libId = entryLibId(entry);
   const virtualSource = entry.virtualSource;
   const virtualModules = virtualRegistryModules(options.outputRoot, entry);
-  const generatedModules = plannedVirtualModules(entry, options.outputRoot);
+  // Every generated module this entry serves virtually during its build:
+  // the wrapper entry (when present) plus the registry modules.
+  const generatedModules = [
+    ...(virtualSource === undefined
+      ? []
+      : [{ path: generatedEntryModulePath(options.outputRoot, entry), source: virtualSource }]),
+    ...virtualModules,
+  ];
   const aliases = entry.aliases ?? {};
   const reserved = reservedSpecifiers(entry);
   const frameworkAliasKeys = new Set([
@@ -474,16 +468,14 @@ export const composeEntryLibConfig = (
       // above serves from memory. Rspack resolves entries through the
       // plugin-patched input filesystem, so no real path is ever shadowed.
       const lowered = config.entry;
-      if (lowered === undefined || typeof lowered !== 'object' || Array.isArray(lowered)) {
+      if (!isRecord(lowered)) {
         throw new Error('Rslib lowered a generated executable without a keyed entry record.');
       }
-      const description = (lowered as Record<string, unknown>)[entry.name];
+      const description = lowered[entry.name];
       const wrapperImport = [generatedEntryModulePath(options.outputRoot, entry)];
       config.entry = {
         ...lowered,
-        [entry.name]: description !== null && typeof description === 'object' && !Array.isArray(description)
-          ? { ...description, import: wrapperImport }
-          : wrapperImport,
+        [entry.name]: isRecord(description) ? { ...description, import: wrapperImport } : wrapperImport,
       } as typeof config.entry;
     }
     const violation = reservedExternalsViolation(config.externals, reserved);
