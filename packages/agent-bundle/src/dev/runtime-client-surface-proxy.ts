@@ -483,7 +483,7 @@ const endpoint = (input: DevRuntimeClientSurfaceEndpoint): ValidatedEndpoint => 
   const httpPathPrefixes = Object.freeze([...new Set(declaredPrefixes.map(prefix))]);
   const entryPath = canonicalPath(endpointValue(input, 'entryPath')).normalized;
   if (!matchesPrefix(entryPath, httpPathPrefixes)) invalidEndpoint('an entry path within a declared HTTP prefix');
-  const webSocketPath = canonicalPath(endpointValue(input, 'webSocketPath')).normalized;
+  const webSocketPath = canonicalPath(endpointValue(input, 'webSocketPath')).upstream;
   const webSocketToken = endpointValue(input, 'webSocketToken');
   // Rsbuild documents webSocketToken only as a string; its current
   // base64url-like alphabet and length are empirical, not API guarantees.

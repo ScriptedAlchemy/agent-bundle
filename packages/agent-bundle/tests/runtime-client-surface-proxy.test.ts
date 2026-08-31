@@ -629,7 +629,7 @@ it('percent-encodes a bounded public HMR token while keeping it out of the brows
     webSocketServer.handleUpgrade(request, socket, head, (client) => webSocketServer.emit('connection', client, request));
   });
   const webSocketToken = 'token with /?+%= punctuation';
-  const webSocketPath = '/custom-runtime-hmr';
+  const webSocketPath = '/custom%20runtime-hmr';
   const binding = await RuntimeClientSurfaceProxy.open({
     entryPath: '/app/index.html',
     httpOrigin: origin,

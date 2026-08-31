@@ -679,7 +679,7 @@ test('keeps malformed compiler stats in the provider lifecycle failure lane', as
   expect(failures[0]?.[2]).toBe('provider-lifecycle');
 });
 
-test('fails every live attempt loudly when global compile hooks violate FIFO pairing', async () => {
+test('retains FIFO pairing when MultiCompiler emits overlapping before hooks', async () => {
   let attempts = 0;
   const captures: string[] = [];
   const failures: unknown[][] = [];
@@ -687,18 +687,33 @@ test('fails every live attempt loudly when global compile hooks violate FIFO pai
     beforeAttempt: () => `attempt-${String(++attempts)}`,
     capture: async (input) => {
       captures.push(input.attemptId);
-      return snapshotFor(input.attemptId, input.sourceRevision);
+      return undefined;
     },
-    enqueue: () => 'activated',
+    enqueue: () => undefined,
     failAttempt: (...input: unknown[]) => { failures.push(input); },
   });
 
   observer.beginAttempt();
   observer.beginAttempt();
-  await expect(observer.completeAttempt()).rejects.toThrow('exactly one pending attempt');
+  await observer.completeAttempt();
+  await observer.completeAttempt();
 
-  expect(captures).toEqual([]);
-  expect(failures.map(([attemptId]) => attemptId)).toEqual(['attempt-1', 'attempt-2']);
+  expect(captures).toEqual(['attempt-1', 'attempt-2']);
+  expect(failures).toEqual([]);
+});
+
+test('fails duplicate pending attempt identities loudly instead of silently mispairing them', () => {
+  const failures: unknown[][] = [];
+  const observer = compileObserver({
+    beforeAttempt: () => 'attempt-duplicate',
+    capture: async () => undefined,
+    enqueue: () => undefined,
+    failAttempt: (...input: unknown[]) => { failures.push(input); },
+  });
+
+  observer.beginAttempt();
+  expect(() => observer.beginAttempt()).toThrow('duplicate pending attempt identity');
+  expect(failures.map(([attemptId]) => attemptId)).toEqual(['attempt-duplicate', 'attempt-duplicate']);
   expect(failures.every((failure) => failure[2] === 'provider-lifecycle')).toBe(true);
 });
 
@@ -1676,11 +1691,24 @@ test('returns a compiling session without treating provider activation work as a
     await activationReached.promise;
     await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
     const returnedBeforeActivation = returnedSession;
+    expect(returnedBeforeActivation?.status()).toMatchObject({ state: 'compiling' });
+    if (returnedBeforeActivation === undefined) throw new Error('RSC runtime session did not return while compiling.');
+    const originalApp = prepared.devRuntime!.apps[0]!;
+    const reconciling = returnedBeforeActivation.reconcilePreparedRuntime({
+      ...prepared.devRuntime!,
+      apps: [{ ...originalApp, name: 'timeline-startup' }],
+      sourceRevision: `${prepared.devRuntime!.sourceRevision}-startup-reconcile`,
+    });
     releaseActivation.resolve();
     session = await starting;
 
-    expect(returnedBeforeActivation?.status()).toMatchObject({ state: 'compiling' });
+    await reconciling;
     await waitFor(() => session?.status().state === 'active');
+    await expect(session.readAsset({
+      path: ['rsc', 'index.html'],
+      runtimeGenerationId: session.status().activeVector!.runtimeGenerationId,
+      surfaceId: 'mcp.timeline-startup',
+    })).resolves.toMatchObject({ contentType: 'text/html' });
   } finally {
     releaseActivation.resolve();
     await session?.close();

@@ -104,20 +104,24 @@ const runtimeCompileObserverPlugin = (
       api.onBeforeDevCompile(() => {
         // Rsbuild documents global hook order, but not one before/after pair
         // per MultiCompiler cohort. FIFO pairing is only empirical in 2.2.1;
-        // retain all observed IDs so the after hook can reject skew loudly.
-        pendingAttemptIds.push(observer.beforeAttempt());
-      });
-      api.onAfterDevCompile(async ({ stats }) => {
-        if (pendingAttemptIds.length !== 1) {
-          const pairingError = new Error(
-            `RSC runtime compile requires exactly one pending attempt; observed ${String(pendingAttemptIds.length)}.`,
-          );
-          for (const unmatchedAttemptId of pendingAttemptIds.splice(0)) {
+        // reject identities that cannot be paired unambiguously, while
+        // retaining legitimate overlapping before callbacks in FIFO order.
+        const attemptId = observer.beforeAttempt();
+        if (pendingAttemptIds.includes(attemptId)) {
+          const pairingError = new Error(`RSC runtime compile produced duplicate pending attempt identity ${JSON.stringify(attemptId)}.`);
+          for (const unmatchedAttemptId of [...pendingAttemptIds, attemptId]) {
             observer.failAttempt(unmatchedAttemptId, pairingError, 'provider-lifecycle');
           }
+          pendingAttemptIds.length = 0;
           throw pairingError;
         }
-        const attemptId = pendingAttemptIds.shift() as string;
+        pendingAttemptIds.push(attemptId);
+      });
+      api.onAfterDevCompile(async ({ stats }) => {
+        const attemptId = pendingAttemptIds.shift();
+        if (attemptId === undefined) {
+          throw new Error('RSC runtime compile completed without a matching attempt.');
+        }
         let snapshot: RscRuntimeCompileSnapshot | undefined;
         try {
           if (stats.hasErrors()) {

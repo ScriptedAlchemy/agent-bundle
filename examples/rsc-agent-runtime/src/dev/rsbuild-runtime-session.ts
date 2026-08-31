@@ -2340,9 +2340,13 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       // that failed or settled as no-ops, never produce a generation, so
       // judging them as superseding would drop the newest successful compile
       // with nothing to replace it - the permanent-staleness wedge in #38.
+      // Before the first generation commits, an updated prepared declaration
+      // is reconciled by the queued step after this activation; rejecting the
+      // only bootstrap generation would leave that step with no active base.
       check: () => !this.#closed &&
         snapshot.rscCohortRevision === this.#latestRscCohortRevision &&
-        preparedAuthorityDigest === preparedRuntimeAuthorityDigest(this.#latestPreparedRuntime),
+        (this.#active === undefined ||
+          preparedAuthorityDigest === preparedRuntimeAuthorityDigest(this.#latestPreparedRuntime)),
       wait: async () => {
         while (!this.#closed) {
           const sequence = this.#sequenceFor(snapshot.attemptId);
