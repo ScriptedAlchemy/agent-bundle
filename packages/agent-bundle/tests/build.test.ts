@@ -1091,7 +1091,11 @@ const reservedSpecifierProject = async (): Promise<{ readonly entry: RslibEntry;
   await writeFile(join(sourceRoot, 'entry.ts'), [
     "import { marker } from 'agent-bundle/mcp-entry';",
     "import registry from 'agent-bundle/mcp-apps';",
-    'console.log(marker, registry);',
+    // A reserved specifier mentioned as data, not imported: the residual-import
+    // scan parses the emitted bundle instead of grepping it, so this survives
+    // into the output without failing the self-containment check.
+    "const mentioned = 'agent-bundle/mcp-entry';",
+    'console.log(marker, registry, mentioned);',
     '',
   ].join('\n'));
   return {
@@ -1122,6 +1126,9 @@ it('inlines reserved specifiers through exact-match aliases and materialized gen
     expect(bundle).toContain('inlined-runtime-shell');
     expect(bundle).toContain('generated-registry');
     expect(bundle).not.toMatch(/from\s*["']agent-bundle\//u);
+    // The scan tolerates a reserved specifier that is only mentioned as a
+    // string literal; only a live import fails the build.
+    expect(bundle).toContain('agent-bundle/mcp-entry');
     // Materialized generated modules never survive into the artifact and
     // never count as authored source evidence.
     await expect(readdir(join(root, 'dist', '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
