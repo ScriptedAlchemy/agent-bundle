@@ -21,12 +21,12 @@
     }
   },
   "scripts": {
-    "build": "agent-bundle build --json --output artifact",
+    "build": "agent-bundle build --output artifact",
     "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test",
     "dev": "agent-bundle dev",
     "test": "rstest tests",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "validate": "agent-bundle validate --json"
+    "validate": "agent-bundle validate"
   },
   "dependencies": {
     "@agent-bundle/rsc-runtime": "workspace:*",
