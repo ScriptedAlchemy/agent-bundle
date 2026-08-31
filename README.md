@@ -12,7 +12,7 @@ Nothing is published to npm yet (the `agent-bundle` name on npm currently belong
 npm i -D https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@<sha-or-pr>
 ```
 
-Any `main` commit SHA or PR number works. See [Preview packages](docs/preview-packages.md) for pinning and details.
+Use a PR number or the SHA of a commit whose package-preview run succeeded (every green `main` commit has one). See [Preview packages](docs/preview-packages.md) for pinning and details.
 
 ## Quick start
 
