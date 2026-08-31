@@ -10,7 +10,7 @@ gate a build, a validation, or a dev rebuild.
 
 | Family | Area |
 | --- | --- |
-| `AB30xx` | Skill Markdown parsing (missing or malformed frontmatter). |
+| `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter) and rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset). |
 | `AB40xx` | Plugin metadata and Skill source validation. |
 | `AB41xx` | Normalized model invariants (unknown targets, duplicate IDs and outputs). |
 | `AB42xx` | Hook configuration and native hook sources. |
