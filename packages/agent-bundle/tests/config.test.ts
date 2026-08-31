@@ -87,6 +87,9 @@ it('honors an explicit empty skills list instead of conventional discovery', asy
 
     await expect(discoverProject(fixture.root, loaded.config)).resolves.toEqual({
       assets: [],
+      // The conventional skill stays undiscovered but is reported as shadowed
+      // so validation can raise the AB4734 nudge.
+      shadowedConventionalSkills: [fixture.skillSource],
       skills: [],
     });
   } finally {

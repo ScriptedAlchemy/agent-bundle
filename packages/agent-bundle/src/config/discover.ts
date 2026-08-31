@@ -5,7 +5,12 @@ import fastGlob from 'fast-glob';
 
 import type { AgentBundleConfig } from '../core/types.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from './ignore.ts';
+import { isRenderedSkillSourceName } from './rendered-skill.ts';
 import { parseSkill, type SkillDocument } from './skill.ts';
+
+/** A skill directory is identified by SKILL.md or a rendered-skill source module. */
+const isSkillDocumentName = (name: string): boolean =>
+  name === 'SKILL.md' || isRenderedSkillSourceName(name);
 
 /** One discovered project-level asset file with its artifact destination under `assets/`. */
 export interface DiscoveredAsset {
@@ -38,7 +43,7 @@ const expandConfiguredSkill = async (projectRoot: string, skill: string): Promis
     onlyFiles: false,
   });
   return matches
-    .filter((match) => match.dirent.isDirectory() || match.name === 'SKILL.md')
+    .filter((match) => match.dirent.isDirectory() || isSkillDocumentName(match.name))
     .map((match) => match.path);
 };
 
@@ -96,7 +101,7 @@ export const discoverProject = async (
   const projectRoot = resolve(root);
   const rules = await readProjectIgnoreRules(projectRoot);
   const configuredSkills = config.skills;
-  const conventionalSources = (await fastGlob('skills/*/SKILL.md', {
+  const conventionalSources = (await fastGlob('skills/*/SKILL.{md,ts,tsx}', {
     absolute: true,
     cwd: projectRoot,
     dot: true,
@@ -109,14 +114,19 @@ export const discoverProject = async (
       : (await Promise.all(configuredSkills.map((skill) => expandConfiguredSkill(projectRoot, skill)))).flat();
   const skillDirs = [...new Set(sources
     .filter((source) => !isProjectPathIgnored(rules, projectRoot, source))
-    .map((source) => (basename(source) === 'SKILL.md' ? dirname(source) : source)))]
+    .map((source) => (isSkillDocumentName(basename(source)) ? dirname(source) : source)))]
     .sort((left, right) => left.localeCompare(right));
   const coveredDirs = new Set(skillDirs);
-  const shadowedConventionalSkills = configuredSkills === undefined
-    ? []
-    : conventionalSources
-        .filter((source) => !coveredDirs.has(dirname(source)))
-        .sort((left, right) => left.localeCompare(right));
+  const shadowedByDir = new Map<string, string>();
+  if (configuredSkills !== undefined) {
+    for (const source of [...conventionalSources].sort((left, right) => left.localeCompare(right))) {
+      const skillDir = dirname(source);
+      if (!coveredDirs.has(skillDir) && !shadowedByDir.has(skillDir)) {
+        shadowedByDir.set(skillDir, source);
+      }
+    }
+  }
+  const shadowedConventionalSkills = [...shadowedByDir.values()];
 
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),

@@ -1242,6 +1242,13 @@ export const validateModel = (
   };
   for (const target of model.targets) {
     for (const skill of model.skills) {
+      if (skill.markdown !== undefined) {
+        recordOutput(
+          posix.join(target.name, 'skills', skill.name, 'SKILL.md'),
+          skill.source,
+          target.name,
+        );
+      }
       for (const resource of skill.resources) {
         recordOutput(
           posix.join(target.name, 'skills', skill.name, resource.relativePath),
