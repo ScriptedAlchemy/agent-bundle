@@ -252,7 +252,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
-      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST');
+      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST', { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     const openedResponse = await opened;
     const foregroundToken = await openedResponse.request().headerValue('x-agent-bundle-session');
@@ -278,7 +278,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     expect({ request: invocation.request, result: invocation.result }).toEqual({ request: originalInput, result: originalResult });
 
     const createdPreview = page.waitForRequest((request) =>
-      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}/apps` && request.method() === 'POST');
+      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}/apps` && request.method() === 'POST', { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Open App preview for mcp-page-1' }).click();
     const createRequest = requestBody((await createdPreview).postData()) as Readonly<{
       readonly input: unknown;
@@ -410,7 +410,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     }), { timeout: browserTimeout }).toBe(true);
     expect(await appFrame.content()).not.toContain(foregroundToken);
 
-    const firstClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'));
+    const firstClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'), { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Close App preview' }).click();
     const firstCloseBody = requestBody((await firstClose).postData()) as Readonly<{ readonly id: string }>;
     await expect.poll(() => appRequests.some((request) => {
@@ -424,9 +424,9 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
 
     await page.getByRole('button', { name: 'Open App preview for mcp-page-1' }).click();
     await expect(outerFrame).toBeVisible({ timeout: browserTimeout });
-    const secondClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'));
+    const secondClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'), { timeout: 30_000 * timeScale });
     const closedSession = page.waitForRequest((request) =>
-      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}` && request.method() === 'DELETE');
+      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}` && request.method() === 'DELETE', { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Close MCP session' }).click();
     await secondClose;
     await closedSession;
@@ -592,9 +592,9 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await page.getByRole('radio', { name: 'Raw JSON' }).check();
     await page.locator('#runtime-input-raw').fill('{}');
     const createRequest = page.waitForRequest((request) =>
-      request.url() === `${fixture.url}/api/runtime/apps` && request.method() === 'POST');
+      request.url() === `${fixture.url}/api/runtime/apps` && request.method() === 'POST', { timeout: 30_000 * timeScale });
     const createResponse = page.waitForResponse((response) =>
-      response.url() === `${fixture.url}/api/runtime/apps` && response.request().method() === 'POST');
+      response.url() === `${fixture.url}/api/runtime/apps` && response.request().method() === 'POST', { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Run', exact: true }).click();
     const [createdRequest, createdResponse] = await Promise.all([createRequest, createResponse]);
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
@@ -1691,7 +1691,7 @@ e2e('renders a compiler-bundled App template through the canonical sandbox URL',
       const request = response.request();
       const url = new URL(response.url());
       return request.method() === 'DELETE' && url.origin === foregroundOrigin && /^\/api\/mcp\/apps\/[^/]+$/u.test(url.pathname);
-    });
+    }, { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Close App preview' }).click();
     expect((await fallbackClosed).status()).toBe(200);
     await expect(outerFrame).toBeHidden({ timeout: browserTimeout });
