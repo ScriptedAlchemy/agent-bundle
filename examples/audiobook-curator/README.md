@@ -48,6 +48,36 @@ script, and lifecycle-wrapped MCP server) plus the npm package build beneath
 `agent-bundle` and `@agent-bundle/rsc-runtime` exports with `workspace:*`
 dependencies.
 
+## Operation model
+
+Every command is one `defineOperation` definition: a host-neutral use case —
+`id`, input schema, `execute`, result schema, `render` — with two
+projections declared beside it. The shared core runs identically on both
+surfaces (`inputSchema.parse` → `execute` → `resultSchema.parse`); `cli`
+adds argv parsing and exit codes, and `mcp` adds tool metadata. `render` is
+a sibling of both, required on every operation but consumed only by the MCP
+projection: the CLI prints each validated receipt as one line of JSON and
+never renders JSX.
+
+The runtime JSX for every operation is `<CuratorResult>` in
+[`src/result.tsx`](src/result.tsx), which wraps the receipt in the MCP
+result DSL:
+
+```tsx
+export const CuratorResult = ({ receipt }: { readonly receipt: CuratorReceipt }) => (
+  <Mcp.Result structuredContent={receipt}>
+    <Mcp.Text>{summary(receipt)}</Mcp.Text>
+  </Mcp.Result>
+);
+```
+
+`lowerMcpResult` lowers that element tree synchronously into an MCP
+`CallToolResult`. No React Server Components renderer or Flight transport is
+involved anywhere in this example; operation modules are `.tsx` only because
+`render` returns JSX, and `src/application.ts` stays `.ts` because it merely
+composes the operation arrays. The end-to-end walkthrough is in
+[Framework mode](../../docs/framework-mode.md).
+
 ## Source layout
 
 - `agent-bundle.config.ts` — the structure: plugin identity, targets, the CLI
