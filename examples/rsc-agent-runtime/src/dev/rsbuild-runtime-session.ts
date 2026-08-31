@@ -680,6 +680,16 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #completedCohortSequence = 0;
+  /**
+   * Advisory count of `onBeforeDevCompile` observations that no settled
+   * completion has absorbed yet. It is a collapse hint for the activation
+   * guard, never an identity or a barrier: every settled completion resets it
+   * to zero (Rsbuild coalesces invalidations into the next completion), so a
+   * dangling observation can only delay activation by the bounded grace in
+   * `#activationGuard.wait()` and self-heals at the next settled completion.
+   */
+  #observedCompileStarts = 0;
+  #compileSettleWaiters: Array<() => void> = [];
   #evictionTail: Promise<void> = Promise.resolve();
   #generationSequence = 0;
   #failureTail: Promise<void> = Promise.resolve();
@@ -2198,12 +2208,34 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       enqueue: (snapshot) => this.#enqueue(snapshot),
       failAttempt: (attemptId, error, kind) => { void this.#failAttempt(attemptId, error, kind); },
       // Advisory only: pre-compile observation carries no identity and owns
-      // no activation barrier, so a before callback with no matching
-      // completion (a coalesced or superseded invalidation) leaves nothing
-      // behind that could wedge a later activation.
-      observeCompileStart: () => undefined,
+      // no activation barrier. It is a collapse hint: an in-flight activation
+      // briefly waits (bounded, never failing) for the observed compile's
+      // completion so the newest completed cohort supersedes it before an
+      // older generation becomes visible. A before callback with no matching
+      // completion (a coalesced or superseded invalidation) can therefore
+      // only delay one activation by the grace budget, never wedge it.
+      observeCompileStart: () => { this.#observeCompileStart(); },
       stageEnvironmentCheckpoint: (input) => this.#stageEnvironmentCheckpoint(input),
     });
+  }
+
+  #observeCompileStart(): void {
+    if (this.#closed) return;
+    this.#observedCompileStarts += 1;
+  }
+
+  /**
+   * Marks one completed-cohort observation as settled: the completion either
+   * captured (bumping the cohort ordinal), settled as a no-op, or failed.
+   * Rsbuild coalesces pending invalidations into the next completion, so a
+   * settled completion absorbs every outstanding pre-compile observation;
+   * the count resets to zero rather than decrementing.
+   */
+  #settleCompileObservation(): void {
+    this.#observedCompileStarts = 0;
+    const waiters = this.#compileSettleWaiters;
+    this.#compileSettleWaiters = [];
+    for (const wake of waiters) wake();
   }
 
   /**
@@ -2280,18 +2312,25 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       throw new Error('RSC runtime compile capture has no live completed cohort identity.');
     }
     if (input.hasErrors) {
+      this.#settleCompileObservation();
       await this.#failAttempt(input.attemptId, new Error('RSC runtime compilation failed.'), 'source-build');
       return undefined;
     }
     if (input.sourceRevision.length === 0) {
+      this.#settleCompileObservation();
       await this.#failAttempt(input.attemptId, new Error('RSC runtime compilation has no source revision.'));
       return undefined;
     }
-    if (!input.cohortChanged) return undefined;
+    if (!input.cohortChanged) {
+      this.#settleCompileObservation();
+      return undefined;
+    }
     // The completed-cohort ordinal bumps synchronously with the completion
     // callback, so every older activation observes its supersession at the
-    // guard check without waiting on any pre-compile observation.
+    // guard check; the settle below wakes any activation waiting on this
+    // observed compile AFTER the ordinal is authoritative.
     const cohortRevision = ++this.#latestRscCohortRevision;
+    this.#settleCompileObservation();
     const preparedRuntime = this.#latestPreparedRuntime;
     this.#emit(Object.freeze({ runtimeGenerationId: undefined, type: 'runtime.generation.compiling' }));
     try {
@@ -2356,7 +2395,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   ): Promise<void> {
     if (this.#failedAttempts.has(attemptId)) return;
     this.#failedAttempts.add(attemptId);
-    this.#pendingCohortIds.delete(attemptId);
+    // A pending cohort dying before capture (malformed stats, plugin capture
+    // throw) settles its observation here; failures of already-captured
+    // attempts (activation errors) are not completions and settle nothing.
+    if (this.#pendingCohortIds.delete(attemptId)) this.#settleCompileObservation();
     const candidate = this.#candidatesByAttempt.get(attemptId);
     this.#candidatesByAttempt.delete(attemptId);
     if (candidate !== undefined) {
@@ -2388,14 +2430,31 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         snapshot.rscCohortRevision === this.#latestRscCohortRevision &&
         (this.#active === undefined ||
           preparedAuthorityDigest === preparedRuntimeAuthorityDigest(this.#latestPreparedRuntime)),
-      // Nothing to wait for: supersession keys only on completed cohort
-      // ordinals (bumped synchronously with each completed global callback)
-      // and prepared-runtime authority. Pre-compile observation is advisory
-      // and owns no barrier, so an in-flight compile that never completes -
-      // coalesced, superseded, or dropped by the bundler - cannot delay or
-      // wedge this activation; if it does complete with a changed cohort,
-      // its ordinal supersedes this one at the check.
+      // Supersession keys only on completed cohort ordinals (bumped
+      // synchronously with each completed global callback) and
+      // prepared-runtime authority. Pre-compile observation is advisory and
+      // owns no barrier, but it is honored as a bounded collapse hint: an
+      // observed compile that is still in flight is given a grace window to
+      // complete so its cohort supersedes this activation at the check
+      // instead of committing a doomed older generation first (one visible
+      // activation per settled edit, as before #75). The wait can only
+      // delay - it resolves at the grace deadline and never fails the
+      // activation - so a compile that never completes (coalesced,
+      // superseded, or dropped by the bundler) cannot wedge it, and the
+      // dangling observation self-heals at the next settled completion.
       wait: async () => {
+        const deadline = Date.now() + Math.max(1, Math.floor(this.#activationPhaseBudgetMs / 2));
+        while (!this.#closed && this.#observedCompileStarts > 0) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, Math.min(remaining, 100));
+            this.#compileSettleWaiters.push(() => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+        }
         if (this.#closed) throw new Error('RSC runtime session is closed.');
       },
     });
@@ -2692,6 +2751,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#hmrReady = false;
     this.#appReloadSubscriptions.clear();
     this.#pendingCohortIds.clear();
+    this.#settleCompileObservation();
     for (const worker of this.#workers.values()) {
       worker.terminate(new Error('RSC runtime session is closing.'));
     }

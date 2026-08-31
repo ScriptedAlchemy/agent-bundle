@@ -55,7 +55,11 @@ export interface RscRuntimeRsbuildConfigOptions {
     failAttempt(attemptId: string, error: unknown, kind: RscRuntimeCompileFailureKind): void;
     /**
      * Advisory pre-compile observation. It owns no identity, queue, or
-     * activation barrier, and it must never throw or block a compile.
+     * activation barrier, and it must never throw or block a compile. The
+     * session may use it as a bounded collapse hint (briefly holding an
+     * in-flight activation so the observed compile's completed cohort can
+     * supersede it), but a missing completion can only delay one activation
+     * by that bounded grace - never wedge or fail it.
      */
     observeCompileStart(): void;
     /**

@@ -1675,6 +1675,124 @@ test('activates from unpaired completion callbacks and never wedges behind a dan
   }
 });
 
+test('collapses an in-flight activation into a compile observed during its guard wait', { timeout: 90_000 * timeScale }, async () => {
+  const copied = await copyProviderExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const observer = interceptCompileObserver();
+    const prepareReached = deferred<void>();
+    const allowPrepare = deferred<void>();
+    let armPrepareBarrier = false;
+    const events: Array<{ readonly runtimeGenerationId?: string; readonly type: string }> = [];
+    const session = await RsbuildRuntimeSession.start({
+      ...startContext({
+        projectRoot: copied.projectRoot,
+        preparedRuntime: prepared.devRuntime!,
+        providerSessionId: 'provider-collapse-observed-compile',
+        signal: new AbortController().signal,
+        storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-collapse-observed-compile'),
+      }),
+      emit: (event) => { events.push(event); },
+    }, {
+      afterActivationPrepare: async (input) => {
+        if (!armPrepareBarrier || input.phase !== 'registry') return;
+        armPrepareBarrier = false;
+        prepareReached.resolve();
+        await allowPrepare.promise;
+      },
+      createRsbuild: observer.create,
+    });
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const firstGeneration = session.status().activeVector!.runtimeGenerationId;
+      const activatedBefore = events.filter((event) => event.type === 'runtime.generation.activated').length;
+      armPrepareBarrier = true;
+      const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-collapse-observed-compile');
+      const collapseAChildren = await stageSyntheticCohort(observer, storageRoot, 'collapse-a');
+      await observer.completeAttempt({ children: collapseAChildren });
+      await prepareReached.promise;
+      const collapseBChildren = await stageSyntheticCohort(observer, storageRoot, 'collapse-b');
+      // A compile observed while an older cohort's activation is between its
+      // prepared phases and the commit check must collapse that activation:
+      // the guard waits (bounded) for the observed compile, whose completed
+      // cohort bumps the ordinal and supersedes the older activation before
+      // an already-doomed generation becomes visible. Exactly one generation
+      // activates per settled edit, as before the completed-cohort identity.
+      observer.observeCompileStart();
+      allowPrepare.resolve();
+      await observer.completeAttempt({ children: collapseBChildren });
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration && session.status().state === 'active');
+      await waitFor(() => events.some((event) => event.type === 'runtime.generation.failed'));
+      const activatedAfter = events.filter((event) => event.type === 'runtime.generation.activated');
+      // Initial generation plus exactly one for the collapsed pair: the
+      // superseded older cohort is discarded (one transient failed event),
+      // never committed.
+      expect(activatedAfter.length - activatedBefore).toBe(1);
+      expect(events.filter((event) => event.type === 'runtime.generation.failed')).toHaveLength(1);
+      expect(session.status()).toMatchObject({ diagnostics: [], state: 'active' });
+    } finally {
+      allowPrepare.resolve();
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});
+
+test('commits after the observation grace when an observed compile never completes mid-activation', { timeout: 90_000 * timeScale }, async () => {
+  const copied = await copyProviderExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const observer = interceptCompileObserver();
+    const prepareReached = deferred<void>();
+    const allowPrepare = deferred<void>();
+    let armPrepareBarrier = false;
+    const events: Array<{ readonly runtimeGenerationId?: string; readonly type: string }> = [];
+    const session = await RsbuildRuntimeSession.start({
+      ...startContext({
+        projectRoot: copied.projectRoot,
+        preparedRuntime: prepared.devRuntime!,
+        providerSessionId: 'provider-grace-dangling-observation',
+        signal: new AbortController().signal,
+        storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-grace-dangling-observation'),
+      }),
+      emit: (event) => { events.push(event); },
+    }, {
+      activationPhaseBudgetMs: 4_000 * timeScale,
+      afterActivationPrepare: async (input) => {
+        if (!armPrepareBarrier || input.phase !== 'registry') return;
+        armPrepareBarrier = false;
+        prepareReached.resolve();
+        await allowPrepare.promise;
+      },
+      createRsbuild: observer.create,
+    });
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const firstGeneration = session.status().activeVector!.runtimeGenerationId;
+      armPrepareBarrier = true;
+      const graceChildren = await stageSyntheticCohort(observer, join(copied.projectRoot, '.agent-bundle', 'runtime-grace-dangling-observation'), 'grace');
+      await observer.completeAttempt({ children: graceChildren });
+      await prepareReached.promise;
+      // The #75 hostage scenario: an observed compile whose completion never
+      // arrives (coalesced or superseded invalidation). The guard wait may
+      // only delay this activation by its bounded grace - it must then
+      // commit, not fail, and the dangling observation must not leave any
+      // failed generation or diagnostic behind.
+      observer.observeCompileStart();
+      allowPrepare.resolve();
+      await waitForWithin(() => session.status().activeVector?.runtimeGenerationId !== firstGeneration, 30_000);
+      expect(session.status()).toMatchObject({ diagnostics: [], state: 'active' });
+      expect(events.filter((event) => event.type === 'runtime.generation.failed')).toHaveLength(0);
+    } finally {
+      allowPrepare.resolve();
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});
+
 test('fails a wedged activation reconcile within the budget and releases its late reservation', { timeout: 120_000 * timeScale }, async () => {
   const copied = await copyProviderExample();
   try {
