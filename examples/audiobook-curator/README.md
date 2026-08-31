@@ -1,5 +1,11 @@
 # Audiobook Curator
 
+From the repository root, launch this example with:
+
+```bash
+pnpm example:audiobook
+```
+
 A complete TypeScript recreation of the original `audiobook-curator`, authored
 as one React Server Component plugin application. The same typed operation tree
 produces a globally installable CLI, one stdio MCP server, one Skill, and native
@@ -87,6 +93,20 @@ The original thirteen commands are present:
 operation also has an MCP tool with the same implementation and result renderer;
 run `audiobook-curator --help` for exact CLI forms.
 
+## Run the MCP server
+
+Run the built `curator` server in the foreground on stdio:
+
+```bash
+pnpm exec agent-bundle mcp run --server curator --target claude
+```
+
+The command resolves the generated entry from the Claude target's MCP
+manifest, building a temporary artifact first; pass `--artifact artifact` to
+reuse the `pnpm build` output instead. Closing stdin exits 0 and Ctrl-C
+exits 130, and per-server state persists under
+`.agent-bundle/mcp-run/claude/curator`.
+
 ## Safety
 
 Sources are immutable. Planning never mutates media. Conversion publishes a
@@ -106,9 +126,5 @@ This example is the reference consumer of the framework-owned package build
 ("one config, agent-bundle owns the build"): `agent-bundle.config.ts` is a
 pure pass-through of the RSC application's config, and the `src/cli.ts` /
 `src/index.ts` conventions provide the npm bin and library outputs under
-`dist/`. The former second bundler config (`rslib.config.ts`), its
-`tsconfig.build.json`, the hand-written `bin/audiobook-curator.js` shim, the
-self-executing `src/cli-entry.ts`, and the dual `build:cli`/`build:bundle`
-script chain were all deleted when the framework took ownership. See
-[`docs/entry-conventions.md`](../../docs/entry-conventions.md) for the
-contract.
+`dist/`. See [`docs/entry-conventions.md`](../../docs/entry-conventions.md)
+for the contract.
