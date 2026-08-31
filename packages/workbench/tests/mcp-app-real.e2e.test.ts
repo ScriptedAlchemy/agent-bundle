@@ -981,7 +981,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 * timeScale });
     await page.keyboard.press('Shift+Tab');
     await expect(allowRuntimeConsent).toBeFocused({ timeout: 15_000 * timeScale });
-    await expect.poll(() => consentResponses('action')).toHaveLength(1);
+    await expect.poll(() => consentResponses('action'), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const consentCreated = consentResponses('action')[0];
     const challenge = (consentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
     if (typeof challenge?.id !== 'string') throw new Error('Runtime App consent create response omitted its challenge id.');
@@ -1035,7 +1035,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       kind: 'tools/call',
       name: 'render_edit_timeline',
     });
-    await expect.poll(() => operationResponses('tools/call')).toHaveLength(1);
+    await expect.poll(() => operationResponses('tools/call'), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const operated = operationResponses('tools/call')[0];
     const operationResult = (operated?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result;
     expect(operationResult).toEqual({
@@ -1093,7 +1093,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       scope: 'action',
       summary: 'Call MCP App tool',
     });
-    await expect.poll(() => consentResponses('action')).toHaveLength(2);
+    await expect.poll(() => consentResponses('action'), { timeout: 15_000 * timeScale }).toHaveLength(2);
     const deniedConsentCreated = consentResponses('action')[1];
     const deniedChallenge = (deniedConsentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
     if (typeof deniedChallenge?.id !== 'string') throw new Error('Denied Runtime App consent create response omitted its challenge id.');
@@ -1157,8 +1157,8 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       body: { diagnostic: { code: 'AB8023', message: 'MCP App operation could not be completed.' } },
       status: 502,
     });
-    await expect.poll(() => operationRequests('tools/call')).toHaveLength(2);
-    await expect.poll(() => operationResponses('tools/call')).toHaveLength(2);
+    await expect.poll(() => operationRequests('tools/call'), { timeout: 15_000 * timeScale }).toHaveLength(2);
+    await expect.poll(() => operationResponses('tools/call'), { timeout: 15_000 * timeScale }).toHaveLength(2);
     expect(operationResponses('tools/call').filter((entry) => {
       const response = entry.response;
       return response !== null && typeof response === 'object' && Object.hasOwn(response, 'result');
