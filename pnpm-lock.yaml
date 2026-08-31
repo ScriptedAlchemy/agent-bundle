@@ -205,9 +205,6 @@ importers:
       '@rslint/core':
         specifier: 0.8.2
         version: 0.8.2(jiti@2.7.0)
-      '@rspack/core':
-        specifier: 2.2.1
-        version: 2.2.1(@swc/helpers@0.5.23)
       '@rstackjs/load-config':
         specifier: 0.1.2
         version: 0.1.2(jiti@2.7.0)

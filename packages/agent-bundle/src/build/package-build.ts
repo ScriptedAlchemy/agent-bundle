@@ -12,10 +12,11 @@ import { buildWithRslib, type RslibEntry } from './rslib.ts';
 /**
  * The framework-owned npm package build: `bin` entries become self-executing
  * `dist/bin/<name>.js` bundles (shebang + executable bit) and the `lib` entry
- * becomes `dist/<name>.js` (+ bundled `.d.ts`), all through the same Rslib
- * synthesis, invariant assertions, and staged atomic publication as artifact
- * executables. This is the build audiobook-curator previously needed a second
- * bundler config, a tsconfig, and a hand-written bin shim to produce.
+ * becomes `dist/<name>.js` (+ a bundleless `.d.ts` declaration graph), all
+ * through the same Rslib synthesis, invariant assertions, and staged atomic
+ * publication as artifact executables. This is the build audiobook-curator
+ * previously needed a second bundler config, a tsconfig, and a hand-written
+ * bin shim to produce.
  */
 
 const binShebang = '#!/usr/bin/env node';
