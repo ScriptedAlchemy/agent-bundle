@@ -63,7 +63,7 @@ the repository's `docs/entry-conventions.md` for the full contract.
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
-| `agent-bundle mcp run` | Run one built stdio MCP server in the foreground, resolving its hashed entry. |
+| `agent-bundle mcp run` | Run one built stdio MCP server in the foreground, resolving its hashed entry, loading the project-root `.env` set (`--env-file`/`--no-env` to override), and expanding env state anchors to the project root (`--plugin-root` to override). Environment precedence: manifest env < `.env` files < operator `process.env`. |
 | `agent-bundle hooks list` / `hooks simulate` | List generated hooks, or run one emitted wrapper. |
 | `agent-bundle eval` | Run deterministic or native Claude/Codex eval suites and record a run. |
 | `agent-bundle dev` | Serve the packaged developer workbench on loopback. |

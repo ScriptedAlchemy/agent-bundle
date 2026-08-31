@@ -242,6 +242,147 @@ describe('mcp run', () => {
     await expect(stat(join(launches[0]!.cwd, launches[0]!.args[0]!))).resolves.toMatchObject({});
   }, 120_000);
 
+  it('layers the launch environment: manifest env under .env files under operator process.env', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        '  mcp: { servers: { echoer: { env: {',
+        "    SHARED: 'manifest',",
+        "    STATE_DIR: 'agent-bundle:path:plugin-root/.runtime',",
+        '  } } } },',
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      '.env': 'FROM_DOTENV=dotenv\nSHARED=dotenv\nMCP_RUN_BEATEN_BY_PROCESS=dotenv\n',
+      '.env.staging': 'FROM_MODE=staging\n',
+      'custom.env': 'CUSTOM_ONLY=custom\n',
+    });
+    const artifact = join(root, 'artifact');
+    await build({ output: 'artifact', root });
+    const base = { artifact, root, server: 'echoer', target: 'portable' };
+
+    type Launch = { args: readonly string[]; command: string; cwd: string; env: Readonly<Record<string, string>> };
+    const captureLaunch = async (options: Parameters<typeof runMcp>[0]): Promise<Launch> => {
+      const launches: Launch[] = [];
+      const child = new EventEmitter() as import('node:child_process').ChildProcess;
+      child.kill = () => true;
+      await expect(runMcp({
+        ...options,
+        spawnProcess: (command, args, spawnOptions) => {
+          launches.push({ args, command, cwd: spawnOptions.cwd, env: spawnOptions.env });
+          queueMicrotask(() => child.emit('exit', 0, null));
+          return child;
+        },
+      })).resolves.toBe(0);
+      expect(launches).toHaveLength(1);
+      return launches[0]!;
+    };
+
+    // Bare run: .env fills gaps, .env beats manifest env, and the plugin-root
+    // env anchors expand to the durable project root — not the artifact.
+    const bare = await captureLaunch(base);
+    expect(bare.env.AGENT_BUNDLE_PLUGIN_ROOT).toBe(root);
+    expect(bare.env.STATE_DIR).toBe(join(root, '.runtime'));
+    expect(bare.env.FROM_DOTENV).toBe('dotenv');
+    expect(bare.env.SHARED).toBe('dotenv');
+    // args/cwd stay artifact-rooted: args[0] is the content-hashed bundle.
+    expect(bare.args[0]).toMatch(/mcp-echoer-[a-f\d]{8}\.mjs$/u);
+    expect(bare.cwd).toBe(join(artifact, 'portable'));
+    // Loading never leaks .env values into the runner's own environment.
+    expect(process.env.FROM_DOTENV).toBeUndefined();
+
+    // Operator exports beat both the .env layer and the manifest anchor.
+    process.env.MCP_RUN_BEATEN_BY_PROCESS = 'process';
+    process.env.AGENT_BUNDLE_PLUGIN_ROOT = '/operator/pin';
+    try {
+      const exported = await captureLaunch(base);
+      expect(exported.env.MCP_RUN_BEATEN_BY_PROCESS).toBe('process');
+      expect(exported.env.AGENT_BUNDLE_PLUGIN_ROOT).toBe('/operator/pin');
+    } finally {
+      delete process.env.MCP_RUN_BEATEN_BY_PROCESS;
+      delete process.env.AGENT_BUNDLE_PLUGIN_ROOT;
+    }
+
+    // The mode variants of the conventional set participate.
+    const staged = await captureLaunch({ ...base, mode: 'staging' });
+    expect(staged.env.FROM_MODE).toBe('staging');
+
+    // Explicit env files replace the conventional set; opting out drops the
+    // layer without touching the anchor expansion.
+    const custom = await captureLaunch({ ...base, envFiles: [join(root, 'custom.env')] });
+    expect(custom.env.CUSTOM_ONLY).toBe('custom');
+    expect(custom.env.FROM_DOTENV).toBeUndefined();
+    const disabled = await captureLaunch({ ...base, loadEnvFiles: false });
+    expect(disabled.env.FROM_DOTENV).toBeUndefined();
+    expect(disabled.env.AGENT_BUNDLE_PLUGIN_ROOT).toBe(root);
+
+    // pluginRoot restores the byte-faithful artifact-rooted rehearsal.
+    const rehearsal = await captureLaunch({ ...base, pluginRoot: join(artifact, 'portable') });
+    expect(rehearsal.env.AGENT_BUNDLE_PLUGIN_ROOT).toBe(join(artifact, 'portable'));
+    expect(rehearsal.env.STATE_DIR).toBe(join(artifact, 'portable', '.runtime'));
+
+    // A named env file that cannot be read is an error, never a silent skip.
+    await expect(runMcp({ ...base, envFiles: [join(root, 'missing.env')] }))
+      .rejects.toThrow(/Cannot read env file/u);
+  }, 120_000);
+
+  it('anchors consumer state at the project root under a bare CLI mcp run', async () => {
+    const root = await fixtureRoot({
+      'agent-bundle.config.ts': [
+        'export default {',
+        "  mcp: { servers: { pinner: { entry: './src/pin.ts' } } },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+      '.env': 'MCP_RUN_TRACKER_COOKIE=secret\n',
+      // A consumer trusting the documented anchor exactly as PR #49 intends.
+      'src/pin.ts': [
+        "import { mkdirSync, writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "const anchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? '';",
+        "mkdirSync(join(anchor, '.runtime'), { recursive: true });",
+        "writeFileSync(join(anchor, '.runtime', 'state.json'), JSON.stringify({",
+        '  anchor,',
+        "  cookie: process.env.MCP_RUN_TRACKER_COOKIE ?? null,",
+        '}));',
+        '',
+      ].join('\n'),
+    });
+    await build({ output: 'artifact', root });
+    const exitCode = await runCli([
+      'mcp', 'run',
+      '--root', root,
+      '--artifact', join(root, 'artifact'),
+      '--target', 'portable',
+      '--server', 'pinner',
+    ]);
+    expect(exitCode).toBe(0);
+    const state = JSON.parse(await readFile(join(root, '.runtime', 'state.json'), 'utf8')) as {
+      anchor: string;
+      cookie: string | null;
+    };
+    expect(state.anchor).toBe(root);
+    expect(state.cookie).toBe('secret');
+    // Nothing durable may land inside the rebuildable artifact.
+    await expect(stat(join(root, 'artifact', 'portable', '.runtime'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 120_000);
+
+  it('rejects --env-file combined with --no-env', async () => {
+    const stderr: string[] = [];
+    const exitCode = await runCli(
+      ['mcp', 'run', '--root', '.', '--artifact', 'artifact', '--target', 'portable', '--server', 's', '--env-file', 'x.env', '--no-env'],
+      { stderr: { write: (chunk: string) => stderr.push(chunk) }, stdout: { write: () => undefined } },
+    );
+    expect(exitCode).toBe(1);
+    expect(stderr.join('')).toContain('Use either --env-file or --no-env, not both.');
+  });
+
   it('runs a built server end to end through the CLI and forwards its exit code', async () => {
     const root = await fixtureRoot({
       'agent-bundle.config.ts': [

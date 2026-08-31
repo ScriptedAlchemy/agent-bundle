@@ -1,6 +1,8 @@
+import { loadEnv } from '@rsbuild/core';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
+import { parseEnv } from 'node:util';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
@@ -9,7 +11,11 @@ import { sha256Hex } from '../core/digest.ts';
 import { assertInside, joinArtifact } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
-import { readTargetMcpServer, type ModernMcpStdioServer } from './mcp-runtime.ts';
+import {
+  readTargetMcpServer,
+  type ModernMcpStdioServer,
+  type TargetMcpRuntimeContract,
+} from './mcp-runtime.ts';
 
 /**
  * The foreground MCP server runner behind `agent-bundle mcp run`: it resolves
@@ -27,6 +33,15 @@ export interface ResolvedMcpStdioLaunch {
 
 export interface ResolveMcpStdioLaunchOptions {
   readonly artifact: string;
+  /**
+   * Root that plugin-root path tokens in *env values* expand to — the
+   * durable-state anchors like `AGENT_BUNDLE_PLUGIN_ROOT`. Defaults to
+   * `workspaceRoot`: under `mcp run` the artifact is an ephemeral build
+   * product, so anchoring durable state on it would fragment that state per
+   * rebuild. Point it back at the artifact target root for a byte-faithful
+   * rehearsal of a copied-artifact launch.
+   */
+  readonly envPluginRoot?: string;
   /** Durable per-server state root replacing the plugin-data path token. */
   readonly pluginDataRoot: string;
   readonly registry?: TargetRegistry;
@@ -85,13 +100,27 @@ export const resolveMcpStdioLaunch = async (
     throw new Error(`MCP server ${JSON.stringify(options.server)} in target ${JSON.stringify(options.target)} is invalid.`);
   }
 
+  /**
+   * Per-field plugin-root split: `args`/`cwd` must stay artifact-rooted
+   * (`args[0]` is the content-hashed bundle inside the target root), but env
+   * values are durable-state anchors, so their plugin-root tokens expand to
+   * the durable `envPluginRoot` instead of the rebuildable artifact.
+   */
+  const envPluginRoot = resolve(options.envPluginRoot ?? options.workspaceRoot);
+  const launchRuntime: TargetMcpRuntimeContract = {
+    manifestPath: runtime.manifestPath,
+    readModernServers: (document) => runtime.readModernServers(document),
+    resolveStdioArgument: (value, roots) => runtime.resolveStdioArgument(value, roots),
+    resolveValue: (field, roots, value) =>
+      runtime.resolveValue(field, field === 'env' ? { ...roots, pluginRoot: envPluginRoot } : roots, value),
+  };
   const resolved = resolveMcpPathTokens({
     roots: {
       pluginData: resolve(options.pluginDataRoot),
       pluginRoot: targetRoot,
       workspaceRoot: resolve(options.workspaceRoot),
     },
-    runtime,
+    runtime: launchRuntime,
     server: result.server,
     target: options.target,
   });
@@ -108,6 +137,17 @@ export const resolveMcpStdioLaunch = async (
 };
 
 export interface RunMcpForegroundOptions extends ResolveMcpStdioLaunchOptions {
+  /**
+   * Explicit `.env` files replacing the conventional workspace-root set.
+   * Files use Node's `--env-file` dialect and load in order, later files
+   * winning on collision; relative paths resolve from the working directory.
+   * A named file that cannot be read is an error, never a silent skip.
+   */
+  readonly envFiles?: readonly string[];
+  /** Set false to launch without any `.env` layer. */
+  readonly loadEnvFiles?: boolean;
+  /** Configuration mode selecting `.env.<mode>` variants of the conventional set. */
+  readonly mode?: string;
   /** Injectable only to make foreground process behavior deterministic in tests. */
   readonly spawnProcess?: (
     command: string,
@@ -117,9 +157,48 @@ export interface RunMcpForegroundOptions extends ResolveMcpStdioLaunchOptions {
 }
 
 /**
+ * The `.env` layer of the launch environment: explicit `--env-file` paths
+ * when given, otherwise rsbuild's `loadEnv` convention (`.env`, `.env.local`,
+ * `.env.<mode>`, `.env.<mode>.local`) at the workspace root — the same files
+ * `createRslib` reads for the same consumers at build time. Loading targets a
+ * scratch object so the real `process.env` is never mutated; `processEnv`
+ * still seeds `${VAR}` interpolation inside env-file values.
+ */
+const loadLaunchFileEnv = async (
+  options: RunMcpForegroundOptions,
+  processEnv: Readonly<Record<string, string>>,
+): Promise<Record<string, string>> => {
+  if (options.loadEnvFiles === false) return {};
+  if (options.envFiles !== undefined && options.envFiles.length > 0) {
+    const merged: Record<string, string> = {};
+    for (const file of options.envFiles) {
+      const path = resolve(file);
+      let contents: string;
+      try {
+        contents = await readFile(path, 'utf8');
+      } catch {
+        throw new Error(`Cannot read env file ${JSON.stringify(path)}.`);
+      }
+      Object.assign(merged, parseEnv(contents));
+    }
+    return merged;
+  }
+  return loadEnv({
+    cwd: resolve(options.workspaceRoot),
+    ...(options.mode === undefined ? {} : { mode: options.mode }),
+    processEnv: { ...processEnv },
+  }).parsed;
+};
+
+/**
  * Resolves the server's generated entry from the built artifact and runs it
  * in the foreground with inherited stdio. SIGINT/SIGTERM forward to the
  * child; the child's exit code (or 128 + signal number) is returned.
+ *
+ * Launch environment precedence, lowest to highest: manifest env (declared
+ * entries plus the injected plugin-root anchor, path tokens expanded), the
+ * `.env` file layer, then the operator's real `process.env` — an exported
+ * variable always beats every file- or manifest-declared value.
  */
 export const runMcpForeground = async (options: RunMcpForegroundOptions): Promise<number> => {
   const launch = await resolveMcpStdioLaunch(options);
@@ -127,10 +206,11 @@ export const runMcpForeground = async (options: RunMcpForegroundOptions): Promis
   const inheritedEnv = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
+  const fileEnv = await loadLaunchFileEnv(options, inheritedEnv);
   const spawnProcess = options.spawnProcess ?? ((command, args, spawnOptions) => spawn(command, [...args], spawnOptions));
   const child = spawnProcess(launch.command, launch.args, {
     cwd: launch.cwd,
-    env: { ...inheritedEnv, ...launch.env },
+    env: { ...launch.env, ...fileEnv, ...inheritedEnv },
     stdio: 'inherit',
   });
 

@@ -457,13 +457,29 @@ export const runCli = async (
   const mcpRunCommand = configureArtifactOptions(
     mcpCommand.command('run').description('Run one stdio MCP server in the foreground from an artifact'),
     true,
-  ).requiredOption('--server <server>', 'MCP server name');
-  mcpRunCommand.action(async (options: ArtifactCommandOptions & { readonly server: string; readonly target: string }) => {
+  )
+    .requiredOption('--server <server>', 'MCP server name')
+    .option('--env-file <path>', 'Load exactly this .env file, replacing the project-root set (repeatable)', collect, [])
+    .option('--no-env', 'Launch without loading any .env files')
+    .option('--plugin-root <path>', 'Expand env plugin-root anchors against this root instead of the project root');
+  mcpRunCommand.action(async (options: ArtifactCommandOptions & {
+    readonly env: boolean;
+    readonly envFile: readonly string[];
+    readonly pluginRoot?: string;
+    readonly server: string;
+    readonly target: string;
+  }) => {
+    if (options.env === false && options.envFile.length > 0) {
+      throw new TypeError('Use either --env-file or --no-env, not both.');
+    }
     const { runMcp } = await import('./api.ts');
     // No stdout writes here: with inherited stdio the server owns the
     // JSON-RPC channel for the whole foreground run.
     exitCode = await runMcp({
       ...artifactOptions(options),
+      ...(options.envFile.length === 0 ? {} : { envFiles: options.envFile }),
+      ...(options.env === false ? { loadEnvFiles: false } : {}),
+      ...(options.pluginRoot === undefined ? {} : { pluginRoot: options.pluginRoot }),
       server: options.server,
       target: options.target,
     });

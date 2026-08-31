@@ -137,6 +137,7 @@ overriding the contract. The hatch customizes *how code compiles*, never
 
 ```sh
 agent-bundle mcp run --server <name> --target <target> [--artifact <path>]
+  [--env-file <path>]... [--no-env] [--plugin-root <path>]
 ```
 
 Runs one built stdio MCP server in the foreground with inherited stdio: the
@@ -144,5 +145,37 @@ content-hashed generated entry is resolved from the target's MCP manifest
 (the job previously solved with bash launchers parsing `mcp.json`), path
 tokens are resolved through the target adapter, and the child's exit code is
 forwarded (SIGINT/SIGTERM forward to the child). Without `--artifact`, a
-temporary artifact is built first. State anchored on the plugin-data token
-persists under `.agent-bundle/mcp-run/<target>/<server>` in the project root.
+temporary artifact is built first.
+
+### Launch environment
+
+The runner loads the project-root `.env` set by default — rsbuild's `loadEnv`
+conventions (`.env`, `.env.local`, `.env.<mode>`, `.env.<mode>.local`, with
+`--mode` selecting the variants), the same files `createRslib` reads for the
+same consumers at build time — so operator credentials configured for the
+plugin reach a bare `mcp run` without a wrapper script. `--env-file <path>`
+(repeatable, Node's `--env-file` dialect, later files win) replaces the
+conventional set with exactly the named files, and `--no-env` skips the layer
+entirely; a named file that cannot be read is an error, never a silent skip.
+
+The child environment is composed from three layers. This table is the
+canonical precedence order (highest wins):
+
+| Precedence | Layer | Contents |
+| --- | --- | --- |
+| 3 (highest) | Operator `process.env` | The real environment `mcp run` was started with. An exported variable always wins. |
+| 2 | `.env` file layer | The conventional project-root set, or the explicit `--env-file` list in order. Fills gaps only; never beats an exported variable. |
+| 1 (lowest) | Manifest env | Entries declared in the server config plus the injected plugin-root anchor, path tokens expanded. |
+
+### Durable-state anchors
+
+Under `mcp run` the artifact is an ephemeral build product, so both
+durable-state anchors point at the project root: state anchored on the
+plugin-data token persists under `.agent-bundle/mcp-run/<target>/<server>`,
+and plugin-root tokens in *env values* — including the injected
+`AGENT_BUNDLE_PLUGIN_ROOT` anchor — expand to the project root itself.
+`args` and `cwd` stay artifact-rooted (the first argument is the
+content-hashed bundle inside the target root). `--plugin-root <path>`
+overrides the env-anchor root, e.g. point it at `artifact/<target>` for a
+byte-faithful rehearsal of a copied-artifact launch; under a host install the
+anchor still means the durable install root, exactly as before.
