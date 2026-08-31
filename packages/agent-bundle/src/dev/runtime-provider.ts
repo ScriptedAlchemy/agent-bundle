@@ -26,12 +26,15 @@ export interface DevRuntimeClientSurfaceEndpoint {
   readonly entryPath: string;
   readonly httpOrigin: string;
   readonly httpPathPrefixes: readonly string[];
+  /**
+   * Provider-owned Runtime App reload authority. The provider invokes every
+   * subscribed listener after a successful, changed App environment compile;
+   * the returned function detaches that listener. This is the only reload
+   * signal the core relay consumes — Rsbuild's private WebSocket frames are
+   * not part of the contract.
+   */
+  readonly subscribeReload: (listener: () => void) => () => void;
   readonly surfaceId: string;
-  readonly webSocketOrigin: string;
-  /** Normalized public `dev.client.path` from the runtime compiler. */
-  readonly webSocketPath: string;
-  /** Rsbuild compiler credential; server-only and never serialized to a browser surface. */
-  readonly webSocketToken: string;
 }
 
 /** Core-owned, server-only proxy handle; the host plan may embed only bootstrapUrl. */
@@ -39,7 +42,6 @@ export interface DevRuntimeClientSurfaceProxyBinding {
   readonly bootstrapUrl: string;
   readonly origin: string;
   readonly surfaceId: string;
-  readonly webSocketPath: string;
   close(): Promise<void>;
 }
 

@@ -74,7 +74,7 @@ export interface McpAppPreviewSnapshotBase {
 }
 
 export interface McpAppPreviewAppsSnapshot extends McpAppPreviewSnapshotBase {
-  readonly clientSurface: Readonly<{ readonly bootstrapUrl: string; readonly origin: string; readonly webSocketPath: '/rsbuild-hmr' }>;
+  readonly clientSurface: Readonly<{ readonly bootstrapUrl: string; readonly origin: string }>;
   readonly documentPolicy: McpAppDocumentPolicySnapshot;
   readonly kind: 'apps';
   readonly profile: McpAppAppsHostProfile;
@@ -468,7 +468,7 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
       if (profile.kind === 'apps' && proxy !== undefined) {
         snapshot = Object.freeze({
           ...base,
-          clientSurface: Object.freeze({ bootstrapUrl: proxy.bootstrapUrl, origin: proxy.origin, webSocketPath: '/rsbuild-hmr' as const }),
+          clientSurface: Object.freeze({ bootstrapUrl: proxy.bootstrapUrl, origin: proxy.origin }),
           documentPolicy,
           kind: 'apps' as const,
           profile,

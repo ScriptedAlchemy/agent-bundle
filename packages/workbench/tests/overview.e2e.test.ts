@@ -10,7 +10,7 @@ import { ArtifactInspectionService } from '../../agent-bundle/src/dev/artifacts/
 import { ArtifactService } from '../../agent-bundle/src/dev/artifacts/artifact-service.ts';
 import { EpochStore } from '../../agent-bundle/src/dev/epoch-store.ts';
 import { EvalService } from '../../agent-bundle/src/dev/eval/eval-service.ts';
-import { ProjectEventHub, startForegroundServer } from '../../agent-bundle/src/dev/index.ts';
+import { ProjectEventHub, runtimeClientSurfaceReloadChannelPath, startForegroundServer } from '../../agent-bundle/src/dev/index.ts';
 import { ProjectService } from '../../agent-bundle/src/dev/project-service.ts';
 import { SkillDocumentService } from '../../agent-bundle/src/dev/skill-document-service.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
@@ -215,7 +215,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
   });
   page.on('pageerror', (error) => pageErrors.push(error));
   page.on('websocket', (socket) => {
-    if (new URL(socket.url()).pathname !== '/rsbuild-hmr') return;
+    if (new URL(socket.url()).pathname !== runtimeClientSurfaceReloadChannelPath) return;
     runtimePreviewHmrSockets.push(socket.url());
     socket.on('framereceived', (frame) => {
       runtimePreviewHmrMessages.push(typeof frame.payload === 'string' ? frame.payload : frame.payload.toString());
@@ -360,7 +360,17 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       replaceWatchedSource(fixture.root, fixture.widgetAppSource, editedSource),
       replaceWatchedSource(fixture.root, fixture.appStyles, editedStyles),
     ]);
-    await expect.poll(() => runtimePreviewHmrMessages.some((message) => message === JSON.stringify({ type: 'full-reload' })), { timeout: browserTimeout })
+    // The owned reload channel carries provider-authored frames only; a
+    // changed App compile advances the generation past the connect replay.
+    const ownedReloadFrames = (): readonly number[] => runtimePreviewHmrMessages.flatMap((message) => {
+      try {
+        const parsed = JSON.parse(message) as Readonly<{ readonly generation?: unknown; readonly kind?: unknown }>;
+        return parsed.kind === 'runtime-app-reload' && typeof parsed.generation === 'number' ? [parsed.generation] : [];
+      } catch {
+        return [];
+      }
+    });
+    await expect.poll(() => ownedReloadFrames().some((generation) => generation > 0), { timeout: browserTimeout })
       .toBe(true);
     const refreshedWidget = async () => {
       for (const frame of page.frames()) {

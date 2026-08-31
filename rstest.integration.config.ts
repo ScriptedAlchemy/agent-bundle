@@ -24,6 +24,20 @@ const maxWorkers = Number.isSafeInteger(overrideWorkers) && overrideWorkers >= 1
     : Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2)));
 
 /**
+ * Polling budgets scale with contention. A multi-worker pool needs at least
+ * 2 (see the env comment below); an externally set
+ * AGENT_BUNDLE_TEST_TIME_SCALE raises it further when the machine is shared —
+ * scripts/local-ci.mjs passes 4 (hosted CI's own scale) because it runs
+ * three Node legs plus the release gates concurrently. The external value
+ * never lowers the scale below what the pool shape requires.
+ */
+const externalTimeScale = Number(process.env['AGENT_BUNDLE_TEST_TIME_SCALE'] ?? '');
+const poolTimeScale = maxWorkers > 1 ? 2 : 1;
+const timeScale = Number.isSafeInteger(externalTimeScale) && externalTimeScale >= 1
+  ? Math.max(externalTimeScale, poolTimeScale)
+  : poolTimeScale;
+
+/**
  * Build- and process-running tests that only read workspace-shared artifacts;
  * files that WRITE shared locations (root builds, `npm pack`) run through the
  * single-worker `test:packed` script instead (see rstest.integration-tests.ts).
@@ -36,7 +50,7 @@ export default defineConfig({
   // parallel runs double the polling budgets (see tests/support/time-scale.ts)
   // and raise the 5s default test timeout, which real in-process builds can
   // exceed when workers share the machine. Explicit per-test timeouts win.
-  env: { AGENT_BUNDLE_TEST_TIME_SCALE: maxWorkers > 1 ? '2' : '1' },
+  env: { AGENT_BUNDLE_TEST_TIME_SCALE: String(timeScale) },
   testTimeout: 30_000,
   // isolate: false would cut Playwright startup cost, but the log pipeline
   // suites rely on per-file module isolation (verified: logs-real.e2e fails
