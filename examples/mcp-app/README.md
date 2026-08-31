@@ -89,6 +89,12 @@ reuse the `pnpm build` output instead. Closing stdin exits 0 and Ctrl-C
 exits 130, and per-server state persists under
 `.agent-bundle/mcp-run/portable/status`.
 
+`mcp run` loads the project-root `.env` set, including the selected `--mode`
+variants, by default. Launch environment precedence is manifest env, then
+`.env` files, then exported operator variables. Use repeatable
+`--env-file <path>` to replace the conventional files, `--no-env` to skip
+them, and `--plugin-root <path>` only for a copied-artifact rehearsal.
+
 Use `pnpm check` for validation and build without opening the Workbench. The
 deterministic portable eval and fixture check read only checked-in data and
 require no native Claude/Codex login or API key.
