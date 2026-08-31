@@ -77,15 +77,19 @@ uses a separate long-lived Rsbuild development/HMR session only when an
 entry stays self-built inside those Rsbuild artifacts but consumes the
 framework's stdio lifecycle (console-to-stderr guard, SIGINT/SIGTERM exit
 codes, stdin-EOF shutdown) through the public `agent-bundle/mcp-entry` API.
+Host packaging is framework-owned: `agent-bundle.config.ts` declares the
+Rsbuild output trees as prebuilt `payload` directories with prebuilt MCP and
+hook entries, and `agent-bundle build` copies them byte-for-byte at their
+stable paths while generating every host manifest.
 Installing
 `agent-bundle` alone does not install or activate this example provider. See
 [the optional RSC Runtime topology](../../docs/architecture/rsc-runtime-workbench.md)
 for the full ownership boundary.
 
-The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and two self-contained native plugin artifacts under `dist/plugins`. It runs `package:hosts` automatically; it can also be run directly:
+The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and self-contained native plugin artifacts under `dist/plugins`. The packaging step can also be rerun directly against the current Rsbuild output:
 
 ```bash
-pnpm --filter @agent-bundle/rsc-agent-runtime-demo package:hosts
+pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec agent-bundle build --json --output dist/plugins
 ```
 
 To exercise one hook manually, give it an explicit state file and native Claude-shaped JSON:

@@ -3,7 +3,7 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
-import { discoverProject } from '../config/discover.ts';
+import { configuredPayloadRoots, discoverProject } from '../config/discover.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
 import { loadConfig } from '../config/load.ts';
 import { normalizeEvalConfig } from '../eval/config.ts';
@@ -230,10 +230,38 @@ const sourcePaths = async (root: string, outputRoots: readonly string[]): Promis
   return Object.freeze(paths.sort((left, right) => left.localeCompare(right)));
 };
 
+const payloadSourcePaths = async (
+  root: string,
+  payloadRoots: readonly string[],
+): Promise<readonly string[]> => {
+  const paths: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      // A payload that does not exist yet contributes no source inputs.
+      return;
+    }
+    for (const entry of entries) {
+      const source = join(directory, entry.name);
+      if (entry.isDirectory()) await visit(source);
+      else if (entry.isFile()) paths.push(source);
+    }
+  };
+  for (const payloadRoot of payloadRoots) {
+    const resolved = resolve(root, payloadRoot);
+    if (containedPathComponents(root, resolved) === undefined) continue;
+    await visit(resolved);
+  }
+  return Object.freeze(paths.sort((left, right) => left.localeCompare(right)));
+};
+
 export const snapshotProjectSource = async (
   root: string,
   configPath: string,
   outputRoots: readonly string[] = [],
+  payloadRoots: readonly string[] = [],
 ): Promise<ProjectSourceSnapshot> => {
   const requestedRoot = resolve(root);
   const resolvedRoot = await realpath(requestedRoot);
@@ -242,7 +270,14 @@ export const snapshotProjectSource = async (
   relativeSourcePath(requestedRoot, requestedConfigPath);
   const resolvedConfigPath = await realpath(requestedConfigPath);
   relativeSourcePath(resolvedRoot, resolvedConfigPath);
-  const sources = new Set<string>([resolvedConfigPath, ...(await sourcePaths(resolvedRoot, resolvedOutputRoots))]);
+  // Declared prebuilt payload files join the identity even though payload
+  // directories are ignored for source discovery: the artifact packages
+  // their exact bytes, so the project revision must change with them.
+  const sources = new Set<string>([
+    resolvedConfigPath,
+    ...(await sourcePaths(resolvedRoot, resolvedOutputRoots)),
+    ...(await payloadSourcePaths(resolvedRoot, payloadRoots)),
+  ]);
   const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(resolvedRoot, source))))
     .sort((left, right) => left.path.localeCompare(right.path)));
   return Object.freeze({
@@ -493,6 +528,7 @@ const preparedProject = (
   devRuntimeDiagnostic?: Diagnostic,
   devAgentApiEnabled?: boolean,
   tools?: AgentBundleToolsConfig,
+  snapshotSource?: () => Promise<ProjectSourceSnapshot>,
 ): PreparedProject => Object.freeze({
   configPath,
   ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
@@ -504,6 +540,7 @@ const preparedProject = (
   ...(projectContext === undefined ? {} : { projectContext }),
   registry,
   root,
+  ...(snapshotSource === undefined ? {} : { snapshotSource }),
   source,
   ...(tools === undefined ? {} : { tools }),
 });
@@ -658,9 +695,10 @@ export class ProjectService {
       return failedPreparation('AB7000', 'Unable to load project source.', configPath, 'project.invalid-source', snapshot);
     }
 
+    const payloadRoots = configuredPayloadRoots(root, loaded.config);
     let snapshot: ProjectSourceSnapshot;
     try {
-      snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots);
+      snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots, payloadRoots);
     } catch {
       return failedPreparation('AB7003', 'Unable to snapshot project source.', loaded.configPath, 'project.invalid-source');
     }
@@ -718,7 +756,16 @@ export class ProjectService {
 
     let diagnostics: Diagnostic[];
     try {
-      diagnostics = [...validateModel(model, registry)];
+      // Non-error source diagnostics (payload warnings like AB4743/AB4745,
+      // informational nudges like the AB4750 staleness note) surface through
+      // `validate`, where an operator asks for exactly this judgment.
+      // Development flows keep running without them — a payload that has not
+      // been built yet is a normal dev state — and builds are separately
+      // guarded by their own hard refusals.
+      diagnostics = [
+        ...(command === 'validate' ? sourceDiagnostics : []),
+        ...validateModel(model, registry),
+      ];
       for (const target of model.targets) {
         if (!registry.has(target.name)) continue;
         const adapter = registry.get(target.name);
@@ -792,6 +839,10 @@ export class ProjectService {
       devRuntimeDiagnostic,
       devAgentApiEnabled,
       tools,
+      // Re-snapshots must observe the same payload roots the prepared
+      // identity hashed, or payload-bearing projects would always appear
+      // drifted to epoch publication.
+      () => snapshotProjectSource(root, loaded.configPath, outputRoots, payloadRoots),
     );
   }
 }

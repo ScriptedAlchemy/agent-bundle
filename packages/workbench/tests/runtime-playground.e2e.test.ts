@@ -35,7 +35,11 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(page.getByRole('link', { name: 'Inspector' })).toHaveCount(0, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Runtime' })).toBeVisible({ timeout: browserTimeout });
 
-    for (const sibling of ['hooks', 'artifacts', 'playground', 'logs'] as const) {
+    // The example's hooks are prebuilt payload commands packaged like native
+    // hooks, so no simulatable hook wrappers exist and the Hooks and
+    // Playground capability pages stay hidden alongside them.
+    await expect(page.getByRole('link', { name: 'Hooks' })).toHaveCount(0, { timeout: browserTimeout });
+    for (const sibling of ['artifacts', 'logs'] as const) {
       await page.goto(workbenchUrl(fixture.url, sibling));
       await expect(page.locator(`#${sibling}`)).toBeVisible({ timeout: browserTimeout });
       expect(

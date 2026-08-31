@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve, win32 } from 'node:path';
 import { assertInside } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 
-export type ArtifactOutputKind = 'bundle' | 'copy' | 'generated';
+export type ArtifactOutputKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
 
 export interface ArtifactOutputProvenance {
   readonly kind: ArtifactOutputKind;

@@ -100,6 +100,8 @@ export const validateJavaScriptModules = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: ReadonlySet<string>;
+  /** Prebuilt payload files: opaque consumer outputs excluded from graph validation. */
+  readonly prebuiltPaths?: ReadonlySet<string>;
   readonly validJson: ReadonlySet<string>;
 }): Promise<readonly Diagnostic[]> => {
   await init;
@@ -113,6 +115,10 @@ export const validateJavaScriptModules = async (options: {
 
   const validateModule = async (path: string): Promise<void> => {
     if (visited.has(path) || visiting.has(path)) return;
+    if (options.prebuiltPaths?.has(path) === true) {
+      visited.add(path);
+      return;
+    }
     visiting.add(path);
     let source: string;
     try {

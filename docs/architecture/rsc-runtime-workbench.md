@@ -131,7 +131,6 @@ examples/
     scripts/eval-evidence.mjs
     scripts/eval-host-environment.mjs
     scripts/eval-hosts.mjs
-    scripts/package-hosts.mjs
     src/build/emit-artifacts.ts
     src/build/serialize-definition.ts
     src/definition.ts

@@ -33,7 +33,7 @@ export interface ArtifactInspectionSourceInput {
 /** Manifested artifact file facts, without the file contents. */
 export interface ArtifactInspectionFile {
   readonly bytes: number;
-  readonly kind: 'bundle' | 'copy' | 'generated';
+  readonly kind: 'bundle' | 'copy' | 'generated' | 'prebuilt';
   readonly mode?: number;
   readonly path: string;
   readonly sha256: string;

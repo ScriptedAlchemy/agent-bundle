@@ -11,6 +11,13 @@ export interface ValidateArtifactOptions {
   /** Enables the one store-owned epoch staging marker after its exact schema validates. */
   readonly allowEpochStagingMarker?: true;
   readonly artifactRoot: string;
+  /**
+   * Artifact-relative paths of prebuilt payload files for pre-manifest
+   * validation. Prebuilt files are integrity-checked but never subjected to
+   * generated-content validation; after the manifest exists, its `prebuilt`
+   * file kind carries this information instead.
+   */
+  readonly prebuiltPaths?: ReadonlySet<string>;
   /** Target contracts that produced and must validate this artifact. */
   readonly registry?: TargetRegistry;
 }

@@ -52,7 +52,7 @@ const isSourceInput = (value: unknown): boolean =>
 
 const isArtifactFile = (value: unknown): boolean =>
   exactRecord(value, ['bytes', 'kind', 'path', 'sha256', 'sourceInputs'], ['mode']) &&
-  finiteNumber(value.bytes) && (value.kind === 'bundle' || value.kind === 'copy' || value.kind === 'generated') &&
+  finiteNumber(value.bytes) && (value.kind === 'bundle' || value.kind === 'copy' || value.kind === 'generated' || value.kind === 'prebuilt') &&
   typeof value.path === 'string' && typeof value.sha256 === 'string' && arrayOf(value.sourceInputs, isSourceInput) &&
   (!Object.hasOwn(value, 'mode') || finiteNumber(value.mode));
 

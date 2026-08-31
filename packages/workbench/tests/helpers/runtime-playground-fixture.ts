@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { access, cp, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -44,11 +44,33 @@ const buildWorkbench = async (): Promise<void> => {
   });
 };
 
+/** The example's prebuilt payload directories its declared artifacts package. */
+const runtimeExamplePayloads = ['app', 'runtime'] as const;
+
+/**
+ * The example declares its Rsbuild output trees as prebuilt payloads, so the
+ * workbench dev artifact epoch needs them to exist. Build them once when
+ * absent (Rsbuild only — the framework packaging step is what the fixture
+ * exercises live).
+ */
+const ensureRuntimeExamplePayload = async (): Promise<void> => {
+  const probes = await Promise.allSettled(runtimeExamplePayloads.map(async (payload) =>
+    access(join(runtimeExample, 'dist', payload))));
+  if (probes.every((probe) => probe.status === 'fulfilled')) return;
+  const { RSTEST: _rstest, ...environment } = process.env;
+  await execFile('pnpm', ['--filter', '@agent-bundle/rsc-agent-runtime-demo', 'exec', 'rsbuild', 'build', '--mode', 'production'], {
+    cwd: workspaceRoot,
+    env: { ...environment, NODE_ENV: 'production' },
+    maxBuffer: 64 * 1024 * 1024,
+  });
+};
+
 /** Starts the real RSC example in an isolated workspace-local copy. */
 export const startRuntimePlaygroundFixture = async (
   options: RuntimePlaygroundFixtureOptions = {},
 ): Promise<RuntimePlaygroundFixture> => {
   await buildWorkbench();
+  await ensureRuntimeExamplePayload();
   // The real example resolves workspace modules two levels above its project.
   // Copy that topology, including only workspace-local symlinks, into one root.
   const fixtureWorkspace = await mkdtemp(join(workspaceRoot, '.runtime-playground-'));
@@ -61,6 +83,10 @@ export const startRuntimePlaygroundFixture = async (
       filter: (source) => !['.agent-bundle', 'dist', 'node_modules'].includes(source.split('/').at(-1) ?? ''),
       recursive: true,
     });
+    // The declared prebuilt payload trees ride along: the dev artifact epoch
+    // packages them, exactly as `agent-bundle build` would.
+    await Promise.all(runtimeExamplePayloads.map((payload) =>
+      cp(join(runtimeExample, 'dist', payload), join(root, 'dist', payload), { recursive: true })));
     await Promise.all([
       symlink(join(runtimeExample, 'node_modules'), join(root, 'node_modules'), 'dir'),
       symlink(join(workspaceRoot, 'node_modules'), join(fixtureWorkspace, 'node_modules'), 'dir'),

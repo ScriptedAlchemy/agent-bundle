@@ -477,8 +477,11 @@ export const mergeHookDocuments = (
 
 const eventIndex = new Map(canonicalEventOrder.map((event, index) => [event, index]));
 
-export const generatedHookCommand = (contract: TargetHookContract, relativePath: string): string =>
-  `node "${contract.commandRoot}/${relativePath}"`;
+export const generatedHookCommand = (
+  contract: TargetHookContract,
+  relativePath: string,
+  args: readonly string[] = [],
+): string => [`node "${contract.commandRoot}/${relativePath}"`, ...args].join(' ');
 
 export const compilerHookWrapperPath = (
   contract: TargetHookContract,
@@ -567,8 +570,12 @@ export const planHooks = (
     const diagnosticCount = diagnostics.length;
     const matcher = matcherFor(target, contract, hook, diagnostics);
     if (diagnostics.length > diagnosticCount) continue;
-    const relativePath = contract.wrapperPath(hook);
-    const command = generatedHookCommand(contract, relativePath);
+    // A prebuilt hook points the native command at its payload-stable path
+    // (plus its declared arguments) instead of a compiled wrapper: the
+    // document entry is generated, but nothing is compiled or indexed.
+    const prebuilt = hook.prebuiltPath !== undefined;
+    const relativePath = hook.prebuiltPath ?? contract.wrapperPath(hook);
+    const command = generatedHookCommand(contract, relativePath, prebuilt ? hook.args ?? [] : []);
     const entryInput: TargetHookDocumentEntryInput = {
       command,
       ...(matcher === undefined ? {} : { matcher }),
@@ -585,6 +592,7 @@ export const planHooks = (
         }
       : contract.documentEntry(entryInput);
     (groups[nativeEvent] ??= []).push(group);
+    if (prebuilt) continue;
     const wrapper: TargetHookWrapper = {
       event: hook.event,
       hook,
