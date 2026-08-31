@@ -1,0 +1,26 @@
+{
+  "name": "my-agent-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A stdio MCP server plugin built with agent-bundle.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "agent-bundle build --json --output artifact",
+    "check": "npm run validate && npm run build && npm run typecheck && npm run test",
+    "dev": "agent-bundle dev",
+    "test": "rstest tests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "validate": "agent-bundle validate --json"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "@rstest/core": "0.11.10",
+    "@types/node": "26.4.0",
+    "agent-bundle": "workspace:*",
+    "typescript": "7.0.2",
+    "zod": "4.4.3"
+  }
+}

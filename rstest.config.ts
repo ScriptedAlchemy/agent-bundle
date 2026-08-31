@@ -1,5 +1,6 @@
 import { defineConfig } from '@rstest/core';
 
+import { templateTestFiles } from './rstest.integration-tests.ts';
 import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 export default defineConfig({
@@ -7,6 +8,7 @@ export default defineConfig({
   include: [
     'packages/**/tests/**/*.test.ts',
   ],
+  exclude: [...templateTestFiles],
   // Several integration tests run Rslib, whose build cache and configured
   // output paths are process-shared. Keep those builds from racing each other.
   pool: { maxWorkers: 1 },

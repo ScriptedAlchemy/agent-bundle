@@ -1,0 +1,48 @@
+{
+  "name": "create-agent-bundle",
+  "version": "0.0.0",
+  "description": "Scaffold a new agent-bundle plugin project from a checked-in template.",
+  "license": "MIT",
+  "keywords": [
+    "agent-bundle",
+    "create",
+    "scaffold",
+    "cli"
+  ],
+  "homepage": "https://github.com/ScriptedAlchemy/agent-bundle#readme",
+  "bugs": {
+    "url": "https://github.com/ScriptedAlchemy/agent-bundle/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ScriptedAlchemy/agent-bundle.git",
+    "directory": "packages/create-agent-bundle"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "templates",
+    "README.md"
+  ],
+  "bin": {
+    "create-agent-bundle": "./bin/create-agent-bundle.js"
+  },
+  "scripts": {
+    "build": "rslib build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@clack/prompts": "1.7.0",
+    "@rslib/core": "0.23.2",
+    "@rstest/core": "0.11.10",
+    "@types/node": "26.4.0"
+  }
+}
