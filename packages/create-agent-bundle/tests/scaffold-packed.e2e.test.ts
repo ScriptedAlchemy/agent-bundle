@@ -96,7 +96,10 @@ const expectCleanValidate = async (projectRoot: string): Promise<void> => {
   expect(validated.diagnostics).toEqual([]);
 };
 
-it('scaffolds the minimal template, auto-installs, and passes its own check', async () => {
+// The template tests run concurrently: each scaffolds its own project
+// directory under the shared runner and npm's cache tolerates concurrent
+// installs, so the only shared state is the memoized fixture promise.
+it.concurrent('scaffolds the minimal template, auto-installs, and passes its own check', async () => {
   // No --no-install: this run covers the scaffolder-driven `npm install` path.
   const projectRoot = await scaffoldProject('minimal', 'minimal-project', []);
 
@@ -114,7 +117,7 @@ it('scaffolds the minimal template, auto-installs, and passes its own check', as
     .resolves.toContain('# Getting started');
 }, 600_000);
 
-it('scaffolds the mcp-server template and serves the conventional entry from the artifact', async () => {
+it.concurrent('scaffolds the mcp-server template and serves the conventional entry from the artifact', async () => {
   const projectRoot = await scaffoldProject('mcp-server', 'status-plugin', ['--no-install']);
   await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], {
     cwd: projectRoot,
@@ -149,7 +152,7 @@ it('scaffolds the mcp-server template and serves the conventional entry from the
   });
 }, 600_000);
 
-it('scaffolds the cli-tool template with a framework-built bin, lib, and artifact script', async () => {
+it.concurrent('scaffolds the cli-tool template with a framework-built bin, lib, and artifact script', async () => {
   const projectRoot = await scaffoldProject('cli-tool', 'greeter', ['--no-install']);
   await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], {
     cwd: projectRoot,
