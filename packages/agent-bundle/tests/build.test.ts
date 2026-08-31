@@ -1109,6 +1109,10 @@ const reservedSpecifierProject = async (): Promise<{ readonly entry: RslibEntry;
       virtualModules: [{ name: 'agent-bundle/mcp-apps', source: "export default 'generated-registry';\n" }],
       virtualSource: [
         `import { main } from ${JSON.stringify(join(sourceRoot, 'entry.ts'))};`,
+        // A marker only the generated wrapper contains: its presence in the
+        // emitted bundle proves the wrapper (not the authored program) was
+        // the compilation root.
+        "console.log('generated-wrapper-marker');",
         'main();',
         '',
       ].join('\n'),
@@ -1131,6 +1135,7 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
     const bundle = await readFile(join(root, 'dist', 'scripts', 'reserved-probe.mjs'), 'utf8');
     expect(bundle).toContain('inlined-runtime-shell');
     expect(bundle).toContain('generated-registry');
+    expect(bundle).toContain('generated-wrapper-marker');
     expect(bundle).not.toMatch(/from\s*["']agent-bundle\//u);
     // The scan tolerates a reserved specifier that is only mentioned as a
     // string literal; only a live import fails the build.
@@ -1167,6 +1172,31 @@ it('keeps sibling staged outputs alive under a tools hatch that asks to clean th
     expect(bundle).toContain('generated-registry');
     await expect(readFile(join(root, 'dist', 'sibling.mjs'), 'utf8'))
       .resolves.toContain('already-emitted-sibling');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
+it('overrides a tools hatch that strips plugins and repoints the entry away from the generated wrapper', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  try {
+    // The hatch mutator runs before the framework invariant hook, so it
+    // cannot strip the VirtualModulesPlugin (added afterwards) or keep the
+    // entry repointed at the authored program (redirected afterwards).
+    await buildWithRslib({
+      cwd: root,
+      entries: [entry],
+      outputRoot: join(root, 'dist'),
+      tools: {
+        rspack: (config) => {
+          config.plugins = [];
+          config.entry = { 'reserved-probe': [join(root, 'src', 'entry.ts')] };
+        },
+      },
+    });
+    const bundle = await readFile(join(root, 'dist', 'scripts', 'reserved-probe.mjs'), 'utf8');
+    expect(bundle).toContain('generated-wrapper-marker');
+    expect(bundle).toContain('generated-registry');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

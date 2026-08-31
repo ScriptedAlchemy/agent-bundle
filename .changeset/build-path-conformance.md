@@ -2,8 +2,10 @@
 "agent-bundle": minor
 ---
 
-Move the generated-executable build path onto fully documented bundler
-surfaces (Rspack/Rslib/Rsbuild conformance audit).
+Harden the generated-executable build path (Rspack/Rslib/Rsbuild
+conformance audit). One deliberate experimental surface remains:
+`rspack.experiments.VirtualModulesPlugin` serves generated module sources,
+behind a feature check with an actionable diagnostic.
 
 - Generated wrapper entries and registry modules (the stdio MCP entry shell,
   `main` process envelopes, `agent-bundle/mcp-apps` registries) now live at

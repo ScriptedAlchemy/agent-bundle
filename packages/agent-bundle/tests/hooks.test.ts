@@ -282,6 +282,53 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
   }
 });
 
+it('fails closed when the resolved environment lost its virtual modules or wrapper entry', async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-lost-virtual-'));
+  const virtualEntryPath = join(outputRoot, '.agent-bundle-virtual', 'lost-probe-entry.mjs');
+  const rslibFor = (bundlerConfig: Record<string, unknown>) => ({
+    build: async () => {
+      throw new Error('inspection must fail before the build starts');
+    },
+    inspectConfig: async () => ({
+      origin: {
+        bundlerConfigs: [{
+          name: 'agent-bundle-lost-probe',
+          output: { asyncChunks: false, path: outputRoot },
+          target: 'node',
+          ...bundlerConfig,
+        }],
+        environmentConfigs: { 'agent-bundle-lost-probe': { output: { cleanDistPath: false } } },
+      },
+    }),
+  });
+  const buildLostProbe = async (bundlerConfig: Record<string, unknown>) => buildWithRslib({
+    cwd: '/tmp',
+    entries: [{
+      name: 'lost-probe',
+      outputRelativePath: 'hooks/lost-probe.mjs',
+      source: '/tmp/hook.ts',
+      sourceInputs: ['/tmp/hook.ts'],
+      virtualSource: 'export default undefined;',
+    }],
+    outputRoot,
+  }, { createRslib: async () => rslibFor(bundlerConfig) as never });
+
+  try {
+    // A resolved config without the plugin would resolve the
+    // guaranteed-nonexistent generated paths against the real filesystem.
+    await expect(buildLostProbe({ entry: { 'lost-probe': [virtualEntryPath] } }))
+      .rejects.toThrow(/without its virtual modules/u);
+    // A resolved config still keyed on the authored program would compile
+    // without the generated wrapper.
+    await expect(buildLostProbe({
+      entry: { 'lost-probe': ['/tmp/hook.ts'] },
+      plugins: [new rspack.experiments.VirtualModulesPlugin({})],
+    })).rejects.toThrow(/without its generated wrapper entry/u);
+  } finally {
+    await rm(outputRoot, { force: true, recursive: true });
+  }
+});
+
 it('fails closed when an emitted bundle retains a residual reserved import', async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-residual-output-'));
   const rslib = {
