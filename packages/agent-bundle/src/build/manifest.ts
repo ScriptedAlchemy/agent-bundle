@@ -6,7 +6,7 @@ import {
 } from '../core/runtime.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
-export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated';
+export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
 export type ArtifactManifestValidationStatus = 'passed';
 
 export interface ArtifactManifestSourceInput {
@@ -199,7 +199,7 @@ const parseFiles = (value: unknown): readonly ArtifactManifestFile[] => {
     if (!Number.isSafeInteger(file.bytes) || (file.bytes as number) < 0) {
       fail(`files[${index}].bytes must be a non-negative safe integer.`);
     }
-    if (file.kind !== 'bundle' && file.kind !== 'copy' && file.kind !== 'generated') {
+    if (file.kind !== 'bundle' && file.kind !== 'copy' && file.kind !== 'generated' && file.kind !== 'prebuilt') {
       fail(`files[${index}].kind is unknown.`);
     }
     if (file.mode !== undefined && (!Number.isSafeInteger(file.mode) || (file.mode as number) < 0 || (file.mode as number) > 0o777)) {
