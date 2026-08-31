@@ -756,15 +756,14 @@ export class ProjectService {
 
     let diagnostics: Diagnostic[];
     try {
-      // Source warnings (for example a declared-but-unbuilt prebuilt payload)
-      // surface through `validate`, where an operator asks for exactly this
-      // judgment. Development flows keep running without them — a payload
-      // that has not been built yet is a normal dev state — and builds are
-      // separately guarded by their own hard refusals.
+      // Non-error source diagnostics (payload warnings like AB4743/AB4745,
+      // informational nudges like the AB4750 staleness note) surface through
+      // `validate`, where an operator asks for exactly this judgment.
+      // Development flows keep running without them — a payload that has not
+      // been built yet is a normal dev state — and builds are separately
+      // guarded by their own hard refusals.
       diagnostics = [
-        ...(command === 'validate'
-          ? sourceDiagnostics.filter((diagnostic) => diagnostic.severity === 'warning')
-          : []),
+        ...(command === 'validate' ? sourceDiagnostics : []),
         ...validateModel(model, registry),
       ];
       for (const target of model.targets) {

@@ -924,8 +924,8 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     const configSource = await readFile(fixture.configSource, 'utf8');
     const transportMarker = `transport-restart-${Math.random().toString(36).slice(2)}`;
     const changedTransport = configSource.replace(
-      "entry: './src/mcp/stdio.ts',",
-      `entry: './src/mcp/stdio.ts',\n        env: { TIMELINE_TRANSPORT_SENTINEL: '${transportMarker}' },`,
+      "entry: { prebuilt: './dist/runtime/mcp/stdio.js' },",
+      `entry: { prebuilt: './dist/runtime/mcp/stdio.js' },\n        env: { TIMELINE_TRANSPORT_SENTINEL: '${transportMarker}' },`,
     );
     expect(changedTransport).not.toBe(configSource);
     const transportEventStart = runtimeEvents.length;
