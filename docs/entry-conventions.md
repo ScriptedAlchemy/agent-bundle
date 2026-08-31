@@ -144,8 +144,26 @@ The hatch is bounded: the framework invariant hook runs after the consumer's
 `tools.rspack`, and the resolved-config assertions still run after the merge.
 A hatch value that breaks an artifact contract (async chunks, output roots,
 self-containment) fails the build with a hard diagnostic instead of silently
-overriding the contract. The hatch customizes *how code compiles*, never
-*what the artifact promises*.
+overriding the contract. Reserved module specifiers are protected the same
+way: a hatch that externalizes `agent-bundle/mcp-entry` or a generated
+registry specifier (such as `agent-bundle/mcp-apps`) fails the build with a
+hard diagnostic — at config inspection for statically visible `externals`,
+and through a post-build scan of the emitted bundle for function-form
+`externals` — because generated executables must stay self-contained. The
+hatch customizes *how code compiles*, never *what the artifact promises*.
+
+The hatch executes under two different bundler engine copies. Artifact
+scripts, MCP entries, hook wrappers, and the package build compile through
+Rslib, which runs the Rsbuild/Rspack versions nested inside `@rslib/core`
+(currently the 2.1.x line); MCP App views compile through the
+workspace-pinned `@rsbuild/core` (currently 2.2.x), until Rslib catches up to
+the Rsbuild 2.2 line. So a hatch must never construct plugins or run
+`instanceof` checks against an imported `@rspack/core`: a class imported from
+a separately installed `@rspack/core` has a different identity than whichever
+engine executes the config. Use instead the utils argument Rslib/Rsbuild pass
+to `tools.rspack` mutator functions —
+`tools: { rspack: (config, { rspack }) => { ... } }` — which always hands the
+engine's own `rspack` object.
 
 ### `agent-bundle inspect --bundler`
 
@@ -211,12 +229,15 @@ temporary artifact is built first.
 
 The runner loads the project-root `.env` set by default — rsbuild's `loadEnv`
 conventions (`.env`, `.env.local`, `.env.<mode>`, `.env.<mode>.local`, with
-`--mode` selecting the variants), the same files `createRslib` reads for the
-same consumers at build time — so operator credentials configured for the
-plugin reach a bare `mcp run` without a wrapper script. `--env-file <path>`
-(repeatable, Node's `--env-file` dialect, later files win) replaces the
-conventional set with exactly the named files, and `--no-env` skips the layer
-entirely; a named file that cannot be read is an error, never a silent skip.
+`--mode` selecting the variants) — so operator credentials configured for the
+plugin reach a bare `mcp run` without a wrapper script. This is a
+launch-time-only layer: the framework's programmatic Rslib builds never pass
+`loadEnv` to `createRslib`, so `agent-bundle build` and the package build read
+no `.env` file at all, and nothing from `.env` can leak into a compiled
+artifact. `--env-file <path>` (repeatable, Node's `--env-file` dialect, later
+files win) replaces the conventional set with exactly the named files, and
+`--no-env` skips the layer entirely; a named file that cannot be read is an
+error, never a silent skip.
 
 The child environment is composed from three layers. This table is the
 canonical precedence order (highest wins):
