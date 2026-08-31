@@ -18,6 +18,7 @@
     "lint": "rslint .",
     "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json && tsc --project packages/create-agent-bundle/tsconfig.json",
     "check": "pnpm build && pnpm test:unit && pnpm test:integration:run && pnpm lint && pnpm typecheck",
+    "check:local-ci": "node scripts/local-ci.mjs",
     "docs:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md",
     "eval:spot": "pnpm build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo build && pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec rstest run tests/micro-eval.spot.test.ts --config rstest.config.ts",
     "check:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md --check",
