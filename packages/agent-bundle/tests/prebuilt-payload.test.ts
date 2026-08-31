@@ -146,6 +146,35 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
   }
 });
 
+// An argument-less prebuilt hook emits `node "<root>/<payload path>"`, the
+// exact shape of a compiler wrapper command. Hook coherence must recognize it
+// by its payload location instead of misreporting AB6018 (not indexed).
+it('validates an argument-less prebuilt hook without demanding a wrapper index entry', async () => {
+  const root = await createProject({
+    hooks: [
+      '  hooks: { afterTool: [',
+      "    { handler: { prebuilt: './built/runtime/hook.js' }, targets: ['claude'], tools: ['file.write'] },",
+      '  ] },',
+    ].join('\n'),
+    payload: standardPayloadBlock,
+  });
+  try {
+    const result = await build({ output: join(root, 'out'), root });
+    expect(result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+    const claudeHooks = await readJson<{ hooks: { PostToolUse: { hooks: { command: string }[] }[] } }>(
+      join(root, 'out', 'claude', 'hooks', 'hooks.json'),
+    );
+    expect(claudeHooks.hooks.PostToolUse[0]?.hooks[0]).toMatchObject({
+      command: 'node "${CLAUDE_PLUGIN_ROOT}/runtime/hook.js"',
+    });
+
+    const revalidated = await validate({ artifact: join(root, 'out'), root });
+    expect(revalidated.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('reports the prebuilt payload source diagnostics', async () => {
   const root = await createProject({
     hooks: [
