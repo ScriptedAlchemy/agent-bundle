@@ -9,10 +9,8 @@ import { Layers, pluginRSC } from 'rsbuild-plugin-rsc';
 import { emitRuntimeArtifacts } from './src/build/emit-artifacts.js';
 
 export interface RscRuntimeCompileSnapshot {
-  readonly acceptCompilerAssetCheckpoint?: () => void;
   readonly attemptId: string;
   readonly candidateId: string;
-  readonly discardCompilerAssetCheckpoint?: () => void;
   readonly preparedRevision: string;
   readonly rscCohortRevision: number;
   readonly sourceRevision: string;
@@ -20,6 +18,13 @@ export interface RscRuntimeCompileSnapshot {
 
 export type RscRuntimeActivationOutcome = 'activated' | 'failed';
 export type RscRuntimeCompileFailureKind = 'provider-lifecycle' | 'source-build';
+export type RscRuntimeCompileEnvironmentName = 'app' | 'rsc' | 'widget';
+export type RscRuntimeCompileEnvironmentHashes = Readonly<Record<RscRuntimeCompileEnvironmentName, string>>;
+
+const compileEnvironmentNames: readonly RscRuntimeCompileEnvironmentName[] = Object.freeze(['app', 'rsc', 'widget'] as const);
+
+const isCompileEnvironmentName = (value: string): value is RscRuntimeCompileEnvironmentName =>
+  (compileEnvironmentNames as readonly string[]).includes(value);
 
 export interface RscRuntimeRsbuildConfigOptions {
   readonly compilerRoot?: string;
@@ -34,12 +39,24 @@ export interface RscRuntimeRsbuildConfigOptions {
     capture(input: {
       readonly attemptId: string;
       readonly cohortChanged: boolean;
+      readonly environmentHashes: RscRuntimeCompileEnvironmentHashes;
       readonly hasErrors: boolean;
       readonly sourceRevision: string;
     }): Promise<RscRuntimeCompileSnapshot | undefined>;
     /** Queues provider activation but never blocks the Rsbuild compile hook. */
     enqueue(snapshot: RscRuntimeCompileSnapshot): unknown;
     failAttempt(attemptId: string, error: unknown, kind: RscRuntimeCompileFailureKind): void;
+    /**
+     * Stages an immutable checkpoint of one environment's completed output
+     * root. Awaited inside the environment compiler's `done` hook, where
+     * Rsbuild blocks that compiler's next write cycle until staging
+     * finishes, so the copy reads a quiescent output root.
+     */
+    stageEnvironmentCheckpoint(input: {
+      readonly distPath: string;
+      readonly environmentName: RscRuntimeCompileEnvironmentName;
+      readonly statsHash: string;
+    }): Promise<void>;
   }>;
 }
 
@@ -101,6 +118,25 @@ const runtimeCompileObserverPlugin = (
   return {
     name: 'agent-bundle:rsc-runtime-compile-observer',
     setup(api) {
+      api.onAfterEnvironmentCompile(async ({ environment, stats }) => {
+        // Immutable per-environment staging (#74): Rsbuild awaits this hook
+        // inside the environment compiler's Rspack `done` tap, so the copy
+        // reads that environment's completed writeToDisk root before its
+        // next compile can rewrite it. Failed compilations, unexpected
+        // environment names, and missing hashes stage nothing here; the
+        // global after-compile hook is the loud failure path for those, and
+        // rejecting this hook instead would skip that dispatch entirely and
+        // strand the FIFO attempt pairing.
+        if (stats === undefined || stats.hasErrors()) return;
+        const name = environment.name;
+        if (!isCompileEnvironmentName(name)) return;
+        if (typeof stats.hash !== 'string' || stats.hash.length === 0) return;
+        await observer.stageEnvironmentCheckpoint({
+          distPath: environment.distPath,
+          environmentName: name,
+          statsHash: stats.hash,
+        });
+      });
       api.onBeforeDevCompile(() => {
         // Rsbuild documents global hook order, but not one before/after pair
         // per MultiCompiler cohort. FIFO pairing is only empirical in 2.2.1;
@@ -130,13 +166,13 @@ const runtimeCompileObserverPlugin = (
             return;
           }
           const json = stats.toJson({ all: false, children: true, hash: true });
-          const cohortHashes = new Map<'rsc' | 'widget', string>();
+          const cohortHashes = new Map<RscRuntimeCompileEnvironmentName, string>();
           // Rspack documents optional Stats child names, but Rsbuild does not
           // promise they equal environment keys. We explicitly name each
           // compiler below; the name-based cohort match is otherwise only an
           // empirical Rsbuild 2.2.1 behavior.
           for (const child of json.children ?? []) {
-            if (child.name !== 'rsc' && child.name !== 'widget') continue;
+            if (child.name === undefined || !isCompileEnvironmentName(child.name)) continue;
             if (typeof child.hash !== 'string' || child.hash.length === 0) {
               throw new Error(`RSC runtime ${child.name} compilation has no hash.`);
             }
@@ -145,14 +181,22 @@ const runtimeCompileObserverPlugin = (
             }
             cohortHashes.set(child.name, child.hash);
           }
-          if (cohortHashes.size !== 2 || !cohortHashes.has('rsc') || !cohortHashes.has('widget')) {
-            throw new Error('RSC runtime compile requires exactly one RSC and widget stats child.');
+          if (cohortHashes.size !== compileEnvironmentNames.length) {
+            throw new Error('RSC runtime compile requires exactly one RSC, widget, and App stats child.');
           }
+          const environmentHashes = Object.freeze(Object.fromEntries(
+            compileEnvironmentNames.map((name) => [name, cohortHashes.get(name) as string]),
+          )) as RscRuntimeCompileEnvironmentHashes;
+          // The App environment ships through its own dev-server surface, so
+          // only the rsc and widget children define the source revision that
+          // decides whether a new runtime generation is needed. The App child
+          // hash still selects which staged App checkpoint joins the cohort.
           const hashes = (['rsc', 'widget'] as const).map((name) => [name, cohortHashes.get(name) as string]);
           const sourceRevision = createHash('sha256').update(JSON.stringify(hashes)).digest('hex');
           snapshot = await observer.capture({
             attemptId,
             cohortChanged: sourceRevision !== capturedCohort?.sourceRevision,
+            environmentHashes,
             hasErrors: false,
             sourceRevision,
           });
@@ -169,7 +213,6 @@ const runtimeCompileObserverPlugin = (
             const completion = queued instanceof Promise
               ? queued as Promise<RscRuntimeActivationOutcome>
               : Promise.resolve(undefined);
-            snapshot.acceptCompilerAssetCheckpoint?.();
             void completion.then((outcome) => {
               if (outcome === 'activated' || outcome === undefined) return;
               if (capturedCohort?.activationSequence === activationSequence) capturedCohort = undefined;
@@ -178,11 +221,6 @@ const runtimeCompileObserverPlugin = (
             });
           }
         } catch (error) {
-          try {
-            snapshot?.discardCompilerAssetCheckpoint?.();
-          } catch {
-            // The original capture/enqueue error remains the attempted failure cause.
-          }
           observer.failAttempt(attemptId, error, 'provider-lifecycle');
         }
       });
