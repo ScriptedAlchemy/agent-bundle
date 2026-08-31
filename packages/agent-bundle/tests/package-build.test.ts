@@ -143,8 +143,9 @@ describe('framework-owned package build', () => {
     expect(plain).not.toContain('stdio heartbeat');
 
     // The lifecycle shell exits 0 on stdin EOF so clients can respawn.
-    const eofRun = await execFile(process.execPath, [entries['mcp:echoer']!], { timeout: 15_000 });
-    expect(eofRun).toMatchObject({ stdout: '' });
+    const eofRun = execFile(process.execPath, [entries['mcp:echoer']!], { timeout: 15_000 });
+    eofRun.child.stdin?.end();
+    await expect(eofRun).resolves.toMatchObject({ stdout: '' });
     const plainRun = await execFile(process.execPath, [entries['mcp:plain']!], { timeout: 15_000 });
     expect(plainRun.stderr).toContain('self-connecting entry ran');
   }, 120_000);
