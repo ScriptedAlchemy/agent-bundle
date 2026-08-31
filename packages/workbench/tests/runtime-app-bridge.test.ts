@@ -127,7 +127,7 @@ const runtimeFactory = (
     onTrace: () => undefined,
     preview: Object.freeze({
       binding: Object.freeze({ id: 'runtime-binding', profileVersion: 'agent-bundle:mcp-apps:2026-01-26', sessionId: 'runtime-session-a', sessionRevision: 3 }),
-      clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test', webSocketPath: '/rsbuild-hmr' as const }),
+      clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test' }),
       documentPolicy: policy.snapshot,
       kind: 'apps' as const,
       profile: Object.freeze({ hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline']), displayMode: 'inline', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), theme: 'light' }) }),
@@ -183,7 +183,7 @@ it('forwards an initialized App tools/call through the controller-owned client t
       onTrace: () => undefined,
       preview: Object.freeze({
         binding: Object.freeze({ id: 'runtime-binding', profileVersion: 'agent-bundle:mcp-apps:2026-01-26', sessionId: 'runtime-session-a', sessionRevision: 3 }),
-        clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test', webSocketPath: '/rsbuild-hmr' as const }),
+        clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test' }),
         documentPolicy: policy.snapshot,
         kind: 'apps' as const,
         profile: Object.freeze({ hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline']), displayMode: 'inline', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), theme: 'light' }) }),
@@ -903,7 +903,7 @@ it('closes the exact attachment once on bridge setup failure and leaves its retr
       onTrace: () => undefined,
       preview: Object.freeze({
         binding: Object.freeze({ id: 'runtime-binding', profileVersion: 'agent-bundle:mcp-apps:2026-01-26', sessionId: 'runtime-session-a', sessionRevision: 3 }),
-        clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test', webSocketPath: '/rsbuild-hmr' as const }),
+        clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test' }),
         documentPolicy: policy.snapshot,
         kind: 'apps' as const,
         profile: Object.freeze({ hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline']), displayMode: 'inline', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), theme: 'light' }) }),
@@ -956,7 +956,7 @@ it('guards the official bridge to one source and origin while routing only tools
     });
     const preview = Object.freeze({
       binding: Object.freeze({ id: 'runtime-binding', profileVersion: 'agent-bundle:mcp-apps:2026-01-26', sessionId: 'runtime-session-a', sessionRevision: 3 }),
-      clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test', webSocketPath: '/rsbuild-hmr' as const }),
+      clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test' }),
       documentPolicy: policy.snapshot,
       kind: 'apps' as const,
       profile: Object.freeze({ hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline', 'fullscreen']), displayMode: 'inline', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), theme: 'light' }) }),

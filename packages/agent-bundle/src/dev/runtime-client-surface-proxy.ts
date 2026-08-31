@@ -23,21 +23,24 @@ import {
 
 const appAssetLimit = 4 * 1024 * 1024;
 const headerLimit = 16 * 1024;
-const webSocketBufferLimit = 2 * 1024 * 1024;
-const webSocketMessageLimit = 1_048_576;
-const pendingWebSocketMessageLimit = 64;
-const upstreamHandshakeTimeout = 15_000;
 const upstreamRequestTimeout = 15_000;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
-const hmrTokenMaxLength = 4_096;
+/**
+ * Proxy-owned browser push channel. The proxy authors both ends: its server
+ * broadcasts only the owned reload frame below, and the bootstrap shell it
+ * serves is the only intended client. Rsbuild's WebSocket envelope is never
+ * dialed, parsed, or forwarded here, so Rsbuild upgrades cannot silently
+ * change Runtime App reload behavior.
+ */
+export const runtimeClientSurfaceReloadChannelPath = '/__agent_bundle_runtime/reload';
+const reloadMessageKind = 'runtime-app-reload';
+const reloadMessageLimit = 256;
 const endpointKeys = Object.freeze([
   'entryPath',
   'httpOrigin',
   'httpPathPrefixes',
+  'subscribeReload',
   'surfaceId',
-  'webSocketOrigin',
-  'webSocketPath',
-  'webSocketToken',
 ] as const);
 const contentPolicyKeys = Object.freeze(['contentSecurityPolicy'] as const);
 
@@ -62,10 +65,8 @@ interface ValidatedEndpoint {
   readonly host: string;
   readonly httpOrigin: URL;
   readonly httpPathPrefixes: readonly string[];
+  readonly subscribeReload: (listener: () => void) => () => void;
   readonly surfaceId: string;
-  readonly webSocketOrigin: URL;
-  readonly webSocketPath: string;
-  readonly webSocketToken: string;
 }
 
 const invalidEndpoint = (message: string): never => {
@@ -176,7 +177,7 @@ const runtimeProxyShell = (
   entryDocument: string,
   hostOrigin: string,
   childContentSecurityPolicy: string,
-  webSocketPath: string,
+  initialReloadGeneration: number,
 ): string => `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -190,10 +191,11 @@ const runtimeProxyShell = (
   const initialEntry = ${escapedScriptValue(entryDocument)};
   const hostOrigin = ${escapedScriptValue(hostOrigin)};
   const childContentSecurityPolicy = ${escapedScriptValue(childContentSecurityPolicy)};
-  const webSocketPath = ${escapedScriptValue(webSocketPath)};
+  const reloadChannelPath = ${escapedScriptValue(runtimeClientSurfaceReloadChannelPath)};
+  const reloadMessageKind = ${escapedScriptValue(reloadMessageKind)};
   const maxAppToHostMessageBytes = ${String(runtimeAppMessageLimits.appToHostBytes)};
   const maxHostToAppMessageBytes = ${String(runtimeAppMessageLimits.hostToAppBytes)};
-  const maxHmrMessageBytes = maxAppToHostMessageBytes;
+  const maxReloadMessageBytes = ${String(reloadMessageLimit)};
   const maxEntryBytes = ${String(appAssetLimit)};
   const finiteOrdinaryJsonByteLength = ${runtimeAppFiniteOrdinaryJsonByteLength.toString()};
   const allowedKeys = new Set(['error', 'id', 'jsonrpc', 'method', 'params', 'result']);
@@ -201,9 +203,11 @@ const runtimeProxyShell = (
   let lifecycle = 'created';
   const maxPendingHostMessages = 32;
   let pendingHostMessages = [];
-  let hmr;
-  let hmrReconnectAttempts = 0;
-  let hmrReconnectTimer;
+  let reloadSocket;
+  let reloadReconnectAttempts = 0;
+  let reloadReconnectTimer;
+  let reloadGeneration = ${String(initialReloadGeneration)};
+  let appliedReloadGeneration = reloadGeneration;
   let refreshController;
   let refreshGeneration = 0;
   let refreshing = false;
@@ -240,6 +244,9 @@ const runtimeProxyShell = (
     if (refreshing || lifecycle === 'closed') return;
     refreshing = true;
     const generation = refreshGeneration;
+    // The requested generation this attempt can prove: the fetch starts now,
+    // so its response reflects at least every reload announced before now.
+    const target = reloadGeneration;
     const controller = new AbortController();
     refreshController = controller;
     const current = () => lifecycle !== 'closed' && refreshGeneration === generation && refreshController === controller && !controller.signal.aborted;
@@ -252,57 +259,69 @@ const runtimeProxyShell = (
       if (!/^text\\/html(?:;|$)/i.test(type)) return;
       const entry = await response.text();
       if (!current()) return;
-      installEntry(entry);
+      if (installEntry(entry)) appliedReloadGeneration = target;
     } catch {
-      // A failed reload must leave the already-admitted child and its bridge intact.
+      // A failed reload must leave the already-admitted child and its bridge
+      // intact. appliedReloadGeneration stays behind, so the next frame — the
+      // server replays its current generation on every reconnect — retries.
     } finally {
       if (refreshController === controller) {
         refreshController = undefined;
         refreshing = false;
+        // A reload announced while this refresh was in flight must not be
+        // swallowed: this fetch may predate that compilation's output, so
+        // run another refresh for the newer generation.
+        if (lifecycle !== 'closed' && reloadGeneration > target) void refreshEntry();
       }
     }
   };
   installEntry(initialEntry);
-  const reconnectHmr = () => {
-    if (lifecycle === 'closed' || hmrReconnectTimer !== undefined) return;
-    const delay = Math.min(1_000, 100 * (2 ** Math.min(hmrReconnectAttempts, 4)));
-    hmrReconnectAttempts += 1;
-    hmrReconnectTimer = setTimeout(() => {
-      hmrReconnectTimer = undefined;
-      openHmr();
+  const reconnectReloadChannel = () => {
+    if (lifecycle === 'closed' || reloadReconnectTimer !== undefined) return;
+    const delay = Math.min(1_000, 100 * (2 ** Math.min(reloadReconnectAttempts, 4)));
+    reloadReconnectAttempts += 1;
+    reloadReconnectTimer = setTimeout(() => {
+      reloadReconnectTimer = undefined;
+      openReloadChannel();
     }, delay);
   };
-  const openHmr = () => {
-    if (lifecycle === 'closed' || hmr !== undefined) return;
+  const openReloadChannel = () => {
+    if (lifecycle === 'closed' || reloadSocket !== undefined) return;
     let socket;
-    try { socket = new WebSocket(new URL(webSocketPath, location.origin).href); }
-    catch { reconnectHmr(); return; }
-    hmr = socket;
+    try { socket = new WebSocket(new URL(reloadChannelPath, location.origin).href); }
+    catch { reconnectReloadChannel(); return; }
+    reloadSocket = socket;
     const reconnect = () => {
-      if (hmr !== socket) return;
-      hmr = undefined;
+      if (reloadSocket !== socket) return;
+      reloadSocket = undefined;
       try { socket.close(); } catch {}
-      reconnectHmr();
+      reconnectReloadChannel();
     };
     socket.addEventListener('open', () => {
-      if (hmr !== socket || lifecycle === 'closed') return;
-      hmrReconnectAttempts = 0;
+      if (reloadSocket !== socket || lifecycle === 'closed') return;
+      reloadReconnectAttempts = 0;
     });
     socket.addEventListener('message', (event) => {
-      if (hmr !== socket || lifecycle === 'closed' || typeof event.data !== 'string' || event.data.length > maxHmrMessageBytes) return;
+      if (reloadSocket !== socket || lifecycle === 'closed' || typeof event.data !== 'string' || event.data.length > maxReloadMessageBytes) return;
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
-      if (!isRecord(message) || typeof message.type !== 'string') return;
-      // Rsbuild documents Environment.hot.send('full-reload'), but not this
-      // raw WebSocket envelope. In 2.2.1 it empirically arrives as JSON with a
-      // top-level type; only our provider-emitted reload kind is actionable.
-      // Private kinds such as ok/hash and unknown future kinds stay inert.
-      if (message.type === 'full-reload') void refreshEntry();
+      // The proxy authors this channel end to end; only its owned reload kind
+      // exists. Generations already applied stay inert, so duplicate frames
+      // and the on-connect resync are idempotent, while a generation newer
+      // than the last applied one always drives a refresh — catching up on
+      // reloads that fired while the socket was down (the server replays its
+      // current generation on every accepted connection), that arrived while
+      // a refresh fetch was already in flight, or whose refresh failed.
+      if (!isRecord(message) || message.kind !== reloadMessageKind) return;
+      const generation = message.generation;
+      if (typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation <= appliedReloadGeneration) return;
+      if (generation > reloadGeneration) reloadGeneration = generation;
+      void refreshEntry();
     });
     socket.addEventListener('close', reconnect);
     socket.addEventListener('error', reconnect);
   };
-  openHmr();
+  openReloadChannel();
   addEventListener('message', (event) => {
     if (lifecycle === 'closed') return;
     if (event.source === parent) {
@@ -344,11 +363,11 @@ const runtimeProxyShell = (
   addEventListener('pagehide', () => {
     lifecycle = 'closed';
     pendingHostMessages = [];
-    if (hmrReconnectTimer !== undefined) clearTimeout(hmrReconnectTimer);
-    hmrReconnectTimer = undefined;
-    const activeHmr = hmr;
-    hmr = undefined;
-    try { activeHmr?.close(); } catch {}
+    if (reloadReconnectTimer !== undefined) clearTimeout(reloadReconnectTimer);
+    reloadReconnectTimer = undefined;
+    const activeReloadSocket = reloadSocket;
+    reloadSocket = undefined;
+    try { activeReloadSocket?.close(); } catch {}
     const activeRefresh = refreshController;
     refreshController = undefined;
     try { activeRefresh?.abort(); } catch {}
@@ -366,12 +385,6 @@ const hasBody = (request: IncomingMessage): boolean => {
   if (typeof length === 'string' && length !== '0') return true;
   return request.headers['transfer-encoding'] !== undefined;
 };
-
-const rawDataBytes = (data: WebSocket.RawData): number => typeof data === 'string'
-  ? Buffer.byteLength(data)
-  : Array.isArray(data)
-    ? data.reduce((total, part) => total + part.byteLength, 0)
-    : data.byteLength;
 
 interface CanonicalPath {
   readonly normalized: string;
@@ -416,19 +429,19 @@ const literalHost = (value: URL): string => value.hostname.startsWith('[') && va
   ? value.hostname.slice(1, -1)
   : value.hostname;
 
-const origin = (value: string, protocol: 'http:' | 'ws:'): URL => {
+const origin = (value: string): URL => {
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    return invalidEndpoint(`a literal loopback ${protocol === 'http:' ? 'HTTP' : 'WebSocket'} origin`);
+    return invalidEndpoint('a literal loopback HTTP origin');
   }
   if (
-    parsed.protocol !== protocol || !loopbackHosts.has(literalHost(parsed)) ||
+    parsed.protocol !== 'http:' || !loopbackHosts.has(literalHost(parsed)) ||
     parsed.username.length > 0 || parsed.password.length > 0 || parsed.pathname !== '/' ||
     parsed.search.length > 0 || parsed.hash.length > 0
   ) {
-    return invalidEndpoint(`a literal loopback ${protocol === 'http:' ? 'HTTP' : 'WebSocket'} origin`);
+    return invalidEndpoint('a literal loopback HTTP origin');
   }
   return parsed;
 };
@@ -470,12 +483,8 @@ const endpoint = (input: DevRuntimeClientSurfaceEndpoint): ValidatedEndpoint => 
   if (typeof surfaceId !== 'string' || surfaceId.length === 0 || surfaceId.includes('\0')) {
     invalidEndpoint('a nonempty surface id');
   }
-  const httpOrigin = origin(endpointValue(input, 'httpOrigin'), 'http:');
-  const webSocketOrigin = origin(endpointValue(input, 'webSocketOrigin'), 'ws:');
+  const httpOrigin = origin(endpointValue(input, 'httpOrigin'));
   const host = literalHost(httpOrigin);
-  if (host !== literalHost(webSocketOrigin) || httpOrigin.port !== webSocketOrigin.port) {
-    invalidEndpoint('matching host and port for HTTP and WebSocket origins');
-  }
   const declaredPrefixes = endpointValue(input, 'httpPathPrefixes');
   if (!Array.isArray(declaredPrefixes) || declaredPrefixes.length === 0) {
     invalidEndpoint('at least one declared HTTP path prefix');
@@ -483,22 +492,15 @@ const endpoint = (input: DevRuntimeClientSurfaceEndpoint): ValidatedEndpoint => 
   const httpPathPrefixes = Object.freeze([...new Set(declaredPrefixes.map(prefix))]);
   const entryPath = canonicalPath(endpointValue(input, 'entryPath')).normalized;
   if (!matchesPrefix(entryPath, httpPathPrefixes)) invalidEndpoint('an entry path within a declared HTTP prefix');
-  const webSocketPath = canonicalPath(endpointValue(input, 'webSocketPath')).upstream;
-  const webSocketToken = endpointValue(input, 'webSocketToken');
-  // Rsbuild documents webSocketToken only as a string; its current
-  // base64url-like alphabet and length are empirical, not API guarantees.
-  if (typeof webSocketToken !== 'string' || webSocketToken.length === 0 || webSocketToken.length > hmrTokenMaxLength) {
-    invalidEndpoint('a nonempty bounded Rsbuild WebSocket token');
-  }
+  const subscribeReload = endpointValue(input, 'subscribeReload');
+  if (typeof subscribeReload !== 'function') invalidEndpoint('a provider-owned subscribeReload function');
   return Object.freeze({
     entryPath,
     host,
     httpOrigin,
     httpPathPrefixes,
+    subscribeReload: subscribeReload as ValidatedEndpoint['subscribeReload'],
     surfaceId,
-    webSocketOrigin,
-    webSocketPath,
-    webSocketToken,
   });
 };
 
@@ -602,12 +604,14 @@ export class RuntimeClientSurfaceProxy {
     const upstreamAborts = new Set<() => void>();
     const upstreamRequests = new Set<ClientRequest>();
     const upstreamSockets = new Set<Socket>();
-    const webSockets = new Set<WebSocket>();
-    const webSocketServer = new WebSocketServer({ maxPayload: webSocketMessageLimit, noServer: true });
+    const reloadClients = new Set<WebSocket>();
+    const webSocketServer = new WebSocketServer({ maxPayload: reloadMessageLimit, noServer: true });
     let activeConnections = 0;
     let bootstrapUsed = false;
     let closed = false;
     let closePromise: Promise<void> | undefined;
+    let reloadGeneration = 0;
+    let reloadSubscription: (() => void) | undefined;
 
     const emit = (type: RuntimeClientSurfaceConnectionEvent['type']): void => {
       try {
@@ -615,6 +619,21 @@ export class RuntimeClientSurfaceProxy {
       } catch {
         // Browser HMR availability must not depend on an observability listener.
       }
+    };
+
+    const sendReloadFrame = (client: WebSocket): void => {
+      if (client.readyState !== WebSocket.OPEN) return;
+      try {
+        client.send(JSON.stringify({ generation: reloadGeneration, kind: reloadMessageKind }));
+      } catch {
+        client.terminate();
+      }
+    };
+
+    const announceReload = (): void => {
+      if (closed) return;
+      reloadGeneration += 1;
+      for (const client of [...reloadClients]) sendReloadFrame(client);
     };
 
     const isAuthenticated = (request: IncomingMessage): boolean =>
@@ -685,6 +704,10 @@ export class RuntimeClientSurfaceProxy {
             return;
           }
           bootstrapUsed = true;
+          // Capture the reload generation before fetching the entry: a reload
+          // that lands during the fetch then reads as newer than this shell's
+          // baseline, so the channel refreshes it instead of losing it.
+          const bootstrapReloadGeneration = reloadGeneration;
           let entryDocument: string;
           try {
             entryDocument = await readCurrentEntry();
@@ -705,7 +728,7 @@ export class RuntimeClientSurfaceProxy {
             entryDocument,
             trustedHostOrigin,
             trustedContentSecurityPolicy,
-            trusted.webSocketPath,
+            bootstrapReloadGeneration,
           ));
           return;
         }
@@ -838,76 +861,37 @@ export class RuntimeClientSurfaceProxy {
         return reject(404);
       }
       if (!isAuthenticated(request)) return reject(403);
-      if (requestUrl.pathname !== trusted.webSocketPath) return reject(404);
+      if (requestUrl.pathname !== runtimeClientSurfaceReloadChannelPath) return reject(404);
       if (requestUrl.search.length > 0) return reject(404);
       if (request.headers.origin !== proxyOrigin) return reject(403);
-      const requestedProtocols = typeof request.headers['sec-websocket-protocol'] === 'string'
-        ? request.headers['sec-websocket-protocol'].split(',').map((protocol) => protocol.trim()).filter(Boolean)
-        : [];
-      webSocketServer.handleUpgrade(request, socket, head, (downstream) => {
-        const upstreamUrl = new URL(trusted.webSocketPath, trusted.webSocketOrigin);
-        upstreamUrl.searchParams.set('token', trusted.webSocketToken);
-        const upstream = new WebSocket(upstreamUrl, requestedProtocols.length > 0 ? requestedProtocols : undefined, {
-          handshakeTimeout: upstreamHandshakeTimeout,
-          maxPayload: webSocketMessageLimit,
-        });
-        webSockets.add(downstream);
-        webSockets.add(upstream);
-        let announced = false;
-        let pairClosed = false;
-        let pendingDownstreamBytes = 0;
-        let pendingDownstreamMessages = 0;
-        const pendingDownstream: Array<Readonly<{ readonly data: WebSocket.RawData; readonly isBinary: boolean }>> = [];
-        const closePair = (): void => {
-          if (pairClosed) return;
-          pairClosed = true;
-          if (announced) {
-            activeConnections -= 1;
-            emit('disconnected');
-          }
-          webSockets.delete(downstream);
-          webSockets.delete(upstream);
-          pendingDownstream.length = 0;
-          pendingDownstreamBytes = 0;
-          pendingDownstreamMessages = 0;
-          if (downstream.readyState === WebSocket.OPEN || downstream.readyState === WebSocket.CONNECTING) downstream.terminate();
-          if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
+      // The owned channel has no subprotocols; a client negotiating one is
+      // not the relay shell this proxy installed.
+      if (request.headers['sec-websocket-protocol'] !== undefined) return reject(403);
+      webSocketServer.handleUpgrade(request, socket, head, (client) => {
+        if (closed) {
+          client.terminate();
+          return;
+        }
+        reloadClients.add(client);
+        activeConnections += 1;
+        emit('connected');
+        let released = false;
+        const release = (): void => {
+          if (released) return;
+          released = true;
+          reloadClients.delete(client);
+          activeConnections -= 1;
+          emit('disconnected');
+          if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) client.terminate();
         };
-        const overBackpressure = (): boolean => downstream.bufferedAmount > webSocketBufferLimit || upstream.bufferedAmount > webSocketBufferLimit;
-        const forward = (destination: WebSocket, data: WebSocket.RawData, isBinary: boolean): void => {
-          if (pairClosed || destination.readyState !== WebSocket.OPEN) return;
-          destination.send(data, { binary: isBinary }, () => {
-            if (overBackpressure()) closePair();
-          });
-          if (overBackpressure()) closePair();
-        };
-        upstream.once('open', () => {
-          if (pairClosed) return;
-          announced = true;
-          activeConnections += 1;
-          emit('connected');
-          for (const pending of pendingDownstream.splice(0)) forward(upstream, pending.data, pending.isBinary);
-          pendingDownstreamBytes = 0;
-          pendingDownstreamMessages = 0;
-        });
-        downstream.on('message', (data, isBinary) => {
-          if (upstream.readyState === WebSocket.CONNECTING) {
-            pendingDownstreamBytes += rawDataBytes(data);
-            pendingDownstreamMessages += 1;
-            if (pendingDownstreamBytes > webSocketMessageLimit || pendingDownstreamMessages > pendingWebSocketMessageLimit) {
-              closePair();
-              return;
-            }
-            pendingDownstream.push(Object.freeze({ data, isBinary }));
-            return;
-          }
-          forward(upstream, data, isBinary);
-        });
-        upstream.on('message', (data, isBinary) => forward(downstream, data, isBinary));
-        downstream.once('close', closePair);
-        upstream.once('close', closePair);
-        downstream.once('error', closePair);
-        upstream.once('error', closePair);
+        // The channel is strictly proxy-to-relay; an inbound frame means the
+        // peer is not the installed shell, so release it instead of buffering.
+        client.on('message', release);
+        client.once('close', release);
+        client.once('error', release);
+        // Replay the current generation so a shell that reconnects after a
+        // missed reload refreshes instead of silently staying stale.
+        sendReloadFrame(client);
       });
     });
 
@@ -934,23 +918,38 @@ export class RuntimeClientSurfaceProxy {
       if (closePromise !== undefined) return closePromise;
       closed = true;
       closePromise = (async () => {
+        try {
+          reloadSubscription?.();
+        } catch {
+          // Provider-side unsubscribe failures must not block browser release.
+        }
+        reloadSubscription = undefined;
         for (const abort of [...upstreamAborts]) abort();
         for (const request of upstreamRequests) request.destroy();
         upstreamAgent.destroy();
         for (const socket of upstreamSockets) socket.destroy();
-        for (const socket of webSockets) socket.terminate();
+        for (const socket of reloadClients) socket.terminate();
         for (const socket of sockets) socket.destroy();
         webSocketServer.close();
         await closeServer(server);
       })();
       return closePromise;
     };
+    try {
+      const subscription = trusted.subscribeReload(announceReload);
+      if (typeof subscription !== 'function') {
+        throw new TypeError('Runtime client surface endpoint must return a reload unsubscriber.');
+      }
+      reloadSubscription = subscription;
+    } catch (error) {
+      await close();
+      throw error;
+    }
     return Object.freeze({
       bootstrapUrl: `${proxyOrigin}${bootstrapPath}`,
       close,
       origin: proxyOrigin,
       surfaceId: trusted.surfaceId,
-      webSocketPath: trusted.webSocketPath,
     });
   }
 }

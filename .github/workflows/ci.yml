@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Nightly release-boundary matrix (packed-matrix job): the scaffolder
+  # template tests beyond the per-PR minimal-template smoke.
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +20,7 @@ concurrency:
 jobs:
   # Builds and checks every public example through its own toolchain.
   examples-check:
+    if: github.event_name != 'schedule'
     name: Examples check (Node 22.19)
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -30,6 +35,7 @@ jobs:
       - run: pnpm examples:check
 
   verify:
+    if: github.event_name != 'schedule'
     name: Verify (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -56,9 +62,31 @@ jobs:
       - run: pnpm test
 
   release-gates:
+    if: github.event_name != 'schedule'
     name: Release gates (Node 22.19)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v2
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chrome
+      # Per-PR packed pool: single pack+install proofs plus the
+      # minimal-template scaffolder smoke. The full template matrix runs in
+      # the nightly packed-matrix job and in pre-publish `pnpm check:release`.
+      - run: pnpm check:release:ci
+
+  # Release-boundary scaffolder template matrix (mcp-server, cli-tool) plus
+  # the full packed pool — the nightly form of pre-publish `check:release`.
+  packed-matrix:
+    if: github.event_name == 'schedule'
+    name: Packed release matrix (Node 22.19)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/setup@v2
@@ -75,6 +103,7 @@ jobs:
     # (hook -> RSC worker -> shared kernel state -> MCP tool lowering) without
     # any real Claude/Codex host. Real native-host smokes stay skip-gated in
     # the manually dispatched native-host-smoke workflow on purpose.
+    if: github.event_name != 'schedule'
     name: RSC runtime micro-eval (Node 22.19)
     runs-on: ubuntu-latest
     timeout-minutes: 15

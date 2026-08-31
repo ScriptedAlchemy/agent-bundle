@@ -20,6 +20,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { sha256Hex } from '../src/core/digest.ts';
+import { installedEnvironment, npmInstallArguments } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -36,11 +37,6 @@ interface FileDigest {
 interface ManifestDigest extends FileDigest {
   readonly mode?: number;
 }
-
-const installedEnvironment = (): NodeJS.ProcessEnv => {
-  const { NODE_PATH: _nodePath, ...environment } = process.env;
-  return environment;
-};
 
 const artifactDigest = async (root: string): Promise<readonly FileDigest[]> => {
   const collect = async (directory: string): Promise<FileDigest[]> => {
@@ -78,6 +74,11 @@ it('uses only an installed tarball after source deletion', async () => {
   const artifact = join(projectRoot, 'artifact with spaces');
 
   try {
+    // Deliberately not sharedPackedTarball: this test packs from a deletable
+    // copy of the package and removes that copy after install, proving the
+    // tarball's contents hold no path references back to the pack source. The
+    // shared tarball packs from the live workspace, which survives the run,
+    // so a leaked path would resolve and pass silently.
     await cp(packageRoot, packedPackageRoot, { recursive: true });
     await execFile(join(workspaceRoot, 'node_modules', '.bin', 'rslib'), [
       'build', '--config', join(packageRoot, 'rslib.config.ts'), '--dist-path', join(packedPackageRoot, 'dist'),
@@ -97,10 +98,6 @@ it('uses only an installed tarball after source deletion', async () => {
       stat(join(projectRoot, 'src', 'shell.sh')).then((metadata) => metadata.mode & 0o777),
       stat(join(projectRoot, 'src', 'python.py')).then((metadata) => metadata.mode & 0o777),
     ]);
-    await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], {
-      cwd: projectRoot,
-      env: installedEnvironment(),
-    });
     await mkdir(scriptProjectRoot, { recursive: true });
     await Promise.all([
       writeFile(join(scriptProjectRoot, 'package.json'), '{"type":"module"}\n'),
@@ -110,10 +107,13 @@ it('uses only an installed tarball after source deletion', async () => {
       ),
       writeFile(join(scriptProjectRoot, 'shell.sh'), "printf 'packed script stdout\\n'\nprintf 'packed script stderr\\n' >&2\n"),
     ]);
-    await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], {
-      cwd: scriptProjectRoot,
-      env: installedEnvironment(),
-    });
+    // The two consumers are disjoint directories; npm's cache handles the
+    // concurrent installs (the scaffolder e2e relies on the same property).
+    await Promise.all([projectRoot, scriptProjectRoot].map(async (consumer) =>
+      execFile('npm', ['install', ...npmInstallArguments, tarball], {
+        cwd: consumer,
+        env: installedEnvironment(),
+      })));
 
     const cli = join(projectRoot, 'node_modules', '.bin', 'agent-bundle');
     const installedPackage = await realpath(join(projectRoot, 'node_modules', 'agent-bundle'));
@@ -331,7 +331,7 @@ it('uses only an installed tarball after source deletion', async () => {
         '',
       ].join('\n')),
     ]);
-    await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], {
+    await execFile('npm', ['install', ...npmInstallArguments, tarball], {
       cwd: frameworkRoot,
       env: installedEnvironment(),
     });

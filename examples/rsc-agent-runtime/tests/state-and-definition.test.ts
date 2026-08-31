@@ -470,8 +470,16 @@ test('excludes a live heartbeat owner and recovers its stale lock only after SIG
     owner.kill('SIGKILL');
     await new Promise<void>((resolve) => owner.once('close', () => resolve()));
     await wait(2_100);
+    // This test asserts stale-lock recovery, not the release/settlement
+    // budgets (dedicated tests pin those with explicit adapter values). The
+    // test-kernel 100ms defaults poison a recovered mutation whenever one
+    // lock-directory fs operation stalls on a contended runner, so the
+    // recovery kernel uses the scaled production budgets instead.
     await expect(
-      createTestFileRuntimeKernel({ stateFile }).recordEdit({
+      createTestFileRuntimeKernel({
+        adapter: { ownerSettlementMs: 10_000 * timeScale, releaseMs: 10_000 * timeScale },
+        stateFile,
+      }).recordEdit({
         host: 'codex',
         idempotencyKey: 'test:state:stale-recovery',
         path: 'recovered.ts',
