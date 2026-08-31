@@ -731,9 +731,9 @@ it('reports snapshot failures as frozen preparation diagnostics', async () => {
     '',
   ].join('\n'));
   const output = join(root, 'snapshot-output');
-  const externalOutput = join(root, '..', 'snapshot-output-external');
+  // Unique path: a fixed name under tmpdir collides across concurrent runs.
+  const externalOutput = await mkdtemp(join(tmpdir(), 'agent-bundle-snapshot-output-external-'));
   try {
-    await mkdir(externalOutput);
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       "import { symlinkSync } from 'node:fs';",
       'export default ({ projectRoot }) => {',
