@@ -27,6 +27,7 @@ const installedEnvironment = (): NodeJS.ProcessEnv => {
 };
 
 const packs = new Map<SharedPackPackage, Promise<SharedPack>>();
+let fallbackBuild: Promise<void> | undefined;
 
 const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => {
   const sharedDirectory = process.env['AGENT_BUNDLE_SHARED_PACK_DIR'];
@@ -35,9 +36,16 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
   }
   // Ad-hoc single-file runs have no run-level tarball, so build once (unless
   // the caller marked the workspace dist prebuilt) and pack into a
-  // per-process temporary directory that is dropped on exit.
+  // per-process temporary directory that is dropped on exit. The build
+  // promise is process-wide so concurrent callers share one build, and it
+  // runs with NODE_ENV=production like the release pipeline the tarball
+  // stands in for.
   if (process.env['AGENT_BUNDLE_PACKAGE_PREBUILT'] !== '1') {
-    await execFile('pnpm', ['build'], { cwd: workspaceRoot, env: installedEnvironment() });
+    fallbackBuild ??= execFile('pnpm', ['build'], {
+      cwd: workspaceRoot,
+      env: { ...installedEnvironment(), NODE_ENV: 'production' },
+    }).then(() => undefined);
+    await fallbackBuild;
   }
   const destination = await mkdtemp(join(tmpdir(), 'agent-bundle-shared-pack-'));
   process.once('exit', () => {
@@ -45,7 +53,7 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
   });
   const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', destination], {
     cwd: join(workspaceRoot, 'packages', packageName),
-    env: installedEnvironment(),
+    env: { ...installedEnvironment(), NODE_ENV: 'production' },
   });
   const [packOutput] = JSON.parse(stdout) as [SharedPackOutput];
   return { packOutput, tarball: join(destination, packOutput.filename) };

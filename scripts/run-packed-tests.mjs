@@ -10,17 +10,37 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { NODE_PATH: _nodePath, ...environment } = process.env;
 
 /**
- * Packs each public package once and runs the packed pool against the shared
- * tarballs (tests/support/shared-pack.ts). The caller (`test:packed`) builds
- * first, so the pool also runs with the prebuilt seams set instead of every
- * test file rebuilding the workspace for itself.
+ * Builds once, packs each public package once, and runs the packed pool
+ * against the shared tarballs (tests/support/shared-pack.ts) with the
+ * prebuilt seams set instead of every test file rebuilding the workspace for
+ * itself. Build and pack run with NODE_ENV=production like the release
+ * pipeline they stand in for; the test run itself keeps the ambient
+ * environment.
  */
+const run = (command, args, extraEnvironment = {}) => new Promise((resolvePromise, rejectPromise) => {
+  const child = spawn(command, args, {
+    cwd: repositoryRoot,
+    env: { ...environment, ...extraEnvironment },
+    stdio: 'inherit',
+  });
+  child.once('error', rejectPromise);
+  child.once('exit', (code, signal) => {
+    resolvePromise(signal === null ? (code ?? 1) : 1);
+  });
+});
+
+const buildExitCode = await run('pnpm', ['build'], { NODE_ENV: 'production' });
+if (buildExitCode !== 0) {
+  process.exitCode = buildExitCode;
+  process.exit();
+}
+
 const packDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-shared-pack-'));
 try {
   for (const packageName of ['agent-bundle', 'create-agent-bundle']) {
     const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', packDirectory], {
       cwd: join(repositoryRoot, 'packages', packageName),
-      env: environment,
+      env: { ...environment, NODE_ENV: 'production' },
     });
     const [packOutput] = JSON.parse(stdout);
     await writeFile(
@@ -28,21 +48,10 @@ try {
       `${JSON.stringify({ packOutput, tarball: join(packDirectory, packOutput.filename) })}\n`,
     );
   }
-  process.exitCode = await new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn('pnpm', ['exec', 'rstest', '--config', 'rstest.packed.config.ts', ...process.argv.slice(2)], {
-      cwd: repositoryRoot,
-      env: {
-        ...environment,
-        AGENT_BUNDLE_PACKAGE_PREBUILT: '1',
-        AGENT_BUNDLE_SHARED_PACK_DIR: packDirectory,
-        AGENT_BUNDLE_WORKBENCH_PREBUILT: '1',
-      },
-      stdio: 'inherit',
-    });
-    child.once('error', rejectPromise);
-    child.once('exit', (code, signal) => {
-      resolvePromise(signal === null ? (code ?? 1) : 1);
-    });
+  process.exitCode = await run('pnpm', ['exec', 'rstest', '--config', 'rstest.packed.config.ts', ...process.argv.slice(2)], {
+    AGENT_BUNDLE_PACKAGE_PREBUILT: '1',
+    AGENT_BUNDLE_SHARED_PACK_DIR: packDirectory,
+    AGENT_BUNDLE_WORKBENCH_PREBUILT: '1',
   });
 } finally {
   await rm(packDirectory, { force: true, recursive: true });
