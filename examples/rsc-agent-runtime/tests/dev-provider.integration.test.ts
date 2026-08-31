@@ -19,6 +19,7 @@ import {
 import { createDevRuntimeProvider } from '../src/dev/provider.js';
 import { ResourceLedger, RsbuildRuntimeSession } from '../src/dev/rsbuild-runtime-session.js';
 import { copyExample, type CopiedExample } from './support/copy-example.ts';
+import { ensureExampleBuilt } from './support/ensure-built.ts';
 import { timeScale } from './support/time-scale.ts';
 
 const exampleRoot = process.cwd();
@@ -298,6 +299,12 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
   const copied = await copyProviderExample();
   try {
     const root = copied.projectRoot;
+    // Host artifacts package the declared prebuilt payload trees, so building
+    // them requires the example's own Rsbuild output to exist in the copy.
+    await ensureExampleBuilt();
+    for (const payload of ['runtime', 'app']) {
+      await cp(join(exampleRoot, 'dist', payload), join(root, 'dist', payload), { recursive: true });
+    }
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root }).prepare('dev');
 
     expect(prepared.source.state).toBe('ready');
@@ -306,8 +313,11 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       provider: './src/dev/provider.ts',
       servers: [expect.objectContaining({ name: 'timeline', transport: 'stdio' })],
     });
+    // One prebuilt hook declaration per host (each carries its own
+    // `--host` argument), replacing the previous dual-target declaration.
     expect(prepared.model?.hooks).toEqual(expect.arrayContaining([
-      expect.objectContaining({ targets: expect.arrayContaining(['claude', 'codex']) }),
+      expect.objectContaining({ prebuiltPath: 'runtime/hook/index.js', targets: ['claude'] }),
+      expect.objectContaining({ prebuiltPath: 'runtime/hook/index.js', targets: ['codex'] }),
     ]));
 
     const artifact = await new ArtifactService({ epochStore: new EpochStore({ projectRoot: root }) }).build(prepared);

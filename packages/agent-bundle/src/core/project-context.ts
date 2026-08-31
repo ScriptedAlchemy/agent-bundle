@@ -96,7 +96,13 @@ const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   ...(model.assets ?? []).flatMap((asset) => [asset.provenance.sourcePath, asset.source]),
   ...Object.values(model.extensions).map((extension) => extension.provenance.sourcePath),
   ...model.targets.map((target) => target.provenance.sourcePath),
-  ...model.hooks.flatMap((hook) => [hook.provenance.sourcePath, hook.source]),
+  // A prebuilt hook's source is its payload file, which may not exist yet
+  // (the payload comes from the consumer's own build step); its bytes join
+  // the identity through the enumerated payload files instead.
+  ...model.hooks.flatMap((hook) => [
+    hook.provenance.sourcePath,
+    ...(hook.prebuiltPath === undefined ? [hook.source] : []),
+  ]),
   ...model.skills.flatMap((skill) => [
     skill.dir,
     skill.provenance.sourcePath,
@@ -119,6 +125,13 @@ const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   ...(model.packageBuild?.lib === undefined
     ? []
     : [model.packageBuild.lib.provenance.sourcePath, model.packageBuild.lib.source]),
+  // The payload source directory is deliberately absent: a declared payload
+  // may not exist yet (its files list is then empty), and the enumerated
+  // files below carry the byte-level identity.
+  ...(model.payloads ?? []).flatMap((payload) => [
+    payload.provenance.sourcePath,
+    ...payload.files.map((file) => file.source),
+  ]),
 ];
 
 const assertModelPathsResolveInsideProject = (root: string, model: NormalizedPlugin): void => {
@@ -192,6 +205,19 @@ export const canonicalizeNormalizedModel = (
           ...hook,
           provenance: canonicalProvenance(root, hook.provenance),
           source: canonicalCompilerPath(root, hook.source, 'Native hook source path'),
+        })),
+      }),
+    ...(detached.payloads === undefined
+      ? {}
+      : {
+        payloads: detached.payloads.map((payload) => ({
+          ...payload,
+          files: payload.files.map((file) => ({
+            ...file,
+            source: canonicalCompilerPath(root, file.source, 'Payload file source path'),
+          })),
+          provenance: canonicalProvenance(root, payload.provenance),
+          source: canonicalCompilerPath(root, payload.source, 'Payload source path'),
         })),
       }),
     ...(detached.packageBuild === undefined

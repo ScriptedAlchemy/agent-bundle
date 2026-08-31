@@ -178,6 +178,16 @@ export const createRscRuntimeRsbuildConfig = (
     development ? join(options.compilerRoot as string, name) : productionRoot;
 
   return {
+    // The runtime flavor is a pinned contract: react and react-server-dom
+    // compile as their production variants, so Flight payloads stay compact
+    // model rows without development debug/timing frames. This was
+    // previously implicit — some in-process bundler run (for example the
+    // dev artifact epoch compiling MCP entries) had already set NODE_ENV to
+    // "production" before this config compiled. With prebuilt host
+    // packaging nothing else compiles first, so the flavor must not float
+    // with ambient NODE_ENV. `options.mode` keeps selecting the compile
+    // topology (dev entries, compiler roots) independently of this flavor.
+    mode: 'production',
     ...(development ? {
       dev: { writeToDisk: true },
       server: { host: '127.0.0.1', printUrls: false },

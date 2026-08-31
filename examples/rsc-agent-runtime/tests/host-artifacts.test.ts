@@ -17,10 +17,17 @@ const pluginsRoot = join(exampleRoot, 'dist/plugins');
 
 const runPackageHosts = async (): Promise<void> => {
   await ensureExampleBuilt();
-  const child = spawn(process.execPath, ['scripts/package-hosts.mjs'], { cwd: exampleRoot, stdio: 'pipe' });
+  // Repackaging the existing prebuilt payload is agent-bundle's job now; the
+  // command must be independently rerunnable against the current dist trees.
+  const child = spawn('pnpm', ['exec', 'agent-bundle', 'build', '--json', '--output', 'dist/plugins'], {
+    cwd: exampleRoot,
+    stdio: 'pipe',
+  });
+  const stderr: Buffer[] = [];
+  child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
   const [exitCode, signal] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
   expect(signal).toBeNull();
-  expect(exitCode).toBe(0);
+  expect(exitCode, Buffer.concat(stderr).toString('utf8')).toBe(0);
 };
 
 const runProductionBuild = async (): Promise<void> => {
@@ -118,22 +125,29 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
     join(codexRoot, 'hooks/hooks.json'),
   );
 
-  expect(claudeManifest).toMatchObject({ name: 'rsc-agent-runtime', version: '0.1.0' });
+  // Host manifests are generated from agent-bundle.config.ts now, so the
+  // plugin identity is the config's plugin block rather than the previously
+  // hand-rolled name/version pair.
+  expect(claudeManifest).toMatchObject({ name: 'rsc-agent-runtime-demo', version: '1.0.0' });
   expect(codexManifest).toMatchObject({
     hooks: './hooks/hooks.json',
     interface: expect.any(Object),
     mcpServers: './.mcp.json',
-    name: 'rsc-agent-runtime',
+    name: 'rsc-agent-runtime-demo',
     skills: './skills/',
-    version: '0.1.0',
+    version: '1.0.0',
   });
-  expect(claudeMcp.mcpServers['rsc-agent-runtime'].args).toContain('${CLAUDE_PLUGIN_ROOT}/runtime/mcp/stdio.js');
-  expect(codexMcp.mcpServers['rsc-agent-runtime']).toMatchObject({ args: ['./runtime/mcp/stdio.js'], cwd: './' });
-  expect(JSON.stringify(codexMcp)).not.toMatch(/PLUGIN_ROOT|PLUGIN_DATA|workspace/i);
-  expect(claudeHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: 'Write|Edit' });
+  // The stable prebuilt entry paths the workers and manual flows pin.
+  expect(claudeMcp.mcpServers['timeline'].args).toContain('${CLAUDE_PLUGIN_ROOT}/runtime/mcp/stdio.js');
+  expect(codexMcp.mcpServers['timeline']).toMatchObject({ args: ['./runtime/mcp/stdio.js'], cwd: './' });
+  // Codex has no path-token interpolation: no `${...}` token may survive into
+  // its document. (The AGENT_BUNDLE_PLUGIN_ROOT env anchor is a plain
+  // variable name, not a host token.)
+  expect(JSON.stringify(codexMcp)).not.toMatch(/\$\{|workspace/i);
+  expect(claudeHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: '^(?:Write|Edit)$' });
   expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('${CLAUDE_PLUGIN_ROOT}');
   expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('--host claude');
-  expect(codexHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: 'apply_patch' });
+  expect(codexHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: '^(?:apply_patch|Edit|Write)$' });
   expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('${PLUGIN_ROOT}');
   expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('--host codex');
   expect(JSON.stringify({ claudeMcp, claudeHooks, codexMcp, codexHooks })).not.toMatch(/api[ _-]?key/i);
@@ -157,7 +171,10 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
     const appHtml = await readFile(join(exampleRoot, relative), 'utf8');
     expect(appHtml).not.toMatch(/<script[^>]+src=|<link[^>]+rel=["']stylesheet["']/iu);
   }
-  for (const relative of ['.agents/plugins/marketplace.json', '.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json', 'skills']) {
+  // The generated layout has no empty skills directory for this skill-less
+  // plugin; the manifest's `./skills/` pointer stays, matching every other
+  // framework-built Codex artifact.
+  for (const relative of ['.agents/plugins/marketplace.json', '.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json']) {
     await access(join(codexRoot, relative));
   }
 });

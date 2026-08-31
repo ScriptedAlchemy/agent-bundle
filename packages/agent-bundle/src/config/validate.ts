@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import { scanEntryExportsSource } from '../build/entry-exports.ts';
@@ -10,7 +10,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { parseNativeHookToolSelector } from '../core/types.ts';
+import { isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleHookEntry,
@@ -18,6 +18,8 @@ import type {
   AgentBundleLibEntry,
   AgentBundleMcpApp,
   AgentBundleMcpServer,
+  AgentBundlePayloadEntry,
+  AgentBundlePrebuiltEntry,
   AgentBundleScriptInput,
   CanonicalHookEvent,
   NormalizationTargetRegistry,
@@ -27,6 +29,7 @@ import {
   conventionalCliEntrySource,
   conventionalIndexEntrySource,
   conventionalMcpEntrySource,
+  reservedPayloadDestinations,
 } from './normalize.ts';
 import type { DiscoveredProject } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
@@ -71,6 +74,7 @@ const asHookEntries = (input: AgentBundleHookInput): readonly (string | AgentBun
 const validateHooks = (
   loaded: LoadedConfig,
   registry: NormalizationTargetRegistry,
+  payloads: readonly DeclaredPayload[],
 ): Diagnostic[] => {
   const hooks = loaded.config.hooks;
   if (hooks === undefined) return [];
@@ -84,12 +88,42 @@ const validateHooks = (
     if (input === undefined) continue;
     for (const rawEntry of asHookEntries(input)) {
       const entry = typeof rawEntry === 'string' ? { handler: rawEntry } : rawEntry;
-      if (typeof entry.handler !== 'string' || entry.handler.trim().length === 0) {
+      const prebuilt = isPrebuiltEntryInput(entry.handler);
+      if (prebuilt) {
+        const hookTargets = Array.isArray(entry.targets) && entry.targets.every(nonemptyString)
+          ? entry.targets
+          : selectedTargets.filter((target) => registry.supports(target, 'hooks'));
+        diagnostics.push(...validatePrebuiltReference(
+          `Hook ${event}`,
+          entry.handler as AgentBundlePrebuiltEntry,
+          hookTargets,
+          loaded,
+          payloads,
+        ));
+      } else if (typeof entry.handler !== 'string' || entry.handler.trim().length === 0) {
         diagnostics.push(sourceDiagnostic(
           'AB4200',
           `Hook ${event} requires a nonempty handler path.`,
           loaded.configPath,
         ));
+      }
+      if (entry.args !== undefined) {
+        if (!prebuilt) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4746',
+            `Hook ${event} declares arguments, but only prebuilt handlers accept arguments.`,
+            loaded.configPath,
+          ));
+        } else if (
+          !Array.isArray(entry.args) ||
+          entry.args.some((argument) => typeof argument !== 'string' || !safePrebuiltArgumentPattern.test(argument))
+        ) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4746',
+            `Hook ${event} arguments must be shell-safe strings (letters, digits, and %+,-./:=@_).`,
+            loaded.configPath,
+          ));
+        }
       }
       if (entry.tools !== undefined && event !== 'beforeTool' && event !== 'afterTool') {
         diagnostics.push(sourceDiagnostic(
@@ -587,6 +621,8 @@ const validateMcpServer = (
   name: string,
   value: unknown,
   loaded: LoadedConfig,
+  registry: NormalizationTargetRegistry,
+  payloads: readonly DeclaredPayload[],
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   if (!nonemptyString(name)) {
@@ -638,7 +674,18 @@ const validateMcpServer = (
   diagnostics.push(...validateStringList(server.targets, 'targets', 'AB4305', loaded));
 
   if (entry !== undefined || conventionalEntry !== undefined) {
-    if (entry !== undefined && !nonemptyString(entry)) {
+    if (isPrebuiltEntryInput(entry)) {
+      const serverTargets = Array.isArray(server.targets) && server.targets.every(nonemptyString)
+        ? server.targets
+        : selectedTargetNamesFor(loaded, registry);
+      diagnostics.push(...validatePrebuiltReference(
+        `MCP server ${JSON.stringify(name)}`,
+        entry,
+        serverTargets,
+        loaded,
+        payloads,
+      ));
+    } else if (entry !== undefined && !nonemptyString(entry)) {
       diagnostics.push(sourceDiagnostic('AB4306', `MCP server ${JSON.stringify(name)} entry must be a nonempty path.`, loaded.configPath));
     } else if (entry !== undefined && !localEntryExists(loaded.context.projectRoot, entry)) {
       diagnostics.push(sourceDiagnostic('AB4307', `MCP server ${JSON.stringify(name)} entry does not exist.`, loaded.configPath));
@@ -654,7 +701,9 @@ const validateMcpServer = (
     }
     diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
     diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
-    diagnostics.push(...selfConnectingEntryNudge(name, entry, conventionalEntry, loaded));
+    if (!isPrebuiltEntryInput(entry)) {
+      diagnostics.push(...selfConnectingEntryNudge(name, entry, conventionalEntry, loaded));
+    }
     return diagnostics;
   }
 
@@ -750,7 +799,11 @@ const validateRuntime = (loaded: LoadedConfig): Diagnostic[] => {
   return [];
 };
 
-const validateMcp = (loaded: LoadedConfig): Diagnostic[] => {
+const validateMcp = (
+  loaded: LoadedConfig,
+  registry: NormalizationTargetRegistry,
+  payloads: readonly DeclaredPayload[],
+): Diagnostic[] => {
   const mcp = loaded.config.mcp;
   if (mcp === undefined) return [];
   if (!isRecord(mcp)) {
@@ -762,7 +815,7 @@ const validateMcp = (loaded: LoadedConfig): Diagnostic[] => {
   const names = new Map<string, string | undefined>();
   const uris = new Map<string, string>();
   return Object.entries(mcp.servers).flatMap(([name, server]) => {
-    const diagnostics = validateMcpServer(name, server, loaded);
+    const diagnostics = validateMcpServer(name, server, loaded, registry, payloads);
     return isRecord(server)
       ? [...diagnostics, ...validateMcpApps(name, server as AgentBundleMcpServer, loaded, names, uris)]
       : diagnostics;
@@ -936,6 +989,279 @@ const packageConventionShadowNudges = (loaded: LoadedConfig): Diagnostic[] => {
   return diagnostics;
 };
 
+const warningDiagnostic = (
+  code: string,
+  message: string,
+  sourcePath: string,
+  recovery: string,
+): Diagnostic => ({ code, message, recovery, severity: 'warning', sourcePath });
+
+const isSafePayloadName = (name: string): boolean =>
+  /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(name);
+
+interface DeclaredPayload {
+  readonly name: string;
+  /** Absolute source directory. */
+  readonly source: string;
+  readonly targets: readonly string[];
+}
+
+const selectedTargetNamesFor = (
+  loaded: LoadedConfig,
+  registry: NormalizationTargetRegistry,
+): readonly string[] => loaded.context.selectedTargets.length > 0
+  ? loaded.context.selectedTargets
+  : (loaded.config.targets ?? registry.defaultTargetNames());
+
+/** Well-shaped payload declarations; malformed entries are reported by validatePayload and skipped here. */
+const declaredPayloads = (
+  loaded: LoadedConfig,
+  registry: NormalizationTargetRegistry,
+): readonly DeclaredPayload[] => {
+  const configured = loaded.config.payload;
+  if (configured === undefined || !isRecord(configured)) return [];
+  const selectedTargets = selectedTargetNamesFor(loaded, registry);
+  const payloads: DeclaredPayload[] = [];
+  for (const [name, rawDeclaration] of Object.entries(configured)) {
+    const declaration = rawDeclaration as string | AgentBundlePayloadEntry;
+    const entry = typeof declaration === 'string'
+      ? declaration
+      : isRecord(declaration) ? declaration.source : undefined;
+    if (!nonemptyString(entry)) continue;
+    const source = resolve(loaded.context.projectRoot, entry);
+    if (!isInside(loaded.context.projectRoot, source)) continue;
+    const targets = typeof declaration === 'string' ? undefined : declaration.targets;
+    payloads.push({
+      name,
+      source,
+      targets: Array.isArray(targets) && targets.every(nonemptyString) ? targets : selectedTargets,
+    });
+  }
+  return payloads;
+};
+
+const directoryHasFiles = (source: string): boolean => {
+  try {
+    const entries = readdirSync(source, { withFileTypes: true });
+    return entries.some((entry) => entry.isFile() || (entry.isDirectory() && directoryHasFiles(resolve(source, entry.name))));
+  } catch {
+    return false;
+  }
+};
+
+const newestFileMtime = (root: string, skipDirectory: (name: string) => boolean): number => {
+  let newest = 0;
+  const visit = (directory: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!skipDirectory(entry.name)) visit(path);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      try {
+        const mtime = statSync(path).mtimeMs;
+        if (mtime > newest) newest = mtime;
+      } catch {
+        // A racing deletion never fails validation.
+      }
+    }
+  };
+  visit(root);
+  return newest;
+};
+
+const ignoredSourceDirectoryNames = new Set(['.agent-bundle', '.git', 'dist', 'node_modules']);
+
+/**
+ * AB4740-AB4743 and the AB4750 freshness nudge: shape, destination-name,
+ * source-path, and existence checks for the prebuilt `payload` block.
+ * Missing or empty payloads warn here (development flows never require the
+ * consumer's own build to have run); `agent-bundle build` refuses them with
+ * AB4747/AB4748.
+ */
+const validatePayload = (
+  loaded: LoadedConfig,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const configured = loaded.config.payload;
+  if (configured === undefined) return [];
+  if (!isRecord(configured)) {
+    return [sourceDiagnostic('AB4740', 'Payload configuration must be an object of payload directories.', loaded.configPath)];
+  }
+  const diagnostics: Diagnostic[] = [];
+  const sources: { name: string; source: string }[] = [];
+  for (const [name, rawDeclaration] of Object.entries(configured)) {
+    if (!isSafePayloadName(name) || reservedPayloadDestinations.has(name)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4741',
+        `Payload destination ${JSON.stringify(name)} must be a safe directory name outside the compiler-owned artifact namespaces.`,
+        loaded.configPath,
+      ));
+    }
+    const declaration = rawDeclaration as string | AgentBundlePayloadEntry;
+    const entry = typeof declaration === 'string'
+      ? declaration
+      : isRecord(declaration) ? declaration.source : undefined;
+    if (!nonemptyString(entry)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4740',
+        `Payload ${JSON.stringify(name)} must be a source directory path or an object with a source path.`,
+        loaded.configPath,
+      ));
+      continue;
+    }
+    if (typeof declaration !== 'string' && declaration.targets !== undefined) {
+      if (!Array.isArray(declaration.targets) || declaration.targets.some((target) => !nonemptyString(target))) {
+        diagnostics.push(sourceDiagnostic(
+          'AB4740',
+          `Payload ${JSON.stringify(name)} targets must be an array of nonempty strings.`,
+          loaded.configPath,
+        ));
+      } else {
+        for (const target of declaration.targets) {
+          if (!registry.has(target)) {
+            diagnostics.push(sourceDiagnostic(
+              'AB4740',
+              `Payload ${JSON.stringify(name)} selects unknown target ${JSON.stringify(target)}.`,
+              loaded.configPath,
+            ));
+          }
+        }
+      }
+    }
+    const source = resolve(loaded.context.projectRoot, entry);
+    if (!isInside(loaded.context.projectRoot, source)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4742',
+        `Payload ${JSON.stringify(name)} source must resolve inside the project root.`,
+        loaded.configPath,
+      ));
+      continue;
+    }
+    sources.push({ name, source });
+    if (!existsSync(source)) {
+      diagnostics.push(warningDiagnostic(
+        'AB4743',
+        `Payload ${JSON.stringify(name)} directory ${JSON.stringify(entry)} does not exist yet.`,
+        loaded.configPath,
+        'Run the project\'s own build to produce the prebuilt payload before "agent-bundle build".',
+      ));
+      continue;
+    }
+    if (!statSync(source).isDirectory()) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4742',
+        `Payload ${JSON.stringify(name)} source ${JSON.stringify(entry)} must name a directory.`,
+        loaded.configPath,
+      ));
+      continue;
+    }
+    if (!directoryHasFiles(source)) {
+      diagnostics.push(warningDiagnostic(
+        'AB4743',
+        `Payload ${JSON.stringify(name)} directory ${JSON.stringify(entry)} contains no files.`,
+        loaded.configPath,
+        'Run the project\'s own build to produce the prebuilt payload before "agent-bundle build".',
+      ));
+    }
+  }
+  for (const left of sources) {
+    for (const right of sources) {
+      if (left === right) continue;
+      const duplicate = left.source === right.source && left.name < right.name;
+      const nested = left.source !== right.source && isInside(left.source, right.source);
+      if (!duplicate && !nested) continue;
+      diagnostics.push(sourceDiagnostic(
+        'AB4742',
+        `Payload ${JSON.stringify(left.name)} source contains payload ${JSON.stringify(right.name)}; payload directories must be disjoint.`,
+        loaded.configPath,
+      ));
+    }
+  }
+  const existing = sources.filter((payload) => existsSync(payload.source));
+  if (existing.length > 0) {
+    const newestSource = newestFileMtime(
+      loaded.context.projectRoot,
+      (name) => ignoredSourceDirectoryNames.has(name),
+    );
+    for (const payload of existing) {
+      const newestPayload = newestFileMtime(payload.source, () => false);
+      if (newestPayload !== 0 && newestSource > newestPayload) {
+        diagnostics.push({
+          code: 'AB4750',
+          message: `Prebuilt payload ${JSON.stringify(payload.name)} is older than the newest project source file; it may be stale.`,
+          recovery: 'Optional: rerun the project\'s own build so the packaged payload reflects the current sources.',
+          severity: 'info',
+          sourcePath: loaded.configPath,
+        });
+      }
+    }
+  }
+  return diagnostics;
+};
+
+const safePrebuiltArgumentPattern = /^[A-Za-z0-9%+,\-./:=@_]+$/u;
+
+/**
+ * AB4744/AB4745: one prebuilt reference (an MCP entry or a hook handler)
+ * must resolve inside a declared payload whose targets cover the component,
+ * and should already exist on disk. Missing files warn — the payload comes
+ * from the consumer's own build step — and `agent-bundle build` refuses them
+ * with AB4748.
+ */
+const validatePrebuiltReference = (
+  label: string,
+  declaration: AgentBundlePrebuiltEntry,
+  componentTargets: readonly string[],
+  loaded: LoadedConfig,
+  payloads: readonly DeclaredPayload[],
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  if (!nonemptyString(declaration.prebuilt)) {
+    return [sourceDiagnostic('AB4744', `${label} prebuilt entry must be a nonempty path.`, loaded.configPath)];
+  }
+  const source = resolve(loaded.context.projectRoot, declaration.prebuilt);
+  if (!isInside(loaded.context.projectRoot, source)) {
+    return [sourceDiagnostic('AB4744', `${label} prebuilt entry must resolve inside the project root.`, loaded.configPath)];
+  }
+  const payload = payloads
+    .filter((candidate) => isInside(candidate.source, source))
+    .sort((left, right) => right.source.length - left.source.length)[0];
+  if (payload === undefined) {
+    diagnostics.push(sourceDiagnostic(
+      'AB4744',
+      `${label} prebuilt entry ${JSON.stringify(declaration.prebuilt)} must resolve inside a directory declared in the payload block.`,
+      loaded.configPath,
+    ));
+    return diagnostics;
+  }
+  for (const target of componentTargets) {
+    if (!payload.targets.includes(target)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4744',
+        `${label} prebuilt entry needs payload ${JSON.stringify(payload.name)} on target ${JSON.stringify(target)}, but the payload does not select it.`,
+        loaded.configPath,
+      ));
+    }
+  }
+  if (!localEntryExists(loaded.context.projectRoot, declaration.prebuilt)) {
+    diagnostics.push(warningDiagnostic(
+      'AB4745',
+      `${label} prebuilt entry ${JSON.stringify(declaration.prebuilt)} does not exist yet.`,
+      loaded.configPath,
+      'Run the project\'s own build to produce the prebuilt file before "agent-bundle build".',
+    ));
+  }
+  return diagnostics;
+};
+
 const isRspackHatchValue = (value: unknown): boolean =>
   typeof value === 'function' || isRecord(value);
 
@@ -1026,11 +1352,13 @@ export const validateSource = (
     }
   }
 
+  const payloads = declaredPayloads(loaded, registry);
   diagnostics.push(...validateAssets(loaded));
   diagnostics.push(...validateBin(loaded));
-  diagnostics.push(...validateHooks(loaded, registry));
+  diagnostics.push(...validateHooks(loaded, registry, payloads));
   diagnostics.push(...validateLib(loaded));
-  diagnostics.push(...validateMcp(loaded));
+  diagnostics.push(...validateMcp(loaded, registry, payloads));
+  diagnostics.push(...validatePayload(loaded, registry));
   diagnostics.push(...validateRuntime(loaded));
   diagnostics.push(...validateScripts(loaded, registry));
   diagnostics.push(...validateTools(loaded));
@@ -1070,6 +1398,7 @@ export const validateModel = (
     ...(model.assets ?? []),
     ...(model.packageBuild?.bins ?? []),
     ...(model.packageBuild?.lib === undefined ? [] : [model.packageBuild.lib]),
+    ...(model.payloads ?? []),
   ];
   for (const component of components) {
     const firstSource = ids.get(component.id);
@@ -1237,6 +1566,12 @@ export const validateModel = (
     for (const asset of model.assets ?? []) {
       if (!asset.targets.includes(target.name)) continue;
       recordOutput(posix.join(target.name, 'assets', asset.relativePath), asset.source, target.name);
+    }
+    for (const payload of model.payloads ?? []) {
+      if (!payload.targets.includes(target.name)) continue;
+      for (const file of payload.files) {
+        recordOutput(posix.join(target.name, payload.name, file.relativePath), file.source, target.name);
+      }
     }
   }
 

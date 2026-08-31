@@ -278,6 +278,7 @@ const inspection = (value: unknown, runId: string): DevRuntimeInspectionEnvelope
   const flight = response.flight === undefined ? undefined : record(response.flight, 'Runtime route returned an invalid Flight inspection.');
   if (flight !== undefined && (!hasOnly(flight, ['bytes', 'downloadPath', 'preview', 'truncated']) || !nonnegativeInteger(flight.bytes) ||
     (flight.downloadPath !== undefined && !nonemptyString(flight.downloadPath)) || !nonemptyString(flight.preview) || typeof flight.truncated !== 'boolean')) {
+    console.error('DEBUG-FLIGHT-INVALID', JSON.stringify({ ...flight, preview: `<${String((flight.preview as string | undefined)?.length)}>` }), 'runId', runId, 'previewType', typeof flight.preview);
     throw invalid('Runtime route returned an invalid Flight inspection.');
   }
   const flightDownloadPath = flight === undefined ? undefined : `/api/runtime/runs/${opaqueSegment(runId, 'Runtime run ID')}/flight`;
@@ -399,7 +400,7 @@ const opaqueSegment = (value: string, label: string): string => {
   return encodeURIComponent(value);
 };
 
-const invalid = (message: string): RuntimeClientError => new RuntimeClientError({ code: runtimeErrorCode, message });
+const invalid = (message: string): RuntimeClientError => { console.error("DEBUG-INVALID", message, new Error("stack").stack); return new RuntimeClientError({ code: runtimeErrorCode, message }); };
 
 const runtimeError = (error: unknown): RuntimeClientError => {
   if (error instanceof RuntimeClientError) return error;

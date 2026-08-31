@@ -3,8 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "rsbuild build --mode production && pnpm package:hosts",
-    "package:hosts": "node scripts/package-hosts.mjs",
+    "build": "rsbuild build --mode production && agent-bundle build --json --output dist/plugins",
     "test": "rstest --config rstest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "pnpm build && pnpm test && pnpm typecheck",

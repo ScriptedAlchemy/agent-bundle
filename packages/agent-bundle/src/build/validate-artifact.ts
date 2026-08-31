@@ -439,11 +439,17 @@ const validateArtifactOwnership = (options: {
 }): readonly Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   const targets = targetNamespaces(options.manifest);
+  const manifestKinds = new Map(options.manifest.files.map((file) => [file.path, file.kind]));
 
   for (const file of options.files) {
     if (artifactRootMetadata.has(file.path)) continue;
     const target = pathTarget(file.path, targets);
     if (target !== undefined && isTargetArtifactPath(file.path, target, options.registry)) continue;
+    // Prebuilt payload files are consumer-shaped by definition: they live in
+    // config-named directories under their target namespace, are declared
+    // with the `prebuilt` manifest kind, and stay hash-locked to the
+    // manifest like every other file.
+    if (target !== undefined && manifestKinds.get(file.path) === 'prebuilt') continue;
     diagnostics.push(diagnostic(
       'AB6014',
       `Artifact file ${JSON.stringify(file.path)} is outside declared target emitted layouts.`,
@@ -523,9 +529,16 @@ const validateGeneratedFiles = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: readonly ManifestFile[];
+  readonly prebuiltPaths?: ReadonlySet<string>;
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
   const generatedFiles = new Set(options.files.map((file) => file.path));
+  // Prebuilt payload files are opaque consumer build outputs: they stay
+  // hash-locked to the manifest, but their contents are never held to the
+  // generated-output contracts (strict JSON, bundled ESM import graphs).
+  const prebuiltPaths = options.prebuiltPaths ?? new Set(
+    (options.manifestFiles ?? []).filter((file) => file.kind === 'prebuilt').map((file) => file.path),
+  );
   const validJson = new Set<string>();
 
   for (const file of options.files.filter((entry) => entry.path.endsWith('.json'))) {
@@ -545,7 +558,9 @@ const validateGeneratedFiles = async (options: {
         }
       }
     } catch {
-      diagnostics.push(diagnostic('AB6006', 'Generated JSON cannot be parsed.', file.path));
+      if (!prebuiltPaths.has(file.path)) {
+        diagnostics.push(diagnostic('AB6006', 'Generated JSON cannot be parsed.', file.path));
+      }
     }
   }
 
@@ -555,6 +570,7 @@ const validateGeneratedFiles = async (options: {
     ...(options.manifestFiles === undefined
       ? {}
       : { manifestFiles: new Set(options.manifestFiles.map((file) => file.path)) }),
+    prebuiltPaths,
     validJson,
   }));
 
@@ -567,7 +583,11 @@ export const validateArtifactFiles = async (
   const inspection = await inspectArtifact(context);
   return Object.freeze([
     ...filesystemDiagnostics(inspection.filesystem),
-    ...await validateGeneratedFiles({ artifactRoot: context.artifactRoot, files: inspection.files }),
+    ...await validateGeneratedFiles({
+      artifactRoot: context.artifactRoot,
+      files: inspection.files,
+      ...(context.prebuiltPaths === undefined ? {} : { prebuiltPaths: context.prebuiltPaths }),
+    }),
   ]);
 };
 

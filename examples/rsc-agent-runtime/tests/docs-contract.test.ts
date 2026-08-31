@@ -43,7 +43,12 @@ test('declares a shell-independent production build', async () => {
     readonly scripts?: Readonly<Record<string, string>>;
   };
 
-  expect(manifest.scripts?.build).toBe('rsbuild build --mode production && pnpm package:hosts');
+  // Pin updated with the prebuilt-payload migration (RFC #50 Phase 3): the
+  // demo's own Rsbuild production build stays first — the custom RSC
+  // compilation is this example's subject — and the hand-rolled
+  // scripts/package-hosts.mjs step is replaced by `agent-bundle build`
+  // packaging the declared payload trees into dist/plugins.
+  expect(manifest.scripts?.build).toBe('rsbuild build --mode production && agent-bundle build --json --output dist/plugins');
 });
 
 test('derives the native evaluator root from decoded module URLs', async () => {

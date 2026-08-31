@@ -93,7 +93,9 @@ export const planCompiledMcpApps = (
   options: { readonly outDir: string; readonly target: string },
 ): readonly CompiledMcpApp[] => {
   const planned = new Map<string, { identity: string; serverIds: string[]; app: NormalizedMcpApp }>();
-  for (const app of apps.filter((candidate) => candidate.targets.includes(options.target))) {
+  // Apps of prebuilt servers stay development surfaces: the payload already
+  // carries the served resource, so the compiler emits nothing for them.
+  for (const app of apps.filter((candidate) => candidate.prebuilt !== true && candidate.targets.includes(options.target))) {
     const identity = appIdentity(app);
     const existing = planned.get(app.name);
     if (existing !== undefined) {

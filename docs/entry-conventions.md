@@ -128,6 +128,82 @@ Export detection is a static scan of the entry source (comment-, string-, and
 template-safe). The generated shells re-verify the export shape at runtime
 with a clear error.
 
+## Prebuilt payloads — package what you compiled yourself
+
+Some projects legitimately own their compilation — a coordinated
+multi-environment bundler topology the per-entry `tools` hatch cannot
+express — but still want framework-owned host packaging (manifests, hook
+documents, env anchors, provenance, validation). The `payload` block
+declares already-built directory trees the build packages **as-is**, and the
+`{ prebuilt: ... }` marker points MCP entries and hook handlers at files
+inside them:
+
+```ts
+export default defineConfig({
+  payload: {
+    // key = artifact-root destination directory, value = the built tree
+    app: './dist/app',
+    runtime: { source: './dist/runtime', targets: ['claude', 'codex'] },
+  },
+  mcp: {
+    servers: {
+      timeline: {
+        entry: { prebuilt: './dist/runtime/mcp/stdio.js' },
+        transport: 'stdio',
+      },
+    },
+  },
+  hooks: {
+    afterTool: [{
+      args: ['--host', 'claude'],
+      handler: { prebuilt: './dist/runtime/hook/index.js' },
+      targets: ['claude'],
+      tools: ['file.write'],
+    }],
+  },
+});
+```
+
+- **Stable paths, not content-hashing.** Every payload file keeps its exact
+  relative path under the destination directory. The framework did not
+  compile these files, so it cannot rewrite the references inside them —
+  sibling chunk imports, worker entries resolved from `import.meta.url` —
+  and hosts, manuals, and tests pin the entry paths. Integrity stays
+  content-addressed anyway: each payload file lands in the artifact manifest
+  with its SHA-256 and the `prebuilt` file kind, and the payload files hash
+  into `project.sourceInputs`, so the project revision changes whenever the
+  payload bytes do.
+- **The same adapter lowering.** A prebuilt MCP entry normalizes to a
+  command-shaped stdio server whose first argument is the payload path
+  anchored on the plugin-root token, so every target renders it natively
+  (`${CLAUDE_PLUGIN_ROOT}/runtime/mcp/stdio.js`, Codex's `./runtime/…` with
+  `cwd: "./"`, `${PLUGIN_ROOT}/…`), the `AGENT_BUNDLE_PLUGIN_ROOT` env
+  anchor is injected as usual, and artifact validation confirms the
+  referenced file is present and manifested. A prebuilt hook emits its
+  native command as `node "<root>/<payload path>" <args…>` — one config
+  declaration replaces a hand-rolled `hooks/hooks.json` per host. Prebuilt
+  hook `args` (for example `--host claude`) accept shell-safe strings only.
+- **Prebuilt means opaque.** Payload files are exempt from generated-output
+  content validation (bundled-ESM import graphs, strict generated JSON) but
+  remain hash-locked to the manifest. Declaration provenance is recorded as
+  `kind: 'prebuilt'`. Hooks with prebuilt handlers are packaged like native
+  hook documents: they do not compile wrappers and do not appear in the
+  simulatable hook index. MCP Apps declared on a prebuilt server stay a
+  development surface (the Workbench compiles them live); the build assumes
+  the payload already serves the resource.
+- **Ordering.** Run your own build before `agent-bundle build`: a missing or
+  empty payload is a validation warning (`AB4743`/`AB4745`) so `dev` works
+  from a clean checkout, but `agent-bundle build` refuses it
+  (`AB4747`/`AB4748`). Payload directories must not overlap the artifact
+  `--output` root (`AB4749`) — with payloads under `dist/`, pass an output
+  like `dist/plugins`. See `docs/diagnostics.md` for the full `AB474x`
+  table.
+
+`examples/rsc-agent-runtime` is the reference consumer: its Rsbuild build
+owns a three-environment RSC compilation, and `agent-bundle build` packages
+the resulting `dist/runtime` and `dist/app` trees into the Claude, Codex,
+and portable artifacts.
+
 ## `tools` — THE escape hatch
 
 `tools.rsbuild` (an Rsbuild environment-config fragment) and `tools.rspack`

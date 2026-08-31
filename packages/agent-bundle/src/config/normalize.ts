@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, extname, relative, resolve } from 'node:path';
+import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import { digest } from '../core/digest.ts';
 import {
@@ -10,7 +10,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
+import { isPrebuiltEntryInput, parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleConfig,
@@ -19,6 +19,7 @@ import type {
   AgentBundleLibEntry,
   AgentBundleMcpApp,
   AgentBundleMcpServer,
+  AgentBundlePayloadEntry,
   AgentBundleScriptInput,
   CanonicalHookEvent,
   CanonicalHookTool,
@@ -33,6 +34,7 @@ import type {
   NormalizedMcpServer,
   NormalizedNativeHook,
   NormalizedPackageBuild,
+  NormalizedPayload,
   NormalizedPlugin,
   NormalizedRuntime,
   NormalizedScript,
@@ -204,6 +206,71 @@ export const normalizePackageBuild = (
   };
 };
 
+/** The compiler-owned artifact namespaces and documents a payload destination must not shadow. */
+export const reservedPayloadDestinations = Object.freeze(new Set([
+  'AGENTS.md',
+  'assets',
+  'hooks',
+  'mcp',
+  'mcp-apps',
+  'mcp.json',
+  'plugin.json',
+  'scripts',
+  'skills',
+]));
+
+const normalizePayloads = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+  targetNames: readonly string[],
+): readonly NormalizedPayload[] => {
+  const configured = loaded.config.payload;
+  if (configured === undefined || typeof configured !== 'object' || Array.isArray(configured)) return [];
+  const discoveredByName = new Map((discovered.payloads ?? []).map((payload) => [payload.name, payload]));
+  const payloads: NormalizedPayload[] = [];
+  for (const [name, rawDeclaration] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
+    const declaration = rawDeclaration as string | AgentBundlePayloadEntry | undefined;
+    if (declaration === undefined) continue;
+    const entry = typeof declaration === 'string' ? declaration : declaration.source;
+    if (typeof entry !== 'string' || entry.trim().length === 0) continue;
+    payloads.push({
+      files: (discoveredByName.get(name)?.files ?? []).map((file) => ({ ...file })),
+      id: `payload:${name}`,
+      name,
+      provenance: { kind: 'prebuilt', sourcePath: loaded.configPath },
+      source: resolve(loaded.context.projectRoot, entry),
+      targets: sortedUnique(typeof declaration === 'string' ? targetNames : (declaration.targets ?? targetNames)),
+    });
+  }
+  return payloads;
+};
+
+const isInsidePath = (root: string, candidate: string): boolean => {
+  const relativePath = relative(root, candidate);
+  return relativePath.length > 0 && relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
+};
+
+/**
+ * The artifact-relative stable path of a prebuilt file: its declaring payload
+ * destination plus the file's payload-relative path. Falls back to the
+ * project-relative path when no declared payload contains the file — source
+ * validation (AB4744) reports that state before any build consumes it.
+ */
+export const prebuiltArtifactPath = (
+  payloads: readonly NormalizedPayload[],
+  root: string,
+  source: string,
+): string => {
+  let best: NormalizedPayload | undefined;
+  for (const payload of payloads) {
+    if (!isInsidePath(payload.source, source)) continue;
+    if (best === undefined || payload.source.length > best.source.length) best = payload;
+  }
+  return best === undefined
+    ? relative(root, source).replaceAll('\\', '/')
+    : `${best.name}/${relative(best.source, source).replaceAll('\\', '/')}`;
+};
+
 const isHookEntryList = (
   input: AgentBundleHookInput,
 ): input is readonly (string | AgentBundleHookEntry)[] => Array.isArray(input);
@@ -237,10 +304,16 @@ const normalizeHook = (
   defaultTargets: readonly string[],
   provenance: SourceProvenance,
   registry: NormalizationTargetRegistry,
+  payloads: readonly NormalizedPayload[],
 ): NormalizedHook => {
   const entry = typeof input === 'string' ? { handler: input } : input;
-  const source = resolve(root, entry.handler);
+  const prebuilt = isPrebuiltEntryInput(entry.handler);
+  const source = resolve(root, prebuilt ? (entry.handler as { prebuilt: string }).prebuilt : entry.handler as string);
   const handler = relative(root, source).replaceAll('\\', '/');
+  const prebuiltPath = prebuilt ? prebuiltArtifactPath(payloads, root, source) : undefined;
+  const args = prebuilt && entry.args !== undefined
+    ? entry.args.filter((argument): argument is string => typeof argument === 'string')
+    : undefined;
   const tools = sortedUnique(entry.tools ?? []).filter(
     (tool): tool is CanonicalHookTool => knownHookTools.has(tool as CanonicalHookTool),
   );
@@ -248,9 +321,11 @@ const normalizeHook = (
   const nativeTools = normalizeNativeHookTools(entry.tools ?? [], registry);
   const timeout = entry.timeout;
   const identity = {
+    ...(args === undefined || args.length === 0 ? {} : { args }),
     event,
     handler,
     ...(nativeTools.length === 0 ? {} : { nativeTools }),
+    ...(prebuiltPath === undefined ? {} : { prebuiltPath }),
     targets,
     timeout: timeout ?? 'host-default',
     tools,
@@ -261,11 +336,13 @@ const normalizeHook = (
   const name = `${eventName}-${handlerName}-${hash}`;
 
   return {
+    ...(args === undefined || args.length === 0 ? {} : { args: [...args] }),
     event,
     id: `hook:${eventName}:${handlerName}:${hash}`,
     name,
     ...(nativeTools.length === 0 ? {} : { nativeTools }),
-    provenance: { ...provenance },
+    ...(prebuiltPath === undefined ? {} : { prebuiltPath }),
+    provenance: prebuilt ? { kind: 'prebuilt', sourcePath: provenance.sourcePath } : { ...provenance },
     source,
     targets,
     ...(timeout === undefined ? {} : { timeout }),
@@ -277,6 +354,7 @@ const normalizeHooks = (
   loaded: LoadedConfig,
   targetNames: readonly string[],
   registry: NormalizationTargetRegistry,
+  payloads: readonly NormalizedPayload[],
 ): readonly NormalizedHook[] => {
   const hooks: NormalizedHook[] = [];
   const config = loaded.config.hooks;
@@ -291,7 +369,7 @@ const normalizeHooks = (
       const hookTargets = inherited
         ? targetNames.filter((target) => registry.supports(target, 'hooks'))
         : targetNames;
-      hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, hookTargets, provenance, registry));
+      hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, hookTargets, provenance, registry, payloads));
     }
   }
 
@@ -342,6 +420,7 @@ const normalizeMcpServer = (
   root: string,
   defaultTargets: readonly string[],
   provenance: SourceProvenance,
+  payloads: readonly NormalizedPayload[],
 ): NormalizedMcpServer => {
   const targets = sortedUnique(server.targets ?? defaultTargets);
   const conventionalEntry =
@@ -356,6 +435,26 @@ const normalizeMcpServer = (
       : { kind: 'conventional' as const, sourcePath: conventionalEntry },
     targets,
   };
+
+  if (isPrebuiltEntryInput(server.entry)) {
+    // A prebuilt stdio entry lowers to a command-shaped server whose first
+    // argument is the payload-stable path anchored on the plugin-root token,
+    // so every adapter's existing token expansion, env-anchor injection, and
+    // artifact-reference validation applies unchanged.
+    const prebuiltSource = resolve(root, server.entry.prebuilt);
+    return {
+      ...common,
+      ...(server.env === undefined ? {} : { env: { ...server.env } }),
+      args: [
+        `${pathTokens.pluginRoot}/${prebuiltArtifactPath(payloads, root, prebuiltSource)}`,
+        ...(server.args ?? []),
+      ],
+      command: 'node',
+      cwd: pathTokens.pluginRoot,
+      provenance: { kind: 'prebuilt', sourcePath: provenance.sourcePath },
+      transport: 'stdio',
+    };
+  }
 
   if (server.entry !== undefined || conventionalEntry !== undefined) {
     const entryName = mcpEntryName(name);
@@ -392,6 +491,7 @@ const normalizeMcpServer = (
 const normalizeMcpServers = (
   loaded: LoadedConfig,
   targetNames: readonly string[],
+  payloads: readonly NormalizedPayload[],
 ): readonly NormalizedMcpServer[] => {
   const servers = loaded.config.mcp?.servers;
   if (servers === undefined) return [];
@@ -400,7 +500,7 @@ const normalizeMcpServers = (
   return Object.entries(servers)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, server]) =>
-      normalizeMcpServer(name, server, loaded.context.projectRoot, targetNames, provenance));
+      normalizeMcpServer(name, server, loaded.context.projectRoot, targetNames, provenance, payloads));
 };
 
 const normalizeMcpApps = (
@@ -415,13 +515,18 @@ const normalizeMcpApps = (
 
   for (const [serverName, rawServer] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
     const server = serverByName.get(serverName);
-    if (server?.source === undefined || rawServer.apps === undefined) continue;
+    // Apps require a local server entry: a compiled source entry, or a
+    // prebuilt one — whose payload already carries the served resource, so
+    // the app stays a development surface the compiler never re-emits.
+    const prebuilt = isPrebuiltEntryInput(rawServer.entry);
+    if (server === undefined || (server.source === undefined && !prebuilt) || rawServer.apps === undefined) continue;
     for (const [name, app] of Object.entries(rawServer.apps).sort(([left], [right]) => left.localeCompare(right))) {
       const declaration = app as AgentBundleMcpApp;
       apps.push({
         ...(declaration._meta === undefined ? {} : { _meta: structuredClone(declaration._meta) }),
         id: `mcp-app:${serverName}:${name}`,
         name,
+        ...(prebuilt ? { prebuilt: true as const } : {}),
         provenance: { ...provenance },
         resourceUri: declaration.resourceUri,
         serverId: server.id,
@@ -666,7 +771,8 @@ export const normalizeProject = async (
   });
   const description = loaded.config.plugin.description;
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
-  const mcpServers = normalizeMcpServers(loaded, targetNames);
+  const payloads = normalizePayloads(loaded, discovered, targetNames);
+  const mcpServers = normalizeMcpServers(loaded, targetNames, payloads);
   const scripts = normalizeScripts(loaded, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
   const packageBuild = normalizePackageBuild(loaded.config, loaded.context.projectRoot, loaded.configPath);
@@ -683,9 +789,10 @@ export const normalizeProject = async (
     },
     mcpApps: normalizeMcpApps(loaded, mcpServers),
     mcpServers,
-    hooks: normalizeHooks(loaded, targetNames, registry),
+    hooks: normalizeHooks(loaded, targetNames, registry, payloads),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
     ...(packageBuild === undefined ? {} : { packageBuild }),
+    ...(payloads.length === 0 ? {} : { payloads }),
     runtime: normalizeRuntime(loaded),
     scripts,
     skills,

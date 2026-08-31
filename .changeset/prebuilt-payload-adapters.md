@@ -1,0 +1,5 @@
+---
+"agent-bundle": minor
+---
+
+Prebuilt payload adapter mode (RFC #50 Phase 3): the top-level `payload` block declares already-built directory trees that `agent-bundle build` packages byte-for-byte at stable paths, and `{ prebuilt: ... }` markers on MCP server entries and hook handlers point the generated host manifests at files inside those payloads. Prebuilt entries skip compilation but flow through the same adapter lowering as compiled entries — path-token expansion in every target's MCP document, the injected `AGENT_BUNDLE_PLUGIN_ROOT` env anchor, generated `hooks/hooks.json` commands (with shell-safe prebuilt hook `args`), and artifact-reference validation. Payload files are recorded in the artifact manifest with the new `prebuilt` file kind and hash into `project.sourceInputs`; declaration provenance is recorded as `kind: 'prebuilt'`. New diagnostics: `AB4740`–`AB4746` at validation (missing payloads and prebuilt files warn so development flows work before the consumer's own build has run), `AB4747`–`AB4749` as build-time refusals, and the `AB4750` staleness nudge.

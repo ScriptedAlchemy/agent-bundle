@@ -26,6 +26,12 @@ export interface TargetArtifactWrite {
 export interface TargetArtifactCopy {
   readonly bytes: number;
   readonly kind: 'copy';
+  /**
+   * True for a file of a declared prebuilt payload: copied byte-for-byte
+   * like any other copy entry, but recorded with the `prebuilt` manifest
+   * kind and exempt from generated-module content validation.
+   */
+  readonly prebuilt?: true;
   readonly relativePath: string;
   readonly source: string;
   /** Absolute authored inputs for this copied artifact. */
@@ -96,6 +102,27 @@ export const withPluginRootEnvAnchor = <Value extends string | undefined>(
   env: Readonly<Record<string, Value>> | undefined,
   pluginRoot: string,
 ): Record<string, Value | string> => ({ [pluginRootEnvAnchor]: pluginRoot, ...env });
+
+/**
+ * Copy entries for every selected prebuilt payload file: exact relative
+ * paths under the payload's declared destination, byte-for-byte, no
+ * content-hashing — the compiler did not produce these files and cannot
+ * rewrite the sibling references inside them, so stable names are the
+ * packaging contract. Shared by every target plan that emits payloads.
+ */
+export const payloadCopyEntries = (
+  model: NormalizedPlugin,
+  isSelected: (targets: readonly string[]) => boolean,
+): TargetArtifactCopy[] => (model.payloads ?? [])
+  .filter((payload) => isSelected(payload.targets))
+  .flatMap((payload) => payload.files.map((file): TargetArtifactCopy => ({
+    bytes: file.bytes,
+    kind: 'copy',
+    prebuilt: true,
+    relativePath: `${payload.name}/${file.relativePath}`,
+    source: file.source,
+    sourceInputs: sourceInputs(payload.provenance.sourcePath, file.source),
+  })));
 
 export interface StandardPluginArtifactsInput {
   readonly diagnostics: readonly Diagnostic[];
@@ -227,6 +254,8 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
       sourceInputs: sourceInputs(asset.source),
     });
   }
+
+  entries.push(...(input.sharedCopyEntries === false ? [] : payloadCopyEntries(model, isSelected)));
 
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),

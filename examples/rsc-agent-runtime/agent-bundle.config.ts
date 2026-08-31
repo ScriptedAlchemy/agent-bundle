@@ -1,16 +1,32 @@
 import { defineConfig } from 'agent-bundle/config';
 
+// The RSC runtime and App payloads are compiled by this example's own
+// multi-environment Rsbuild build (see rsbuild.config.ts); agent-bundle
+// packages those prebuilt trees verbatim and generates the host manifests,
+// so this file is the single declaration for both development and packaging.
 export default defineConfig({
   claude: {},
   codex: {},
   dev: { runtime: { provider: './src/dev/provider.ts' } },
   hooks: {
-    afterTool: {
-      handler: './src/hook/cli.ts',
-      targets: ['claude', 'codex'],
-      tools: ['file.write'],
-    },
+    afterTool: [
+      {
+        args: ['--host', 'claude'],
+        handler: { prebuilt: './dist/runtime/hook/index.js' },
+        targets: ['claude'],
+        timeout: 30,
+        tools: ['file.write'],
+      },
+      {
+        args: ['--host', 'codex'],
+        handler: { prebuilt: './dist/runtime/hook/index.js' },
+        targets: ['codex'],
+        timeout: 30,
+        tools: ['file.write'],
+      },
+    ],
   },
+  marketplace: true,
   mcp: {
     servers: {
       timeline: {
@@ -24,11 +40,15 @@ export default defineConfig({
             targets: ['portable', 'claude', 'codex'],
           },
         },
-        entry: './src/mcp/stdio.ts',
+        entry: { prebuilt: './dist/runtime/mcp/stdio.js' },
         targets: ['portable', 'claude', 'codex'],
         transport: 'stdio',
       },
     },
+  },
+  payload: {
+    app: './dist/app',
+    runtime: './dist/runtime',
   },
   portable: {},
   plugin: {

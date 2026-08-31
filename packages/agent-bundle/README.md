@@ -52,8 +52,15 @@ entries that default-export a server factory are wrapped in the framework stdio 
 (console-to-stderr guard with raw stdout restored for protocol frames, SIGINT 130 / SIGTERM 143,
 stdin-EOF exit 0, bounded shutdown, heartbeat), also available directly from
 `agent-bundle/mcp-entry`. `tools.rsbuild` / `tools.rspack` is the single bundler escape hatch,
-merged last into every synthesized config and bounded by the artifact invariant assertions. See
-the repository's `docs/entry-conventions.md` for the full contract.
+merged last into every synthesized config and bounded by the artifact invariant assertions.
+
+Projects that own their compilation entirely declare prebuilt payloads instead: the top-level
+`payload` block names already-built directory trees the build packages byte-for-byte at stable
+paths, and `entry: { prebuilt: './dist/…' }` (MCP servers) or
+`handler: { prebuilt: './dist/…' }` plus shell-safe `args` (hooks) point the generated host
+manifests at files inside those payloads without compiling them. Payload files carry the
+`prebuilt` manifest file kind and hash into the project revision. See the repository's
+`docs/entry-conventions.md` for the full contract.
 
 ## Commands
 

@@ -22,6 +22,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB471x` | Package build `lib` configuration. |
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch. |
 | `AB473x` | Migration nudges (informational; see below). |
+| `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB5000` | General CLI and adapter failures. |
 | `AB7xxx` | Project preparation and development rebuilds. |
 | `AB8xxx` | Development server configuration. |
@@ -74,6 +75,29 @@ to it — a confusable state where the file on disk is not what runs.
 
 Adopt: drop the explicit `entry`/`command`/`url` so the convention applies.
 Silence: remove the shadowed file.
+
+## Prebuilt payloads (`AB4740`–`AB4750`)
+
+The `payload` block and `{ prebuilt: ... }` entries (see
+`docs/entry-conventions.md`) package files the framework did not compile.
+The consumer's own build produces them, so their diagnostics split by
+moment: configuration mistakes are validation **errors**, a payload that has
+simply not been built yet is a validation **warning** that only
+`agent-bundle build` escalates, and freshness is an **info** nudge.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB4740` | error | The `payload` block, one entry, or its `targets` list is malformed, or a payload selects an unknown target. |
+| `AB4741` | error | A payload destination is not a safe directory name, or shadows a compiler-owned artifact namespace (`assets`, `hooks`, `mcp`, `mcp-apps`, `scripts`, `skills`, root documents). |
+| `AB4742` | error | A payload source escapes the project root, is not a directory, or contains another payload's source. |
+| `AB4743` | warning | A declared payload directory does not exist yet or contains no files. Run the project's own build first. |
+| `AB4744` | error | A `{ prebuilt: ... }` entry (MCP server or hook handler) does not resolve inside a declared payload, or its payload does not select every target the component needs. |
+| `AB4745` | warning | A declared prebuilt entry file does not exist yet. Run the project's own build first. |
+| `AB4746` | error | Hook `args` on a non-prebuilt handler, or arguments outside the shell-safe charset. |
+| `AB4747` | error (build) | `agent-bundle build` refuses an empty or missing payload. |
+| `AB4748` | error (build) | `agent-bundle build` refuses a prebuilt entry file absent from its payload. |
+| `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
+| `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
 ## Development package build (`AB7103`)
 

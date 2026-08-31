@@ -1,5 +1,5 @@
 import { stat } from 'node:fs/promises';
-import { basename, dirname, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import fastGlob from 'fast-glob';
 
@@ -14,8 +14,23 @@ export interface DiscoveredAsset {
   readonly source: string;
 }
 
+/** One file found inside a declared prebuilt payload directory. */
+export interface DiscoveredPayloadFile {
+  readonly bytes: number;
+  readonly relativePath: string;
+  readonly source: string;
+}
+
+/** One declared prebuilt payload directory with its enumerated files. */
+export interface DiscoveredPayload {
+  readonly files: readonly DiscoveredPayloadFile[];
+  readonly name: string;
+  readonly source: string;
+}
+
 export interface DiscoveredProject {
   assets?: DiscoveredAsset[];
+  payloads?: DiscoveredPayload[];
   skills: SkillDocument[];
 }
 
@@ -82,6 +97,75 @@ const discoverAssets = async (
   })));
 };
 
+const isInsideRoot = (root: string, candidate: string): boolean => {
+  const relativePath = relative(root, candidate);
+  return relativePath.length > 0 && relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
+};
+
+/**
+ * The absolute source directories of well-shaped payload declarations.
+ * Source snapshots use this to include payload files in the project
+ * identity even though payload directories are ignored for source discovery.
+ */
+export const configuredPayloadRoots = (
+  projectRoot: string,
+  config: Readonly<AgentBundleConfig>,
+): readonly string[] => {
+  const configured = config.payload;
+  if (configured === undefined || typeof configured !== 'object' || Array.isArray(configured)) return [];
+  const roots: string[] = [];
+  for (const declaration of Object.values(configured)) {
+    const entry = typeof declaration === 'string' ? declaration : declaration?.source;
+    if (typeof entry !== 'string' || entry.trim().length === 0) continue;
+    const source = resolve(projectRoot, entry);
+    if (isInsideRoot(projectRoot, source)) roots.push(source);
+  }
+  return [...new Set(roots)].sort((left, right) => left.localeCompare(right));
+};
+
+/**
+ * Enumerates every file of each declared prebuilt payload directory. Ignore
+ * rules deliberately do not apply: payloads live inside build-output
+ * directories (`dist/` is mandatory-ignored for source discovery) and are
+ * packaged verbatim. Malformed declarations are skipped here — source
+ * validation reports them (AB4740-AB4742).
+ */
+const discoverPayloads = async (
+  projectRoot: string,
+  configured: AgentBundleConfig['payload'],
+): Promise<DiscoveredPayload[]> => {
+  if (configured === undefined || typeof configured !== 'object' || Array.isArray(configured)) return [];
+  const payloads: DiscoveredPayload[] = [];
+  for (const [name, declaration] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
+    const entry = typeof declaration === 'string' ? declaration : declaration?.source;
+    if (typeof entry !== 'string' || entry.trim().length === 0) continue;
+    const source = resolve(projectRoot, entry);
+    if (!isInsideRoot(projectRoot, source)) continue;
+    let stats;
+    try {
+      stats = await stat(source);
+    } catch {
+      payloads.push({ files: [], name, source });
+      continue;
+    }
+    if (!stats.isDirectory()) {
+      payloads.push({ files: [], name, source });
+      continue;
+    }
+    const matches = (await fastGlob('**', { ...assetGlobOptions, cwd: source })).sort((left, right) => left.localeCompare(right));
+    payloads.push({
+      files: await Promise.all(matches.map(async (file) => ({
+        bytes: (await stat(file)).size,
+        relativePath: relative(source, file).replaceAll('\\', '/'),
+        source: file,
+      }))),
+      name,
+      source,
+    });
+  }
+  return payloads;
+};
+
 export const discoverProject = async (
   root: string,
   config: AgentBundleConfig,
@@ -104,8 +188,10 @@ export const discoverProject = async (
     .map((source) => (basename(source) === 'SKILL.md' ? dirname(source) : source)))]
     .sort((left, right) => left.localeCompare(right));
 
+  const payloads = await discoverPayloads(projectRoot, config.payload);
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
+    ...(payloads.length === 0 ? {} : { payloads }),
     skills: await Promise.all(
       skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules)),
     ),
