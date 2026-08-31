@@ -363,12 +363,17 @@ it('uses only an installed tarball after source deletion', async () => {
     const greeterBundle = await readFile(greeterEntry, 'utf8');
     expect(greeterBundle).not.toMatch(agentBundleImport);
     expect(greeterBundle).toContain('stdio heartbeat');
-    // The packaged lifecycle shell exits 0 on stdin EOF so clients can respawn.
-    await expect(execFile(process.execPath, [greeterEntry], {
+    // The packaged lifecycle shell exits 0 on stdin EOF so clients can
+    // respawn. execFile never closes the child's stdin pipe, so deliver the
+    // EOF explicitly — the real server's transport holds the process alive
+    // until it arrives.
+    const greeterRun = execFile(process.execPath, [greeterEntry], {
       cwd: frameworkRoot,
       env: installedEnvironment(),
       timeout: 30_000,
-    })).resolves.toMatchObject({ stdout: '' });
+    });
+    greeterRun.child.stdin?.end();
+    await expect(greeterRun).resolves.toMatchObject({ stdout: '' });
     const { stdout: greeterTools } = await runInstalled(frameworkCli, frameworkRoot, [
       'mcp', 'list', '--json', '--root', frameworkRoot, '--artifact', frameworkArtifact, '--target', 'portable', '--server', 'greeter',
     ]);
