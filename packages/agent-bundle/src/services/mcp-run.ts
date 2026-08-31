@@ -111,8 +111,15 @@ export const resolveMcpStdioLaunch = async (
     manifestPath: runtime.manifestPath,
     readModernServers: (document) => runtime.readModernServers(document),
     resolveStdioArgument: (value, roots) => runtime.resolveStdioArgument(value, roots),
-    resolveValue: (field, roots, value) =>
-      runtime.resolveValue(field, field === 'env' ? { ...roots, pluginRoot: envPluginRoot } : roots, value),
+    resolveValue: (field, roots, value) => {
+      if (field !== 'env') return runtime.resolveValue(field, roots, value);
+      const envRoots = { ...roots, pluginRoot: envPluginRoot };
+      const resolution = runtime.resolveValue(field, envRoots, value);
+      // Targets without token interpolation (Codex) serialize the anchor as
+      // a `./` path instead: the target's own relative-argument rule
+      // re-anchors it against the durable root the tokens expand to.
+      return { ...resolution, value: runtime.resolveStdioArgument(resolution.value, envRoots) };
+    },
   };
   const resolved = resolveMcpPathTokens({
     roots: {

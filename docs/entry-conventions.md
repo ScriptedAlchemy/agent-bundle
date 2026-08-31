@@ -174,6 +174,8 @@ durable-state anchors point at the project root: state anchored on the
 plugin-data token persists under `.agent-bundle/mcp-run/<target>/<server>`,
 and plugin-root tokens in *env values* — including the injected
 `AGENT_BUNDLE_PLUGIN_ROOT` anchor — expand to the project root itself.
+Targets without token interpolation (Codex serializes the anchor as a `./`
+path) re-anchor their relative env values against the same durable root.
 `args` and `cwd` stay artifact-rooted (the first argument is the
 content-hashed bundle inside the target root). `--plugin-root <path>`
 overrides the env-anchor root, e.g. point it at `artifact/<target>` for a

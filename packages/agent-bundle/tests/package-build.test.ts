@@ -252,7 +252,7 @@ describe('mcp run', () => {
         "    STATE_DIR: 'agent-bundle:path:plugin-root/.runtime',",
         '  } } } },',
         "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
-        "  targets: ['portable'],",
+        "  targets: ['codex', 'portable'],",
         '};',
         '',
       ].join('\n'),
@@ -323,6 +323,12 @@ describe('mcp run', () => {
     const rehearsal = await captureLaunch({ ...base, pluginRoot: join(artifact, 'portable') });
     expect(rehearsal.env.AGENT_BUNDLE_PLUGIN_ROOT).toBe(join(artifact, 'portable'));
     expect(rehearsal.env.STATE_DIR).toBe(join(artifact, 'portable', '.runtime'));
+
+    // Codex has no token interpolation — its anchor is a `./` path, so the
+    // target's own relative rule must re-anchor it durably too.
+    const codex = await captureLaunch({ ...base, target: 'codex' });
+    expect(codex.env.AGENT_BUNDLE_PLUGIN_ROOT).toBe(root);
+    expect(codex.env.STATE_DIR).toBe(join(root, '.runtime'));
 
     // A named env file that cannot be read is an error, never a silent skip.
     await expect(runMcp({ ...base, envFiles: [join(root, 'missing.env')] }))
