@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import {
+  discoverProject,
   normalizeProject,
   validateSource,
   type NormalizationTargetRegistry,
@@ -423,6 +424,57 @@ describe('migration nudges (AB473x)', () => {
       { 'src/mcp/curator.ts': factoryEntry },
     );
     expect(diagnostics).toEqual([]);
+  });
+
+  const skillMarkdown = (name: string): string =>
+    `---\nname: ${name}\ndescription: The ${name} skill for nudge coverage.\n---\n\n# ${name}\n\nBody.\n`;
+
+  const discoveredAndValidated = async (
+    config: Omit<AgentBundleConfig, 'plugin'>,
+    files: Readonly<Record<string, string>>,
+  ) => {
+    const root = await projectRoot(files);
+    const loaded = loadedProject({
+      ...config,
+      plugin: { name: 'review-tools', version: '1.0.0' },
+    }, root);
+    const discovered = await discoverProject(root, loaded.config);
+    return { diagnostics: validateSource(loaded, discovered, registry), root };
+  };
+
+  it('nudges AB4734 when explicit skills configuration shadows a conventional skill', async () => {
+    const { diagnostics, root } = await discoveredAndValidated(
+      { skills: ['skills/covered'] },
+      {
+        'skills/covered/SKILL.md': skillMarkdown('covered'),
+        'skills/shadowed/SKILL.md': skillMarkdown('shadowed'),
+      },
+    );
+    expect(diagnostics).toEqual([{
+      code: 'AB4734',
+      message: expect.stringContaining('skills/shadowed/SKILL.md'),
+      recovery: expect.stringContaining('Optional'),
+      severity: 'info',
+      sourcePath: `${root}/skills/shadowed/SKILL.md`,
+    }]);
+  });
+
+  it('stays silent when skills config is absent or covers every conventional skill', async () => {
+    const files = {
+      'skills/one/SKILL.md': skillMarkdown('one'),
+      'skills/two/SKILL.md': skillMarkdown('two'),
+    };
+    const conventional = await discoveredAndValidated({}, files);
+    expect(conventional.diagnostics).toEqual([]);
+
+    const globCovered = await discoveredAndValidated({ skills: ['skills/*'] }, files);
+    expect(globCovered.diagnostics).toEqual([]);
+
+    const literalCovered = await discoveredAndValidated(
+      { skills: ['skills/one', 'skills/two/SKILL.md'] },
+      files,
+    );
+    expect(literalCovered.diagnostics).toEqual([]);
   });
 
   it('never raises nudges above info severity', async () => {

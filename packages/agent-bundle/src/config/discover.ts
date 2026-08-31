@@ -16,6 +16,13 @@ export interface DiscoveredAsset {
 
 export interface DiscoveredProject {
   assets?: DiscoveredAsset[];
+  /**
+   * Conventional `skills/<name>/SKILL.md` documents that explicit `skills`
+   * configuration leaves uncovered — the confusable shadowed state surfaced
+   * by the AB4734 migration nudge. Absent when config is silent (the
+   * convention itself applies) or when every conventional skill is covered.
+   */
+  shadowedConventionalSkills?: readonly string[];
   skills: SkillDocument[];
 }
 
@@ -89,23 +96,31 @@ export const discoverProject = async (
   const projectRoot = resolve(root);
   const rules = await readProjectIgnoreRules(projectRoot);
   const configuredSkills = config.skills;
+  const conventionalSources = (await fastGlob('skills/*/SKILL.md', {
+    absolute: true,
+    cwd: projectRoot,
+    dot: true,
+    followSymbolicLinks: false,
+    onlyFiles: true,
+  })).filter((source) => !isProjectPathIgnored(rules, projectRoot, source));
   const sources =
     configuredSkills === undefined
-      ? await fastGlob('skills/*/SKILL.md', {
-          absolute: true,
-          cwd: projectRoot,
-          dot: true,
-          followSymbolicLinks: false,
-          onlyFiles: true,
-        })
+      ? conventionalSources
       : (await Promise.all(configuredSkills.map((skill) => expandConfiguredSkill(projectRoot, skill)))).flat();
   const skillDirs = [...new Set(sources
     .filter((source) => !isProjectPathIgnored(rules, projectRoot, source))
     .map((source) => (basename(source) === 'SKILL.md' ? dirname(source) : source)))]
     .sort((left, right) => left.localeCompare(right));
+  const coveredDirs = new Set(skillDirs);
+  const shadowedConventionalSkills = configuredSkills === undefined
+    ? []
+    : conventionalSources
+        .filter((source) => !coveredDirs.has(dirname(source)))
+        .sort((left, right) => left.localeCompare(right));
 
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
+    ...(shadowedConventionalSkills.length === 0 ? {} : { shadowedConventionalSkills }),
     skills: await Promise.all(
       skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules)),
     ),
