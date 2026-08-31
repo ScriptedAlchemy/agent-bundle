@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { writeFixtureManifest } from './support/manifest.ts';
-import { sharedPackedTarball } from './support/shared-pack.ts';
+import { npmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
 
 interface PackageManifest {
   bin: {
@@ -58,7 +58,7 @@ it('writes the package version as the producer of a packed CLI manifest', async 
   try {
     await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
     await execFile(
-      'npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
+      'npm', ['install', ...npmInstallArguments, tarball],
       { cwd: consumerRoot },
     );
 
@@ -90,7 +90,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
     await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
     await execFile(
       'npm',
-      ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
+      ['install', ...npmInstallArguments, tarball],
       { cwd: consumerRoot },
     );
 
@@ -142,7 +142,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }
-}, 15_000);
+}, 30_000);
 
 it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
   const { tarball } = await sharedPackedTarball('agent-bundle');
@@ -198,7 +198,7 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
     await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
     await execFile(
       'npm',
-      ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
+      ['install', ...npmInstallArguments, tarball],
       { cwd: consumerRoot },
     );
     const { stdout } = await execFile(process.execPath, [

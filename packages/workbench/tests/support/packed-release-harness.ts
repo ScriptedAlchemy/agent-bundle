@@ -1,18 +1,14 @@
-import type { ChildProcess } from 'node:child_process';
+import { execFile as executeFile, type ChildProcess } from 'node:child_process';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { join, relative, isAbsolute } from 'node:path';
+import { relative, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 
-export const execFile = promisify((await import('node:child_process')).execFile);
-export const workspaceRoot = process.cwd();
-export const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
-const packedServerStartupBudget = 45_000;
+export { installedEnvironment } from '../../../agent-bundle/tests/support/shared-pack.ts';
 
-export const installedEnvironment = (): NodeJS.ProcessEnv => {
-  const { NODE_PATH: _nodePath, ...environment } = process.env;
-  return environment;
-};
+export const execFile = promisify(executeFile);
+export const workspaceRoot = process.cwd();
+const packedServerStartupBudget = 45_000;
 
 export const availablePort = async (): Promise<number> => {
   const server = createServer();

@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
-import { sharedPackedTarball } from './support/shared-pack.ts';
+import { installedEnvironment, npmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -15,11 +15,6 @@ const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const workbenchRoot = join(workspaceRoot, 'packages', 'workbench');
 const appRendererLicense = join('src', 'mcp', 'APP-RENDERER-LICENSE');
 let built: Promise<void> | undefined;
-
-const packedEnvironment = (): NodeJS.ProcessEnv => {
-  const { NODE_PATH: _nodePath, ...environment } = process.env;
-  return environment;
-};
 
 const buildPackage = async (force = false): Promise<void> => {
   if (force) {
@@ -88,7 +83,7 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     expect(listing.stdout).not.toMatch(/package\/dist\/workbench\/.*-[a-f0-9]{8,}/iu);
 
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
-    await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], { cwd: consumer });
+    await execFile('npm', ['install', ...npmInstallArguments, tarball], { cwd: consumer });
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
@@ -120,9 +115,7 @@ it('runs the Agent API from an omit-dev installed tarball with its runtime MCP d
   const project = join(consumer, 'project');
   try {
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
-    await execFile('npm', [
-      'install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', tarball,
-    ], { cwd: consumer });
+    await execFile('npm', ['install', '--omit=dev', ...npmInstallArguments, tarball], { cwd: consumer });
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
@@ -152,7 +145,7 @@ it('runs the Agent API from an omit-dev installed tarball with its runtime MCP d
     ].join('\n');
     const result = await execFile(process.execPath, ['--input-type=module', '--eval', script], {
       cwd: consumer,
-      env: { ...packedEnvironment(), AGENT_BUNDLE_AGENT_API_TOKEN: 'packed-agent-api-token' },
+      env: { ...installedEnvironment(), AGENT_BUNDLE_AGENT_API_TOKEN: 'packed-agent-api-token' },
     });
     expect(JSON.parse(result.stdout)).toEqual({
       runtime: ['function', 'function', 'function'],

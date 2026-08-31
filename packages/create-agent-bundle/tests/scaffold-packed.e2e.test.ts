@@ -7,14 +7,9 @@ import { promisify } from 'node:util';
 
 import { afterAll, expect, it } from '@rstest/core';
 
-import { sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
+import { installedEnvironment, npmInstallArguments, sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
-
-const installedEnvironment = (): NodeJS.ProcessEnv => {
-  const { NODE_PATH: _nodePath, ...environment } = process.env;
-  return environment;
-};
 
 interface PackedFixture {
   readonly frameworkTarball: string;
@@ -41,7 +36,7 @@ const packFixture = async (): Promise<PackedFixture> => {
   const runnerRoot = join(root, 'runner');
   await mkdir(runnerRoot, { recursive: true });
   await writeFile(join(runnerRoot, 'package.json'), '{"name":"scaffold-runner","type":"module","private":true}\n');
-  await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', scaffolderTarball], {
+  await execFile('npm', ['install', ...npmInstallArguments, scaffolderTarball], {
     cwd: runnerRoot,
     env: installedEnvironment(),
   });
@@ -61,7 +56,7 @@ const fixture = (): Promise<PackedFixture> => {
 
 afterAll(async () => {
   if (fixturePromise === undefined) return;
-  const { root } = await fixture();
+  const { root } = await fixturePromise;
   await rm(root, { force: true, recursive: true });
 });
 
@@ -82,8 +77,9 @@ const scaffoldProject = async (
   return join(runnerRoot, projectName);
 };
 
-const npmRun = async (projectRoot: string, script: string): Promise<{ readonly stdout: string }> =>
-  execFile('npm', ['run', script], { cwd: projectRoot, env: installedEnvironment() });
+const npmRun = async (projectRoot: string, script: string): Promise<void> => {
+  await execFile('npm', ['run', script], { cwd: projectRoot, env: installedEnvironment() });
+};
 
 /** Zero diagnostics — including the informational AB473x migration nudges. */
 const expectCleanValidate = async (projectRoot: string): Promise<void> => {
@@ -119,7 +115,7 @@ it.concurrent('scaffolds the minimal template, auto-installs, and passes its own
 
 it.concurrent('scaffolds the mcp-server template and serves the conventional entry from the artifact', async () => {
   const projectRoot = await scaffoldProject('mcp-server', 'status-plugin', ['--no-install']);
-  await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], {
+  await execFile('npm', ['install', ...npmInstallArguments], {
     cwd: projectRoot,
     env: installedEnvironment(),
   });
@@ -154,7 +150,7 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
 
 it.concurrent('scaffolds the cli-tool template with a framework-built bin, lib, and artifact script', async () => {
   const projectRoot = await scaffoldProject('cli-tool', 'greeter', ['--no-install']);
-  await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], {
+  await execFile('npm', ['install', ...npmInstallArguments], {
     cwd: projectRoot,
     env: installedEnvironment(),
   });

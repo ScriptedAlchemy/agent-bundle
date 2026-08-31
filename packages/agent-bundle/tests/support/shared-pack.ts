@@ -21,10 +21,13 @@ export interface SharedPack {
 
 export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle';
 
-const installedEnvironment = (): NodeJS.ProcessEnv => {
+export const installedEnvironment = (): NodeJS.ProcessEnv => {
   const { NODE_PATH: _nodePath, ...environment } = process.env;
   return environment;
 };
+
+/** Canonical flags for installing a packed tarball into a consumer fixture. */
+export const npmInstallArguments = ['--ignore-scripts', '--no-audit', '--no-fund'] as const;
 
 const packs = new Map<SharedPackPackage, Promise<SharedPack>>();
 let fallbackBuild: Promise<void> | undefined;

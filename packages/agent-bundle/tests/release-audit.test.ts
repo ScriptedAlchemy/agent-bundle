@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
-import { sharedPackedTarball } from './support/shared-pack.ts';
+import { npmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -46,7 +46,12 @@ it('audits an externally installed production tarball and generates its CycloneD
   const componentReferences = new Set(components.flatMap((component) => (
     component['bom-ref'] === undefined ? [] : [component['bom-ref']]
   )));
-  const dependencyReferences = new Set([root?.['bom-ref'], ...componentReferences]);
+  const rootReference = root?.['bom-ref'];
+  expect(rootReference).toBeDefined();
+  const dependencyReferences = new Set<string>([
+    ...(rootReference === undefined ? [] : [rootReference]),
+    ...componentReferences,
+  ]);
   const declaredDependencyReferences = new Set((sbom.dependencies ?? []).flatMap((dependency) => (
     dependency.ref === undefined ? [] : [dependency.ref]
   )));
@@ -60,9 +65,7 @@ it('audits an externally installed production tarball and generates its CycloneD
   expect(product).toBeDefined();
   expect(rootDependencies?.dependsOn).toContain(product?.['bom-ref']);
   expect(productDependencies?.dependsOn?.length).toBeGreaterThan(0);
-  expect([...dependencyReferences]).not.toContain(undefined);
-  expect([...dependencyReferences].filter((reference): reference is string => reference !== undefined)
-    .every((reference) => declaredDependencyReferences.has(reference))).toBe(true);
+  expect([...dependencyReferences].every((reference) => declaredDependencyReferences.has(reference))).toBe(true);
   expect((sbom.dependencies ?? []).every((dependency) => (
     dependency.ref !== undefined
       && dependencyReferences.has(dependency.ref)
@@ -122,12 +125,7 @@ it('installs public entrypoints and an externally resolved CLI for production co
     const { tarball } = await sharedPackedTarball('agent-bundle');
     await writeFile(join(consumerRoot, 'package.json'), '{"private":true,"type":"module"}\n');
     await execFile('npm', [
-      'install',
-      '--omit=dev',
-      '--ignore-scripts',
-      '--no-audit',
-      '--no-fund',
-      tarball,
+      'install', '--omit=dev', ...npmInstallArguments, tarball,
     ], { cwd: consumerRoot, env: releaseEnvironment() });
 
     const installedPackageRoot = await realpath(join(consumerRoot, 'node_modules', 'agent-bundle'));

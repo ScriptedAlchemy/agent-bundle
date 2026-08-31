@@ -14,7 +14,7 @@ import {
   validateOutageLedger,
   type ConsoleErrorRecord,
 } from './support/packed-outage-ledger.ts';
-import { sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
+import { npmInstallArguments, sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import {
   availablePort,
@@ -35,7 +35,6 @@ import { workbenchUrl } from './support/workbench-e2e.ts';
 
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
 const browserTimeout = 12_000 * timeScale;
-const packedServerStartupBudget = 45_000 * timeScale;
 const productTemporaryRootPrefixes = [
   'agent-bundle-hook-playground-',
   'agent-bundle-mcp-',
@@ -84,7 +83,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
   let primaryFailure: Error | undefined;
   try {
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
-    await execFile('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', tarball], {
+    await execFile('npm', ['install', '--omit=dev', ...npmInstallArguments, tarball], {
       cwd: consumer,
       env: installedEnvironment(),
     });
@@ -468,8 +467,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const exportedScriptSection = page.getByRole('heading', { name: 'Exported trace' }).locator('..');
       await expect(exportedScriptSection).toContainText(scriptSessionId);
       await expect(exportedScriptSection).toContainText(scriptCompletedReference);
-      const scriptSelectedCheckbox = scriptCompletedCheckbox;
-      await scriptSelectedCheckbox.check();
+      await scriptCompletedCheckbox.check();
       await expect(page.getByRole('button', { name: 'Promote to draft eval case' })).toBeEnabled({ timeout: browserTimeout });
       const promotedScriptResponse = page.waitForResponse((response) =>
         response.url() === `${origin}/api/playground/sessions/${encodeURIComponent(scriptSessionId)}/draft-eval` &&
@@ -942,9 +940,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const browserMcpSessionBCloseCompletedAt = Date.now();
 
       phase = 'desktop navigation floor';
-      await page.setViewportSize({ height: 900, width: 1440 });
-      const mobileNavigationRequestIndex = browserRequests.length;
-      const mobileRoutes: readonly Readonly<{ heading: string; label: string }>[] = [
+      const navigationFloorRequestIndex = browserRequests.length;
+      const navigationRoutes: readonly Readonly<{ heading: string; label: string }>[] = [
         { heading: 'Bundle dashboard', label: 'Overview' }, { heading: 'Skills', label: 'Skills' }, { heading: 'Hooks', label: 'Hooks' },
         { heading: 'MCP playground', label: 'MCP playground' }, { heading: 'Artifacts', label: 'Artifacts' }, { heading: 'Playground', label: 'Playground' },
         { heading: 'Logs', label: 'Logs' }, { heading: 'Evals', label: 'Evals' }, { heading: 'Comparisons', label: 'Comparisons' },
@@ -964,20 +961,20 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         respondedStream?: true;
         url: string;
       }>> = [];
-      let activeMobileRoute: Readonly<{ openedAt: number; urls?: readonly string[] }> | undefined;
-      const leaveActiveMobileRoute = (leftAt: number): void => {
-        if (activeMobileRoute === undefined) return;
-        for (const url of activeMobileRoute.urls ?? []) postRecoveryNavigation.push(Object.freeze({
+      let activeNavigationRoute: Readonly<{ openedAt: number; urls?: readonly string[] }> | undefined;
+      const leaveActiveNavigationRoute = (leftAt: number): void => {
+        if (activeNavigationRoute === undefined) return;
+        for (const url of activeNavigationRoute.urls ?? []) postRecoveryNavigation.push(Object.freeze({
           leftAt,
-          openedAt: activeMobileRoute.openedAt,
+          openedAt: activeNavigationRoute.openedAt,
           ...(respondedNavigationStreams.has(url) ? { respondedStream: true as const } : {}),
           url,
         }));
-        activeMobileRoute = undefined;
+        activeNavigationRoute = undefined;
       };
-      for (const route of mobileRoutes) {
+      for (const route of navigationRoutes) {
         const openedAt = Date.now();
-        leaveActiveMobileRoute(openedAt);
+        leaveActiveNavigationRoute(openedAt);
         const logsStreamResponse = route.label === 'Logs'
           ? page.waitForResponse((response) => {
             const url = new URL(response.url());
@@ -1003,13 +1000,13 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
           respondedNavigationStreams.add(streamUrl);
           routeUrls.push(streamUrl);
         }
-        activeMobileRoute = Object.freeze({ openedAt, urls: Object.freeze(routeUrls) });
+        activeNavigationRoute = Object.freeze({ openedAt, urls: Object.freeze(routeUrls) });
       }
-      leaveActiveMobileRoute(Date.now());
+      leaveActiveNavigationRoute(Date.now());
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-      await waitForBrowserRequestsAfter(mobileNavigationRequestIndex);
+      await waitForBrowserRequestsAfter(navigationFloorRequestIndex);
 
       phase = 'foreground outage ledger quiet fence';
       const requestFailuresBeforeQuietFence = browserRequests.filter((request) => request.error !== undefined);
