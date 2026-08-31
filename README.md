@@ -78,7 +78,7 @@ Run these from the repository root. `pnpm examples:check` validates and builds e
 
 ## Development
 
-`pnpm check` runs the local delivery gate (build, unit and integration tests, lint, typecheck); `pnpm check:release` adds the packaging gates. Versioning goes through Changesets. Native Claude/Codex host smokes are opt-in and intentionally skipped in CI. The Workbench architecture and the optional RSC runtime are documented in [docs/architecture/rsc-runtime-workbench.md](docs/architecture/rsc-runtime-workbench.md).
+`pnpm check` runs the local delivery gate (build, unit and integration tests, lint, typecheck); `pnpm check:release` adds the packaging gates. `pnpm check:local-ci` mirrors the full hosted CI gate — the three-Node verify matrix plus the examples, release, and micro-eval jobs — in parallel local worktrees, and is the merge gate for the local-merge workflow described in [docs/local-ci.md](docs/local-ci.md). Versioning goes through Changesets. Native Claude/Codex host smokes are opt-in and intentionally skipped in CI. The Workbench architecture and the optional RSC runtime are documented in [docs/architecture/rsc-runtime-workbench.md](docs/architecture/rsc-runtime-workbench.md).
 
 ## Status
 

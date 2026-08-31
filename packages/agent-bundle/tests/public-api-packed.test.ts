@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { writeFixtureManifest } from './support/manifest.ts';
+import { npmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
 
 interface PackageManifest {
   bin: {
@@ -18,14 +19,6 @@ interface PackageManifest {
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
-let buildPromise: Promise<void> | undefined;
-
-const buildPackage = async (): Promise<void> => {
-  buildPromise ??= execFile('pnpm', ['build'], {
-    cwd: workspaceRoot,
-  }).then(() => undefined);
-  await buildPromise;
-};
 
 const readPackageManifest = async (): Promise<PackageManifest> =>
   JSON.parse(
@@ -58,18 +51,14 @@ const producerFrom = async (output: string): Promise<{ readonly name: string; re
 };
 
 it('writes the package version as the producer of a packed CLI manifest', async () => {
-  await buildPackage();
+  const { tarball } = await sharedPackedTarball('agent-bundle');
 
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-manifest-'));
   const manifest = await readPackageManifest();
   try {
-    const { stdout: packedOutput } = await execFile(
-      'npm', ['pack', '--json', '--pack-destination', consumerRoot], { cwd: packageRoot },
-    );
-    const [packed] = JSON.parse(packedOutput) as Array<{ filename: string }>;
     await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
     await execFile(
-      'npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(consumerRoot, packed.filename)],
+      'npm', ['install', ...npmInstallArguments, tarball],
       { cwd: consumerRoot },
     );
 
@@ -94,22 +83,14 @@ it('writes the package version as the producer of a packed CLI manifest', async 
 }, 30_000);
 
 it('imports the externalized config entry from a packed npm consumer', async () => {
-  await buildPackage();
+  const { tarball } = await sharedPackedTarball('agent-bundle');
 
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-consumer-'));
   try {
-    const { stdout: packedOutput } = await execFile(
-      'npm',
-      ['pack', '--json', '--pack-destination', consumerRoot],
-      { cwd: packageRoot },
-    );
-    const [packed] = JSON.parse(packedOutput) as Array<{ filename: string }>;
-    const tarball = join(consumerRoot, packed.filename);
-
     await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
     await execFile(
       'npm',
-      ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
+      ['install', ...npmInstallArguments, tarball],
       { cwd: consumerRoot },
     );
 
@@ -161,10 +142,10 @@ it('imports the externalized config entry from a packed npm consumer', async () 
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }
-}, 15_000);
+}, 30_000);
 
 it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
-  await buildPackage();
+  const { tarball } = await sharedPackedTarball('agent-bundle');
 
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-consumer-'));
   try {
@@ -214,16 +195,10 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
       '{"hooks":[]}\n',
     );
 
-    const { stdout: packedOutput } = await execFile(
-      'npm',
-      ['pack', '--json', '--pack-destination', consumerRoot],
-      { cwd: packageRoot },
-    );
-    const [packed] = JSON.parse(packedOutput) as Array<{ filename: string }>;
     await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
     await execFile(
       'npm',
-      ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(consumerRoot, packed.filename)],
+      ['install', ...npmInstallArguments, tarball],
       { cwd: consumerRoot },
     );
     const { stdout } = await execFile(process.execPath, [

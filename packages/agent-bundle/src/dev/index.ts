@@ -86,6 +86,7 @@ export {
 export { createWorkbenchAssetSource, type WorkbenchAssetSourceOptions } from './workbench-assets.ts';
 export {
   RuntimeClientSurfaceProxy,
+  runtimeClientSurfaceReloadChannelPath,
   type RuntimeClientSurfaceConnectionEvent,
 } from './runtime-client-surface-proxy.ts';
 export { RuntimeRoutes, type RuntimeRoutesOptions } from './runtime-routes.ts';

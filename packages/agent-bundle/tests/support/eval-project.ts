@@ -21,7 +21,11 @@ export interface SeedEvalProjectOptions {
 }
 
 const evalEntryPoint = resolve(process.cwd(), 'packages/agent-bundle/src/eval/index.ts');
-const sourceEntryPoint = resolve(process.cwd(), 'packages/agent-bundle/src/index.ts');
+// defineConfig's defining module, not the package entry: seeded configs load
+// through Jiti with the module cache off, so re-exporting src/index.ts made
+// every config load re-transpile the whole package graph (~5s per project).
+// project-fixture.ts stubs the same way.
+const sourceEntryPoint = resolve(process.cwd(), 'packages/agent-bundle/src/core/types.ts');
 
 const graderModule = (expected: string): string => [
   "import { readFile } from 'node:fs/promises';",

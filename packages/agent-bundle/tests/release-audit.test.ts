@@ -6,6 +6,8 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
+import { npmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
+
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
@@ -44,7 +46,12 @@ it('audits an externally installed production tarball and generates its CycloneD
   const componentReferences = new Set(components.flatMap((component) => (
     component['bom-ref'] === undefined ? [] : [component['bom-ref']]
   )));
-  const dependencyReferences = new Set([root?.['bom-ref'], ...componentReferences]);
+  const rootReference = root?.['bom-ref'];
+  expect(rootReference).toBeDefined();
+  const dependencyReferences = new Set<string>([
+    ...(rootReference === undefined ? [] : [rootReference]),
+    ...componentReferences,
+  ]);
   const declaredDependencyReferences = new Set((sbom.dependencies ?? []).flatMap((dependency) => (
     dependency.ref === undefined ? [] : [dependency.ref]
   )));
@@ -58,9 +65,7 @@ it('audits an externally installed production tarball and generates its CycloneD
   expect(product).toBeDefined();
   expect(rootDependencies?.dependsOn).toContain(product?.['bom-ref']);
   expect(productDependencies?.dependsOn?.length).toBeGreaterThan(0);
-  expect([...dependencyReferences]).not.toContain(undefined);
-  expect([...dependencyReferences].filter((reference): reference is string => reference !== undefined)
-    .every((reference) => declaredDependencyReferences.has(reference))).toBe(true);
+  expect([...dependencyReferences].every((reference) => declaredDependencyReferences.has(reference))).toBe(true);
   expect((sbom.dependencies ?? []).every((dependency) => (
     dependency.ref !== undefined
       && dependencyReferences.has(dependency.ref)
@@ -81,14 +86,8 @@ it('ships repository and support metadata that matches the verified origin', asy
   const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-package-metadata-'));
 
   try {
-    const { stdout } = await execFile('npm', [
-      'pack',
-      '--json',
-      '--pack-destination',
-      tarballRoot,
-    ], { cwd: packageRoot, env: releaseEnvironment() });
-    const [{ filename }] = JSON.parse(stdout) as Array<{ readonly filename: string }>;
-    await execFile('tar', ['--extract', '--file', join(tarballRoot, filename), '--directory', tarballRoot]);
+    const { tarball } = await sharedPackedTarball('agent-bundle');
+    await execFile('tar', ['--extract', '--file', tarball, '--directory', tarballRoot]);
     const manifest = JSON.parse(await readFile(join(tarballRoot, 'package', 'package.json'), 'utf8')) as {
       readonly bugs?: { readonly url?: string };
       readonly description?: string;
@@ -109,51 +108,24 @@ it('ships repository and support metadata that matches the verified origin', asy
 });
 
 it('packs generated Workbench legal companion files', async () => {
-  const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-audit-'));
+  const { packOutput } = await sharedPackedTarball('agent-bundle');
+  const productManifest = await readFile(join(packageRoot, 'package.json'), 'utf8');
 
-  try {
-    await execFile('pnpm', ['build'], { cwd: workspaceRoot, env: releaseEnvironment() });
-    const { stdout } = await execFile('npm', [
-      'pack',
-      '--json',
-      '--pack-destination',
-      tarballRoot,
-    ], { cwd: packageRoot, env: releaseEnvironment() });
-    const [{ files }] = JSON.parse(stdout) as Array<{ readonly files: readonly { readonly path: string }[] }>;
-    const productManifest = await readFile(join(packageRoot, 'package.json'), 'utf8');
-
-    expect(files.map((file) => file.path)).toContainEqual(
-      expect.stringMatching(/^dist\/workbench\/.*\.LICENSE\.txt$/u),
-    );
-    expect(files.some(({ path }) => path.startsWith('examples/'))).toBe(false);
-    expect(productManifest).not.toContain('workspace:');
-  } finally {
-    await rm(tarballRoot, { force: true, recursive: true });
-  }
+  expect(packOutput.files.map((file) => file.path)).toContainEqual(
+    expect.stringMatching(/^dist\/workbench\/.*\.LICENSE\.txt$/u),
+  );
+  expect(packOutput.files.some(({ path }) => path.startsWith('examples/'))).toBe(false);
+  expect(productManifest).not.toContain('workspace:');
 }, 120_000);
 
 it('installs public entrypoints and an externally resolved CLI for production consumers', async () => {
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-consumer-'));
-  const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-tarball-'));
 
   try {
-    await execFile('pnpm', ['build'], { cwd: workspaceRoot, env: releaseEnvironment() });
-    const { stdout: packed } = await execFile('npm', [
-      'pack',
-      '--json',
-      '--pack-destination',
-      tarballRoot,
-    ], { cwd: packageRoot, env: releaseEnvironment() });
-    const [{ filename }] = JSON.parse(packed) as Array<{ readonly filename: string }>;
-    const tarball = join(tarballRoot, filename);
+    const { tarball } = await sharedPackedTarball('agent-bundle');
     await writeFile(join(consumerRoot, 'package.json'), '{"private":true,"type":"module"}\n');
     await execFile('npm', [
-      'install',
-      '--omit=dev',
-      '--ignore-scripts',
-      '--no-audit',
-      '--no-fund',
-      tarball,
+      'install', '--omit=dev', ...npmInstallArguments, tarball,
     ], { cwd: consumerRoot, env: releaseEnvironment() });
 
     const installedPackageRoot = await realpath(join(consumerRoot, 'node_modules', 'agent-bundle'));
@@ -221,9 +193,6 @@ it('installs public entrypoints and an externally resolved CLI for production co
     await rm(join(consumerRoot, 'node_modules', 'commander'), { force: true, recursive: true });
     await expect(execFile(cli, ['--help'], { cwd: consumerRoot, env: releaseEnvironment() })).rejects.toThrow();
   } finally {
-    await Promise.all([
-      rm(consumerRoot, { force: true, recursive: true }),
-      rm(tarballRoot, { force: true, recursive: true }),
-    ]);
+    await rm(consumerRoot, { force: true, recursive: true });
   }
 }, 120_000);

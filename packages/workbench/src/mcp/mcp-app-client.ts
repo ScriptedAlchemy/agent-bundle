@@ -741,8 +741,7 @@ const runtimePreview = (value: unknown, foregroundOrigin: string): McpAppPreview
     session: runtimeSession(record.session, binding),
   };
   if (record.kind === 'fallback') return Object.freeze({ ...base, kind: 'fallback', profile: runtimeProfile(record.profile, binding, 'fallback') }) as unknown as McpAppPreviewSnapshot;
-  const clientSurface = runtimeRecord(record.clientSurface, ['bootstrapUrl', 'origin', 'webSocketPath']);
-  if (clientSurface.webSocketPath !== '/rsbuild-hmr') runtimeInvalid('Runtime MCP App route returned an invalid client surface.');
+  const clientSurface = runtimeRecord(record.clientSurface, ['bootstrapUrl', 'origin']);
   const bootstrapUrl = runtimeText(clientSurface.bootstrapUrl, 'client bootstrap URL');
   const clientOrigin = origin(clientSurface.origin);
   let bootstrap: URL;
@@ -756,7 +755,7 @@ const runtimePreview = (value: unknown, foregroundOrigin: string): McpAppPreview
   }
   return Object.freeze({
     ...base,
-    clientSurface: Object.freeze({ bootstrapUrl, origin: clientOrigin, webSocketPath: '/rsbuild-hmr' }),
+    clientSurface: Object.freeze({ bootstrapUrl, origin: clientOrigin }),
     documentPolicy: runtimeDocumentPolicy(record.documentPolicy),
     kind: 'apps',
     profile: runtimeProfile(record.profile, binding, 'apps'),
