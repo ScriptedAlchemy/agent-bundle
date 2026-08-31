@@ -81,7 +81,9 @@ export const createAudiobookCuratorApplication = (
       version="1.0.0"
     >
       <Skill source="./skills/curate-audiobooks" />
-      <Script entry="./src/cli-entry.ts" name="audiobook-curator" />
+      {/* The framework process envelope invokes the exported `main`; no
+          hand-written self-executing entry file is needed. */}
+      <Script entry="./src/cli.ts" name="audiobook-curator" />
       <McpServer entry="./src/mcp-server.ts" name="curator" />
       {definitions.map((definition) => <Operation definition={definition} key={definition.id} />)}
     </AgentBundle>,

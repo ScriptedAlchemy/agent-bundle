@@ -210,6 +210,7 @@ export class ArtifactService {
         projectContext,
         projectRoot: prepared.root,
         registry: prepared.registry,
+        ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
       const firstValidation = this.#validateArtifact === undefined
         ? await validateArtifactWithSnapshot({

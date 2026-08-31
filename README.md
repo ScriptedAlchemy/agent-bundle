@@ -207,6 +207,63 @@ Skills follow the Agent Skills directory layout and may contain references and b
 
 The compiler rejects unsafe output names, unsupported extensions, nonexistent or escaping source paths, unknown targets, and output collisions before it stages an artifact. It does not call Codex, Claude, or another host CLI, and it does not require API keys.
 
+### One config: agent-bundle owns the build
+
+`agent-bundle.config.ts` is the only build configuration a plugin project
+needs — no consumer `rslib.config.ts`, no hand-written bin shims, no
+hand-rolled stdio lifecycles, no launcher scripts. Alongside the host
+artifacts, `agent-bundle build` also produces the node-consumable npm package
+build when a project declares (or conventionally provides) one:
+
+```ts
+export default defineConfig({
+  plugin: { name: 'review-tools', version: '1.0.0' },
+  // npm-facing CLI binaries: dist/bin/<name>.js, self-executing with a
+  // shebang and executable bit; point package.json "bin" straight at it.
+  bin: { 'review-tools': './src/cli.ts' },
+  // Optional npm library output: dist/index.js (+ dist/*.d.ts). The profile
+  // is deliberately thin — one ESM entry, node target, optional dts.
+  lib: { entry: './src/index.ts', dts: true },
+  // THE bundler escape hatch: merged last into every config agent-bundle
+  // synthesizes (scripts, MCP entries, hooks, MCP Apps, bin/lib), still
+  // bounded by the artifact invariant assertions. Consumers never need a
+  // second bundler config file.
+  tools: {
+    rsbuild: { /* Rsbuild environment-config fragment */ },
+    rspack: (config) => { /* mutate the resolved Rspack config */ },
+  },
+});
+```
+
+A `bin` entry that exports `main(argv)` (or a default function) receives the
+generated process envelope: argv forwarding, `await`, and a numeric return
+adopted as the exit code. Artifact `scripts` whose module exports `main` get
+the same envelope; self-executing scripts keep their direct-bundle behavior.
+Generating `lib` declarations resolves `typescript` from the project (install
+it as a devDependency) and reuses the project `tsconfig.json` compiler
+options scoped to the entry's source directory.
+
+Entry-file conventions fill the config when it is silent, and config always
+wins (`bin: false` / `lib: false` opt out): `src/cli.ts` becomes the bin named
+after the plugin, `src/index.ts` becomes the library output, and
+`src/mcp/<server-id>.ts` becomes the stdio entry of a declared MCP server that
+names no `entry`, `command`, or `url`. See
+[docs/entry-conventions.md](docs/entry-conventions.md) for the full contract.
+
+An MCP server entry that **default-exports a server factory** is wrapped in
+the framework-owned stdio lifecycle shell: console-to-stderr protection with
+raw stdout restored for protocol frames, SIGINT/SIGTERM handling (exit 130 /
+143), stdin-EOF detection (exit 0 so the client can respawn), a bounded
+shutdown race against wedged transports, and heartbeat logging. Self-connecting
+entries keep today's behavior byte for byte. The same lifecycle is available
+directly from `agent-bundle/mcp-entry` for hand-rolled entries.
+
+`agent-bundle mcp run --server <name> --target <target> [--artifact <path>]`
+runs one built stdio server in the foreground, resolving its content-hashed
+generated entry from the target manifest — no more parsing `mcp.json` from a
+launcher script. Server state anchored on the plugin-data token persists under
+`.agent-bundle/mcp-run/<target>/<server>`.
+
 ### Adapter-owned extensions
 
 Ordinary projects need no runtime extension key. `AgentBundleConfig` explicitly

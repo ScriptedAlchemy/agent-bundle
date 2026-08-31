@@ -115,6 +115,10 @@ const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
     ...(app.template === undefined ? [] : [app.template]),
   ]),
   ...(model.nativeHooks ?? []).flatMap((hook) => [hook.provenance.sourcePath, hook.source]),
+  ...(model.packageBuild?.bins ?? []).flatMap((bin) => [bin.provenance.sourcePath, bin.source]),
+  ...(model.packageBuild?.lib === undefined
+    ? []
+    : [model.packageBuild.lib.provenance.sourcePath, model.packageBuild.lib.source]),
 ];
 
 const assertModelPathsResolveInsideProject = (root: string, model: NormalizedPlugin): void => {
@@ -189,6 +193,27 @@ export const canonicalizeNormalizedModel = (
           provenance: canonicalProvenance(root, hook.provenance),
           source: canonicalCompilerPath(root, hook.source, 'Native hook source path'),
         })),
+      }),
+    ...(detached.packageBuild === undefined
+      ? {}
+      : {
+        packageBuild: {
+          ...detached.packageBuild,
+          bins: detached.packageBuild.bins.map((bin) => ({
+            ...bin,
+            provenance: canonicalProvenance(root, bin.provenance),
+            source: canonicalCompilerPath(root, bin.source, 'Bin entry source path'),
+          })),
+          ...(detached.packageBuild.lib === undefined
+            ? {}
+            : {
+              lib: {
+                ...detached.packageBuild.lib,
+                provenance: canonicalProvenance(root, detached.packageBuild.lib.provenance),
+                source: canonicalCompilerPath(root, detached.packageBuild.lib.source, 'Lib entry source path'),
+              },
+            }),
+        },
       }),
     scripts: detached.scripts.map((script) => ({
       ...script,

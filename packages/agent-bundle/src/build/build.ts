@@ -7,7 +7,7 @@ import type { TargetRegistry } from '../adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from '../adapters/types.ts';
 import { deduplicateDiagnostics, DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
-import type { NormalizedPlugin } from '../core/types.ts';
+import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
 import { assertInside } from '../core/paths.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
@@ -57,6 +57,8 @@ export interface BuildOptions {
   readonly projectContext: ProjectContext;
   readonly projectRoot: string;
   readonly registry: TargetRegistry;
+  /** The consumer bundler escape hatch, applied to every synthesized config. */
+  readonly tools?: AgentBundleToolsConfig;
 }
 
 interface PlannedTarget {
@@ -271,26 +273,29 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     const compiledHooks: CompiledHookEntry[] = [];
     const compiledMcpApps: CompiledMcpApp[] = [];
     const compiledMcpEntries: CompiledMcpEntry[] = [];
+    const tools = options.tools === undefined ? {} : { tools: options.tools };
     for (const target of stagedTargets) {
       const targetMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
         cwd: options.projectRoot,
         outDir: target.root,
         target: target.name,
+        ...tools,
       });
       compiledMcpApps.push(...targetMcpApps);
       await emitPlanEntries({ entries: target.entries, root: target.root });
       compiledEntries.push(
         ...(await compileEntries(
           options.model.scripts.filter((script) => script.targets.includes(target.name)),
-          { cwd: options.projectRoot, outDir: target.root },
+          { cwd: options.projectRoot, outDir: target.root, ...tools },
         )),
       );
-      compiledHooks.push(...(await compileHooks(target.hookEntries, { cwd: options.projectRoot, outDir: target.root })));
+      compiledHooks.push(...(await compileHooks(target.hookEntries, { cwd: options.projectRoot, outDir: target.root, ...tools })));
       compiledMcpEntries.push(...(await compileMcpEntries(options.model.mcpServers, {
         apps: targetMcpApps,
         cwd: options.projectRoot,
         outDir: target.root,
         target: target.name,
+        ...tools,
       })));
     }
     const publishedCompiledEntries = Object.freeze(compiledEntries.map((entry) =>

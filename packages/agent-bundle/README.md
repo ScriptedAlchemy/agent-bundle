@@ -43,14 +43,27 @@ plus explicit host-native selectors such as `claude:WebSearch` or `codex:view_im
 contribute only to that host's native matcher. A hook that selects tools must leave every selected
 target with at least one applicable selector, otherwise the build fails.
 
+agent-bundle also owns the npm-facing package build: `bin` entries become self-executing
+`dist/bin/<name>.js` bundles (shebang, executable bit, generated `main(argv)` envelope) and the
+optional `lib` entry becomes `dist/<stem>.js` with declarations (resolving `typescript` from the
+project). The `src/cli.ts`, `src/index.ts`, and `src/mcp/<server-id>.ts` conventions fill these in
+when the config is silent; config always wins and `bin: false` / `lib: false` opt out. MCP server
+entries that default-export a server factory are wrapped in the framework stdio lifecycle shell
+(console-to-stderr guard with raw stdout restored for protocol frames, SIGINT 130 / SIGTERM 143,
+stdin-EOF exit 0, bounded shutdown, heartbeat), also available directly from
+`agent-bundle/mcp-entry`. `tools.rsbuild` / `tools.rspack` is the single bundler escape hatch,
+merged last into every synthesized config and bounded by the artifact invariant assertions. See
+the repository's `docs/entry-conventions.md` for the full contract.
+
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `agent-bundle build` | Build a validated artifact from source. |
+| `agent-bundle build` | Build a validated artifact from source, plus the declared `dist/` package build. |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
+| `agent-bundle mcp run` | Run one built stdio MCP server in the foreground, resolving its hashed entry. |
 | `agent-bundle hooks list` / `hooks simulate` | List generated hooks, or run one emitted wrapper. |
 | `agent-bundle eval` | Run deterministic or native Claude/Codex eval suites and record a run. |
 | `agent-bundle dev` | Serve the packaged developer workbench on loopback. |
