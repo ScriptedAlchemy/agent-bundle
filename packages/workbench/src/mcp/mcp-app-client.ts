@@ -131,7 +131,6 @@ export interface McpAppRuntimeClient {
   decideRuntimeConsent(bindingId: string, consentId: string, decision: 'allow-once' | 'deny', signal?: AbortSignal): Promise<McpAppConsentDecisionResponse>;
   getRuntime(bindingId: string): Promise<McpAppPreviewSnapshot>;
   operateRuntime(bindingId: string, operation: McpAppBindingOperation, signal?: AbortSignal): Promise<McpAppBoundOperationResult>;
-  sessionSuperseded(sessionId: string, sessionRevision: number): boolean;
   subscribeInvalidations(listener: (details: McpAppRuntimeInvalidationDetails) => void): () => void;
 }
 
@@ -1040,7 +1039,6 @@ export class McpAppClient implements McpAppRuntimeClient {
   readonly #runtimeBindings = new Map<string, McpAppPreviewSnapshot>();
   readonly #runtimeBindingGenerations = new Map<string, number>();
   readonly #runtimePolicies = new Map<string, McpAppTrustedDocumentPolicy>();
-  readonly #supersededSessionRevisions = new Map<string, number>();
   readonly #unsubscribeProjectEvents: (() => void) | undefined;
   #lastRuntimeEventSequence = -1;
   #runtimeBindingInvalidationEpoch = 0;
@@ -1186,22 +1184,6 @@ export class McpAppClient implements McpAppRuntimeClient {
     const policy = this.#runtimePolicies.get(id);
     if (policy === undefined) throw new McpAppClientError('AB8015', 'Runtime MCP App document policy is not available.');
     return policy;
-  }
-
-  /**
-   * Reports whether locally observed invalidations prove the session revision
-   * can no longer authorize a new binding. Superseded evidence must degrade to
-   * fallback instead of silently re-creating runtime authority.
-   */
-  sessionSuperseded(sessionId: string, sessionRevision: number): boolean {
-    if (typeof sessionId !== 'string' || !positiveInteger(sessionRevision)) return false;
-    const latest = this.#supersededSessionRevisions.get(sessionId);
-    return latest !== undefined && sessionRevision <= latest;
-  }
-
-  #recordSupersededSession(sessionId: string, sessionRevision: number): void {
-    const current = this.#supersededSessionRevisions.get(sessionId);
-    if (current === undefined || current < sessionRevision) this.#supersededSessionRevisions.set(sessionId, sessionRevision);
   }
 
   subscribeInvalidations(listener: (details: McpAppRuntimeInvalidationDetails) => void): () => void {
@@ -1508,10 +1490,6 @@ export class McpAppClient implements McpAppRuntimeClient {
       state: 'revoked' as const,
     }) as McpAppRuntimeInvalidationDetails);
     for (const details of invalidations) {
-      // A wholesale invalidation (replay gap, shutdown, foreground
-      // replacement) leaves every held session revision unverifiable, so the
-      // revision is recorded as superseded before its binding is revoked.
-      this.#recordSupersededSession(details.sessionId, details.sessionRevision);
       this.#advanceRuntimeBinding(details.bindingId);
       this.#runtimeBindings.delete(details.bindingId);
       this.#runtimePolicies.delete(details.bindingId);
@@ -1559,10 +1537,6 @@ export class McpAppClient implements McpAppRuntimeClient {
       this.#invalidateAll('registry-replay-gap');
       return;
     }
-    // Every server-announced revocation except a user-initiated manual close
-    // supersedes the session revision it names; manual close keeps the
-    // revision reusable so an explicit re-selection may re-create a preview.
-    if (details.reason !== 'manual-close') this.#recordSupersededSession(details.sessionId, details.sessionRevision);
     const known = this.#runtimeBindings.get(details.bindingId);
     if (known === undefined) {
       this.#revokeRuntimeBinding(details.bindingId);

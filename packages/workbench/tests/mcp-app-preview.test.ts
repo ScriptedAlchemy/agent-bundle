@@ -164,7 +164,6 @@ const runtimePreview = Object.freeze({
 
 const runtimeClient = (value: Partial<McpAppRuntimeClient> & Readonly<Record<string, unknown>>): McpAppClient & McpAppRuntimeClient =>
   Object.freeze({
-    sessionSuperseded: () => false,
     subscribeInvalidations: () => () => undefined,
     ...value,
   }) as unknown as McpAppClient & McpAppRuntimeClient;

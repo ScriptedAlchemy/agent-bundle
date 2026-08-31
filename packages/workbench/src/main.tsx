@@ -304,9 +304,26 @@ type WorkbenchPage = GeneralWorkbenchPage | 'runtime';
 type RuntimeCapability = 'available' | 'unavailable' | 'unknown';
 type CapabilityState =
   | Readonly<{ readonly state: 'empty' }>
-  | Readonly<{ readonly buildId: string; readonly state: 'loading' }>
-  | Readonly<{ readonly buildId: string; readonly message: string; readonly state: 'error' }>
+  | Readonly<{ readonly buildId: string; readonly previous?: WorkbenchCapabilities; readonly state: 'loading' }>
+  | Readonly<{ readonly buildId: string; readonly message: string; readonly previous?: WorkbenchCapabilities; readonly state: 'error' }>
   | Readonly<{ readonly state: 'ready'; readonly value: WorkbenchCapabilities }>;
+
+/** The last loaded catalog, retained so an epoch flip revalidates without unmounting live content. */
+const staleCapabilities = (state: CapabilityState): WorkbenchCapabilities | undefined => {
+  switch (state.state) {
+    case 'ready':
+      return state.value;
+    case 'loading':
+    case 'error':
+      return state.previous;
+    case 'empty':
+      return undefined;
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
+};
 
 const navigationItems: readonly Readonly<{ glyph: string; label: string; page: WorkbenchPage }>[] = [
   { glyph: '⊞', label: 'Overview', page: 'overview' },
@@ -838,9 +855,12 @@ const Workbench = () => {
 
   const runtimeAvailable = runtimeCapability === 'available';
   const buildId = status === undefined ? undefined : activeEpochId(status);
-  const capabilities = capabilityState.state === 'ready' && capabilityState.value.buildId === buildId
-    ? capabilityState.value
-    : undefined;
+  // Serve the last loaded catalog while a new epoch's catalog loads. A build
+  // flip must not unmount live content: a Runtime App preview keeps its
+  // session across artifact-only changes (for example a prebuilt payload
+  // rewritten by the consumer's own dev compiler), and remounting it would
+  // discard a healthy binding just to re-create it from the same evidence.
+  const capabilities = staleCapabilities(capabilityState);
   const capabilityPages = capabilities?.pages ?? generalWorkbenchPages;
   const pages = useMemo<ReadonlySet<WorkbenchPage>>(() => Object.freeze(new Set<WorkbenchPage>([
     ...capabilityPages,
@@ -1216,9 +1236,11 @@ const Workbench = () => {
       setCapabilityState({ state: 'empty' });
       return () => request.abort();
     }
-    setCapabilityState((current) => current.state === 'ready' && current.value.buildId === buildId
-      ? current
-      : { buildId, state: 'loading' });
+    setCapabilityState((current) => {
+      if (current.state === 'ready' && current.value.buildId === buildId) return current;
+      const previous = staleCapabilities(current);
+      return previous === undefined ? { buildId, state: 'loading' } : { buildId, previous, state: 'loading' };
+    });
     void loadWorkbenchCapabilities({
       artifactClient: artifactClient.current!,
       buildId,
@@ -1229,7 +1251,12 @@ const Workbench = () => {
       (value) => { if (!request.signal.aborted) setCapabilityState({ state: 'ready', value }); },
       (reason: unknown) => {
         if (request.signal.aborted) return;
-        setCapabilityState({ buildId, message: errorMessage(reason), state: 'error' });
+        setCapabilityState((current) => {
+          const previous = staleCapabilities(current);
+          return previous === undefined
+            ? { buildId, message: errorMessage(reason), state: 'error' }
+            : { buildId, message: errorMessage(reason), previous, state: 'error' };
+        });
       },
     );
     return () => request.abort();
