@@ -135,6 +135,7 @@ examples/
     src/build/serialize-definition.ts
     src/definition.ts
     src/dev/definition-entry.ts
+    src/dev/environment-checkpoint-store.ts
     src/dev/generation-materializer.ts
     src/dev/inspection-security.ts
     src/dev/invocation-worker.ts

@@ -14,7 +14,6 @@ import {
 } from '../../rsbuild.config.js';
 import {
   createRscEnvironmentCheckpointStore,
-  rscRuntimeEnvironmentNames,
   type RscEnvironmentCheckpointStore,
   type RscRuntimeEnvironmentName,
 } from './environment-checkpoint-store.js';
