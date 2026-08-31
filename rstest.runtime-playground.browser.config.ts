@@ -19,7 +19,7 @@ export default defineConfig({
   extends: withRslibConfig(),
   include: ['packages/workbench/tests/runtime-playground.browser.test.tsx'],
   plugins: [pluginReact()],
-  pool: { maxWorkers: 1 },
+  setupFiles: ['./rstest.setup.ts'],
   resolve: {
     alias: {
       react: browserReactRoot,

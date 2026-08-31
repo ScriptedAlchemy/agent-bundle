@@ -16,7 +16,7 @@ export default defineConfig({
     reporters: ['text', 'json'],
     thresholds: { branches: 85, functions: 90, lines: 90, statements: 90 },
   },
-  pool: { maxWorkers: 1 },
+  setupFiles: ['./rstest.setup.ts'],
   projects: [
     defineInlineProject({
       extends: withRslibConfig(),

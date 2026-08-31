@@ -10,4 +10,7 @@ export default defineConfig({
     'packages/**/tests/**/*.test.ts',
   ],
   exclude: [...integrationTestFiles, ...packedTestFiles, ...templateTestFiles],
+  setupFiles: ['./rstest.setup.ts'],
+  // Unit files construct per-test services; logs-real.e2e is not in this pool.
+  isolate: false,
 });
