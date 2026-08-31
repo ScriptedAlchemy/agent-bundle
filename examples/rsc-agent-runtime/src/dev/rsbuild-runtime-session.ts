@@ -589,8 +589,6 @@ const sourceBuildDiagnostic = (): DevRuntimeDiagnostic => Object.freeze({
 });
 
 const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new Error('RSC runtime provider startup was aborted.');
-const hmrPathMaxLength = 2_048;
-const hmrTokenMaxLength = 4_096;
 
 export interface RsbuildRuntimeSessionStartTesting {
   readonly createRsbuild?: typeof createRsbuild;
@@ -675,8 +673,11 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #workers = new Map<string, InvocationWorker>();
   readonly #failedAttempts = new Set<string>();
   #active: RuntimeGeneration<RscRuntimeGenerationMetadata> | undefined;
-  #appWebSocketPath: string | undefined;
-  #appWebSocketToken: string | undefined;
+  /**
+   * Wrapper objects, not raw listeners, so one relay subscribing the same
+   * function twice still owns two independently detachable subscriptions.
+   */
+  readonly #appReloadSubscriptions = new Set<Readonly<{ readonly listener: () => void }>>();
   #clientSurface: DevRuntimeClientSurfaceEndpoint | undefined;
   #closePromise: Promise<void> | undefined;
   #closed = false;
@@ -845,7 +846,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         config: createRscRuntimeRsbuildConfig({
           compilerRoot: join(storageRoot, 'compiler'),
           mode: 'development',
-          onAppWebSocketToken: (input) => session.#captureAppWebSocketConnection(input),
+          onAppReload: () => { session.#emitAppReload(); },
           onCompile: session.#compileObserver(),
         }),
         cwd: context.projectRoot,
@@ -2150,47 +2151,38 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       devServer === undefined || devServer.hostname !== '127.0.0.1' || devServer.https ||
       !Number.isSafeInteger(devServer.port) || devServer.port < 1 || devServer.port > 65_535
     ) throw new Error('RSC runtime dev server did not expose a valid loopback HTTP origin.');
-    const webSocketPath = this.#appWebSocketPath;
-    if (webSocketPath === undefined) throw new Error('RSC runtime App compiler did not capture a normalized HMR path.');
-    const webSocketToken = this.#appWebSocketToken;
-    if (webSocketToken === undefined) throw new Error('RSC runtime App compiler did not capture an HMR credential.');
     const origin = new URL(`http://${devServer.hostname}:${String(devServer.port)}`).origin;
     this.#server = started.server;
     this.#clientSurface = Object.freeze({
       entryPath: clientSurfaceEntry,
       httpOrigin: origin,
       httpPathPrefixes: Object.freeze(['/']),
+      subscribeReload: (listener: () => void) => this.#subscribeAppReload(listener),
       surfaceId: clientSurfaceId,
-      webSocketOrigin: origin.replace(/^http:/u, 'ws:'),
-      webSocketPath,
-      webSocketToken,
     });
     this.#hmrReady = true;
     this.#setStatus(this.#active === undefined ? 'compiling' : 'active');
   }
 
-  #captureAppWebSocketConnection(input: Readonly<{ readonly path: string; readonly token: string }>): void {
-    const { path, token } = input;
-    if (
-      typeof path !== 'string' || path.length === 0 || path.length > hmrPathMaxLength || !path.startsWith('/') ||
-      new URL(path, 'http://compiler.invalid').pathname !== path
-    ) {
-      throw new Error('RSC runtime App compiler exposed an invalid normalized HMR path.');
+  #subscribeAppReload(listener: () => void): () => void {
+    if (typeof listener !== 'function') {
+      throw new TypeError('RSC runtime App reload subscription requires a listener function.');
     }
-    // Rsbuild's public contract says only that webSocketToken is a string.
-    // Its 2.2.1 alphabet and length are empirical, so enforce only resource
-    // bounds and rely on URLSearchParams at the proxy boundary.
-    if (typeof token !== 'string' || token.length === 0 || token.length > hmrTokenMaxLength) {
-      throw new Error('RSC runtime App compiler exposed an invalid HMR credential.');
+    if (this.#closed) return () => undefined;
+    const subscription = Object.freeze({ listener });
+    this.#appReloadSubscriptions.add(subscription);
+    return () => { this.#appReloadSubscriptions.delete(subscription); };
+  }
+
+  #emitAppReload(): void {
+    if (this.#closed) return;
+    for (const subscription of [...this.#appReloadSubscriptions]) {
+      try {
+        subscription.listener();
+      } catch {
+        // One relay's failure must not starve the remaining subscribers.
+      }
     }
-    if (
-      (this.#appWebSocketPath !== undefined && this.#appWebSocketPath !== path) ||
-      (this.#appWebSocketToken !== undefined && this.#appWebSocketToken !== token)
-    ) {
-      throw new Error('RSC runtime App compiler changed its HMR connection during startup.');
-    }
-    this.#appWebSocketPath = path;
-    this.#appWebSocketToken = token;
   }
 
   #compileObserver(): NonNullable<Parameters<typeof createRscRuntimeRsbuildConfig>[0]['onCompile']> {
@@ -2649,6 +2641,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#closed = true;
     this.#invocationAbort.abort(new Error('RSC runtime session is closing.'));
     this.#hmrReady = false;
+    this.#appReloadSubscriptions.clear();
     for (const attempt of [...this.#attempts.values()]) attempt.settle();
     for (const worker of this.#workers.values()) {
       worker.terminate(new Error('RSC runtime session is closing.'));
