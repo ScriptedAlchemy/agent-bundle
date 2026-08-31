@@ -1,12 +1,11 @@
 {
   "name": "@agent-bundle/rsc-runtime",
   "version": "0.0.0",
-  "description": "React Server Component primitives for Agent Bundle hook and MCP results.",
+  "description": "React-element result primitives (an MCP result DSL) for Agent Bundle hook and MCP protocol results.",
   "license": "MIT",
   "keywords": [
     "agent-bundle",
-    "mcp",
-    "react-server-components"
+    "mcp"
   ],
   "homepage": "https://github.com/ScriptedAlchemy/agent-bundle#readme",
   "bugs": {
