@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { build, runMcp } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
+import { mcpServerStateDirectory } from '../src/services/mcp-run.ts';
 
 const execFile = promisify(executeFile);
 const workspaceNodeModules = join(process.cwd(), 'node_modules');
@@ -187,6 +188,18 @@ describe('framework-owned package build', () => {
     expect(result.packageBuild?.files.some((file) => file.path === 'bin/package-build-fixture.js')).toBe(true);
   }, 120_000);
 
+  it('keeps colocated tests out of the declaration program and the package output', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      // Would fail the declaration build if the synthesized program included it.
+      'src/answer.test.ts': 'const wrong: number = "not a number";\nvoid wrong;\n',
+    });
+    await installTypescriptToolchain(root);
+    await build({ output: 'artifact', packageOutputs: true, root });
+    await expect(readFile(join(root, 'dist', 'index.d.ts'), 'utf8')).resolves.toContain('interface Answer');
+    await expect(stat(join(root, 'dist', 'answer.test.d.ts'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 120_000);
+
   it('rejects artifact outputs that overlap the package output directory', async () => {
     const root = await fixtureRoot(conventionFixture());
     await expect(build({ output: 'dist', packageOutputs: true, root })).rejects.toThrow(/overlaps the package build output/u);
@@ -252,6 +265,15 @@ describe('mcp run', () => {
     ]);
     expect(exitCode).toBe(7);
   }, 120_000);
+
+  it('contains server state directories to a single safe path segment', () => {
+    expect(mcpServerStateDirectory('greeter')).toBe('greeter');
+    expect(mcpServerStateDirectory('my.server-2')).toBe('my.server-2');
+    for (const hostile of ['../shared', 'a/b', '..', '.hidden', 'trailing.']) {
+      expect(mcpServerStateDirectory(hostile)).toMatch(/^server-[a-f\d]{16}$/u);
+    }
+    expect(mcpServerStateDirectory('../shared')).not.toBe(mcpServerStateDirectory('../other'));
+  });
 
   it('refuses to run remote servers in the foreground', async () => {
     const root = await fixtureRoot({

@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
+import { sha256Hex } from '../core/digest.ts';
 import { assertInside, joinArtifact } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
@@ -36,6 +37,17 @@ export interface ResolveMcpStdioLaunchOptions {
 
 const resolveContained = (root: string, path: string): string =>
   isAbsolute(path) ? path : assertInside(root, resolve(root, path));
+
+const safeStateSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
+
+/**
+ * MCP server names are consumer input with no path-shape guarantee: a name
+ * containing separators or leading dots (for example `../shared`) must never
+ * traverse out of the per-server state root. Plain single-segment names pass
+ * through untouched; anything else becomes a content-addressed segment.
+ */
+export const mcpServerStateDirectory = (server: string): string =>
+  safeStateSegment.test(server) ? server : `server-${sha256Hex(server).slice(0, 16)}`;
 
 export const resolveMcpStdioLaunch = async (
   options: ResolveMcpStdioLaunchOptions,

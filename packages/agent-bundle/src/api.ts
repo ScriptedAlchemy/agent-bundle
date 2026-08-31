@@ -6,7 +6,7 @@ import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
 import { isInsideOrEqual } from './core/paths.ts';
-import { runMcpForeground } from './services/mcp-run.ts';
+import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
 export type { BuildResult } from './build/build.ts';
 export type { PackageBuildResult, PackageOutputFile } from './build/package-build.ts';
 export type { ArtifactOutputKind, ArtifactOutputProvenance } from './build/provenance.ts';
@@ -656,7 +656,7 @@ export const runMcp = async (options: RunMcpOptions): Promise<number> => {
   const workspaceRoot = resolve(options.root);
   return temporaryArtifact({ ...options, registry }, async (artifact) => runMcpForeground({
     artifact,
-    pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', options.target, options.server),
+    pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', options.target, mcpServerStateDirectory(options.server)),
     registry,
     server: options.server,
     ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }),

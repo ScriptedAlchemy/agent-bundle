@@ -72,6 +72,13 @@ const synthesizeDtsTsconfig = async (options: {
   await writeFile(path, `${JSON.stringify({
     ...(existsSync(projectTsconfig) ? { extends: projectTsconfig } : {}),
     compilerOptions: { rootDir: options.sourceDir },
+    // Colocated tests must neither fail the declaration build nor publish
+    // test declarations into the package output.
+    exclude: [
+      `${options.sourceDir}/**/*.test.*`,
+      `${options.sourceDir}/**/*.spec.*`,
+      `${options.sourceDir}/**/__tests__/**`,
+    ],
     include: [`${options.sourceDir}/**/*.ts`, `${options.sourceDir}/**/*.tsx`],
   }, null, 2)}\n`, 'utf8');
   return {
