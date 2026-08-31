@@ -1078,9 +1078,10 @@ it('restores the existing artifact when publication fails after backup', async (
 });
 
 /**
- * A minimal project exercising both reserved-specifier mechanisms of one
- * generated executable: an alias onto an on-disk runtime module and a
- * materialized generated registry module.
+ * A minimal project exercising every generated-source mechanism of one
+ * executable: a virtual wrapper entry (compiled from a guaranteed-nonexistent
+ * path under the reserved `.agent-bundle-virtual/` namespace), an alias onto
+ * an on-disk runtime module, and a virtual generated registry module.
  */
 const reservedSpecifierProject = async (): Promise<{ readonly entry: RslibEntry; readonly root: string }> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-reserved-specifiers-'));
@@ -1095,7 +1096,7 @@ const reservedSpecifierProject = async (): Promise<{ readonly entry: RslibEntry;
     // scan parses the emitted bundle instead of grepping it, so this survives
     // into the output without failing the self-containment check.
     "const mentioned = 'agent-bundle/mcp-entry';",
-    'console.log(marker, registry, mentioned);',
+    'export const main = () => { console.log(marker, registry, mentioned); };',
     '',
   ].join('\n'));
   return {
@@ -1106,12 +1107,17 @@ const reservedSpecifierProject = async (): Promise<{ readonly entry: RslibEntry;
       source: join(sourceRoot, 'entry.ts'),
       sourceInputs: [join(sourceRoot, 'entry.ts')],
       virtualModules: [{ name: 'agent-bundle/mcp-apps', source: "export default 'generated-registry';\n" }],
+      virtualSource: [
+        `import { main } from ${JSON.stringify(join(sourceRoot, 'entry.ts'))};`,
+        'main();',
+        '',
+      ].join('\n'),
     },
     root,
   };
 };
 
-it('inlines reserved specifiers through exact-match aliases and materialized generated modules', async () => {
+it('inlines reserved specifiers through exact-match aliases and virtual generated modules', async () => {
   const { entry, root } = await reservedSpecifierProject();
   try {
     const evidence = await buildWithRslib({
@@ -1129,8 +1135,9 @@ it('inlines reserved specifiers through exact-match aliases and materialized gen
     // The scan tolerates a reserved specifier that is only mentioned as a
     // string literal; only a live import fails the build.
     expect(bundle).toContain('agent-bundle/mcp-entry');
-    // Materialized generated modules never survive into the artifact and
-    // never count as authored source evidence.
+    // The wrapper entry and registry module were served from memory at
+    // guaranteed-nonexistent paths: the reserved namespace never reaches the
+    // filesystem and never counts as authored source evidence.
     await expect(readdir(join(root, 'dist', '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(evidence).toEqual([{
       path: 'scripts/reserved-probe.mjs',
@@ -1141,13 +1148,14 @@ it('inlines reserved specifiers through exact-match aliases and materialized gen
   }
 }, 20_000);
 
-it('keeps materialized generated modules alive under a tools hatch that asks to clean the output root', async () => {
+it('keeps sibling staged outputs alive under a tools hatch that asks to clean the output root', async () => {
   const { entry, root } = await reservedSpecifierProject();
   try {
-    // Dist cleaning runs when the build starts, after the generated wrapper
-    // and registry sources are written into that same tree, so an honored
-    // hatch would delete this build's own entry modules. Sibling entries
-    // already emitted into a shared staged root would go with them.
+    // Scripts, MCP entries, hooks, and MCP Apps build sequentially into one
+    // shared staged root, so an honored cleanDistPath hatch would delete
+    // sibling outputs already emitted there.
+    await mkdir(join(root, 'dist'), { recursive: true });
+    await writeFile(join(root, 'dist', 'sibling.mjs'), 'export default "already-emitted-sibling";\n');
     await buildWithRslib({
       cwd: root,
       entries: [entry],
@@ -1157,6 +1165,8 @@ it('keeps materialized generated modules alive under a tools hatch that asks to 
     const bundle = await readFile(join(root, 'dist', 'scripts', 'reserved-probe.mjs'), 'utf8');
     expect(bundle).toContain('inlined-runtime-shell');
     expect(bundle).toContain('generated-registry');
+    await expect(readFile(join(root, 'dist', 'sibling.mjs'), 'utf8'))
+      .resolves.toContain('already-emitted-sibling');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

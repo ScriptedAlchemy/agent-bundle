@@ -6,16 +6,15 @@ Move the generated-executable build path onto fully documented bundler
 surfaces (Rspack/Rslib/Rsbuild conformance audit).
 
 - Generated wrapper entries and registry modules (the stdio MCP entry shell,
-  `main` process envelopes, `agent-bundle/mcp-apps` registries) are now
-  materialized as real files under the reserved `.agent-bundle-virtual/`
-  directory for the duration of one Rslib build — replacing the experimental
-  `rspack.experiments.VirtualModulesPlugin` and its undocumented
+  `main` process envelopes, `agent-bundle/mcp-apps` registries) now live at
+  dedicated, deterministic, guaranteed-nonexistent paths under the reserved
+  `.agent-bundle-virtual/` namespace — replacing the undocumented
   real-file-overlay of the framework's own module as the entry anchor. The
-  files never reach a published artifact and never count as authored source
-  provenance; emitted bundles keep their behavior byte for byte (the only
-  content shift is one scope-hoisting identifier now derived from the stable
-  generated-entry name instead of the framework's install-dependent bundle
-  filename).
+  generated sources never reach the filesystem or a published artifact and
+  never count as authored source provenance; emitted bundles keep their
+  behavior byte for byte (the only content shift is one scope-hoisting
+  identifier now derived from the stable generated-entry name instead of the
+  framework's install-dependent bundle filename).
 - The self-contained-artifact invariant now closes the `output.externals`
   hole: a `tools` hatch that externalizes a reserved specifier
   (`agent-bundle/mcp-entry`, `agent-bundle/mcp-apps`, or any generated
@@ -23,11 +22,10 @@ surfaces (Rspack/Rslib/Rsbuild conformance audit).
   string/RegExp/object externals, and via a post-build residual-import scan
   of every emitted bundle for function-form externals.
 - Dist cleaning is now a framework invariant rather than a profile default:
-  because generated sources are materialized under the output root, a
-  `tools.rsbuild.output.cleanDistPath: true` hatch would delete this build's
-  own entry modules and any sibling entry already emitted into the shared
-  staged root. It is pinned off after the hatch merge and asserted on the
-  resolved environment config.
+  scripts, MCP entries, hooks, and MCP Apps build sequentially into one
+  shared staged root, so a `tools.rsbuild.output.cleanDistPath: true` hatch
+  would delete sibling outputs already emitted there. It is pinned off after
+  the hatch merge and asserted on the resolved environment config.
 - Pre-build inspection assertions are keyed by the documented Rslib `lib.id`
   (`origin.environmentConfigs[id]` and the Rspack config `name`) instead of
   relying on undocumented array ordering, and reserved aliases use Rspack's

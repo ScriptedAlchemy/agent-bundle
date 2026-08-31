@@ -1,9 +1,9 @@
 // Rslib re-exports its own Rsbuild/Rspack stack (values and types alike);
 // installing @rspack/core separately risks version conflicts
 // (https://rslib.rs/api/javascript-api/core).
-import { createRslib, mergeRslibConfig, type LibConfig, type Rspack } from '@rslib/core';
+import { createRslib, mergeRslibConfig, rspack, type LibConfig, type Rspack } from '@rslib/core';
 import { init, parse } from 'es-module-lexer';
-import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { isErrno } from '../core/errors.ts';
@@ -47,13 +47,35 @@ interface RslibDependencies {
 }
 
 /**
- * The reserved directory (under each build's output root) where generated
- * module sources — wrapper entries and registry modules — are materialized
- * as real files for the duration of one Rslib build. Materialized files are
- * excluded from authored-source provenance and removed after the build, so
- * they never reach a published artifact.
+ * The reserved namespace (under each build's output root) whose paths
+ * identify generated module sources — wrapper entries and registry modules.
+ * Nothing ever writes these paths: they are guaranteed-nonexistent module
+ * ids served from memory by {@link virtualModulesPluginConstructor}, chosen
+ * to be deterministic for `inspect --bundler` and collision-safe across
+ * entries. The namespace stays excluded from authored-source provenance.
  */
 const generatedModulesDirname = '.agent-bundle-virtual';
+
+/**
+ * Generated sources ride Rspack's `experiments.VirtualModulesPlugin` instead
+ * of throwaway files on disk — an accepted design decision: the experimental
+ * surface is the cost of never touching the artifact tree with build-time
+ * scratch files. This narrow feature check turns an upstream rename or
+ * removal into an actionable diagnostic instead of an opaque resolution
+ * failure deep inside a build.
+ */
+const virtualModulesPluginConstructor = (): typeof rspack.experiments.VirtualModulesPlugin => {
+  const constructor = (rspack as { readonly experiments?: { readonly VirtualModulesPlugin?: unknown } })
+    .experiments?.VirtualModulesPlugin;
+  if (typeof constructor !== 'function') {
+    throw new Error(
+      'The Rspack engine nested in @rslib/core no longer exposes experiments.VirtualModulesPlugin, '
+      + 'which agent-bundle uses to serve generated wrapper and registry modules. '
+      + 'Pin @rslib/core to a version whose Rspack ships the plugin, or update agent-bundle.',
+    );
+  }
+  return constructor as typeof rspack.experiments.VirtualModulesPlugin;
+};
 
 /**
  * The tools escape hatch is typed against the workspace `@rsbuild/core` (the
@@ -72,12 +94,24 @@ const asRslibRspackHatch = (
 
 const entryLibId = (entry: Pick<RslibEntry, 'name'>): string => `agent-bundle-${entry.name}`;
 
-// join (not resolve) so `inspect --bundler`'s tokenized output roots
-// (`<output>/<target>`) stay tokens instead of resolving against the cwd.
+// join (not resolve) so a tokenized output root (`<output>/<target>`) stays
+// a token instead of resolving against the cwd.
 const generatedEntryModulePath = (outputRoot: string, entry: RslibEntry): string =>
   join(outputRoot, generatedModulesDirname, `${entry.name}-entry.mjs`);
 
-const materializedVirtualModules = (
+/** The import requests of one named entry in a lowered Rspack entry record. */
+const entryImportsOf = (entryRecord: unknown, name: string): readonly string[] => {
+  if (entryRecord === null || typeof entryRecord !== 'object' || Array.isArray(entryRecord)) return [];
+  const description = (entryRecord as Record<string, unknown>)[name];
+  if (typeof description === 'string') return [description];
+  if (Array.isArray(description)) return description.filter((item): item is string => typeof item === 'string');
+  if (description !== null && typeof description === 'object') {
+    return entryImportsOf({ [name]: (description as { readonly import?: unknown }).import }, name);
+  }
+  return [];
+};
+
+const virtualRegistryModules = (
   outputRoot: string,
   entry: RslibEntry,
 ): readonly { readonly name: string; readonly path: string; readonly source: string }[] =>
@@ -86,15 +120,15 @@ const materializedVirtualModules = (
     path: join(outputRoot, generatedModulesDirname, `${entry.name}-${index}.mjs`),
   }));
 
-/** Every generated module one entry materializes to disk for its build. */
-const plannedGeneratedModules = (
+/** Every generated module one entry serves virtually during its build. */
+const plannedVirtualModules = (
   entry: RslibEntry,
   outputRoot: string,
 ): readonly { readonly path: string; readonly source: string }[] => [
   ...(entry.virtualSource === undefined
     ? []
     : [{ path: generatedEntryModulePath(outputRoot, entry), source: entry.virtualSource }]),
-  ...materializedVirtualModules(outputRoot, entry).map(({ path, source }) => ({ path, source })),
+  ...virtualRegistryModules(outputRoot, entry).map(({ path, source }) => ({ path, source })),
 ];
 
 /**
@@ -276,9 +310,11 @@ const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> 
 };
 
 interface InspectedBundlerConfig {
+  readonly entry?: unknown;
   readonly externals?: unknown;
   readonly name?: string;
   readonly output?: { readonly asyncChunks?: boolean; readonly path?: string };
+  readonly plugins?: readonly unknown[];
   readonly resolve?: { readonly alias?: unknown };
   readonly target?: false | string | readonly string[];
 }
@@ -312,9 +348,10 @@ const assertExecutableConfig = (
     if (environment === undefined) {
       throw new Error('Rslib did not resolve one environment for every generated executable.');
     }
-    // Dist cleaning would delete this build's own materialized generated
-    // sources and any sibling entry already emitted into the shared staged
-    // root, so the composed invariant pins it off after the hatch merge.
+    // Scripts, MCP entries, hooks, and MCP Apps build sequentially into one
+    // shared staged root, so an environment that cleans its dist path would
+    // delete sibling outputs already emitted there; the composed invariant
+    // pins it off after the hatch merge.
     if (environment.output?.cleanDistPath !== false) {
       throw new Error('Rslib resolved a generated executable environment that would clean its own output root.');
     }
@@ -329,9 +366,22 @@ const assertExecutableConfig = (
     if (config.output?.asyncChunks !== false || config.output.path !== outputRoot || !target.some((value) => value === 'node')) {
       throw new Error('Rslib resolved an invalid generated executable configuration.');
     }
+    // The generated environment must retain the virtual-module source: a
+    // resolved config without the plugin instance would resolve the
+    // guaranteed-nonexistent generated paths against the real filesystem.
+    if (plannedVirtualModules(entry, outputRoot).length > 0) {
+      const constructor = virtualModulesPluginConstructor();
+      if (config.plugins?.some((plugin) => plugin instanceof constructor) !== true) {
+        throw new Error('Rslib resolved a generated executable environment without its virtual modules.');
+      }
+    }
+    if (entry.virtualSource !== undefined
+      && !entryImportsOf(config.entry, entry.name).includes(generatedEntryModulePath(outputRoot, entry))) {
+      throw new Error('Rslib resolved a generated executable environment without its generated wrapper entry.');
+    }
     const expectedAliases = {
       ...entry.aliases,
-      ...Object.fromEntries(materializedVirtualModules(outputRoot, entry)
+      ...Object.fromEntries(virtualRegistryModules(outputRoot, entry)
         .map((module) => [module.name, module.path])),
     };
     const alias = aliasRecordOf(config);
@@ -374,7 +424,8 @@ export const composeEntryLibConfig = (
 ): LibConfig => {
   const libId = entryLibId(entry);
   const virtualSource = entry.virtualSource;
-  const virtualModules = materializedVirtualModules(options.outputRoot, entry);
+  const virtualModules = virtualRegistryModules(options.outputRoot, entry);
+  const generatedModules = plannedVirtualModules(entry, options.outputRoot);
   const aliases = entry.aliases ?? {};
   const reserved = reservedSpecifiers(entry);
   const frameworkAliasKeys = new Set([
@@ -405,6 +456,35 @@ export const composeEntryLibConfig = (
           ...Object.fromEntries(virtualModules.map((module) => [`${module.name}$`, module.path])),
         },
       };
+    }
+    if (generatedModules.length > 0) {
+      // Added after the hatch mutator (this hook is merged last), so a
+      // consumer cannot strip the generated sources out of the compiler.
+      const VirtualModulesPlugin = virtualModulesPluginConstructor();
+      config.plugins = [
+        ...(config.plugins ?? []),
+        new VirtualModulesPlugin(Object.fromEntries(generatedModules.map((module) => [module.path, module.source]))),
+      ];
+    }
+    if (virtualSource !== undefined) {
+      // Rslib validates `source.entry` against the real filesystem before
+      // Rspack exists, so the profile keys the entry on the authored program
+      // and this hook redirects the lowered Rspack entry to the generated
+      // wrapper's guaranteed-nonexistent virtual path, which the plugin
+      // above serves from memory. Rspack resolves entries through the
+      // plugin-patched input filesystem, so no real path is ever shadowed.
+      const lowered = config.entry;
+      if (lowered === undefined || typeof lowered !== 'object' || Array.isArray(lowered)) {
+        throw new Error('Rslib lowered a generated executable without a keyed entry record.');
+      }
+      const description = (lowered as Record<string, unknown>)[entry.name];
+      const wrapperImport = [generatedEntryModulePath(options.outputRoot, entry)];
+      config.entry = {
+        ...lowered,
+        [entry.name]: description !== null && typeof description === 'object' && !Array.isArray(description)
+          ? { ...description, import: wrapperImport }
+          : wrapperImport,
+      } as typeof config.entry;
     }
     const violation = reservedExternalsViolation(config.externals, reserved);
     if (violation !== undefined) throw reservedExternalError(violation);
@@ -446,8 +526,12 @@ export const composeEntryLibConfig = (
       target: 'node',
     },
     source: {
+      // Always the authored program, even when a generated wrapper is the
+      // real compilation root: Rslib checks that every entry exists on disk,
+      // and `enforceInvariants` redirects the lowered Rspack entry to the
+      // wrapper's virtual path.
       entry: {
-        [entry.name]: virtualSource === undefined ? entry.source : generatedEntryModulePath(options.outputRoot, entry),
+        [entry.name]: entry.source,
       },
       ...(entry.tsconfigPath === undefined ? {} : { tsconfigPath: entry.tsconfigPath }),
     },
@@ -461,11 +545,9 @@ export const composeEntryLibConfig = (
       ? undefined
       : { lib: [{ id: libId, tools: { rspack: asRslibRspackHatch(options.tools.rspack) } }] },
     // Merged last so the hatch cannot reach either invariant. Dist cleaning
-    // would delete this build's own materialized generated sources (they live
-    // under the output root) and any sibling entry already emitted into the
-    // shared staged root, so it stays off no matter what the consumer asks
-    // for; the emitted output is published atomically from a staged root
-    // instead.
+    // would delete sibling entries already emitted into the shared staged
+    // root, so it stays off no matter what the consumer asks for; the
+    // emitted output is published atomically from a staged root instead.
     { lib: [{ id: libId, output: { cleanDistPath: false }, tools: { rspack: enforceInvariants } }] },
   );
   const lib = merged.lib?.[0];
@@ -491,34 +573,23 @@ export const buildWithRslib = async (options: {
   }
   const dependencyRoots = await declaredDependencyRoots(options.cwd);
 
-  // Generated wrapper entries and registry modules become real files for the
-  // duration of the build — the stable, documented alternative to serving
-  // them through the experimental VirtualModulesPlugin — and are removed
-  // before artifact listing/publication.
-  const generatedModulesRoot = resolve(options.outputRoot, generatedModulesDirname);
-  const generatedModules = options.entries.flatMap((entry) => plannedGeneratedModules(entry, options.outputRoot));
+  const reservedExternalViolations: string[] = [];
+  const rslib = await (dependencies.createRslib ?? createRslib)({
+    cwd: options.cwd,
+    config: {
+      logLevel: options.logLevel ?? 'silent',
+      lib: options.entries.map((entry) => composeEntryLibConfig(entry, {
+        onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
+        outputRoot: options.outputRoot,
+        ...(options.tools === undefined ? {} : { tools: options.tools }),
+      })),
+    },
+  });
+
+  const inspection = await rslib.inspectConfig();
+  assertExecutableConfig(options.entries, inspection.origin, options.outputRoot);
   let result: Awaited<ReturnType<RslibInstance['build']>> | undefined;
   try {
-    if (generatedModules.length > 0) {
-      await mkdir(generatedModulesRoot, { recursive: true });
-      await Promise.all(generatedModules.map((module) => writeFile(module.path, module.source, 'utf8')));
-    }
-
-    const reservedExternalViolations: string[] = [];
-    const rslib = await (dependencies.createRslib ?? createRslib)({
-      cwd: options.cwd,
-      config: {
-        logLevel: options.logLevel ?? 'silent',
-        lib: options.entries.map((entry) => composeEntryLibConfig(entry, {
-          onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
-          outputRoot: options.outputRoot,
-          ...(options.tools === undefined ? {} : { tools: options.tools }),
-        })),
-      },
-    });
-
-    const inspection = await rslib.inspectConfig();
-    assertExecutableConfig(options.entries, inspection.origin, options.outputRoot);
     try {
       result = await rslib.build();
     } catch (error) {
@@ -534,7 +605,9 @@ export const buildWithRslib = async (options: {
         sourceInputs: entry.sourceInputs,
       })),
       ignoredSourcePaths: [
-        generatedModulesRoot,
+        // Generated wrapper/registry modules are virtual, but they still
+        // surface in stats as modules under this reserved namespace.
+        resolve(options.outputRoot, generatedModulesDirname),
         ...(options.ignoredSourcePaths ?? []),
         ...dependencyRoots,
       ],
@@ -544,10 +617,6 @@ export const buildWithRslib = async (options: {
     await assertNoResidualReservedImports(options.entries, options.outputRoot);
     return evidence;
   } finally {
-    try {
-      await result?.close();
-    } finally {
-      await rm(generatedModulesRoot, { force: true, recursive: true });
-    }
+    await result?.close();
   }
 };
