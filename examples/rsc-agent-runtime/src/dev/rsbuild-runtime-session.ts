@@ -8,17 +8,22 @@ import { createRsbuild, type StartDevServerResult } from '@rsbuild/core';
 
 import {
   createRscRuntimeRsbuildConfig,
+  type RscRuntimeCompileEnvironmentHashes,
   type RscRuntimeCompileFailureKind,
   type RscRuntimeCompileSnapshot,
 } from '../../rsbuild.config.js';
 import {
+  createRscEnvironmentCheckpointStore,
+  type RscEnvironmentCheckpointStore,
+  type RscRuntimeEnvironmentName,
+} from './environment-checkpoint-store.js';
+import {
   captureRuntimeGenerationSnapshot,
-  createRscCompilerAssetCheckpointTracker,
   materializeRuntimeGeneration,
   rscRuntimeGenerationMetadataCodec,
   runtimeDefinitionDigest,
   validateRscRuntimeGenerationMetadata,
-  type RscCompilerAssetCheckpointTracker,
+  validateStagedRscEnvironmentCheckpoint,
   type RscRuntimeCapturedGenerationSnapshot,
 } from './generation-materializer.js';
 import type {
@@ -258,6 +263,7 @@ interface RunArtifact {
 }
 
 type LiveSessionCleanupResource =
+  | 'environment-checkpoints'
   | 'generation-store'
   | 'owned-runs-root'
   | 'rsbuild-dev-server'
@@ -645,7 +651,7 @@ export interface RsbuildRuntimeSessionStartTesting {
  * The private compiler URL is exposed only through `clientSurface`.
  */
 export class RsbuildRuntimeSession implements DevRuntimeSession {
-  readonly #checkpointTracker: RscCompilerAssetCheckpointTracker;
+  readonly #checkpointStore: RscEnvironmentCheckpointStore;
   readonly #candidatesByAttempt = new Map<string, RuntimeGenerationCandidate>();
   readonly #captureTasks = new Set<Promise<void>>();
   readonly #context: DevRuntimeStartContext;
@@ -695,7 +701,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #status: DevRuntimeStatus;
 
   private constructor(input: Readonly<{
-    readonly checkpointTracker: RscCompilerAssetCheckpointTracker;
+    readonly checkpointStore: RscEnvironmentCheckpointStore;
     readonly context: DevRuntimeStartContext;
     readonly generationStore: RuntimeGenerationStore<RscRuntimeGenerationMetadata>;
     readonly mcpRegistry: RuntimeMcpRegistry;
@@ -704,7 +710,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     readonly testing: RsbuildRuntimeSessionStartTesting;
   }>) {
     this.#context = input.context;
-    this.#checkpointTracker = input.checkpointTracker;
+    this.#checkpointStore = input.checkpointStore;
     this.#generationStore = input.generationStore;
     this.#mcpRegistry = input.mcpRegistry;
     this.#latestPreparedRuntime = input.preparedRuntime;
@@ -763,8 +769,16 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         validateMetadata: validateRscRuntimeGenerationMetadata,
       });
       ledger.add(() => generationStore.close(), 'generation-store');
-      const checkpointTracker = createRscCompilerAssetCheckpointTracker();
-      ledger.add(async () => { checkpointTracker.close(); }, 'compiler-asset-checkpoints');
+      // Staged checkpoints are only meaningful within one session's validated
+      // staging chain, so a reused storage root must not leak a crashed
+      // session's stale staging directories into this one.
+      const checkpointsRoot = join(storageRoot, 'environment-checkpoints');
+      await rm(checkpointsRoot, { force: true, recursive: true });
+      const checkpointStore = createRscEnvironmentCheckpointStore({
+        root: checkpointsRoot,
+        validators: { rsc: validateStagedRscEnvironmentCheckpoint },
+      });
+      ledger.add(() => checkpointStore.close(), 'environment-checkpoints');
       await Promise.all([
         mkdir(join(storageRoot, 'compiler'), { recursive: true }),
         mkdir(join(storageRoot, 'state'), { recursive: true }),
@@ -830,7 +844,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       });
       ledger.add(() => mcpRegistry.close(), 'runtime-mcp-registry');
       const session = new RsbuildRuntimeSession({
-        checkpointTracker,
+        checkpointStore,
         context,
         generationStore,
         mcpRegistry,
@@ -2191,12 +2205,48 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       capture: async (input) => this.#trackCapture(input),
       enqueue: (snapshot) => this.#enqueue(snapshot),
       failAttempt: (attemptId, error, kind) => { void this.#failAttempt(attemptId, error, kind); },
+      stageEnvironmentCheckpoint: (input) => this.#stageEnvironmentCheckpoint(input),
     });
+  }
+
+  /**
+   * Never rejects into the compiler's `done` hook: a rejected environment
+   * hook would skip Rsbuild's global after-compile dispatch and strand the
+   * FIFO attempt pairing. Failures are recorded against this (environment,
+   * hash) instead and fail the attempt loudly at cohort acquisition.
+   */
+  async #stageEnvironmentCheckpoint(input: Readonly<{
+    readonly distPath: string;
+    readonly environmentName: RscRuntimeEnvironmentName;
+    readonly statsHash: string;
+  }>): Promise<void> {
+    try {
+      if (this.#closed) throw new Error('RSC runtime session is closed.');
+      // The staged copy must read the same root this session configured for
+      // the environment; a diverging Rsbuild distPath would silently
+      // checkpoint the wrong tree.
+      const expectedRoot = join(resolve(this.#context.storageRoot), 'compiler', input.environmentName);
+      if (resolve(input.distPath) !== expectedRoot) {
+        throw new Error(`RSC runtime ${input.environmentName} compiler emitted outside its session root.`);
+      }
+      await this.#checkpointStore.stage({
+        environment: input.environmentName,
+        hash: input.statsHash,
+        sourceRoot: expectedRoot,
+      });
+    } catch (error) {
+      this.#checkpointStore.recordStagingFailure({
+        environment: input.environmentName,
+        error: error instanceof Error ? error : new Error(String(error)),
+        hash: input.statsHash,
+      });
+    }
   }
 
   #trackCapture(input: Readonly<{
     readonly attemptId: string;
     readonly cohortChanged: boolean;
+    readonly environmentHashes: RscRuntimeCompileEnvironmentHashes;
     readonly hasErrors: boolean;
     readonly sourceRevision: string;
   }>): Promise<RscRuntimeCompileSnapshot | undefined> {
@@ -2230,6 +2280,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   async #capture(input: Readonly<{
     readonly attemptId: string;
     readonly cohortChanged: boolean;
+    readonly environmentHashes: RscRuntimeCompileEnvironmentHashes;
     readonly hasErrors: boolean;
     readonly sourceRevision: string;
   }>): Promise<RscRuntimeCompileSnapshot | undefined> {
@@ -2261,24 +2312,32 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       await this.#testing.beforeGenerationCapture?.();
       if (this.#closed) throw new Error('RSC runtime session is closed.');
       // Rsbuild does not guarantee that global MultiStats completion is a
-      // transactional snapshot of parallel writeToDisk roots. In 2.2.1 the
-      // files empirically correspond to this completed cohort; the checkpoint
-      // capture below serializes and validates a copied immutable candidate.
-      const snapshot = await captureRuntimeGenerationSnapshot({
-        attemptId: input.attemptId,
-        candidate,
-        compilerAssetCheckpointTracker: this.#checkpointTracker,
-        compilerRoot: join(this.#context.storageRoot, 'compiler'),
-        preparedRuntime,
-        rscCohortRevision: cohortRevision,
-        sourceRevision: input.sourceRevision,
-      });
+      // transactional snapshot of parallel writeToDisk roots, so capture
+      // never reads the live compiler roots. It assembles the candidate from
+      // the immutable per-environment checkpoints staged in each compiler's
+      // own after-environment-compile hook, matched exactly against this
+      // cohort's Stats hashes; acquisition waits for a late-staging child and
+      // fails fast once a newer compilation supersedes a requested hash.
+      const cohort = await this.#checkpointStore.acquireCohort(input.environmentHashes);
+      let snapshot: RscRuntimeCapturedGenerationSnapshot;
+      try {
+        snapshot = await captureRuntimeGenerationSnapshot({
+          attemptId: input.attemptId,
+          candidate,
+          cohort: cohort.checkpoints,
+          preparedRuntime,
+          rscCohortRevision: cohortRevision,
+          sourceRevision: input.sourceRevision,
+        });
+      } finally {
+        // The candidate now owns its own copied bytes, so superseded
+        // checkpoints can be garbage-collected without touching it.
+        cohort.release();
+      }
       if (this.#closed) throw new Error('RSC runtime session is closed.');
       return Object.freeze({
-        acceptCompilerAssetCheckpoint: snapshot.acceptCompilerAssetCheckpoint,
         attemptId: snapshot.attemptId,
         candidateId: snapshot.candidate.id,
-        discardCompilerAssetCheckpoint: snapshot.discardCompilerAssetCheckpoint,
         preparedRevision: snapshot.preparedRuntime.sourceRevision,
         rscCohortRevision: snapshot.rscCohortRevision,
         sourceRevision: snapshot.sourceRevision,
@@ -2294,7 +2353,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const captured = (snapshot as RscRuntimeCompileSnapshot & Readonly<{ readonly snapshot?: RscRuntimeCapturedGenerationSnapshot }>).snapshot;
     if (captured === undefined) throw new Error('RSC runtime compile snapshot was not captured by this session.');
     if (this.#closed) {
-      snapshot.discardCompilerAssetCheckpoint?.();
       return this.#failAttempt(snapshot.attemptId, new Error('RSC runtime session is closed.')).then(() => 'failed');
     }
     return this.#append(async () => this.#activate(captured));
@@ -2432,7 +2490,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           ...(preparedRegistry === undefined ? [] : [this.#mcpRegistry.abortActivationReconcile(preparedRegistry)]),
         ]);
       }
-      snapshot.discardCompilerAssetCheckpoint?.();
       await this.#failAttempt(snapshot.attemptId, error);
       return 'failed';
     } finally {
@@ -2646,7 +2703,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     for (const worker of this.#workers.values()) {
       worker.terminate(new Error('RSC runtime session is closing.'));
     }
-    this.#checkpointTracker.close();
+    // Closing the checkpoint store first fails in-flight cohort acquisitions
+    // fast; its staged directories drain below once captures release them.
+    const checkpointStoreClose = this.#checkpointStore.close();
+    void checkpointStoreClose.catch(() => undefined);
     this.#setStatus('closed');
     for (const broker of this.#appBrokers.values()) broker.closedObservation?.unsubscribe();
     this.#appBrokers.clear();
@@ -2679,6 +2739,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         () => this.#server?.close() ?? Promise.resolve(),
       ) }),
       Object.freeze({ label: 'runtime-mcp-registry' as const, close: () => mcpRegistryClose }),
+      Object.freeze({ label: 'environment-checkpoints' as const, close: () => this.#closeLiveSessionResource(
+        'environment-checkpoints',
+        () => checkpointStoreClose,
+      ) }),
       Object.freeze({ label: 'generation-store' as const, close: () => this.#closeLiveSessionResource(
         'generation-store',
         () => this.#generationStore.close(),

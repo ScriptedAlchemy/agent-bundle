@@ -1,9 +1,14 @@
 import { createHash } from 'node:crypto';
-import { open, lstat, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { open, lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { emitRuntimeArtifacts } from '../build/emit-artifacts.js';
+import type {
+  RscEnvironmentCheckpointValidator,
+  RscRuntimeEnvironmentName,
+  RscStagedEnvironmentCheckpoint,
+} from './environment-checkpoint-store.js';
 import type {
   RscRuntimeAppDefinition,
   RscRuntimeGenerationMetadata,
@@ -56,76 +61,11 @@ interface RuntimeAssetsEntry {
   readonly initial?: Readonly<{ readonly js?: readonly string[] }>;
 }
 
-export interface RscCompilerAssetCheckpointTracker {
-  checkpoint(compilerRoot: string): Promise<RscCompilerAssetCheckpoint>;
-  close(): void;
-}
-
-export interface RscCompilerAssetCheckpoint {
-  readonly priorAssets: ReadonlyMap<string, string>;
-  accept(assets: ReadonlyMap<string, string>): void;
-  discard(): void;
-}
-
-interface CompilerAssetCheckpointRoot {
-  assets: ReadonlyMap<string, string>;
-  tail: Promise<void>;
-}
-
-class CompilerAssetCheckpointTracker implements RscCompilerAssetCheckpointTracker {
-  readonly #activeDiscards = new Set<() => void>();
-  readonly #roots = new Map<string, CompilerAssetCheckpointRoot>();
-  #closed = false;
-
-  async checkpoint(compilerRoot: string): Promise<RscCompilerAssetCheckpoint> {
-    if (this.#closed) throw new Error('RSC compiler asset checkpoint tracker is closed.');
-    const root = resolve(compilerRoot);
-    let state = this.#roots.get(root);
-    if (state === undefined) {
-      state = { assets: new Map(), tail: Promise.resolve() };
-      this.#roots.set(root, state);
-    }
-    const previous = state.tail;
-    let release: (() => void) | undefined;
-    state.tail = new Promise<void>((resolveTail) => { release = resolveTail; });
-    await previous;
-    if (this.#closed) {
-      release?.();
-      throw new Error('RSC compiler asset checkpoint tracker is closed.');
-    }
-    const priorAssets = new Map(state.assets);
-    let settled = false;
-    const settle = (assets: ReadonlyMap<string, string> | undefined): void => {
-      if (settled) return;
-      settled = true;
-      this.#activeDiscards.delete(discard);
-      if (assets !== undefined && !this.#closed) state.assets = new Map(assets);
-      release?.();
-    };
-    const discard = (): void => settle(undefined);
-    const accept = (assets: ReadonlyMap<string, string>): void => settle(assets);
-    this.#activeDiscards.add(discard);
-    return Object.freeze({ accept, discard, priorAssets });
-  }
-
-  close(): void {
-    if (this.#closed) return;
-    this.#closed = true;
-    this.#roots.clear();
-    for (const discard of [...this.#activeDiscards]) discard();
-  }
-}
-
-export const createRscCompilerAssetCheckpointTracker = (): RscCompilerAssetCheckpointTracker =>
-  new CompilerAssetCheckpointTracker();
-
 export interface RscRuntimeCapturedGenerationSnapshot {
-  readonly acceptCompilerAssetCheckpoint?: () => void;
   readonly assets: readonly RuntimeGenerationAsset[];
   readonly attemptId: string;
   readonly candidate: RuntimeGenerationCandidate;
   readonly definition: SerializedRuntimeDefinition;
-  readonly discardCompilerAssetCheckpoint?: () => void;
   readonly preparedRuntime: DevRuntimePreparedProject;
   readonly rscCohortRevision: number;
   readonly sourceRevision: string;
@@ -134,8 +74,8 @@ export interface RscRuntimeCapturedGenerationSnapshot {
 export interface CaptureRuntimeGenerationSnapshotOptions {
   readonly attemptId: string;
   readonly candidate: RuntimeGenerationCandidate;
-  readonly compilerAssetCheckpointTracker?: RscCompilerAssetCheckpointTracker;
-  readonly compilerRoot: string;
+  /** Immutable staged per-environment checkpoints matching this cohort's Stats hashes. */
+  readonly cohort: Readonly<Record<RscRuntimeEnvironmentName, RscStagedEnvironmentCheckpoint>>;
   readonly preparedRuntime: DevRuntimePreparedProject;
   readonly rscCohortRevision: number;
   readonly sourceRevision: string;
@@ -225,8 +165,21 @@ const fsync = async (path: string): Promise<void> => {
   }
 };
 
-const copyFileExclusive = async (source: string, destination: string): Promise<void> => {
+/**
+ * Copies one staged checkpoint file, requiring its bytes to match the digest
+ * recorded when the checkpoint was staged. A mismatch means the immutable
+ * staging area itself was disturbed, so the cohort must not be admitted.
+ */
+const copyCheckpointFile = async (
+  checkpoint: RscStagedEnvironmentCheckpoint,
+  path: string,
+  source: string,
+  destination: string,
+): Promise<void> => {
   const bytes = await readFile(source);
+  if (checkpoint.files.get(path) !== digestBytes(bytes)) {
+    throw new Error(`Staged ${checkpoint.environment} checkpoint no longer matches its recorded digest for ${JSON.stringify(path)}.`);
+  }
   const handle = await open(destination, 'wx');
   try {
     await handle.writeFile(bytes);
@@ -236,14 +189,19 @@ const copyFileExclusive = async (source: string, destination: string): Promise<v
   }
 };
 
-const copyTree = async (sourceRoot: string, destinationRoot: string): Promise<void> => {
+const copyCheckpointTree = async (
+  checkpoint: RscStagedEnvironmentCheckpoint,
+  destinationRoot: string,
+): Promise<void> => {
+  const sourceRoot = checkpoint.root;
   const sourceStatus = await lstat(sourceRoot);
   if (!sourceStatus.isDirectory() || sourceStatus.isSymbolicLink()) {
-    throw new Error(`Compiler environment ${JSON.stringify(sourceRoot)} must be a regular directory.`);
+    throw new Error(`Staged ${checkpoint.environment} checkpoint must be a regular directory.`);
   }
   await mkdir(destinationRoot, { recursive: false });
+  let copied = 0;
 
-  const copyDirectory = async (source: string, destination: string): Promise<void> => {
+  const copyDirectory = async (source: string, destination: string, prefix: string): Promise<void> => {
     assertInside(sourceRoot, source);
     assertInside(destinationRoot, destination);
     const entries = await readdir(source, { withFileTypes: true });
@@ -255,11 +213,13 @@ const copyTree = async (sourceRoot: string, destinationRoot: string): Promise<vo
       assertInside(destinationRoot, destinationPath);
       const status = await lstat(sourcePath);
       if (status.isSymbolicLink()) throw new Error('Compiler output cannot contain symbolic links.');
+      const path = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
       if (status.isDirectory()) {
         await mkdir(destinationPath, { recursive: false });
-        await copyDirectory(sourcePath, destinationPath);
+        await copyDirectory(sourcePath, destinationPath, path);
       } else if (status.isFile()) {
-        await copyFileExclusive(sourcePath, destinationPath);
+        await copyCheckpointFile(checkpoint, path, sourcePath, destinationPath);
+        copied += 1;
       } else {
         throw new Error('Compiler output can contain only regular files and directories.');
       }
@@ -267,54 +227,26 @@ const copyTree = async (sourceRoot: string, destinationRoot: string): Promise<vo
     await fsync(destination);
   };
 
-  await copyDirectory(sourceRoot, destinationRoot);
+  await copyDirectory(sourceRoot, destinationRoot, '');
+  if (copied !== checkpoint.files.size) {
+    throw new Error(`Staged ${checkpoint.environment} checkpoint no longer matches its recorded file set.`);
+  }
 };
 
-const copyCurrentRscAssets = async (
-  sourceRoot: string,
-  destinationRoot: string,
+/**
+ * Copies the RSC assets declared by the checkpoint's own `runtime-assets.json`
+ * into the candidate. Files staged alongside them that are not part of the
+ * current compilation (stale chunks from earlier incremental compiles, and
+ * previously generated definition artifacts) were already validated against
+ * the prior checkpoint's known digests when the checkpoint was staged, so
+ * they are skipped here rather than admitted into the generation.
+ */
+const copyDeclaredRscAssets = async (
+  checkpoint: RscStagedEnvironmentCheckpoint,
   runtimeAssets: RuntimeAssetsManifest,
-  priorAssets: ReadonlyMap<string, string> | undefined,
-): Promise<ReadonlyMap<string, string>> => {
-  const sourceStatus = await lstat(sourceRoot);
-  if (!sourceStatus.isDirectory() || sourceStatus.isSymbolicLink()) {
-    throw new Error(`Compiler environment ${JSON.stringify(sourceRoot)} must be a regular directory.`);
-  }
-  const currentAssets = new Set<string>([
-    ...runtimeAssets.allFiles,
-    ...generatedRscAssetPaths,
-  ]);
-  const sourceFiles = new Map<string, string>();
-  const staleAssets = new Map<string, string>();
-  const inspectDirectory = async (source: string, prefix: string): Promise<void> => {
-    assertInside(sourceRoot, source);
-    const entries = await readdir(source, { withFileTypes: true });
-    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (!isSafeSegment(entry.name)) throw new Error('Compiler output contains an unsafe path segment.');
-      const sourcePath = join(source, entry.name);
-      assertInside(sourceRoot, sourcePath);
-      const status = await lstat(sourcePath);
-      if (status.isSymbolicLink()) throw new Error('Compiler output cannot contain symbolic links.');
-      const path = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
-      if (status.isDirectory()) {
-        await inspectDirectory(sourcePath, path);
-      } else if (status.isFile()) {
-        if (currentAssets.has(path)) {
-          sourceFiles.set(path, sourcePath);
-          continue;
-        }
-        const priorDigest = priorAssets?.get(path);
-        if (priorDigest === undefined || digestBytes(await readFile(sourcePath)) !== priorDigest) {
-          throw new Error(`Compiler output contains an undeclared file ${JSON.stringify(path)}.`);
-        }
-        staleAssets.set(path, priorDigest);
-      } else {
-        throw new Error('Compiler output can contain only regular files and directories.');
-      }
-    }
-  };
-
-  await inspectDirectory(sourceRoot, '');
+  destinationRoot: string,
+): Promise<void> => {
+  const currentAssets = new Set<string>([...runtimeAssets.allFiles, 'runtime-assets.json']);
   await mkdir(destinationRoot, { recursive: false });
   const destinationDirectories = new Set<string>([destinationRoot]);
   const rememberDirectories = (directory: string): void => {
@@ -327,19 +259,43 @@ const copyCurrentRscAssets = async (
     }
   };
   for (const path of [...currentAssets].sort((left, right) => left.localeCompare(right))) {
-    const source = sourceFiles.get(path);
-    if (source === undefined) throw new Error(`runtime-assets.json references missing asset ${JSON.stringify(path)}.`);
+    if (!checkpoint.files.has(path)) {
+      throw new Error(`runtime-assets.json references missing asset ${JSON.stringify(path)}.`);
+    }
+    const source = join(checkpoint.root, ...path.split('/'));
     const destination = join(destinationRoot, ...path.split('/'));
     const directory = dirname(destination);
+    assertInside(checkpoint.root, source);
     assertInside(destinationRoot, destination);
     await mkdir(directory, { recursive: true });
     rememberDirectories(directory);
-    await copyFileExclusive(source, destination);
+    await copyCheckpointFile(checkpoint, path, source, destination);
   }
   for (const directory of [...destinationDirectories].sort((left, right) => right.length - left.length)) {
     await fsync(directory);
   }
-  return staleAssets;
+};
+
+/**
+ * Staging-time guard for the RSC environment: every staged file must either
+ * be declared by that compilation's `runtime-assets.json`, be a definition
+ * artifact this runtime generated into a reused compiler root, or match a
+ * digest already validated by the previous checkpoint of the same
+ * environment (a stale asset carried over from an earlier incremental
+ * compile). Anything else is a foreign write into the compiler root and
+ * rejects the checkpoint loudly.
+ */
+export const validateStagedRscEnvironmentCheckpoint: RscEnvironmentCheckpointValidator = async (input) => {
+  const runtimeAssets = await parseRuntimeAssets(input.root);
+  const declared = new Set<string>([...runtimeAssets.allFiles, ...generatedRscAssetPaths]);
+  const knownAssets = new Map<string, string>();
+  for (const [path, sha256] of input.files) {
+    if (!declared.has(path) && input.priorKnownAssets.get(path) !== sha256) {
+      throw new Error(`Compiler output contains an undeclared file ${JSON.stringify(path)}.`);
+    }
+    knownAssets.set(path, sha256);
+  }
+  return knownAssets;
 };
 
 const walkRegularFiles = async (root: string): Promise<readonly RuntimeGenerationAsset[]> => {
@@ -800,56 +756,34 @@ const clonePreparedRuntime = (preparedRuntime: DevRuntimePreparedProject): DevRu
 export const captureRuntimeGenerationSnapshot = async (
   input: CaptureRuntimeGenerationSnapshotOptions,
 ): Promise<RscRuntimeCapturedGenerationSnapshot> => {
-  const compilerRoot = resolve(input.compilerRoot);
-  const checkpoint = await input.compilerAssetCheckpointTracker?.checkpoint(compilerRoot);
-  try {
-    const rscRoot = join(compilerRoot, 'rsc');
-    const definition = await runDefinitionExecutable(join(rscRoot, 'dev', 'definition.js'));
-    const definitionBytes = Buffer.from(canonicalJson(definition));
-    const definitionPath = join(rscRoot, 'runtime-definition.json');
-    await unlink(definitionPath).catch((error: unknown) => {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return undefined;
-      throw error;
-    });
-    await writeFile(definitionPath, definitionBytes, { encoding: 'utf8', flag: 'wx' });
-    await fsync(join(rscRoot, 'runtime-definition.json'));
-    await emitRuntimeArtifacts(rscRoot, definition);
-    await fsync(rscRoot);
-    const runtimeAssets = await parseRuntimeAssets(rscRoot);
-    const staleAssets = await copyCurrentRscAssets(
-      rscRoot,
-      join(input.candidate.root, 'rsc'),
-      runtimeAssets,
-      checkpoint?.priorAssets,
-    );
-    await copyTree(join(compilerRoot, 'app'), join(input.candidate.root, 'app'));
-    await copyTree(join(compilerRoot, 'widget'), join(input.candidate.root, 'widget'));
-    await fsync(input.candidate.root);
-    const assets = await walkRegularFiles(input.candidate.root);
-    const capturedAssets = new Map(assets.map((asset) => [asset.path, asset]));
-    const checkpointAssets = new Map(staleAssets);
-    for (const path of runtimeAssets.allFiles) {
-      const asset = capturedAssets.get(`rsc/${path}`);
-      if (asset === undefined) throw new Error(`runtime-assets.json references missing asset ${JSON.stringify(path)}.`);
-      checkpointAssets.set(path, asset.sha256);
-    }
-    return Object.freeze({
-      ...(checkpoint === undefined ? {} : {
-        acceptCompilerAssetCheckpoint: () => checkpoint.accept(checkpointAssets),
-        discardCompilerAssetCheckpoint: () => checkpoint.discard(),
-      }),
-      assets,
-      attemptId: input.attemptId,
-      candidate: input.candidate,
-      definition,
-      preparedRuntime: clonePreparedRuntime(input.preparedRuntime),
-      rscCohortRevision: input.rscCohortRevision,
-      sourceRevision: input.sourceRevision,
-    });
-  } catch (error) {
-    checkpoint?.discard();
-    throw error;
-  }
+  // Every byte admitted into the candidate comes from the immutable staged
+  // checkpoints whose Stats hashes identify this cohort - never from the
+  // live compiler roots, which the next parallel compile may already be
+  // rewriting. The definition executable and the generated definition
+  // artifacts likewise run against and land in the candidate's own copy.
+  const { app, rsc, widget } = input.cohort;
+  const candidateRsc = join(input.candidate.root, 'rsc');
+  const runtimeAssets = await parseRuntimeAssets(rsc.root);
+  await copyDeclaredRscAssets(rsc, runtimeAssets, candidateRsc);
+  const definition = await runDefinitionExecutable(join(candidateRsc, 'dev', 'definition.js'));
+  const definitionBytes = Buffer.from(canonicalJson(definition));
+  await writeFile(join(candidateRsc, 'runtime-definition.json'), definitionBytes, { encoding: 'utf8', flag: 'wx' });
+  await fsync(join(candidateRsc, 'runtime-definition.json'));
+  await emitRuntimeArtifacts(candidateRsc, definition);
+  await fsync(candidateRsc);
+  await copyCheckpointTree(app, join(input.candidate.root, 'app'));
+  await copyCheckpointTree(widget, join(input.candidate.root, 'widget'));
+  await fsync(input.candidate.root);
+  const assets = await walkRegularFiles(input.candidate.root);
+  return Object.freeze({
+    assets,
+    attemptId: input.attemptId,
+    candidate: input.candidate,
+    definition,
+    preparedRuntime: clonePreparedRuntime(input.preparedRuntime),
+    rscCohortRevision: input.rscCohortRevision,
+    sourceRevision: input.sourceRevision,
+  });
 };
 
 const decodeMetadata = (value: JsonValue): RscRuntimeGenerationMetadata => {
