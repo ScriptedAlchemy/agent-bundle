@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { expect, it, rs } from '@rstest/core';
+import { rspack } from '@rslib/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
@@ -190,8 +191,9 @@ it('does not share a persistent Rslib cache between generated executables', asyn
   expect(config.lib[0].performance).toEqual({ buildCache: false });
 });
 
-it('closes the Rslib build result and removes materialized generated modules after building a virtual hook entry', async () => {
+it('closes the Rslib build result and serves the generated wrapper entry virtually without touching disk', async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-close-output-'));
+  const virtualEntryPath = join(outputRoot, '.agent-bundle-virtual', 'close-probe-entry.mjs');
   const close = rs.fn(async () => undefined);
   const buildResult = {
     close,
@@ -202,22 +204,23 @@ it('closes the Rslib build result and removes materialized generated modules aft
       }),
     },
   };
-  let materializedEntry: string | undefined;
+  let reservedNamespaceDuringBuild: unknown;
+  const createOptions: unknown[] = [];
   const rslib = {
     build: async () => {
-      // The generated wrapper entry must exist as a real on-disk module for
-      // the duration of the build (no virtual-module plugin involved).
-      materializedEntry = await readFile(
-        join(outputRoot, '.agent-bundle-virtual', 'close-probe-entry.mjs'),
-        'utf8',
-      );
+      // The generated wrapper entry is served from memory: its reserved
+      // namespace must not exist on disk even while the build is running.
+      reservedNamespaceDuringBuild = await readdir(join(outputRoot, '.agent-bundle-virtual'))
+        .then(() => undefined, (error: unknown) => error);
       return buildResult;
     },
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
+          entry: { 'close-probe': [virtualEntryPath] },
           name: 'agent-bundle-close-probe',
           output: { asyncChunks: false, path: outputRoot },
+          plugins: [new rspack.experiments.VirtualModulesPlugin({})],
           target: 'node',
         }],
         environmentConfigs: { 'agent-bundle-close-probe': { output: { cleanDistPath: false } } },
@@ -238,12 +241,89 @@ it('closes the Rslib build result and removes materialized generated modules aft
         virtualSource: 'export default undefined;',
       }],
       outputRoot,
-    }, { createRslib: async () => rslib as never });
+    }, {
+      createRslib: async (options) => {
+        createOptions.push(options);
+        return rslib as never;
+      },
+    });
 
     expect(close).toHaveBeenCalledOnce();
-    expect(materializedEntry).toBe('export default undefined;');
-    // The reserved directory never survives into artifact listing.
+    expect(reservedNamespaceDuringBuild).toMatchObject({ code: 'ENOENT' });
     await expect(readdir(join(outputRoot, '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    // The composed profile keys the entry on the authored program (Rslib
+    // checks entry existence on the real filesystem), and the invariant hook
+    // redirects the lowered Rspack entry to the guaranteed-nonexistent
+    // virtual path it registers with VirtualModulesPlugin.
+    const [{ config }] = createOptions as [{
+      readonly config: {
+        readonly lib: readonly [{
+          readonly source: { readonly entry: Readonly<Record<string, string>> };
+          readonly tools?: { readonly rspack?: unknown };
+        }];
+      };
+    }];
+    expect(config.lib[0].source.entry).toEqual({ 'close-probe': '/tmp/hook.ts' });
+    const hooksChain = config.lib[0].tools?.rspack;
+    const mutators = (Array.isArray(hooksChain) ? hooksChain : [hooksChain])
+      .filter((mutator): mutator is (value: object) => object => typeof mutator === 'function');
+    expect(mutators.length).toBeGreaterThan(0);
+    const resolved: { entry?: unknown; plugins?: readonly unknown[] } = {
+      entry: { 'close-probe': ['/tmp/hook.ts'] },
+    };
+    for (const mutator of mutators) mutator(resolved);
+    expect(resolved.entry).toEqual({ 'close-probe': [virtualEntryPath] });
+    const virtualPlugins = (resolved.plugins ?? [])
+      .filter((plugin) => plugin instanceof rspack.experiments.VirtualModulesPlugin);
+    expect(virtualPlugins).toHaveLength(1);
+  } finally {
+    await rm(outputRoot, { force: true, recursive: true });
+  }
+});
+
+it('fails closed when the resolved environment lost its virtual modules or wrapper entry', async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-lost-virtual-'));
+  const virtualEntryPath = join(outputRoot, '.agent-bundle-virtual', 'lost-probe-entry.mjs');
+  const rslibFor = (bundlerConfig: Record<string, unknown>) => ({
+    build: async () => {
+      throw new Error('inspection must fail before the build starts');
+    },
+    inspectConfig: async () => ({
+      origin: {
+        bundlerConfigs: [{
+          name: 'agent-bundle-lost-probe',
+          output: { asyncChunks: false, path: outputRoot },
+          target: 'node',
+          ...bundlerConfig,
+        }],
+        environmentConfigs: { 'agent-bundle-lost-probe': { output: { cleanDistPath: false } } },
+      },
+    }),
+  });
+  const buildLostProbe = async (bundlerConfig: Record<string, unknown>) => buildWithRslib({
+    cwd: '/tmp',
+    entries: [{
+      name: 'lost-probe',
+      outputRelativePath: 'hooks/lost-probe.mjs',
+      source: '/tmp/hook.ts',
+      sourceInputs: ['/tmp/hook.ts'],
+      virtualSource: 'export default undefined;',
+    }],
+    outputRoot,
+  }, { createRslib: async () => rslibFor(bundlerConfig) as never });
+
+  try {
+    // A resolved config without the plugin would resolve the
+    // guaranteed-nonexistent generated paths against the real filesystem.
+    await expect(buildLostProbe({ entry: { 'lost-probe': [virtualEntryPath] } }))
+      .rejects.toThrow(/without its virtual modules/u);
+    // A resolved config still keyed on the authored program would compile
+    // without the generated wrapper.
+    await expect(buildLostProbe({
+      entry: { 'lost-probe': ['/tmp/hook.ts'] },
+      plugins: [new rspack.experiments.VirtualModulesPlugin({})],
+    })).rejects.toThrow(/without its generated wrapper entry/u);
   } finally {
     await rm(outputRoot, { force: true, recursive: true });
   }
