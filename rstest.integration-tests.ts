@@ -19,6 +19,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/build.test.ts',
   'packages/agent-bundle/tests/cli.test.ts',
   'packages/agent-bundle/tests/dev-artifact-service.test.ts',
+  'packages/agent-bundle/tests/dev-package-build.test.ts',
   'packages/agent-bundle/tests/dev-workbench.test.ts',
   'packages/agent-bundle/tests/eval-claude-harness.test.ts',
   'packages/agent-bundle/tests/eval-cli.test.ts',

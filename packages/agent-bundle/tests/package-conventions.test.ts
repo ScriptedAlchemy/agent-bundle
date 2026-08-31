@@ -263,3 +263,186 @@ describe('bin, lib, and tools validation', () => {
     expect(diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
   });
 });
+
+describe('migration nudges (AB473x)', () => {
+  const factoryEntry = 'export default () => ({ close() {}, async connect() {} });\n';
+  const selfConnectingEntry = [
+    "import { connect } from './transport.js';",
+    'await connect();',
+    '',
+  ].join('\n');
+
+  const validated = async (
+    config: Omit<AgentBundleConfig, 'plugin'>,
+    files: Readonly<Record<string, string>> = {},
+  ) => {
+    const root = await projectRoot(files);
+    return {
+      diagnostics: validateSource(loadedProject({
+        ...config,
+        plugin: { name: 'review-tools', version: '1.0.0' },
+      }, root), { skills: [] }, registry),
+      root,
+    };
+  };
+
+  it('nudges AB4730 for a self-connecting explicit stdio entry', async () => {
+    const { diagnostics, root } = await validated(
+      { mcp: { servers: { curator: { entry: './src/server.ts' } } } },
+      { 'src/server.ts': selfConnectingEntry },
+    );
+    expect(diagnostics).toEqual([{
+      code: 'AB4730',
+      message: expect.stringContaining('self-connecting'),
+      recovery: expect.stringContaining('Optional'),
+      severity: 'info',
+      sourcePath: `${root}/src/server.ts`,
+    }]);
+  });
+
+  it('nudges AB4730 for a self-connecting conventional stdio entry', async () => {
+    const { diagnostics, root } = await validated(
+      { mcp: { servers: { curator: {} } } },
+      { 'src/mcp/curator.ts': selfConnectingEntry },
+    );
+    expect(diagnostics).toEqual([expect.objectContaining({
+      code: 'AB4730',
+      severity: 'info',
+      sourcePath: `${root}/src/mcp/curator.ts`,
+    })]);
+  });
+
+  it('stays silent for factory-exporting stdio entries', async () => {
+    const { diagnostics } = await validated(
+      {
+        mcp: {
+          servers: {
+            curator: {},
+            explicit: { entry: './src/factory.ts' },
+          },
+        },
+      },
+      {
+        'src/factory.ts': factoryEntry,
+        'src/mcp/curator.ts': factoryEntry,
+      },
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('nudges AB4731 when explicit bin configuration shadows src/cli.ts', async () => {
+    const { diagnostics, root } = await validated(
+      { bin: { other: './src/other.ts' } },
+      {
+        'src/cli.ts': 'export const main = async () => 0;\n',
+        'src/other.ts': 'export const main = async () => 0;\n',
+      },
+    );
+    expect(diagnostics).toEqual([{
+      code: 'AB4731',
+      message: expect.stringContaining('src/cli.ts'),
+      recovery: expect.stringContaining('Optional'),
+      severity: 'info',
+      sourcePath: `${root}/src/cli.ts`,
+    }]);
+  });
+
+  it('stays silent when bin config references src/cli.ts or opts out with false', async () => {
+    const files = {
+      'src/cli.ts': 'export const main = async () => 0;\n',
+      'src/other.ts': 'export const main = async () => 0;\n',
+    };
+    const referencing = await validated(
+      { bin: { other: './src/other.ts', tool: './src/cli.ts' } },
+      files,
+    );
+    expect(referencing.diagnostics).toEqual([]);
+
+    const optedOut = await validated({ bin: false }, files);
+    expect(optedOut.diagnostics).toEqual([]);
+  });
+
+  it('nudges AB4732 when explicit lib configuration shadows src/index.ts', async () => {
+    const { diagnostics, root } = await validated(
+      { lib: { entry: './src/other.ts' } },
+      {
+        'src/index.ts': 'export const a = 1;\n',
+        'src/other.ts': 'export const b = 2;\n',
+      },
+    );
+    expect(diagnostics).toEqual([{
+      code: 'AB4732',
+      message: expect.stringContaining('src/index.ts'),
+      recovery: expect.stringContaining('Optional'),
+      severity: 'info',
+      sourcePath: `${root}/src/index.ts`,
+    }]);
+  });
+
+  it('stays silent when lib config references src/index.ts or opts out with false', async () => {
+    const files = {
+      'src/index.ts': 'export const a = 1;\n',
+      'src/other.ts': 'export const b = 2;\n',
+    };
+    const referencing = await validated({ lib: './src/index.ts' }, files);
+    expect(referencing.diagnostics).toEqual([]);
+
+    const optedOut = await validated({ lib: false }, files);
+    expect(optedOut.diagnostics).toEqual([]);
+  });
+
+  it('nudges AB4733 when explicit server configuration shadows src/mcp/<id>.ts', async () => {
+    const entryShadow = await validated(
+      { mcp: { servers: { curator: { entry: './src/factory.ts' } } } },
+      {
+        'src/factory.ts': factoryEntry,
+        'src/mcp/curator.ts': factoryEntry,
+      },
+    );
+    expect(entryShadow.diagnostics).toEqual([{
+      code: 'AB4733',
+      message: expect.stringContaining('src/mcp/curator.ts'),
+      recovery: expect.stringContaining('Optional'),
+      severity: 'info',
+      sourcePath: `${entryShadow.root}/src/mcp/curator.ts`,
+    }]);
+
+    const commandShadow = await validated(
+      { mcp: { servers: { curator: { command: 'curator-server' } } } },
+      { 'src/mcp/curator.ts': factoryEntry },
+    );
+    expect(commandShadow.diagnostics).toEqual([expect.objectContaining({
+      code: 'AB4733',
+      severity: 'info',
+    })]);
+  });
+
+  it('stays silent when the explicit entry is the conventional file itself', async () => {
+    const { diagnostics } = await validated(
+      { mcp: { servers: { curator: { entry: './src/mcp/curator.ts' } } } },
+      { 'src/mcp/curator.ts': factoryEntry },
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('never raises nudges above info severity', async () => {
+    const { diagnostics } = await validated(
+      {
+        bin: { other: './src/other.ts' },
+        lib: { entry: './src/other.ts' },
+        mcp: { servers: { curator: { entry: './src/server.ts' } } },
+      },
+      {
+        'src/cli.ts': 'export const main = async () => 0;\n',
+        'src/index.ts': 'export const a = 1;\n',
+        'src/mcp/curator.ts': factoryEntry,
+        'src/other.ts': 'export const main = async () => 0;\n',
+        'src/server.ts': selfConnectingEntry,
+      },
+    );
+    expect(diagnostics.map((diagnostic) => diagnostic.code).sort()).toEqual([
+      'AB4730', 'AB4731', 'AB4732', 'AB4733',
+    ]);
+    expect(diagnostics.every((diagnostic) => diagnostic.severity === 'info')).toBe(true);
+  });
+});

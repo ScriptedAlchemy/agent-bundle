@@ -195,6 +195,68 @@ it('serializes a running build and coalesces all concurrent invalidations into o
   }
 });
 
+it('runs the package build inside the rebuild pass and surfaces its warnings on succeeded attempts', async () => {
+  const root = await createProject();
+  const packageCalls: (readonly string[])[] = [];
+  let artifactOutcome: 'failed' | 'succeeded' = 'succeeded';
+  let packageDiagnostics: readonly { code: string; message: string; severity: 'warning' }[] = [];
+  let builds = 0;
+
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: {
+        build: async (prepared) => {
+          builds += 1;
+          return artifactOutcome === 'succeeded'
+            ? succeeded(epochFor(root, `epoch-${builds}`, prepared.source.revision ?? 'missing'))
+            : failed();
+        },
+      },
+      diagnosticService: {
+        close: async () => undefined,
+        lint: async (paths): Promise<DiagnosticReport> => ({ diagnostics: [], paths }),
+      },
+      epochStore: new EpochStore({ projectRoot: root }),
+      packageBuildService: {
+        build: async (_prepared, invalidated) => {
+          packageCalls.push(invalidated.paths);
+          return { diagnostics: packageDiagnostics, state: 'built' };
+        },
+      },
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    await coordinator.start();
+    expect(packageCalls).toEqual([[]]);
+
+    packageDiagnostics = [{
+      code: 'AB7103',
+      message: 'Package build (bin/lib) failed during development rebuild: sentinel.',
+      severity: 'warning',
+    }];
+    const warned = await coordinator.rebuild(invalidation(['src/cli.ts']));
+    expect(warned.outcome).toBe('succeeded');
+    expect(packageCalls).toEqual([[], ['src/cli.ts']]);
+    expect(coordinator.status().build).toMatchObject({ state: 'idle' });
+    expect(coordinator.status().build.lastAttempt).toMatchObject({ outcome: 'succeeded' });
+    expect(coordinator.status().build.lastAttempt?.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'AB7103', severity: 'warning' }),
+    );
+
+    // A failed artifact build never reaches the package build.
+    artifactOutcome = 'failed';
+    const failedRebuild = await coordinator.rebuild(invalidation(['src/broken.ts']));
+    expect(failedRebuild.outcome).toBe('failed');
+    expect(packageCalls).toHaveLength(2);
+
+    await coordinator.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('queues watcher add, change, and delete paths as one rebuild during a running build', async () => {
   const root = await createProject();
   const sourceWatcher = new EventSourceWatcher();

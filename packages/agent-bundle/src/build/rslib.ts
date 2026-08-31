@@ -95,6 +95,86 @@ const assertExecutableConfig = (
   }
 };
 
+/**
+ * Composes the full Rslib lib config for one synthesized entry: the
+ * framework profile, the consumer `tools` escape hatch merged over it
+ * (Rslib's "raw user config highest" priority), and the invariant enforcer
+ * hook appended last. `buildWithRslib` lowers exactly this composition and
+ * `inspect --bundler` surfaces it, so the two can never drift.
+ */
+export const composeEntryLibConfig = (
+  entry: RslibEntry,
+  options: { readonly outputRoot: string; readonly tools?: AgentBundleToolsConfig },
+): LibConfig => {
+  const virtualSource = entry.virtualSource;
+  const virtualModules = (entry.virtualModules ?? []).map((module, index) => ({
+    ...module,
+    path: resolve(options.outputRoot, '.agent-bundle-virtual', `${entry.name}-${index}.mjs`),
+  }));
+  const hasVirtualModules = virtualSource !== undefined || virtualModules.length > 0;
+  const aliases = entry.aliases ?? {};
+  const enforceInvariants = (config: {
+    output: { asyncChunks?: boolean };
+    plugins: unknown[];
+    resolve: { alias?: Record<string, unknown> };
+  }): void => {
+    config.output.asyncChunks = false;
+    if (hasVirtualModules || Object.keys(aliases).length > 0) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        ...aliases,
+        ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
+      };
+    }
+    if (hasVirtualModules) {
+      config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
+        ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
+        ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
+      }));
+    }
+  };
+  const profile: RslibLibConfig = {
+    id: `agent-bundle-${entry.name}`,
+    autoExternal: false,
+    ...(entry.banner === undefined ? {} : { banner: { js: entry.banner } }),
+    bundle: true,
+    dts: entry.dts === true,
+    format: 'esm',
+    // Copied projects can share one node_modules tree, so a cache keyed
+    // by this stable library id would give concurrent builds one lock.
+    performance: {
+      buildCache: false,
+    },
+    // Rsbuild 2.x deprecated performance.chunkSplit 'all-in-one'; the
+    // documented migration is top-level splitChunks: false, which also
+    // guards against the node-target splitting default added in v2.2.
+    splitChunks: false,
+    syntax: 'es2022',
+    output: {
+      cleanDistPath: false,
+      distPath: { root: options.outputRoot },
+      filename: { js: entry.outputRelativePath },
+      filenameHash: false,
+      legalComments: 'none',
+      minify: false,
+      sourceMap: false,
+      target: 'node',
+    },
+    source: {
+      entry: {
+        [entry.name]: virtualSource === undefined ? entry.source : entryAnchor,
+      },
+      ...(entry.tsconfigPath === undefined ? {} : { tsconfigPath: entry.tsconfigPath }),
+    },
+  };
+  return mergeRsbuildConfig(
+    profile as never,
+    ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild as never]),
+    ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } } as never]),
+    { tools: { rspack: enforceInvariants } } as never,
+  ) as RslibLibConfig;
+};
+
 export const buildWithRslib = async (options: {
   readonly cwd: string;
   readonly entries: readonly RslibEntry[];
@@ -115,78 +195,10 @@ export const buildWithRslib = async (options: {
     cwd: options.cwd,
     config: {
       logLevel: options.logLevel ?? 'silent',
-      lib: options.entries.map((entry) => {
-        const virtualSource = entry.virtualSource;
-        const virtualModules = (entry.virtualModules ?? []).map((module, index) => ({
-          ...module,
-          path: resolve(options.outputRoot, '.agent-bundle-virtual', `${entry.name}-${index}.mjs`),
-        }));
-        const hasVirtualModules = virtualSource !== undefined || virtualModules.length > 0;
-        const aliases = entry.aliases ?? {};
-        const enforceInvariants = (config: {
-          output: { asyncChunks?: boolean };
-          plugins: unknown[];
-          resolve: { alias?: Record<string, unknown> };
-        }): void => {
-          config.output.asyncChunks = false;
-          if (hasVirtualModules || Object.keys(aliases).length > 0) {
-            config.resolve.alias = {
-              ...config.resolve.alias,
-              ...aliases,
-              ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
-            };
-          }
-          if (hasVirtualModules) {
-            config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
-              ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
-              ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
-            }));
-          }
-        };
-        const profile: RslibLibConfig = {
-          id: `agent-bundle-${entry.name}`,
-          autoExternal: false,
-          ...(entry.banner === undefined ? {} : { banner: { js: entry.banner } }),
-          bundle: true,
-          dts: entry.dts === true,
-          format: 'esm',
-          // Copied projects can share one node_modules tree, so a cache keyed
-          // by this stable library id would give concurrent builds one lock.
-          performance: {
-            buildCache: false,
-          },
-          // Rsbuild 2.x deprecated performance.chunkSplit 'all-in-one'; the
-          // documented migration is top-level splitChunks: false, which also
-          // guards against the node-target splitting default added in v2.2.
-          splitChunks: false,
-          syntax: 'es2022',
-          output: {
-            cleanDistPath: false,
-            distPath: { root: options.outputRoot },
-            filename: { js: entry.outputRelativePath },
-            filenameHash: false,
-            legalComments: 'none',
-            minify: false,
-            sourceMap: false,
-            target: 'node',
-          },
-          source: {
-            entry: {
-              [entry.name]: virtualSource === undefined ? entry.source : entryAnchor,
-            },
-            ...(entry.tsconfigPath === undefined ? {} : { tsconfigPath: entry.tsconfigPath }),
-          },
-        };
-        // The escape hatch merges over the synthesized profile (Rslib's
-        // "raw user config highest" priority); the invariant enforcer hook is
-        // appended last, and the post-resolution assertions bound the hatch.
-        return mergeRsbuildConfig(
-          profile as never,
-          ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild as never]),
-          ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } } as never]),
-          { tools: { rspack: enforceInvariants } } as never,
-        ) as RslibLibConfig;
-      }),
+      lib: options.entries.map((entry) => composeEntryLibConfig(entry, {
+        outputRoot: options.outputRoot,
+        ...(options.tools === undefined ? {} : { tools: options.tools }),
+      })),
     },
   });
 

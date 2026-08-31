@@ -416,6 +416,67 @@ it('reports an unselected inspect target on JSON and human output', async () => 
   }
 }, 30_000);
 
+it('dumps the synthesized bundler configuration with inspect --bundler', async () => {
+  const project = await createCliProject();
+  try {
+    await mkdir(join(project.root, 'src'), { recursive: true });
+    await writeFile(
+      join(project.root, 'agent-bundle.config.ts'),
+      [
+        'export default {',
+        "  plugin: { name: 'cli-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        "  scripts: { tool: './src/tool.ts' },",
+        "  tools: { rspack: { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } } },",
+        '};',
+        '',
+      ].join('\n'),
+    );
+    await writeFile(join(project.root, 'src', 'tool.ts'), 'export const main = async () => 0;\n');
+
+    const json = await runSourceCliWithOutput(['inspect', '--root', project.root, '--bundler', '--json']);
+    expect(json).toMatchObject({ code: 0, stderr: '' });
+    const document = JSON.parse(json.stdout) as {
+      readonly selected: {
+        readonly bundler: {
+          readonly entries: readonly {
+            readonly config: { readonly tools: { readonly rspack: readonly unknown[] } };
+            readonly kind: string;
+            readonly name: string;
+          }[];
+        };
+      };
+    };
+    const script = document.selected.bundler.entries.find((entry) => entry.kind === 'script');
+    expect(script).toMatchObject({
+      config: {
+        output: { distPath: { root: '<output>/portable' } },
+        tools: {
+          rspack: [
+            { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } },
+            '[function enforceInvariants]',
+          ],
+        },
+      },
+      name: 'tool',
+    });
+
+    const repeated = await runSourceCliWithOutput(['inspect', '--root', project.root, '--bundler', '--json']);
+    expect(repeated.stdout).toBe(json.stdout);
+
+    const human = await runSourceCliWithOutput(['inspect', '--root', project.root, '--bundler']);
+    expect(human).toMatchObject({ code: 0, stderr: '' });
+    expect(human.stdout).toContain('"kind": "script"');
+    expect(human.stdout).toContain('[function enforceInvariants]');
+
+    const ambiguous = await runSourceCliWithOutput(['inspect', '--root', project.root, '--bundler', '--skills']);
+    expect(ambiguous.code).toBe(1);
+    expect(JSON.parse(ambiguous.stderr)).toMatchObject([{ code: 'AB5000', severity: 'error' }]);
+  } finally {
+    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('reports source validation diagnostics on stderr before staging an artifact', async () => {
   await buildCliPackage();
   const project = await createCliProject();

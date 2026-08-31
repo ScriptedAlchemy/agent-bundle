@@ -62,11 +62,12 @@ the repository's `docs/entry-conventions.md` for the full contract.
 | `agent-bundle build` | Build a validated artifact from source, plus the declared `dist/` package build. |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
+| `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
 | `agent-bundle mcp run` | Run one built stdio MCP server in the foreground, resolving its hashed entry. |
 | `agent-bundle hooks list` / `hooks simulate` | List generated hooks, or run one emitted wrapper. |
 | `agent-bundle eval` | Run deterministic or native Claude/Codex eval suites and record a run. |
-| `agent-bundle dev` | Serve the packaged developer workbench on loopback. |
+| `agent-bundle dev` | Serve the packaged developer workbench on loopback; rebuilds the `dist/` package build when its inputs change. |
 
 `validate --artifact`, `mcp`, and `hooks` work against a built artifact with project sources deleted.
 

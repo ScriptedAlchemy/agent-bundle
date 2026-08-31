@@ -45,7 +45,7 @@ const relativeSourceInputs = (projectRoot: string, inputs: readonly string[]): r
   Object.freeze([...new Set(inputs.map((input) => toPosixRelative(projectRoot, assertInside(projectRoot, input))))]
     .sort((left, right) => left.localeCompare(right)));
 
-interface PlannedPackageEntry extends RslibEntry {
+export interface PlannedPackageEntry extends RslibEntry {
   readonly executable: boolean;
 }
 
@@ -87,7 +87,7 @@ const synthesizeDtsTsconfig = async (options: {
   };
 };
 
-const planPackageEntries = async (
+export const planPackageEntries = async (
   model: NormalizedPlugin,
   dtsTsconfigPath: string | undefined,
 ): Promise<readonly PlannedPackageEntry[]> => {

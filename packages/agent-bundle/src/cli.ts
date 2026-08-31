@@ -65,6 +65,7 @@ interface EvalCommandOptions extends SourceCommandOptions {
 }
 
 interface InspectCommandOptions {
+  readonly bundler?: boolean;
   readonly config?: string;
   readonly hooks?: boolean;
   readonly json?: boolean;
@@ -207,6 +208,12 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
     }
     return;
   }
+  if (result.selected?.bundler !== undefined) {
+    // The bundler focus is a debugging dump: the full synthesized
+    // configuration is the human output, not a one-line summary.
+    output.write(`${JSON.stringify(result.selected.bundler, null, 2)}\n`);
+    return;
+  }
   output.write(`Inspected ${result.model.metadata.name}: ${result.plans.map((plan) => plan.target).join(', ')}\n`);
 };
 
@@ -267,6 +274,11 @@ const writeHumanEvalComparison = (output: Output, result: Awaited<ReturnType<typ
 };
 
 const writeHumanValidate = (output: Output, result: Awaited<ReturnType<typeof validate>>): void => {
+  // Errors abort the command before this writer runs, so any diagnostics
+  // reaching it are informational nudges or warnings worth surfacing.
+  for (const diagnostic of result.diagnostics) {
+    output.write(`${diagnostic.code} (${diagnostic.severity}): ${diagnostic.message}\n`);
+  }
   output.write(result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')
     ? `Validation reported ${result.diagnostics.length} diagnostic(s)\n`
     : 'Validation succeeded\n');
@@ -395,15 +407,18 @@ export const runCli = async (
   const inspectCommand = configureInspectOptions(
     program.command('inspect').description('Inspect normalized targets and adapter plans'),
   )
+    .option('--bundler', 'Include the synthesized bundler configuration focus')
     .option('--hooks', 'Include the hook focus')
     .option('--skills', 'Include the skill focus');
   inspectCommand.action(async (options: InspectCommandOptions) => {
-    if (options.hooks === true && options.skills === true) {
+    const focuses = [options.bundler, options.hooks, options.skills].filter((focus) => focus === true);
+    if (focuses.length > 1) {
       throw new TypeError('Choose at most one inspect focus.');
     }
     const { inspect } = await import('./api.ts');
     const result = await inspect({
       ...inspectProjectOptions(options),
+      ...(options.bundler === true ? { focus: 'bundler' as const } : {}),
       ...(options.hooks === true ? { focus: 'hooks' as const } : {}),
       ...(options.skills === true ? { focus: 'skills' as const } : {}),
       ...(options.target === undefined ? {} : { target: options.target }),

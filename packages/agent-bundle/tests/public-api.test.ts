@@ -223,6 +223,14 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       join(consumerRoot, 'node_modules', '@rspack'),
       'dir',
     );
+    // The bundler-inspection surface types the composed Rslib lib config, so
+    // the declaration graph resolves @rslib/core exactly as installed
+    // consumers do (also a runtime dependency of the package).
+    await symlink(
+      join(agentBundleNodeModules, '@rslib'),
+      join(consumerRoot, 'node_modules', '@rslib'),
+      'dir',
+    );
     await writeFile(join(emittedPackageRoot, 'package.json'), JSON.stringify({
       exports: { '.': { types: './dist/index.d.ts' } },
       name: 'agent-bundle',

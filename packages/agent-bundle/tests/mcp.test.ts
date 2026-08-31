@@ -479,8 +479,14 @@ it('rejects non-JSON MCP App metadata before normalization', async () => {
         plugin: { name: 'mcp-app-meta', version: '1.0.0' },
       } as unknown as AgentBundleConfig;
 
-      expect(validateSource(loadedProject(root, config), { skills: [] }, registry).map(({ code }) => code)).toEqual([
+      const diagnostics = validateSource(loadedProject(root, config), { skills: [] }, registry);
+      expect(diagnostics.filter(({ severity }) => severity === 'error').map(({ code }) => code)).toEqual([
         'AB4338',
+      ]);
+      // The self-connecting fixture entry additionally draws the AB4730
+      // migration nudge, which must stay informational.
+      expect(diagnostics.filter(({ severity }) => severity !== 'error')).toEqual([
+        expect.objectContaining({ code: 'AB4730', severity: 'info' }),
       ]);
     }
   } finally {
@@ -828,7 +834,12 @@ it('compiles one shared MCP App once and serves it from every identically declar
       plugin: { name: 'mcp-app-shared', version: '1.0.0' },
       targets: ['portable'],
     };
-    expect(validateSource(loadedProject(root, config), { skills: [] }, registry)).toEqual([]);
+    // Both fixture entries are deliberately self-connecting registry probes,
+    // so validation reports exactly the two informational AB4730 nudges.
+    expect(validateSource(loadedProject(root, config), { skills: [] }, registry)).toEqual([
+      expect.objectContaining({ code: 'AB4730', severity: 'info' }),
+      expect.objectContaining({ code: 'AB4730', severity: 'info' }),
+    ]);
 
     const model = await normalizeProject(loadedProject(root, config), { skills: [] }, registry);
     const outputRoot = join(root, 'dist');

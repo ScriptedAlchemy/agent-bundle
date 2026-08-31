@@ -1,4 +1,4 @@
-import { createRsbuild, mergeRsbuildConfig } from '@rsbuild/core';
+import { createRsbuild, mergeRsbuildConfig, type RsbuildConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
@@ -126,33 +126,18 @@ export const planCompiledMcpApps = (
   })));
 };
 
-export const compileMcpApps = async (
-  apps: readonly NormalizedMcpApp[],
-  options: {
-    readonly cwd: string;
-    readonly outDir: string;
-    readonly target: string;
-    readonly tools?: AgentBundleToolsConfig;
-  },
-): Promise<readonly CompiledMcpApp[]> => {
-  const compiled = planCompiledMcpApps(apps, { outDir: options.outDir, target: options.target });
-  if (compiled.length === 0) {
-    return compiled;
-  }
-
-  const sources = compiled.map((app) => {
-    const source = apps.find((candidate) => candidate.id === app.id);
-    if (source === undefined) {
-      throw new Error(`MCP App ${JSON.stringify(app.id)} disappeared during compilation planning.`);
-    }
-    return source;
-  });
-
-  // One Rsbuild instance with one environment per app compiles every view in
-  // a single parallel run instead of a sequential per-app build loop. The
-  // consumer escape hatch merges over this synthesized profile with the
-  // framework invariant hook appended last; the resolved-config assertions
-  // below bound what the hatch may change.
+/**
+ * One Rsbuild instance with one environment per app compiles every view in
+ * a single parallel run instead of a sequential per-app build loop. The
+ * consumer escape hatch merges over this synthesized profile with the
+ * framework invariant hook appended last; the resolved-config assertions in
+ * `compileMcpApps` bound what the hatch may change. `inspect --bundler`
+ * surfaces exactly this composition.
+ */
+export const composeMcpAppsRsbuildConfig = (
+  sources: readonly Pick<NormalizedMcpApp, 'name' | 'source' | 'template'>[],
+  options: { readonly outDir: string; readonly tools?: AgentBundleToolsConfig },
+): RsbuildConfig => {
   const profile = {
     environments: Object.fromEntries(sources.map((source) => [source.name, {
       ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
@@ -179,20 +164,45 @@ export const compileMcpApps = async (
     server: { publicDir: false },
     splitChunks: false,
   };
+  const enforceInvariants = (config: { output: { asyncChunks?: boolean } }): void => {
+    config.output.asyncChunks = false;
+  };
+  return mergeRsbuildConfig(
+    profile as never,
+    ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild as never]),
+    ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } } as never]),
+    { tools: { rspack: enforceInvariants } } as never,
+  ) as RsbuildConfig;
+};
+
+export const compileMcpApps = async (
+  apps: readonly NormalizedMcpApp[],
+  options: {
+    readonly cwd: string;
+    readonly outDir: string;
+    readonly target: string;
+    readonly tools?: AgentBundleToolsConfig;
+  },
+): Promise<readonly CompiledMcpApp[]> => {
+  const compiled = planCompiledMcpApps(apps, { outDir: options.outDir, target: options.target });
+  if (compiled.length === 0) {
+    return compiled;
+  }
+
+  const sources = compiled.map((app) => {
+    const source = apps.find((candidate) => candidate.id === app.id);
+    if (source === undefined) {
+      throw new Error(`MCP App ${JSON.stringify(app.id)} disappeared during compilation planning.`);
+    }
+    return source;
+  });
+
   const rsbuild = await createRsbuild({
     cwd: options.cwd,
-    config: mergeRsbuildConfig(
-      profile as never,
-      ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild as never]),
-      ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } } as never]),
-      {
-        tools: {
-          rspack: (config: { output: { asyncChunks?: boolean } }) => {
-            config.output.asyncChunks = false;
-          },
-        },
-      } as never,
-    ),
+    config: composeMcpAppsRsbuildConfig(sources, {
+      outDir: options.outDir,
+      ...(options.tools === undefined ? {} : { tools: options.tools }),
+    }),
   });
   const inspection = await rsbuild.inspectConfig({ mode: 'production' });
   assertResolvedViewConfig(inspection, compiled.map((app) => app.name), options.outDir);

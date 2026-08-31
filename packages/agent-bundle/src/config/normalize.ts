@@ -106,6 +106,14 @@ export const conventionalMcpEntrySource = (root: string, serverName: string): st
     ? conventionalEntryAt(root, 'src', 'mcp', serverName)
     : undefined;
 
+/** The `src/cli.ts` convention: the package bin entry when config is silent. */
+export const conventionalCliEntrySource = (root: string): string | undefined =>
+  conventionalEntryAt(root, 'src', 'cli');
+
+/** The `src/index.ts` convention: the package library entry when config is silent. */
+export const conventionalIndexEntrySource = (root: string): string | undefined =>
+  conventionalEntryAt(root, 'src', 'index');
+
 const safePackageOutputName = (name: string): boolean =>
   /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(name);
 
@@ -136,7 +144,7 @@ const normalizeBinEntries = (
         };
       });
   }
-  const conventional = conventionalEntryAt(root, 'src', 'cli');
+  const conventional = conventionalCliEntrySource(root);
   if (conventional === undefined || !safePackageOutputName(config.plugin.name)) return [];
   return [{
     id: `bin:${config.plugin.name}`,
@@ -165,7 +173,7 @@ const normalizeLibEntry = (
       source,
     };
   }
-  const conventional = conventionalEntryAt(root, 'src', 'index');
+  const conventional = conventionalIndexEntrySource(root);
   if (conventional === undefined) return undefined;
   return {
     dts: true,
