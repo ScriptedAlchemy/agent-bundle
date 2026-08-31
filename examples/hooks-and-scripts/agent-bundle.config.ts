@@ -1,4 +1,4 @@
-import { defineConfig } from 'agent-bundle';
+import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   assets: ['release/*.json'],

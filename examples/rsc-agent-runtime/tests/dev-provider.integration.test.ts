@@ -23,8 +23,11 @@ import { timeScale } from './support/time-scale.ts';
 
 const exampleRoot = process.cwd();
 
+// Budgets stay unscaled at the call sites and are scaled here, so a contended
+// host widens every deadline instead of only the ones a caller remembered to
+// multiply (see tests/support/time-scale.ts).
 const waitForWithin = async (predicate: () => boolean, budgetMs: number): Promise<void> => {
-  const deadline = Date.now() + budgetMs;
+  const deadline = Date.now() + budgetMs * timeScale;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for the RSC runtime provider.');
     await new Promise<void>((resolve) => { setTimeout(resolve, 25); });
@@ -57,19 +60,32 @@ const compileObserver = (onCompile: NonNullable<Parameters<typeof createRscRunti
     onAfterDevCompile: (callback: unknown) => { after = callback as (input: unknown) => Promise<void>; },
     onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
   });
+  const beginAttempt = (): void => {
+    if (before === undefined) throw new Error('RSC compiler observer before hook is unavailable.');
+    before();
+  };
+  const completeAttempt = async (input: Readonly<{
+    readonly children?: readonly unknown[];
+    readonly hasErrors?: boolean;
+  }> = {}): Promise<void> => {
+    if (after === undefined) throw new Error('RSC compiler observer after hook is unavailable.');
+    await after({
+      stats: {
+        hasErrors: () => input.hasErrors ?? false,
+        toJson: () => ({ children: input.children ?? [{ hash: 'rsc-hash', name: 'rsc' }, { hash: 'widget-hash', name: 'widget' }] }),
+      },
+    });
+  };
   return Object.freeze({
+    beginAttempt,
     async compile(input: Readonly<{
       readonly children?: readonly unknown[];
       readonly hasErrors?: boolean;
     }> = {}): Promise<void> {
-      before?.();
-      await after?.({
-        stats: {
-          hasErrors: () => input.hasErrors ?? false,
-          toJson: () => ({ children: input.children ?? [{ hash: 'rsc-hash', name: 'rsc' }, { hash: 'widget-hash', name: 'widget' }] }),
-        },
-      });
+      beginAttempt();
+      await completeAttempt(input);
     },
+    completeAttempt,
   });
 };
 
@@ -191,11 +207,11 @@ const introduceWorkerSyntaxError = async (projectRoot: string): Promise<void> =>
 };
 
 test('captures the App compiler HMR credential only through the public Rsbuild environment hook', async () => {
-  const captured: string[] = [];
+  const captured: Array<Readonly<{ readonly path: string; readonly token: string }>> = [];
   const config = createRscRuntimeRsbuildConfig({
     compilerRoot: join(tmpdir(), 'rsc-provider-hmr-token'),
     mode: 'development',
-    onAppWebSocketToken: (token: string) => { captured.push(token); },
+    onAppWebSocketToken: (input) => { captured.push(input); },
   } as Parameters<typeof createRscRuntimeRsbuildConfig>[0]);
   const plugin = (config.plugins as readonly unknown[]).find((candidate): candidate is Readonly<{
     readonly name: string;
@@ -210,8 +226,8 @@ test('captures the App compiler HMR credential only through the public Rsbuild e
     onBeforeStartDevServer: () => undefined,
     onCloseDevServer: () => undefined,
   });
-  afterCreate?.({ environments: { app: { webSocketToken: 'rsbuild-token-1234' } } });
-  expect(captured).toEqual(['rsbuild-token-1234']);
+  afterCreate?.({ environments: { app: { config: { dev: { client: { path: '/custom-hmr' } } }, webSocketToken: 'rsbuild-token-1234' } } });
+  expect(captured).toEqual([{ path: '/custom-hmr', token: 'rsbuild-token-1234' }]);
 });
 
 test('sends one App-only full reload for each later successful App compilation', async () => {
@@ -219,7 +235,7 @@ test('sends one App-only full reload for each later successful App compilation',
   const config = createRscRuntimeRsbuildConfig({
     compilerRoot: join(tmpdir(), 'rsc-provider-app-reload'),
     mode: 'development',
-    onAppWebSocketToken: (token: string) => { captured.push(token); },
+    onAppWebSocketToken: ({ token }) => { captured.push(token); },
   } as Parameters<typeof createRscRuntimeRsbuildConfig>[0]);
   const plugin = (config.plugins as readonly unknown[]).find((candidate): candidate is Readonly<{
     readonly name: string;
@@ -249,7 +265,12 @@ test('sends one App-only full reload for each later successful App compilation',
   const failedAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => true } });
   const nonAppUpdate = Object.freeze({ environment: { name: 'widget' }, isFirstCompile: false, stats: { hasErrors: () => false } });
 
-  afterCompiler?.({ environments: { app: { webSocketToken: 'rsbuild-app-token-1234' }, widget: { webSocketToken: 'widget-token-must-not-leak' } } });
+  afterCompiler?.({
+    environments: {
+      app: { config: { dev: { client: { path: '/rsbuild-hmr' } } }, webSocketToken: 'rsbuild-app-token-1234' },
+      widget: { webSocketToken: 'widget-token-must-not-leak' },
+    },
+  });
   afterEnvironmentCompile?.(appBUpdate);
   expect(appSends).toEqual([]);
   beforeStartDevServer?.({
@@ -493,7 +514,7 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('resets state through the dynamically loaded copied provider', async () => {
   const copied = await copyProviderExample();
@@ -523,7 +544,7 @@ test('resets state through the dynamically loaded copied provider', async () => 
     await session?.close();
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('rejects an already-aborted provider start before creating a runtime session', async () => {
   const copied = await copyProviderExample();
@@ -661,6 +682,44 @@ test('keeps malformed compiler stats in the provider lifecycle failure lane', as
   expect(failures[0]?.[2]).toBe('provider-lifecycle');
 });
 
+test('retains FIFO pairing when MultiCompiler emits overlapping before hooks', async () => {
+  let attempts = 0;
+  const captures: string[] = [];
+  const failures: unknown[][] = [];
+  const observer = compileObserver({
+    beforeAttempt: () => `attempt-${String(++attempts)}`,
+    capture: async (input) => {
+      captures.push(input.attemptId);
+      return undefined;
+    },
+    enqueue: () => undefined,
+    failAttempt: (...input: unknown[]) => { failures.push(input); },
+  });
+
+  observer.beginAttempt();
+  observer.beginAttempt();
+  await observer.completeAttempt();
+  await observer.completeAttempt();
+
+  expect(captures).toEqual(['attempt-1', 'attempt-2']);
+  expect(failures).toEqual([]);
+});
+
+test('fails duplicate pending attempt identities loudly instead of silently mispairing them', () => {
+  const failures: unknown[][] = [];
+  const observer = compileObserver({
+    beforeAttempt: () => 'attempt-duplicate',
+    capture: async () => undefined,
+    enqueue: () => undefined,
+    failAttempt: (...input: unknown[]) => { failures.push(input); },
+  });
+
+  observer.beginAttempt();
+  expect(() => observer.beginAttempt()).toThrow('duplicate pending attempt identity');
+  expect(failures.map(([attemptId]) => attemptId)).toEqual(['attempt-duplicate', 'attempt-duplicate']);
+  expect(failures.every((failure) => failure[2] === 'provider-lifecycle')).toBe(true);
+});
+
 test('aggregates owned resource closer failures', async () => {
   const ledger = new ResourceLedger();
   const first = new Error('first closer failed');
@@ -706,7 +765,7 @@ test('records one failed event when capture and observer finalization both fail 
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('keeps the active generation while publishing a source build diagnostic before its failed event', async () => {
   const copied = await copyProviderExample();
@@ -755,7 +814,7 @@ test('keeps the active generation while publishing a source build diagnostic bef
     await session?.close();
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 60_000);
+}, 60_000 * timeScale);
 
 test('drains a deferred generation pipeline before close without publishing late lifecycle events', async () => {
   const copied = await copyProviderExample();
@@ -810,7 +869,7 @@ test('drains a deferred generation pipeline before close without publishing late
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('binds renamed and added App surfaces to the active generation assets without restoring removed surfaces', async () => {
   const copied = await copyProviderExample();
@@ -878,7 +937,7 @@ test('binds renamed and added App surfaces to the active generation assets witho
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('rebinds current App surfaces across retained generations after a later configuration reconcile', async () => {
   const copied = await copyProviderExample();
@@ -930,7 +989,7 @@ test('rebinds current App surfaces across retained generations after a later con
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('keeps the same MCP session and revision across an implementation-only generation', async () => {
   const copied = await copyProviderExample();
@@ -973,7 +1032,7 @@ test('keeps the same MCP session and revision across an implementation-only gene
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('restarts and relists an open MCP session after a warm-cache definition change', async () => {
   const copied = await copyProviderExample();
@@ -1011,7 +1070,7 @@ test('restarts and relists an open MCP session after a warm-cache definition cha
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('uses the live registry authority after a transport-only runtime MCP reconciliation', async () => {
   const copied = await copyProviderExample();
@@ -1142,7 +1201,7 @@ test('uses the live registry authority after a transport-only runtime MCP reconc
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('rejects MCP admission until a deferred public prepared-config restart has relisted', async () => {
   const copied = await copyProviderExample();
@@ -1207,7 +1266,7 @@ test('rejects MCP admission until a deferred public prepared-config restart has 
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('aborts stale activation transactions at both private preparation boundaries', async () => {
   for (const phase of ['store', 'registry'] as const) {
@@ -1283,7 +1342,7 @@ test('aborts stale activation transactions at both private preparation boundarie
       await rm(copied.workspaceRoot, { force: true, recursive: true });
     }
   }
-}, 60_000);
+}, 60_000 * timeScale);
 
 test('commits a compiled generation across an equivalent prepared-runtime revision', { timeout: 0 }, async () => {
   const copied = await copyProviderExample();
@@ -1345,7 +1404,7 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
   }
 });
 
-test('commits an activation while a later attempt is still live at the commit check', { timeout: 90_000 }, async () => {
+test('commits an activation while a later attempt is still live at the commit check', { timeout: 90_000 * timeScale }, async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
@@ -1400,7 +1459,7 @@ test('commits an activation while a later attempt is still live at the commit ch
   }
 });
 
-test('commits an activation after a later broken attempt fails inside the commit window', { timeout: 90_000 }, async () => {
+test('commits an activation after a later broken attempt fails inside the commit window', { timeout: 90_000 * timeScale }, async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
@@ -1454,14 +1513,14 @@ test('commits an activation after a later broken attempt fails inside the commit
   }
 });
 
-test('fails a wedged activation reconcile within the budget and releases its late reservation', { timeout: 120_000 }, async () => {
+test('fails a wedged activation reconcile within the budget and releases its late reservation', { timeout: 120_000 * timeScale }, async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const wedgeReached = deferred<void>();
     const releaseWedge = deferred<void>();
     let armWedge = false;
-    const activationBudgetMs = 4_000 * timeScale;
+    const activationBudgetMs = 4_000;
     const events: Array<{ readonly runtimeGenerationId?: string; readonly type: string }> = [];
     const session = await RsbuildRuntimeSession.start({
       ...startContext({
@@ -1473,7 +1532,7 @@ test('fails a wedged activation reconcile within the budget and releases its lat
       }),
       emit: (event) => { events.push(event); },
     }, {
-      activationPhaseBudgetMs: activationBudgetMs,
+      activationPhaseBudgetMs: activationBudgetMs * timeScale,
       beforeMcpRelist: async () => {
         if (!armWedge) return;
         wedgeReached.resolve();
@@ -1571,7 +1630,7 @@ test('retains a leased inactive generation through pruning and prunes it after t
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 60_000);
+}, 60_000 * timeScale);
 
 test('aborts a deferred Rsbuild creation before starting its dev server', async () => {
   const copied = await copyProviderExample();
@@ -1610,6 +1669,56 @@ test('aborts a deferred Rsbuild creation before starting its dev server', async 
   }
 });
 
+test('returns a compiling session without treating provider activation work as a startup barrier', async () => {
+  const copied = await copyProviderExample();
+  const activationReached = deferred<void>();
+  const releaseActivation = deferred<void>();
+  let session: RsbuildRuntimeSession | undefined;
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const starting = RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-compiling-startup',
+      signal: new AbortController().signal,
+      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-compiling-startup'),
+    }), {
+      afterActivationPrepare: async (input) => {
+        if (input.phase !== 'store') return;
+        activationReached.resolve();
+        await releaseActivation.promise;
+      },
+    });
+    let returnedSession: RsbuildRuntimeSession | undefined;
+    void starting.then((started) => { returnedSession = started; });
+    await activationReached.promise;
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+    const returnedBeforeActivation = returnedSession;
+    expect(returnedBeforeActivation?.status()).toMatchObject({ state: 'compiling' });
+    if (returnedBeforeActivation === undefined) throw new Error('RSC runtime session did not return while compiling.');
+    const originalApp = prepared.devRuntime!.apps[0]!;
+    const reconciling = returnedBeforeActivation.reconcilePreparedRuntime({
+      ...prepared.devRuntime!,
+      apps: [{ ...originalApp, name: 'timeline-startup' }],
+      sourceRevision: `${prepared.devRuntime!.sourceRevision}-startup-reconcile`,
+    });
+    releaseActivation.resolve();
+    session = await starting;
+
+    await reconciling;
+    await waitFor(() => session?.status().state === 'active');
+    await expect(session.readAsset({
+      path: ['rsc', 'index.html'],
+      runtimeGenerationId: session.status().activeVector!.runtimeGenerationId,
+      surfaceId: 'mcp.timeline-startup',
+    })).resolves.toMatchObject({ contentType: 'text/html' });
+  } finally {
+    releaseActivation.resolve();
+    await session?.close();
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 60_000);
+
 test('uses the bound Rsbuild dev-server context instead of a stale port-zero start result', async () => {
   const copied = await copyProviderExample();
   try {
@@ -1629,7 +1738,14 @@ test('uses the bound Rsbuild dev-server context instead of a stale port-zero sta
         onBeforeStartDevServer: () => undefined,
         onCloseDevServer: () => undefined,
       });
-      afterCreate?.({ environments: { app: { webSocketToken: 'rsbuild-token-1234' } } });
+      afterCreate?.({
+        environments: {
+          app: {
+            config: { dev: { client: { path: '/custom-runtime-hmr' } } },
+            webSocketToken: 'token with /?+%= punctuation',
+          },
+        },
+      });
       return Object.freeze({
         context: Object.freeze({
           devServer: Object.freeze({ hostname: '127.0.0.1', https: false, port: 41_103 }),
@@ -1652,6 +1768,8 @@ test('uses the bound Rsbuild dev-server context instead of a stale port-zero sta
       expect(session.clientSurface('mcp.edit-timeline')).toMatchObject({
         httpOrigin: 'http://127.0.0.1:41103',
         webSocketOrigin: 'ws://127.0.0.1:41103',
+        webSocketPath: '/custom-runtime-hmr',
+        webSocketToken: 'token with /?+%= punctuation',
       });
     } finally {
       await session.close();
@@ -1919,4 +2037,4 @@ test('drains every live-session cleanup group once when independent closers reje
     await session?.close().catch(() => undefined);
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 45_000);
+}, 45_000 * timeScale);

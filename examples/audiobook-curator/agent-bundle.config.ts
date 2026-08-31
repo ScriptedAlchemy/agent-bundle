@@ -1,4 +1,4 @@
-import { defineConfig } from 'agent-bundle';
+import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   marketplace: true,
