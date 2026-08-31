@@ -13,20 +13,22 @@ interface RiskRegister {
 
 const registerPath = new URL('../assets/release/risk-register.json', import.meta.url);
 
-try {
-  const register = JSON.parse(await readFile(registerPath, 'utf8')) as RiskRegister;
-  if (!Array.isArray(register.risks)) throw new Error('risk register must contain a risks array');
+export const main = async (): Promise<number> => {
+  try {
+    const register = JSON.parse(await readFile(registerPath, 'utf8')) as RiskRegister;
+    if (!Array.isArray(register.risks)) throw new Error('risk register must contain a risks array');
 
-  const blockers = register.risks.filter((risk) => risk.status === 'open' && risk.severity === 'high');
-  if (blockers.length === 0) {
-    process.stdout.write('No open high-severity release risks found.\n');
-  } else {
+    const blockers = register.risks.filter((risk) => risk.status === 'open' && risk.severity === 'high');
+    if (blockers.length === 0) {
+      process.stdout.write('No open high-severity release risks found.\n');
+      return 0;
+    }
     for (const risk of blockers) {
       process.stderr.write(`${typeof risk.id === 'string' ? risk.id : 'UNIDENTIFIED'}: ${typeof risk.summary === 'string' ? risk.summary : 'Open high-severity release risk'}\n`);
     }
-    process.exitCode = 2;
+    return 2;
+  } catch (error) {
+    process.stderr.write(`Unable to detect release risks: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
   }
-} catch (error) {
-  process.stderr.write(`Unable to detect release risks: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-}
+};

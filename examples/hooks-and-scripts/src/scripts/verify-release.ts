@@ -35,16 +35,18 @@ const validationErrors = (manifest: ReleaseManifest): readonly string[] => {
   return errors;
 };
 
-try {
-  const manifest = await readManifest();
-  const errors = validationErrors(manifest);
-  if (errors.length > 0) {
-    process.stderr.write(`Release manifest is incomplete:\n${errors.map((error) => `- ${error}`).join('\n')}\n`);
-    process.exitCode = 1;
-  } else {
+export const main = async (): Promise<number> => {
+  try {
+    const manifest = await readManifest();
+    const errors = validationErrors(manifest);
+    if (errors.length > 0) {
+      process.stderr.write(`Release manifest is incomplete:\n${errors.map((error) => `- ${error}`).join('\n')}\n`);
+      return 1;
+    }
     process.stdout.write(`Release ${manifest.version} is ready for packaging.\n`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`Unable to verify release manifest: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
   }
-} catch (error) {
-  process.stderr.write(`Unable to verify release manifest: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-}
+};
