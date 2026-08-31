@@ -14,7 +14,7 @@ import {
   validateOutageLedger,
   type ConsoleErrorRecord,
 } from './support/packed-outage-ledger.ts';
-import { npmInstallArguments, sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
+import { cachedNpmInstallArguments, sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import {
   availablePort,
@@ -83,7 +83,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
   let primaryFailure: Error | undefined;
   try {
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
-    await execFile('npm', ['install', '--omit=dev', ...npmInstallArguments, tarball], {
+    await execFile('npm', ['install', '--omit=dev', ...cachedNpmInstallArguments, tarball], {
       cwd: consumer,
       env: installedEnvironment(),
     });

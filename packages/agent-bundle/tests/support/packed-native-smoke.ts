@@ -15,6 +15,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
+// The native smoke installs the production closure a real consumer would get,
+// so it stays on npm's default metadata staleness checks.
 import { npmInstallArguments } from './shared-pack.ts';
 
 const execFile = promisify(executeFile);

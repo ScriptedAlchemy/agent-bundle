@@ -28,14 +28,25 @@ export const installedEnvironment = (): NodeJS.ProcessEnv => {
 
 /**
  * Canonical flags for installing a packed tarball into a consumer fixture.
- * `--prefer-offline` serves cached registry metadata without revalidating it:
- * the tarball under test is always read from disk, and uncached dependencies
- * are still fetched, so only the staleness round-trips are skipped. The
- * release audit (scripts/audit-packed-release.mjs) deliberately does not use
- * these flags — its install feeds `npm audit`/`npm audit signatures`, which
- * must resolve against live registry metadata.
+ * They keep npm's default metadata staleness checks, so the install resolves
+ * the tree a consumer would get today. That is the point of the proofs that
+ * stand in for a real consumer — release-audit's production entrypoint walk,
+ * the scaffolder template matrix, the native host smoke — and exact direct
+ * pins do not make it free: transitive ranges still move underneath them, and
+ * scripts/audit-packed-release.mjs audits the installed tree without ever
+ * exercising it.
  */
-export const npmInstallArguments = ['--ignore-scripts', '--no-audit', '--no-fund', '--prefer-offline'] as const;
+export const npmInstallArguments = ['--ignore-scripts', '--no-audit', '--no-fund'] as const;
+
+/**
+ * The same flags for suites that only prove the packed tarball resolves,
+ * imports, and runs, where the dependency tree is a means rather than the
+ * subject. `--prefer-offline` serves cached registry metadata without
+ * revalidating it: the tarball under test is always read from disk and
+ * uncached dependencies are still fetched, so only the staleness round-trips
+ * are skipped.
+ */
+export const cachedNpmInstallArguments = [...npmInstallArguments, '--prefer-offline'] as const;
 
 const packs = new Map<SharedPackPackage, Promise<SharedPack>>();
 let fallbackBuild: Promise<void> | undefined;
