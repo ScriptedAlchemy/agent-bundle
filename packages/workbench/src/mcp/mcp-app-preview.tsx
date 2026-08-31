@@ -676,7 +676,12 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   async #startRuntime(): Promise<void> {
     const runtime = this.#runtime;
     const request = this.#runtimeRequest();
-    if (runtime === undefined || request === undefined) {
+    const app = this.#runtimeEvidence?.app;
+    // Evidence whose session revision was superseded (restart, close, replay
+    // gap) can no longer authorize a binding; it degrades to fallback instead
+    // of re-creating runtime authority from stale run history.
+    if (runtime === undefined || request === undefined || app === undefined ||
+      runtime.client.sessionSuperseded(app.mcpBinding.sessionId, app.mcpBinding.sessionRevision)) {
       if (!this.#closed) this.#setState(runtimeFallbackState(this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#result)));
       return;
     }
