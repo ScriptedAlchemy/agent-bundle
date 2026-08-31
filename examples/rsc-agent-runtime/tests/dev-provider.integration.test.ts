@@ -23,8 +23,11 @@ import { timeScale } from './support/time-scale.ts';
 
 const exampleRoot = process.cwd();
 
+// Budgets stay unscaled at the call sites and are scaled here, so a contended
+// host widens every deadline instead of only the ones a caller remembered to
+// multiply (see tests/support/time-scale.ts).
 const waitForWithin = async (predicate: () => boolean, budgetMs: number): Promise<void> => {
-  const deadline = Date.now() + budgetMs;
+  const deadline = Date.now() + budgetMs * timeScale;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for the RSC runtime provider.');
     await new Promise<void>((resolve) => { setTimeout(resolve, 25); });
@@ -493,7 +496,7 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('resets state through the dynamically loaded copied provider', async () => {
   const copied = await copyProviderExample();
@@ -523,7 +526,7 @@ test('resets state through the dynamically loaded copied provider', async () => 
     await session?.close();
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('rejects an already-aborted provider start before creating a runtime session', async () => {
   const copied = await copyProviderExample();
@@ -706,7 +709,7 @@ test('records one failed event when capture and observer finalization both fail 
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('keeps the active generation while publishing a source build diagnostic before its failed event', async () => {
   const copied = await copyProviderExample();
@@ -755,7 +758,7 @@ test('keeps the active generation while publishing a source build diagnostic bef
     await session?.close();
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 60_000);
+}, 60_000 * timeScale);
 
 test('drains a deferred generation pipeline before close without publishing late lifecycle events', async () => {
   const copied = await copyProviderExample();
@@ -810,7 +813,7 @@ test('drains a deferred generation pipeline before close without publishing late
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('binds renamed and added App surfaces to the active generation assets without restoring removed surfaces', async () => {
   const copied = await copyProviderExample();
@@ -878,7 +881,7 @@ test('binds renamed and added App surfaces to the active generation assets witho
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('rebinds current App surfaces across retained generations after a later configuration reconcile', async () => {
   const copied = await copyProviderExample();
@@ -930,7 +933,7 @@ test('rebinds current App surfaces across retained generations after a later con
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('keeps the same MCP session and revision across an implementation-only generation', async () => {
   const copied = await copyProviderExample();
@@ -973,7 +976,7 @@ test('keeps the same MCP session and revision across an implementation-only gene
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('restarts and relists an open MCP session after a warm-cache definition change', async () => {
   const copied = await copyProviderExample();
@@ -1011,7 +1014,7 @@ test('restarts and relists an open MCP session after a warm-cache definition cha
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('uses the live registry authority after a transport-only runtime MCP reconciliation', async () => {
   const copied = await copyProviderExample();
@@ -1142,7 +1145,7 @@ test('uses the live registry authority after a transport-only runtime MCP reconc
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('rejects MCP admission until a deferred public prepared-config restart has relisted', async () => {
   const copied = await copyProviderExample();
@@ -1207,7 +1210,7 @@ test('rejects MCP admission until a deferred public prepared-config restart has 
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('aborts stale activation transactions at both private preparation boundaries', async () => {
   for (const phase of ['store', 'registry'] as const) {
@@ -1283,7 +1286,7 @@ test('aborts stale activation transactions at both private preparation boundarie
       await rm(copied.workspaceRoot, { force: true, recursive: true });
     }
   }
-}, 60_000);
+}, 60_000 * timeScale);
 
 test('commits a compiled generation across an equivalent prepared-runtime revision', { timeout: 0 }, async () => {
   const copied = await copyProviderExample();
@@ -1345,7 +1348,7 @@ test('commits a compiled generation across an equivalent prepared-runtime revisi
   }
 });
 
-test('commits an activation while a later attempt is still live at the commit check', { timeout: 90_000 }, async () => {
+test('commits an activation while a later attempt is still live at the commit check', { timeout: 90_000 * timeScale }, async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
@@ -1400,7 +1403,7 @@ test('commits an activation while a later attempt is still live at the commit ch
   }
 });
 
-test('commits an activation after a later broken attempt fails inside the commit window', { timeout: 90_000 }, async () => {
+test('commits an activation after a later broken attempt fails inside the commit window', { timeout: 90_000 * timeScale }, async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
@@ -1454,14 +1457,14 @@ test('commits an activation after a later broken attempt fails inside the commit
   }
 });
 
-test('fails a wedged activation reconcile within the budget and releases its late reservation', { timeout: 120_000 }, async () => {
+test('fails a wedged activation reconcile within the budget and releases its late reservation', { timeout: 120_000 * timeScale }, async () => {
   const copied = await copyProviderExample();
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     const wedgeReached = deferred<void>();
     const releaseWedge = deferred<void>();
     let armWedge = false;
-    const activationBudgetMs = 4_000 * timeScale;
+    const activationBudgetMs = 4_000;
     const events: Array<{ readonly runtimeGenerationId?: string; readonly type: string }> = [];
     const session = await RsbuildRuntimeSession.start({
       ...startContext({
@@ -1473,7 +1476,7 @@ test('fails a wedged activation reconcile within the budget and releases its lat
       }),
       emit: (event) => { events.push(event); },
     }, {
-      activationPhaseBudgetMs: activationBudgetMs,
+      activationPhaseBudgetMs: activationBudgetMs * timeScale,
       beforeMcpRelist: async () => {
         if (!armWedge) return;
         wedgeReached.resolve();
@@ -1571,7 +1574,7 @@ test('retains a leased inactive generation through pruning and prunes it after t
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 60_000);
+}, 60_000 * timeScale);
 
 test('aborts a deferred Rsbuild creation before starting its dev server', async () => {
   const copied = await copyProviderExample();
@@ -1919,4 +1922,4 @@ test('drains every live-session cleanup group once when independent closers reje
     await session?.close().catch(() => undefined);
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 45_000);
+}, 45_000 * timeScale);

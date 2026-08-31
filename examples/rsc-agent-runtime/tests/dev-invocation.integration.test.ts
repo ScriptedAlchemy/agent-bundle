@@ -8,6 +8,7 @@ import { createRsbuild } from '@rsbuild/core';
 import { expect, test } from '@rstest/core';
 
 import { copyExample } from './support/copy-example.ts';
+import { timeScale } from './support/time-scale.ts';
 import { createElement, type ReactNode } from 'react';
 
 import { ProjectService } from '../../../packages/agent-bundle/src/dev/index.ts';
@@ -84,7 +85,7 @@ process.stdout.end(JSON.stringify({
   } finally {
     await rm(compilerRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 const invoke = async (entry: string, request: Record<string, unknown>) => startInvocation(entry, request).completed;
 
@@ -97,8 +98,11 @@ const buildInvocationEntry = async (compilerRoot: string, cwd = process.cwd()): 
   return join(compilerRoot, 'rsc', 'dev', 'invoke.js');
 };
 
+// Budgets stay unscaled at the call sites and are scaled here, so a contended
+// host widens every deadline instead of only the ones a caller remembered to
+// multiply (see tests/support/time-scale.ts).
 const waitFor = async (condition: () => boolean, message: string, timeoutMs = 4_000): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + timeoutMs * timeScale;
   while (!condition()) {
     if (Date.now() >= deadline) throw new Error(message);
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -241,7 +245,7 @@ test('lowers the hook state version from durable state when copied RSC output gr
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('builds a generation-contained inspection entry for Claude, Codex, and MCP fixtures', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invoke-'));
@@ -592,7 +596,7 @@ test('bounds Flight output and waits for a SIGKILL cleanup when the RSC child ig
     if (childPid !== undefined && isProcessAlive(childPid)) process.kill(childPid, 'SIGKILL');
     await rm(compilerRoot, { force: true, recursive: true });
   }
-}, 6_000);
+}, 6_000 * timeScale);
 
 test('forwards dev invocation termination through a SIGKILL cleanup of its RSC child', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invoke-'));
@@ -623,7 +627,7 @@ test('forwards dev invocation termination through a SIGKILL cleanup of its RSC c
     if (childPid !== undefined && isProcessAlive(childPid)) process.kill(childPid, 'SIGKILL');
     await rm(compilerRoot, { force: true, recursive: true });
   }
-}, 6_000);
+}, 6_000 * timeScale);
 
 test('keeps each concurrent hook run bound to its rendered durable snapshot', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-exact-snapshot-'));
@@ -707,7 +711,7 @@ test('keeps each concurrent hook run bound to its rendered durable snapshot', as
     await session.close();
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('runs an exact generation-contained hook invocation and retains its immutable Flight asset', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-'));
@@ -797,7 +801,7 @@ test('runs an exact generation-contained hook invocation and retains its immutab
     await session.close();
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('preserves the Claude fixture seed in post-state while exact replay stays valid', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-fixture-seed-'));
@@ -1055,7 +1059,7 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('does not spawn an invocation worker when runtime.run.started closes the session', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-started-close-'));
@@ -1092,7 +1096,7 @@ test('does not spawn an invocation worker when runtime.run.started closes the se
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('refuses to adopt an existing or symbolic provider run root', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-run-root-'));
@@ -1117,7 +1121,7 @@ test('refuses to adopt an existing or symbolic provider run root', async () => {
     await rm(storageRoot, { force: true, recursive: true });
     await rm(external, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('refreshes a failed run vector after its generation-contained hook mutates durable state', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-failed-vector-'));
@@ -1171,7 +1175,7 @@ require(${JSON.stringify(original)});
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('pins an overlapping g1 invocation while exact replay stays on g1 and latest replay advances to g2', async () => {
   const copied = await copyInvocationExample();
@@ -1223,7 +1227,7 @@ setInterval(() => undefined, 1_000);
     await blocked?.catch(() => undefined);
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 60_000);
+}, 60_000 * timeScale);
 
 test('replays an exact historical surface after generation two removes it', async () => {
   const copied = await copyInvocationExample();
@@ -1272,7 +1276,7 @@ test('replays an exact historical surface after generation two removes it', asyn
     await session.close().catch(() => undefined);
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 60_000);
+}, 60_000 * timeScale);
 
 test('releases an exact historical lease when four active workers reject its admission', async () => {
   const copied = await copyInvocationExample();
@@ -1302,10 +1306,13 @@ test('releases an exact historical lease when four active workers reject its adm
     const g2 = session.status().activeVector!.runtimeGenerationId;
     const marker = join(storageRoot, 'blocked-exact-lease-workers.txt');
     const worker = join(storageRoot, 'generation-store', 'generations', g2, 'rsc', 'rsc', 'index.js');
+    // The four workers must still hold capacity when the replay below asks for
+    // a fifth slot; a loaded host can stagger their starts past a fixed second,
+    // so the lifetime scales with the same knob as the waits.
     await writeFile(worker, `
 import { appendFileSync } from 'node:fs';
 appendFileSync(${JSON.stringify(marker)}, 'ready\\n');
-setTimeout(() => process.exit(0), 1_000);
+setTimeout(() => process.exit(0), ${1_000 * timeScale});
 `);
     const workers = Array.from({ length: 4 }, () => session.invoke({
       expectedGenerationId: g2,
@@ -1337,7 +1344,7 @@ setTimeout(() => process.exit(0), 1_000);
     await session.close().catch(() => undefined);
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
-}, 90_000);
+}, 90_000 * timeScale);
 
 test('closes the provider-owned invocation process group without orphaning its RSC grandchild', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-close-'));
@@ -1397,7 +1404,7 @@ setInterval(() => undefined, 1000);
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('hard-kills the invocation process group when its leader exits before an RSC grandchild', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-leader-exit-'));
@@ -1438,7 +1445,7 @@ process.exit(0);
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('settles a successful invocation only after its TERM-resistant RSC grandchild exits', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-success-tree-'));
@@ -1491,7 +1498,7 @@ process.stdout.end(JSON.stringify({
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 windowsTest('keeps a detached successful worker grandchild in its Windows Job Object until it dies', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-job-'));
@@ -1548,7 +1555,7 @@ process.stdout.end(JSON.stringify({
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 windowsTest('bounds a hung Windows Job owner before it can arm the invocation wrapper', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-owner-hang-'));
@@ -1569,7 +1576,7 @@ windowsTest('bounds a hung Windows Job owner before it can arm the invocation wr
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 windowsTest('bounds a broken Windows Job owner control pipe and drains its assigned wrapper', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-owner-pipe-'));
@@ -1594,7 +1601,7 @@ setInterval(() => undefined, 1000);
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 windowsTest('forces an ignored Windows Job owner STOP without leaving its wrapper alive', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-owner-stop-'));
@@ -1622,7 +1629,7 @@ setInterval(() => undefined, 1000);
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 windowsTest('fails a nonzero Windows Job owner only after its resistant descendant is drained', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-owner-nonzero-'));
@@ -1662,7 +1669,7 @@ process.stdout.end(JSON.stringify({
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 windowsTest('never invokes taskkill after a Windows Job has owned and drained the wrapper', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-no-taskkill-'));
@@ -1701,7 +1708,7 @@ process.stdout.end(JSON.stringify({
     await rm(storageRoot, { force: true, recursive: true });
     await rm(commandRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('drives the run-eviction window through its happy, held-reader, failed-removal, and failed-release paths', async () => {
   // The retention window is injected small so the suite does not need fifty
@@ -1849,7 +1856,7 @@ test('drives the run-eviction window through its happy, held-reader, failed-remo
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 240_000);
+}, 240_000 * timeScale);
 
 test('retains a failed invocation Flight artifact until its explicit session-close release succeeds', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-artifact-release-'));
@@ -1904,7 +1911,7 @@ test('retains a failed invocation Flight artifact until its explicit session-clo
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 45_000);
+}, 45_000 * timeScale);
 
 test('rejects a fifth blocked generation worker and settles every leased worker on close', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-bound-'));
@@ -1967,7 +1974,7 @@ setInterval(() => undefined, 1000);
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 test('contains invocation stdout, stderr, and timeout failures without retaining partial run artifacts', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-output-'));
@@ -2053,4 +2060,4 @@ process.stdout.end(${JSON.stringify(`${JSON.stringify({ flightBytes: 1, inspecti
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
-}, 45_000);
+}, 45_000 * timeScale);
