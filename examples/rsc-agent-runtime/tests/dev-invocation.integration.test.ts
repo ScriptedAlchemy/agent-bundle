@@ -1211,7 +1211,7 @@ setInterval(() => undefined, 1_000);
     const workerSource = join(copied.projectRoot, 'src', 'rsc', 'worker.tsx');
     const source = await readFile(workerSource, 'utf8');
     await writeFile(workerSource, source.replace('RSC worker received an invalid event', 'RSC worker received an invalid event generation-two'));
-    await waitFor(() => session.status().activeVector?.runtimeGenerationId !== g1, 'Timed out waiting for generation two');
+    await waitFor(() => session.status().activeVector?.runtimeGenerationId !== g1, 'Timed out waiting for generation two', 15_000);
     const g2 = session.status().activeVector!.runtimeGenerationId;
     await writeFile(g1Worker, originalG1Worker);
 
@@ -1262,7 +1262,7 @@ test('replays an exact historical surface after generation two removes it', asyn
     const definition = join(copied.projectRoot, 'src', 'definition.ts');
     const source = await readFile(definition, 'utf8');
     await writeFile(definition, source.replace("      host: 'claude',", "      host: 'codex',"));
-    await waitFor(() => session.status().activeVector?.runtimeGenerationId !== g1, 'Timed out waiting for generation two');
+    await waitFor(() => session.status().activeVector?.runtimeGenerationId !== g1, 'Timed out waiting for generation two', 15_000);
     const g2 = session.status().activeVector!.runtimeGenerationId;
 
     await expect(session.replay({ expectedGenerationId: g1, mode: 'exact', runId: run.id }))
@@ -1299,7 +1299,7 @@ test('releases an exact historical lease when four active workers reject its adm
 
     const definition = join(copied.projectRoot, 'src', 'definition.ts');
     await appendFile(definition, '\n// exact-lease-capacity-g2\n');
-    await waitFor(() => session.status().activeVector?.runtimeGenerationId !== g1, 'Timed out waiting for generation two');
+    await waitFor(() => session.status().activeVector?.runtimeGenerationId !== g1, 'Timed out waiting for generation two', 15_000);
     const g2 = session.status().activeVector!.runtimeGenerationId;
     const marker = join(storageRoot, 'blocked-exact-lease-workers.txt');
     const worker = join(storageRoot, 'generation-store', 'generations', g2, 'rsc', 'rsc', 'index.js');

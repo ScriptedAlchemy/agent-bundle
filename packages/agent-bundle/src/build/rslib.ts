@@ -2,6 +2,7 @@
 // installing @rspack/core separately risks version conflicts
 // (https://rslib.rs/api/javascript-api/core).
 import { createRslib, mergeRslibConfig, type LibConfig, type Rspack } from '@rslib/core';
+import { init, parse } from 'es-module-lexer';
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
@@ -209,29 +210,39 @@ const reservedAliasViolation = (
   return reserved.some((specifier) => specifier === base || (!exact && specifier.startsWith(`${base}/`)));
 });
 
-const escapeForRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-
-const residualReservedImportPattern = (reserved: readonly string[]): RegExp =>
-  new RegExp(`(?:\\bfrom|\\bimport|\\brequire)\\s*\\(?\\s*(["'])(?:${reserved.map(escapeForRegExp).join('|')})\\1`, 'u');
-
 /**
  * Fail-closed self-containment check on the emitted bundles themselves:
- * no reserved specifier may survive bundling as a live import. This catches
- * externalization paths the static invariant cannot see (function-form
- * `externals` from the consumer tools hatch).
+ * no reserved specifier may survive bundling as a live import. This is the
+ * belt behind the static externals check and the function-external guard.
+ * The bundle is parsed as an ES module (the emitted format by contract), so
+ * string literals or comments that merely mention a reserved specifier are
+ * not violations.
  */
 const assertNoResidualReservedImports = async (
   entries: readonly RslibEntry[],
   outputRoot: string,
 ): Promise<void> => {
+  await init;
   await Promise.all(entries.map(async (entry) => {
-    const pattern = residualReservedImportPattern(reservedSpecifiers(entry));
+    const reserved = reservedSpecifiers(entry);
     const bundle = await readFile(resolve(outputRoot, entry.outputRelativePath), 'utf8');
-    if (pattern.test(bundle)) {
+    // A bin banner shebang is legal for Node but not for the ESM lexer.
+    const source = bundle.startsWith('#!') ? bundle.slice(bundle.indexOf('\n') + 1) : bundle;
+    let imports: ReturnType<typeof parse>[0];
+    try {
+      [imports] = parse(source);
+    } catch {
+      throw new Error(`Generated executable ${JSON.stringify(entry.outputRelativePath)} did not parse as an ES module.`);
+    }
+    const residual = imports
+      .map((record) => record.n)
+      .find((specifier) => specifier !== undefined && reserved.includes(specifier));
+    if (residual !== undefined) {
       throw new Error(
         `Generated executable ${JSON.stringify(entry.outputRelativePath)} is not self-contained: `
-        + 'a reserved module specifier survived bundling. The tools escape hatch must not externalize '
-        + `${reservedSpecifiers(entry).map((specifier) => JSON.stringify(specifier)).join(', ')}.`,
+        + `the reserved module specifier ${JSON.stringify(residual)} survived bundling. `
+        + 'The tools escape hatch must not externalize '
+        + `${reserved.map((specifier) => JSON.stringify(specifier)).join(', ')}.`,
       );
     }
   }));
