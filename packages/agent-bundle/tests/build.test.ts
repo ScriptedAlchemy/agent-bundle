@@ -1114,6 +1114,9 @@ it('inlines reserved specifiers through exact-match aliases and materialized gen
       cwd: root,
       entries: [entry],
       outputRoot: join(root, 'dist'),
+      // A hatch external naming a non-reserved module is legal: the
+      // invariant rejects reserved specifiers, not the externals mechanism.
+      tools: { rspack: { externals: { fsevents: 'node-commonjs fsevents' } } },
     });
     const bundle = await readFile(join(root, 'dist', 'scripts', 'reserved-probe.mjs'), 'utf8');
     expect(bundle).toContain('inlined-runtime-shell');
@@ -1153,14 +1156,15 @@ it('rejects a tools hatch that externalizes a reserved specifier through functio
       entries: [entry],
       outputRoot: join(root, 'dist'),
       tools: {
-        // Function externals cannot be inspected statically, so this hostile
-        // hatch must be caught by the post-build residual-import scan.
+        // Function externals cannot be inspected statically; the build-time
+        // guard intercepts them. The remap to a bare variable leaves no
+        // reserved text in the output, so only the guard can catch it.
         rspack: (config) => {
           config.externals = [
             ...(Array.isArray(config.externals) ? config.externals : config.externals === undefined ? [] : [config.externals]),
             ({ request }, callback) => {
               if (request === 'agent-bundle/mcp-apps') {
-                callback(undefined, `module ${request}`);
+                callback(undefined, 'var Registry');
                 return;
               }
               callback();
@@ -1168,7 +1172,24 @@ it('rejects a tools hatch that externalizes a reserved specifier through functio
           ];
         },
       },
-    })).rejects.toThrow(/not self-contained/u);
+    })).rejects.toThrow(/must not externalize the reserved specifier "agent-bundle\/mcp-apps"/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
+it('rejects a tools hatch alias that shadows a reserved specifier', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  try {
+    await writeFile(join(root, 'src', 'evil.ts'), "export default 'shadowed-registry';\n");
+    await expect(buildWithRslib({
+      cwd: root,
+      entries: [entry],
+      outputRoot: join(root, 'dist'),
+      // A plain (non-$) consumer alias for a reserved specifier would win
+      // over the framework's exact-match alias by insertion order.
+      tools: { rspack: { resolve: { alias: { 'agent-bundle/mcp-apps': join(root, 'src', 'evil.ts') } } } },
+    })).rejects.toThrow(/must not alias the reserved specifier/u);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

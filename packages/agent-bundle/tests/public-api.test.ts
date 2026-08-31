@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -222,8 +222,11 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       join(consumerRoot, 'node_modules', '@rsbuild'),
       'dir',
     );
+    // realpath first: under pnpm the @rsbuild/core entry is a symlink into
+    // the virtual store, and plain-Node resolution walks the literal path
+    // (where @rspack/core is not visible) rather than the store.
     const requireFromRsbuildCore = createRequire(
-      join(agentBundleNodeModules, '@rsbuild', 'core', 'package.json'),
+      join(await realpath(join(agentBundleNodeModules, '@rsbuild', 'core')), 'package.json'),
     );
     await mkdir(join(consumerRoot, 'node_modules', '@rspack'));
     await symlink(

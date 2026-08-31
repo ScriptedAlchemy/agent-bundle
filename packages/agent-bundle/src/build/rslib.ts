@@ -109,11 +109,18 @@ const reservedSpecifiers = (entry: RslibEntry): readonly string[] => Object.free
   ...(entry.virtualModules ?? []).map((module) => module.name),
 ])]);
 
+const reservedExternalError = (specifier: string): Error => new Error(
+  `The tools escape hatch must not externalize the reserved specifier ${JSON.stringify(specifier)}; `
+  + 'generated executables stay self-contained.',
+);
+
 /**
  * Finds a reserved specifier that a statically inspectable `externals` value
- * (string, RegExp, object map, or arrays thereof) would externalize.
- * Function externals cannot be inspected here; the post-build
- * residual-import scan fails closed for those.
+ * (string, RegExp, object map, or arrays thereof) would externalize. An
+ * object entry whose value is `false` explicitly opts out of
+ * externalization, so it is not a violation. Function externals cannot be
+ * inspected here; {@link guardReservedExternals} intercepts those at build
+ * time and the post-build residual-import scan fails closed behind both.
  */
 const reservedExternalsViolation = (externals: unknown, reserved: readonly string[]): string | undefined => {
   if (externals === undefined || externals === null) return undefined;
@@ -127,10 +134,80 @@ const reservedExternalsViolation = (externals: unknown, reserved: readonly strin
   if (typeof externals === 'string') return reserved.includes(externals) ? externals : undefined;
   if (externals instanceof RegExp) return reserved.find((specifier) => externals.test(specifier));
   if (typeof externals === 'object') {
-    return Object.keys(externals).find((key) => reserved.includes(key));
+    return Object.entries(externals).find(([key, value]) => reserved.includes(key) && value !== false)?.[0];
   }
   return undefined;
 };
+
+/** A function external's non-result: not externalized, resolution continues. */
+const isExternalizedResult = (result: unknown): boolean => result !== undefined && result !== false;
+
+/**
+ * Wraps every function-form external so that resolving a reserved specifier
+ * as external fails the build instead of silently breaking the
+ * self-contained artifact. Merely consulting the function for a reserved
+ * request stays legal (the engine consults every external for every
+ * request); only a positive externalization is a violation. Both the
+ * callback and the promise calling conventions are preserved, including the
+ * arity the engine uses to distinguish them. Violations are also reported
+ * through `onViolation`, because an error delivered inside the external
+ * factory surfaces only as a generic bundler failure — the caller uses the
+ * report to raise the actionable diagnostic.
+ */
+const guardReservedExternals = (
+  externals: unknown,
+  reserved: readonly string[],
+  onViolation: (specifier: string) => void,
+): unknown => {
+  if (Array.isArray(externals)) return externals.map((item) => guardReservedExternals(item, reserved, onViolation));
+  if (typeof externals !== 'function') return externals;
+  const external = externals as (
+    data: { readonly request?: string },
+    callback?: (error?: Error | null, result?: unknown, type?: string) => void,
+  ) => unknown;
+  const reservedRequestOf = (data: { readonly request?: string }): string | undefined =>
+    typeof data.request === 'string' && reserved.includes(data.request) ? data.request : undefined;
+  if (external.length <= 1) {
+    return async (data: { readonly request?: string }): Promise<unknown> => {
+      const result = await external(data);
+      const request = reservedRequestOf(data);
+      if (request !== undefined && isExternalizedResult(result)) {
+        onViolation(request);
+        throw reservedExternalError(request);
+      }
+      return result;
+    };
+  }
+  return (
+    data: { readonly request?: string },
+    callback: (error?: Error | null, result?: unknown, type?: string) => void,
+  ): unknown => external(data, (error, result, type) => {
+    const request = reservedRequestOf(data);
+    if ((error === undefined || error === null) && request !== undefined && isExternalizedResult(result)) {
+      onViolation(request);
+      callback(reservedExternalError(request));
+      return;
+    }
+    callback(error, result, type);
+  });
+};
+
+/**
+ * Finds an alias key (from rslib defaults or the consumer hatch) that could
+ * capture a reserved specifier: an exact key for the specifier, its
+ * exact-match (`$`) form, or a prefix key covering it. The framework's own
+ * reserved aliases are exempted by the caller.
+ */
+const reservedAliasViolation = (
+  alias: Readonly<Record<string, unknown>> | undefined,
+  reserved: readonly string[],
+  frameworkKeys: ReadonlySet<string>,
+): string | undefined => Object.keys(alias ?? {}).find((key) => {
+  if (frameworkKeys.has(key)) return false;
+  const exact = key.endsWith('$');
+  const base = exact ? key.slice(0, -1) : key;
+  return reserved.some((specifier) => specifier === base || (!exact && specifier.startsWith(`${base}/`)));
+});
 
 const escapeForRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
@@ -236,18 +313,22 @@ const assertExecutableConfig = (
         .map((module) => [module.name, module.path])),
     };
     const alias = aliasRecordOf(config);
+    const frameworkAliasKeys = new Set(Object.keys(expectedAliases).map((name) => `${name}$`));
     for (const [name, moduleTarget] of Object.entries(expectedAliases)) {
       if (alias?.[`${name}$`] !== moduleTarget) {
         throw new Error('Rslib resolved a generated executable environment without its reserved module aliases.');
       }
     }
-    const violation = reservedExternalsViolation(config.externals, reservedSpecifiers(entry));
-    if (violation !== undefined) {
+    const reserved = reservedSpecifiers(entry);
+    const aliasViolation = reservedAliasViolation(alias, reserved, frameworkAliasKeys);
+    if (aliasViolation !== undefined) {
       throw new Error(
-        `The tools escape hatch must not externalize the reserved specifier ${JSON.stringify(violation)}; `
-        + 'generated executables stay self-contained.',
+        `The tools escape hatch must not alias the reserved specifier matched by ${JSON.stringify(aliasViolation)}; `
+        + 'generated executables resolve reserved modules through the framework aliases.',
       );
     }
+    const violation = reservedExternalsViolation(config.externals, reserved);
+    if (violation !== undefined) throw reservedExternalError(violation);
   }
 };
 
@@ -262,15 +343,35 @@ const assertExecutableConfig = (
  */
 export const composeEntryLibConfig = (
   entry: RslibEntry,
-  options: { readonly outputRoot: string; readonly tools?: AgentBundleToolsConfig },
+  options: {
+    /** Receives reserved specifiers that a function-form external resolved at build time. */
+    readonly onReservedExternal?: (specifier: string) => void;
+    readonly outputRoot: string;
+    readonly tools?: AgentBundleToolsConfig;
+  },
 ): LibConfig => {
   const libId = entryLibId(entry);
   const virtualSource = entry.virtualSource;
   const virtualModules = materializedVirtualModules(options.outputRoot, entry);
   const aliases = entry.aliases ?? {};
   const reserved = reservedSpecifiers(entry);
+  const frameworkAliasKeys = new Set([
+    ...Object.keys(aliases).map((name) => `${name}$`),
+    ...virtualModules.map((module) => `${module.name}$`),
+  ]);
   const enforceInvariants = (config: Rspack.Configuration): Rspack.Configuration => {
     config.output = { ...config.output, asyncChunks: false };
+    const aliasViolation = reservedAliasViolation(
+      config.resolve?.alias as Readonly<Record<string, unknown>> | undefined,
+      reserved,
+      frameworkAliasKeys,
+    );
+    if (aliasViolation !== undefined) {
+      throw new Error(
+        `The tools escape hatch must not alias the reserved specifier matched by ${JSON.stringify(aliasViolation)}; `
+        + 'generated executables resolve reserved modules through the framework aliases.',
+      );
+    }
     if (virtualModules.length > 0 || Object.keys(aliases).length > 0) {
       config.resolve = {
         ...config.resolve,
@@ -284,11 +385,15 @@ export const composeEntryLibConfig = (
       };
     }
     const violation = reservedExternalsViolation(config.externals, reserved);
-    if (violation !== undefined) {
-      throw new Error(
-        `The tools escape hatch must not externalize the reserved specifier ${JSON.stringify(violation)}; `
-        + 'generated executables stay self-contained.',
-      );
+    if (violation !== undefined) throw reservedExternalError(violation);
+    if (config.externals !== undefined) {
+      // Function externals resolve requests at build time, so they are
+      // guarded there rather than inspected here.
+      config.externals = guardReservedExternals(
+        config.externals,
+        reserved,
+        options.onReservedExternal ?? (() => undefined),
+      ) as typeof config.externals;
     }
     return config;
   };
@@ -372,11 +477,13 @@ export const buildWithRslib = async (options: {
       await Promise.all(generatedModules.map((module) => writeFile(module.path, module.source, 'utf8')));
     }
 
+    const reservedExternalViolations: string[] = [];
     const rslib = await (dependencies.createRslib ?? createRslib)({
       cwd: options.cwd,
       config: {
         logLevel: options.logLevel ?? 'silent',
         lib: options.entries.map((entry) => composeEntryLibConfig(entry, {
+          onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
           outputRoot: options.outputRoot,
           ...(options.tools === undefined ? {} : { tools: options.tools }),
         })),
@@ -385,7 +492,15 @@ export const buildWithRslib = async (options: {
 
     const inspection = await rslib.inspectConfig();
     assertExecutableConfig(options.entries, inspection.origin, options.outputRoot);
-    result = await rslib.build();
+    try {
+      result = await rslib.build();
+    } catch (error) {
+      // A violation raised inside the external factory reaches here only as
+      // a generic bundler failure; surface the actionable diagnostic.
+      if (reservedExternalViolations.length > 0) throw reservedExternalError(reservedExternalViolations[0]!);
+      throw error;
+    }
+    if (reservedExternalViolations.length > 0) throw reservedExternalError(reservedExternalViolations[0]!);
     const evidence = collectBundledOutputEvidence({
       expectedAssets: options.entries.map((entry) => ({
         path: entry.outputRelativePath,
@@ -402,7 +517,10 @@ export const buildWithRslib = async (options: {
     await assertNoResidualReservedImports(options.entries, options.outputRoot);
     return evidence;
   } finally {
-    await result?.close();
-    await rm(generatedModulesRoot, { force: true, recursive: true });
+    try {
+      await result?.close();
+    } finally {
+      await rm(generatedModulesRoot, { force: true, recursive: true });
+    }
   }
 };
