@@ -4,6 +4,7 @@ import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
+import type { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 
 import { createRsbuild } from '@rsbuild/core';
@@ -141,6 +142,67 @@ test('built stdio MCP serves static tools, file-backed data, Flight results, and
     });
   } finally {
     await client.close();
+    await rm(join(stateFile, '..'), { force: true, recursive: true });
+  }
+});
+
+const readJsonRpcLine = async (stdout: Readable): Promise<unknown> => {
+  let buffered = '';
+  for (;;) {
+    const [chunk] = (await once(stdout, 'data')) as [Buffer];
+    buffered += chunk.toString('utf8');
+    const newlineIndex = buffered.indexOf('\n');
+    if (newlineIndex !== -1) return JSON.parse(buffered.slice(0, newlineIndex)) as unknown;
+  }
+};
+
+test('built stdio MCP owns its lifecycle: stdin EOF exits 0, SIGINT exits 130, SIGTERM exits 143', async () => {
+  await ensureExampleBuilt();
+  const stateFile = await createStateFile();
+  const entry = join(process.cwd(), 'dist/runtime/mcp/stdio.js');
+  const scenarios = [
+    { action: 'stdin-eof', expectedExitCode: 0 },
+    { action: 'SIGINT', expectedExitCode: 130 },
+    { action: 'SIGTERM', expectedExitCode: 143 },
+  ] as const;
+
+  try {
+    for (const scenario of scenarios) {
+      const child = spawn(process.execPath, [entry], {
+        env: { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk: string) => {
+        stderr += chunk;
+      });
+      // The initialize response proves the entry finished connecting — the
+      // lifecycle installs its signal/stdin handlers before connect — and
+      // that the console guard handed stdout back for clean protocol frames.
+      child.stdin.write(`${JSON.stringify({
+        id: 1,
+        jsonrpc: '2.0',
+        method: 'initialize',
+        params: {
+          capabilities: {},
+          clientInfo: { name: 'lifecycle-probe', version: '1.0.0' },
+          protocolVersion: '2025-06-18',
+        },
+      })}\n`);
+      await expect(readJsonRpcLine(child.stdout)).resolves.toMatchObject({
+        id: 1,
+        jsonrpc: '2.0',
+        result: { serverInfo: { name: 'rsc-agent-runtime-demo' } },
+      });
+      if (scenario.action === 'stdin-eof') child.stdin.end();
+      else child.kill(scenario.action);
+      const [exitCode, signal] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
+      expect(signal, stderr).toBeNull();
+      expect(exitCode, stderr).toBe(scenario.expectedExitCode);
+      expect(stderr).toContain('[rsc-agent-runtime] stdio heartbeat (activity)');
+    }
+  } finally {
     await rm(join(stateFile, '..'), { force: true, recursive: true });
   }
 });
