@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
+import { isolatedCommandEnvironment } from '../../../rstest.worker-isolation.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
 import { npmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
 
@@ -59,7 +60,7 @@ it('writes the package version as the producer of a packed CLI manifest', async 
     await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
     await execFile(
       'npm', ['install', ...npmInstallArguments, tarball],
-      { cwd: consumerRoot },
+      { cwd: consumerRoot, env: isolatedCommandEnvironment() },
     );
 
     const project = await createBuildProject(consumerRoot);
@@ -91,7 +92,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
     await execFile(
       'npm',
       ['install', ...npmInstallArguments, tarball],
-      { cwd: consumerRoot },
+      { cwd: consumerRoot, env: isolatedCommandEnvironment() },
     );
 
     expect((await stat(join(packageRoot, 'dist/config.js'))).size).toBeLessThan(
@@ -106,7 +107,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
           "import { defineConfig } from 'agent-bundle/config';",
           'if (defineConfig !== rootDefineConfig) throw new Error(\'config factory identity mismatch\');',
         ].join('\n'),
-      ], { cwd: consumerRoot }),
+      ], { cwd: consumerRoot, env: isolatedCommandEnvironment() }),
     ).resolves.toMatchObject({ stderr: '', stdout: '' });
     await symlink(
       join(workspaceRoot, 'node_modules', '@types'),
@@ -138,7 +139,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
       '--target', 'es2022',
       '--types', 'node',
       'config.mts',
-    ], { cwd: consumerRoot })).resolves.toMatchObject({ stderr: '', stdout: '' });
+    ], { cwd: consumerRoot, env: isolatedCommandEnvironment() })).resolves.toMatchObject({ stderr: '', stdout: '' });
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }
@@ -199,7 +200,7 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
     await execFile(
       'npm',
       ['install', ...npmInstallArguments, tarball],
-      { cwd: consumerRoot },
+      { cwd: consumerRoot, env: isolatedCommandEnvironment() },
     );
     const { stdout } = await execFile(process.execPath, [
       '--input-type=module',
@@ -209,7 +210,7 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
         "const result = await new McpService().invoke({ artifact: './artifact', input: {}, server: 'fixture', target: 'portable', tool: 'inspect' });",
         'console.log(JSON.stringify(result));',
       ].join('\n'),
-    ], { cwd: consumerRoot });
+    ], { cwd: consumerRoot, env: isolatedCommandEnvironment() });
     expect(JSON.parse(stdout)).toMatchObject({
       result: {
         content: [{ text: 'packed result', type: 'text' }],

@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,13 +16,7 @@ const workbenchRoot = join(workspaceRoot, 'packages', 'workbench');
 const appRendererLicense = join('src', 'mcp', 'APP-RENDERER-LICENSE');
 let built: Promise<void> | undefined;
 
-const buildPackage = async (force = false): Promise<void> => {
-  if (force) {
-    // The stale-asset pruning test rebuilds on purpose; the prebuilt seam
-    // never skips it because the rebuild itself is the behavior under test.
-    await execFile('pnpm', ['build'], { cwd: workspaceRoot });
-    return;
-  }
+const buildPackage = async (): Promise<void> => {
   if (process.env['AGENT_BUNDLE_PACKAGE_PREBUILT'] === '1') return;
   built ??= execFile('pnpm', ['build'], { cwd: workspaceRoot }).then(() => undefined);
   await built;
@@ -57,17 +51,26 @@ it('copies stable prebuilt workbench assets and the exact app-renderer license i
 
 it('prunes stale copied workbench assets without removing the package library output', async () => {
   await buildPackage();
-  const workbench = join(packageRoot, 'dist', 'workbench');
-  const stale = join(workbench, 'static', 'js', 'async', 'stale-nested.js');
-  await mkdir(join(workbench, 'static', 'js', 'async'), { recursive: true });
-  await writeFile(stale, 'obsolete workbench output\n');
-  await expect(access(stale)).resolves.toBeUndefined();
-
-  await buildPackage(true);
-
-  await expect(access(stale)).rejects.toThrow();
-  await expect(access(join(packageRoot, 'dist', 'cli.js'))).resolves.toBeUndefined();
-  expect(await readdir(workbench, { recursive: true })).not.toContain('index.js.map');
+  const isolatedRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-prune-'));
+  const isolatedDist = join(isolatedRoot, 'dist');
+  try {
+    await cp(join(packageRoot, 'dist'), isolatedDist, { recursive: true });
+    const workbench = join(isolatedDist, 'workbench');
+    const stale = join(workbench, 'static', 'js', 'async', 'stale-nested.js');
+    await mkdir(join(workbench, 'static', 'js', 'async'), { recursive: true });
+    await writeFile(stale, 'obsolete workbench output\n');
+    await expect(access(stale)).resolves.toBeUndefined();
+    await execFile(join(workspaceRoot, 'node_modules', '.bin', 'rslib'), [
+      'build',
+      '--config', join(packageRoot, 'rslib.config.ts'),
+      '--dist-path', isolatedDist,
+    ], { cwd: workspaceRoot });
+    await expect(access(stale)).rejects.toThrow();
+    await expect(access(join(isolatedDist, 'cli.js'))).resolves.toBeUndefined();
+    expect(await readdir(workbench, { recursive: true })).not.toContain('index.js.map');
+  } finally {
+    await rm(isolatedRoot, { force: true, recursive: true });
+  }
 }, 60_000);
 
 it('serves prebuilt workbench assets from an installed tarball without the repository source tree', async () => {
@@ -83,7 +86,7 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     expect(listing.stdout).not.toMatch(/package\/dist\/workbench\/.*-[a-f0-9]{8,}/iu);
 
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
-    await execFile('npm', ['install', ...npmInstallArguments, tarball], { cwd: consumer });
+    await execFile('npm', ['install', ...npmInstallArguments, tarball], { cwd: consumer, env: installedEnvironment() });
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
@@ -99,7 +102,7 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
       '  console.log(JSON.stringify({ body: await response.text(), status: response.status }));',
       '} finally { await session.close(); }',
     ].join('\n');
-    const served = await execFile(process.execPath, ['--input-type=module', '--eval', script], { cwd: consumer });
+    const served = await execFile(process.execPath, ['--input-type=module', '--eval', script], { cwd: consumer, env: installedEnvironment() });
     expect(JSON.parse(served.stdout)).toMatchObject({
       body: expect.stringContaining('Agent Bundle workbench'),
       status: 200,
@@ -115,7 +118,7 @@ it('runs the Agent API from an omit-dev installed tarball with its runtime MCP d
   const project = join(consumer, 'project');
   try {
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
-    await execFile('npm', ['install', '--omit=dev', ...npmInstallArguments, tarball], { cwd: consumer });
+    await execFile('npm', ['install', '--omit=dev', ...npmInstallArguments, tarball], { cwd: consumer, env: installedEnvironment() });
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
