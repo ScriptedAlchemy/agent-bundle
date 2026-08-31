@@ -566,7 +566,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const bootstrap = await clientPage.goto(clientSurface.bootstrapUrl, { waitUntil: 'domcontentloaded' });
     expect(bootstrap?.status()).toBe(200);
     try {
-      await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 }).toBe('1');
+      await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 * timeScale }).toBe('1');
     } catch {
       throw new Error(`Runtime App HMR proxy did not connect: ${JSON.stringify({
         console: clientSurfaceConsole,
@@ -576,12 +576,16 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
         sockets: clientSurfaceSockets,
       })}`);
     }
-    expect(clientSurfaceSockets).toEqual([`${clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
+    // The hmr-client-count attribute is the server's view, read through the
+    // main page's CDP session; Playwright's websocket event arrives on the
+    // client page's session and can lag it, so the socket list must be
+    // awaited rather than asserted synchronously.
+    await expect.poll(() => clientSurfaceSockets, { timeout: 3_000 * timeScale }).toEqual([`${clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
     expect(clientSurfaceSockets.every((socket) => new URL(socket).search.length === 0)).toBe(true);
     expect(clientSurfaceHmrRequests.every((request) => new URL(request.url).search.length === 0)).toBe(true);
     await clientPage.close();
     clientPage = undefined;
-    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 }).toBe('0');
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 * timeScale }).toBe('0');
     await page.routeWebSocket((url) => url.pathname === runtimeClientSurfaceReloadChannelPath, (route) => {
       runtimePreviewHmrRoutes.push(route);
       route.connectToServer();
@@ -638,7 +642,9 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
     await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
     await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 * timeScale }).toBe('1');
-    expect(runtimePreviewSockets).toEqual([`${created.preview.clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
+    // Awaited for the same reason as clientSurfaceSockets above: the
+    // websocket event can arrive after the server already counts the client.
+    await expect.poll(() => runtimePreviewSockets, { timeout: 3_000 * timeScale }).toEqual([`${created.preview.clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
     const runtimeAppFrame = async () => {
       for (const frame of page.frames()) {
         if (await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
@@ -946,7 +952,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
 
     await appFrame.getByRole('button', { name: 'Refresh' }).click();
     try {
-      await expect.poll(() => consentRequests('action'), { timeout: 3_000 }).toHaveLength(1);
+      await expect.poll(() => consentRequests('action'), { timeout: 3_000 * timeScale }).toHaveLength(1);
     } catch {
       throw new Error(`Runtime App call relay did not reach consent: ${JSON.stringify({
         console: browserConsole,
