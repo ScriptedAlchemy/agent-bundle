@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import apps from 'agent-bundle/mcp-apps';
 import { z } from 'zod';
 
-import { healthyCompilerStatus } from './compiler-status-contract.ts';
+import { healthyCompilerStatus } from '../compiler-status-contract.ts';
 
 const app = apps[0];
 if (app === undefined) throw new Error('Expected the status MCP App.');
