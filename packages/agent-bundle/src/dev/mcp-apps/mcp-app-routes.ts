@@ -15,7 +15,11 @@ import type { McpAppConsentRequest } from './mcp-app-sandbox.ts';
 import { runtimeAppMessageLimits } from '../runtime-app-message-limits.ts';
 
 const bodyLimit = 64 * 1024;
-const gracefulCloseReceiptTimeoutMs = 5_000;
+// A force-close DELETE that lands after an accepted graceful close must stay
+// idempotent (200, not 404), so this window has to dominate the frame relay's
+// force-close budget — clients may fall back as late as their closeTimeoutMs,
+// which mcp-app-frame.tsx caps at 30s.
+const gracefulCloseReceiptTimeoutMs = 35_000;
 
 interface RequestDiagnostic {
   readonly code: string;
