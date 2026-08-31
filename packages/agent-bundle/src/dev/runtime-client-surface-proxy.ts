@@ -29,7 +29,7 @@ const pendingWebSocketMessageLimit = 64;
 const upstreamHandshakeTimeout = 15_000;
 const upstreamRequestTimeout = 15_000;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
-const hmrToken = /^[A-Za-z0-9_-]{16,128}$/u;
+const hmrTokenMaxLength = 4_096;
 const endpointKeys = Object.freeze([
   'entryPath',
   'httpOrigin',
@@ -64,6 +64,7 @@ interface ValidatedEndpoint {
   readonly httpPathPrefixes: readonly string[];
   readonly surfaceId: string;
   readonly webSocketOrigin: URL;
+  readonly webSocketPath: string;
   readonly webSocketToken: string;
 }
 
@@ -170,7 +171,13 @@ const escapedHtmlAttribute = (value: string): string => value.replace(/[&<>"']/g
  * The same-origin outer document is the sole relay. The compiler App is never
  * granted that origin: it runs in this document's one opaque nested iframe.
  */
-const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin: string, childContentSecurityPolicy: string): string => `<!doctype html>
+const runtimeProxyShell = (
+  entryPath: string,
+  entryDocument: string,
+  hostOrigin: string,
+  childContentSecurityPolicy: string,
+  webSocketPath: string,
+): string => `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Runtime App surface</title>
@@ -183,6 +190,7 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   const initialEntry = ${escapedScriptValue(entryDocument)};
   const hostOrigin = ${escapedScriptValue(hostOrigin)};
   const childContentSecurityPolicy = ${escapedScriptValue(childContentSecurityPolicy)};
+  const webSocketPath = ${escapedScriptValue(webSocketPath)};
   const maxAppToHostMessageBytes = ${String(runtimeAppMessageLimits.appToHostBytes)};
   const maxHostToAppMessageBytes = ${String(runtimeAppMessageLimits.hostToAppBytes)};
   const maxHmrMessageBytes = maxAppToHostMessageBytes;
@@ -267,10 +275,9 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   const openHmr = () => {
     if (lifecycle === 'closed' || hmr !== undefined) return;
     let socket;
-    try { socket = new WebSocket(new URL('/rsbuild-hmr', location.origin).href); }
+    try { socket = new WebSocket(new URL(webSocketPath, location.origin).href); }
     catch { reconnectHmr(); return; }
     hmr = socket;
-    let initialHmrMessage = true;
     const reconnect = () => {
       if (hmr !== socket) return;
       hmr = undefined;
@@ -286,10 +293,11 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
       if (!isRecord(message) || typeof message.type !== 'string') return;
-      if (message.type === 'ok') {
-        if (initialHmrMessage) { initialHmrMessage = false; return; }
-        void refreshEntry();
-      } else if (message.type === 'full-reload') void refreshEntry();
+      // Rsbuild documents Environment.hot.send('full-reload'), but not this
+      // raw WebSocket envelope. In 2.2.1 it empirically arrives as JSON with a
+      // top-level type; only our provider-emitted reload kind is actionable.
+      // Private kinds such as ok/hash and unknown future kinds stay inert.
+      if (message.type === 'full-reload') void refreshEntry();
     });
     socket.addEventListener('close', reconnect);
     socket.addEventListener('error', reconnect);
@@ -475,10 +483,12 @@ const endpoint = (input: DevRuntimeClientSurfaceEndpoint): ValidatedEndpoint => 
   const httpPathPrefixes = Object.freeze([...new Set(declaredPrefixes.map(prefix))]);
   const entryPath = canonicalPath(endpointValue(input, 'entryPath')).normalized;
   if (!matchesPrefix(entryPath, httpPathPrefixes)) invalidEndpoint('an entry path within a declared HTTP prefix');
-  if (endpointValue(input, 'webSocketPath') !== '/rsbuild-hmr') invalidEndpoint('the exact /rsbuild-hmr WebSocket path');
+  const webSocketPath = canonicalPath(endpointValue(input, 'webSocketPath')).upstream;
   const webSocketToken = endpointValue(input, 'webSocketToken');
-  if (typeof webSocketToken !== 'string' || !hmrToken.test(webSocketToken)) {
-    invalidEndpoint('a bounded Rsbuild WebSocket token');
+  // Rsbuild documents webSocketToken only as a string; its current
+  // base64url-like alphabet and length are empirical, not API guarantees.
+  if (typeof webSocketToken !== 'string' || webSocketToken.length === 0 || webSocketToken.length > hmrTokenMaxLength) {
+    invalidEndpoint('a nonempty bounded Rsbuild WebSocket token');
   }
   return Object.freeze({
     entryPath,
@@ -487,6 +497,7 @@ const endpoint = (input: DevRuntimeClientSurfaceEndpoint): ValidatedEndpoint => 
     httpPathPrefixes,
     surfaceId,
     webSocketOrigin,
+    webSocketPath,
     webSocketToken,
   });
 };
@@ -689,7 +700,13 @@ export class RuntimeClientSurfaceProxy {
           };
           headers['set-cookie'] = `${cookieName}=${sessionCapability}; HttpOnly; SameSite=None; Secure; Partitioned; Path=/`;
           target.writeHead(200, headers);
-          target.end(runtimeProxyShell(trusted.entryPath, entryDocument, trustedHostOrigin, trustedContentSecurityPolicy));
+          target.end(runtimeProxyShell(
+            trusted.entryPath,
+            entryDocument,
+            trustedHostOrigin,
+            trustedContentSecurityPolicy,
+            trusted.webSocketPath,
+          ));
           return;
         }
         if (!isAuthenticated(request)) {
@@ -821,14 +838,15 @@ export class RuntimeClientSurfaceProxy {
         return reject(404);
       }
       if (!isAuthenticated(request)) return reject(403);
-      if (requestUrl.pathname !== '/rsbuild-hmr') return reject(404);
+      if (requestUrl.pathname !== trusted.webSocketPath) return reject(404);
       if (requestUrl.search.length > 0) return reject(404);
       if (request.headers.origin !== proxyOrigin) return reject(403);
       const requestedProtocols = typeof request.headers['sec-websocket-protocol'] === 'string'
         ? request.headers['sec-websocket-protocol'].split(',').map((protocol) => protocol.trim()).filter(Boolean)
         : [];
       webSocketServer.handleUpgrade(request, socket, head, (downstream) => {
-        const upstreamUrl = `${trusted.webSocketOrigin.origin}/rsbuild-hmr?token=${trusted.webSocketToken}`;
+        const upstreamUrl = new URL(trusted.webSocketPath, trusted.webSocketOrigin);
+        upstreamUrl.searchParams.set('token', trusted.webSocketToken);
         const upstream = new WebSocket(upstreamUrl, requestedProtocols.length > 0 ? requestedProtocols : undefined, {
           handshakeTimeout: upstreamHandshakeTimeout,
           maxPayload: webSocketMessageLimit,
@@ -932,7 +950,7 @@ export class RuntimeClientSurfaceProxy {
       close,
       origin: proxyOrigin,
       surfaceId: trusted.surfaceId,
-      webSocketPath: '/rsbuild-hmr',
+      webSocketPath: trusted.webSocketPath,
     });
   }
 }

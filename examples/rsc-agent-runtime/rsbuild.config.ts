@@ -25,7 +25,10 @@ export interface RscRuntimeRsbuildConfigOptions {
   readonly compilerRoot?: string;
   readonly mode: 'development' | 'production';
   /** Receives the App environment's server-only Rsbuild HMR credential. */
-  readonly onAppWebSocketToken?: (token: string) => void;
+  readonly onAppWebSocketToken?: (input: Readonly<{
+    readonly path: string;
+    readonly token: string;
+  }>) => void;
   readonly onCompile?: Readonly<{
     beforeAttempt(): string;
     capture(input: {
@@ -49,9 +52,12 @@ const runtimeAppHmrTokenPlugin = (
     name: 'agent-bundle:rsc-runtime-app-hmr-token',
     setup(api) {
       api.onAfterCreateCompiler(({ environments }) => {
-        const token = environments.app?.webSocketToken;
+        const app = environments.app;
+        const token = app?.webSocketToken;
         if (typeof token !== 'string') throw new Error('RSC runtime App compiler did not expose an HMR credential.');
-        capture(token);
+        const path = app?.config.dev.client.path;
+        if (typeof path !== 'string') throw new Error('RSC runtime App compiler did not expose a normalized HMR path.');
+        capture(Object.freeze({ path, token }));
       });
       api.onBeforeStartDevServer(({ server }) => {
         devServer = server;
@@ -96,7 +102,20 @@ const runtimeCompileObserverPlugin = (
     name: 'agent-bundle:rsc-runtime-compile-observer',
     setup(api) {
       api.onBeforeDevCompile(() => {
-        pendingAttemptIds.push(observer.beforeAttempt());
+        // Rsbuild documents global hook order, but not one before/after pair
+        // per MultiCompiler cohort. FIFO pairing is only empirical in 2.2.1;
+        // reject identities that cannot be paired unambiguously, while
+        // retaining legitimate overlapping before callbacks in FIFO order.
+        const attemptId = observer.beforeAttempt();
+        if (pendingAttemptIds.includes(attemptId)) {
+          const pairingError = new Error(`RSC runtime compile produced duplicate pending attempt identity ${JSON.stringify(attemptId)}.`);
+          for (const unmatchedAttemptId of [...pendingAttemptIds, attemptId]) {
+            observer.failAttempt(unmatchedAttemptId, pairingError, 'provider-lifecycle');
+          }
+          pendingAttemptIds.length = 0;
+          throw pairingError;
+        }
+        pendingAttemptIds.push(attemptId);
       });
       api.onAfterDevCompile(async ({ stats }) => {
         const attemptId = pendingAttemptIds.shift();
@@ -112,6 +131,10 @@ const runtimeCompileObserverPlugin = (
           }
           const json = stats.toJson({ all: false, children: true, hash: true });
           const cohortHashes = new Map<'rsc' | 'widget', string>();
+          // Rspack documents optional Stats child names, but Rsbuild does not
+          // promise they equal environment keys. We explicitly name each
+          // compiler below; the name-based cohort match is otherwise only an
+          // empirical Rsbuild 2.2.1 behavior.
           for (const child of json.children ?? []) {
             if (child.name !== 'rsc' && child.name !== 'widget') continue;
             if (typeof child.hash !== 'string' || child.hash.length === 0) {
@@ -190,7 +213,12 @@ export const createRscRuntimeRsbuildConfig = (
     mode: 'production',
     ...(development ? {
       dev: { writeToDisk: true },
-      server: { host: '127.0.0.1', printUrls: false },
+      // Port 0 lets the OS assign the listener. Rsbuild's default (3000 with an
+      // incrementing probe) makes every concurrent runtime session on a host
+      // race for the same first candidate, which surfaces as EADDRINUSE when
+      // suites run in parallel. Consumers read the resolved port back from
+      // `rsbuild.context.devServer`.
+      server: { host: '127.0.0.1', port: 0, printUrls: false },
     } : {}),
     plugins: [
       pluginReact(),
@@ -213,6 +241,7 @@ export const createRscRuntimeRsbuildConfig = (
         },
         tools: {
           rspack: {
+            name: 'rsc',
             module: {
               rules: [{
                 parser: { importMeta: { url: false } },
@@ -250,6 +279,9 @@ export const createRscRuntimeRsbuildConfig = (
           distPath: { root: root('widget', 'dist/widget') },
           filename: { js: '[name].js' },
           target: 'web',
+        },
+        tools: {
+          rspack: { name: 'widget' },
         },
       },
       app: {
@@ -290,6 +322,7 @@ export const createRscRuntimeRsbuildConfig = (
         },
         tools: {
           rspack: {
+            name: 'app',
             module: { parser: { javascript: { dynamicImportMode: 'eager' } } },
           },
         },

@@ -248,7 +248,7 @@ it('keeps malformed opaque-child initialize messages from advancing the trusted 
   }
 });
 
-it('reconnects one outer HMR socket and stops reconnecting after pagehide', async () => {
+it('refreshes only for explicit full-reload frames while reconnecting the outer HMR socket', async () => {
   const upstream = createServer((request, response) => {
     if (serveBootstrapEntry(request, response)) return;
     response.writeHead(404).end();
@@ -277,6 +277,11 @@ it('reconnects one outer HMR socket and stops reconnecting after pagehide', asyn
     shell.sockets[1]!.emit('open');
     shell.sockets[1]!.emit('message', { data: JSON.stringify({ type: 'ok' }) });
     shell.sockets[1]!.emit('message', { data: JSON.stringify({ type: 'ok' }) });
+    shell.sockets[1]!.emit('message', { data: JSON.stringify({ type: 'hash', data: 'private-hash' }) });
+    shell.sockets[1]!.emit('message', { data: JSON.stringify({ type: 'future-private-frame' }) });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(shell.entries).toHaveLength(1);
+    shell.sockets[1]!.emit('message', { data: JSON.stringify({ type: 'full-reload' }) });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(shell.entries).toHaveLength(2);
     shell.pagehide();
@@ -600,7 +605,7 @@ it('rejects noncanonical foreground origins before exposing a bootstrap capabili
     .rejects.toThrow('canonical foreground');
 });
 
-it('keeps the trusted HMR token out of the browser URL while authenticating an opaque child upgrade', async () => {
+it('percent-encodes a bounded public HMR token while keeping it out of the browser URL', async () => {
   const upstream = createServer((request, response) => {
     if (serveBootstrapEntry(request, response)) return;
     response.writeHead(404).end();
@@ -623,19 +628,22 @@ it('keeps the trusted HMR token out of the browser URL while authenticating an o
     resolveUpgrade();
     webSocketServer.handleUpgrade(request, socket, head, (client) => webSocketServer.emit('connection', client, request));
   });
+  const webSocketToken = 'token with /?+%= punctuation';
+  const webSocketPath = '/custom%20runtime-hmr';
   const binding = await RuntimeClientSurfaceProxy.open({
     entryPath: '/app/index.html',
     httpOrigin: origin,
     httpPathPrefixes: ['/app/'],
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
-    webSocketPath: '/rsbuild-hmr',
-    webSocketToken: 'rsbuild-token-1234',
+    webSocketPath,
+    webSocketToken,
   } as DevRuntimeClientSurfaceEndpoint, () => undefined);
 
   try {
     const cookie = await bootstrapCookie(binding);
-    const rejected = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr?token=leaked`, {
+    expect(binding.webSocketPath).toBe(webSocketPath);
+    const rejected = new WebSocket(`${binding.origin.replace('http:', 'ws:')}${webSocketPath}?token=leaked`, {
       headers: { cookie, origin: 'null' },
     });
     const rejectedState = await new Promise<'close' | 'error' | 'open'>((resolvePromise) => {
@@ -646,7 +654,7 @@ it('keeps the trusted HMR token out of the browser URL while authenticating an o
     if (rejectedState === 'open') rejected.close();
     expect(rejectedState).not.toBe('open');
 
-    const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, {
+    const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}${webSocketPath}`, {
       headers: { cookie, origin: binding.origin },
     });
     await new Promise<void>((resolvePromise, rejectPromise) => {
@@ -658,7 +666,7 @@ it('keeps the trusted HMR token out of the browser URL while authenticating an o
     expect(receivedUpgrade).toEqual({
       cookie: undefined,
       origin: undefined,
-      url: '/rsbuild-hmr?token=rsbuild-token-1234',
+      url: `${webSocketPath}?${new URLSearchParams({ token: webSocketToken }).toString()}`,
     });
   } finally {
     await binding.close();

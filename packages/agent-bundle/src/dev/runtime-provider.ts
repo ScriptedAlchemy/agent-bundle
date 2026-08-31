@@ -28,7 +28,8 @@ export interface DevRuntimeClientSurfaceEndpoint {
   readonly httpPathPrefixes: readonly string[];
   readonly surfaceId: string;
   readonly webSocketOrigin: string;
-  readonly webSocketPath: '/rsbuild-hmr';
+  /** Normalized public `dev.client.path` from the runtime compiler. */
+  readonly webSocketPath: string;
   /** Rsbuild compiler credential; server-only and never serialized to a browser surface. */
   readonly webSocketToken: string;
 }
@@ -38,7 +39,7 @@ export interface DevRuntimeClientSurfaceProxyBinding {
   readonly bootstrapUrl: string;
   readonly origin: string;
   readonly surfaceId: string;
-  readonly webSocketPath: '/rsbuild-hmr';
+  readonly webSocketPath: string;
   close(): Promise<void>;
 }
 

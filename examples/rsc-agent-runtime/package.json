@@ -7,7 +7,7 @@
     "test": "rstest --config rstest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "validate": "agent-bundle validate",
-    "check": "pnpm build && pnpm test && pnpm typecheck",
+    "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test",
     "eval:hosts": "node scripts/eval-hosts.mjs",
     "capture:widget": "node scripts/capture-widget.mjs"
   },

@@ -221,8 +221,15 @@ const compilerObserver = (input: Readonly<{
 test('resolves the coherent development compiler configuration through Rsbuild', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-compiler-'));
   try {
+    const developmentConfig = createRscRuntimeRsbuildConfig({ compilerRoot, mode: 'development' });
+    const configuredEnvironments = developmentConfig.environments as Readonly<Record<string, Readonly<{
+      readonly tools?: Readonly<{ readonly rspack?: Readonly<{ readonly name?: string }> }>;
+    }>>>;
+    expect(configuredEnvironments.rsc?.tools?.rspack?.name).toBe('rsc');
+    expect(configuredEnvironments.widget?.tools?.rspack?.name).toBe('widget');
+    expect(configuredEnvironments.app?.tools?.rspack?.name).toBe('app');
     const rsbuild = await createRsbuild({
-      config: createRscRuntimeRsbuildConfig({ compilerRoot, mode: 'development' }),
+      config: developmentConfig,
       cwd: process.cwd(),
     });
     const inspection = await rsbuild.inspectConfig({ mode: 'development' });
@@ -240,7 +247,7 @@ test('resolves the coherent development compiler configuration through Rsbuild',
     expect(environments.app?.output.distPath.root).toBe(join(compilerRoot, 'app'));
     expect(inspection.origin.rsbuildConfig.dev.writeToDisk).toBe(true);
     expect(inspection.origin.rsbuildConfig.server.host).toBe('127.0.0.1');
-    expect(inspection.origin.rsbuildConfig.server.port).toBe(3000);
+    expect(inspection.origin.rsbuildConfig.server.port).toBe(0);
     expect(rscBundler?.output?.chunkFilename).toBe('chunks/[name].js');
     expect(rscBundler?.output?.path).toBe(join(compilerRoot, 'rsc'));
     expect(widgetBundler?.output?.path).toBe(join(compilerRoot, 'widget'));
