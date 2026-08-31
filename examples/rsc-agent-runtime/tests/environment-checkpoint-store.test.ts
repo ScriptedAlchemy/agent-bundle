@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -219,6 +219,100 @@ test('deduplicates unchanged-hash restaging onto the same immutable checkpoint',
     await store.stage({ environment: 'widget', hash: 'widget-one', sourceRoot: join(compilerRoot, 'widget') });
     const staged = await readdir(checkpointsRoot);
     expect(staged.filter((entry) => entry.startsWith('widget-'))).toHaveLength(1);
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('close rejects when a garbage-collected checkpoint directory cannot be removed', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-checkpoints-rm-failure-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const checkpointsRoot = join(storageRoot, 'environment-checkpoints');
+  const store = createCheckpointStore(checkpointsRoot);
+  let pinnedRoot: string | undefined;
+  try {
+    await writeCompilerCohort(compilerRoot);
+    await store.stage({ environment: 'widget', hash: 'widget-one', sourceRoot: join(compilerRoot, 'widget') });
+    const staged = await readdir(checkpointsRoot);
+    pinnedRoot = join(checkpointsRoot, staged.find((entry) => entry.startsWith('widget-'))!);
+    // A read-only subdirectory makes every removal of this checkpoint fail,
+    // both the supersession GC attempt and the close-time retry.
+    await chmod(join(pinnedRoot, 'rsc'), 0o555);
+    await store.stage({ environment: 'widget', hash: 'widget-two', sourceRoot: join(compilerRoot, 'widget') });
+    await expect(store.close()).rejects.toThrow('could not remove staged directories');
+  } finally {
+    if (pinnedRoot !== undefined) await chmod(join(pinnedRoot, 'rsc'), 0o755).catch(() => undefined);
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('close retries a transiently failed checkpoint removal before reporting a clean drain', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-checkpoints-rm-retry-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const checkpointsRoot = join(storageRoot, 'environment-checkpoints');
+  const store = createCheckpointStore(checkpointsRoot);
+  try {
+    await writeCompilerCohort(compilerRoot);
+    await store.stage({ environment: 'widget', hash: 'widget-one', sourceRoot: join(compilerRoot, 'widget') });
+    const staged = await readdir(checkpointsRoot);
+    const supersededRoot = join(checkpointsRoot, staged.find((entry) => entry.startsWith('widget-'))!);
+    await chmod(join(supersededRoot, 'rsc'), 0o555);
+    await store.stage({ environment: 'widget', hash: 'widget-two', sourceRoot: join(compilerRoot, 'widget') });
+    // Let the failed GC removal settle while the directory is still
+    // read-only, then clear the transient condition: the close-time retry
+    // must remove the directory and report a clean drain.
+    await new Promise<void>((resolve) => { setTimeout(resolve, 200); });
+    expect((await readdir(checkpointsRoot)).includes(supersededRoot.slice(checkpointsRoot.length + 1))).toBe(true);
+    await chmod(join(supersededRoot, 'rsc'), 0o755);
+    await store.close();
+    const remaining = await readdir(checkpointsRoot).catch(() => []);
+    expect(remaining.filter((entry) => entry.startsWith('widget-'))).toEqual([]);
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('close waits for in-flight staging work before reporting the store drained', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-checkpoints-inflight-close-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const checkpointsRoot = join(storageRoot, 'environment-checkpoints');
+  let enteredValidator!: () => void;
+  const entered = new Promise<void>((resolve) => { enteredValidator = resolve; });
+  let releaseValidator!: () => void;
+  const hold = new Promise<void>((resolve) => { releaseValidator = resolve; });
+  const store = createRscEnvironmentCheckpointStore({
+    root: checkpointsRoot,
+    validators: {
+      widget: async (input) => {
+        enteredValidator();
+        await hold;
+        return input.files;
+      },
+    },
+  });
+  try {
+    await writeCompilerCohort(compilerRoot);
+    const staging = store.stage({ environment: 'widget', hash: 'widget-one', sourceRoot: join(compilerRoot, 'widget') });
+    const stagingOutcome = staging.catch((error: unknown) => error);
+    await entered;
+    let closed = false;
+    const closing = store.close().then(() => { closed = true; });
+    await settled();
+    await new Promise<void>((resolve) => { setTimeout(resolve, 50); });
+    // The staging copy (held inside its validator) still owns filesystem
+    // work; close must not report the store drained yet.
+    expect(closed).toBe(false);
+    releaseValidator();
+    await closing;
+    await expect(stagingOutcome).resolves.toMatchObject({
+      message: expect.stringContaining('closed'),
+    });
+    // The in-flight staging directory was cleaned before close resolved.
+    const remaining = await readdir(checkpointsRoot).catch(() => []);
+    expect(remaining).toEqual([]);
   } finally {
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });

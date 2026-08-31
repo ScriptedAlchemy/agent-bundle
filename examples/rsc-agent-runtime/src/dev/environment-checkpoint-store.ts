@@ -196,6 +196,7 @@ type PendingAcquisition = Readonly<{
 
 class EnvironmentCheckpointStore implements RscEnvironmentCheckpointStore {
   readonly #environments = new Map<RscRuntimeEnvironmentName, EnvironmentState>();
+  readonly #failedDeletions = new Map<string, Error>();
   readonly #pendingDeletions = new Set<Promise<void>>();
   readonly #releaseWaiters: Array<() => void> = [];
   readonly #live = new Set<CheckpointRecord>();
@@ -230,7 +231,15 @@ class EnvironmentCheckpointStore implements RscEnvironmentCheckpointStore {
     if (record.deleted || record.pins > 0 || (!record.superseded && !this.#closed)) return;
     record.deleted = true;
     this.#live.delete(record);
-    const deletion = rm(record.checkpoint.root, { force: true, recursive: true }).catch(() => undefined);
+    // A failed removal must not be silent: the root is remembered, retried
+    // once while the store drains, and still-failing roots reject close so
+    // session teardown reports the leaked staging directories.
+    const deletion = rm(record.checkpoint.root, { force: true, recursive: true }).catch((error: unknown) => {
+      this.#failedDeletions.set(
+        record.checkpoint.root,
+        error instanceof Error ? error : new Error(String(error)),
+      );
+    });
     this.#pendingDeletions.add(deletion);
     void deletion.finally(() => {
       this.#pendingDeletions.delete(deletion);
@@ -472,6 +481,17 @@ class EnvironmentCheckpointStore implements RscEnvironmentCheckpointStore {
   }
 
   async #drain(): Promise<void> {
+    // An in-flight stage() may still be copying into (or cleaning up) its
+    // staging directory; close must not report the store drained while that
+    // filesystem work continues. Post-close stage() calls fail fast, so the
+    // tails converge.
+    let tails = [...this.#environments.values()].map((state) => state.tail);
+    for (;;) {
+      await Promise.allSettled(tails);
+      const current = [...this.#environments.values()].map((state) => state.tail);
+      if (current.every((tail, index) => tail === tails[index])) break;
+      tails = current;
+    }
     while (this.#live.size > 0 || this.#pendingDeletions.size > 0) {
       if (this.#pendingDeletions.size > 0) {
         await Promise.allSettled([...this.#pendingDeletions]);
@@ -479,6 +499,18 @@ class EnvironmentCheckpointStore implements RscEnvironmentCheckpointStore {
       }
       // Remaining records are pinned by an in-flight cohort; wait for release.
       await new Promise<void>((resolveRelease) => { this.#releaseWaiters.push(resolveRelease); });
+    }
+    const leaked: string[] = [];
+    for (const [root, error] of [...this.#failedDeletions]) {
+      try {
+        await rm(root, { force: true, recursive: true });
+        this.#failedDeletions.delete(root);
+      } catch {
+        leaked.push(`${root} (${error.message})`);
+      }
+    }
+    if (leaked.length > 0) {
+      throw new Error(`RSC environment checkpoint store could not remove staged directories: ${leaked.join(', ')}.`);
     }
   }
 }
