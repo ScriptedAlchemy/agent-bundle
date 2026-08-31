@@ -589,7 +589,8 @@ const sourceBuildDiagnostic = (): DevRuntimeDiagnostic => Object.freeze({
 });
 
 const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new Error('RSC runtime provider startup was aborted.');
-const hmrToken = /^[A-Za-z0-9_-]{16,128}$/u;
+const hmrPathMaxLength = 2_048;
+const hmrTokenMaxLength = 4_096;
 
 export interface RsbuildRuntimeSessionStartTesting {
   readonly createRsbuild?: typeof createRsbuild;
@@ -674,6 +675,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #workers = new Map<string, InvocationWorker>();
   readonly #failedAttempts = new Set<string>();
   #active: RuntimeGeneration<RscRuntimeGenerationMetadata> | undefined;
+  #appWebSocketPath: string | undefined;
   #appWebSocketToken: string | undefined;
   #clientSurface: DevRuntimeClientSurfaceEndpoint | undefined;
   #closePromise: Promise<void> | undefined;
@@ -843,7 +845,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         config: createRscRuntimeRsbuildConfig({
           compilerRoot: join(storageRoot, 'compiler'),
           mode: 'development',
-          onAppWebSocketToken: (token) => session.#captureAppWebSocketToken(token),
+          onAppWebSocketToken: (input) => session.#captureAppWebSocketConnection(input),
           onCompile: session.#compileObserver(),
         }),
         cwd: context.projectRoot,
@@ -853,7 +855,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       await ledger.add(() => started.server.close(), 'rsbuild-dev-server');
       context.signal.throwIfAborted();
       session.#attachServer(started, rsbuild.context.devServer);
-      await session.#providerTail;
+      // startDevServer does not guarantee that the initial compile or async
+      // onAfterDevCompile work has finished. In 2.2.1 that work often starts
+      // before this return, but providerTail is not a documented readiness
+      // barrier; callers intentionally receive a compiling session.
       context.signal.throwIfAborted();
       context.signal.removeEventListener('abort', abort);
       return session;
@@ -2145,6 +2150,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       devServer === undefined || devServer.hostname !== '127.0.0.1' || devServer.https ||
       !Number.isSafeInteger(devServer.port) || devServer.port < 1 || devServer.port > 65_535
     ) throw new Error('RSC runtime dev server did not expose a valid loopback HTTP origin.');
+    const webSocketPath = this.#appWebSocketPath;
+    if (webSocketPath === undefined) throw new Error('RSC runtime App compiler did not capture a normalized HMR path.');
     const webSocketToken = this.#appWebSocketToken;
     if (webSocketToken === undefined) throw new Error('RSC runtime App compiler did not capture an HMR credential.');
     const origin = new URL(`http://${devServer.hostname}:${String(devServer.port)}`).origin;
@@ -2155,18 +2162,34 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       httpPathPrefixes: Object.freeze(['/']),
       surfaceId: clientSurfaceId,
       webSocketOrigin: origin.replace(/^http:/u, 'ws:'),
-      webSocketPath: '/rsbuild-hmr',
+      webSocketPath,
       webSocketToken,
     });
     this.#hmrReady = true;
     this.#setStatus(this.#active === undefined ? 'compiling' : 'active');
   }
 
-  #captureAppWebSocketToken(token: string): void {
-    if (!hmrToken.test(token)) throw new Error('RSC runtime App compiler exposed an invalid HMR credential.');
-    if (this.#appWebSocketToken !== undefined && this.#appWebSocketToken !== token) {
-      throw new Error('RSC runtime App compiler changed its HMR credential during startup.');
+  #captureAppWebSocketConnection(input: Readonly<{ readonly path: string; readonly token: string }>): void {
+    const { path, token } = input;
+    if (
+      typeof path !== 'string' || path.length === 0 || path.length > hmrPathMaxLength || !path.startsWith('/') ||
+      new URL(path, 'http://compiler.invalid').pathname !== path
+    ) {
+      throw new Error('RSC runtime App compiler exposed an invalid normalized HMR path.');
     }
+    // Rsbuild's public contract says only that webSocketToken is a string.
+    // Its 2.2.1 alphabet and length are empirical, so enforce only resource
+    // bounds and rely on URLSearchParams at the proxy boundary.
+    if (typeof token !== 'string' || token.length === 0 || token.length > hmrTokenMaxLength) {
+      throw new Error('RSC runtime App compiler exposed an invalid HMR credential.');
+    }
+    if (
+      (this.#appWebSocketPath !== undefined && this.#appWebSocketPath !== path) ||
+      (this.#appWebSocketToken !== undefined && this.#appWebSocketToken !== token)
+    ) {
+      throw new Error('RSC runtime App compiler changed its HMR connection during startup.');
+    }
+    this.#appWebSocketPath = path;
     this.#appWebSocketToken = token;
   }
 
@@ -2245,6 +2268,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       this.#candidatesByAttempt.set(input.attemptId, candidate);
       await this.#testing.beforeGenerationCapture?.();
       if (this.#closed) throw new Error('RSC runtime session is closed.');
+      // Rsbuild does not guarantee that global MultiStats completion is a
+      // transactional snapshot of parallel writeToDisk roots. In 2.2.1 the
+      // files empirically correspond to this completed cohort; the checkpoint
+      // capture below serializes and validates a copied immutable candidate.
       const snapshot = await captureRuntimeGenerationSnapshot({
         attemptId: input.attemptId,
         candidate,
@@ -2313,9 +2340,13 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       // that failed or settled as no-ops, never produce a generation, so
       // judging them as superseding would drop the newest successful compile
       // with nothing to replace it - the permanent-staleness wedge in #38.
+      // Before the first generation commits, an updated prepared declaration
+      // is reconciled by the queued step after this activation; rejecting the
+      // only bootstrap generation would leave that step with no active base.
       check: () => !this.#closed &&
         snapshot.rscCohortRevision === this.#latestRscCohortRevision &&
-        preparedAuthorityDigest === preparedRuntimeAuthorityDigest(this.#latestPreparedRuntime),
+        (this.#active === undefined ||
+          preparedAuthorityDigest === preparedRuntimeAuthorityDigest(this.#latestPreparedRuntime)),
       wait: async () => {
         while (!this.#closed) {
           const sequence = this.#sequenceFor(snapshot.attemptId);
