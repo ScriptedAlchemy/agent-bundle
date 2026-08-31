@@ -79,7 +79,7 @@ const status = defineOperation({
 export const application = defineRscAgentBundle(
   <AgentBundle name="example" targets={['claude', 'codex']} version="1.0.0">
     <Skill source="./skills/example" />
-    <Script entry="./src/cli-entry.ts" name="example" />
+    <Script entry="./src/cli.ts" name="example" />
     <McpServer entry="./src/mcp-server.ts" name="runtime">
       <McpApp
         entry="./views/status-panel.ts"
@@ -93,9 +93,10 @@ export const application = defineRscAgentBundle(
 );
 ```
 
-Export `application.config` from `agent-bundle.config.ts`, use
-`runRscCli(application, argv)` for the executable, and use
-`createRscMcpServer(application, 'runtime')` for stdio MCP. Operation inputs,
+Export `application.config` from `agent-bundle.config.ts`, export a `main`
+that returns `runRscCli(application, argv)` from the Script entry (the build
+generates the process envelope that owns argv, awaiting, and exit-code
+adoption), and use `createRscMcpServer(application, 'runtime')` for stdio MCP. Operation inputs,
 implementations, output validation, and result renderers cannot drift between the
 two surfaces. Definition lowering rejects duplicate ownership and references to
 undeclared MCP servers before Agent Bundle compilation begins.

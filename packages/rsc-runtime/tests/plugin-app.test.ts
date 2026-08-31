@@ -54,7 +54,7 @@ const applicationNode = () => createElement(
     version: '1.0.0',
   },
   createElement(Skill, { source: './skills/curate-audiobooks' }),
-  createElement(Script, { entry: './src/cli-entry.ts', name: 'audiobook-curator' }),
+  createElement(Script, { entry: './src/cli.ts', name: 'audiobook-curator' }),
   createElement(McpServer, { entry: './src/mcp-server.ts', name: 'curator' }),
   createElement(Operation, { definition: statusOperation }),
 );
@@ -79,7 +79,7 @@ describe('RSC plugin applications', () => {
       },
       scripts: {
         'audiobook-curator': {
-          entry: './src/cli-entry.ts',
+          entry: './src/cli.ts',
           targets: ['claude', 'codex'],
         },
       },
