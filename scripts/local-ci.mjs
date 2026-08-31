@@ -169,20 +169,29 @@ const buildLegEnvironment = (syntheticBinDirectory, overrides) => {
   return environment;
 };
 
-/** node/npm/npx symlinks plus a pnpm wrapper that pins pnpm to the leg's Node. */
+/**
+ * node symlink, npm/npx exec wrappers, and a pnpm wrapper that pins pnpm to
+ * the leg's Node. npm and npx must be exec wrappers to their real paths (not
+ * symlinks): npm's shell launcher resolves its Node sibling relative to $0
+ * without following symlinks, so a symlinked npm looks for node next to the
+ * symlink and finds nothing.
+ */
 const createSyntheticBinDirectory = async (leg, pnpmEntrypoint) => {
   const directory = join(legsRoot, '.bin', leg.name);
   await rm(directory, { recursive: true, force: true });
   await mkdir(directory, { recursive: true });
   const nodeBinDirectory = dirname(leg.nodeBinary);
   await symlink(leg.nodeBinary, join(directory, 'node'));
+  const writeExecWrapper = async (name, commandLine) => {
+    const wrapper = join(directory, name);
+    await writeFile(wrapper, `#!/bin/sh\nexec ${commandLine} "$@"\n`);
+    await chmod(wrapper, 0o755);
+  };
   for (const tool of ['npm', 'npx']) {
     const source = join(nodeBinDirectory, tool);
-    if (existsSync(source)) await symlink(source, join(directory, tool));
+    if (existsSync(source)) await writeExecWrapper(tool, `"${source}"`);
   }
-  const wrapper = join(directory, 'pnpm');
-  await writeFile(wrapper, `#!/bin/sh\nexec "${leg.nodeBinary}" "${pnpmEntrypoint}" "$@"\n`);
-  await chmod(wrapper, 0o755);
+  await writeExecWrapper('pnpm', `"${leg.nodeBinary}" "${pnpmEntrypoint}"`);
   return directory;
 };
 
@@ -210,11 +219,22 @@ const formatDuration = (milliseconds) => {
   return minutes > 0 ? `${minutes}m${String(seconds).padStart(2, '0')}s` : `${seconds}s`;
 };
 
-/** Last rstest-style summary line ("Tests 813 passed ...") in a step log, for the census column. */
+/**
+ * Test census for the summary table, from the repo reporter's JSON counts
+ * block (last one in the step log; a step like examples:check aggregates
+ * several suites and is labelled as such).
+ */
 const extractTestCensus = (logText) => {
-  const matches = logText.match(/^\s*Tests[ :]+\d[^\n]*/gm);
-  if (matches === null || matches.length === 0) return undefined;
-  return matches[matches.length - 1].trim().replace(/\s+/g, ' ');
+  const blocks = [
+    ...logText.matchAll(
+      /"testFiles":\s*(\d+)[\s\S]{0,200}?"tests":\s*(\d+),\s*"failedTests":\s*(\d+),\s*"passedTests":\s*(\d+),\s*"skippedTests":\s*(\d+)/g,
+    ),
+  ];
+  if (blocks.length === 0) return undefined;
+  const [, files, tests, , passed, skipped] = blocks[blocks.length - 1];
+  const skippedSuffix = Number(skipped) > 0 ? `, ${skipped} skipped` : '';
+  const summary = `${passed}/${tests} passed${skippedSuffix}, ${files} files`;
+  return blocks.length > 1 ? `${summary} (last of ${blocks.length} suites)` : summary;
 };
 
 const runStep = async (leg, step, stepIndex) => {
