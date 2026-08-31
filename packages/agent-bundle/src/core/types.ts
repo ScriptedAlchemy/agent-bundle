@@ -30,8 +30,28 @@ export const parseNativeHookToolSelector = (value: string): NativeHookToolSelect
   return target.length === 0 || name.length === 0 ? undefined : { name, target };
 };
 
+/**
+ * The prebuilt marker: names an already-built file the framework packages
+ * as-is instead of compiling. The file must live inside a directory declared
+ * in the top-level `payload` block; its artifact path is the payload
+ * destination plus the file's payload-relative path, so consumer-pinned
+ * stable paths survive packaging.
+ */
+export interface AgentBundlePrebuiltEntry {
+  prebuilt: string;
+}
+
+/** True when a config entry value is the prebuilt marker object. */
+export const isPrebuiltEntryInput = (value: unknown): value is AgentBundlePrebuiltEntry =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  typeof (value as { readonly prebuilt?: unknown }).prebuilt === 'string';
+
 export interface AgentBundleHookEntry {
-  handler: string;
+  /** Extra command arguments. Only prebuilt handlers accept arguments. */
+  args?: readonly string[];
+  handler: string | AgentBundlePrebuiltEntry;
   targets?: readonly string[];
   /** Native hook timeout in seconds. Omit it to use the selected host's default. */
   timeout?: number;
@@ -53,7 +73,7 @@ export interface AgentBundleMcpServer {
   args?: readonly string[];
   command?: string;
   cwd?: string;
-  entry?: string;
+  entry?: string | AgentBundlePrebuiltEntry;
   /**
    * Extra environment for stdio servers. Adapters inject the well-known
    * plugin-root anchor (see pluginRootEnvAnchor) beneath these entries, so a
@@ -99,6 +119,25 @@ export interface AgentBundleScriptEntry {
   entry: string;
   targets?: readonly string[];
 }
+
+/** One declared prebuilt payload directory with an optional target restriction. */
+export interface AgentBundlePayloadEntry {
+  source: string;
+  targets?: readonly string[];
+}
+
+export type AgentBundlePayloadInput = string | AgentBundlePayloadEntry;
+
+/**
+ * Prebuilt payload trees packaged byte-for-byte into selected target
+ * artifacts. Key = artifact-root destination directory (a safe single path
+ * segment outside the compiler-owned namespaces), value = the already-built
+ * source directory. Every file keeps its exact relative path — payload trees
+ * are opaque to the compiler, which cannot rewrite their internal sibling
+ * references, so stable names are the correctness contract; integrity stays
+ * content-addressed through the artifact manifest and project source inputs.
+ */
+export type AgentBundlePayloadConfig = Readonly<Record<string, AgentBundlePayloadInput>>;
 
 /** One npm-facing CLI binary compiled into the framework-owned package build. */
 export interface AgentBundleBinEntry {
@@ -185,6 +224,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   lib?: AgentBundleLibConfig;
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
+  payload?: AgentBundlePayloadConfig;
   plugin: AgentBundlePluginConfig;
   runtime?: AgentBundleRuntimeConfig;
   scripts?: Readonly<Record<string, AgentBundleScriptInput>>;
@@ -194,7 +234,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   [key: string]: unknown;
 }
 
-export type ProvenanceKind = 'config' | 'conventional' | 'explicit';
+export type ProvenanceKind = 'config' | 'conventional' | 'explicit' | 'prebuilt';
 
 export interface SourceProvenance {
   readonly kind: ProvenanceKind;
@@ -273,6 +313,12 @@ export interface NormalizedMcpApp {
   readonly _meta?: Readonly<Record<string, unknown>>;
   readonly id: string;
   readonly name: string;
+  /**
+   * True when the owning server's prebuilt payload already contains the
+   * served resource: the app stays a development surface and the compiler
+   * emits no `mcp-apps/` output for it.
+   */
+  readonly prebuilt?: true;
   readonly provenance: SourceProvenance;
   readonly resourceUri: string;
   readonly serverId: string;
@@ -320,17 +366,46 @@ export interface NormalizedPackageBuild {
 }
 
 export interface NormalizedHook {
+  /** Extra command arguments appended after the handler path; prebuilt hooks only. */
+  readonly args?: readonly string[];
   readonly event: CanonicalHookEvent;
   readonly id: string;
   readonly name: string;
   /** Host-native tools selected explicitly per target, alongside the canonical selectors. */
   readonly nativeTools?: readonly NativeHookToolSelector[];
+  /**
+   * Artifact-relative POSIX path of a prebuilt handler inside a declared
+   * payload. Present only for prebuilt hooks: adapters point the native
+   * command at this stable path instead of compiling a wrapper.
+   */
+  readonly prebuiltPath?: string;
   readonly provenance: SourceProvenance;
   readonly source: string;
   readonly targets: readonly string[];
   /** Native hook timeout in seconds. Omit it to use the selected host's default. */
   readonly timeout?: number;
   readonly tools: readonly CanonicalHookTool[];
+}
+
+/** One file of a prebuilt payload directory, copied byte-for-byte. */
+export interface NormalizedPayloadFile {
+  readonly bytes: number;
+  /** POSIX path relative to the payload source directory (and its artifact destination). */
+  readonly relativePath: string;
+  /** Absolute source file path. */
+  readonly source: string;
+}
+
+/** One declared prebuilt payload directory packaged verbatim into target artifacts. */
+export interface NormalizedPayload {
+  readonly files: readonly NormalizedPayloadFile[];
+  readonly id: string;
+  /** The artifact-root destination directory name. */
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  /** Absolute payload source directory. */
+  readonly source: string;
+  readonly targets: readonly string[];
 }
 
 export interface NormalizedNativeHook {
@@ -378,6 +453,12 @@ export interface NormalizedPlugin {
    * models predating the package build stay valid.
    */
   readonly packageBuild?: NormalizedPackageBuild;
+  /**
+   * Declared prebuilt payload directories packaged verbatim. Present only
+   * when the config declares a `payload` block; optional so hand-constructed
+   * models predating prebuilt payloads stay valid.
+   */
+  readonly payloads?: readonly NormalizedPayload[];
   /** The generated-executable runtime floor selected during normalization. */
   readonly runtime: NormalizedRuntime;
   readonly scripts: readonly NormalizedScript[];

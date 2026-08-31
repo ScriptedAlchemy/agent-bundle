@@ -7,8 +7,8 @@ import type { TargetRegistry } from '../adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from '../adapters/types.ts';
 import { deduplicateDiagnostics, DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
-import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
-import { assertInside } from '../core/paths.ts';
+import { pathTokens, type AgentBundleToolsConfig, type NormalizedPlugin } from '../core/types.ts';
+import { assertInside, isInsideOrEqual } from '../core/paths.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
   compileEntries,
@@ -74,6 +74,70 @@ interface StagedTarget extends PlannedTarget {
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly root: string;
 }
+
+const prebuiltReferenceExists = (
+  model: NormalizedPlugin,
+  artifactPath: string,
+): boolean => (model.payloads ?? []).some((payload) =>
+  artifactPath.startsWith(`${payload.name}/`) &&
+  payload.files.some((file) => `${payload.name}/${file.relativePath}` === artifactPath));
+
+/**
+ * AB4747-AB4749: an artifact build packages prebuilt payloads exactly as
+ * they exist, so it refuses to run while a declared payload is missing or
+ * empty, a prebuilt entry file is absent, or a payload directory overlaps
+ * the artifact output root. Validation reports the first two states as
+ * warnings (AB4743/AB4745) because development flows never require the
+ * consumer's own build to have run.
+ */
+const prebuiltPayloadDiagnostics = (
+  model: NormalizedPlugin,
+  outputRoot: string,
+): readonly Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  const selectedTargets = new Set(model.targets.map((target) => target.name));
+  for (const payload of model.payloads ?? []) {
+    if (isInsideOrEqual(payload.source, outputRoot) || isInsideOrEqual(outputRoot, payload.source)) {
+      diagnostics.push({
+        code: 'AB4749',
+        message: `Payload ${JSON.stringify(payload.name)} source ${JSON.stringify(payload.source)} overlaps the artifact output ${JSON.stringify(outputRoot)}; pass a different --output.`,
+        severity: 'error',
+      });
+    }
+    if (payload.files.length === 0 && payload.targets.some((target) => selectedTargets.has(target))) {
+      diagnostics.push({
+        code: 'AB4747',
+        message: `Payload ${JSON.stringify(payload.name)} contains no files; run the project's own build before "agent-bundle build".`,
+        severity: 'error',
+      });
+    }
+  }
+  const tokenPrefix = `${pathTokens.pluginRoot}/`;
+  for (const server of model.mcpServers) {
+    if (server.provenance.kind !== 'prebuilt') continue;
+    const entry = server.args?.[0];
+    if (typeof entry !== 'string' || !entry.startsWith(tokenPrefix)) continue;
+    const artifactPath = entry.slice(tokenPrefix.length);
+    if (!prebuiltReferenceExists(model, artifactPath)) {
+      diagnostics.push({
+        code: 'AB4748',
+        message: `MCP server ${JSON.stringify(server.name)} prebuilt entry ${JSON.stringify(artifactPath)} is not present in its declared payload; run the project's own build before "agent-bundle build".`,
+        severity: 'error',
+      });
+    }
+  }
+  for (const hook of model.hooks) {
+    if (hook.prebuiltPath === undefined) continue;
+    if (!prebuiltReferenceExists(model, hook.prebuiltPath)) {
+      diagnostics.push({
+        code: 'AB4748',
+        message: `Hook ${JSON.stringify(hook.name)} prebuilt handler ${JSON.stringify(hook.prebuiltPath)} is not present in its declared payload; run the project's own build before "agent-bundle build".`,
+        severity: 'error',
+      });
+    }
+  }
+  return diagnostics;
+};
 
 const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
   const diagnostics: Diagnostic[] = [];
@@ -157,7 +221,9 @@ const outputCandidatesFor = (options: {
   readonly targets: readonly StagedTarget[];
 }): readonly ArtifactOutputCandidate[] => [
   ...options.targets.flatMap((target) => target.entries.map((entry) => ({
-    kind: entry.kind === 'copy' ? 'copy' as const : 'generated' as const,
+    kind: entry.kind !== 'copy'
+      ? 'generated' as const
+      : entry.prebuilt === true ? 'prebuilt' as const : 'copy' as const,
     path: resolveArtifactDestination(target.root, entry.relativePath),
     sourceInputs: entry.sourceInputs,
   }))),
@@ -245,8 +311,10 @@ const manifestFor = (options: {
 };
 
 export const build = async (options: BuildOptions): Promise<BuildResult> => {
-  const planned = planTargets(options);
   const outputRoot = resolve(options.outputRoot);
+  const payloadDiagnostics = prebuiltPayloadDiagnostics(options.model, outputRoot);
+  if (payloadDiagnostics.length > 0) throw new DiagnosticError(payloadDiagnostics);
+  const planned = planTargets(options);
   const preflightTargets = planStagedTargets({
     artifactRoot: outputRoot,
     model: options.model,
@@ -336,7 +404,12 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       files: await listArtifactFiles(stageRoot),
       outputProvenance,
     });
-    const preManifestDiagnostics = await validateArtifactFiles({ artifactRoot: stageRoot });
+    const preManifestDiagnostics = await validateArtifactFiles({
+      artifactRoot: stageRoot,
+      prebuiltPaths: new Set(outputProvenance
+        .filter((output) => output.kind === 'prebuilt')
+        .map((output) => output.path)),
+    });
     if (preManifestDiagnostics.some((entry) => entry.severity === 'error')) {
       throw new DiagnosticError(preManifestDiagnostics);
     }

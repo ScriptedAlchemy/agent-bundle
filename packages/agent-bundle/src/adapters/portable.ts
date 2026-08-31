@@ -20,6 +20,7 @@ import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' }
 import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'json' };
 import {
   createAdapterValidator,
+  payloadCopyEntries,
   schemaDescriptorsFrom,
   sourceInputs,
   validateJsonSchemaDocument,
@@ -270,6 +271,8 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       sourceInputs: sourceInputs(asset.source),
     });
   }
+
+  entries.push(...payloadCopyEntries(model, hasPortableTarget));
 
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<
     string,

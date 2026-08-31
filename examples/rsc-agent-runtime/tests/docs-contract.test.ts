@@ -43,7 +43,9 @@ test('declares a shell-independent production build', async () => {
     readonly scripts?: Readonly<Record<string, string>>;
   };
 
-  expect(manifest.scripts?.build).toBe('rsbuild build --mode production && pnpm package:hosts');
+  // Ordering is the contract: the demo's own Rsbuild build must produce the
+  // declared payload trees before `agent-bundle build` packages them.
+  expect(manifest.scripts?.build).toBe('rsbuild build --mode production && agent-bundle build --json --output dist/plugins');
 });
 
 test('derives the native evaluator root from decoded module URLs', async () => {

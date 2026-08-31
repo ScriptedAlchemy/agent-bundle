@@ -183,7 +183,7 @@ it('uses only an installed tarball after source deletion', async () => {
 
     const manifest = JSON.parse(await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly files: readonly (ManifestDigest & {
-        readonly kind: 'bundle' | 'copy' | 'generated';
+        readonly kind: 'bundle' | 'copy' | 'generated' | 'prebuilt';
         readonly sourceInputs: readonly string[];
       })[];
     };
@@ -199,7 +199,7 @@ it('uses only an installed tarball after source deletion', async () => {
         .sort((left, right) => left.path.localeCompare(right.path)),
     ).toEqual(manifestFiles);
     for (const file of manifest.files) {
-      expect(['bundle', 'copy', 'generated']).toContain(file.kind);
+      expect(['bundle', 'copy', 'generated', 'prebuilt']).toContain(file.kind);
       expect(file.sourceInputs).toEqual([...file.sourceInputs].sort((left, right) => left.localeCompare(right)));
     }
     for (const file of files.filter((entry) => entry.path.endsWith('.mjs'))) {

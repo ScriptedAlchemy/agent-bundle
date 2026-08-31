@@ -143,9 +143,15 @@ export const validateHookCoherence = async (options: {
         ));
       }
     }
+    const wrapperLayout = options.registry.artifactLayout(target).hookWrappers;
     for (const command of commands.commands) {
       const relativePath = compilerHookWrapperPath(contract, command.command);
       if (relativePath === undefined) continue;
+      // Only compiler wrapper outputs must be indexed. A prebuilt hook
+      // command without arguments parses like a wrapper command but points
+      // into its payload directory, outside the wrapper layout, and is
+      // deliberately absent from the hook index (like native hooks).
+      if (!pathInTargetOutputLayout(targetArtifactPath(target, relativePath), target, wrapperLayout)) continue;
       const entries = relativePaths.get(relativePath) ?? 0;
       if (entries === 1) continue;
       diagnostics.push(diagnostic(

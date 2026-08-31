@@ -201,6 +201,13 @@ export const createRscRuntimeRsbuildConfig = (
     development ? join(options.compilerRoot as string, name) : productionRoot;
 
   return {
+    // Pinned, not derived from ambient NODE_ENV: react and react-server-dom
+    // must compile as their production variants so Flight payloads stay
+    // compact model rows without development debug and timing frames, and so
+    // the in-worker dev server serves the production surface layout its
+    // session URLs are built for. `options.mode` still selects the compile
+    // topology (dev entries, compiler roots) independently of this flavor.
+    mode: 'production',
     ...(development ? {
       dev: { writeToDisk: true },
       // Port 0 lets the OS assign the listener. Rsbuild's default (3000 with an
