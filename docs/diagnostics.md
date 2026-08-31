@@ -27,7 +27,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
 
-## Migration nudges (`AB4730`–`AB4733`)
+## Migration nudges (`AB4730`–`AB4735`)
 
 The entry conventions and the framework-owned stdio lifecycle shell (RFC #50)
 replaced patterns consumers previously wrote by hand. When `validate`,
@@ -74,6 +74,25 @@ to it — a confusable state where the file on disk is not what runs.
 
 Adopt: drop the explicit `entry`/`command`/`url` so the convention applies.
 Silence: remove the shadowed file.
+
+### `AB4734` — conventional skill shadowed by explicit `skills` config
+
+A `skills/<name>/SKILL.md` (or rendered `SKILL.tsx`/`SKILL.ts`) directory
+exists, but the explicit `skills` configuration does not cover it — the
+conventional skill is silently shadowed. When config is silent, every
+`skills/<name>/` directory ships by convention and this nudge never fires.
+
+Adopt: remove the explicit `skills` configuration so the convention applies,
+or add the directory to `skills`. Silence: remove the directory.
+
+### `AB4735` — rendered skill source shadowed by hand-authored `SKILL.md`
+
+A skill directory contains both a hand-authored `SKILL.md` and a rendered
+skill source (`SKILL.tsx`/`SKILL.ts`). The authored file wins — an authored
+document beats a generated one — so the component module never compiles.
+
+Adopt: remove `SKILL.md` so the rendered skill compiles at build. Silence:
+remove the component module.
 
 ## Development package build (`AB7103`)
 
