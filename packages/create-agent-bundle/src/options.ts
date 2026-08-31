@@ -140,8 +140,11 @@ export interface ProjectName {
  * `create-rstack` name semantics: `foo/bar` scaffolds into `<cwd>/foo/bar`
  * and names the package `bar`; `@scope/foo` keeps the full scoped name as
  * the package name. The plugin name additionally drops the scope and is
- * sanitized to agent-bundle's safe package-output shape so the `src/cli.ts`
- * bin convention always applies.
+ * sanitized to the strictest host contract — Cursor's lowercase kebab-case
+ * (`/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/`, at most 64 characters), which the
+ * unified `plugin` target enforces too and which is also a valid safe
+ * package-output name — so every selectable target validates and the
+ * `src/cli.ts` bin convention always applies.
  */
 export const formatProjectName = (input: string): ProjectName => {
   const formatted = input.trim().replace(/\/+$/u, '');
@@ -154,9 +157,11 @@ const pluginNameFrom = (packageName: string): string => {
     ? packageName.slice(packageName.indexOf('/') + 1)
     : packageName;
   const cleaned = bare
-    .replace(/[^a-zA-Z0-9._-]+/gu, '-')
-    .replace(/^[^a-zA-Z0-9]+/u, '')
-    .replace(/[^a-zA-Z0-9]+$/u, '');
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]+/gu, '-')
+    .replace(/^[^a-z0-9]+/u, '')
+    .slice(0, 64)
+    .replace(/[^a-z0-9]+$/u, '');
   return cleaned === '' ? 'my-agent-plugin' : cleaned;
 };
 

@@ -67,9 +67,19 @@ describe('formatProjectName', () => {
     });
   });
 
-  it('sanitizes the plugin name to the safe package-output shape', () => {
+  it('sanitizes the plugin name to the strictest host contract (Cursor lowercase kebab-case)', () => {
+    // Mirrored from cursorNamePattern in packages/agent-bundle/src/adapters/cursor.ts,
+    // which the unified `plugin` target enforces as well.
+    const cursorNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
     expect(formatProjectName('my plugin!').pluginName).toBe('my-plugin');
     expect(formatProjectName('--weird--').pluginName).toBe('weird');
+    expect(formatProjectName('My_App').pluginName).toBe('my-app');
+    expect(formatProjectName('@scope/My.Tool').pluginName).toBe('my.tool');
+    for (const input of ['My_App', 'projects/UPPER_case', '@scope/Dots.and_Under', `${'x'.repeat(80)}!`, '汉字']) {
+      const { pluginName } = formatProjectName(input);
+      expect(pluginName).toMatch(cursorNamePattern);
+      expect(pluginName.length).toBeLessThanOrEqual(64);
+    }
   });
 });
 
