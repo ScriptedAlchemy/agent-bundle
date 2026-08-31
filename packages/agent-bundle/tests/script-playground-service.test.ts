@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { ScriptPlaygroundService } from '../src/dev/playground/script-playground-service.ts';
+import { taskkill, terminateProcessTree, waitForProcessTreeExit } from '../src/services/process-tree.ts';
 import { timeScale } from './support/time-scale.ts';
 
 const temporaryScript = async (source: string): Promise<Readonly<{ readonly close: () => Promise<void>; readonly path: string }>> => {
@@ -18,7 +19,10 @@ const temporaryScript = async (source: string): Promise<Readonly<{ readonly clos
 
 const eventually = async (assertion: () => Promise<void> | void): Promise<void> => {
   let failure: unknown;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  // Child-process startup is what these polls usually wait on, and it slows
+  // roughly with worker contention, so the budget follows the suite's
+  // time-scale convention.
+  for (let attempt = 0; attempt < 100 * timeScale; attempt += 1) {
     try {
       await assertion();
       return;
@@ -392,11 +396,17 @@ it('reports a stable interpreter-unavailable failure without exposing a command 
 it('cancels and drains the emitted script process group before its workspace is released', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-playground-tree-'));
   const pidPath = join(root, 'descendant.pid');
+  // The pid file must appear atomically (write staged, then rename): a plain
+  // writeFile creates the file before its bytes land, and a poll that reads
+  // the empty window parses Number('') === 0 — and process.kill(0, 0) probes
+  // this test runner's own process group, which always exists.
+  const pidStagingPath = `${pidPath}.staging`;
   const emitted = await temporaryScript([
     "import { spawn } from 'node:child_process';",
-    "import { writeFile } from 'node:fs/promises';",
+    "import { rename, writeFile } from 'node:fs/promises';",
     `const descendant = spawn(process.execPath, ['--eval', 'setInterval(() => undefined, 1_000)'], { stdio: 'ignore' });`,
-    `await writeFile(${JSON.stringify(pidPath)}, String(descendant.pid));`,
+    `await writeFile(${JSON.stringify(pidStagingPath)}, String(descendant.pid));`,
+    `await rename(${JSON.stringify(pidStagingPath)}, ${JSON.stringify(pidPath)});`,
     'setInterval(() => undefined, 1_000);',
     '',
   ].join('\n'));
@@ -438,9 +448,11 @@ it('keeps SIGKILL process-group cleanup alive after the direct child closes', as
   const descendantProgram = "require('node:fs').writeFileSync(" + JSON.stringify(readyPath) + ", 'ready'); process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1_000);";
   const emitted = await temporaryScript([
     "import { spawn } from 'node:child_process';",
-    "import { writeFile } from 'node:fs/promises';",
+    "import { rename, writeFile } from 'node:fs/promises';",
     'const descendant = spawn(process.execPath, [\'--eval\', ' + JSON.stringify(descendantProgram) + '], { stdio: \'ignore\' });',
-    'await writeFile(' + JSON.stringify(pidPath) + ', String(descendant.pid));',
+    // Staged rename: the pid file must never be observable empty.
+    'await writeFile(' + JSON.stringify(`${pidPath}.staging`) + ', String(descendant.pid));',
+    'await rename(' + JSON.stringify(`${pidPath}.staging`) + ', ' + JSON.stringify(pidPath) + ');',
     'setInterval(() => undefined, 1_000);',
     '',
   ].join('\n'));
@@ -480,18 +492,47 @@ const assertStubbornDescendantIsGoneAtSettlement = async (
   const descendantProgram = "require('node:fs').writeFileSync(" + JSON.stringify(readyPath) + ", 'ready'); process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1_000);";
   const emitted = await temporaryScript([
     "import { spawn } from 'node:child_process';",
-    "import { readFile, writeFile } from 'node:fs/promises';",
+    "import { readFile, rename, writeFile } from 'node:fs/promises';",
     'const descendant = spawn(process.execPath, [\'--eval\', ' + JSON.stringify(descendantProgram) + '], { stdio: \'ignore\' });',
-    'await writeFile(' + JSON.stringify(pidPath) + ', String(descendant.pid));',
+    // Staged rename: the pid file must never be observable empty.
+    'await writeFile(' + JSON.stringify(`${pidPath}.staging`) + ', String(descendant.pid));',
+    'await rename(' + JSON.stringify(`${pidPath}.staging`) + ', ' + JSON.stringify(pidPath) + ');',
     'while (true) { try { await readFile(' + JSON.stringify(readyPath) + '); break; } catch { await new Promise((resolvePromise) => setTimeout(resolvePromise, 1)); } }',
     trigger === 'output-limit' ? "process.stdout.write('x'.repeat(512));" : 'setInterval(() => undefined, 1_000);',
     trigger === 'output-limit' ? 'setInterval(() => undefined, 1_000);' : '',
     '',
   ].join('\n'));
+  // The service arms its timeout timer the moment it spawns the wrapper, so a
+  // fixed timeoutMs races the descendant's startup (two sequential Node
+  // process launches) under CPU contention: the tree kill can land before the
+  // descendant installs its SIGTERM handler and writes the ready file, and
+  // the test then polls for a file that will never exist. Sequence the
+  // scenario instead of racing it: hold the first termination signal until
+  // the descendant is observably ready, then delegate to the same
+  // process-tree cleanup the service uses in production.
+  const descendantReady = async (): Promise<void> => {
+    for (;;) {
+      try {
+        await readFile(readyPath);
+        return;
+      } catch {
+        await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 10); });
+      }
+    }
+  };
+  const readinessGatedProcessTree = Object.freeze({
+    terminate: async (child: ChildProcess, signal: NodeJS.Signals): Promise<boolean> => {
+      await descendantReady();
+      return terminateProcessTree(child, signal, { onTreeTerminationFailure: () => undefined, platform: process.platform, taskkill });
+    },
+    // Mirrors the service's default exit-settlement parameters.
+    waitForExit: (child: ChildProcess): Promise<boolean> =>
+      waitForProcessTreeExit(child, { platform: process.platform, pollMilliseconds: 10, timeoutMilliseconds: 250 }),
+  });
   let descendant: number | undefined;
   try {
     const service = new ScriptPlaygroundService({
-      ...(trigger === 'output-limit' ? { outputLimit: 128 } : { timeoutMs: 100 }),
+      ...(trigger === 'output-limit' ? { outputLimit: 128 } : { processTree: readinessGatedProcessTree, timeoutMs: 100 }),
       resolveScript: async () => Object.freeze({
         interpreter: Object.freeze({ args: Object.freeze([]), command: process.execPath }), name: 'review', path: emitted.path,
       }),
