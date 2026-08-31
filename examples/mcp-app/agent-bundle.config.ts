@@ -16,7 +16,6 @@ export default defineConfig({
             template: './views/status-panel.html',
           },
         },
-        entry: './src/mcp-server.ts',
       },
     },
   },
