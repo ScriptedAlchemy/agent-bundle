@@ -1080,8 +1080,12 @@ it('canonicalizes copied script extensions in emitted artifact paths', async () 
 it('documents a versioned MCP App resource URI accepted by source validation', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-readme-uri-parent-'));
   const root = join(parent, 'project');
-  const readme = await readFile(join(process.cwd(), 'README.md'), 'utf8');
-  const resourceUri = /resourceUri: '([^']+)'/u.exec(readme)?.[1];
+  const documentedConfig = await readFile(
+    join(process.cwd(), 'examples', 'mcp-app', 'agent-bundle.config.ts'),
+    'utf8',
+  );
+  const resourceUri = /resourceUri: '([^']+)'/u.exec(documentedConfig)?.[1];
+  expect(resourceUri).toBeDefined();
   await mkdir(join(root, 'src'), { recursive: true });
   await mkdir(join(root, 'views'), { recursive: true });
   await Promise.all([
