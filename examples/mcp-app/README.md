@@ -18,8 +18,13 @@ and Claude artifacts; the App resource remains portable.
 - `src/hooks/session-start.ts` adds the readiness workflow to compatible host
   sessions, while `check-service-fixture` validates the checked-in compiler
   fixture before a release walkthrough.
-- `src/mcp-server.ts` serves immutable `compiler` and `payments-api` health
-  records. `payments-api` deliberately returns degraded latency evidence.
+- `src/mcp/status.ts` default-exports the `status` server factory serving
+  immutable `compiler` and `payments-api` health records; `payments-api`
+  deliberately returns degraded latency evidence. The build discovers the
+  entry through the `src/mcp/<server-id>.ts` convention — the config declares
+  no `entry` — and wraps the factory in the generated stdio lifecycle shell
+  (console-to-stderr guard, signal handling, stdin-EOF exit, bounded
+  shutdown, heartbeat).
 
 ## Workbench walkthrough
 
@@ -71,6 +76,18 @@ pnpm build
 pnpm exec agent-bundle eval --case status-is-healthy --trials 1
 pnpm dev
 ```
+
+Run the built `status` server in the foreground on stdio:
+
+```bash
+pnpm exec agent-bundle mcp run --server status --target portable
+```
+
+The command resolves the generated entry from the portable target's MCP
+manifest, building a temporary artifact first; pass `--artifact dist` to
+reuse the `pnpm build` output instead. Closing stdin exits 0 and Ctrl-C
+exits 130, and per-server state persists under
+`.agent-bundle/mcp-run/portable/status`.
 
 Use `pnpm check` for validation and build without opening the Workbench. The
 deterministic portable eval and fixture check read only checked-in data and
