@@ -95,9 +95,11 @@ run `audiobook-curator --help` for exact CLI forms.
 
 ## Run the MCP server
 
-Run the built `curator` server in the foreground on stdio:
+From this example's directory, run the built `curator` server in the
+foreground on stdio:
 
 ```bash
+cd examples/audiobook-curator
 pnpm exec agent-bundle mcp run --server curator --target claude
 ```
 
