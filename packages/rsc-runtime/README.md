@@ -27,23 +27,16 @@ exactly as `JSON.stringify` serializes them. Values that cannot round-trip as
 JSON — cycles, accessors, sparse arrays, non-finite numbers, non-plain objects —
 are still rejected, and the error names the offending key path.
 
-## Complete plugin applications
+## Applications
 
-The `@agent-bundle/rsc-runtime/plugin` entry defines an Agent Bundle application
-once and derives its compiler configuration, CLI commands, and MCP tool catalog
-from the same typed operation registry:
+Structure — targets, skills, scripts, MCP servers, MCP apps — lives in
+`agent-bundle.config.ts` and file conventions; JSX renders. The
+`@agent-bundle/rsc-runtime/plugin` entry defines the application's runtime
+identity and typed operation catalog once and derives its CLI commands and
+MCP tool registrations from that one registry:
 
 ```tsx
-import {
-  AgentBundle,
-  McpApp,
-  McpServer,
-  Operation,
-  Script,
-  Skill,
-  defineOperation,
-  defineRscAgentBundle,
-} from '@agent-bundle/rsc-runtime/plugin';
+import { defineOperation, defineRscApplication } from '@agent-bundle/rsc-runtime/plugin';
 import { Mcp } from '@agent-bundle/rsc-runtime';
 import { z } from 'zod';
 
@@ -76,30 +69,21 @@ const status = defineOperation({
   resultSchema,
 });
 
-export const application = defineRscAgentBundle(
-  <AgentBundle name="example" targets={['claude', 'codex']} version="1.0.0">
-    <Skill source="./skills/example" />
-    <Script entry="./src/cli.ts" name="example" />
-    <McpServer entry="./src/mcp-server.ts" name="runtime">
-      <McpApp
-        entry="./views/status-panel.ts"
-        name="status"
-        resourceUri="ui://example/status.html"
-        template="./views/status-panel.html"
-      />
-    </McpServer>
-    <Operation definition={status} />
-  </AgentBundle>,
-);
+export const application = defineRscApplication({
+  name: 'example',
+  operations: [status],
+  version: '1.0.0',
+});
 ```
 
-Export `application.config` from `agent-bundle.config.ts`, export a `main`
-that returns `runRscCli(application, argv)` from the Script entry (the build
-generates the process envelope that owns argv, awaiting, and exit-code
-adoption), and use `createRscMcpServer(application, 'runtime')` for stdio MCP. Operation inputs,
-implementations, output validation, and result renderers cannot drift between the
-two surfaces. Definition lowering rejects duplicate ownership and references to
-undeclared MCP servers before Agent Bundle compilation begins.
+Use `runRscCli(application, argv)` in the conventional `src/cli.ts` entry and
+`createRscMcpServer(application, 'runtime')` in the conventional
+`src/mcp/runtime.ts` entry. Operation inputs, implementations, output
+validation, and result renderers cannot drift between the two surfaces, and
+`defineRscApplication` rejects duplicate operation ids, CLI commands, and MCP
+tools up front. The server name passed to `createRscMcpServer` selects the
+operations whose `mcp.server` matches; the server's structural declaration
+(entry, targets, apps) belongs to `agent-bundle.config.ts`.
 
 The optional `mcp.title` and `mcp._meta` ride the tool listing verbatim —
 `_meta: { ui: { resourceUri } }` is how MCP Apps hosts bind a tool to its
@@ -107,18 +91,6 @@ widget. `createRscMcpServer` registers exactly the annotation hints an
 operation declares (`readOnly`, plus `destructive` / `idempotent` /
 `openWorld` when present); absent hints stay absent on the wire, where they
 keep their MCP-spec default semantics.
-
-`<McpApp>` children of `<McpServer>` lower into the owning server's
-`mcp.servers[<name>].apps` record, so `application.config` stays the single
-source of truth for MCP Apps: the compiler bundles each view into a
-self-contained HTML resource served through `import apps from
-'agent-bundle/mcp-apps'`. App `targets` default to the owning server's
-targets. Several servers may serve one shared widget by declaring the same
-`<McpApp>` (identical `name`, `entry`, `resourceUri`, `template`, and
-`_meta`; per-server `targets` may differ) — it compiles once and lands in
-every declaring server's registry. Conflicting redeclarations of an app
-name, or one `resourceUri` spread across different app names, are rejected
-during lowering.
 
 This layer intentionally does not own transport persistence or application
 state. Those remain explicit dependencies of operation implementations.

@@ -1,11 +1,16 @@
 import { lowerMcpResult } from '@agent-bundle/rsc-runtime';
 import { describe, expect, it } from '@rstest/core';
 
+import maybeFactoryConfig from '../agent-bundle.config.ts';
 import {
   createAudiobookCuratorApplication,
   type AudiobookCuratorOperations,
 } from '../src/application.js';
 import { runCli } from '../src/cli.js';
+
+// defineConfig also admits factories; this example's config is a static object.
+if (typeof maybeFactoryConfig === 'function') throw new Error('expected a static config object');
+const config = maybeFactoryConfig;
 
 const operations = (): AudiobookCuratorOperations => ({
   audit: async (input) => ({
@@ -63,13 +68,15 @@ const operations = (): AudiobookCuratorOperations => ({
 });
 
 describe('audiobook curator RSC application', () => {
-  it('owns config, CLI commands, and MCP tools in one definition', () => {
-    const application = createAudiobookCuratorApplication({ operations: operations() });
+  it('declares structure in config and owns CLI commands and MCP tools in the application', () => {
+    expect(config.targets).toEqual(['claude', 'codex']);
+    expect(Object.keys(config.scripts ?? {})).toEqual(['audiobook-curator']);
+    expect(Object.keys(config.mcp?.servers ?? {})).toEqual(['curator']);
+    // No skills entry: skills/curate-audiobooks/SKILL.md ships by convention.
+    expect(config.skills).toBeUndefined();
 
-    expect(application.config.targets).toEqual(['claude', 'codex']);
-    expect(application.config.skills).toEqual(['./skills/curate-audiobooks']);
-    expect(Object.keys(application.config.scripts ?? {})).toEqual(['audiobook-curator']);
-    expect(Object.keys(application.config.mcp?.servers ?? {})).toEqual(['curator']);
+    const application = createAudiobookCuratorApplication({ operations: operations() });
+    expect(application.name).toBe('audiobook-curator');
     expect(application.operations.map((operation) => operation.cli?.name)).toEqual([
       'acoustic-verify',
       'acoustic-identify',

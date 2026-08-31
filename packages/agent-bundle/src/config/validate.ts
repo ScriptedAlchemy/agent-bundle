@@ -936,6 +936,21 @@ const packageConventionShadowNudges = (loaded: LoadedConfig): Diagnostic[] => {
   return diagnostics;
 };
 
+/**
+ * AB4734: explicit `skills` configuration leaves a conventional
+ * `skills/<name>/SKILL.md` document uncovered, so the convention is silently
+ * shadowed — the skills-directory analogue of AB4731/AB4732/AB4733.
+ */
+const skillConventionShadowNudges = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+): Diagnostic[] => (discovered.shadowedConventionalSkills ?? []).map((source) => nudgeDiagnostic(
+  'AB4734',
+  `${relativePosix(loaded.context.projectRoot, source)} is present but explicit skills configuration does not cover it; the conventional skill is shadowed.`,
+  source,
+  'Optional: remove the explicit skills configuration to adopt the skills/<name>/SKILL.md convention, add the directory to skills, or remove it to silence this nudge.',
+));
+
 const isRspackHatchValue = (value: unknown): boolean =>
   typeof value === 'function' || isRecord(value);
 
@@ -1035,6 +1050,7 @@ export const validateSource = (
   diagnostics.push(...validateScripts(loaded, registry));
   diagnostics.push(...validateTools(loaded));
   diagnostics.push(...packageConventionShadowNudges(loaded));
+  diagnostics.push(...skillConventionShadowNudges(loaded, discovered));
 
   return diagnostics;
 };
@@ -1226,6 +1242,13 @@ export const validateModel = (
   };
   for (const target of model.targets) {
     for (const skill of model.skills) {
+      if (skill.markdown !== undefined) {
+        recordOutput(
+          posix.join(target.name, 'skills', skill.name, 'SKILL.md'),
+          skill.source,
+          target.name,
+        );
+      }
       for (const resource of skill.resources) {
         recordOutput(
           posix.join(target.name, 'skills', skill.name, resource.relativePath),
