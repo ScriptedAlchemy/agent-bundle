@@ -30,8 +30,10 @@ are still rejected, and the error names the offending key path.
 ## Applications
 
 Structure — targets, skills, scripts, MCP servers, MCP apps — lives in
-`agent-bundle.config.ts` and file conventions; JSX renders. The
-`@agent-bundle/rsc-runtime/plugin` entry defines the application's runtime
+`agent-bundle.config.ts` and file conventions; JSX renders. That split is the
+whole authoring model, described on one screen in
+[Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md).
+The `@agent-bundle/rsc-runtime/plugin` entry defines the application's runtime
 identity and typed operation catalog once and derives its CLI commands and
 MCP tool registrations from that one registry:
 
@@ -91,6 +93,14 @@ widget. `createRscMcpServer` registers exactly the annotation hints an
 operation declares (`readOnly`, plus `destructive` / `idempotent` /
 `openWorld` when present); absent hints stay absent on the wire, where they
 keep their MCP-spec default semantics.
+
+The widget behind that `resourceUri` is structure, so it is declared in
+`agent-bundle.config.ts` under the owning server — `mcp.servers.<id>.apps.<name>`
+with an `entry`, the matching `resourceUri`, and optional `template`, `targets`,
+and `_meta`. Agent Bundle compiles each view into a self-contained HTML resource
+and hands it to the server through `import apps from 'agent-bundle/mcp-apps'`.
+`createRscMcpServer` registers tools only, so serving that resource remains an
+explicit `registerResource` call on the server it returns.
 
 This layer intentionally does not own transport persistence or application
 state. Those remain explicit dependencies of operation implementations.
