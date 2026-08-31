@@ -18,6 +18,17 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@1
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/rsc-runtime@1
 ```
 
+The `create-agent-bundle` scaffolder is published to the same channel and is
+meant to be run rather than installed:
+
+```sh
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
+```
+
+A scaffolded project pins `agent-bundle` to the preview of the same commit
+the scaffolder came from, so both sides of the pairing rule below hold
+automatically.
+
 `@1` resolves to the last preview published for PR #1 — commit `5685521` at the
 time of its merge, which is the state that landed on `main`.
 

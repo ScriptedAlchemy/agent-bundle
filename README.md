@@ -16,7 +16,19 @@ Use a PR number or the SHA of a commit whose package-preview run succeeded (ever
 
 ## Quick start
 
-Describe the plugin in `agent-bundle.config.ts` at the project root:
+The fastest start is the scaffolder — it prompts for a name, a template
+(`minimal`, `mcp-server`, or `cli-tool`), and the host targets, then emits a
+project that already passes its own `check`:
+
+```sh
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
+```
+
+(`npm create agent-bundle` once npm releases exist. See the
+[create-agent-bundle README](packages/create-agent-bundle/README.md) for
+templates and flags.)
+
+Or describe the plugin by hand in `agent-bundle.config.ts` at the project root:
 
 ```ts
 import { defineConfig } from 'agent-bundle/config';

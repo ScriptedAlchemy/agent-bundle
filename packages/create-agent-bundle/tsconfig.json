@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "rslib.config.ts",
+    "src/**/*.ts",
+    "tests/**/*.ts"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "isolatedModules": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2024",
+    "types": [
+      "node"
+    ],
+    "verbatimModuleSyntax": true
+  },
+  "include": [
+    "agent-bundle.config.ts",
+    "src/**/*.ts",
+    "tests/**/*.ts"
+  ]
+}

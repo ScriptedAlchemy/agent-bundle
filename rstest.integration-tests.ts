@@ -82,5 +82,16 @@ export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/public-api-packed.test.ts',
   'packages/agent-bundle/tests/release-audit.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
+  'packages/create-agent-bundle/tests/scaffold-packed.e2e.test.ts',
   'packages/workbench/tests/packed-release.e2e.test.ts',
+];
+
+/**
+ * Checked-in scaffolding templates ship their own test files; they run inside
+ * scaffolded projects (the packed e2e drives them through each project's
+ * `check`), never through the workspace pools, whose include glob would
+ * otherwise pick them up.
+ */
+export const templateTestFiles: readonly string[] = [
+  'packages/create-agent-bundle/templates/**',
 ];
