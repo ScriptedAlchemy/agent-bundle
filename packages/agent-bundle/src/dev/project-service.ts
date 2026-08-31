@@ -59,7 +59,12 @@ export interface PreparedProject {
   readonly projectContext?: ProjectContext;
   readonly registry: TargetRegistry;
   readonly root: string;
-  readonly snapshotSource?: () => Promise<ProjectSourceSnapshot>;
+  /**
+   * Re-snapshots the project with the same output and payload roots the
+   * prepared identity hashed; a divergent re-snapshot would make
+   * payload-bearing projects always appear drifted to epoch publication.
+   */
+  readonly snapshotSource: () => Promise<ProjectSourceSnapshot>;
   readonly source: SourceStatus;
   /** The consumer bundler escape hatch, passed through for build lowering. */
   readonly tools?: AgentBundleToolsConfig;
@@ -523,12 +528,12 @@ const preparedProject = (
   registry: TargetRegistry,
   root: string,
   source: SourceStatus,
+  snapshotSource: () => Promise<ProjectSourceSnapshot>,
   model?: NormalizedPlugin,
   devRuntime?: DevRuntimePreparedProject,
   devRuntimeDiagnostic?: Diagnostic,
   devAgentApiEnabled?: boolean,
   tools?: AgentBundleToolsConfig,
-  snapshotSource?: () => Promise<ProjectSourceSnapshot>,
 ): PreparedProject => Object.freeze({
   configPath,
   ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
@@ -540,7 +545,7 @@ const preparedProject = (
   ...(projectContext === undefined ? {} : { projectContext }),
   registry,
   root,
-  ...(snapshotSource === undefined ? {} : { snapshotSource }),
+  snapshotSource,
   source,
   ...(tools === undefined ? {} : { tools }),
 });
@@ -587,6 +592,9 @@ const invalidPreparedProject = (options: {
     options.registry,
     options.root,
     sourceStatus(options.diagnostics, snapshot.revision),
+    // A failed preparation never resolved its payload roots; the re-snapshot
+    // observes the same source tree the failure snapshot did.
+    () => snapshotProjectSource(options.root, options.configPath, options.outputRoots),
   );
 };
 
@@ -712,7 +720,11 @@ export class ProjectService {
     const supplementalMetadataFailure = runtimeMetadata.changed;
     let sourceDiagnostics: readonly Diagnostic[];
     try {
-      sourceDiagnostics = freezeDiagnostics(validateSource(preparedLoaded, discovered, registry));
+      // The AB4750 freshness nudge only surfaces through `validate`; other
+      // commands skip its full-project mtime walk.
+      sourceDiagnostics = freezeDiagnostics(validateSource(preparedLoaded, discovered, registry, {
+        payloadFreshness: command === 'validate',
+      }));
     } catch {
       return failedPreparation(
         'AB7001',
@@ -722,10 +734,12 @@ export class ProjectService {
         snapshot,
       );
     }
+    const snapshotSource = (): Promise<ProjectSourceSnapshot> =>
+      snapshotProjectSource(root, loaded.configPath, outputRoots, payloadRoots);
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source);
+      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source, snapshotSource);
     }
 
     let model: NormalizedPlugin;
@@ -834,15 +848,12 @@ export class ProjectService {
       registry,
       root,
       source,
+      snapshotSource,
       model,
       devRuntime,
       devRuntimeDiagnostic,
       devAgentApiEnabled,
       tools,
-      // Re-snapshots must observe the same payload roots the prepared
-      // identity hashed, or payload-bearing projects would always appear
-      // drifted to epoch publication.
-      () => snapshotProjectSource(root, loaded.configPath, outputRoots, payloadRoots),
     );
   }
 }
