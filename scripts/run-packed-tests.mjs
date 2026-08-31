@@ -4,7 +4,9 @@
  * prebuilt seams set instead of every test file rebuilding the workspace for
  * itself. Build and pack run with NODE_ENV=production like the release
  * pipeline they stand in for; every child inherits the ambient environment
- * minus NODE_PATH.
+ * minus NODE_PATH. `--release` adds the release-boundary-only files (the
+ * scaffolder template matrix) to the pool; remaining arguments pass through
+ * to rstest.
  */
 import { execFile as executeFile, spawn } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -16,6 +18,8 @@ import { promisify } from 'node:util';
 const execFile = promisify(executeFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { NODE_PATH: _nodePath, ...environment } = process.env;
+const releasePool = process.argv.includes('--release');
+const rstestArguments = process.argv.slice(2).filter((argument) => argument !== '--release');
 
 const run = (command, args, extraEnvironment = {}) => new Promise((resolvePromise, rejectPromise) => {
   const child = spawn(command, args, {
@@ -45,8 +49,9 @@ try {
       `${JSON.stringify({ packOutput, tarball: join(packDirectory, packOutput.filename) })}\n`,
     );
   }));
-  process.exitCode = await run('pnpm', ['exec', 'rstest', '--config', 'rstest.packed.config.ts', ...process.argv.slice(2)], {
+  process.exitCode = await run('pnpm', ['exec', 'rstest', '--config', 'rstest.packed.config.ts', ...rstestArguments], {
     AGENT_BUNDLE_PACKAGE_PREBUILT: '1',
+    ...(releasePool ? { AGENT_BUNDLE_PACKED_RELEASE: '1' } : {}),
     AGENT_BUNDLE_SHARED_PACK_DIR: packDirectory,
     AGENT_BUNDLE_WORKBENCH_PREBUILT: '1',
   });

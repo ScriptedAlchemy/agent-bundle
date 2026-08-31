@@ -66,13 +66,13 @@ export const integrationTestFiles: readonly string[] = [
 ];
 
 /**
- * Pack-and-install tests: each one runs `npm pack` (and usually a clean
- * `npm install` of the tarball), which dominates the serialized integration
- * pool. They run through the root `test:packed` / `test:packed:native`
- * scripts instead — CI's release-gates job (`check:release`) and the
+ * Pack-and-install tests: each one consumes the run-level release tarball
+ * (and usually a clean `npm install` of it), which dominates the serialized
+ * integration pool. They run through the root `test:packed` /
+ * `test:packed:native` scripts instead — CI's release-gates job and the
  * native-host-smoke workflow keep them covered — and stay excluded from the
  * parallel unit pool. packed-release.e2e lives here (not in the integration
- * pool) so `pnpm test` and `check:release` don't each run the same long
+ * pool) so `pnpm test` and the release gates don't each run the same long
  * packed-browser suite; `rstest.packed.config.ts` keeps `test:packed` on one
  * worker.
  */
@@ -85,6 +85,17 @@ export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
   'packages/create-agent-bundle/tests/scaffold-packed.e2e.test.ts',
   'packages/workbench/tests/packed-release.e2e.test.ts',
+];
+
+/**
+ * Release-boundary-only pack-and-install tests: the scaffolder template
+ * matrix beyond the per-PR minimal-template smoke. Runs through
+ * `test:packed:release` (check:release and CI's nightly schedule), not on
+ * every PR — the per-PR release gates keep one full scaffold journey via
+ * scaffold-packed.e2e.test.ts.
+ */
+export const packedReleaseOnlyTestFiles: readonly string[] = [
+  'packages/create-agent-bundle/tests/scaffold-packed-matrix.e2e.test.ts',
 ];
 
 /**
