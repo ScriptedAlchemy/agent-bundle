@@ -20,6 +20,7 @@ describe('decodeAgentDocument', () => {
     const document = decodeAgentDocument(createElement(
       'agent-result',
       { metadata: { source: 'flight' }, value: { ready: true } },
+      createElement('agent-context', null, 'route guidance'),
       createElement('agent-markdown', null, '# Ready'),
       createElement('agent-error', { code: 'E_REPRESENTED' }, 'Partial result'),
     ));
@@ -27,6 +28,7 @@ describe('decodeAgentDocument', () => {
     expect(document).toEqual({
       root: {
         children: [
+          { kind: 'context', text: 'route guidance' },
           { kind: 'markdown', text: '# Ready' },
           { code: 'E_REPRESENTED', kind: 'error', message: 'Partial result' },
         ],

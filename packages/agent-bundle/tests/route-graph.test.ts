@@ -42,7 +42,7 @@ const fixtureConfig = (extra: Readonly<Record<string, unknown>> = {}): AgentBund
 const conventionalTree: Readonly<Record<string, string>> = {
   'src/cli/doctor.tsx': moduleSource,
   'src/cli/library/audit.ts': moduleSource,
-  'src/events/file/saved.tsx': moduleSource,
+  'src/events/workspace/open.tsx': moduleSource,
   'src/mcp/curator/apps/dashboard.tsx': `export const config = { resourceUri: 'ui://curator/dashboard.html' }; ${moduleSource}`,
   'src/mcp/curator/prompts/curate.tsx': moduleSource,
   'src/mcp/curator/resources/catalog.ts': moduleSource,
@@ -87,11 +87,12 @@ it('compiles the conventional tree into one frozen graph with a machine-independ
   ]);
   expect(curator!.routes.map((route) => route.kind)).toEqual(['app', 'prompt', 'resource', 'tool']);
   expect(curator!.routes.every((route) => route.serverId === 'mcp:curator')).toBe(true);
-  expect(graph.events.map((route) => route.id)).toEqual(['event:file/saved']);
+  expect(graph.events.map((route) => route.id)).toEqual(['event:workspace/open']);
   expect(graph.events[0]).toMatchObject({
+    event: 'workspace/open',
     kind: 'event-route',
-    provenance: { kind: 'conventional', relativePath: 'src/events/file/saved.tsx' },
-    source: join(root, 'src/events/file/saved.tsx'),
+    provenance: { kind: 'conventional', relativePath: 'src/events/workspace/open.tsx' },
+    source: join(root, 'src/events/workspace/open.tsx'),
   });
   expect(graph.cli).toMatchObject({ mode: 'generated' });
   expect(graph.cli!.routes.map((route) => route.id)).toEqual(['cli:doctor', 'cli:library/audit']);
@@ -526,4 +527,43 @@ it('validates the single async route-module authoring contract statically', asyn
     'AB4810',
     'AB4811',
   ]);
+});
+
+it('discovers only the seven v1 event families and validates their component contract', async () => {
+  const root = await createRoot();
+  const eventSource = 'export default async function EventRoute() { return undefined; }\n';
+  await writeTree(root, {
+    'src/events/agent/start.tsx': eventSource,
+    'src/events/agent/stop.tsx': eventSource,
+    'src/events/prompt/submit.tsx': eventSource,
+    'src/events/session/start.tsx': eventSource,
+    'src/events/stop.tsx': eventSource,
+    'src/events/tool/after.tsx': eventSource,
+    'src/events/tool/before.tsx': 'export default function BeforeTool() { return undefined; }\n',
+    'src/events/workspace/open.tsx': eventSource,
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.events.map((route) => route.id)).toEqual([
+    'event:agent/start',
+    'event:agent/stop',
+    'event:session/start',
+    'event:stop',
+    'event:tool/after',
+    'event:tool/before',
+    'event:workspace/open',
+  ]);
+  expect(graph.events.map((route) => route.event)).toEqual([
+    'agent/start',
+    'agent/stop',
+    'session/start',
+    'stop',
+    'tool/after',
+    'tool/before',
+    'workspace/open',
+  ]);
+  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4813', 'AB4810']);
+  expect(graph.diagnostics[0]?.sourcePath).toBe(join(root, 'src/events/prompt/submit.tsx'));
+  expect(graph.diagnostics[1]?.sourcePath).toBe(join(root, 'src/events/tool/before.tsx'));
 });

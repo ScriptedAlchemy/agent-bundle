@@ -44,6 +44,8 @@ const AgentMarkdown = ({ children }: AgentTextProps): ReactElement =>
 
 const AgentText = ({ children }: AgentTextProps): ReactElement => createElement('agent-text', null, children);
 
+const AgentContext = ({ children }: AgentTextProps): ReactElement => createElement('agent-context', null, children);
+
 const AgentJson = ({ value }: AgentJsonProps): ReactElement => createElement('agent-json', { value });
 
 const AgentProgress = ({ completed, message, total }: AgentProgressProps): ReactElement =>
@@ -63,6 +65,7 @@ const AgentError = ({ children, code }: AgentErrorProps): ReactElement =>
 
 export const Agent = Object.freeze({
   Audio: AgentAudio,
+  Context: AgentContext,
   Error: AgentError,
   Image: AgentImage,
   Json: AgentJson,

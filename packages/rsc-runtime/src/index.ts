@@ -22,6 +22,7 @@ export {
 export type {
   AgentAudioNode,
   AgentContractErrorCode,
+  AgentContextNode,
   AgentDocument,
   AgentDocumentNode,
   AgentDocumentSnapshot,

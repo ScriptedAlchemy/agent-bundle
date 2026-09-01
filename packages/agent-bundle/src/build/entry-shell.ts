@@ -275,6 +275,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     'const appendNode = (node, content) => {',
     '  switch (node.kind) {',
     "    case 'result': for (const child of node.children) appendNode(child, content); break;",
+    "    case 'context':",
     "    case 'markdown':",
     "    case 'text': content.push({ text: node.text, type: 'text' }); break;",
     "    case 'json': content.push({ text: JSON.stringify(node.value), type: 'text' }); break;",
