@@ -15,7 +15,11 @@ import type { McpAppConsentRequest } from './mcp-app-sandbox.ts';
 import { runtimeAppMessageLimits } from '../runtime-app-message-limits.ts';
 
 const bodyLimit = 64 * 1024;
-const gracefulCloseReceiptTimeoutMs = 5_000;
+// A force-close DELETE that lands after an accepted graceful close must stay
+// idempotent (200, not 404), so this window has to dominate the frame relay's
+// force-close budget — clients may fall back as late as their closeTimeoutMs,
+// which mcp-app-frame.tsx caps at 30s.
+const gracefulCloseReceiptTimeoutMs = 35_000;
 
 interface RequestDiagnostic {
   readonly code: string;
@@ -84,6 +88,12 @@ export interface McpAppRoutePreviewService {
 
 export interface McpAppRoutesOptions {
   readonly authorize: (request: IncomingMessage) => void;
+  /**
+   * Test-only override for the graceful-close receipt window. Production
+   * callers must leave this unset so the window keeps dominating the frame
+   * relay's force-close budget.
+   */
+  readonly gracefulCloseReceiptTimeoutMs?: number;
   readonly service?: McpAppRoutePreviewService;
 }
 
@@ -445,6 +455,7 @@ const bridgeHostContext = (host: McpAppPreviewHostContext): McpAppBridgeJsonReco
 /** Authenticated HTTP boundary for already-bound MCP App previews. */
 export class McpAppRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
+  readonly #gracefulCloseReceiptTimeoutMs: number;
   readonly #service: McpAppRoutePreviewService | undefined;
   readonly #tails = new Map<string, Promise<void>>();
   readonly #teardowns = new Map<string, ReturnType<typeof setTimeout>>();
@@ -452,6 +463,7 @@ export class McpAppRoutes {
 
   constructor(options: McpAppRoutesOptions) {
     this.#authorize = options.authorize;
+    this.#gracefulCloseReceiptTimeoutMs = options.gracefulCloseReceiptTimeoutMs ?? gracefulCloseReceiptTimeoutMs;
     this.#service = options.service;
   }
 
@@ -644,7 +656,7 @@ export class McpAppRoutes {
     if (this.#closed) return;
     const receipt = setTimeout(() => {
       if (this.#teardowns.get(bindingId) === receipt) this.#teardowns.delete(bindingId);
-    }, gracefulCloseReceiptTimeoutMs);
+    }, this.#gracefulCloseReceiptTimeoutMs);
     this.#teardowns.set(bindingId, receipt);
   }
 

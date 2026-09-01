@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, cp, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { cp, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -8,6 +8,7 @@ import type { ProjectEventHub } from '../../../agent-bundle/src/dev/events.ts';
 import { startForegroundServer, type ForegroundProjectEventStreamHandle } from '../../../agent-bundle/src/dev/foreground-server.ts';
 import type { DevRuntimeClientSurfaceProxyBinding } from '../../../agent-bundle/src/dev/runtime-provider.ts';
 import { startDevServer } from '../../../agent-bundle/src/dev/workbench-server.ts';
+import { ensureRuntimeExamplePayload, runtimeExamplePayloads } from './runtime-example-payload.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -44,26 +45,6 @@ const buildWorkbench = async (): Promise<void> => {
   });
 };
 
-/** The example's prebuilt payload directories its declared artifacts package. */
-const runtimeExamplePayloads = ['app', 'runtime'] as const;
-
-/**
- * The example declares its Rsbuild output trees as prebuilt payloads, so the
- * workbench dev artifact epoch needs them to exist. Build them once when
- * absent (Rsbuild only — the framework packaging step is what the fixture
- * exercises live).
- */
-const ensureRuntimeExamplePayload = async (): Promise<void> => {
-  const probes = await Promise.allSettled(runtimeExamplePayloads.map(async (payload) =>
-    access(join(runtimeExample, 'dist', payload))));
-  if (probes.every((probe) => probe.status === 'fulfilled')) return;
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('pnpm', ['--filter', '@agent-bundle/rsc-agent-runtime-demo', 'exec', 'rsbuild', 'build', '--mode', 'production'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
-    maxBuffer: 64 * 1024 * 1024,
-  });
-};
 
 /** Starts the real RSC example in an isolated workspace-local copy. */
 export const startRuntimePlaygroundFixture = async (

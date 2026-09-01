@@ -5,9 +5,10 @@
  * costs nothing on green runs - polling assertions return on success - and
  * the workflow-level timeout-minutes still bounds real hangs.
  *
- * AGENT_BUNDLE_TEST_TIME_SCALE (set by rstest.integration.config.ts when the
- * pool runs multiple workers) covers the same contention on development
+ * AGENT_BUNDLE_TEST_TIME_SCALE covers the same contention on development
  * machines, where concurrent Chrome + dev-server + rsbuild pairs share cores.
+ * rstest.integration.config.ts sets it locally from core count without pinning
+ * workers. CI always uses 4, independent of pool size.
  */
 const localScale = Number(process.env['AGENT_BUNDLE_TEST_TIME_SCALE'] ?? '');
 export const timeScale = process.env['CI'] !== undefined

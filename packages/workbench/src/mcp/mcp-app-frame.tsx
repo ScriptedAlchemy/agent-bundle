@@ -128,7 +128,12 @@ const messageForResource = (frame: McpAppRelayFrame, value: CanonicalResource): 
 });
 
 const positiveTimeout = (value: number | undefined): number => {
-  const timeout = value ?? 1_000;
+  // The force-close timer bounds a hung or hostile app's teardown, so its
+  // budget only needs to be finite, not tight. A tight budget misfires on a
+  // healthy app when the host is loaded (the teardown handshake is a route
+  // round trip plus iframe processing): the forced DELETE then supersedes the
+  // queued graceful close, discarding app-side teardown work.
+  const timeout = value ?? 5_000;
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 30_000) {
     throw new RangeError('MCP App frame close timeout must be an integer from 1 to 30000 ms.');
   }

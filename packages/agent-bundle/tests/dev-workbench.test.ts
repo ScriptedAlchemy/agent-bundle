@@ -20,6 +20,8 @@ import {
 import type { ForegroundCoordinator, ForegroundServerOptions } from '../src/dev/foreground-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
+import { timeScale } from './support/time-scale.ts';
+import { replaceWatchedSource } from './support/watched-files.ts';
 
 const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
   const decoder = new TextDecoder();
@@ -437,7 +439,7 @@ it('latches a runtime declaration added to an ordinary Workbench session as rest
     if (cookie === null) throw new Error('Expected foreground session bootstrap cookie.');
     events = openProjectEventStream(server.url, cookie);
     await events.opened;
-    await writeFile(project.configPath, [
+    await replaceWatchedSource(project.root, project.configPath, [
       "import { defineConfig } from 'agent-bundle';",
       '',
       'export default defineConfig({',
@@ -610,7 +612,7 @@ it('retains Runtime App routes through invalid config updates and reconciles onl
     });
     expect(runtimeState.subscribes).toBe(0);
 
-    await writeFile(project.configPath, config(['portable'], 'valid-first', '{}'));
+    await replaceWatchedSource(project.root, project.configPath, config(['portable'], 'valid-first', '{}'));
     await within((async () => {
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const response = await create();
@@ -634,7 +636,7 @@ it('retains Runtime App routes through invalid config updates and reconciles onl
       unsubscribes: runtimeState.unsubscribes,
     };
 
-    await writeFile(project.configPath, config(['portable'], 'invalid-nonfinite', 'Number.NaN'));
+    await replaceWatchedSource(project.root, project.configPath, config(['portable'], 'invalid-nonfinite', 'Number.NaN'));
     const invalid = await fetch(`${server.url}/api/project/rebuild`, {
       body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
       headers,
@@ -669,7 +671,7 @@ it('retains Runtime App routes through invalid config updates and reconciles onl
     }).then((response) => response.status)).resolves.toBe(200);
     expect(runtimeState).toEqual(stableRuntime);
 
-    await writeFile(project.configPath, config(['portable'], 'valid-repair', '{}'));
+    await replaceWatchedSource(project.root, project.configPath, config(['portable'], 'valid-repair', '{}'));
     await expect(fetch(`${server.url}/api/project/rebuild`, {
       body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
       headers,
@@ -683,7 +685,7 @@ it('retains Runtime App routes through invalid config updates and reconciles onl
       unsubscribes: stableRuntime.unsubscribes,
     });
 
-    await writeFile(project.configPath, config(['portable'], 'valid-removal', undefined, false));
+    await replaceWatchedSource(project.root, project.configPath, config(['portable'], 'valid-removal', undefined, false));
     await expect(fetch(`${server.url}/api/project/rebuild`, {
       body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
       headers,
@@ -788,7 +790,7 @@ it('fences a closing foreground before a held valid runtime reconcile can attach
     const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
     const { token } = await bootstrap.json() as { readonly token: string };
     const headers = { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token };
-    await writeFile(project.configPath, config(['portable']));
+    await replaceWatchedSource(project.root, project.configPath, config(['portable']));
     const rebuilding = fetch(`${server.url}/api/project/rebuild`, {
       body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
       headers,
@@ -913,7 +915,7 @@ it('does not reconcile a valid preparation released after foreground close begin
       subscribes: runtimeState.subscribes,
     };
 
-    await writeFile(project.configPath, config('held-after-close', true));
+    await replaceWatchedSource(project.root, project.configPath, config('held-after-close', true));
     const rebuilding = fetch(`${server.url}/api/project/rebuild`, {
       body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
       headers,
@@ -976,7 +978,7 @@ it('does not publish a prepared runtime topology after foreground close begins',
         },
       },
     });
-    await writeFile(project.configPath, [
+    await replaceWatchedSource(project.root, project.configPath, [
       "import { defineConfig } from 'agent-bundle';",
       `const state = globalThis[${JSON.stringify(stateKey)}];`,
       "if (state === undefined) throw new Error('Missing prepared topology close state.');",
@@ -1529,7 +1531,9 @@ it('records a durable playground trace and promotes it through the packaged fore
     expect(run.id).not.toBe(binding.hook);
     expect(run.session.state).toBe('open');
     let terminal: string | undefined;
-    for (let attempt = 0; attempt < 25; attempt += 1) {
+    // Finalization settles asynchronously after the run settles, so the poll
+    // budget follows the suite time scale like every other readiness wait.
+    for (let attempt = 0; attempt < 250 * timeScale; attempt += 1) {
       const session = await fetch(`${server.url}/api/playground/sessions/${run.session.id}`, { headers });
       const body = await session.json() as { readonly session: { readonly state: string } };
       terminal = body.session.state;

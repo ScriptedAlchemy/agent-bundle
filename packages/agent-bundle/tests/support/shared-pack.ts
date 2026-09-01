@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { isolatedCommandEnvironment } from '../../../../rstest.worker-isolation.ts';
+
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 
@@ -21,10 +23,12 @@ export interface SharedPack {
 
 export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle';
 
-export const installedEnvironment = (): NodeJS.ProcessEnv => {
-  const { NODE_PATH: _nodePath, ...environment } = process.env;
-  return environment;
-};
+/**
+ * NODE_PATH-free environment with per-command npm cache and tmp roots under
+ * the worker's RSTEST_WORKER_ID directory (see rstest.worker-isolation.ts),
+ * so concurrent workers never contend on shared npm or tmp state.
+ */
+export const installedEnvironment = (): NodeJS.ProcessEnv => isolatedCommandEnvironment();
 
 /**
  * Canonical flags for installing a packed tarball into a consumer fixture.

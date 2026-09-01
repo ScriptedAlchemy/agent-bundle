@@ -252,7 +252,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
-      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST');
+      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST', { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     const openedResponse = await opened;
     const foregroundToken = await openedResponse.request().headerValue('x-agent-bundle-session');
@@ -278,7 +278,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     expect({ request: invocation.request, result: invocation.result }).toEqual({ request: originalInput, result: originalResult });
 
     const createdPreview = page.waitForRequest((request) =>
-      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}/apps` && request.method() === 'POST');
+      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}/apps` && request.method() === 'POST', { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Open App preview for mcp-page-1' }).click();
     const createRequest = requestBody((await createdPreview).postData()) as Readonly<{
       readonly input: unknown;
@@ -410,7 +410,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     }), { timeout: browserTimeout }).toBe(true);
     expect(await appFrame.content()).not.toContain(foregroundToken);
 
-    const firstClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'));
+    const firstClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'), { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Close App preview' }).click();
     const firstCloseBody = requestBody((await firstClose).postData()) as Readonly<{ readonly id: string }>;
     await expect.poll(() => appRequests.some((request) => {
@@ -424,9 +424,9 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
 
     await page.getByRole('button', { name: 'Open App preview for mcp-page-1' }).click();
     await expect(outerFrame).toBeVisible({ timeout: browserTimeout });
-    const secondClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'));
+    const secondClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'), { timeout: 30_000 * timeScale });
     const closedSession = page.waitForRequest((request) =>
-      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}` && request.method() === 'DELETE');
+      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}` && request.method() === 'DELETE', { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Close MCP session' }).click();
     await secondClose;
     await closedSession;
@@ -566,7 +566,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const bootstrap = await clientPage.goto(clientSurface.bootstrapUrl, { waitUntil: 'domcontentloaded' });
     expect(bootstrap?.status()).toBe(200);
     try {
-      await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 }).toBe('1');
+      await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 * timeScale }).toBe('1');
     } catch {
       throw new Error(`Runtime App HMR proxy did not connect: ${JSON.stringify({
         console: clientSurfaceConsole,
@@ -576,12 +576,16 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
         sockets: clientSurfaceSockets,
       })}`);
     }
-    expect(clientSurfaceSockets).toEqual([`${clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
+    // The hmr-client-count attribute is the server's view, read through the
+    // main page's CDP session; Playwright's websocket event arrives on the
+    // client page's session and can lag it, so the socket list must be
+    // awaited rather than asserted synchronously.
+    await expect.poll(() => clientSurfaceSockets, { timeout: 3_000 * timeScale }).toEqual([`${clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
     expect(clientSurfaceSockets.every((socket) => new URL(socket).search.length === 0)).toBe(true);
     expect(clientSurfaceHmrRequests.every((request) => new URL(request.url).search.length === 0)).toBe(true);
     await clientPage.close();
     clientPage = undefined;
-    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 }).toBe('0');
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 * timeScale }).toBe('0');
     await page.routeWebSocket((url) => url.pathname === runtimeClientSurfaceReloadChannelPath, (route) => {
       runtimePreviewHmrRoutes.push(route);
       route.connectToServer();
@@ -592,9 +596,9 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await page.getByRole('radio', { name: 'Raw JSON' }).check();
     await page.locator('#runtime-input-raw').fill('{}');
     const createRequest = page.waitForRequest((request) =>
-      request.url() === `${fixture.url}/api/runtime/apps` && request.method() === 'POST');
+      request.url() === `${fixture.url}/api/runtime/apps` && request.method() === 'POST', { timeout: 30_000 * timeScale });
     const createResponse = page.waitForResponse((response) =>
-      response.url() === `${fixture.url}/api/runtime/apps` && response.request().method() === 'POST');
+      response.url() === `${fixture.url}/api/runtime/apps` && response.request().method() === 'POST', { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Run', exact: true }).click();
     const [createdRequest, createdResponse] = await Promise.all([createRequest, createResponse]);
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
@@ -638,7 +642,9 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
     await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
     await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 * timeScale }).toBe('1');
-    expect(runtimePreviewSockets).toEqual([`${created.preview.clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
+    // Awaited for the same reason as clientSurfaceSockets above: the
+    // websocket event can arrive after the server already counts the client.
+    await expect.poll(() => runtimePreviewSockets, { timeout: 3_000 * timeScale }).toEqual([`${created.preview.clientSurface.origin.replace('http:', 'ws:')}${runtimeClientSurfaceReloadChannelPath}`]);
     const runtimeAppFrame = async () => {
       for (const frame of page.frames()) {
         if (await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
@@ -946,7 +952,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
 
     await appFrame.getByRole('button', { name: 'Refresh' }).click();
     try {
-      await expect.poll(() => consentRequests('action'), { timeout: 3_000 }).toHaveLength(1);
+      await expect.poll(() => consentRequests('action'), { timeout: 3_000 * timeScale }).toHaveLength(1);
     } catch {
       throw new Error(`Runtime App call relay did not reach consent: ${JSON.stringify({
         console: browserConsole,
@@ -975,7 +981,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 * timeScale });
     await page.keyboard.press('Shift+Tab');
     await expect(allowRuntimeConsent).toBeFocused({ timeout: 15_000 * timeScale });
-    await expect.poll(() => consentResponses('action')).toHaveLength(1);
+    await expect.poll(() => consentResponses('action'), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const consentCreated = consentResponses('action')[0];
     const challenge = (consentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
     if (typeof challenge?.id !== 'string') throw new Error('Runtime App consent create response omitted its challenge id.');
@@ -1029,7 +1035,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       kind: 'tools/call',
       name: 'render_edit_timeline',
     });
-    await expect.poll(() => operationResponses('tools/call')).toHaveLength(1);
+    await expect.poll(() => operationResponses('tools/call'), { timeout: 15_000 * timeScale }).toHaveLength(1);
     const operated = operationResponses('tools/call')[0];
     const operationResult = (operated?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result;
     expect(operationResult).toEqual({
@@ -1087,7 +1093,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       scope: 'action',
       summary: 'Call MCP App tool',
     });
-    await expect.poll(() => consentResponses('action')).toHaveLength(2);
+    await expect.poll(() => consentResponses('action'), { timeout: 15_000 * timeScale }).toHaveLength(2);
     const deniedConsentCreated = consentResponses('action')[1];
     const deniedChallenge = (deniedConsentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
     if (typeof deniedChallenge?.id !== 'string') throw new Error('Denied Runtime App consent create response omitted its challenge id.');
@@ -1151,8 +1157,8 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       body: { diagnostic: { code: 'AB8023', message: 'MCP App operation could not be completed.' } },
       status: 502,
     });
-    await expect.poll(() => operationRequests('tools/call')).toHaveLength(2);
-    await expect.poll(() => operationResponses('tools/call')).toHaveLength(2);
+    await expect.poll(() => operationRequests('tools/call'), { timeout: 15_000 * timeScale }).toHaveLength(2);
+    await expect.poll(() => operationResponses('tools/call'), { timeout: 15_000 * timeScale }).toHaveLength(2);
     expect(operationResponses('tools/call').filter((entry) => {
       const response = entry.response;
       return response !== null && typeof response === 'object' && Object.hasOwn(response, 'result');
@@ -1691,7 +1697,7 @@ e2e('renders a compiler-bundled App template through the canonical sandbox URL',
       const request = response.request();
       const url = new URL(response.url());
       return request.method() === 'DELETE' && url.origin === foregroundOrigin && /^\/api\/mcp\/apps\/[^/]+$/u.test(url.pathname);
-    });
+    }, { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Close App preview' }).click();
     expect((await fallbackClosed).status()).toBe(200);
     await expect(outerFrame).toBeHidden({ timeout: browserTimeout });

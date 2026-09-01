@@ -6,13 +6,14 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
+import { isolatedCommandEnvironment } from '../../../rstest.worker-isolation.ts';
 import { npmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 
-const releaseEnvironment = (): NodeJS.ProcessEnv => ({ ...process.env, NODE_ENV: 'production' });
+const releaseEnvironment = (): NodeJS.ProcessEnv => isolatedCommandEnvironment({ ...process.env, NODE_ENV: 'production' });
 
 it('audits an externally installed production tarball and generates its CycloneDX SBOM', async () => {
   const { stdout } = await execFile(process.execPath, ['scripts/audit-packed-release.mjs'], {
