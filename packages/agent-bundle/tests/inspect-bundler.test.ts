@@ -98,6 +98,10 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
   expect(script.generatedEntry).toContain('process.argv.slice(2)');
   expect(script.config).toMatchObject({
     id: 'agent-bundle-tool',
+    // Routes are authored as TSX, so every Rslib entry carries the React
+    // plugin: without it JSX lowers to a `React` factory that no generated
+    // executable has in scope.
+    plugins: [{ name: 'rsbuild:react' }],
     output: {
       distPath: { root: '<output>/portable' },
       filename: { js: 'scripts/tool.mjs' },

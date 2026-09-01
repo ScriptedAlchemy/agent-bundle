@@ -1,6 +1,6 @@
 import { defineConfig } from '@rstest/core';
 
-import { routeUnitTestFiles, templateTestFiles } from './rstest.integration-tests.ts';
+import { projectionTestFiles, routeUnitTestFiles, templateTestFiles } from './rstest.integration-tests.ts';
 import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 export default defineConfig({
@@ -8,7 +8,7 @@ export default defineConfig({
   include: [
     'packages/**/tests/**/*.test.ts',
   ],
-  exclude: [...routeUnitTestFiles, ...templateTestFiles],
+  exclude: [...projectionTestFiles, ...routeUnitTestFiles, ...templateTestFiles],
   // The e2e fixtures copy the shared rsc-agent-runtime example dist; build it
   // once in the orchestrator so parallel workers never race the ensure-build.
   globalSetup: ['./rstest.integration.setup.ts'],

@@ -214,6 +214,43 @@ This is the route-unit proof level, and only that: it proves a route module
 renders to the document it claims. It is not evidence about the MCP transport,
 a packed artifact, or a browser surface.
 
+### Proof levels
+
+The levels are separate on purpose. Each helper stamps the level it carried
+into its provenance and prints it in every failure, because a pass at one level
+is never a receipt for another.
+
+| level | helpers | what it proves |
+| --- | --- | --- |
+| `route-unit` | `renderRoute`, `renderRouteEvents` | a route module renders to the document (and render-event stream) it claims |
+| `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
+| `cli-dispatch` | `invokeCli`, `cliJson` | an argv vector resolved and run through the routed CLI's own shell, in-process |
+| `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
+
+```ts
+import { cliJson, expectEvents, invokeCli, invokeMcpTool } from 'agent-bundle/test';
+
+// mcp-in-memory: the generated server projects the document to protocol content.
+const call = await invokeMcpTool('summarize', { input: { title: 'Dune' } });
+expect(call.result.structuredContent).toEqual({ chapters: 24 });
+
+// cli-dispatch: the routed CLI resolves the command, parses argv, and maps the exit code.
+const run = await invokeCli(['library', 'audit', './books', '--max-files', '8']);
+expect(run.exitCode).toBe(0);
+expect(cliJson(run)).toMatchObject({ scanned: 8 });
+```
+
+`expectEvents` asserts over a render-event stream. `toContainSequence` is
+sequence-tolerant — an extra `progress` or `replace` frame is legal and cannot
+turn a passing render red — while a missing frame, a reordering, or a regressed
+ordinal still fails; `toHaveMonotonicSequence`, `toCompleteOnce`,
+`toHaveProgress`, and `toHaveNoErrors` cover the rest of the contract.
+
+Only `packed-stdio` is process evidence, and it is deliberately expensive: pack
+once, install once, spawn once, and iterate every per-route assertion inside
+that one session. Browser-App surfaces and deleted-source artifact proofs are
+later stages; nothing here stands in for them.
+
 ## Evaluation
 
 Eval suites are typed modules discovered by convention:

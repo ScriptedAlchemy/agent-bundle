@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 
 import { describe, expect, it } from '@rstest/core';
 
@@ -9,6 +9,8 @@ import {
   generatedStdioMcpEntrySource,
   mcpEntryRuntimePath,
   mcpEntryRuntimeSpecifier,
+  mcpServerRuntimePath,
+  mcpServerRuntimeSpecifier,
 } from '../src/build/entry-shell.ts';
 
 describe('entry export scanning', () => {
@@ -133,29 +135,74 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
     workerFile: 'mcp-curator-flight.mjs',
   });
 
-  expect(source).toContain("from '@agent-bundle/runtime'");
-  expect(source).toContain("from 'node:worker_threads'");
-  expect(source).toContain('mcp-curator-flight.mjs');
-  expect(source).toContain("from '@modelcontextprotocol/server'");
+  // The entry is the compiled data — route table, App registry, worker URL,
+  // artifact epoch — handed to the shared server runtime. Registration,
+  // projection, and the warm host live in agent-bundle/mcp-server-runtime so
+  // the in-memory projection proof level exercises this artifact's code
+  // rather than a second copy of it (#103 stage 2).
+  expect(source).toContain(`from ${JSON.stringify(mcpServerRuntimeSpecifier)}`);
   expect(source).toContain("from 'agent-bundle/mcp-apps'");
-  expect(source).toContain('createAgentRenderDispatcher');
-  expect(source).toContain('createWarmFlightHost');
-  expect(source).toContain('{ stderr: true, stdout: true }');
-  expect(source).toContain('projectMcpRenderStream');
-  expect(source).toContain('attachMcpStructuredContent');
-  expect(source).toContain('createEventRuntimeServer');
-  expect(source).toContain("kind: 'event'");
-  expect(source).toContain('projectEventDocument');
-  expect(source).toContain('runAgentRequest');
-  expect(source).toContain('notifications/progress');
-  expect(source).toContain('ARTIFACT_EPOCH');
-  expect(source).toContain('route-fixture@1.2.3');
-  expect(source).toContain('server.registerTool("inspect"');
-  expect(source).toContain('server.registerResource("catalog", "catalog://books"');
-  expect(source).toContain('server.registerPrompt("curate"');
-  expect(source).toContain('export default createGeneratedRouteServer');
+  expect(source).toContain('import * as route0 from "/project/src/mcp/curator/tools/inspect.tsx"');
+  expect(source).toContain('const ARTIFACT_EPOCH = "route-fixture@1.2.3"');
+  expect(source).toContain('"tool:curator/inspect": Object.freeze({ config: {"annotations":{"readOnlyHint":true}');
+  expect(source).toContain('"resource:curator/catalog"');
+  expect(source).toContain('"prompt:curator/curate"');
+  expect(source).toContain('createFlightWorkerHost(new URL("./mcp-curator-flight.mjs", import.meta.url), ARTIFACT_EPOCH)');
+  expect(source).toContain('artifactEpoch: ARTIFACT_EPOCH');
+  expect(source).toContain('plugin: {"name":"route-fixture","version":"1.2.3"}');
+  expect(source).toContain('export default async () => createGeneratedRouteMcpServer(');
+  // The event runtime's modules are aliased into the artifact, so the entry
+  // imports them and hands them to the shared runtime; the wiring itself is
+  // not re-templated here.
+  expect(source).toContain('createEventRuntimeServer,');
+  expect(source).toContain('projectEventDocument,');
+  expect(source).toContain('endpointId: `${EVENT_ARTIFACT_EPOCH}:${EVENT_TARGET}:');
+  expect(source).toContain('events,');
+  // Nothing else the shared runtime owns may be re-templated here.
+  expect(source).not.toContain('server.register');
+  expect(source).not.toContain('projectMcpRenderStream');
+  expect(source).not.toContain('new Worker(');
+  expect(source).not.toContain("kind: 'event'");
   expect(source).not.toContain('lowerMcpResult');
-  expect(source).not.toContain('projectToolResult');
+});
+
+it('keeps the generated server behaviour in the shared runtime module the entry aliases', async () => {
+  const runtime = await readFile(mcpServerRuntimePath(), 'utf8');
+
+  expect(runtime).toContain('createWarmFlightHost');
+  expect(runtime).toContain('projectMcpRenderStream');
+  expect(runtime).toContain('attachMcpStructuredContent');
+  expect(runtime).toContain('runAgentRequest');
+  expect(runtime).toContain('notifications/progress');
+  expect(runtime).toContain('{ stderr: true, stdout: true }');
+  expect(runtime).toContain('server.registerTool');
+  expect(runtime).toContain('server.registerResource');
+  expect(runtime).toContain('server.registerPrompt');
+  expect(runtime).toContain('createEventRuntimeServer(');
+  expect(runtime).toContain('projectEventDocument(');
+});
+
+it('fails the build on an MCP route the generated server cannot register', () => {
+  const generate = entryShellModule.generatedRouteMcpEntrySource;
+  const entry = (routes: readonly Readonly<Record<string, unknown>>[]): string => generate({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: routes as never,
+    serverName: 'curator',
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+
+  expect(() => entry([{
+    config: {},
+    id: 'resource:curator/catalog',
+    kind: 'resource',
+    source: '/project/src/mcp/curator/resources/catalog.tsx',
+  }])).toThrow('non-empty static config.uri');
+  expect(() => entry([{
+    config: {},
+    id: 'cli:migrate',
+    kind: 'cli',
+    source: '/project/src/cli/migrate.tsx',
+  }])).toThrow('non-MCP route');
 });
 
 

@@ -1,13 +1,18 @@
+import { proofLevelLabel } from './manifest.ts';
 import type { RenderedRouteProvenance } from './types.ts';
 
 export type AgentTestErrorCode =
   | 'assertion-failed'
+  | 'command-not-found'
   | 'invalid-input'
   | 'invalid-route-module'
   | 'manifest-unavailable'
+  | 'packed-unavailable'
+  | 'projection-failed'
   | 'render-failed'
   | 'result-rejected'
   | 'route-not-found'
+  | 'server-not-found'
   | 'unsupported-route-kind';
 
 /** How many characters of a captured value one diagnostic may print. */
@@ -27,7 +32,7 @@ export const captured = (value: unknown): string => {
 };
 
 const provenanceLines = (provenance: RenderedRouteProvenance): readonly string[] => [
-  `  proof level:  ${provenance.proofLevel} (renders the route module through the real Agent renderer; not transport, browser, or artifact proof)`,
+  `  proof level:  ${proofLevelLabel(provenance.proofLevel)}`,
   `  route:        ${provenance.routeId} (${provenance.kind})`,
   ...(provenance.serverId === undefined ? [] : [`  server:       ${provenance.serverId}`]),
   `  route source: ${provenance.source === 'manifest' ? 'compiler manifest' : 'module passed to renderRoute'}`,
@@ -37,7 +42,7 @@ const provenanceLines = (provenance: RenderedRouteProvenance): readonly string[]
     : [`  module:       ${provenance.modulePath}`]),
   ...(provenance.projectRoot === undefined ? [] : [`  project root: ${provenance.projectRoot}`]),
   ...(provenance.manifestDigest === undefined ? [] : [`  manifest:     route-graph digest ${provenance.manifestDigest}`]),
-  `  targets:      ${provenance.targets.length === 0 ? 'none selected' : provenance.targets.join(', ')} (route-unit rendering is target-neutral)`,
+  `  targets:      ${provenance.targets.length === 0 ? 'none selected' : provenance.targets.join(', ')}`,
 ];
 
 /**

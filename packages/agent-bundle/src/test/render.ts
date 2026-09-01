@@ -5,6 +5,7 @@ import type {
   AgentInvocationInput,
   AgentProgressReporter,
   AgentProgressUpdate,
+  AgentRenderEvent,
   AgentRenderInvocation,
   AgentRenderLimits,
   AgentRequestInit,
@@ -167,7 +168,16 @@ const invocationFor = (
     case 'tool':
       return { kind: 'tool', props: { input: (options.input ?? {}) as never, operationId: routeId } };
     case 'event-route':
-      return { kind: 'event', props: { event: routeId, payload: (options.input ?? {}) as never } };
+      // The generated server names the canonical event, not the route id, and
+      // carries the host envelope as `payload`; the harness matches both so a
+      // route sees the props the artifact would hand it.
+      return {
+        kind: 'event',
+        props: {
+          event: routeId.startsWith('event:') ? routeId.slice('event:'.length) : routeId,
+          payload: (options.input ?? {}) as never,
+        },
+      };
     case 'cli':
       return { kind: 'cli', props: { args: cliArguments(options, provenance), command: routeId } };
     case 'script':
@@ -217,8 +227,15 @@ const componentProps = (
     case 'resource':
     case 'tool':
       return { input: (invocation.props as { readonly input?: unknown }).input, signal };
+    case 'event-route': {
+      // The public event-route contract is `{ canonical, native, signal }`,
+      // and the generated Flight worker unwraps the payload into exactly that.
+      const payload = (invocation.props as {
+        readonly payload?: { readonly canonical?: unknown; readonly native?: unknown };
+      }).payload ?? {};
+      return { canonical: payload.canonical, native: payload.native, signal };
+    }
     case 'cli':
-    case 'event-route':
     case 'script':
       return { ...invocation.props, signal };
     default: {
@@ -378,6 +395,83 @@ const streamOf = (chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> => 
   },
 });
 
+interface PreparedRender {
+  readonly collected: readonly AgentProgressUpdate[];
+  readonly dispatcher: AgentRuntime.AgentRenderDispatcher;
+  readonly invocation: AgentRenderInvocation;
+  readonly resolved: ResolvedTarget;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Resolves the route, loads the real renderer, and wires one dispatcher over
+ * a request-scoped Flight render of the route component. Both the final-only
+ * and the event-stream entry points run through this, so neither owns a
+ * second rendering path.
+ */
+const prepareRender = async (
+  target: RenderRouteTarget,
+  options: RenderRouteOptions,
+): Promise<PreparedRender> => {
+  const resolved = await resolveTarget(target, options);
+  const renderer = await loadRenderer();
+  const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, options, resolved.provenance);
+  const collected: AgentProgressUpdate[] = [];
+  const context = options.context ?? {};
+  /**
+   * Every render collects progress for {@link RenderedRoute.progress}, then
+   * forwards it to the caller's reporter and to the dispatcher's, which is
+   * what turns an update into a `progress` render event. The collector cannot
+   * be an either/or fallback: the event-stream entry point always supplies a
+   * dispatcher reporter, and that would leave the array empty.
+   */
+  const progressFor = (reporter: AgentProgressReporter | undefined): AgentProgressReporter => ({
+    report: async (update) => {
+      collected.push(update);
+      await context.progress?.report(update);
+      await reporter?.report(update);
+    },
+  });
+  const dispatcher = renderer.createAgentRenderDispatcher({
+    execute: async (request) => streamOf(await renderer.runAgentRequest({
+      ...context,
+      invocation: {
+        ...requestInvocation(request.invocation, resolved.provenance.routeId),
+        ...context.invocation,
+        kind: request.invocation.kind,
+      },
+      progress: progressFor(request.progress),
+      signal: request.signal,
+    }, async () => drain(renderer.renderAgentFlight(
+      renderer.createElement(
+        resolved.component as never,
+        componentProps(request.invocation, resolved.kind, request.signal) as never,
+      ),
+      { signal: request.signal },
+    )))),
+  }, options.limits === undefined ? {} : { limits: options.limits });
+  return {
+    collected,
+    dispatcher,
+    invocation,
+    resolved,
+    signal: options.signal ?? new AbortController().signal,
+  };
+};
+
+const renderFailure = (
+  error: unknown,
+  invocation: AgentRenderInvocation,
+  provenance: RenderedRouteProvenance,
+): AgentTestError => new AgentTestError('render-failed', 'The route render failed.', {
+  cause: error,
+  details: [
+    `cause:        ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`,
+    `invocation:   ${invocation.kind}`,
+  ],
+  provenance,
+});
+
 /**
  * Renders one route through the real Agent renderer and returns its final
  * Agent Document. The route component executes inside a real request scope,
@@ -391,52 +485,12 @@ export const renderRoute = async (
   target: RenderRouteTarget,
   options: RenderRouteOptions = {},
 ): Promise<RenderedRoute> => {
-  const resolved = await resolveTarget(target, options);
-  const renderer = await loadRenderer();
-  const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, options, resolved.provenance);
-  const collected: AgentProgressUpdate[] = [];
-  const context = options.context ?? {};
-  // The result contract exposes the route's request-scoped progress, so the
-  // harness always records it and then delegates to a caller's reporter.
-  const reporter = context.progress;
-  const progress: AgentProgressReporter = {
-    report: async (update) => {
-      collected.push(update);
-      await reporter?.report(update);
-    },
-  };
-  const signal = options.signal ?? new AbortController().signal;
-  const dispatcher = renderer.createAgentRenderDispatcher({
-    execute: async (request) => streamOf(await renderer.runAgentRequest({
-      ...context,
-      invocation: {
-        ...requestInvocation(request.invocation, resolved.provenance.routeId),
-        ...context.invocation,
-        kind: request.invocation.kind,
-      },
-      progress,
-      signal: request.signal,
-    }, async () => drain(renderer.renderAgentFlight(
-      renderer.createElement(
-        resolved.component as never,
-        componentProps(request.invocation, resolved.kind, request.signal) as never,
-      ),
-      { signal: request.signal },
-    )))),
-  }, options.limits === undefined ? {} : { limits: options.limits });
-
+  const { collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
   let document: AgentDocument;
   try {
     document = await dispatcher.dispatch({ invocation, signal });
   } catch (error) {
-    throw new AgentTestError('render-failed', 'The route render failed.', {
-      cause: error,
-      details: [
-        `cause:        ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`,
-        `invocation:   ${invocation.kind}`,
-      ],
-      provenance: resolved.provenance,
-    });
+    throw renderFailure(error, invocation, resolved.provenance);
   }
   return Object.freeze({
     document,
@@ -446,5 +500,55 @@ export const renderRoute = async (
     ...(resolved.module.resultSchema === undefined
       ? {}
       : { result: parsedResult(resolved.module.resultSchema, document, resolved.provenance) }),
+  });
+};
+
+export interface RenderedRouteEvents extends RenderedRoute {
+  /** Every render event the runtime emitted, in the order it emitted them. */
+  readonly events: readonly AgentRenderEvent[];
+}
+
+/**
+ * Renders one route and collects the ordered render-event stream (#140)
+ * alongside the final document, for the event matchers in
+ * `agent-bundle/test`. Same proof level and same renderer as
+ * {@link renderRoute}: this drains the dispatcher's public event stream
+ * rather than its final-only entry point.
+ */
+export const renderRouteEvents = async (
+  target: RenderRouteTarget,
+  options: RenderRouteOptions = {},
+): Promise<RenderedRouteEvents> => {
+  const { collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
+  const events: AgentRenderEvent[] = [];
+  const reader = dispatcher.stream({ invocation, signal }).getReader();
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      events.push(next.value);
+    }
+  } catch (error) {
+    throw renderFailure(error, invocation, resolved.provenance);
+  }
+  const complete = events.findLast((event) => event.type === 'complete');
+  if (complete === undefined) {
+    throw new AgentTestError('render-failed', 'The route render ended without a complete event.', {
+      details: [
+        `invocation:   ${invocation.kind}`,
+        `events:       ${events.length === 0 ? 'none' : events.map((event) => `${String(event.sequence)}:${event.type}`).join(' ')}`,
+      ],
+      provenance: resolved.provenance,
+    });
+  }
+  return Object.freeze({
+    document: complete.document,
+    events: Object.freeze([...events]),
+    invocation,
+    progress: Object.freeze([...collected]),
+    provenance: resolved.provenance,
+    ...(resolved.module.resultSchema === undefined
+      ? {}
+      : { result: parsedResult(resolved.module.resultSchema, complete.document, resolved.provenance) }),
   });
 };
