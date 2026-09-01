@@ -40,6 +40,10 @@
     "./flight/server": {
       "types": "./dist/flight/server.d.ts",
       "import": "./dist/flight/server.js"
+    },
+    "./state": {
+      "types": "./dist/state/index.d.ts",
+      "import": "./dist/state.js"
     }
   },
   "scripts": {

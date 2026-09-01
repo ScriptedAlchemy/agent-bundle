@@ -20,6 +20,7 @@ export default defineConfig({
       'flight/server': './src/flight/server.ts',
       index: './src/index.ts',
       plugin: './src/plugin.ts',
+      state: './src/state/index.ts',
     },
     tsconfigPath: './tsconfig.build.json',
   },

@@ -146,5 +146,54 @@ and hands it to the server through `import apps from 'agent-bundle/mcp-apps'`.
 `createRscMcpServer` registers tools only, so serving that resource remains an
 explicit `registerResource` call on the server it returns.
 
-This layer intentionally does not own transport persistence or application
-state. Those remain explicit dependencies of operation implementations.
+This layer intentionally does not own transport persistence, and operations
+never receive implicit storage: application state is an opt-in kernel behind
+its own subpath, described next.
+
+## State (optional)
+
+`@agent-bundle/runtime/state` is the event-sourced Agent state kernel
+([#98](https://github.com/ScriptedAlchemy/agent-bundle/issues/98)). Stateless
+projects never import the subpath and ship none of it. Stateful applications
+declare typed events and a pure reducer once, and every mutation flows through
+`dispatch` with a caller-owned idempotency key:
+
+```ts
+import { defineState } from '@agent-bundle/runtime/state';
+import { z } from 'zod';
+
+export const editTimeline = defineState({
+  id: 'my-plugin/edit-timeline',
+  lifetime: 'workspace-durable',
+  schema: z.object({ edits: z.array(EditSchema) }).strict(),
+  initial: { edits: [] },
+  events: { editRecorded: EditSchema },
+  reduce: (state, event) => ({ edits: [...state.edits, event.payload] }),
+});
+```
+
+Every state declares one explicit lifetime — `request` (discarded with the
+invocation), `process` (a warm runtime's heap; lost on restart by definition),
+`workspace-durable` (survives restarts for one workspace), or `external` (an
+application-provided authority). Nothing infers durability from the presence
+of an MCP process: hosts restart, multiply, or omit it.
+
+The kernel owns monotonic revisions, exact-revision snapshot reads,
+idempotency-key replay (a committed key returns its committed result; the same
+key with a different payload is a typed `idempotency-conflict`),
+compare-and-swap via `expectedRevision`, deterministic resets, explicit
+versioned migrations, and polling change cursors — subscriptions across
+short-lived processes are polling, and the kernel promises nothing stronger.
+Corruption fails closed with typed errors, and error messages never embed
+state or payload contents.
+
+Host wiring opens a store from a driver and installs a request-bound handle on
+the reserved context slot, so routes read
+`const { state } = await agent()` and call
+`state.dispatch(event, payload, { idempotencyKey })`. The in-memory driver
+(`createMemoryStateDriver`) serves the two volatile lifetimes and doubles as
+the test stand-in; it is never durable. The workspace-durable driver ships on
+`node:sqlite` behind `@agent-bundle/runtime/state/sqlite`. Any driver —
+including external ones — must pass the exported conformance suite
+(`stateDriverConformanceCases`); a disconnected adapter is not a completed
+integration.

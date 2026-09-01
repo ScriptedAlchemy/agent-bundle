@@ -133,8 +133,10 @@ Separately, `@agent-bundle/runtime` now exposes a final-only React-owned Flight
 dispatcher for generated routes. An execution host supplies Flight bytes, the
 dispatcher decodes intrinsic `Agent.*` elements into one immutable
 `AgentDocument`, and cancellation follows the request `AbortSignal`. Streaming
-Suspense replacement and public filesystem-route authoring are later stages;
-the package still owns no persistence or application state.
+Suspense replacement and public filesystem-route authoring are later stages.
+Operations receive no implicit storage: persistent application state exists
+only through the opt-in `@agent-bundle/runtime/state` kernel, which stateless
+projects never import.
 
 Operation modules are `.tsx` for exactly one reason: the `render` callback
 returns JSX. Everything else in an operation — schemas, argv parsing, MCP
