@@ -28,6 +28,7 @@ import {
 } from './hook-contract.ts';
 import schemaProvenance from './schemas/claude/PROVENANCE.json' with { type: 'json' };
 import hooksSchema from './schemas/claude/hooks.schema.json' with { type: 'json' };
+import lspSchema from './schemas/claude/lsp.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
@@ -35,6 +36,7 @@ import {
   createAdapterValidator,
   hasPathToken,
   schemaDescriptorsFrom,
+  sourceInputs,
   standardArtifactLayout,
   standardPluginArtifactPlan,
   validateJsonSchemaDocument,
@@ -44,13 +46,49 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 
+/**
+ * One Claude Code plugin LSP server. The binary is never vendored: Claude
+ * Code resolves `command` on the user's PATH, so the bundle only wires the
+ * connection. Only `command`, `args`, `env`, and `workspaceFolder`
+ * substitute Agent Bundle path tokens, matching the placeholder table in the
+ * Claude Code 2.1.x plugin reference; every other field passes through to
+ * `.lsp.json` untouched.
+ */
+export interface ClaudeLspServerConfig {
+  readonly args?: readonly string[];
+  readonly command: string;
+  /** Push diagnostics into Claude's context after edits. Claude Code defaults to true. */
+  readonly diagnostics?: boolean;
+  readonly env?: Readonly<Record<string, string>>;
+  /** File extension to LSP language identifier, for example `{ '.go': 'go' }`. */
+  readonly extensionToLanguage: Readonly<Record<string, string>>;
+  readonly initializationOptions?: unknown;
+  readonly maxRestarts?: number;
+  readonly restartOnCrash?: boolean;
+  readonly settings?: unknown;
+  readonly shutdownTimeout?: number;
+  readonly startupTimeout?: number;
+  /** Claude Code accepts `socket` but runs every server over stdio. */
+  readonly transport?: 'socket' | 'stdio';
+  readonly workspaceFolder?: string;
+}
+
+/**
+ * Claude's host config. `lspServers` lives here rather than in a portable
+ * top-level block because no other pinned host contract has an LSP surface;
+ * the portable LSP component kind stays deferred.
+ */
+export interface ClaudeHostConfig extends AgentBundleHostConfig {
+  readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
+}
+
 export interface ClaudeConfigExtension {
-  claude?: AgentBundleHostConfig;
+  claude?: ClaudeHostConfig;
 }
 
 declare module '../core/types.ts' {
   interface AgentBundleConfigExtensions {
-    claude?: AgentBundleHostConfig;
+    claude?: ClaudeHostConfig;
   }
 }
 
@@ -59,6 +97,7 @@ const claudeName = 'claude';
 /** Claude Code's conventional artifact document paths, shared with the unified bundle adapter. */
 export const claudeArtifactPaths = Object.freeze({
   hooksManifest: 'hooks/hooks.json',
+  lsp: '.lsp.json',
   marketplace: '.claude-plugin/marketplace.json',
   mcp: '.mcp.json',
   plugin: '.claude-plugin/plugin.json',
@@ -68,6 +107,7 @@ const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 const validateHooks = validator.compile(hooksSchema);
+const validateLsp = validator.compile(lspSchema);
 
 /** The pinned Claude hooks validator, shared with the unified bundle adapter. */
 export const claudeHooksValidator = validateHooks;
@@ -83,9 +123,9 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.1.0',
+  adapterRevision: '1.2.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'a1d90db5f605e76dad541a1ba37ba06283aa24f8b55f10ce7d197b5c6b5ac9f2',
+  capabilitySha256: '952788d759db5152e8bcb7128ba778bb74f51fac79403011f669eecdcb1f45f3',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -94,12 +134,14 @@ const evidence = capabilityEvidence(claudeName, metadata);
 const artifactValidation = Object.freeze({
   documents: Object.freeze([
     Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
+    Object.freeze({ path: claudeArtifactPaths.lsp, required: false, schema: 'lsp' }),
     Object.freeze({ path: '.claude-plugin/marketplace.json', required: false, schema: 'marketplace' }),
     Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
     Object.freeze({ path: '.claude-plugin/plugin.json', required: true, schema: 'plugin' }),
   ]),
   schemas: Object.freeze([
     Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
+    Object.freeze({ name: 'lsp', validate: validateJsonSchemaDocument(validateLsp) }),
     Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
     Object.freeze({ name: 'mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateMcp)) }),
     Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
@@ -199,6 +241,165 @@ const planMcpServer = (
   };
 };
 
+/**
+ * Every field the pinned Claude LSP contract documents for one server. The
+ * emitted document copies this allowlist rather than the declared record, so
+ * a misspelled field is a build diagnostic instead of a silently shipped key
+ * that Claude Code would reject at startup.
+ */
+const lspServerFields: ReadonlySet<string> = new Set([
+  'args',
+  'command',
+  'diagnostics',
+  'env',
+  'extensionToLanguage',
+  'initializationOptions',
+  'maxRestarts',
+  'restartOnCrash',
+  'settings',
+  'shutdownTimeout',
+  'startupTimeout',
+  'transport',
+  'workspaceFolder',
+]);
+
+/** Normalized config extension values are already strict JSON, so a plain shape test is enough. */
+const isDataRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const expandLspToken = (value: unknown): unknown =>
+  typeof value === 'string' ? expandClaudeToken(value) : value;
+
+const planLspServer = (
+  name: string,
+  declared: unknown,
+): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
+  const diagnostics: Diagnostic[] = [];
+  if (!isDataRecord(declared)) {
+    diagnostics.push(errorDiagnostic(
+      'claude.lsp.server.invalid',
+      `Claude LSP server "${name}" must be an LSP server configuration object.`,
+    ));
+    return { diagnostics };
+  }
+  for (const field of Object.keys(declared).sort()) {
+    if (lspServerFields.has(field)) continue;
+    diagnostics.push(errorDiagnostic(
+      'claude.lsp.field.unknown',
+      `Claude LSP server "${name}" declares unknown field "${field}".`,
+    ));
+  }
+  const command = declared['command'];
+  if (typeof command !== 'string' || command.length === 0) {
+    diagnostics.push(errorDiagnostic(
+      'claude.lsp.command.required',
+      `Claude LSP server "${name}" requires a command. Claude Code resolves it on the user's PATH; the bundle never vendors the language-server binary.`,
+    ));
+  }
+  const extensionToLanguage = declared['extensionToLanguage'];
+  if (!isDataRecord(extensionToLanguage) || Object.keys(extensionToLanguage).length === 0) {
+    diagnostics.push(errorDiagnostic(
+      'claude.lsp.extensions.required',
+      `Claude LSP server "${name}" requires a nonempty extensionToLanguage map; a server that claims no extension never starts.`,
+    ));
+  }
+  const env = declared['env'];
+  if (isDataRecord(env)) {
+    for (const key of Object.keys(env).sort()) {
+      if (!hasPathToken(key)) continue;
+      diagnostics.push(errorDiagnostic(
+        'claude.lsp.token.env.key',
+        `Claude LSP environment key "${key}" cannot use a path token.`,
+      ));
+    }
+  }
+  if (diagnostics.length > 0) return { diagnostics };
+
+  const value: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const field of Object.keys(declared)) {
+    if (!lspServerFields.has(field)) continue;
+    value[field] = declared[field];
+  }
+  value['command'] = expandLspToken(value['command']);
+  if (Array.isArray(value['args'])) value['args'] = value['args'].map(expandLspToken);
+  if (isDataRecord(value['env'])) {
+    value['env'] = Object.fromEntries(Object.entries(value['env']).map(([key, entry]) => [key, expandLspToken(entry)]));
+  }
+  if (value['workspaceFolder'] !== undefined) value['workspaceFolder'] = expandLspToken(value['workspaceFolder']);
+  return { diagnostics, value };
+};
+
+interface ClaudeLspPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Record<string, unknown>;
+  readonly sourceInputs: readonly string[];
+}
+
+const noLspPlan: ClaudeLspPlan = Object.freeze({
+  diagnostics: Object.freeze([]),
+  sourceInputs: Object.freeze([]),
+});
+
+/**
+ * Lowers `claude.lspServers` into the plugin-root `.lsp.json` document
+ * Claude Code discovers by convention, the same way `.mcp.json` is
+ * discovered. The manifest deliberately keeps no `lspServers` pointer at
+ * `./.lsp.json`: both locations register servers, and Claude Code starts
+ * only the first server registered for a file extension, so pointing the
+ * manifest at the conventional file risks a self-collision for no gain.
+ *
+ * The Claude host config is the source of truth for both the `claude`
+ * target and the Claude half of the unified `plugin` bundle, because no
+ * other pinned host contract has an LSP surface to select.
+ */
+export const planClaudeLsp = (model: NormalizedPlugin): ClaudeLspPlan => {
+  const extension = model.extensions[claudeName];
+  if (extension === undefined || !isDataRecord(extension.value)) return noLspPlan;
+  const declared = extension.value['lspServers'];
+  if (declared === undefined) return noLspPlan;
+  const diagnostics: Diagnostic[] = [];
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (!isDataRecord(declared) || Object.keys(declared).length === 0) {
+    diagnostics.push(errorDiagnostic(
+      'claude.lsp.declaration.invalid',
+      'Claude lspServers must be a nonempty record of server name to LSP server configuration.',
+    ));
+    return { diagnostics, sourceInputs: inputs };
+  }
+
+  const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+  // Claude Code starts only the first server registered for an extension and
+  // warns about the rest, so a bundle that claims one extension twice is an
+  // authoring error rather than a shippable document.
+  const claimedExtensions = new Map<string, string>();
+  let conflicted = false;
+  for (const name of Object.keys(declared).sort()) {
+    const serverPlan = planLspServer(name, declared[name]);
+    diagnostics.push(...serverPlan.diagnostics);
+    if (serverPlan.value === undefined) continue;
+    servers[name] = serverPlan.value;
+    const extensions = serverPlan.value['extensionToLanguage'];
+    if (!isDataRecord(extensions)) continue;
+    for (const fileExtension of Object.keys(extensions).sort()) {
+      const owner = claimedExtensions.get(fileExtension);
+      if (owner === undefined) {
+        claimedExtensions.set(fileExtension, name);
+        continue;
+      }
+      diagnostics.push(errorDiagnostic(
+        'claude.lsp.extension.conflict',
+        `Claude LSP servers "${owner}" and "${name}" both claim extension "${fileExtension}"; Claude Code starts only the first server registered for an extension.`,
+      ));
+      conflicted = true;
+    }
+  }
+  if (conflicted) return { diagnostics, sourceInputs: inputs };
+  if (Object.keys(servers).length === 0) return { diagnostics, sourceInputs: inputs };
+  const valid = validateLsp(servers);
+  diagnostics.push(...schemaDiagnostics('lsp', valid, validateLsp.errors));
+  return { diagnostics, ...(valid ? { document: servers } : {}), sourceInputs: inputs };
+};
+
 export interface ClaudeArtifactPlanOptions {
   /** Target name used for selection and provenance; native hooks stay keyed to Claude. */
   readonly targetName?: string;
@@ -221,6 +422,8 @@ export const planClaudeArtifacts = (
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
+  const lsp = planClaudeLsp(model);
+  diagnostics.push(...lsp.diagnostics);
   const generatedHooks = planHooks(model, targetName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
@@ -258,6 +461,13 @@ export const planClaudeArtifacts = (
 
   return standardPluginArtifactPlan({
     diagnostics,
+    ...(lsp.document === undefined ? {} : {
+      hostDocuments: [{
+        document: lsp.document,
+        relativePath: claudeArtifactPaths.lsp,
+        sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...lsp.sourceInputs),
+      }],
+    }),
     hookDocument,
     hookDocumentValid,
     hookEntries: generatedHooks.hookEntries,
@@ -281,6 +491,12 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
+    lsp: capabilityStateFromSupport(
+      capabilityTable.plugin.lsp.config === claudeArtifactPaths.lsp &&
+        capabilityTable.plugin.lsp.manifestField === 'lspServers',
+      evidence,
+      'The pinned Claude plugin contract does not document the plugin-root .lsp.json LSP surface.',
+    ),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,

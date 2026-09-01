@@ -140,6 +140,7 @@ const artifactValidation = Object.freeze({
     // One shared Claude-format hook document serves both hosts; the pinned
     // Codex hooks schema is byte-identical apart from its $id.
     Object.freeze({ path: bundleHookContract.manifestPath, required: false, schema: 'claude-hooks' }),
+    Object.freeze({ path: claudeArtifactPaths.lsp, required: false, schema: 'claude-lsp' }),
     Object.freeze({ path: claudeArtifactPaths.marketplace, required: false, schema: 'claude-marketplace' }),
     Object.freeze({ path: claudeArtifactPaths.mcp, required: false, schema: 'claude-mcp' }),
     Object.freeze({ path: claudeArtifactPaths.plugin, required: true, schema: 'claude-plugin' }),
@@ -163,7 +164,7 @@ const artifactValidation = Object.freeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.1.0',
+  adapterRevision: '1.2.0',
   capabilityRevision: `claude ${claudeAdapter.metadata.observedVersion} + codex ${codexAdapter.metadata.observedVersion}`,
   capabilitySha256: claudeAdapter.metadata.capabilitySha256,
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}`,
@@ -204,7 +205,12 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
 
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(pluginName, 'Agent plugin bundle');
 
-const agentsDocument = (model: NormalizedPlugin): string => {
+interface AgentsDocumentOptions {
+  /** True when the Claude half of this bundle emitted `.lsp.json`. */
+  readonly lsp: boolean;
+}
+
+const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions): string => {
   const description = model.metadata.description ?? model.metadata.name;
   return [
     `# ${model.metadata.name}`,
@@ -229,10 +235,31 @@ const agentsDocument = (model: NormalizedPlugin): string => {
     '- `.codex-plugin/` — Codex manifest and host documents.',
     '- `.cursor-plugin/plugin.json` and root `mcp.json` — Cursor local-plugin manifest and MCP document.',
     '- `.mcp.json` — Claude Code MCP configuration (plugin-root convention).',
+    ...(options.lsp
+      ? [
+          '- `.lsp.json` — Claude Code language-server configuration (plugin-root convention). Claude Code only; Codex and Cursor have no LSP surface.',
+        ]
+      : []),
     '- `hooks/` — one `hooks.json` with a host-detecting wrapper per hook (Claude Code and Codex), plus `hooks-cursor.json` with per-hook Cursor wrappers (`<name>.cursor.mjs`).',
     '- `skills/` — agent skills (`SKILL.md` per skill), shared by every host.',
     '- `scripts/`, `mcp/`, `mcp-apps/`, `assets/` — compiled shared surfaces.',
     '',
+    ...(options.lsp
+      ? [
+          '## Language servers',
+          '',
+          '`.lsp.json` wires Claude Code to a language server; it does not ship one. Per the Claude Code plugin',
+          'reference: "You must install the language server binary separately. LSP plugins configure how Claude Code',
+          "connects to a language server, but they don't include the server itself.\" The bundle only carries",
+          '`command`, `extensionToLanguage`, and the optional connection fields such as `diagnostics`, so every',
+          'declared `command` must already be on the user\'s PATH.',
+          '',
+          'If a server does not come up, the `/plugin` Errors tab names the cause (`Executable not found in $PATH`',
+          'when the binary is missing) and `claude --debug` prints why a server was skipped. When more than one',
+          'enabled server declares the same file extension, Claude Code starts only the first one registered.',
+          '',
+        ]
+      : []),
   ].join('\n');
 };
 
@@ -394,7 +421,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   }
 
   entries.push({
-    content: agentsDocument(model),
+    content: agentsDocument(model, {
+      lsp: entries.some((entry) => entry.relativePath === claudeArtifactPaths.lsp),
+    }),
     kind: 'write',
     relativePath: 'AGENTS.md',
     sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
@@ -415,6 +444,12 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({
     marketplace: intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
     hooks: intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
+    // Claude supports LSP and Codex has no LSP surface, so the intersection
+    // is honestly unavailable for the bundle as a whole. The Claude half
+    // still emits `.lsp.json` at the shared root from the Claude host
+    // config, which is exactly why this stays unavailable instead of
+    // supported: nothing about that document reaches Codex or Cursor.
+    lsp: intersectCapabilityStates(claudeAdapter.capabilities.lsp!, codexAdapter.capabilities.lsp!),
     mcp: intersectCapabilityStates(claudeAdapter.capabilities.mcp!, codexAdapter.capabilities.mcp!),
     skills: intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),
   }),

@@ -100,15 +100,20 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.1.0',
+    adapterRevision: '1.2.0',
     capabilityRevision: '2.1.250',
-    capabilitySha256: 'a1d90db5f605e76dad541a1ba37ba06283aa24f8b55f10ce7d197b5c6b5ac9f2',
+    capabilitySha256: '952788d759db5152e8bcb7128ba778bb74f51fac79403011f669eecdcb1f45f3',
     observedVersion: '2.1.250',
     schemas: [
       {
         name: 'hooks',
         revision: '2.1.250',
         sha256: '3c6f3e4391f3dca939d75bd0b200ea88e68db939a2cb885d46f0b143293efb84',
+      },
+      {
+        name: 'lsp',
+        revision: '2.1.250',
+        sha256: 'c81fd2f57c410f70f8e5c3f84483f5ec1b575ee02802b424977826f757dccd8e',
       },
       {
         name: 'marketplace',
@@ -123,7 +128,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'plugin',
         revision: '2.1.250',
-        sha256: 'd145d370f5ad16fb9f29a6f1b5c9cb3ae8a6b9c33b3a11513eea324e8feb17c5',
+        sha256: 'f0c503ec8bc11c2ebeade8e8feed37a6c920525b0534438c37210cc50aa66a62',
       },
     ],
   });

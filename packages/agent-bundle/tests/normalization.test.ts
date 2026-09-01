@@ -7,6 +7,7 @@ import {
   validateSource,
   type NormalizationTargetRegistry,
 } from '../src/config/index.ts';
+import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
 import type { DiscoveredProject } from '../src/config/discover.ts';
@@ -165,6 +166,42 @@ it('normalizes registered extensions and validates registered script and hook ta
   expect(Object.isFrozen(extensions)).toBe(true);
   expect(Object.isFrozen(extensions.example?.value)).toBe(true);
   expect(Object.isFrozen(extensions.example?.value.nested)).toBe(true);
+});
+
+it('normalizes the typed Claude LSP source surface through the strict JSON extension seam', async () => {
+  const model = await normalizeProject(loadedProject({
+    claude: {
+      lspServers: {
+        typescript: {
+          args: ['--stdio'],
+          command: 'typescript-language-server',
+          extensionToLanguage: { '.ts': 'typescript' },
+          workspaceFolder: '/workspace/project',
+        },
+      },
+    },
+    plugin: { name: 'claude-lsp-fixture', version: '1.0.0' },
+    targets: ['claude'],
+  }), { skills: [] }, createDefaultRegistry());
+  const extension = model.extensions.claude;
+
+  expect(extension).toMatchObject({
+    id: 'extension:claude',
+    key: 'claude',
+    target: 'claude',
+    value: {
+      lspServers: {
+        typescript: {
+          args: ['--stdio'],
+          command: 'typescript-language-server',
+          extensionToLanguage: { '.ts': 'typescript' },
+          workspaceFolder: '/workspace/project',
+        },
+      },
+    },
+  });
+  expect(Object.isFrozen(extension)).toBe(true);
+  expect(Object.isFrozen(extension?.value)).toBe(true);
 });
 
 it('rejects non-JSON values in registered config extensions before normalization', async () => {

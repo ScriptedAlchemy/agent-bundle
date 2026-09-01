@@ -2,11 +2,17 @@
   "observedCliVersion": "2.1.250",
   "retrievedAt": "2026-08-28",
   "schemaSource": "https://docs.anthropic.com/en/docs/claude-code/plugins",
+  "notes": "lsp.schema.json and plugin.json's `lspServers` property were pinned from the Claude Code 2.1.x plugin reference LSP servers section (retrieved 2026-09-01), which documents `.lsp.json` at the plugin root or inline `lspServers` in the manifest, required `command` / `extensionToLanguage`, and the optional `args`, `transport`, `env`, `initializationOptions`, `settings`, `workspaceFolder`, `startupTimeout`, `shutdownTimeout`, `restartOnCrash`, `maxRestarts`, and `diagnostics` fields. `restartOnCrash` and `shutdownTimeout` require Claude Code 2.1.205 or later, which the pinned 2.1.250 revision satisfies. Manifest `lspServers` keeps the documented `string|array|object` union rather than being narrowed to the one emitted form the way `hooks` is; the emitted document itself is `.lsp.json` at the plugin root. Two agent-bundle tightenings over the documented text: a server map and an `extensionToLanguage` map must both be nonempty, because an empty map claims no extension and can never start a server.",
   "schemas": {
     "hooks.schema.json": {
       "bytes": 1108,
       "sha256": "3c6f3e4391f3dca939d75bd0b200ea88e68db939a2cb885d46f0b143293efb84",
       "url": "https://code.claude.com/docs/en/hooks"
+    },
+    "lsp.schema.json": {
+      "bytes": 1369,
+      "sha256": "c81fd2f57c410f70f8e5c3f84483f5ec1b575ee02802b424977826f757dccd8e",
+      "url": "https://docs.anthropic.com/en/docs/claude-code/plugins"
     },
     "marketplace.schema.json": {
       "bytes": 1210,
@@ -19,8 +25,8 @@
       "url": "https://docs.anthropic.com/en/docs/claude-code/mcp"
     },
     "plugin.schema.json": {
-      "bytes": 804,
-      "sha256": "d145d370f5ad16fb9f29a6f1b5c9cb3ae8a6b9c33b3a11513eea324e8feb17c5",
+      "bytes": 2279,
+      "sha256": "f0c503ec8bc11c2ebeade8e8feed37a6c920525b0534438c37210cc50aa66a62",
       "url": "https://docs.anthropic.com/en/docs/claude-code/plugins"
     }
   },

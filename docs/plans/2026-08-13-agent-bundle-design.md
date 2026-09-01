@@ -368,6 +368,12 @@ example (hooks plus all three targets) builds. A host that supports hooks but ca
 specific requested event, selector dimension, blocking decision, or handler type remains a
 build error unless the hook is explicitly limited to capable targets.
 
+Claude Code LSP emission is intentionally consumer-driven and host-scoped: `claude.lspServers`
+passes through the registered Claude config extension and emits plugin-root `.lsp.json` for the
+Claude target (and the Claude half of the composite plugin target). It does not introduce a
+portable LSP component kind or imply support in Codex, Cursor, or Agent Plugins 1.0.0; that
+cross-host source model remains deferred under #100.
+
 ### Zero runtime dependency
 
 Generated hook bundles do not import `agent-bundle` and do not detect the host dynamically.

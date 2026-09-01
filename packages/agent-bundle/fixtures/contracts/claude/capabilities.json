@@ -8,6 +8,7 @@
     "streamableHttp": true
   },
   "nativePaths": {
+    "lsp": ".lsp.json",
     "manifest": ".claude-plugin/plugin.json",
     "marketplace": ".claude-plugin/marketplace.json",
     "mcp": ".mcp.json"
