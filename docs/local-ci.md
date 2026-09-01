@@ -2,9 +2,13 @@
 
 `pnpm check:local-ci` proves what the hosted CI gate proves, on the
 development machine, in one command — including the full Node matrix. It
-exists because a hosted Verify leg takes ~13–16 minutes while a many-core
-development machine can run all three legs plus the release gates
-concurrently in less wall time. The local-merge workflow it enables:
+exists because a hosted Verify leg takes ~7 minutes by current measurement.
+PR CI runs only the Node 24 Verify leg, while pushes to `main` and
+`workflow_dispatch` run the full 22.19/24/26 matrix. The local gate keeps all
+three legs because local green is used to merge and must prove what the
+post-merge `main` run will prove. A many-core development machine can run all
+three legs plus the release gates concurrently. The local-merge workflow it
+enables:
 
 1. Run `pnpm check:local-ci` on the branch's HEAD commit.
 2. If the gate is green, the branch is mergeable — merge it.
@@ -16,6 +20,11 @@ For quick iteration, `pnpm check:local-ci --current-node-only` runs a single
 Verify-equivalent leg on whatever Node is currently active, with the repo's
 normal local worker derivation. It skips the Node matrix and the
 examples/release/micro-eval gates, so it is a fast signal, not a merge gate.
+
+Docs-only PRs skip the hosted Verify, examples, release-gates, and micro-eval
+jobs. Docs-only means changes under `docs/` or `agent-patterns/`, changeset
+markdown (`.changeset/*.md`), or top-level markdown. Nested markdown elsewhere
+is treated as code. Pushes to `main` never use this skip.
 
 ## What it runs
 
@@ -34,6 +43,9 @@ in-flight work cannot fail them — while a directory the leg itself leaks
 still fails its own scan. Legs live under `.worktrees/local-ci/`
 (gitignored), are reused across runs for warm caches, and can be recreated
 with `--fresh`.
+
+The three Verify legs below mirror the hosted `main`-push matrix. On PRs,
+only `verify (24)` runs hosted.
 
 | Local leg | Node | Steps | Mirrors hosted job |
 | --- | --- | --- | --- |
