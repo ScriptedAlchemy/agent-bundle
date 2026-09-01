@@ -5,7 +5,7 @@ import { basename, extname, relative, resolve } from 'node:path';
 
 import { digest } from '../core/digest.ts';
 import { isInside } from '../core/paths.ts';
-import { readProjectPackageJson } from '../core/project-context.ts';
+import { derivePackageIdentity } from '../core/project-context.ts';
 import {
   defaultGeneratedRuntime,
   formatRuntimeVersion,
@@ -780,7 +780,7 @@ export const normalizeProject = async (
   const scripts = normalizeScripts(loaded, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
   const packageBuild = normalizePackageBuild(loaded.config, loaded.context.projectRoot, loaded.configPath);
-  const packageIdentity = readProjectPackageJson(loaded.context.projectRoot)?.identity;
+  const packageIdentity = derivePackageIdentity(loaded.context.projectRoot);
   const model: NormalizedPlugin = {
     ...(assets.length === 0 ? {} : { assets }),
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
@@ -797,10 +797,8 @@ export const normalizeProject = async (
     hooks: normalizeHooks(loaded, targetNames, registry, payloads),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
     ...(packageBuild === undefined ? {} : { packageBuild }),
-    ...(packageIdentity === undefined ? {} : {
-      packageName: packageIdentity.packageName,
-      packageVersion: packageIdentity.packageVersion,
-    }),
+    packageName: packageIdentity.packageName,
+    packageVersion: packageIdentity.packageVersion,
     ...(payloads.length === 0 ? {} : { payloads }),
     runtime: normalizeRuntime(loaded),
     scripts,

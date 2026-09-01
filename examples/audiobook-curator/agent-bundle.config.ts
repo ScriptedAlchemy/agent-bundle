@@ -14,6 +14,8 @@ export default defineConfig({
     description:
       'Complete plan-first audiobook inventory, matching, conversion, repair, and integrity audit.',
     name: 'audiobook-curator',
+    // Package identity is derived from package.json. plugin.name stays the
+    // host slug; plugin.version must match until a later stage makes it optional.
     version: '1.0.0',
   },
   runtime: { node: '22.19.0' },

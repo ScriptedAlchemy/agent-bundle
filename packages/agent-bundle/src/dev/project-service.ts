@@ -15,7 +15,11 @@ import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from 
 import { digest } from '../core/digest.ts';
 import {
   createProjectContext,
+  derivePackageIdentity,
+  fallbackDevPackageName,
+  fallbackDevPackageVersion,
   packageVersionMismatchDiagnostic,
+  type DerivedPackageIdentity,
   type ProjectContext,
   type ProjectSourceSnapshotInput,
 } from '../core/project-context.ts';
@@ -296,6 +300,22 @@ const emptySnapshot = (): ProjectSourceSnapshot => Object.freeze({
   inputs: Object.freeze([]),
   revision: digest({ inputs: [] }),
 });
+
+const statusIdentity = (
+  identity: DerivedPackageIdentity,
+): Readonly<{ readonly packageName: string; readonly packageVersion: string }> => identity;
+
+const packageIdentityFor = (root: string): DerivedPackageIdentity => {
+  try {
+    return derivePackageIdentity(root);
+  } catch {
+    return {
+      packageName: fallbackDevPackageName,
+      packageVersion: fallbackDevPackageVersion,
+      source: 'dev-fallback',
+    };
+  }
+};
 
 const snapshotForLoadFailure = async (
   root: string,
@@ -597,7 +617,7 @@ const invalidPreparedProject = (options: {
     undefined,
     options.registry,
     options.root,
-    sourceStatus(options.diagnostics, snapshot.revision),
+    sourceStatus(options.diagnostics, snapshot.revision, statusIdentity(packageIdentityFor(options.root))),
     // A failed preparation never resolved its payload roots; the re-snapshot
     // observes the same source tree the failure snapshot did.
     () => snapshotProjectSource(options.root, options.configPath, options.outputRoots),
@@ -743,7 +763,7 @@ export class ProjectService {
     const snapshotSource = (): Promise<ProjectSourceSnapshot> =>
       snapshotProjectSource(root, loaded.configPath, outputRoots, payloadRoots);
     if (hasErrors(sourceDiagnostics)) {
-      const source = sourceStatus(sourceDiagnostics, snapshot.revision);
+      const source = sourceStatus(sourceDiagnostics, snapshot.revision, statusIdentity(packageIdentityFor(root)));
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
       return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source, snapshotSource);
     }
@@ -811,10 +831,11 @@ export class ProjectService {
     } catch {
       diagnostics.push(projectDiagnostic('AB7001', 'Unable to create project context.', { sourcePath: loaded.configPath }));
     }
-    if (projectContext?.packageVersion !== undefined) {
+    const packageIdentity = packageIdentityFor(root);
+    if (packageIdentity.source === 'package.json') {
       const mismatch = packageVersionMismatchDiagnostic(
         model.metadata.version,
-        projectContext.packageVersion,
+        packageIdentity.packageVersion,
         loaded.configPath,
       );
       if (mismatch !== undefined) diagnostics.push(mismatch);
@@ -831,13 +852,7 @@ export class ProjectService {
         snapshot,
       );
     }
-    const source = sourceStatus(
-      frozenDiagnostics,
-      snapshot.revision,
-      projectContext?.packageName === undefined || projectContext.packageVersion === undefined
-        ? undefined
-        : { packageName: projectContext.packageName, packageVersion: projectContext.packageVersion },
-    );
+    const source = sourceStatus(frozenDiagnostics, snapshot.revision, statusIdentity(packageIdentity));
     log(this.#options.logger, 'project.prepared', {
       diagnostics: frozenDiagnostics.length,
       root,

@@ -294,7 +294,20 @@ export interface ProjectPackageJsonSnapshot {
     readonly packageName: string;
     readonly packageVersion: string;
   };
+  readonly packageName?: string;
   readonly sha256: string;
+}
+
+/** Labeled development fallback used when package.json has no valid name. */
+export const fallbackDevPackageName = 'agent-bundle-dev';
+
+/** Labeled development fallback used when package.json has no valid version. */
+export const fallbackDevPackageVersion = '0.0.0-dev';
+
+export interface DerivedPackageIdentity {
+  readonly packageName: string;
+  readonly packageVersion: string;
+  readonly source: 'dev-fallback' | 'package.json';
 }
 
 const packageVersionPattern =
@@ -333,14 +346,44 @@ export const readProjectPackageJson = (root: string): ProjectPackageJsonSnapshot
   if (!isRecord(parsed)) {
     throw new TypeError(`Project package.json ${JSON.stringify(packageJsonPath)} must be a JSON object.`);
   }
-  if (isPackageName(parsed.name) && isSemanticPackageVersion(parsed.version)) {
+  const packageName = isPackageName(parsed.name) ? parsed.name : undefined;
+  const packageVersion = isSemanticPackageVersion(parsed.version) ? parsed.version : undefined;
+  return {
+    sha256,
+    ...(packageName === undefined ? {} : { packageName }),
+    ...(packageName === undefined || packageVersion === undefined
+      ? {}
+      : { identity: { packageName, packageVersion } }),
+  };
+};
+
+const derivedIdentityFromSnapshot = (
+  snapshot: ProjectPackageJsonSnapshot | undefined,
+): DerivedPackageIdentity => {
+  if (snapshot?.identity !== undefined) {
     return {
-      identity: { packageName: parsed.name, packageVersion: parsed.version },
-      sha256,
+      packageName: snapshot.identity.packageName,
+      packageVersion: snapshot.identity.packageVersion,
+      source: 'package.json',
     };
   }
-  return { sha256 };
+  if (snapshot?.packageName !== undefined) {
+    return {
+      packageName: snapshot.packageName,
+      packageVersion: fallbackDevPackageVersion,
+      source: 'dev-fallback',
+    };
+  }
+  return {
+    packageName: fallbackDevPackageName,
+    packageVersion: fallbackDevPackageVersion,
+    source: 'dev-fallback',
+  };
 };
+
+/** Resolves package.json identity, or the labeled development fallback. */
+export const derivePackageIdentity = (root: string): DerivedPackageIdentity =>
+  derivedIdentityFromSnapshot(readProjectPackageJson(root));
 
 export const packageVersionMismatchDiagnostic = (
   pluginVersion: string,
@@ -383,7 +426,8 @@ export const createProjectContext = (options: CreateProjectContextOptions): Proj
   const canonicalRoot = realpathSync(resolve(options.root));
   const configPath = resolvedProjectPath(canonicalRoot, options.configPath, 'Configuration path');
   const packageSnapshot = readProjectPackageJson(canonicalRoot);
-  if (options.requirePackageIdentity === true && packageSnapshot?.identity === undefined) {
+  const derived = derivedIdentityFromSnapshot(packageSnapshot);
+  if (options.requirePackageIdentity === true && derived.source !== 'package.json') {
     invalidPackageIdentity(canonicalRoot);
   }
   const sourceInputs = canonicalSourceInputs(
@@ -395,15 +439,12 @@ export const createProjectContext = (options: CreateProjectContextOptions): Proj
     throw new TypeError(`Configuration source ${JSON.stringify(configPath)} must have a SHA-256 digest.`);
   }
   assertModelPathsResolveInsideProject(canonicalRoot, options.model);
-  const identity = packageSnapshot?.identity;
   return deepFreeze({
     configDigest: configInput.sha256,
     configPath,
     modelDigest: digest(canonicalizeNormalizedModel(canonicalRoot, options.model)),
-    ...(identity === undefined ? {} : {
-      packageName: identity.packageName,
-      packageVersion: identity.packageVersion,
-    }),
+    packageName: derived.packageName,
+    packageVersion: derived.packageVersion,
     revision: digest({ inputs: sourceInputs }),
     sourceInputs,
   });

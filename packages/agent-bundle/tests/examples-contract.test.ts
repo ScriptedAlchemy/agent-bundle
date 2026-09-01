@@ -20,8 +20,14 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     await expect(inspect({ root })).resolves.toMatchObject({
       model: {
         metadata: { name: 'skills-starter' },
+        packageName: '@agent-bundle-example/skills-starter',
+        packageVersion: '0.0.0-dev',
         scripts: [],
         targets: [{ name: 'portable' }, { name: 'codex' }, { name: 'claude' }],
+      },
+      projectContext: {
+        packageName: '@agent-bundle-example/skills-starter',
+        packageVersion: '0.0.0-dev',
       },
       state: 'ready',
     });
@@ -118,12 +124,18 @@ it('publishes the MCP App example service readiness across targets and returns d
     });
     expect(inspected).toMatchObject({
       model: {
+        packageName: '@agent-bundle-example/mcp-app',
+        packageVersion: '0.0.0-dev',
         hooks: [{ event: 'sessionStart', targets: ['claude', 'codex'] }],
         mcpApps: [{ name: 'status', targets: ['portable'] }],
         mcpServers: [{ name: 'status', targets: ['claude', 'codex', 'portable'] }],
         scripts: [{ name: 'check-service-fixture', targets: ['claude', 'codex', 'portable'] }],
         skills: [{ name: 'service-readiness', targets: ['portable', 'codex', 'claude'] }],
         targets: [{ name: 'portable' }, { name: 'codex' }, { name: 'claude' }],
+      },
+      projectContext: {
+        packageName: '@agent-bundle-example/mcp-app',
+        packageVersion: '0.0.0-dev',
       },
       state: 'ready',
     });

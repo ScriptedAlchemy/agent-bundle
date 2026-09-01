@@ -723,9 +723,13 @@ it('returns an output-independent project context without absolute project paths
       'configDigest',
       'configPath',
       'modelDigest',
+      'packageName',
+      'packageVersion',
       'revision',
       'sourceInputs',
     ]);
+    expect(left.projectContext.packageName).toBe('agent-bundle-dev');
+    expect(left.projectContext.packageVersion).toBe('0.0.0-dev');
     expect(JSON.stringify(left.projectContext)).not.toContain(leftRoot);
     expect(JSON.stringify(right.projectContext)).not.toContain(rightRoot);
     expect(JSON.stringify(left.projectContext)).not.toContain('custom-artifact');

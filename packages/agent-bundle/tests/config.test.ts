@@ -533,3 +533,26 @@ it('adds derived package identity to the normalized model without changing plugi
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('labels unversioned package.json identity as 0.0.0-dev without changing plugin.name', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-normalize-fallback-'));
+  try {
+    await writeFile(
+      join(root, 'agent-bundle.config.ts'),
+      "export default { plugin: { name: 'review-tools', version: '1.0.0' }, targets: ['portable'] };\n",
+    );
+    await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'canonical-pkg' }));
+    const loaded = await loadConfig({ command: 'build', mode: 'production', root });
+    const model = await normalizeProject(loaded, { skills: [] }, {
+      configExtensions: () => [],
+      defaultTargetNames: () => ['portable'],
+      has: (name) => name === 'portable',
+      supports: () => false,
+    });
+    expect(model.metadata.name).toBe('review-tools');
+    expect(model.packageName).toBe('canonical-pkg');
+    expect(model.packageVersion).toBe('0.0.0-dev');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});

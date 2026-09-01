@@ -13,6 +13,8 @@ import { digest, sha256Hex, stableJson } from '../src/core/digest.ts';
 import { assertInside } from '../src/core/paths.ts';
 import {
   createProjectContext,
+  fallbackDevPackageName,
+  fallbackDevPackageVersion,
   isPackageName,
   isSemanticPackageVersion,
   packageVersionMismatchDiagnostic,
@@ -230,7 +232,7 @@ it('fails closed when release identity is missing or invalid', async () => {
   }
 });
 
-it('omits package identity for unpackaged scratch projects', async () => {
+it('uses the labeled development fallback for unpackaged scratch projects', async () => {
   const { configPath, root } = await writeIdentityProject();
   try {
     const configBytes = await readFile(configPath);
@@ -240,15 +242,38 @@ it('omits package identity for unpackaged scratch projects', async () => {
       root,
       sourceInputs: [{ path: configPath, sha256: sha256Hex(configBytes) }],
     });
-    expect(context.packageName).toBeUndefined();
-    expect(context.packageVersion).toBeUndefined();
+    expect(context.packageName).toBe(fallbackDevPackageName);
+    expect(context.packageVersion).toBe(fallbackDevPackageVersion);
     expect(Object.keys(context)).toEqual([
       'configDigest',
       'configPath',
       'modelDigest',
+      'packageName',
+      'packageVersion',
       'revision',
       'sourceInputs',
     ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+
+it('keeps package.json name and labels a missing version as 0.0.0-dev', async () => {
+  const { configPath, root } = await writeIdentityProject({
+    packageJson: JSON.stringify({ name: 'named-scratch' }),
+  });
+  try {
+    const configBytes = await readFile(configPath);
+    const context = createProjectContext({
+      configPath,
+      model: identityModel(configPath),
+      root,
+      sourceInputs: [{ path: configPath, sha256: sha256Hex(configBytes) }],
+    });
+    expect(context.packageName).toBe('named-scratch');
+    expect(context.packageVersion).toBe(fallbackDevPackageVersion);
+    expect(context.sourceInputs.map((input) => input.path)).toEqual(['agent-bundle.config.ts', 'package.json']);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

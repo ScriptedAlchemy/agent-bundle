@@ -464,9 +464,18 @@ it('creates an exact deeply frozen root-independent project context', async () =
       'configDigest',
       'configPath',
       'modelDigest',
+      'packageName',
+      'packageVersion',
       'revision',
       'sourceInputs',
     ]);
+    expect(left.projectContext?.packageName).toBe('agent-bundle-dev');
+    expect(left.projectContext?.packageVersion).toBe('0.0.0-dev');
+    expect(left.model?.packageName).toBe('agent-bundle-dev');
+    expect(left.model?.packageVersion).toBe('0.0.0-dev');
+    expect(left.model?.metadata.name).toBe('dev-service-fixture');
+    expect(left.source.packageName).toBe('agent-bundle-dev');
+    expect(left.source.packageVersion).toBe('0.0.0-dev');
     expect(left.projectContext?.configPath).toBe('agent-bundle.config.ts');
     expect(left.projectContext?.revision).toBe(digest({ inputs: left.projectContext?.sourceInputs }));
     expect(left.projectContext?.sourceInputs.map((input) => input.path)).toEqual([

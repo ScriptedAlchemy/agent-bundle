@@ -454,15 +454,13 @@ export interface NormalizedPlugin {
    */
   readonly packageBuild?: NormalizedPackageBuild;
   /**
-   * Derived package.json name for packaged projects. Absent for unpackaged
-   * scratch projects. plugin.name stays the host-facing plugin identity and
-   * is never overwritten.
+   * Derived package.json name, or omitted for unpackaged scratch projects.
+   * plugin.name stays the host-facing plugin identity and is never overwritten.
    */
   readonly packageName?: string;
   /**
-   * Derived package.json semantic version for packaged projects. Absent for
-   * unpackaged scratch projects; release builds fail closed instead of
-   * inventing a fallback version.
+   * Derived package.json version, or the labeled development fallback
+   * `0.0.0-dev` when package.json names a package without a valid version.
    */
   readonly packageVersion?: string;
   /**
