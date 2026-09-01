@@ -1,6 +1,12 @@
 import { defineConfig } from '@rstest/core';
 
-import { integrationTestFiles, nightlyEvidenceTestFiles, packedTestFiles, templateTestFiles } from './rstest.integration-tests.ts';
+import {
+  integrationTestFiles,
+  nightlyEvidenceTestFiles,
+  packedTestFiles,
+  routeUnitTestFiles,
+  templateTestFiles,
+} from './rstest.integration-tests.ts';
 import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 /** Build-free, process-free tests only; safe on parallel workers. `pnpm test` runs this before the integration config. */
@@ -9,7 +15,13 @@ export default defineConfig({
   include: [
     'packages/**/tests/**/*.test.ts',
   ],
-  exclude: [...integrationTestFiles, ...nightlyEvidenceTestFiles, ...packedTestFiles, ...templateTestFiles],
+  exclude: [
+    ...integrationTestFiles,
+    ...nightlyEvidenceTestFiles,
+    ...packedTestFiles,
+    ...routeUnitTestFiles,
+    ...templateTestFiles,
+  ],
   setupFiles: ['./rstest.setup.ts'],
   // Unit files construct per-test services; logs-real.e2e is not in this pool.
   isolate: false,

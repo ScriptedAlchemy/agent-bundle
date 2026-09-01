@@ -150,6 +150,65 @@ AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 pnpm --filter agent-bundl
 `packages/workbench/scripts/dev.mjs` requires that proxy URL. Published `agent-bundle dev` serves
 prebuilt assets and project events; it does not run an Rsbuild development server.
 
+## Testing routes
+
+Route modules are tested through the framework, not through a hand-written
+bundler configuration. Two subpaths ship that harness, and both are opt-in:
+`@rstest/core` and `react` are optional peer dependencies, so a project that
+never tests routes installs neither. Rendering also needs
+`@agent-bundle/runtime`, which the project already owns whenever it has route
+modules — the generated entries import it the same way.
+
+`agent-bundle/rstest` is the configuration helper. It compiles the project once
+— the same route-graph compilation the build performs, with no artifact build —
+and returns a plain Rstest configuration object carrying the test manifest,
+the route loaders, React's `react-server` resolution, and the automatic JSX
+runtime:
+
+```ts
+// rstest.route-unit.config.ts
+import { defineConfig } from '@rstest/core';
+import { agentBundleRstest } from 'agent-bundle/rstest';
+
+export default defineConfig(await agentBundleRstest());
+```
+
+Route-unit tests default to `tests/route-unit/**/*.test.{ts,tsx}` and need
+their own Rstest run, because rendering a route requires Node's `react-server`
+condition for the whole worker process. Keep them out of the project's ordinary
+`rstest` run.
+
+`agent-bundle/test` holds the helpers. `renderRoute` executes a route — by
+compiled route id, or by importing the module directly — through the real
+renderer and the real request store, and resolves to the final Agent Document:
+
+```ts
+import { expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
+
+const { document } = await renderRoute('tool:library/summarize', {
+  context: { cwd: '/tmp/library', operationId: 'run-1' },
+  input: { title: 'Dune' },
+});
+
+expectDocument(document).toHaveStatus('success').toContainMarkdown('Dune').toHaveValue({ chapters: 24 });
+```
+
+`renderRoute` accepts `input`, `args` (CLI routes), request-`context`
+overrides, a `progress` reporter, render `limits`, and an `abort` signal; it
+returns the document, the ordered render events, the resolved provenance, and
+the route's own `resultSchema`-parsed value. `testManifest()` exposes the
+compiled route inventory, so a suite can iterate every route in process rather
+than paying for a build per route. Every failure — an unknown route, a refused
+route kind, a rejected input, a render error — names the route id, the target
+kind, and the module provenance.
+
+Matchers over the Agent Document contracts: `toHaveStatus`, `toContainMarkdown`,
+`toContainText`, `toHaveValue`, `toHaveError`, and `toHaveNodeKinds`.
+
+This is the route-unit proof level, and only that: it proves a route module
+renders to the document it claims. It is not evidence about the MCP transport,
+a packed artifact, or a browser surface.
+
 ## Evaluation
 
 Eval suites are typed modules discovered by convention:
