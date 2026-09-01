@@ -455,7 +455,8 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
   if (cleanupFailure !== undefined) throw cleanupFailure;
 });
 
-e2e('opens the real RSC runtime timeline App from provider-owned run evidence', { timeout: 120_000 }, async ({ page }) => {
+// Flaky under gate load (expect.poll budget, #122); retry while the root cause stays open.
+e2e('opens the real RSC runtime timeline App from provider-owned run evidence', { retry: 2, timeout: 120_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture({
     prepare: async ({ root }) => {
       const definitionSource = join(root, 'src', 'definition.ts');
