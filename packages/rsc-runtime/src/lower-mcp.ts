@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 
@@ -50,6 +52,16 @@ export interface JsonObject {
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
 
+/** Incremental depth / node / byte checks while cloning JSON (Agent Document bounds). */
+export interface JsonSnapshotBudget {
+  readonly addBytes: (n: number) => void;
+  readonly addNode: () => void;
+  readonly checkDepth: (depth: number) => void;
+}
+
+const jsonLeafBytes = (value: null | boolean | number | string): number =>
+  Buffer.byteLength(JSON.stringify(value), 'utf8');
+
 const isArrayIndex = (key: string, length: number): boolean => {
   if (key === '0') return length > 0;
   if (!/^[1-9]\d*$/.test(key)) return false;
@@ -60,10 +72,22 @@ const isArrayIndex = (key: string, length: number): boolean => {
 const jsonPathError = (reason: string, path: string): Error =>
   new Error(path === '' ? reason : `${reason} at ${path}`);
 
-const cloneJsonValue = (value: unknown, ancestors: Set<object>, path: string): JsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+const cloneJsonValue = (
+  value: unknown,
+  ancestors: Set<object>,
+  path: string,
+  depth = 0,
+  budget?: JsonSnapshotBudget,
+): JsonValue => {
+  budget?.checkDepth(depth);
+  budget?.addNode();
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    budget?.addBytes(jsonLeafBytes(value));
+    return value;
+  }
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw jsonPathError('non-finite number', path);
+    budget?.addBytes(jsonLeafBytes(value));
     return value;
   }
   if (typeof value !== 'object') throw jsonPathError('non-JSON value', path);
@@ -80,21 +104,29 @@ const cloneJsonValue = (value: unknown, ancestors: Set<object>, path: string): J
         throw jsonPathError('sparse or decorated array', path);
       }
 
+      budget?.addBytes(2);
       const clone: JsonValue[] = [];
       for (let index = 0; index < value.length; index += 1) {
+        if (index > 0) budget?.addBytes(1);
         const elementPath = `${path}[${index}]`;
         if (!Object.hasOwn(value, index)) throw jsonPathError('sparse array', elementPath);
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (descriptor === undefined || !('value' in descriptor)) throw jsonPathError('array accessor', elementPath);
         // JSON.stringify serializes undefined array elements as null; match the SDK wire shape.
-        clone.push(descriptor.value === undefined ? null : cloneJsonValue(descriptor.value, ancestors, elementPath));
+        clone.push(
+          descriptor.value === undefined
+            ? cloneJsonValue(null, ancestors, elementPath, depth + 1, budget)
+            : cloneJsonValue(descriptor.value, ancestors, elementPath, depth + 1, budget),
+        );
       }
       return clone;
     }
 
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) throw jsonPathError('non-plain object', path);
+    budget?.addBytes(2);
     const clone: { [key: string]: JsonValue } = Object.create(null) as { [key: string]: JsonValue };
+    let properties = 0;
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== 'string') throw jsonPathError('symbol key', path);
       const propertyPath = path === '' ? key : `${path}.${key}`;
@@ -104,7 +136,10 @@ const cloneJsonValue = (value: unknown, ancestors: Set<object>, path: string): J
       }
       // JSON.stringify drops undefined-valued properties; match the SDK wire shape.
       if (descriptor.value === undefined) continue;
-      clone[key] = cloneJsonValue(descriptor.value, ancestors, propertyPath);
+      if (properties > 0) budget?.addBytes(1);
+      budget?.addBytes(jsonLeafBytes(key) + 1);
+      properties += 1;
+      clone[key] = cloneJsonValue(descriptor.value, ancestors, propertyPath, depth + 1, budget);
     }
     return clone;
   } finally {
@@ -135,10 +170,21 @@ const deepFreezeJson = (value: JsonValue): JsonValue => {
   return value;
 };
 
-export const snapshotJsonValue = (value: unknown, message: string): JsonValue => {
+export const snapshotJsonValue = (
+  value: unknown,
+  message: string,
+  budget?: { readonly depth: number; readonly limits: JsonSnapshotBudget },
+): JsonValue => {
   try {
-    return deepFreezeJson(cloneJsonValue(value, new Set(), ''));
+    return deepFreezeJson(cloneJsonValue(
+      value,
+      new Set(),
+      '',
+      budget?.depth ?? 0,
+      budget?.limits,
+    ));
   } catch (error) {
+    if (error instanceof Error && error.name === 'AgentContractError') throw error;
     throw new Error(`${message} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
   }
 };

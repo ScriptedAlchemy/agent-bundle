@@ -1,13 +1,16 @@
-import { Effect, Option, Queue, Stream, type Scope } from 'effect';
+import { Duration, Effect, Option, Queue, Stream, type Scope } from 'effect';
 import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { createFromReadableStream } from 'react-server-dom-rspack/client.node';
 
 import {
   AgentContractError,
   createAgentRenderEventSequence,
+  elapsedTimeExceeded,
+  resolveAgentRenderLimits,
   type AgentRenderError,
   type AgentRenderEvent,
   type AgentRenderEventInput,
+  type AgentRenderEventSequence,
   type AgentRenderLimits,
 } from './agent-document.js';
 import type { AgentProgressReporter, AgentProgressUpdate } from './agent-request.js';
@@ -290,71 +293,121 @@ const waitSettledBoundary = (
     ),
   );
 
-type ReconcileState =
-  | { readonly kind: 'shell'; readonly snapshot: TreeSnapshot }
-  | { readonly kind: 'loop'; readonly snapshot: TreeSnapshot };
+type SettledBoundary = {
+  readonly boundary: PendingBoundary;
+  readonly error?: unknown;
+  readonly ok: boolean;
+};
 
-const reconcileInputStream = (root: ReactNode): Stream.Stream<AgentRenderEventInput, Error> => {
-  const ids = new Map<string, string>();
-  const initial = snapshotTree(root, ids);
-  return Stream.paginate(
-    { kind: 'shell', snapshot: initial } satisfies ReconcileState,
-    (state): Effect.Effect<
-      readonly [readonly AgentRenderEventInput[], Option.Option<ReconcileState>],
+const waitPendingOrDeadline = (
+  pending: readonly PendingBoundary[],
+  sequence: AgentRenderEventSequence,
+): Effect.Effect<SettledBoundary, Error> => {
+  const remaining = sequence.remainingMs;
+  if (remaining <= 0) return Effect.fail(elapsedTimeExceeded(sequence.maxElapsedMs));
+  return Effect.raceFirst(
+    waitSettledBoundary(pending),
+    Effect.sleep(Duration.millis(remaining)).pipe(
+      Effect.flatMap(() => Effect.fail(elapsedTimeExceeded(sequence.maxElapsedMs))),
+    ),
+  );
+};
+
+const settledBoundaryInputs = (
+  previous: TreeSnapshot,
+  next: TreeSnapshot,
+  winner: SettledBoundary,
+  limits: Partial<AgentRenderLimits> | undefined,
+): readonly AgentRenderEventInput[] => {
+  const stillPending = new Set(next.pending.map((boundary) => boundary.id));
+  const rejectedById = new Map(next.rejected.map((entry) => [entry.id, entry.error] as const));
+  const document = decodeAgentDocument(next.tree, limits);
+  const inputs: AgentRenderEventInput[] = [];
+  const emitFor = (id: string, fallback?: SettledBoundary): void => {
+    const rejected = rejectedById.get(id);
+    if (rejected !== undefined) {
+      inputs.push({ boundaryId: id, error: rejected, type: 'error' });
+      return;
+    }
+    if (fallback !== undefined && !fallback.ok) {
+      inputs.push({ boundaryId: id, error: renderErrorFrom(fallback.error), type: 'error' });
+      return;
+    }
+    if (stillPending.has(id) && id !== winner.boundary.id) return;
+    inputs.push({ boundaryId: id, document, type: 'replace' });
+  };
+  emitFor(winner.boundary.id, winner);
+  for (const boundary of previous.pending) {
+    if (boundary.id === winner.boundary.id) continue;
+    emitFor(boundary.id);
+  }
+  return inputs;
+};
+
+type LoopWait =
+  | { readonly kind: 'boundary'; readonly winner: SettledBoundary }
+  | { readonly kind: 'progress'; readonly input: AgentRenderEventInput };
+
+const reconcileLoopStream = (
+  root: ReactNode,
+  ids: Map<string, string>,
+  initial: TreeSnapshot,
+  limits: Partial<AgentRenderLimits> | undefined,
+  progressInputs: Queue.Queue<AgentRenderEventInput>,
+  sequence: AgentRenderEventSequence,
+): Stream.Stream<AgentRenderEventInput, Error> =>
+  Stream.paginate(
+    initial,
+    (snapshot): Effect.Effect<
+      readonly [readonly AgentRenderEventInput[], Option.Option<TreeSnapshot>],
       Error
     > => {
-      switch (state.kind) {
-        case 'shell':
-          return Effect.try({
-            catch: (error) => toRuntimeError(error),
-            try: () =>
-              [
-                [{ document: decodeAgentDocument(state.snapshot.tree), type: 'shell' as const }],
-                Option.some({ kind: 'loop' as const, snapshot: state.snapshot }),
-              ] as const,
-          });
-        case 'loop': {
-          if (state.snapshot.pending.length === 0) {
-            return Effect.try({
+      if (snapshot.pending.length === 0) {
+        return Queue.clear(progressInputs).pipe(
+          Effect.flatMap((queued) =>
+            Effect.try({
               catch: (error) => toRuntimeError(error),
               try: () =>
                 [
-                  [{ document: decodeAgentDocument(state.snapshot.tree), type: 'complete' as const }],
+                  [
+                    ...queued,
+                    { document: decodeAgentDocument(snapshot.tree, limits), type: 'complete' as const },
+                  ],
                   Option.none(),
                 ] as const,
-            });
-          }
-          return waitSettledBoundary(state.snapshot.pending).pipe(
-            Effect.flatMap((settled) =>
-              Effect.try({
+            }),
+          ),
+        );
+      }
+      return Effect.raceFirst(
+        waitPendingOrDeadline(snapshot.pending, sequence).pipe(
+          Effect.map((winner): LoopWait => ({ kind: 'boundary', winner })),
+        ),
+        Queue.take(progressInputs).pipe(
+          Effect.map((input): LoopWait => ({ kind: 'progress', input })),
+        ),
+      ).pipe(
+        Effect.flatMap((event) => {
+          switch (event.kind) {
+            case 'progress':
+              return Effect.succeed([[event.input], Option.some(snapshot)] as const);
+            case 'boundary':
+              return Effect.try({
                 catch: (error) => toRuntimeError(error),
                 try: () => {
-                  const snapshot = snapshotTree(root, ids);
-                  const input: AgentRenderEventInput = settled.ok
-                    ? {
-                      boundaryId: settled.boundary.id,
-                      document: decodeAgentDocument(snapshot.tree),
-                      type: 'replace',
-                    }
-                    : {
-                      boundaryId: settled.boundary.id,
-                      error: renderErrorFrom(settled.error),
-                      type: 'error',
-                    };
-                  return [[input], Option.some({ kind: 'loop' as const, snapshot })] as const;
+                  const next = snapshotTree(root, ids);
+                  return [settledBoundaryInputs(snapshot, next, event.winner, limits), Option.some(next)] as const;
                 },
-              }),
-            ),
-          );
-        }
-        default: {
-          const exhaustive: never = state;
-          return exhaustive;
-        }
-      }
+              });
+            default: {
+              const exhaustive: never = event;
+              return exhaustive;
+            }
+          }
+        }),
+      );
     },
   );
-};
 
 const gatedFlightStream = (
   flight: ReadableStream<Uint8Array>,
@@ -424,28 +477,39 @@ export interface AgentRenderEventSession {
   readonly progress: AgentProgressReporter;
 }
 
+const handoffRequired = (): AgentContractError =>
+  new AgentContractError(
+    'handoff-required',
+    'The render is complete; later work requires a new invocation handoff',
+  );
+
 /**
  * Invocation-local render pipeline: Flight bytes as a pull-gated Stream,
  * pending boundaries as `Stream.paginate`, contract bounds as the emit
  * stage. `progress` is created synchronously so the host can execute in the
- * same turn as `stream()`.
+ * same turn as `stream()`. Pre-shell reports buffer (capped by maxEvents);
+ * live reports wait on a demand-bounded queue (capacity 0).
  */
 export const createAgentRenderEventSession = (
   options: AgentRenderEventStreamOptions,
 ): AgentRenderEventSession => {
   const sequence = createAgentRenderEventSequence(options.limits);
+  const maxBufferedProgress = resolveAgentRenderLimits(options.limits).maxEvents;
   let offerProgress: ((input: AgentRenderEventInput) => Effect.Effect<void, Error>) | undefined;
+  let progressFailure: Error | undefined;
   const bufferedProgress: AgentRenderEventInput[] = [];
   const progress: AgentProgressReporter = Object.freeze({
     report: async (update: AgentProgressUpdate) => {
-      if (sequence.completed) {
-        throw new AgentContractError(
-          'handoff-required',
-          'The render is complete; later work requires a new invocation handoff',
-        );
-      }
+      if (progressFailure !== undefined) throw progressFailure;
+      if (sequence.completed) throw handoffRequired();
       const input = progressInput(update);
       if (offerProgress === undefined) {
+        if (bufferedProgress.length >= maxBufferedProgress) {
+          throw new AgentContractError(
+            'event-count-exceeded',
+            `Agent render event count exceeds ${String(maxBufferedProgress)}`,
+          );
+        }
         bufferedProgress.push(input);
         return;
       }
@@ -454,27 +518,67 @@ export const createAgentRenderEventSession = (
   });
   const events = Stream.unwrap(
     Effect.gen(function*() {
-      const progressInputs = yield* Queue.unbounded<AgentRenderEventInput>();
-      offerProgress = (input) => Queue.offer(progressInputs, input).pipe(Effect.asVoid);
-      for (const input of bufferedProgress) {
-        yield* Queue.offer(progressInputs, input);
-      }
-      const flight = yield* Effect.tryPromise({
-        catch: (error) => hostError(options.signal, error),
-        try: () => options.flight,
+      const progressInputs = yield* Queue.bounded<AgentRenderEventInput>(0);
+      const bindProgress = (): void => {
+        offerProgress = (input) =>
+          Queue.offer(progressInputs, input).pipe(
+            Effect.flatMap((accepted) => {
+              if (progressFailure !== undefined) return Effect.fail(progressFailure);
+              if (!accepted) return Effect.fail(handoffRequired());
+              return Effect.void;
+            }),
+          );
+      };
+      const finalizeProgress = (error: Error): Effect.Effect<void> =>
+        Effect.sync(() => {
+          progressFailure = error;
+        }).pipe(Effect.andThen(Queue.shutdown(progressInputs)));
+      const setup = Effect.gen(function*() {
+        const flight = yield* Effect.tryPromise({
+          catch: (error) => hostError(options.signal, error),
+          try: () => options.flight,
+        });
+        if (options.signal.aborted) return yield* Effect.fail(abortError());
+        const root = yield* decodeFlightRoot(flight, options.demand, options.signal);
+        if (options.signal.aborted) return yield* Effect.fail(abortError());
+        const prepared = yield* Effect.try({
+          catch: (error) => toRuntimeError(error),
+          try: () => {
+            const ids = new Map<string, string>();
+            const initial = snapshotTree(root, ids);
+            return {
+              ids,
+              initial,
+              shellInput: {
+                document: decodeAgentDocument(initial.tree, options.limits),
+                type: 'shell' as const,
+              } satisfies AgentRenderEventInput,
+            };
+          },
+        });
+        bindProgress();
+        return Stream.concat(
+          Stream.fromArray([prepared.shellInput, ...bufferedProgress]),
+          reconcileLoopStream(
+            root,
+            prepared.ids,
+            prepared.initial,
+            options.limits,
+            progressInputs,
+            sequence,
+          ),
+        ).pipe(
+          Stream.mapEffect((input) => emitBoundRenderEvent(sequence, input)),
+          Stream.tap((event) => (event.type === 'shell' ? options.demand.markShell : Effect.void)),
+          Stream.tapError((error) => Effect.sync(() => {
+            progressFailure = error;
+          })),
+          Stream.takeUntil((event) => event.type === 'complete'),
+          Stream.ensuring(Effect.suspend(() => finalizeProgress(progressFailure ?? handoffRequired()))),
+        );
       });
-      if (options.signal.aborted) return yield* Effect.fail(abortError());
-      const root = yield* decodeFlightRoot(flight, options.demand, options.signal);
-      if (options.signal.aborted) return yield* Effect.fail(abortError());
-      return Stream.merge(
-        reconcileInputStream(root),
-        Stream.fromQueue(progressInputs),
-        { haltStrategy: 'left' },
-      ).pipe(
-        Stream.mapEffect((input) => emitBoundRenderEvent(sequence, input)),
-        Stream.tap((event) => (event.type === 'shell' ? options.demand.markShell : Effect.void)),
-        Stream.takeUntil((event) => event.type === 'complete'),
-        Stream.ensuring(Queue.shutdown(progressInputs)),
+      return yield* setup.pipe(
+        Effect.catch((error) => finalizeProgress(error).pipe(Effect.andThen(Effect.fail(error)))),
       );
     }),
   );
