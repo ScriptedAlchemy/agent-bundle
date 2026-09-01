@@ -2,8 +2,7 @@
  * Plan-first derived-media repair operations: `apply-metadata` and
  * `apply-chapters`, backed by `../media-mutation.ts`.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
-import React from 'react';
+import { defineCliCommand, type CliCommandContext } from '../cli-command.js';
 import { z } from 'zod';
 
 import {
@@ -14,7 +13,6 @@ import {
   type MetadataInput,
   type MetadataReceipt,
 } from '../media-mutation.ts';
-import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
   optionValue,
@@ -25,8 +23,8 @@ import {
 import { parityReceiptSchema, pathSchema } from './schemas.ts';
 
 export interface MediaMutationOperations {
-  readonly applyChapters?: (input: ChapterInput, options: RscOperationContext) => Promise<ChapterReceipt>;
-  readonly applyMetadata?: (input: MetadataInput, options: RscOperationContext) => Promise<MetadataReceipt>;
+  readonly applyChapters?: (input: ChapterInput, options: CliCommandContext) => Promise<ChapterReceipt>;
+  readonly applyMetadata?: (input: MetadataInput, options: CliCommandContext) => Promise<MetadataReceipt>;
 }
 
 export const defaultMediaMutationOperations: Required<MediaMutationOperations> = {
@@ -37,8 +35,8 @@ export const defaultMediaMutationOperations: Required<MediaMutationOperations> =
 const metadataResultSchema = parityReceiptSchema<MetadataReceipt>('apply-metadata');
 const chaptersResultSchema = parityReceiptSchema<ChapterReceipt>('apply-chapters');
 
-export const mediaMutationOperations = (operations: Required<MediaMutationOperations>) => [
-  defineOperation({
+export const mediaMutationOperations = (operations: Required<MediaMutationOperations>) => ({
+  applyMetadata: defineCliCommand({
     cli: {
       name: 'apply-metadata',
       parse: (args) => {
@@ -61,18 +59,16 @@ export const mediaMutationOperations = (operations: Required<MediaMutationOperat
       summary: 'Plan or apply verified Audible metadata and artwork without changing encoded audio.',
       usage: 'apply-metadata --file FILE --product FILE --receipt FILE [--artwork FILE] [--language CODE] [--apply]',
     },
-    execute: operations.applyMetadata,
+    handler: operations.applyMetadata,
     id: 'apply-metadata',
     inputSchema: z.object({
       apply: z.boolean().optional(), artwork: pathSchema.optional(), author: z.string().max(512).optional(), file: pathSchema,
       language: z.string().min(1).max(64).optional(), narrator: z.string().max(512).optional(), product: pathSchema,
       receipt: pathSchema.optional(), title: z.string().max(1024).optional(), year: z.string().max(64).optional(),
     }).strict(),
-    mcp: { description: 'Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream.', destructive: true, name: 'apply_audiobook_metadata', readOnly: false, server: 'curator' },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: metadataResultSchema,
   }),
-  defineOperation({
+  applyChapters: defineCliCommand({
     cli: {
       name: 'apply-chapters',
       parse: (args) => {
@@ -89,11 +85,9 @@ export const mediaMutationOperations = (operations: Required<MediaMutationOperat
       summary: 'Plan or apply verified generic or Audible chapter rows without changing encoded audio.',
       usage: 'apply-chapters --file FILE --chapters FILE --receipt FILE [--apply]',
     },
-    execute: operations.applyChapters,
+    handler: operations.applyChapters,
     id: 'apply-chapters',
     inputSchema: z.object({ apply: z.boolean().optional(), chapters: pathSchema, file: pathSchema, receipt: pathSchema.optional() }).strict(),
-    mcp: { description: 'Plan or explicitly apply verified chapter rows while preserving all non-chapter media state.', destructive: true, name: 'apply_audiobook_chapters', readOnly: false, server: 'curator' },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: chaptersResultSchema,
   }),
-];
+});

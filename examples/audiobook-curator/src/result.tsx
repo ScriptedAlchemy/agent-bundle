@@ -1,12 +1,5 @@
-/**
- * The one place runtime JSX lives: every operation's `render` wraps its
- * receipt in `<CuratorResult>`, and the MCP projection lowers that element
- * tree synchronously into a `CallToolResult` via `lowerMcpResult`. This is
- * the MCP result DSL, not React Server Components — no renderer or Flight
- * transport is involved, and the CLI projection never calls it (it prints
- * the validated receipt as JSON instead).
- */
-import { Mcp } from '@agent-bundle/runtime';
+/** Shared Agent Document rendering for filesystem tool routes. */
+import { Agent, type JsonValue } from '@agent-bundle/runtime';
 import React from 'react';
 
 import type { AudibleCacheReceipt, AudibleSearchReceipt, AudibleSelectionReceipt } from './audible.ts';
@@ -78,7 +71,7 @@ const summary = (receipt: CuratorReceipt): string => {
 };
 
 export const CuratorResult = ({ receipt }: { readonly receipt: CuratorReceipt }) => (
-  <Mcp.Result structuredContent={receipt}>
-    <Mcp.Text>{summary(receipt)}</Mcp.Text>
-  </Mcp.Result>
+  <Agent.Result value={receipt as unknown as JsonValue}>
+    <Agent.Text>{summary(receipt)}</Agent.Text>
+  </Agent.Result>
 );

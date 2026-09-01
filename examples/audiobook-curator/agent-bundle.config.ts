@@ -2,14 +2,6 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   marketplace: true,
-  mcp: {
-    servers: {
-      // No `entry` needed: the conventional stdio entry `src/mcp/curator.ts`
-      // supplies it, and its default-exported factory runs under the
-      // framework lifecycle shell.
-      curator: {},
-    },
-  },
   plugin: {
     description:
       'Complete plan-first audiobook inventory, matching, conversion, repair, and integrity audit.',

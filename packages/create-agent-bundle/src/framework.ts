@@ -9,6 +9,16 @@ export const previewPackageSpec = (packageName: PreviewPackageName, sha: string)
 
 export const previewFrameworkSpec = (sha: string): string => previewPackageSpec('agent-bundle', sha);
 
+/** Derives the paired runtime package from the selected framework build. */
+export const runtimeSpecForFramework = (frameworkSpec: string): string => {
+  const preview = /^(https:\/\/pkg\.pr\.new\/ScriptedAlchemy\/agent-bundle\/)agent-bundle@([0-9a-f]{7,40})$/u.exec(frameworkSpec);
+  if (preview !== null) return `${preview[1]}@agent-bundle/runtime@${preview[2]}`;
+  if (frameworkSpec.startsWith('file:')) {
+    return frameworkSpec.replace(/agent-bundle-([^/]+\.tgz)$/u, 'agent-bundle-runtime-$1');
+  }
+  return frameworkSpec;
+};
+
 /**
  * Resolve the dependency spec the scaffolded project pins `agent-bundle` to.
  *

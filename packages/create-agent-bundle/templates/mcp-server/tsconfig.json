@@ -11,11 +11,13 @@
     "types": [
       "node"
     ],
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "jsx": "react-jsx"
   },
   "include": [
     "agent-bundle.config.ts",
     "src/**/*.ts",
-    "tests/**/*.ts"
+    "tests/**/*.ts",
+    "src/**/*.tsx"
   ]
 }

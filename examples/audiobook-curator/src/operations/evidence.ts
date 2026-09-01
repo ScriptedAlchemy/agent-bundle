@@ -2,8 +2,7 @@
  * Acoustic and transcript identity-evidence operations: `acoustic-verify`,
  * `acoustic-identify`, and `whisper-verify`, backed by `../evidence.ts`.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
-import React from 'react';
+import { defineCliCommand, type CliCommandContext } from '../cli-command.js';
 import { z } from 'zod';
 
 import {
@@ -17,7 +16,6 @@ import {
   type WhisperReceipt,
 } from '../evidence.ts';
 import { readJson } from '../foundation.ts';
-import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
   numberOption,
@@ -32,10 +30,10 @@ import { audibleRegions, audibleRegionSchema, parityReceiptSchema, pathSchema } 
 export interface EvidenceOperations {
   readonly acousticIdentify?: (
     input: { readonly all?: boolean; readonly attempts?: number; readonly candidates: string; readonly chunkSeconds?: number; readonly file: string; readonly receipt?: string; readonly top?: number; readonly verbose?: boolean },
-    options: RscOperationContext,
+    options: CliCommandContext,
   ) => Promise<AcousticIdentifyReceipt>;
-  readonly acousticVerify?: (input: AcousticVerifyInput, options: RscOperationContext) => Promise<AcousticReceipt>;
-  readonly whisperVerify?: (input: WhisperInput, options: RscOperationContext) => Promise<WhisperReceipt>;
+  readonly acousticVerify?: (input: AcousticVerifyInput, options: CliCommandContext) => Promise<AcousticReceipt>;
+  readonly whisperVerify?: (input: WhisperInput, options: CliCommandContext) => Promise<WhisperReceipt>;
 }
 
 export const defaultEvidenceOperations: Required<EvidenceOperations> = {
@@ -56,8 +54,8 @@ const acousticResultSchema = parityReceiptSchema<AcousticReceipt>('audiolocate')
 const acousticIdentifyResultSchema = parityReceiptSchema<AcousticIdentifyReceipt>('acoustic-identify');
 const whisperResultSchema = parityReceiptSchema<WhisperReceipt>('whisper-identity');
 
-export const evidenceOperations = (operations: Required<EvidenceOperations>) => [
-  defineOperation({
+export const evidenceOperations = (operations: Required<EvidenceOperations>) => ({
+  acousticVerify: defineCliCommand({
     cli: {
       exitCode: (receipt) => receipt.exitCode,
       name: 'acoustic-verify',
@@ -80,18 +78,16 @@ export const evidenceOperations = (operations: Required<EvidenceOperations>) => 
       summary: 'Compare one bounded Audible sample with local audio through optional Audiolocate.',
       usage: 'acoustic-verify --file FILE --asin ASIN --region REGION --receipt FILE [--audiolocate-python PATH]',
     },
-    execute: operations.acousticVerify,
+    handler: operations.acousticVerify,
     id: 'acoustic-verify',
     inputSchema: z.object({
       asin: z.string().min(1).max(64), attempts: z.number().int().min(1).max(10).optional(), audiolocatePython: pathSchema.optional(),
       chunkSeconds: z.number().int().min(1).max(86_400).optional(), file: pathSchema, receipt: pathSchema.optional(),
       region: audibleRegionSchema.optional(), sampleUrl: z.url().optional(), verbose: z.boolean().optional(),
     }).strict(),
-    mcp: { description: 'Compare a bounded Audible sample with local audio through an optional Audiolocate Python capability.', name: 'verify_audible_sample', openWorld: true, readOnly: false, server: 'curator' },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: acousticResultSchema,
   }),
-  defineOperation({
+  acousticIdentify: defineCliCommand({
     cli: {
       exitCode: (receipt) => receipt.exitCode,
       name: 'acoustic-identify',
@@ -113,18 +109,16 @@ export const evidenceOperations = (operations: Required<EvidenceOperations>) => 
       summary: 'Try score-ranked, deduplicated Audible candidates and retain per-candidate evidence.',
       usage: 'acoustic-identify --file FILE --candidates FILE --receipt FILE [--top N] [--all]',
     },
-    execute: operations.acousticIdentify,
+    handler: operations.acousticIdentify,
     id: 'acoustic-identify',
     inputSchema: z.object({
       all: z.boolean().optional(), attempts: z.number().int().min(1).max(10).optional(), candidates: pathSchema,
       chunkSeconds: z.number().int().min(1).max(86_400).optional(), file: pathSchema, receipt: pathSchema.optional(),
       top: z.number().int().min(1).max(10).optional(), verbose: z.boolean().optional(),
     }).strict(),
-    mcp: { description: 'Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default.', name: 'identify_audible_sample', openWorld: true, readOnly: false, server: 'curator' },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: acousticIdentifyResultSchema,
   }),
-  defineOperation({
+  whisperVerify: defineCliCommand({
     cli: {
       exitCode: (receipt) => receipt.exitCode,
       name: 'whisper-verify',
@@ -149,7 +143,7 @@ export const evidenceOperations = (operations: Required<EvidenceOperations>) => 
       summary: 'Transcribe distributed audiobook windows for human language and identity review.',
       usage: 'whisper-verify --file FILE --model FILE --receipt FILE [--language CODE] [--max-windows N]',
     },
-    execute: operations.whisperVerify,
+    handler: operations.whisperVerify,
     id: 'whisper-verify',
     inputSchema: z.object({
       author: z.string().max(512).optional(), file: pathSchema, language: z.string().min(1).max(64).optional(),
@@ -157,8 +151,6 @@ export const evidenceOperations = (operations: Required<EvidenceOperations>) => 
       model: pathSchema, receipt: pathSchema.optional(), threads: z.number().int().min(1).max(256).optional(), title: z.string().max(1024).optional(),
       whisperCli: pathSchema.optional(), windowSeconds: z.number().int().min(1).max(3600).optional(),
     }).strict(),
-    mcp: { description: 'Extract and transcribe distributed PCM windows for human language, story, and narrator review.', name: 'verify_with_whisper', readOnly: false, server: 'curator' },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: whisperResultSchema,
   }),
-];
+});

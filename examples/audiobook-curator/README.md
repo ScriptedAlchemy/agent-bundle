@@ -8,8 +8,7 @@ pnpm example:audiobook
 
 A complete TypeScript recreation of the original `audiobook-curator`, built in
 framework mode: `agent-bundle.config.ts` plus file conventions declare the
-structure, and one typed operation catalog produces a globally installable
-CLI, one stdio MCP server, one Skill, and native Claude Code and Codex plugin
+structure, and filesystem route modules produce one generated stdio MCP server, while a compatibility CLI remains globally installable, one Skill, and native Claude Code and Codex plugin
 artifacts. JSX appears only where something is rendered — the MCP result
 receipts. It has no hooks and does not call the old Python curator.
 
@@ -48,57 +47,32 @@ script, and lifecycle-wrapped MCP server) plus the npm package build beneath
 `agent-bundle` and `@agent-bundle/runtime` exports with `workspace:*`
 dependencies.
 
-## Operation model
+## Route model
 
-Every command is one `defineOperation` definition: a host-neutral use case —
-`id`, input schema, `execute`, result schema, `render` — with two
-projections declared beside it. The shared core runs identically on both
-surfaces (`inputSchema.parse` → `execute` → `resultSchema.parse`); `cli`
-adds argv parsing and exit codes, and `mcp` adds tool metadata. `render` is
-a sibling of both, required on every operation but consumed only by the MCP
-projection: the CLI prints each validated receipt as one line of JSON and
-never renders JSX.
+The MCP application is the route tree under `src/mcp/curator/`: fifteen tool
+modules plus one resource and one prompt. Every executable route exports static
+`config`, `inputSchema`, `resultSchema`, and one async default Server Component
+that executes the domain operation and renders `Agent.*`. The compiler derives
+the `curator` server, lifecycle entry, warm Flight worker, and MCP registrations;
+there is no `src/application.ts`, operation-array registry, handwritten
+`src/mcp/curator.ts`, or per-operation server selector.
 
-The runtime JSX for every operation is `<CuratorResult>` in
-[`src/result.tsx`](src/result.tsx), which wraps the receipt in the MCP
-result DSL:
-
-```tsx
-export const CuratorResult = ({ receipt }: { readonly receipt: CuratorReceipt }) => (
-  <Mcp.Result structuredContent={receipt}>
-    <Mcp.Text>{summary(receipt)}</Mcp.Text>
-  </Mcp.Result>
-);
-```
-
-`lowerMcpResult` lowers that element tree synchronously into an MCP
-`CallToolResult`. No React Server Components renderer or Flight transport is
-involved anywhere in this example; operation modules are `.tsx` only because
-`render` returns JSX, and `src/application.ts` stays `.ts` because it merely
-composes the operation arrays. The end-to-end walkthrough is in
-[Framework mode](../../docs/framework-mode.md).
+The existing handwritten CLI remains a compatibility escape hatch until routed
+CLI rendering in #102 stage 3. It uses the same domain helpers but still prints
+validated JSON directly and never renders JSX.
 
 ## Source layout
 
-- `agent-bundle.config.ts` — the structure: plugin identity, targets, the CLI
-  script, and the MCP server (whose entry is the `src/mcp/curator.ts`
-  convention). The Skill needs no declaration at all:
-  `skills/curate-audiobooks/SKILL.md` ships by convention.
-- `src/application.ts` — composition only: merges the feature modules'
-  defaults into one `defineRscApplication` operation catalog.
-- `src/operations/` — the operation catalog, grouped by workflow stage:
-  `discovery` (inspect/inventory/library-audit/select), `audible`
-  (search/select/cache), `evidence` (acoustic/whisper), `media-mutation`
-  (apply-metadata/apply-chapters), and `output` (convert/prepare/audit), with
-  shared `cli-arguments.ts` and `schemas.ts`.
-- Domain logic lives beside them in `src/` (`library.ts`, `audible.ts`,
-  `evidence.ts`, `conversion.ts`, `media-mutation.ts`, `integrity-audit.ts`,
-  `curator-core.ts`) over the shared `foundation.ts` and `media-process.ts`
-  primitives; `result.tsx` renders every receipt for MCP.
-- `src/cli.ts` exports `main`; the framework's generated process envelope
-  turns it into both the bundled script artifact entry and the npm bin.
-  `src/mcp/curator.ts` default-exports a server factory served under the
-  framework's stdio lifecycle shell. No hand-written entry shims remain.
+- `agent-bundle.config.ts` — plugin identity, selected targets, and the bundled
+  CLI script; MCP needs no declaration.
+- `src/mcp/curator/tools/` — one single-file route per MCP tool.
+- `src/mcp/curator/resources/catalog.tsx` and `prompts/curate.tsx` — the routed
+  resource and prompt proofs.
+- `src/operations/` — CLI-only compatibility command data and shared schemas; MCP
+  metadata and server strings do not live here.
+- Domain logic remains in `src/` over `foundation.ts` and `media-process.ts`;
+  `result.tsx` renders route receipts as Agent Documents.
+- `src/cli.ts` and `src/index.ts` keep the package bin/library conventions.
 
 ## Complete workflow
 

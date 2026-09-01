@@ -38,9 +38,13 @@ if (buildExitCode !== 0) process.exit(buildExitCode);
 
 const packDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-shared-pack-'));
 try {
-  await Promise.all(['agent-bundle', 'create-agent-bundle'].map(async (packageName) => {
+  await Promise.all([
+    ['agent-bundle', 'agent-bundle'],
+    ['create-agent-bundle', 'create-agent-bundle'],
+    ['runtime', 'rsc-runtime'],
+  ].map(async ([packageName, directory]) => {
     const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', packDirectory], {
-      cwd: join(repositoryRoot, 'packages', packageName),
+      cwd: join(repositoryRoot, 'packages', directory),
       env: { ...environment, NODE_ENV: 'production' },
     });
     const [packOutput] = JSON.parse(stdout);

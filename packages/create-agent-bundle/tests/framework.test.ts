@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@rstest/core';
 
-import { previewPackageSpec, resolveFrameworkSpec } from '../src/framework.ts';
+import { previewPackageSpec, resolveFrameworkSpec, runtimeSpecForFramework } from '../src/framework.ts';
 import { UsageError } from '../src/options.ts';
 
 describe('previewPackageSpec', () => {
@@ -27,5 +27,14 @@ describe('resolveFrameworkSpec', () => {
   it('refuses to guess outside a preview build (the npm agent-bundle name is unrelated)', () => {
     expect(() => resolveFrameworkSpec('0.0.0', undefined)).toThrow(UsageError);
     expect(() => resolveFrameworkSpec('0.0.0', undefined)).toThrow('--framework-version');
+  });
+});
+
+describe('runtimeSpecForFramework', () => {
+  it('pairs preview and local tarball framework specs with the runtime package', () => {
+    expect(runtimeSpecForFramework('https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@da5df1d'))
+      .toBe('https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@da5df1d');
+    expect(runtimeSpecForFramework('file:/tmp/agent-bundle-0.1.0.tgz'))
+      .toBe('file:/tmp/agent-bundle-runtime-0.1.0.tgz');
   });
 });

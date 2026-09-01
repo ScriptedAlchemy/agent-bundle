@@ -21,7 +21,7 @@ export interface SharedPack {
   readonly tarball: string;
 }
 
-export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle';
+export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle' | 'runtime';
 
 /**
  * NODE_PATH-free environment with per-command npm cache and tmp roots under
@@ -78,7 +78,7 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
     rmSync(destination, { force: true, recursive: true });
   });
   const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', destination], {
-    cwd: join(workspaceRoot, 'packages', packageName),
+    cwd: join(workspaceRoot, 'packages', packageName === 'runtime' ? 'rsc-runtime' : packageName),
     env: { ...installedEnvironment(), NODE_ENV: 'production' },
   });
   const [packOutput] = JSON.parse(stdout) as [SharedPackOutput];

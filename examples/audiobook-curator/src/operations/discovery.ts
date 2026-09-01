@@ -3,8 +3,7 @@
  * `library-audit`, and `select`, backed by `../curator-core.ts` and
  * `../library.ts`. All four retain evidence and never mutate media.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
-import React from 'react';
+import { defineCliCommand, type CliCommandContext } from '../cli-command.js';
 import { z } from 'zod';
 
 import { inspectSources, type InspectionReceipt } from '../curator-core.ts';
@@ -17,7 +16,6 @@ import {
   type LibraryAuditReceipt,
   type SelectionReceipt,
 } from '../library.ts';
-import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
   numberOption,
@@ -31,19 +29,19 @@ import { parityReceiptSchema, pathSchema, probeShape } from './schemas.ts';
 export interface DiscoveryOperations {
   readonly inspect: (
     input: { readonly maxFiles?: number; readonly root: string },
-    options: RscOperationContext,
+    options: CliCommandContext,
   ) => Promise<InspectionReceipt>;
   readonly inventory?: (
     input: { readonly report?: string; readonly source: string; readonly strict?: boolean },
-    options: RscOperationContext,
+    options: CliCommandContext,
   ) => Promise<InventoryReceipt>;
   readonly libraryAudit?: (
     input: { readonly concurrency?: number; readonly report?: string; readonly sources: readonly string[]; readonly strict?: boolean },
-    options: RscOperationContext,
+    options: CliCommandContext,
   ) => Promise<LibraryAuditReceipt>;
   readonly select?: (
     input: { readonly inventory: string; readonly report?: string },
-    options: RscOperationContext,
+    options: CliCommandContext,
   ) => Promise<SelectionReceipt>;
 }
 
@@ -87,8 +85,8 @@ export const defaultDiscoveryOperations: Required<DiscoveryOperations> = {
   },
 };
 
-export const discoveryOperations = (operations: Required<DiscoveryOperations>) => [
-  defineOperation({
+export const discoveryOperations = (operations: Required<DiscoveryOperations>) => ({
+  inspect: defineCliCommand({
     cli: {
       name: 'inspect',
       parse: (args) => {
@@ -102,19 +100,12 @@ export const discoveryOperations = (operations: Required<DiscoveryOperations>) =
       summary: 'Inspect a bounded audiobook source tree without changing it.',
       usage: 'inspect [--max-files N] <root>',
     },
-    execute: operations.inspect,
+    handler: operations.inspect,
     id: 'inspect',
     inputSchema: inspectInputSchema,
-    mcp: {
-      description: 'Inspect a bounded directory tree and report supported audiobook media without changing it.',
-      name: 'inspect_sources',
-      readOnly: true,
-      server: 'curator',
-    },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: inspectResultSchema,
   }),
-  defineOperation({
+  inventory: defineCliCommand({
     cli: {
       exitCode: (receipt) => receipt.exitCode,
       name: 'inventory',
@@ -130,19 +121,12 @@ export const discoveryOperations = (operations: Required<DiscoveryOperations>) =
       summary: 'Probe source audio without changing it.',
       usage: 'inventory <source> --report FILE [--strict]',
     },
-    execute: operations.inventory,
+    handler: operations.inventory,
     id: 'inventory',
     inputSchema: z.object({ report: pathSchema.optional(), source: pathSchema, strict: z.boolean().optional() }).strict(),
-    mcp: {
-      description: 'Inventory source audio with retained per-file probe evidence.',
-      name: 'inventory_sources',
-      readOnly: false,
-      server: 'curator',
-    },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: inventoryResultSchema,
   }),
-  defineOperation({
+  libraryAudit: defineCliCommand({
     cli: {
       exitCode: (receipt) => receipt.exitCode,
       name: 'library-audit',
@@ -161,7 +145,7 @@ export const discoveryOperations = (operations: Required<DiscoveryOperations>) =
       summary: 'Audit metadata, artwork, chapters, duplicate candidates, and multipart groups.',
       usage: 'library-audit <sources...> --report FILE [--concurrency N] [--strict]',
     },
-    execute: operations.libraryAudit,
+    handler: operations.libraryAudit,
     id: 'library-audit',
     inputSchema: z.object({
       concurrency: z.number().int().min(1).max(8).optional(),
@@ -169,16 +153,9 @@ export const discoveryOperations = (operations: Required<DiscoveryOperations>) =
       sources: z.array(pathSchema).min(1).max(64),
       strict: z.boolean().optional(),
     }).strict(),
-    mcp: {
-      description: 'Audit audiobook library metadata, duplicates, and multipart evidence without deletion advice.',
-      name: 'audit_library',
-      readOnly: false,
-      server: 'curator',
-    },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: libraryResultSchema,
   }),
-  defineOperation({
+  select: defineCliCommand({
     cli: {
       name: 'select',
       parse: (args) => {
@@ -193,16 +170,9 @@ export const discoveryOperations = (operations: Required<DiscoveryOperations>) =
       summary: 'Choose the strongest source among normalized collisions.',
       usage: 'select --inventory FILE --report FILE',
     },
-    execute: operations.select,
+    handler: operations.select,
     id: 'select',
     inputSchema: z.object({ inventory: pathSchema, report: pathSchema.optional() }).strict(),
-    mcp: {
-      description: 'Select strongest source encodings while retaining alternates and duration review evidence.',
-      name: 'select_sources',
-      readOnly: false,
-      server: 'curator',
-    },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: selectionResultSchema,
   }),
-];
+});

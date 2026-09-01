@@ -3,8 +3,7 @@
  * and `audible-cache`, backed by `../audible.ts`. Ranking is evidence only;
  * `audible-select` records the required human edition choice.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
-import React from 'react';
+import { defineCliCommand, type CliCommandContext } from '../cli-command.js';
 import { z } from 'zod';
 
 import {
@@ -19,7 +18,6 @@ import {
   type AudibleSelectionReceipt,
 } from '../audible.ts';
 import { readJson, writeReceipt } from '../foundation.ts';
-import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
   numberOption,
@@ -32,11 +30,11 @@ import {
 import { audibleRegions, audibleRegionSchema, parityReceiptSchema, pathSchema } from './schemas.ts';
 
 export interface AudibleOperations {
-  readonly audibleCache?: (input: AudibleCacheInput, options: RscOperationContext) => Promise<AudibleCacheReceipt>;
-  readonly audibleSearch?: (input: AudibleSearchInput, options: RscOperationContext) => Promise<AudibleSearchReceipt>;
+  readonly audibleCache?: (input: AudibleCacheInput, options: CliCommandContext) => Promise<AudibleCacheReceipt>;
+  readonly audibleSearch?: (input: AudibleSearchInput, options: CliCommandContext) => Promise<AudibleSearchReceipt>;
   readonly audibleSelect?: (
     input: { readonly candidate: number; readonly candidates: string; readonly note?: string; readonly receipt?: string },
-    options: RscOperationContext,
+    options: CliCommandContext,
   ) => Promise<AudibleSelectionReceipt>;
 }
 
@@ -78,8 +76,8 @@ const audibleRegionList = (value: string): readonly AudibleRegion[] => value.spl
   return candidate as AudibleRegion;
 });
 
-export const audibleOperations = (operations: Required<AudibleOperations>) => [
-  defineOperation({
+export const audibleOperations = (operations: Required<AudibleOperations>) => ({
+  audibleSearch: defineCliCommand({
     cli: {
       exitCode: (receipt) => receipt.exitCode,
       name: 'audible-search',
@@ -102,7 +100,7 @@ export const audibleOperations = (operations: Required<AudibleOperations>) => [
       summary: 'Search and rank Audible identity candidates across reviewed regions.',
       usage: 'audible-search --title TITLE --report FILE [--author AUTHOR] [--narrator NARRATOR] [--duration SECONDS] [--regions LIST]',
     },
-    execute: operations.audibleSearch,
+    handler: operations.audibleSearch,
     id: 'audible-search',
     inputSchema: z.object({
       attempts: z.number().int().min(1).max(10).optional(), author: z.string().min(1).max(512).optional(),
@@ -110,11 +108,9 @@ export const audibleOperations = (operations: Required<AudibleOperations>) => [
       narrator: z.string().min(1).max(512).optional(), regions: z.array(audibleRegionSchema).min(1).max(10).optional(),
       report: pathSchema.optional(), title: z.string().min(1).max(1024),
     }).strict(),
-    mcp: { description: 'Search Audible regions and return ranked identity evidence requiring human review.', name: 'search_audible', openWorld: true, readOnly: false, server: 'curator' },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: audibleSearchResultSchema,
   }),
-  defineOperation({
+  audibleSelect: defineCliCommand({
     cli: {
       name: 'audible-select',
       parse: (args) => {
@@ -131,14 +127,12 @@ export const audibleOperations = (operations: Required<AudibleOperations>) => [
       summary: 'Record one explicit human-reviewed Audible edition choice.',
       usage: 'audible-select --candidates FILE --candidate N --receipt FILE [--note NOTE]',
     },
-    execute: operations.audibleSelect,
+    handler: operations.audibleSelect,
     id: 'audible-select',
     inputSchema: z.object({ candidate: z.number().int().min(1).max(500), candidates: pathSchema, note: z.string().max(4096).optional(), receipt: pathSchema.optional() }).strict(),
-    mcp: { description: 'Record an explicit human-reviewed Audible edition choice from a candidate report.', name: 'select_audible_edition', readOnly: false, server: 'curator' },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: audibleSelectResultSchema,
   }),
-  defineOperation({
+  audibleCache: defineCliCommand({
     cli: {
       name: 'audible-cache',
       parse: (args) => {
@@ -156,14 +150,12 @@ export const audibleOperations = (operations: Required<AudibleOperations>) => [
       summary: 'Cache one reviewed Audible product, chapters, artwork, and source URLs.',
       usage: 'audible-cache --asin ASIN --region REGION --cache-dir DIR --receipt FILE',
     },
-    execute: operations.audibleCache,
+    handler: operations.audibleCache,
     id: 'audible-cache',
     inputSchema: z.object({
       asin: z.string().min(1).max(64), attempts: z.number().int().min(1).max(10).optional(), cacheDirectory: pathSchema,
       receipt: pathSchema.optional(), region: audibleRegionSchema.optional(),
     }).strict(),
-    mcp: { description: 'Cache a reviewed Audible edition and retained source evidence.', name: 'cache_audible_edition', openWorld: true, readOnly: false, server: 'curator' },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: audibleCacheResultSchema,
   }),
-];
+});
