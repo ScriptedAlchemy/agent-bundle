@@ -1,16 +1,23 @@
-import { access, appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, test } from '@rstest/core';
-import { createRsbuild } from '@rsbuild/core';
 
 import { serializeRuntimeDefinition } from '../src/build/serialize-definition.js';
 import { runtimeDefinition } from '../src/definition.js';
-import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
-import { createTestFileRuntimeKernel } from '../src/runtime/state-file-test-support.js';
-import { timeScale } from './support/time-scale.ts';
+import { AgentStateError, createFileRuntimeKernel } from '../src/runtime/state-file.js';
+
+/**
+ * Durable-state semantics for the example's provider-facing RuntimeKernel,
+ * now an adapter over the framework state kernel's workspace-durable
+ * `node:sqlite` driver (#98). Locking, transactions, torn-write repair, and
+ * lease policing belong to the framework kernel and its conformance suite
+ * (`@agent-bundle/runtime` state tests); what stays here is the example's
+ * own contract: snapshot shapes, bounded limit views, exact versions,
+ * idempotency behavior across kernel instances, and the derived
+ * eventId/recordedAt decoration.
+ */
 
 const readOnlyAnnotations = {
   destructiveHint: false,
@@ -20,98 +27,6 @@ const readOnlyAnnotations = {
 };
 
 const resourceUri = 'ui://rsc-agent-runtime/edit-timeline-v1.html';
-
-const wait = async (milliseconds: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
-
-const errorMessages = (value: unknown, seen = new Set<Error>()): readonly string[] => {
-  if (!(value instanceof Error) || seen.has(value)) return [];
-  seen.add(value);
-  return [
-    value.message,
-    ...(value instanceof AggregateError ? value.errors.flatMap((error) => errorMessages(error, seen)) : []),
-    ...errorMessages(value.cause, seen),
-  ];
-};
-
-const observeCancellation = (signal: AbortSignal, onCancelled: () => void): void => {
-  if (signal.aborted) {
-    onCancelled();
-    return;
-  }
-  signal.addEventListener('abort', onCancelled, { once: true });
-};
-
-/**
- * Observes a contender kernel's settled lock-acquisition attempts. A fixed
- * sleep before asserting the contender has not settled races the retry loop:
- * on a loaded runner a wrongly released lease can take longer than the sleep
- * to be noticed, so the assertion passes without testing anything. Waiting
- * for an observed refusal proves the lease was actually held when the
- * contender asked.
- */
-const observeLockAttempts = () => {
-  let waiters: Array<(outcome: 'acquired' | 'held') => void> = [];
-  return {
-    /** Resolves with the outcome of the next attempt settled from now on. */
-    next: async (): Promise<'acquired' | 'held'> =>
-      new Promise((resolve) => {
-        waiters.push(resolve);
-      }),
-    record: (outcome: 'acquired' | 'held'): void => {
-      const settled = waiters;
-      waiters = [];
-      for (const waiter of settled) waiter(outcome);
-    },
-  };
-};
-
-const eagerPromise = <T>(value: T): Promise<T> => ({
-  then<TResult1 = T, TResult2 = never>(
-    onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
-    _onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
-  ): Promise<TResult1 | TResult2> {
-    return Promise.resolve(onfulfilled === undefined || onfulfilled === null ? value as unknown as TResult1 : onfulfilled(value));
-  },
-}) as Promise<T>;
-
-const startLockOwner = async (stateFile: string, timing: { stale: number; update: number } = { stale: 2_000, update: 1_000 }) => {
-  const child = spawn(process.execPath, [
-    join(process.cwd(), 'tests/fixtures/state-lock-owner.mjs'),
-    stateFile,
-    String(timing.stale),
-    String(timing.update),
-  ], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  await new Promise<void>((resolve, reject) => {
-    child.once('error', reject);
-    child.stdout.once('data', (chunk: Buffer) => {
-      if (chunk.toString('utf8').trim() === '{"ready":true}') {
-        resolve();
-        return;
-      }
-      reject(new Error(`Unexpected lock-owner output: ${chunk.toString('utf8')}`));
-    });
-  });
-  return child;
-};
-
-const validEditRecord = (stateVersion: number, idempotencyKey: string) => ({
-  event: {
-    eventId: `event-${stateVersion}`,
-    host: 'claude',
-    path: `src/${stateVersion}.ts`,
-    recordedAt: '2026-08-14T12:00:00.000Z',
-    sessionId: 'session-1',
-    toolName: 'Write',
-  },
-  idempotencyKey,
-  kind: 'edit',
-  stateVersion,
-});
 
 const containsFunction = (value: unknown): boolean => {
   if (typeof value === 'function') {
@@ -129,12 +44,14 @@ const containsFunction = (value: unknown): boolean => {
   return false;
 };
 
+const temporaryStateFile = async (): Promise<string> =>
+  join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.sqlite');
+
 test('reads an edit recorded by another kernel instance', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const stateFile = await temporaryStateFile();
   const first = createFileRuntimeKernel({
     stateFile,
     now: () => new Date('2026-08-14T12:00:00.000Z'),
-    createId: () => 'edit-1',
   });
   const second = createFileRuntimeKernel({ stateFile });
 
@@ -146,18 +63,25 @@ test('reads an edit recorded by another kernel instance', async () => {
     toolName: 'Write',
   });
 
-  expect(await second.readSnapshot()).toMatchObject({
-    edits: [{ eventId: 'edit-1', host: 'claude', path: 'src/runtime/state-file.ts' }],
+  expect(await second.readSnapshot()).toEqual({
+    edits: [
+      {
+        eventId: 'edit-1',
+        host: 'claude',
+        path: 'src/runtime/state-file.ts',
+        recordedAt: '2026-08-14T12:00:00.000Z',
+        sessionId: 'session-1',
+        toolName: 'Write',
+      },
+    ],
     stateVersion: 1,
   });
 });
 
-test('limits snapshots to the newest valid edit events', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  let nextId = 0;
+test('limits snapshots to the newest edit events', async () => {
+  const stateFile = await temporaryStateFile();
   const kernel = createFileRuntimeKernel({
     stateFile,
-    createId: () => `edit-${++nextId}`,
     now: () => new Date('2026-08-14T12:00:00.000Z'),
   });
 
@@ -192,36 +116,15 @@ test('limits snapshots to the newest valid edit events', async () => {
   });
 });
 
-test('ignores one trailing partial JSONL record', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  const kernel = createFileRuntimeKernel({ stateFile, createId: () => 'complete-edit' });
-
-  await kernel.recordEdit({
-    host: 'claude',
-    idempotencyKey: 'test:state:partial',
-    path: 'complete.ts',
-    sessionId: 'session-1',
-    toolName: 'Write',
-  });
-  await appendFile(stateFile, '{"eventId":"partial"', 'utf8');
-
-  await expect(kernel.readSnapshot()).resolves.toMatchObject({
-    edits: [{ eventId: 'complete-edit', path: 'complete.ts' }],
-    stateVersion: 1,
-  });
-});
-
 test('deduplicates identical state edits and rejects conflicting idempotency-key reuse', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const stateFile = await temporaryStateFile();
   const first = createFileRuntimeKernel({
     stateFile,
-    createId: () => 'first-event',
     now: () => new Date('2026-08-14T12:00:00.000Z'),
   });
   const second = createFileRuntimeKernel({
     stateFile,
-    createId: () => 'second-event',
-    now: () => new Date('2026-08-14T12:00:00.000Z'),
+    now: () => new Date('2026-08-14T12:00:05.000Z'),
   });
   const edit = {
     host: 'claude' as const,
@@ -234,23 +137,25 @@ test('deduplicates identical state edits and rejects conflicting idempotency-key
   const [firstSnapshot, secondSnapshot] = await Promise.all([first.recordEdit(edit), second.recordEdit(edit)]);
   expect(firstSnapshot.stateVersion).toBe(1);
   expect(secondSnapshot.stateVersion).toBe(1);
-  expect((await readFile(stateFile, 'utf8')).trim().split('\n')).toHaveLength(1);
-  expect(JSON.parse((await readFile(stateFile, 'utf8')).trim())).toMatchObject({
-    idempotencyKey: 'claude:tool:tool-1',
-    kind: 'edit',
-    stateVersion: 1,
-  });
+  expect(firstSnapshot.edits).toEqual(secondSnapshot.edits);
+  expect(await first.readSnapshot()).toMatchObject({ stateVersion: 1 });
 
-  await expect(second.recordEdit({ ...edit, path: 'src/conflict.ts' })).rejects.toThrow(
-    'idempotency key claude:tool:tool-1',
-  );
+  // The committed decoration is stable: replays return the original commit's
+  // eventId and recordedAt, never a retry's clock.
+  const replayed = await second.recordEdit(edit);
+  expect(replayed.edits).toEqual(firstSnapshot.edits);
+
+  await expect(second.recordEdit({ ...edit, path: 'src/conflict.ts' })).rejects.toMatchObject({
+    code: 'idempotency-conflict',
+    name: 'AgentStateError',
+  });
+  await expect(first.readSnapshot()).resolves.toMatchObject({ stateVersion: 1 });
 });
 
 test('appends reset records without resetting the monotonic durable version', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const stateFile = await temporaryStateFile();
   const kernel = createFileRuntimeKernel({
     stateFile,
-    createId: () => 'event-1',
     now: () => new Date('2026-08-14T12:00:00.000Z'),
   });
 
@@ -264,16 +169,15 @@ test('appends reset records without resetting the monotonic durable version', as
   const reset = await kernel.resetState({ idempotencyKey: 'test:state:reset-1', seed: { reason: 'test' } });
 
   expect(reset).toEqual({ edits: [], seed: { reason: 'test' }, stateVersion: 2 });
-  const records = (await readFile(stateFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-  expect(records).toMatchObject([
-    { kind: 'edit', stateVersion: 1 },
-    { idempotencyKey: 'test:state:reset-1', kind: 'reset', seed: { reason: 'test' }, stateVersion: 2 },
-  ]);
-  expect(await createFileRuntimeKernel({ stateFile }).readSnapshot()).toEqual({ edits: [], seed: { reason: 'test' }, stateVersion: 2 });
+  expect(await createFileRuntimeKernel({ stateFile }).readSnapshot()).toEqual({
+    edits: [],
+    seed: { reason: 'test' },
+    stateVersion: 2,
+  });
 });
 
 test('preserves reset seeds across immediate, idempotent, reopened, limited, and follow-up snapshots', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const stateFile = await temporaryStateFile();
   const seed = Object.freeze({
     cwd: '/tmp',
     hook_event_name: 'PostToolUse',
@@ -284,7 +188,6 @@ test('preserves reset seeds across immediate, idempotent, reopened, limited, and
   });
   const first = createFileRuntimeKernel({
     stateFile,
-    createId: () => 'seed-follow-up-edit',
     now: () => new Date('2026-08-15T00:00:00.000Z'),
   });
 
@@ -301,7 +204,6 @@ test('preserves reset seeds across immediate, idempotent, reopened, limited, and
 
   const reopened = createFileRuntimeKernel({
     stateFile,
-    createId: () => 'seed-follow-up-edit',
     now: () => new Date('2026-08-15T00:00:01.000Z'),
   });
   await expect(reopened.readSnapshot({ limit: 1 })).resolves.toEqual(reset);
@@ -312,28 +214,39 @@ test('preserves reset seeds across immediate, idempotent, reopened, limited, and
     sessionId: 'fixture-seed-session',
     toolName: 'Write',
   })).resolves.toEqual({
-    edits: [expect.objectContaining({ eventId: 'seed-follow-up-edit', path: 'after-reset.ts' })],
+    edits: [
+      {
+        eventId: 'edit-3',
+        host: 'claude',
+        path: 'after-reset.ts',
+        recordedAt: '2026-08-15T00:00:01.000Z',
+        sessionId: 'fixture-seed-session',
+        toolName: 'Write',
+      },
+    ],
     seed,
     stateVersion: 3,
   });
-  await expect(reopened.readSnapshot({ limit: 1 })).resolves.toEqual({
-    edits: [expect.objectContaining({ eventId: 'seed-follow-up-edit', path: 'after-reset.ts' })],
+  await expect(reopened.readSnapshot({ limit: 1 })).resolves.toMatchObject({
+    edits: [expect.objectContaining({ eventId: 'edit-3', path: 'after-reset.ts' })],
     seed,
     stateVersion: 3,
   });
   await expect(reopened.resetState({
     idempotencyKey: 'test:state:seed-reset',
     seed: { ...seed, session_id: 'conflicting-seed-session' },
-  })).rejects.toThrow('idempotency key test:state:seed-reset');
-  await expect(reopened.resetState({ idempotencyKey: 'test:state:seed-clear' })).resolves.toEqual({ edits: [], stateVersion: 4 });
+  })).rejects.toMatchObject({ code: 'idempotency-conflict' });
+  await expect(reopened.resetState({ idempotencyKey: 'test:state:seed-clear' })).resolves.toEqual({
+    edits: [],
+    stateVersion: 4,
+  });
   await expect(createFileRuntimeKernel({ stateFile }).readSnapshot()).resolves.toEqual({ edits: [], stateVersion: 4 });
 });
 
 test('reconstructs an exact durable snapshot version through edits, resets, and idempotent replays', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const stateFile = await temporaryStateFile();
   const kernel = createFileRuntimeKernel({
     stateFile,
-    createId: () => 'exact-version-edit',
     now: () => new Date('2026-08-15T01:00:00.000Z'),
   });
   const readExact = (stateVersion: number) => kernel.readSnapshot({ stateVersion });
@@ -369,7 +282,7 @@ test('reconstructs an exact durable snapshot version through edits, resets, and 
   });
   await expect(readExact(2)).resolves.toEqual({ edits: [], seed, stateVersion: 2 });
   await expect(readExact(3)).resolves.toMatchObject({
-    edits: [expect.objectContaining({ path: 'after-reset.ts' })],
+    edits: [expect.objectContaining({ eventId: 'edit-3', path: 'after-reset.ts' })],
     seed,
     stateVersion: 3,
   });
@@ -378,752 +291,43 @@ test('reconstructs an exact durable snapshot version through edits, resets, and 
   await expect(readExact(1.5)).rejects.toThrow(RangeError);
 });
 
-test('rejects terminated JSONL corruption while preserving only an incomplete final tail for recovery', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  const kernel = createFileRuntimeKernel({ stateFile, createId: () => 'complete-edit' });
-  await kernel.recordEdit({
-    host: 'claude',
-    idempotencyKey: 'test:state:complete',
-    path: 'complete.ts',
-    sessionId: 'session-1',
-    toolName: 'Write',
-  });
-
-  await appendFile(stateFile, '{"broken":true}\n', 'utf8');
-  await expect(kernel.readSnapshot()).rejects.toThrow('Runtime state corruption');
-
-  const recoverableStateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'recoverable.jsonl');
-  const recoverable = createFileRuntimeKernel({ stateFile: recoverableStateFile, createId: () => 'recovered-edit' });
-  await recoverable.recordEdit({
-    host: 'codex',
-    idempotencyKey: 'test:state:before-tail',
-    path: 'first.ts',
-    sessionId: 'session-1',
-    toolName: 'apply_patch',
-  });
-  await appendFile(recoverableStateFile, '{"truncated"', 'utf8');
-  await expect(
-    recoverable.recordEdit({
-      host: 'codex',
-      idempotencyKey: 'test:state:after-tail',
-      path: 'second.ts',
-      sessionId: 'session-1',
-      toolName: 'apply_patch',
-    }),
-  ).resolves.toMatchObject({ stateVersion: 2 });
-  await expect(recoverable.readSnapshot()).resolves.toMatchObject({
-    edits: [{ path: 'first.ts' }, { path: 'second.ts' }],
-    stateVersion: 2,
-  });
-});
-
-test('rejects malformed middle records and non-monotonic durable versions', async () => {
-  const middleStateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'middle.jsonl');
-  await writeFile(middleStateFile, `${JSON.stringify(validEditRecord(1, 'test:state:first'))}\n{"invalid":true}\n`, 'utf8');
-  await expect(createFileRuntimeKernel({ stateFile: middleStateFile }).readSnapshot()).rejects.toThrow('Runtime state corruption');
-
-  const versionStateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'version.jsonl');
-  await writeFile(
-    versionStateFile,
-    `${JSON.stringify(validEditRecord(1, 'test:state:first'))}\n${JSON.stringify(validEditRecord(1, 'test:state:second'))}\n`,
-    'utf8',
+test('serializes concurrent kernel instances into one monotonic history', async () => {
+  const stateFile = await temporaryStateFile();
+  const kernels = Array.from({ length: 3 }, () =>
+    createFileRuntimeKernel({ stateFile, now: () => new Date('2026-08-15T02:00:00.000Z') }),
   );
-  await expect(createFileRuntimeKernel({ stateFile: versionStateFile }).readSnapshot()).rejects.toThrow('monotonic state version');
-});
 
-// Real lock heartbeats and staleness windows put the nominal runtime near
-// the 5s default budget; contended 2-core runners starve it.
-test('excludes a live heartbeat owner and recovers its stale lock only after SIGKILL', { timeout: 30_000 * timeScale }, async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  await writeFile(stateFile, '', 'utf8');
-  const owner = await startLockOwner(stateFile);
-  try {
-    const lockDirectory = `${stateFile}.lock`;
-    const firstMtime = (await stat(lockDirectory)).mtimeMs;
-    // The heartbeat touches the lock from a 1s timer in the owner CHILD
-    // process. A fixed 1.1s sleep races that timer with only 100ms of
-    // scheduling margin, which a loaded runner blows through. Poll for the
-    // touch instead of assuming timer punctuality.
-    const heartbeatDeadline = Date.now() + 15_000 * timeScale;
-    let touchedMtime = firstMtime;
-    while (touchedMtime <= firstMtime && Date.now() < heartbeatDeadline) {
-      await wait(50);
-      touchedMtime = (await stat(lockDirectory)).mtimeMs;
-    }
-    expect(touchedMtime).toBeGreaterThan(firstMtime);
-
-    const aborted = new AbortController();
-    setTimeout(() => aborted.abort(new Error('test abort')), 50);
-    await expect(
-      createTestFileRuntimeKernel({ stateFile }).recordEdit(
-        {
-          host: 'claude',
-          idempotencyKey: 'test:state:live-owner',
-          path: 'live-owner.ts',
-          sessionId: 'session-1',
-          toolName: 'Write',
-        },
-        { lockAcquireTimeoutMs: 500, signal: aborted.signal },
-      ),
-    ).rejects.toThrow('test abort');
-
-    owner.kill('SIGKILL');
-    await new Promise<void>((resolve) => owner.once('close', () => resolve()));
-    await wait(2_100);
-    // This test asserts stale-lock recovery, not the release/settlement
-    // budgets (dedicated tests pin those with explicit adapter values). The
-    // test-kernel 100ms defaults poison a recovered mutation whenever one
-    // lock-directory fs operation stalls on a contended runner, so the
-    // recovery kernel uses the scaled production budgets instead.
-    await expect(
-      createTestFileRuntimeKernel({
-        adapter: { ownerSettlementMs: 10_000 * timeScale, releaseMs: 10_000 * timeScale },
-        stateFile,
-      }).recordEdit({
-        host: 'codex',
-        idempotencyKey: 'test:state:stale-recovery',
-        path: 'recovered.ts',
+  const snapshots = await Promise.all(
+    kernels.map((kernel, index) =>
+      kernel.recordEdit({
+        host: 'claude',
+        idempotencyKey: `test:state:concurrent-${String(index)}`,
+        path: `src/concurrent-${String(index)}.ts`,
         sessionId: 'session-1',
-        toolName: 'apply_patch',
+        toolName: 'Write',
       }),
-    ).resolves.toMatchObject({ stateVersion: 1 });
-  } finally {
-    owner.kill('SIGKILL');
-  }
-});
-
-test('a non-production short-timing contender cannot steal a production lease', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  await writeFile(stateFile, '', 'utf8');
-  const owner = await startLockOwner(stateFile, { stale: 30_000, update: 5_000 });
-  try {
-    const cancelled = new AbortController();
-    setTimeout(() => cancelled.abort(new Error('short contender aborted')), 2_100);
-    await expect(
-      createTestFileRuntimeKernel({ stateFile }).recordEdit(
-        {
-          host: 'claude',
-          idempotencyKey: 'test:state:short-contender',
-          path: 'must-not-write.ts',
-          sessionId: 'session-1',
-          toolName: 'Write',
-        },
-        { lockAcquireTimeoutMs: 30_000, signal: cancelled.signal },
-      ),
-    ).rejects.toThrow('short contender aborted');
-    await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
-  } finally {
-    owner.kill('SIGTERM');
-    await new Promise<void>((resolve) => owner.once('close', () => resolve()));
-  }
-});
-
-test('releases a lease acquired after an expired absolute acquisition deadline', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  let releases = 0;
-  const kernel = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: {
-      prepareStateFile: async ({ stateFile: preparedStateFile }) => preparedStateFile,
-      acquireLock: async () =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve(async () => {
-            releases += 1;
-          }), 30);
-        }),
-    },
-  });
-
-  await expect(
-    kernel.recordEdit(
-      {
-        host: 'claude',
-        idempotencyKey: 'test:state:late-lock',
-        path: 'late-lock.ts',
-        sessionId: 'session-1',
-        toolName: 'Write',
-      },
-      { lockAcquireTimeoutMs: 20 },
     ),
-  ).rejects.toThrow('Timed out acquiring runtime state lease');
-  await wait(60);
-  expect(releases).toBe(1);
-});
-
-// The critical-section deadline arms at lock acquisition, so a deadline
-// shorter than a loaded runner's read phase can fire BEFORE the hung append
-// is entered; the read then settles fast and the rejection becomes 'exceeded
-// … critical-section limit' instead of the settlement timeout. A 1s deadline
-// lets the read always finish first, so the cancellation deterministically
-// lands in the never-settling append.
-test('cancels a never-settling active phase at the hard critical-section deadline', { timeout: 30_000 * timeScale }, async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  const kernel = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: {
-      beforeAppend: () => new Promise<void>(() => undefined),
-      criticalSectionMs: 1_000,
-    },
-  });
-
-  await expect(
-    kernel.recordEdit({
-      host: 'claude',
-      idempotencyKey: 'test:state:never-settles',
-      path: 'never-settles.ts',
-      sessionId: 'session-1',
-      toolName: 'Write',
-    }),
-  ).rejects.toThrow('did not settle within 100 ms after cancellation');
-  await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
-});
-
-test('exits promptly after a timed-out phase settles before its owner-settlement deadline', async () => {
-  const buildRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-state-exit-build-'));
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-state-exit-')), 'state.jsonl');
-  const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        distPath: { root: buildRoot },
-        filename: { js: '[name].js' },
-        target: 'node',
-      },
-      source: { entry: { fixture: './tests/fixtures/state-settlement-exit.ts' } },
-    },
-    cwd: process.cwd(),
-  });
-  const build = await rsbuild.build();
-  const startedAt = Date.now();
-  const child = spawn(process.execPath, [join(buildRoot, 'fixture.js'), stateFile], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let stdout = '';
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (chunk: string) => {
-    stdout += chunk;
-  });
-  const outcome = await Promise.race([
-    new Promise<Readonly<{ exitCode: number | null; type: 'closed' }>>((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', (exitCode) => resolve({ exitCode, type: 'closed' }));
-    }),
-    wait(500).then(() => ({ type: 'timeout' as const })),
-  ]);
-  if (outcome.type === 'timeout') child.kill('SIGKILL');
-  await build.close();
-  await rm(buildRoot, { force: true, recursive: true });
-
-  expect(outcome.type).toBe('closed');
-  if (outcome.type === 'closed') expect(outcome.exitCode).toBe(0);
-  expect(stdout).toBe('phase-settled\n');
-  expect(Date.now() - startedAt).toBeLessThan(500);
-});
-
-// The critical-section deadline arms at lock acquisition, so a 20ms deadline
-// could fire before the instrumented phase was entered on a loaded runner;
-// the phase barrier then never resolved and the test hung to its budget. A
-// 1s deadline lets the read phase always finish first, and the barrier
-// observes the cancellation so settlement is ordered on events rather than
-// wall-clock margins.
-test('retains the lease until a timed-out mutation phase actually settles', { timeout: 30_000 * timeScale }, async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  let entered!: () => void;
-  let settle!: () => void;
-  let cancelled!: () => void;
-  const phaseEntered = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
-  const phaseSettlement = new Promise<void>((resolve) => {
-    settle = resolve;
-  });
-  const phaseCancelled = new Promise<void>((resolve) => {
-    cancelled = resolve;
-  });
-  const first = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: {
-      beforeAppend: async (signal) => {
-        entered();
-        observeCancellation(signal, cancelled);
-        await phaseSettlement;
-      },
-      criticalSectionMs: 1_000,
-      ownerSettlementMs: 30_000,
-    },
-  });
-  const lockAttempts = observeLockAttempts();
-  const second = createTestFileRuntimeKernel({ stateFile, adapter: { onLockAttempt: lockAttempts.record } });
-
-  const firstMutation = first.recordEdit({
-    host: 'claude',
-    idempotencyKey: 'test:state:late-phase-owner',
-    path: 'late-phase-owner.ts',
-    sessionId: 'session-1',
-    toolName: 'Write',
-  });
-  void firstMutation.catch(() => undefined);
-  await phaseEntered;
-
-  let contenderSettled = false;
-  const contender = second.recordEdit(
-    {
-      host: 'codex',
-      idempotencyKey: 'test:state:late-phase-contender',
-      path: 'late-phase-contender.ts',
-      sessionId: 'session-2',
-      toolName: 'apply_patch',
-    },
-    { lockAcquireTimeoutMs: 30_000 },
-  ).finally(() => {
-    contenderSettled = true;
-  });
-  await expect(lockAttempts.next()).resolves.toBe('held');
-  expect(contenderSettled).toBe(false);
-
-  // The deadline has cancelled the mutation, but the lease must stay held
-  // while the phase is unsettled. The first observed refusal may belong to
-  // an attempt already in flight when the cancellation landed; the second
-  // necessarily started after it, so a wrongly released lease would surface
-  // here as 'acquired'.
-  await phaseCancelled;
-  await expect(lockAttempts.next()).resolves.toBe('held');
-  await expect(lockAttempts.next()).resolves.toBe('held');
-  expect(contenderSettled).toBe(false);
-
-  settle();
-  await expect(firstMutation).rejects.toThrow('exceeded 1000 ms critical-section limit');
-  await expect(contender).resolves.toMatchObject({ stateVersion: 1 });
-  const settledContents = await readFile(stateFile, 'utf8');
-  await wait(30);
-  expect(await readFile(stateFile, 'utf8')).toBe(settledContents);
-  expect(settledContents).not.toContain('late-phase-owner.ts');
-  expect(settledContents).toContain('late-phase-contender.ts');
-});
-
-for (const phase of ['truncate', 'append', 'fsync'] as const) {
-  // The critical-section deadline arms at lock acquisition, so a 20ms
-  // deadline could fire before the instrumented phase was entered on a
-  // loaded runner (observed 4/10 under taskset -c 0,1); the phase barrier
-  // then never resolved and the test hung to its budget. A 1s deadline lets
-  // the pre-phase work always finish first, and the barrier observes the
-  // cancellation so settlement is ordered on events rather than wall-clock
-  // margins.
-  test(`does not unlock while a timed-out ${phase} phase is unsettled`, { timeout: 30_000 * timeScale }, async () => {
-    const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-    if (phase === 'truncate') {
-      await writeFile(stateFile, '{"incomplete":true', 'utf8');
-    }
-    let entered!: () => void;
-    let settle!: () => void;
-    let cancelled!: () => void;
-    const phaseEntered = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const phaseSettlement = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
-    const phaseCancelled = new Promise<void>((resolve) => {
-      cancelled = resolve;
-    });
-    const barrier = async (signal: AbortSignal) => {
-      entered();
-      observeCancellation(signal, cancelled);
-      await phaseSettlement;
-    };
-    const first = createTestFileRuntimeKernel({
-      stateFile,
-      adapter: {
-        ...(phase === 'truncate' ? { beforeRepair: barrier } : {}),
-        ...(phase === 'append' ? { beforeAppendWrite: barrier } : {}),
-        ...(phase === 'fsync' ? { beforeAppendSync: barrier } : {}),
-        criticalSectionMs: 1_000,
-        ownerSettlementMs: 30_000,
-      },
-    });
-    const lockAttempts = observeLockAttempts();
-    const second = createTestFileRuntimeKernel({ stateFile, adapter: { onLockAttempt: lockAttempts.record } });
-    const firstMutation = first.recordEdit({
-      host: 'claude',
-      idempotencyKey: `test:state:${phase}-owner`,
-      path: `${phase}-owner.ts`,
-      sessionId: 'session-1',
-      toolName: 'Write',
-    });
-    void firstMutation.catch(() => undefined);
-    await phaseEntered;
-
-    let contenderSettled = false;
-    const contender = second.recordEdit(
-      {
-        host: 'codex',
-        idempotencyKey: `test:state:${phase}-contender`,
-        path: `${phase}-contender.ts`,
-        sessionId: 'session-2',
-        toolName: 'apply_patch',
-      },
-      { lockAcquireTimeoutMs: 30_000 },
-    ).finally(() => {
-      contenderSettled = true;
-    });
-    await expect(lockAttempts.next()).resolves.toBe('held');
-    expect(contenderSettled).toBe(false);
-
-    // The deadline has cancelled the mutation, but the lease must stay held
-    // while the phase is unsettled. The first observed refusal may belong to
-    // an attempt already in flight when the cancellation landed; the second
-    // necessarily started after it, so a wrongly released lease would
-    // surface here as 'acquired'.
-    await phaseCancelled;
-    await expect(lockAttempts.next()).resolves.toBe('held');
-    await expect(lockAttempts.next()).resolves.toBe('held');
-    expect(contenderSettled).toBe(false);
-
-    settle();
-    await expect(firstMutation).rejects.toThrow('exceeded 1000 ms critical-section limit');
-    await expect(contender).resolves.toMatchObject({ stateVersion: phase === 'fsync' ? 2 : 1 });
-    const contentsAtUnlock = await readFile(stateFile, 'utf8');
-    await wait(30);
-    expect(await readFile(stateFile, 'utf8')).toBe(contentsAtUnlock);
-  });
-}
-
-test('keeps contenders excluded until a delayed release settles', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  let releaseEntered!: () => void;
-  let settleRelease!: () => void;
-  const entered = new Promise<void>((resolve) => {
-    releaseEntered = resolve;
-  });
-  const settlement = new Promise<void>((resolve) => {
-    settleRelease = resolve;
-  });
-  const first = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: {
-      beforeRelease: async () => {
-        releaseEntered();
-        await settlement;
-      },
-      releaseMs: 200,
-    },
-  });
-  const lockAttempts = observeLockAttempts();
-  const second = createTestFileRuntimeKernel({ stateFile, adapter: { onLockAttempt: lockAttempts.record } });
-  const firstMutation = first.recordEdit({
-    host: 'claude',
-    idempotencyKey: 'test:state:delayed-release-owner',
-    path: 'release-owner.ts',
-    sessionId: 'session-1',
-    toolName: 'Write',
-  });
-  await entered;
-  let contenderSettled = false;
-  const contender = second.recordEdit(
-    {
-      host: 'codex',
-      idempotencyKey: 'test:state:delayed-release-contender',
-      path: 'release-contender.ts',
-      sessionId: 'session-2',
-      toolName: 'apply_patch',
-    },
-    { lockAcquireTimeoutMs: 500 },
-  ).finally(() => {
-    contenderSettled = true;
-  });
-  await expect(lockAttempts.next()).resolves.toBe('held');
-  expect(contenderSettled).toBe(false);
-  settleRelease();
-  await expect(firstMutation).resolves.toMatchObject({ stateVersion: 1 });
-  await expect(contender).resolves.toMatchObject({ stateVersion: 2 });
-});
-
-test('bounds a stuck release and invokes fatal owner teardown without unlocking', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  let fatalError: Error | undefined;
-  const kernel = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: {
-      acquireLock: async () => async () => new Promise<void>(() => undefined),
-      criticalSectionMs: 20,
-      fatalOwnerTeardown: (error) => {
-        fatalError = error;
-      },
-      prepareStateFile: async ({ stateFile: preparedStateFile }) => {
-        await writeFile(preparedStateFile, '', 'utf8');
-        return preparedStateFile;
-      },
-      releaseMs: 20,
-    },
-  });
-
-  const outcome = await Promise.race([
-    kernel.recordEdit({
-      host: 'claude',
-      idempotencyKey: 'test:state:stuck-release',
-      path: 'stuck-release.ts',
-      sessionId: 'session-1',
-      toolName: 'Write',
-    }).then(() => 'resolved', (error: unknown) => error),
-    wait(200).then(() => 'test-timeout'),
-  ]);
-
-  expect(outcome).toBeInstanceOf(Error);
-  expect(errorMessages(outcome).some((message) => message.includes('lease release exceeded 20 ms'))).toBe(true);
-  expect(fatalError?.message).toContain('lease release exceeded 20 ms');
-  await expect(
-    kernel.recordEdit({
-      host: 'codex',
-      idempotencyKey: 'test:state:after-stuck-release',
-      path: 'after-stuck-release.ts',
-      sessionId: 'session-2',
-      toolName: 'apply_patch',
-    }),
-  ).rejects.toThrow('permanently poisoned');
-});
-
-test('lease compromise cancels its owning mutation while a contender is acquiring', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  let allowRead!: () => void;
-  let compromiseOwner!: (error: Error) => void;
-  let firstRead = true;
-  let acquireCount = 0;
-  const readBarrier = new Promise<void>((resolve) => {
-    allowRead = resolve;
-  });
-  const kernel = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: {
-      acquireLock: async ({ onCompromised }) => {
-        acquireCount += 1;
-        if (acquireCount === 1) {
-          compromiseOwner = onCompromised;
-          return async () => undefined;
-        }
-        return new Promise(() => undefined);
-      },
-      beforeRead: async () => {
-        if (firstRead) {
-          firstRead = false;
-          await readBarrier;
-        }
-      },
-      criticalSectionMs: 500,
-      prepareStateFile: async ({ stateFile: preparedStateFile }) => {
-        await writeFile(preparedStateFile, '', 'utf8');
-        return preparedStateFile;
-      },
-    },
-  });
-  const first = kernel.recordEdit({
-    host: 'claude',
-    idempotencyKey: 'test:state:compromise-owner-a',
-    path: 'owner-a.ts',
-    sessionId: 'session-a',
-    toolName: 'Write',
-  });
-  void first.catch(() => undefined);
-  await wait(10);
-  const second = kernel.recordEdit(
-    {
-      host: 'codex',
-      idempotencyKey: 'test:state:compromise-contender-b',
-      path: 'contender-b.ts',
-      sessionId: 'session-b',
-      toolName: 'apply_patch',
-    },
-    { lockAcquireTimeoutMs: 500 },
   );
-  void second.catch(() => undefined);
-  await wait(10);
-  compromiseOwner(new Error('simulated owner compromise'));
 
-  const firstOutcome = await Promise.race([
-    first.then(() => 'resolved', (error: unknown) => error),
-    wait(100).then(() => 'test-timeout'),
-  ]);
-  expect(firstOutcome).toBeInstanceOf(Error);
-  expect((firstOutcome as Error).message).toContain('permanently poisoned');
-  await expect(second).rejects.toThrow('permanently poisoned');
-  await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
-  allowRead();
+  expect(snapshots.map((snapshot) => snapshot.stateVersion).sort()).toEqual([1, 2, 3]);
+  const settled = await createFileRuntimeKernel({ stateFile }).readSnapshot();
+  expect(settled.stateVersion).toBe(3);
+  expect(new Set(settled.edits.map((edit) => edit.path)).size).toBe(3);
 });
 
-test('rechecks a simultaneous owner abort after a phase value wins and releases exactly once', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  const controller = new AbortController();
-  let appendAttempts = 0;
-  let releases = 0;
-  const kernel = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: {
-      acquireLock: async () => async () => {
-        releases += 1;
-      },
-      beforeAppend: async () => {
-        appendAttempts += 1;
-      },
-      prepareStateFile: async ({ stateFile: preparedStateFile }) => {
-        await writeFile(preparedStateFile, '', 'utf8');
-        return preparedStateFile;
-      },
-      readState: () => {
-        controller.abort(new Error('simultaneous owner abort'));
-        return eagerPromise(Buffer.alloc(0));
-      },
-    },
-  });
+test('fails closed with a typed corrupt error when the state file is not a database', async () => {
+  const stateFile = await temporaryStateFile();
+  await writeFile(stateFile, 'this is not a sqlite database, and it is long enough to hold a header', 'utf8');
 
-  await expect(
-    kernel.recordEdit(
-      {
-        host: 'claude',
-        idempotencyKey: 'test:state:simultaneous-abort',
-        path: 'simultaneous-abort.ts',
-        sessionId: 'session-1',
-        toolName: 'Write',
-      },
-      { signal: controller.signal },
-    ),
-  ).rejects.toThrow('simultaneous owner abort');
-  expect(appendAttempts).toBe(0);
-  expect(releases).toBe(1);
+  await expect(createFileRuntimeKernel({ stateFile }).readSnapshot()).rejects.toMatchObject({
+    code: 'corrupt',
+    name: 'AgentStateError',
+  });
+  expect(new AgentStateError('corrupt', 'proof of the exported class').name).toBe('AgentStateError');
 });
 
-test('rechecks simultaneous lease poison after a phase value wins and never enters append', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  let appendAttempts = 0;
-  let compromise!: (error: Error) => void;
-  let fatalTeardowns = 0;
-  let releases = 0;
-  const kernel = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: {
-      acquireLock: async ({ onCompromised }) => {
-        compromise = onCompromised;
-        return async () => {
-          releases += 1;
-        };
-      },
-      beforeAppend: async () => {
-        appendAttempts += 1;
-      },
-      fatalOwnerTeardown: () => {
-        fatalTeardowns += 1;
-      },
-      prepareStateFile: async ({ stateFile: preparedStateFile }) => {
-        await writeFile(preparedStateFile, '', 'utf8');
-        return preparedStateFile;
-      },
-      readState: () => {
-        compromise(new Error('simultaneous owner compromise'));
-        return eagerPromise(Buffer.alloc(0));
-      },
-    },
-  });
-
-  await expect(
-    kernel.recordEdit({
-      host: 'claude',
-      idempotencyKey: 'test:state:simultaneous-poison',
-      path: 'simultaneous-poison.ts',
-      sessionId: 'session-1',
-      toolName: 'Write',
-    }),
-  ).rejects.toThrow('permanently poisoned');
-  expect(appendAttempts).toBe(0);
-  expect(fatalTeardowns).toBe(1);
-  expect(releases).toBe(0);
-});
-
-test('accepts Windows parent-fsync limitations when creating a new state file', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  const kernel = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: {
-      platform: 'win32',
-      syncParent: async () => {
-        throw Object.assign(new Error('Windows directory sync unsupported'), { code: 'EPERM' });
-      },
-    },
-  });
-  await expect(
-    kernel.recordEdit({
-      host: 'claude',
-      idempotencyKey: 'test:state:windows-parent-sync',
-      path: 'windows.ts',
-      sessionId: 'session-1',
-      toolName: 'Write',
-    }),
-  ).resolves.toMatchObject({ stateVersion: 1 });
-});
-
-test('rejects oversized snapshots before parsing or allocating their full file size', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'oversized.jsonl');
-  await writeFile(stateFile, Buffer.alloc(16 * 1024 * 1024 + 1));
-  await expect(createFileRuntimeKernel({ stateFile }).readSnapshot()).rejects.toThrow('exceeds 16777216 byte limit');
-});
-
-test('rejects invalid writes before creating their state file', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  await expect(
-    createFileRuntimeKernel({ stateFile }).recordEdit({
-      host: 'claude',
-      idempotencyKey: 'test:state:invalid-write',
-      path: '',
-      sessionId: 'session-1',
-      toolName: 'Write',
-    }),
-  ).rejects.toThrow('every event field');
-  await expect(access(stateFile)).rejects.toThrow();
-});
-
-test('poisons a kernel after lease compromise before it can append or mutate again', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
-  let entered!: () => void;
-  let continueAppend!: () => void;
-  const enteredBeforeAppend = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
-  const allowAppend = new Promise<void>((resolve) => {
-    continueAppend = resolve;
-  });
-  const kernel = createTestFileRuntimeKernel({
-    stateFile,
-    adapter: { beforeAppend: async () => {
-      entered();
-      await allowAppend;
-    } },
-  });
-  const pending = kernel.recordEdit({
-    host: 'claude',
-    idempotencyKey: 'test:state:compromised',
-    path: 'compromised.ts',
-    sessionId: 'session-1',
-    toolName: 'Write',
-  });
-  void pending.catch(() => undefined);
-  await Promise.race([
-    enteredBeforeAppend,
-    wait(100).then(() => Promise.reject(new Error('test-only append barrier was not reached'))),
-  ]);
-  await rm(`${stateFile}.lock`, { force: true, recursive: true });
-  await wait(1_100);
-  continueAppend();
-  await expect(pending).rejects.toThrow('lease was compromised');
-  await expect(
-    kernel.recordEdit({
-      host: 'claude',
-      idempotencyKey: 'test:state:after-compromise',
-      path: 'after-compromise.ts',
-      sessionId: 'session-1',
-      toolName: 'Write',
-    }),
-  ).rejects.toThrow('permanently poisoned');
-  await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
-});
-
-test('treats a valid empty JSONL file as an empty snapshot', async () => {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+test('treats a valid empty state file as an empty snapshot', async () => {
+  const stateFile = await temporaryStateFile();
   await writeFile(stateFile, '', 'utf8');
 
   await expect(createFileRuntimeKernel({ stateFile }).readSnapshot()).resolves.toEqual({

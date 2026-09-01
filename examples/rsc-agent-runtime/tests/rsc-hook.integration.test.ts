@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
 import { normalizeClaudeHook, normalizeCodexHook } from '../src/hook/normalize.js';
+import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
 import { ensureExampleBuilt } from './support/ensure-built.js';
 
 const temporaryDirectories: string[] = [];
@@ -213,9 +214,10 @@ describe('built RSC hook entry', () => {
       },
     });
 
-    const records = (await readFile(stateFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-    expect(records.map((record) => record.event.host)).toEqual(['claude', 'codex']);
-    expect(records.map((record) => record.idempotencyKey)).toEqual(['claude:tool:tool-1', 'codex:tool:tool-2']);
+    const settled = await createFileRuntimeKernel({ stateFile }).readSnapshot();
+    expect(settled.stateVersion).toBe(2);
+    expect(settled.edits.map((edit) => edit.host)).toEqual(['claude', 'codex']);
+    expect(settled.edits.map((edit) => edit.eventId)).toEqual(['edit-1', 'edit-2']);
   });
 
   it('rejects unsupported native hook input without writing stdout', async () => {
@@ -255,8 +257,10 @@ describe('built RSC hook entry', () => {
 
     expect(result.exitCode).toBe(0);
     const workspaceId = createHash('sha256').update(await realpath(workspace)).digest('hex');
-    const stateFile = join(stateHome, 'agent-bundle', 'rsc-agent-runtime', workspaceId, 'events.jsonl');
-    expect((await readFile(stateFile, 'utf8')).trim()).toContain('fallback.txt');
+    const stateFile = join(stateHome, 'agent-bundle', 'rsc-agent-runtime', workspaceId, 'state.sqlite');
+    const fallbackSnapshot = await createFileRuntimeKernel({ stateFile }).readSnapshot();
+    expect(fallbackSnapshot.stateVersion).toBe(1);
+    expect(fallbackSnapshot.edits.map((edit) => edit.path.endsWith('fallback.txt'))).toEqual([true]);
     await expect(access(join(workspace, '.agent-runtime-demo'))).rejects.toThrow();
   });
 

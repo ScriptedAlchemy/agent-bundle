@@ -21,6 +21,7 @@
     "provenance": true
   },
   "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=22.19.0"
   },
@@ -44,6 +45,10 @@
     "./state": {
       "types": "./dist/state/index.d.ts",
       "import": "./dist/state.js"
+    },
+    "./state/sqlite": {
+      "types": "./dist/state/sqlite.d.ts",
+      "import": "./dist/state/sqlite.js"
     }
   },
   "scripts": {

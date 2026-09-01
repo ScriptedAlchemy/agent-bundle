@@ -7,7 +7,7 @@ This private, opt-in example shows one React Server Components (RSC) runtime sha
 | Plane | Responsibility | Lifetime |
 | --- | --- | --- |
 | Definition | Static hook matchers, tool schemas, resource URIs, and metadata | Build/startup |
-| Kernel | Append-only JSONL events and snapshots | Cross-process |
+| Kernel | Framework state kernel (#98): typed events, monotonic revisions, workspace-durable `node:sqlite` storage | Cross-process |
 | RSC render | Hook and MCP result component trees, lowered from Flight | One request |
 | MCP App UI | Mounted timeline, Refresh, and recoverable row selection | One UI instance |
 
@@ -96,7 +96,7 @@ pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec agent-bundle build --jso
 To exercise one hook manually, give it an explicit state file and native Claude-shaped JSON:
 
 ```bash
-AGENT_RUNTIME_STATE_FILE=/tmp/rsc-events.jsonl \
+AGENT_RUNTIME_STATE_FILE=/tmp/rsc-agent-state.sqlite \
   node examples/rsc-agent-runtime/dist/runtime/hook/index.js --host claude <<JSON
 {"hook_event_name":"PostToolUse","session_id":"manual","cwd":"$PWD","tool_name":"Write","tool_input":{"file_path":"README.md"}}
 JSON
@@ -105,14 +105,14 @@ JSON
 Run the built stdio MCP server with the same state file:
 
 ```bash
-AGENT_RUNTIME_STATE_FILE=/tmp/rsc-events.jsonl \
+AGENT_RUNTIME_STATE_FILE=/tmp/rsc-agent-state.sqlite \
   node examples/rsc-agent-runtime/dist/runtime/mcp/stdio.js
 ```
 
 Run the Streamable HTTP server locally at `/mcp`:
 
 ```bash
-AGENT_RUNTIME_STATE_FILE=/tmp/rsc-events.jsonl PORT=3000 \
+AGENT_RUNTIME_STATE_FILE=/tmp/rsc-agent-state.sqlite PORT=3000 \
   node examples/rsc-agent-runtime/dist/runtime/mcp/http.js
 ```
 
@@ -150,11 +150,12 @@ pnpm eval:spot
 ```
 
 It builds this example, replays one native-shaped Claude `PostToolUse` event
-through the built hook binary (RSC worker render, Flight lowering, durable
-JSONL kernel write), then connects a real stdio MCP client to the built server
-over the same state file and asserts the RSC-lowered `render_edit_timeline`
-result, the shared edit snapshot, and the linked MCP App resource. It contacts
-no real host and needs no credentials.
+through the built hook binary (RSC worker render, Flight lowering, a durable
+state-kernel commit), replays the same native tool id from a second hook
+process to prove cross-process idempotency, then connects a real stdio MCP
+client to the built server over the same state file and asserts the
+RSC-lowered `render_edit_timeline` result, the shared edit snapshot, and the
+linked MCP App resource. It contacts no real host and needs no credentials.
 
 To exercise the Claude package manually when an external host run is separately
 authorized, use its native shell contract:
@@ -206,7 +207,7 @@ separately captures a real public HTTPS-host result.
 The widget is locally tested over its MCP Apps resource/HTTP/browser path. To connect it to ChatGPT Developer Mode, expose local `/mcp` through a public HTTPS tunnel and allow that exact public host/origin before starting the server:
 
 ```bash
-AGENT_RUNTIME_STATE_FILE=/tmp/rsc-events.jsonl \
+AGENT_RUNTIME_STATE_FILE=/tmp/rsc-agent-state.sqlite \
 AGENT_RUNTIME_ALLOWED_HOSTS=tunnel.example \
 AGENT_RUNTIME_ALLOWED_ORIGINS=https://tunnel.example \
 AGENT_RUNTIME_PUBLIC_MCP_URL=https://tunnel.example/mcp \
@@ -237,7 +238,21 @@ For ordinary MCP Apps, prefer Agent Bundle's standard non-RSC `mcp.servers.<serv
 
 ## Limits and opt-in boundary
 
-The demo kernel is append-only JSONL: it is appropriate for a small local example, not concurrent/distributed production storage. The RSC-facing packages are exact pins because their framework-facing surface is not treated as stable here: React `19.2.8`, `react-dom` `19.2.8`, `react-server-dom-rspack` `0.1.0`, Rsbuild `2.2.1`, and `rsbuild-plugin-rsc` `0.1.1`.
+Durable state rides the framework state kernel's workspace-durable driver
+(`@agent-bundle/runtime/state/sqlite`, issue #98): one SQLite database per
+workspace on Node's built-in `node:sqlite`, with WAL journaling, transactional
+commits, idempotency-key replay, and exact-revision reads. The retired
+hand-rolled JSONL kernel is gone; this example now only declares its schema,
+events, and reducer. Loading the sqlite driver emits Node's one-time
+`ExperimentalWarning: SQLite is an experimental feature` on stderr — expected
+on the supported Node lines (`node:sqlite` needs no flag on Node >= 22.13),
+harmless for hooks and MCP servers (protocol output uses stdout), and absent
+for stateless consumers because the driver lives behind its own subpath. It is
+suitable local single-workspace storage, not concurrent/distributed production
+storage. The RSC-facing packages are exact pins because their framework-facing
+surface is not treated as stable here: React `19.2.8`, `react-dom` `19.2.8`,
+`react-server-dom-rspack` `0.1.0`, Rsbuild `2.2.1`, and `rsbuild-plugin-rsc`
+`0.1.1`.
 
 Existing Agent Bundle skills, static MCPs, evaluations, and normal hooks neither require nor activate this runtime. Nothing under `packages/agent-bundle` imports the example or React/RSC runtime packages.
 

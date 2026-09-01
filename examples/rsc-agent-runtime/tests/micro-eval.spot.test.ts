@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,18 +8,21 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { expect, test } from '@rstest/core';
 
+import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
 import { ensureExampleBuilt } from './support/ensure-built.js';
 
 // This is the ordinary-CI micro-eval spot-check (`npm run eval:spot`): one
 // deterministic pass over the built production artifacts, with no real Claude
 // or Codex host. It proves the end-to-end runtime path in a small way: a
-// native-shaped hook event renders through the RSC worker into durable kernel
-// state, and the MCP server then RSC-lowers that same shared state for a tool
-// call while linking the MCP App resource.
+// native-shaped hook event renders through the RSC worker into the framework
+// state kernel's workspace-durable sqlite store (#98), a second hook process
+// replaying the same native tool id commits nothing new, and the MCP server
+// then RSC-lowers that same shared state for a tool call while linking the
+// MCP App resource.
 test('micro-eval spot-check: built hook and MCP server share one RSC-rendered runtime', async () => {
   await ensureExampleBuilt();
   const workspace = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-micro-eval-'));
-  const stateFile = join(workspace, 'events.jsonl');
+  const stateFile = join(workspace, 'state.sqlite');
   const client = new Client({ name: 'rsc-agent-runtime-micro-eval', version: '1.0.0' });
   const transport = new StdioClientTransport({
     args: [join(process.cwd(), 'dist/runtime/mcp/stdio.js')],
@@ -28,7 +31,7 @@ test('micro-eval spot-check: built hook and MCP server share one RSC-rendered ru
     stderr: 'pipe',
   });
 
-  try {
+  const runHookOnce = async (): Promise<void> => {
     const hook = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/hook/index.js'), '--host', 'claude'], {
       env: { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -55,15 +58,21 @@ test('micro-eval spot-check: built hook and MCP server share one RSC-rendered ru
         hookEventName: 'PostToolUse',
       },
     });
+  };
 
-    const records = (await readFile(stateFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as {
-      readonly event: { readonly host: string; readonly path: string };
-      readonly idempotencyKey: string;
-    });
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      event: { host: 'claude', path: join(workspace, 'spot-check.txt') },
-      idempotencyKey: 'claude:tool:micro-eval-tool-1',
+  try {
+    await runHookOnce();
+    // A second short-lived hook process replaying the same native tool id
+    // returns the committed result instead of appending a duplicate edit.
+    await runHookOnce();
+
+    const settled = await createFileRuntimeKernel({ stateFile }).readSnapshot();
+    expect(settled.stateVersion).toBe(1);
+    expect(settled.edits).toHaveLength(1);
+    expect(settled.edits[0]).toMatchObject({
+      eventId: 'edit-1',
+      host: 'claude',
+      path: join(workspace, 'spot-check.txt'),
     });
 
     await client.connect(transport);

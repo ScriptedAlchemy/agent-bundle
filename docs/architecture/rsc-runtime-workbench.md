@@ -145,6 +145,7 @@ examples/
     src/flight/request-render.ts
     src/hook/cli.ts
     src/hook/normalize.ts
+    src/hook/project-document.ts
     src/mcp/create-server.ts
     src/mcp/handlers.ts
     src/mcp/host-metadata.ts
@@ -157,8 +158,7 @@ examples/
     src/rsc/routes.tsx
     src/rsc/worker.tsx
     src/runtime/contracts.ts
-    src/runtime/state-file-core.ts
-    src/runtime/state-file-test-support.ts
+    src/runtime/state-definition.ts
     src/runtime/state-file.ts
     src/types/mcp-ext-apps-react.d.ts
     src/types/react-server-dom-rspack.d.ts

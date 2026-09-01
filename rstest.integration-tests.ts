@@ -44,6 +44,8 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/script-playground-service.test.ts',
   'packages/agent-bundle/tests/target-hook-contract.test.ts',
   'packages/agent-bundle/tests/target-mcp-runtime.test.ts',
+  'packages/rsc-runtime/tests/state-packaging.test.ts',
+  'packages/rsc-runtime/tests/state-sqlite-cross-process.test.ts',
   'packages/workbench/tests/comparisons-page-client-scope-browser.test.ts',
   'packages/workbench/tests/evals-real.e2e.test.ts',
   'packages/workbench/tests/examples-real.e2e.test.ts',

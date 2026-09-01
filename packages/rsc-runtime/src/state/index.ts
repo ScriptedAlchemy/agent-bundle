@@ -13,6 +13,8 @@ export {
   AgentStateError,
   agentStateLifetimeIsVolatile,
   defineState,
+  describeSchemaIssues,
+  expectIdempotencyKey,
 } from './contract.js';
 export type {
   AgentStateChange,
@@ -36,6 +38,20 @@ export type {
   AgentStateSnapshot,
   AgentStateStore,
 } from './contract.js';
+// Driver-author toolkit: external drivers implement the same journal
+// semantics with these helpers and prove it against the conformance suite.
+export {
+  applyStateEvent,
+  canonicalCommitInput,
+  changeFromJournalRecord,
+  expectConsistentJournal,
+  migrationIdempotencyKey,
+  replayJournal,
+  resolveResetState,
+  runStateMigrations,
+} from './journal.js';
+export type { AgentStateJournalRecord } from './journal.js';
+export { canonicalJson, deepFreezeJson, isJsonSafe } from './json.js';
 export { createAgentStateHandle } from './handle.js';
 export type { AgentStateHandleOptions } from './handle.js';
 export { createMemoryStateDriver } from './memory-driver.js';

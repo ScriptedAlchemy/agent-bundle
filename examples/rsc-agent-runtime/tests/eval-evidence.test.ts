@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 
 import { expect, test } from '@rstest/core';
 
+import { withoutNodeSqliteWarning } from './support/state-driver-warnings.js';
+
 type TranscriptEvidence = {
   eventCounts: { hook: number; json: number; mcp: number; rscRender: number };
   finalMarkerObserved: boolean;
@@ -136,7 +138,7 @@ const unavailableHostEnvelope = async (): Promise<{ capturedAt: string; hosts: N
   const [exitCode] = (await once(child, 'close')) as [number | null];
 
   expect(exitCode).toBe(1);
-  expect(stderr).toBe('');
+  expect(withoutNodeSqliteWarning(stderr).trim()).toBe('');
   return JSON.parse(stdout) as { capturedAt: string; hosts: NativeEvidenceEnvelope[]; schemaVersion: number };
 };
 
