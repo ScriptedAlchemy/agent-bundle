@@ -279,3 +279,26 @@ it('rejects whitespace, key-order drift, and trailing input outside the canonica
   expect(() => parseArtifactManifest(reordered)).toThrow(/canonical/i);
   expect(() => parseArtifactManifest(`${bytes} `)).toThrow(/canonical|JSON/i);
 });
+
+it('records semantic package identity on the project without substituting a hash', () => {
+  const manifest = clone();
+  manifest.project.packageName = '@acme/review';
+  manifest.project.packageVersion = '2.3.4';
+  const parsed = parseArtifactManifest(canonicalBytes(manifest));
+  expect(parsed.project.packageName).toBe('@acme/review');
+  expect(parsed.project.packageVersion).toBe('2.3.4');
+  expect(parsed.project.packageVersion).not.toMatch(/^[a-f0-9]{64}$/u);
+  expect(parsed.project.revision).toMatch(/^[a-f0-9]{64}$/u);
+});
+
+it('rejects a digest masquerading as packageVersion and incomplete identity pairs', () => {
+  const hashed = clone();
+  hashed.project.packageName = 'review';
+  hashed.project.packageVersion = hash('e');
+  expectInvalid(hashed, /semantic version/i);
+
+  const incomplete = clone();
+  incomplete.project.packageName = 'review';
+  delete incomplete.project.packageVersion;
+  expectInvalid(incomplete, /both packageName and packageVersion/i);
+});

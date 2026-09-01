@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   discoverProject,
   loadConfig,
+  normalizeProject,
   parseSkill,
 } from '../src/config/index.ts';
 import {
@@ -506,5 +507,29 @@ it('keeps mandatory resource ignores when .gitignore re-includes their paths', a
     ]);
   } finally {
     await removeProjectFixture(fixture.root);
+  }
+});
+
+it('adds derived package identity to the normalized model without changing plugin.name', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-normalize-identity-'));
+  try {
+    await writeFile(
+      join(root, 'agent-bundle.config.ts'),
+      "export default { plugin: { name: 'review-tools', version: '1.0.0' }, targets: ['portable'] };\n",
+    );
+    await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'canonical-pkg', version: '4.5.6' }));
+    const loaded = await loadConfig({ command: 'build', mode: 'production', root });
+    const model = await normalizeProject(loaded, { skills: [] }, {
+      configExtensions: () => [],
+      defaultTargetNames: () => ['portable'],
+      has: (name) => name === 'portable',
+      supports: () => false,
+    });
+    expect(model.metadata.name).toBe('review-tools');
+    expect(model.metadata.version).toBe('1.0.0');
+    expect(model.packageName).toBe('canonical-pkg');
+    expect(model.packageVersion).toBe('4.5.6');
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });

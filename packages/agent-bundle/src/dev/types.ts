@@ -147,6 +147,8 @@ export type SourceState = 'unknown' | 'ready' | 'invalid';
 
 export interface SourceStatus {
   readonly diagnostics: readonly Diagnostic[];
+  readonly packageName?: string;
+  readonly packageVersion?: string;
   readonly revision?: string;
   readonly state: SourceState;
 }

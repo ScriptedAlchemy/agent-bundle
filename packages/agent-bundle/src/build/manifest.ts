@@ -1,4 +1,5 @@
 import { digest, stableJson } from '../core/digest.ts';
+import { isPackageName, isSemanticPackageVersion } from '../core/project-context.ts';
 import {
   formatRuntimeVersion,
   parseRuntimeVersion,
@@ -43,6 +44,8 @@ export interface ArtifactManifestProject {
   readonly configDigest: string;
   readonly configPath: string;
   readonly modelDigest: string;
+  readonly packageName?: string;
+  readonly packageVersion?: string;
   readonly revision: string;
   readonly sourceInputs: readonly ArtifactManifestSourceInput[];
 }
@@ -307,7 +310,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   if (producer.name !== 'agent-bundle') fail('producer.name must be "agent-bundle".');
 
   const project = requireRecord(manifest.project, 'project');
-  requireExactKeys(project, 'project', ['configDigest', 'configPath', 'modelDigest', 'revision', 'sourceInputs']);
+  requireExactKeys(project, 'project', ['configDigest', 'configPath', 'modelDigest', 'revision', 'sourceInputs'], ['packageName', 'packageVersion']);
   const sourceInputs = parseSourceInputs(project.sourceInputs, 'project.sourceInputs');
   const configPath = requirePath(project.configPath, 'project.configPath');
   const configDigest = requireHash(project.configDigest, 'project.configDigest');
@@ -317,6 +320,21 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   }
   const revision = requireHash(project.revision, 'project.revision');
   if (revision !== digest({ inputs: sourceInputs })) fail('project.revision does not match project.sourceInputs.');
+  const packageName = project.packageName === undefined
+    ? undefined
+    : requireString(project.packageName, 'project.packageName');
+  const packageVersion = project.packageVersion === undefined
+    ? undefined
+    : requireString(project.packageVersion, 'project.packageVersion');
+  if ((packageName === undefined) !== (packageVersion === undefined)) {
+    fail('project must include both packageName and packageVersion, or neither.');
+  }
+  if (packageName !== undefined && !isPackageName(packageName)) {
+    fail('project.packageName must be a nonempty package name.');
+  }
+  if (packageVersion !== undefined && !isSemanticPackageVersion(packageVersion)) {
+    fail('project.packageVersion must be a semantic version.');
+  }
 
   const files = parseFiles(manifest.files);
   const projectInputPaths = new Set(sourceInputs.map((input) => input.path));
@@ -354,6 +372,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
       configDigest,
       configPath,
       modelDigest: requireHash(project.modelDigest, 'project.modelDigest'),
+      ...(packageName === undefined ? {} : { packageName, packageVersion }),
       revision,
       sourceInputs,
     },

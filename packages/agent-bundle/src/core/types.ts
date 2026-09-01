@@ -454,6 +454,18 @@ export interface NormalizedPlugin {
    */
   readonly packageBuild?: NormalizedPackageBuild;
   /**
+   * Derived package.json name for packaged projects. Absent for unpackaged
+   * scratch projects. plugin.name stays the host-facing plugin identity and
+   * is never overwritten.
+   */
+  readonly packageName?: string;
+  /**
+   * Derived package.json semantic version for packaged projects. Absent for
+   * unpackaged scratch projects; release builds fail closed instead of
+   * inventing a fallback version.
+   */
+  readonly packageVersion?: string;
+  /**
    * Declared prebuilt payload directories packaged verbatim. Present only
    * when the config declares a `payload` block; optional so hand-constructed
    * models predating prebuilt payloads stay valid.

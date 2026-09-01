@@ -1,10 +1,13 @@
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 
-import { digest } from './digest.ts';
+import type { Diagnostic } from './diagnostics.ts';
+import { digest, sha256Hex } from './digest.ts';
+import { isErrno } from './errors.ts';
 import { deepFreeze } from './freeze.ts';
 import { isInsideOrEqual } from './paths.ts';
-import { snapshotStrictJsonValue } from './strict-json.ts';
+import { parseSemanticVersion } from './semver.ts';
+import { isRecord, snapshotStrictJsonValue } from './strict-json.ts';
 import type { NormalizedPlugin, SourceProvenance } from './types.ts';
 
 /** One deterministic, byte-addressed authored input in a project identity. */
@@ -25,6 +28,8 @@ export interface ProjectContext {
   readonly configDigest: string;
   readonly configPath: string;
   readonly modelDigest: string;
+  readonly packageName?: string;
+  readonly packageVersion?: string;
   readonly revision: string;
   readonly sourceInputs: readonly ProjectSourceInput[];
 }
@@ -32,6 +37,7 @@ export interface ProjectContext {
 export interface CreateProjectContextOptions {
   readonly configPath: string;
   readonly model: NormalizedPlugin;
+  readonly requirePackageIdentity?: boolean;
   readonly root: string;
   readonly sourceInputs: readonly ProjectSourceSnapshotInput[];
 }
@@ -283,20 +289,121 @@ const canonicalSourceInputs = (
   return deepFreeze(canonical);
 };
 
+export interface ProjectPackageJsonSnapshot {
+  readonly identity?: {
+    readonly packageName: string;
+    readonly packageVersion: string;
+  };
+  readonly sha256: string;
+}
+
+const packageVersionPattern =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+
+export const isPackageName = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0 && value.trim() === value;
+
+export const isSemanticPackageVersion = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  packageVersionPattern.test(value) &&
+  parseSemanticVersion(value) !== undefined;
+
+const invalidPackageIdentity = (root: string): never => {
+  throw new TypeError(
+    `Project package.json in ${JSON.stringify(root)} must declare a nonempty name and valid semantic version.`,
+  );
+};
+
+export const readProjectPackageJson = (root: string): ProjectPackageJsonSnapshot | undefined => {
+  const packageJsonPath = resolve(root, 'package.json');
+  let bytes: string;
+  try {
+    bytes = readFileSync(packageJsonPath, 'utf8');
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return undefined;
+    throw new TypeError(`Project package.json ${JSON.stringify(packageJsonPath)} could not be read.`);
+  }
+  const sha256 = sha256Hex(bytes);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes);
+  } catch {
+    throw new TypeError(`Project package.json ${JSON.stringify(packageJsonPath)} must be valid JSON.`);
+  }
+  if (!isRecord(parsed)) {
+    throw new TypeError(`Project package.json ${JSON.stringify(packageJsonPath)} must be a JSON object.`);
+  }
+  if (isPackageName(parsed.name) && isSemanticPackageVersion(parsed.version)) {
+    return {
+      identity: { packageName: parsed.name, packageVersion: parsed.version },
+      sha256,
+    };
+  }
+  return { sha256 };
+};
+
+export const packageVersionMismatchDiagnostic = (
+  pluginVersion: string,
+  packageVersion: string,
+  sourcePath: string,
+): Diagnostic | undefined => {
+  if (pluginVersion === packageVersion) return undefined;
+  return {
+    code: 'AB4008',
+    message:
+      `plugin.version ${JSON.stringify(pluginVersion)} differs from package.json version ${JSON.stringify(packageVersion)}; package.json is authoritative.`,
+    recovery:
+      'Keep package.json version as the package identity and update plugin.version to match. plugin.version does not override package.json.',
+    severity: 'warning',
+    sourcePath,
+  };
+};
+
+const withPackageJsonSourceInput = (
+  root: string,
+  inputs: readonly ProjectSourceSnapshotInput[],
+  packageSnapshot: ProjectPackageJsonSnapshot | undefined,
+): readonly ProjectSourceSnapshotInput[] => {
+  if (packageSnapshot === undefined) return inputs;
+  const packageJsonPath = resolve(root, 'package.json');
+  const canonicalPath = resolvedProjectPath(root, packageJsonPath, 'Package manifest path');
+  const alreadyDeclared = inputs.some((input) => {
+    try {
+      return resolvedProjectPath(root, input.path, 'Project source input path') === canonicalPath;
+    } catch {
+      return false;
+    }
+  });
+  if (alreadyDeclared) return inputs;
+  return [...inputs, { path: packageJsonPath, sha256: packageSnapshot.sha256 }];
+};
+
 /** Creates the single canonical identity carried from preparation to publication. */
 export const createProjectContext = (options: CreateProjectContextOptions): ProjectContext => {
   const canonicalRoot = realpathSync(resolve(options.root));
   const configPath = resolvedProjectPath(canonicalRoot, options.configPath, 'Configuration path');
-  const sourceInputs = canonicalSourceInputs(options.root, options.sourceInputs);
+  const packageSnapshot = readProjectPackageJson(canonicalRoot);
+  if (options.requirePackageIdentity === true && packageSnapshot?.identity === undefined) {
+    invalidPackageIdentity(canonicalRoot);
+  }
+  const sourceInputs = canonicalSourceInputs(
+    options.root,
+    withPackageJsonSourceInput(canonicalRoot, options.sourceInputs, packageSnapshot),
+  );
   const configInput = sourceInputs.find((input) => input.path === configPath);
   if (configInput === undefined) {
     throw new TypeError(`Configuration source ${JSON.stringify(configPath)} must have a SHA-256 digest.`);
   }
   assertModelPathsResolveInsideProject(canonicalRoot, options.model);
+  const identity = packageSnapshot?.identity;
   return deepFreeze({
     configDigest: configInput.sha256,
     configPath,
     modelDigest: digest(canonicalizeNormalizedModel(canonicalRoot, options.model)),
+    ...(identity === undefined ? {} : {
+      packageName: identity.packageName,
+      packageVersion: identity.packageVersion,
+    }),
     revision: digest({ inputs: sourceInputs }),
     sourceInputs,
   });

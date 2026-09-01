@@ -15,6 +15,7 @@ import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from 
 import { digest } from '../core/digest.ts';
 import {
   createProjectContext,
+  packageVersionMismatchDiagnostic,
   type ProjectContext,
   type ProjectSourceSnapshotInput,
 } from '../core/project-context.ts';
@@ -311,8 +312,13 @@ const snapshotForLoadFailure = async (
 const sourceStatus = (
   diagnostics: readonly Diagnostic[],
   revision: string,
+  identity?: Readonly<{ readonly packageName: string; readonly packageVersion: string }>,
 ): SourceStatus => Object.freeze({
   diagnostics,
+  ...(identity === undefined ? {} : {
+    packageName: identity.packageName,
+    packageVersion: identity.packageVersion,
+  }),
   revision,
   state: hasErrors(diagnostics) ? 'invalid' : 'ready',
 });
@@ -805,6 +811,14 @@ export class ProjectService {
     } catch {
       diagnostics.push(projectDiagnostic('AB7001', 'Unable to create project context.', { sourcePath: loaded.configPath }));
     }
+    if (projectContext?.packageVersion !== undefined) {
+      const mismatch = packageVersionMismatchDiagnostic(
+        model.metadata.version,
+        projectContext.packageVersion,
+        loaded.configPath,
+      );
+      if (mismatch !== undefined) diagnostics.push(mismatch);
+    }
     let frozenDiagnostics: readonly Diagnostic[];
     try {
       frozenDiagnostics = freezeDiagnostics(diagnostics);
@@ -817,7 +831,13 @@ export class ProjectService {
         snapshot,
       );
     }
-    const source = sourceStatus(frozenDiagnostics, snapshot.revision);
+    const source = sourceStatus(
+      frozenDiagnostics,
+      snapshot.revision,
+      projectContext?.packageName === undefined || projectContext.packageVersion === undefined
+        ? undefined
+        : { packageName: projectContext.packageName, packageVersion: projectContext.packageVersion },
+    );
     log(this.#options.logger, 'project.prepared', {
       diagnostics: frozenDiagnostics.length,
       root,
