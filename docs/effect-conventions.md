@@ -26,7 +26,7 @@ Each Effect-consuming package has exactly one `src/effect/boundary.ts`:
 
 The boundary owns:
 
-- `runPromise` / `runPromiseExit` / `runSync` / `runSyncExit`
+- `runPromise` / `runSync` (plus `runPromiseExit` where a caller branches on `Exit`)
 - `AbortSignal` ↔ interruption (`interruptWhenAborted`, `scopedAbortSignal`, `signal` on `runPromise`)
 - mapping the Effect error channel onto the existing typed Error contracts
 

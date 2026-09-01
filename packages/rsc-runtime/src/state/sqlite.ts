@@ -50,6 +50,7 @@ import {
   resolveResetState,
   runStateMigrations,
 } from './index.js';
+import { createPendingOpenTracker } from './pending-opens.js';
 
 /**
  * Workspace-durable state driver on `node:sqlite` (#98, G3).
@@ -239,14 +240,14 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
   #definition: AgentStateDefinition<TState, TEvents>;
   readonly #now: () => Date;
   readonly #onClose: () => void;
-  readonly #runtime: ScopedEffectRuntime<SqliteConnection, AgentStateError>;
+  readonly #runtime: ScopedEffectRuntime<SqliteConnection>;
 
   constructor(
     definition: AgentStateDefinition<TState, TEvents>,
     file: string,
     now: () => Date,
     onClose: () => void,
-    runtime: ScopedEffectRuntime<SqliteConnection, AgentStateError>,
+    runtime: ScopedEffectRuntime<SqliteConnection>,
   ) {
     this.#definition = definition;
     this.location = file;
@@ -511,7 +512,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
 
   #run<A>(effect: Effect.Effect<A, AgentStateError, SqliteConnection>): Promise<A> {
     return this.#closed
-      ? runPromise(Effect.fail(new AgentStateError('store-closed', `State '${this.#definition.id}' store is closed`)))
+      ? Promise.reject(new AgentStateError('store-closed', `State '${this.#definition.id}' store is closed`))
       : this.#runtime.run(effect);
   }
 
@@ -724,21 +725,9 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
   }
   const now = options.now ?? ((): Date => new Date());
   const openStores = new Set<SqliteStore<unknown, AgentStateEventSchemas>>();
-  const pendingOpens = new Set<Promise<void>>();
+  const pendingOpens = createPendingOpenTracker();
   let closed = false;
   let closing: Promise<void> | undefined;
-
-  const trackPendingOpen = <T>(operation: Promise<T>): Promise<T> => {
-    const settled = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    pendingOpens.add(settled);
-    void settled.then(() => {
-      pendingOpens.delete(settled);
-    });
-    return operation;
-  };
 
   return Object.freeze({
     durable: true,
@@ -749,9 +738,7 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
       if (closing !== undefined) return closing;
       closed = true;
       closing = (async () => {
-        while (pendingOpens.size > 0) {
-          await Promise.all([...pendingOpens]);
-        }
+        await pendingOpens.settle();
         for (const store of [...openStores]) {
           await store.close();
         }
@@ -763,7 +750,7 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
     open<TState, TEvents extends AgentStateEventSchemas>(
       definition: AgentStateDefinition<TState, TEvents>,
     ): Promise<AgentStateStore<TState, TEvents>> {
-      return trackPendingOpen(
+      return pendingOpens.track(
         (async () => {
           const file = await runPromise(
             sqliteEffect(definition.id, 'resolve storage', () => {
@@ -788,7 +775,12 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
             }, true),
             (db) =>
               Effect.sync(() => {
-                db.close();
+                try {
+                  db.close();
+                } catch {
+                  // Closing an already-broken connection must not mask the
+                  // caller's path (the original failure carries the cause).
+                }
               }),
           );
           const runtime = makeScopedEffectRuntime(
@@ -807,9 +799,7 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
           }
           if (closed) {
             await store.close();
-            return runPromise(
-              Effect.fail(new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`)),
-            );
+            throw new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`);
           }
           openStores.add(store as unknown as SqliteStore<unknown, AgentStateEventSchemas>);
           return store;

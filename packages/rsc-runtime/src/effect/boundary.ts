@@ -62,7 +62,7 @@ export const isTypedRuntimeError = (error: unknown): error is Error =>
 export const toRuntimeError = (value: unknown): Error => {
   if (isAbortError(value) || isTypedRuntimeError(value)) return value;
   if (value instanceof Error) return value;
-  return new Error(typeof value === 'string' ? value : String(value));
+  return new Error(String(value));
 };
 
 export const mapCause = <E>(cause: Cause.Cause<E>): Error => {
@@ -100,21 +100,18 @@ export const runPromiseExit = async <A, E>(
 export const runSync = <A, E>(effect: Effect.Effect<A, E>): A =>
   throwExitFailure(Effect.runSyncExit(effect));
 
-export const runSyncExit = <A, E>(effect: Effect.Effect<A, E>): Exit.Exit<A, E> =>
-  Effect.runSyncExit(effect);
-
 /**
  * Internal long-lived Effect runtime. Its Layer owns one Scope, which stays
  * live across Promise API calls and is finalized exactly once by close().
  */
-export interface ScopedEffectRuntime<R, E> {
+export interface ScopedEffectRuntime<R> {
   close(): Promise<void>;
   run<A, E2>(effect: Effect.Effect<A, E2, R>, options?: RunPromiseOptions): Promise<A>;
 }
 
 export const makeScopedEffectRuntime = <R, E>(
   layer: Layer.Layer<R, E>,
-): ScopedEffectRuntime<R, E> => {
+): ScopedEffectRuntime<R> => {
   const runtime = ManagedRuntime.make(layer);
   let closing: Promise<void> | undefined;
   return Object.freeze({

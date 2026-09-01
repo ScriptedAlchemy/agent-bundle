@@ -153,7 +153,7 @@ export class McpSession {
   #closed = false;
   #connection: McpSessionConnectionState | undefined;
   #droppedThroughSequence = 0;
-  /** Serializes initialize / restart / close, replacing the pre-Effect serial queue. */
+  /** Serializes initialize / restart / close. */
   readonly #lifecycle: Semaphore.Semaphore = runSync(Semaphore.make(1));
   #sequence = 0;
   #stderrOutput = '';
@@ -414,8 +414,7 @@ export class McpSession {
    * Session teardown as one Effect. Every release step always runs, in
    * order — drain the client, remove plugin data, release the epoch lease,
    * notify the owner — and the last failing step's error is re-raised once
-   * every resource has been visited (the pre-Effect nested `finally` chain
-   * had the same last-failure-wins contract).
+   * every resource has been visited (last-failure-wins).
    */
   #closeEffect(): Effect.Effect<void, unknown> {
     return Effect.suspend(() => {
@@ -526,7 +525,7 @@ export class McpSession {
       }).pipe(
         // A failed connect drains the replacement client and stops its
         // stderr capture before the failure re-raises; a cleanup failure
-        // replaces the original error, exactly as the pre-Effect catch did.
+        // replaces the original error.
         Effect.catch((error) => liftPromise(async () => {
           try {
             await client.close();
