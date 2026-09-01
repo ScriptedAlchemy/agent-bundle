@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command, CommanderError } from 'commander';
+import { Command, CommanderError, InvalidArgumentError } from 'commander';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -24,6 +24,11 @@ import type {
   InstallResult,
   InstallScope,
 } from './install/install.ts';
+import type {
+  DoctorHost,
+  DoctorReport,
+  runDoctor,
+} from './install/doctor.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
@@ -47,6 +52,7 @@ interface CliSignalSource {
 
 export interface CliDependencies {
   readonly installBundle?: typeof installBundle;
+  readonly runDoctor?: typeof runDoctor;
   /** Injectable only to make foreground shutdown behavior deterministic in tests. */
   readonly signals?: CliSignalSource;
   readonly startDevServer?: typeof startDevServer;
@@ -72,6 +78,12 @@ interface InstallCommandOptions {
   readonly from: string;
   readonly json?: boolean;
   readonly scope: string;
+}
+
+interface DoctorCommandOptions {
+  readonly from?: string;
+  readonly host: readonly DoctorHost[];
+  readonly json?: boolean;
 }
 
 interface EvalCommandOptions extends SourceCommandOptions {
@@ -140,6 +152,14 @@ const installScope = (value: string): InstallScope => {
   if (value === 'user' || value === 'project' || value === 'local') return value;
   throw new TypeError('Install scope must be user, project, or local.');
 };
+
+const doctorHost = (value: string): DoctorHost => {
+  if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
+  throw new InvalidArgumentError('Doctor host must be claude, codex, or cursor.');
+};
+
+const collectDoctorHost = (value: string, previous: readonly DoctorHost[]): readonly DoctorHost[] =>
+  [...previous, doctorHost(value)];
 
 const configureSourceOptions = (command: Command): Command => command
   .option('--root <root>', 'Project root', process.cwd())
@@ -235,6 +255,35 @@ const writeHumanInstall = (output: Output, result: InstallResult): void => {
   output.write(
     `${result.state === 'already-installed' ? 'Already installed' : 'Installed'} ` +
     `${result.plugin}@${result.version} for ${result.host} at ${destination}\n`,
+  );
+};
+
+const writeHumanDoctor = (output: Output, result: DoctorReport): void => {
+  for (const host of result.hosts) {
+    const detail = host.probe.version ?? host.probe.evidence;
+    output.write(`${host.host}: ${host.probe.status}${detail === undefined ? '' : ` (${detail})`}\n`);
+    output.write(
+      `  inventory: ${host.inventory.status}` +
+      `${host.inventory.status === 'known' ? ` (${host.inventory.findings.length} finding(s))` : ''}\n`,
+    );
+    if (host.bundle !== undefined) {
+      const identity = host.bundle.name === undefined
+        ? ''
+        : ` ${host.bundle.name}${host.bundle.version === undefined ? '' : `@${host.bundle.version}`}`;
+      output.write(`  bundle:${identity} ${host.bundle.state}\n`);
+    }
+  }
+  output.write(
+    `runtime endpoints: ${result.endpoints.status}; ${result.endpoints.summary.live} live, ` +
+    `${result.endpoints.summary.staleSockets} stale socket(s), ` +
+    `${result.endpoints.summary.staleLocks} stale lock(s)\n`,
+  );
+  for (const entry of result.diagnostics) {
+    output.write(`${entry.code}: ${entry.message}\nRecovery: ${entry.recovery}\n`);
+  }
+  output.write(
+    `Doctor summary: ${result.summary.errors} error(s), ${result.summary.warnings} warning(s), ` +
+    `${result.summary.infos} info(s)\n`,
   );
 };
 
@@ -416,6 +465,22 @@ export const runCli = async (
     });
     if (options.json === true) writeMachine(stdout, result);
     else writeHumanInstall(stdout, result);
+  });
+
+  const doctorCommand = program.command('doctor')
+    .description('Inspect host installs and runtime endpoints without changing them')
+    .option('--host <host>', 'Host to inspect (repeatable)', collectDoctorHost, [])
+    .option('--from <bundle-dir>', 'Target bundle directory or artifact root')
+    .option('--json', 'Write one machine-readable JSON document');
+  doctorCommand.action(async (options: DoctorCommandOptions) => {
+    const doctor = dependencies.runDoctor ?? (await import('./install/doctor.ts')).runDoctor;
+    const result = await doctor({
+      ...(options.from === undefined ? {} : { from: options.from }),
+      ...(options.host.length === 0 ? {} : { hosts: options.host }),
+    });
+    if (options.json === true) writeMachine(stdout, result);
+    else writeHumanDoctor(stdout, result);
+    if (result.diagnostics.some((entry) => entry.severity === 'error')) exitCode = 1;
   });
 
   const validateCommand = configureSourceOptions(
