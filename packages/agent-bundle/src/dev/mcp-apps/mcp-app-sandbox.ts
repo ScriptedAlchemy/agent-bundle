@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { isIP, type Socket } from 'node:net';
 
 import type { McpAppJsonValue } from './mcp-app-binding-service.ts';
+import { createMcpAppConsentActionDigest } from './mcp-app-consent.ts';
 
 const JSON_RPC_VERSION = '2.0';
 const SANDBOX_NOTIFICATION_PREFIX = 'ui/notifications/sandbox-';
@@ -312,7 +313,7 @@ const consentScope = (capability: McpAppConsentCapability): 'action' | 'document
 
 const consentSummary = (capability: McpAppConsentCapability): string => `Allow MCP App ${capability.replaceAll('-', ' ')}?`;
 
-export const createMcpAppConsentActionDigest = (capability: McpAppConsentCapability, details: McpAppJsonValue): string => `${capability}:${JSON.stringify(details)}`;
+export { createMcpAppConsentActionDigest } from './mcp-app-consent.ts';
 
 const consentSensitiveName = /(?:api[_-]?key|authorization|bearer|cookie|credential|pass(?:word)?|private[_-]?key|secret|token)/iu;
 

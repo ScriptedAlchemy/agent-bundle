@@ -1,5 +1,3 @@
-import { Buffer } from 'node:buffer';
-
 import {
   validateMcpAppDownloadRequest,
   validateMcpAppExternalLink,
@@ -10,13 +8,13 @@ import {
   type McpAppBinding,
   type McpAppJsonValue,
 } from './mcp-app-binding-service.ts';
+import { createMcpAppConsentActionDigest } from './mcp-app-consent.ts';
 import type {
   McpAppConsentAuthority,
   McpAppConsentCapability,
   McpAppSandboxCsp,
   McpAppSandboxPermissions,
 } from './mcp-app-sandbox.ts';
-import { createMcpAppConsentActionDigest } from './mcp-app-sandbox.ts';
 import { MCP_APP_PROTOCOL_VERSION } from '../mcp-app-profile-descriptors.ts';
 
 export { MCP_APP_PROTOCOL_VERSION } from '../mcp-app-profile-descriptors.ts';
@@ -245,6 +243,8 @@ const hostStyleVariables = new Set([
 ]);
 
 const hasOwn = (value: object, key: string): boolean => Object.hasOwn(value, key);
+
+const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -616,10 +616,12 @@ const resourceMetadata = (value: unknown): { readonly csp?: McpAppSandboxCsp; re
 
 const htmlFromBlob = (blob: string): string | undefined => {
   if (blob.length === 0 || blob.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(blob)) return undefined;
-  const bytes = Buffer.from(blob, 'base64');
-  if (bytes.toString('base64') !== blob) return undefined;
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const decoded = atob(blob);
+    if (btoa(decoded) !== blob) return undefined;
+    return new TextDecoder('utf-8', { fatal: true }).decode(
+      Uint8Array.from(decoded, (character) => character.charCodeAt(0)),
+    );
   } catch {
     return undefined;
   }
@@ -636,7 +638,7 @@ export const parseMcpAppResource = (value: McpAppJsonValue, resourceUri: string)
     if (hasText === hasBlob) return undefined;
     const html = hasText ? content.text as string : htmlFromBlob(content.blob as string);
     const metadata = resourceMetadata(content._meta);
-    if (html === undefined || Buffer.byteLength(html, 'utf8') > MAX_APP_HTML_BYTES || metadata === undefined) return undefined;
+    if (html === undefined || utf8ByteLength(html) > MAX_APP_HTML_BYTES || metadata === undefined) return undefined;
     return Object.freeze({ ...metadata, html });
   }
   return undefined;
@@ -813,7 +815,7 @@ export const createMcpAppFailClosedSender = <Message>(options: Readonly<McpAppFa
         block();
         return Promise.resolve(false);
       }
-      if (typeof serialized !== 'string' || Buffer.byteLength(serialized, 'utf8') > maximumBytes) {
+      if (typeof serialized !== 'string' || utf8ByteLength(serialized) > maximumBytes) {
         block();
         return Promise.resolve(false);
       }
@@ -824,7 +826,7 @@ export const createMcpAppFailClosedSender = <Message>(options: Readonly<McpAppFa
         block();
         return Promise.resolve(false);
       }
-      const byteLength = Buffer.byteLength(serialized, 'utf8');
+      const byteLength = utf8ByteLength(serialized);
       if (queued.length >= maximumMessages || queuedBytes + byteLength > maximumBytes) {
         block();
         return Promise.resolve(false);
@@ -899,7 +901,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   const pendingConsentActions = new Map<string, PendingConsentAction>();
   const isClosed = (): boolean => lifecycle === 'closing' || lifecycle === 'closed';
 
-  const hostMessageByteLength = (message: McpAppBridgeMessage): number => Buffer.byteLength(JSON.stringify(message), 'utf8');
+  const hostMessageByteLength = (message: McpAppBridgeMessage): number => utf8ByteLength(JSON.stringify(message));
 
   const enqueueHostMessage = (message: McpAppBridgeMessage): boolean => {
     const byteLength = hostMessageByteLength(message);

@@ -41,6 +41,7 @@ export default defineConfig({
       'mcp-server-runtime': './src/mcp-server-runtime.ts',
       rstest: './src/rstest/index.ts',
       test: './src/test/index.ts',
+      'test/browser': './src/test/browser.ts',
     },
   },
 });

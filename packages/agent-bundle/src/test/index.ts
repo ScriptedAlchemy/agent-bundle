@@ -1,9 +1,9 @@
 /**
  * `agent-bundle/test` — the consumer test harness helpers.
  *
- * Four proof levels ship here, and they are deliberately separate. Each
- * helper names the level it supplies, stamps it into its provenance, and
- * prints it in every failure:
+ * Four Node proof levels ship here, and the browser-safe fifth level ships
+ * from `agent-bundle/test/browser`. Each helper names the level it supplies,
+ * stamps it into its provenance, and prints it in every failure:
  *
  * | level | helper | what it proves |
  * | --- | --- | --- |
@@ -11,10 +11,10 @@
  * | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
  * | `cli-dispatch` | `invokeCli`, `cliJson` | a compiled CLI command dispatched through the routed CLI's own shell, in this process |
  * | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
+ * | `browser-app` | `mountBrowserApp` (`agent-bundle/test/browser`) | production-compiled MCP App HTML mounted over the product bridge in a real browser page |
  *
- * A pass at one level is never a receipt for another. Browser-App surfaces
- * and deleted-source artifact proofs are later stages; nothing here stands in
- * for them.
+ * A pass at one level is never a receipt for another. Deleted-source artifact
+ * proof is a later stage; nothing here stands in for it.
  */
 export {
   BROWSER_APP_PROOF_LEVEL,

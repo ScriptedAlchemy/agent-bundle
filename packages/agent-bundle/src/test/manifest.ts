@@ -1,6 +1,7 @@
 import { relative, resolve, sep } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { stableJson } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import type { NormalizedMcpApp } from '../core/types.ts';
 import type {
@@ -164,9 +165,22 @@ const appDescriptors = (
   projectRoot: string,
 ): Readonly<Record<string, TestableAppDescriptor>> => {
   const descriptors: Record<string, TestableAppDescriptor> = {};
+  const identities = new Map<string, string>();
   for (const app of apps) {
+    const identity = stableJson({
+      ...(app._meta === undefined ? {} : { _meta: app._meta }),
+      resourceUri: app.resourceUri,
+      source: app.source,
+      ...(app.template === undefined ? {} : { template: app.template }),
+    });
     const existing = descriptors[app.name];
     if (existing !== undefined) {
+      if (identities.get(app.name) !== identity) {
+        throw new Error(
+          `Duplicate compiled MCP App destination ${JSON.stringify(`mcp-apps/${app.name}.html`)}; `
+          + 'servers may share an app name only with an identical declaration.',
+        );
+      }
       descriptors[app.name] = {
         ...existing,
         serverIds: [...new Set([...existing.serverIds, app.serverId])].sort((left, right) => left.localeCompare(right)),
@@ -174,6 +188,7 @@ const appDescriptors = (
       };
       continue;
     }
+    identities.set(app.name, identity);
     descriptors[app.name] = {
       ...(app._meta === undefined ? {} : { _meta: app._meta }),
       id: app.id,

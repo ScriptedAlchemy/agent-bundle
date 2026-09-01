@@ -72,6 +72,10 @@
     "./test": {
       "types": "./dist/test/index.d.ts",
       "import": "./dist/test.js"
+    },
+    "./test/browser": {
+      "types": "./dist/test/browser.d.ts",
+      "import": "./dist/test/browser.js"
     }
   },
   "dependencies": {

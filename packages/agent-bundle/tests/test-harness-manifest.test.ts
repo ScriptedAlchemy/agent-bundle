@@ -131,6 +131,16 @@ describe('the compiled test manifest', () => {
         source: resolve(fixtureRoot, 'views/panel.ts'),
         targets: ['claude'],
         template: resolve(fixtureRoot, 'views/panel.html'),
+      }, {
+        id: 'mcp-app:mirror:panel',
+        name: 'panel',
+        provenance: { kind: 'config', sourcePath: resolve(fixtureRoot, 'agent-bundle.config.ts') },
+        resourceUri: 'ui://harness/panel.html',
+        serverId: 'mcp:mirror',
+        serverName: 'mirror',
+        source: resolve(fixtureRoot, 'views/panel.ts'),
+        targets: ['claude'],
+        template: resolve(fixtureRoot, 'views/panel.html'),
       }],
       graph,
       projectRoot: fixtureRoot,
@@ -144,7 +154,7 @@ describe('the compiled test manifest', () => {
         name: 'panel',
         relativePath: 'views/panel.ts',
         resourceUri: 'ui://harness/panel.html',
-        serverIds: ['mcp:harness'],
+        serverIds: ['mcp:harness', 'mcp:mirror'],
         source: resolve(fixtureRoot, 'views/panel.ts'),
         targets: ['claude'],
         template: resolve(fixtureRoot, 'views/panel.html'),
@@ -152,6 +162,26 @@ describe('the compiled test manifest', () => {
     });
     expect(Object.isFrozen(projected.apps.panel)).toBe(true);
     expect(Object.isFrozen(projected.routes)).toBe(true);
+  });
+
+  it('rejects a shared app name whose compile-relevant declaration differs', async () => {
+    const graph = await compileRouteGraph(fixtureRoot, { targets: ['claude'] } as never);
+    const app = {
+      id: 'mcp-app:harness:panel',
+      name: 'panel',
+      provenance: { kind: 'config' as const, sourcePath: resolve(fixtureRoot, 'agent-bundle.config.ts') },
+      resourceUri: 'ui://harness/panel.html',
+      serverId: 'mcp:harness',
+      serverName: 'harness',
+      source: resolve(fixtureRoot, 'views/panel.ts'),
+      targets: ['claude'],
+    };
+
+    expect(() => testManifestFromRouteGraph({
+      apps: [app, { ...app, id: 'mcp-app:mirror:panel', serverId: 'mcp:mirror', source: resolve(fixtureRoot, 'views/other.ts') }],
+      graph,
+      projectRoot: fixtureRoot,
+    })).toThrow('servers may share an app name only with an identical declaration');
   });
 
 });
@@ -456,7 +486,7 @@ describe('the manifest a route-free project compiles', () => {
 describe('the harness package boundary', () => {
   const packageRoot = resolve(import.meta.dirname, '..');
 
-  it('publishes both harness subpaths', async () => {
+  it('publishes the Node and browser harness subpaths', async () => {
     const declared = JSON.parse(await readFile(resolve(packageRoot, 'package.json'), 'utf8')) as {
       dependencies: Readonly<Record<string, string>>;
       peerDependencies: Readonly<Record<string, string>>;
@@ -466,6 +496,10 @@ describe('the harness package boundary', () => {
 
     expect(declared.exports['./rstest']).toEqual({ import: './dist/rstest.js', types: './dist/rstest/index.d.ts' });
     expect(declared.exports['./test']).toEqual({ import: './dist/test.js', types: './dist/test/index.d.ts' });
+    expect(declared.exports['./test/browser']).toEqual({
+      import: './dist/test/browser.js',
+      types: './dist/test/browser.d.ts',
+    });
     // Declaring the three as optional peers is also what keeps them external in
     // the published bundle: vendoring the Flight server would ship a second
     // React server copy whose RSC manifest is not the consumer project's.

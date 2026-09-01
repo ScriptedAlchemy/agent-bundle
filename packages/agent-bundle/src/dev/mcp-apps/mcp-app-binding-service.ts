@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../mcp-app-profile-descriptors.ts';
 
 export type McpAppJsonValue =
@@ -218,7 +216,7 @@ export class McpAppBindingService {
       const toolDefinition = requireJson(tool.definition, 'MCP App leased tool definition') as McpAppToolDefinition;
       const binding = Object.freeze({
         epochId: requireNonempty(identity.epochId, 'MCP App epoch id'),
-        id: randomUUID(),
+        id: crypto.randomUUID(),
         input,
         previewProfile,
         resourceUri,
