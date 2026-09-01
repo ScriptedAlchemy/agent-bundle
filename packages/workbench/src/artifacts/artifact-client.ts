@@ -66,9 +66,11 @@ const isTreeNode = (value: unknown): boolean => {
 };
 
 const isProject = (value: unknown): boolean =>
-  exactRecord(value, ['configDigest', 'configPath', 'modelDigest', 'revision', 'sourceInputs']) &&
+  exactRecord(value, ['configDigest', 'configPath', 'modelDigest', 'revision', 'sourceInputs'], ['packageName', 'packageVersion']) &&
   typeof value.configDigest === 'string' && typeof value.configPath === 'string' &&
-  typeof value.modelDigest === 'string' && typeof value.revision === 'string' && arrayOf(value.sourceInputs, isSourceInput);
+  typeof value.modelDigest === 'string' && typeof value.revision === 'string' && arrayOf(value.sourceInputs, isSourceInput) &&
+  (!Object.hasOwn(value, 'packageName') || typeof value.packageName === 'string') &&
+  (!Object.hasOwn(value, 'packageVersion') || typeof value.packageVersion === 'string');
 
 const isProvenance = (value: unknown): boolean =>
   exactRecord(value, ['outputPath', 'sourceInputs']) && typeof value.outputPath === 'string' &&
