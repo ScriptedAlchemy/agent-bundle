@@ -31,7 +31,6 @@ import type {
   AgentStateDefinition,
   AgentStateDispatchOptions,
   AgentStateDriver,
-  AgentStateEvent,
   AgentStateEventSchemas,
   AgentStateJournalRecord,
   AgentStateReadOptions,
@@ -699,38 +698,24 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
       const migrated = runStateMigrations(definition, meta.schema_version, rawHead);
       // Journal records retain the original commit input for dedupe. Their
       // committed results migrate separately, matching the memory driver's
-      // `{ record, state }` split. Legacy event rows without a result are
-      // replayed before the new migration baseline makes old revisions
-      // unavailable.
+      // `{ record, state }` split. A legacy journal-head result can be
+      // recovered from the authoritative materialized head. Earlier missing
+      // results cannot be reconstructed with the current-version reducer.
       const updateResult = transactionDb.prepare(
         'UPDATE agent_state_journal SET result_state = ? WHERE revision = ?',
       );
-      let replayState: unknown = definition.initial;
-      for (const [index, row] of rows.entries()) {
-        const record = records[index] as AgentStateJournalRecord;
+      for (const row of rows) {
         const storedResultText = row.result_state ?? row.state;
         let migratedResult: TState;
         if (storedResultText !== null) {
-          replayState = parseStoredJson(definition.id, 'result state', row.revision, storedResultText);
-          migratedResult = runStateMigrations(definition, meta.schema_version, replayState);
-        } else if (record.kind === 'event') {
-          try {
-            replayState = definition.reduce(
-              replayState as TState,
-              { name: record.name, payload: record.payload } as AgentStateEvent<TEvents>,
-            );
-          } catch (error) {
-            throw new AgentStateError(
-              'migration-failure',
-              `State '${definition.id}' could not recover legacy result at revision ${String(record.revision)}`,
-              { cause: error },
-            );
-          }
-          migratedResult = runStateMigrations(definition, meta.schema_version, replayState);
+          const storedResult = parseStoredJson(definition.id, 'result state', row.revision, storedResultText);
+          migratedResult = runStateMigrations(definition, meta.schema_version, storedResult);
+        } else if (row.revision === journalHead) {
+          migratedResult = migrated;
         } else {
           throw new AgentStateError(
-            'corrupt',
-            `State '${definition.id}' journal row at revision ${String(record.revision)} has no committed result`,
+            'migration-failure',
+            `State '${definition.id}' legacy journal row at revision ${String(row.revision)} has no recoverable committed result; restore a compatible backup or materialize the result with the version ${String(meta.schema_version)} definition before migrating to version ${String(definition.version)}`,
           );
         }
         updateResult.run(canonicalJson(migratedResult), row.revision);
@@ -787,10 +772,16 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
       closed = true;
       closing = (async () => {
         await pendingOpens.settle();
+        const closeErrors: unknown[] = [];
         for (const store of [...openStores]) {
-          await store.close();
+          try {
+            await store.close();
+          } catch (error) {
+            closeErrors.push(error);
+          }
         }
         openStores.clear();
+        if (closeErrors.length > 0) throw closeErrors[0];
       })();
       return closing;
     },
@@ -869,7 +860,12 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
             );
             await store.initialize(busyTimeoutMs);
           } catch (error) {
-            await runtime.close();
+            try {
+              await runtime.close();
+            } catch {
+              // Initialization is the caller-visible failure. The scoped
+              // finalizer still attempts close, but must not replace it.
+            }
             throw error;
           }
           if (closed) {
