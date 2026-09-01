@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, open, rm, stat, type FileHandle } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rm, stat, type FileHandle } from 'node:fs/promises';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -239,6 +239,21 @@ interface EndpointClaim {
   readonly path: string;
 }
 
+interface EndpointClaimOwner {
+  readonly linuxStartTime?: string;
+  readonly pid: number;
+}
+
+interface EndpointClaimSnapshot {
+  readonly identity: Readonly<{ readonly device: number; readonly inode: number }>;
+  readonly owner: EndpointClaimOwner;
+}
+
+const endpointClaimOwnerSchema = z.object({
+  linuxStartTime: z.string().regex(/^\d+$/u).optional(),
+  pid: z.number().int().positive(),
+}).strict();
+
 const probeEndpoint = (endpoint: string): Effect.Effect<EndpointProbe, EventRuntimeTransportError> =>
   Effect.callback<EndpointProbe, EventRuntimeTransportError>((resume) => {
     const socket = createConnection(endpoint);
@@ -277,14 +292,47 @@ const probeEndpoint = (endpoint: string): Effect.Effect<EndpointProbe, EventRunt
     });
   });
 
+const linuxProcessStartTime = async (pid: number): Promise<string> => {
+  const processStat = await readFile(`/proc/${pid}/stat`, 'utf8');
+  const commEnd = processStat.lastIndexOf(')');
+  if (commEnd === -1) throw new Error(`Unable to parse process stat for pid ${pid}.`);
+  const fieldsAfterComm = processStat.slice(commEnd + 1).trim().split(/\s+/u);
+  const startTime = fieldsAfterComm[19];
+  if (startTime === undefined) throw new Error(`Process stat for pid ${pid} has no start time.`);
+  return startTime;
+};
+
+const currentEndpointClaimOwner = async (): Promise<EndpointClaimOwner> => ({
+  ...(process.platform === 'linux' ? { linuxStartTime: await linuxProcessStartTime(process.pid) } : {}),
+  pid: process.pid,
+});
+
+const removeFileIfIdentityMatches = async (
+  path: string,
+  identity: Readonly<{ readonly device: number; readonly inode: number }>,
+): Promise<boolean> => {
+  let current;
+  try {
+    current = await stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  if (current.dev !== identity.device || current.ino !== identity.inode) return false;
+  await rm(path, { force: true });
+  return true;
+};
+
 const tryClaimEndpoint = (
   endpoint: string,
 ): Effect.Effect<EndpointClaim | undefined, EventRuntimeTransportError> =>
   liftPromise(async () => {
     const path = `${endpoint}.lock`;
+    const owner = await currentEndpointClaimOwner();
     let handle: FileHandle | undefined;
     try {
       handle = await open(path, 'wx', 0o600);
+      await handle.writeFile(JSON.stringify(owner), 'utf8');
       const lockStat = await handle.stat();
       return {
         handle,
@@ -292,7 +340,13 @@ const tryClaimEndpoint = (
         path,
       };
     } catch (error) {
-      await handle?.close();
+      if (handle !== undefined) {
+        const lockStat = await handle.stat().catch(() => undefined);
+        await handle.close();
+        if (lockStat !== undefined) {
+          await removeFileIfIdentityMatches(path, { device: lockStat.dev, inode: lockStat.ino });
+        }
+      }
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
       throw error;
     }
@@ -300,22 +354,59 @@ const tryClaimEndpoint = (
     Effect.mapError((error) => transportError('runtime-failed', 'Unable to claim the event runtime endpoint.', error)),
   );
 
+const readEndpointClaimSnapshot = async (path: string): Promise<EndpointClaimSnapshot | 'missing' | undefined> => {
+  try {
+    const handle = await open(path, 'r');
+    try {
+      const rawOwner = await handle.readFile('utf8');
+      const lockStat = await handle.stat();
+      const owner = endpointClaimOwnerSchema.safeParse(JSON.parse(rawOwner));
+      if (!owner.success) return undefined;
+      return {
+        identity: { device: lockStat.dev, inode: lockStat.ino },
+        owner: owner.data,
+      };
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
+    return undefined;
+  }
+};
+
+const isEndpointClaimOwnerProvablyDead = async (owner: EndpointClaimOwner): Promise<boolean> => {
+  try {
+    process.kill(owner.pid, 0);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return true;
+    if (code !== 'EPERM') return false;
+  }
+  if (process.platform !== 'linux' || owner.linuxStartTime === undefined) return false;
+  try {
+    return await linuxProcessStartTime(owner.pid) !== owner.linuxStartTime;
+  } catch {
+    return false;
+  }
+};
+
+const reclaimOrphanedEndpointClaim = (path: string): Effect.Effect<boolean> =>
+  liftPromise(async () => {
+    const snapshot = await readEndpointClaimSnapshot(path);
+    if (snapshot === 'missing') return true;
+    if (snapshot === undefined || !await isEndpointClaimOwnerProvablyDead(snapshot.owner)) return false;
+    try {
+      return await removeFileIfIdentityMatches(path, snapshot.identity);
+    } catch {
+      return false;
+    }
+  }).pipe(Effect.catch(() => Effect.succeed(false)));
+
 const releaseEndpointClaim = (claim: EndpointClaim): Effect.Effect<void> =>
   liftPromise(async () => {
     await claim.handle.close();
-    let current;
-    try {
-      current = await stat(claim.path);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
-    }
-    if (
-      current.dev === claim.identity.device
-      && current.ino === claim.identity.inode
-    ) {
-      await rm(claim.path, { force: true });
-    }
+    await removeFileIfIdentityMatches(claim.path, claim.identity);
   }).pipe(Effect.ignore);
 
 const claimEndpoint = Effect.fnUntraced(function*(
@@ -332,14 +423,13 @@ const claimEndpoint = Effect.fnUntraced(function*(
         'Event runtime endpoint already has a live server.',
       ));
     }
+    if (yield* reclaimOrphanedEndpointClaim(`${endpoint}.lock`)) continue;
     if (attempt + 1 < ENDPOINT_CLAIM_RETRY_COUNT) {
       yield* Effect.sleep(ENDPOINT_CLAIM_RETRY_DELAY);
     }
   }
 
-  // A crashed process can leave the claim file behind. Retrying the endpoint
-  // probe is bounded rather than stealing an unverifiable claim and recreating
-  // the same unlink race that this lock prevents.
+  // Unverifiable claims remain fail-closed rather than being stolen.
   return yield* Effect.fail(transportError(
     'runtime-failed',
     'Event runtime endpoint claim did not clear after bounded retries.',
