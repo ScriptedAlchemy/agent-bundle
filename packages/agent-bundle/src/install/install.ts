@@ -299,7 +299,20 @@ const installCursor = async (
   if (scope !== 'user') {
     throw failure('AB7003', `Cursor local plugin installation supports only user scope, not ${scope}.`, 'cursor');
   }
-  const installRoot = join(options.home ?? homedir(), '.cursor', 'plugins', 'local');
+  const cursorRoot = join(options.home ?? homedir(), '.cursor');
+  let cursorMetadata: Awaited<ReturnType<typeof lstat>>;
+  try {
+    cursorMetadata = await lstat(cursorRoot);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) {
+      throw failure('AB7002', `Cursor is not installed in ${JSON.stringify(cursorRoot)}.`, 'cursor');
+    }
+    throw error;
+  }
+  if (!cursorMetadata.isDirectory()) {
+    throw failure('AB7002', `Cursor home ${JSON.stringify(cursorRoot)} is not a directory.`, 'cursor');
+  }
+  const installRoot = join(cursorRoot, 'plugins', 'local');
   const destination = join(installRoot, identity.plugin);
   try {
     await treeHash(identity.bundleRoot);

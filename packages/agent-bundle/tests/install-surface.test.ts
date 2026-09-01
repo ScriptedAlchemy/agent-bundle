@@ -72,7 +72,7 @@ it('emits a standalone safe-copy installer only for Cursor-compatible fallback p
   for (const target of ['cursor', 'portable', 'plugin']) {
     const writes = writesFor(target);
     expect(writes.get('INSTALL.md')).toContain('node ./install.mjs');
-    expect(writes.get('install.mjs')).toContain("'.cursor', 'plugins', 'local'");
+    expect(writes.get('install.mjs')).toContain("join(cursorRoot, 'plugins', 'local')");
     expect(writes.get('install.mjs')).toContain('install-fixture');
     expect(writes.get('install.mjs')).toContain('1.2.3');
     expect(writes.get('install.mjs')).not.toContain('sudo');

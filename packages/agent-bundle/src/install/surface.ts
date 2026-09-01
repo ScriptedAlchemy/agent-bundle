@@ -62,7 +62,7 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
   '',
 ];
 
-const portableInstructions = (model: NormalizedPlugin): string[] => [
+const portableInstructions = (): string[] => [
   '## Portable Agent Plugin',
   '',
   'Portable is a distribution profile, not a host runtime with one universal install location.',
@@ -85,7 +85,7 @@ const installMarkdown = (model: NormalizedPlugin, target: BuiltInTarget): string
       case 'cursor':
         return cursorInstructions(model);
       case 'portable':
-        return portableInstructions(model);
+        return portableInstructions();
       case 'plugin':
         return [...claudeInstructions(model), ...codexInstructions(model), ...cursorInstructions(model)];
       default: {
@@ -111,7 +111,8 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
     `const pluginName = ${name};`,
     `const pluginVersion = ${version};`,
     "const source = resolve(fileURLToPath(new URL('.', import.meta.url)));",
-    "const installRoot = join(homedir(), '.cursor', 'plugins', 'local');",
+    "const cursorRoot = join(homedir(), '.cursor');",
+    "const installRoot = join(cursorRoot, 'plugins', 'local');",
     'const destination = join(installRoot, pluginName);',
     '',
     'const exists = async (path) => {',
@@ -150,6 +151,9 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
     '  return undefined;',
     '};',
     '',
+    'if (!(await exists(cursorRoot)) || !(await lstat(cursorRoot)).isDirectory()) {',
+    '  throw new Error(`Cursor is not installed in ${cursorRoot}.`);',
+    '}',
     'await mkdir(installRoot, { recursive: true });',
     'if (await exists(destination)) {',
     '  const currentVersion = await installedVersion();',

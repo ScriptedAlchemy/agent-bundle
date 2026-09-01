@@ -181,6 +181,7 @@ it('rejects scopes the selected host does not support', async () => {
 it('copies a Cursor bundle into a fake home and is idempotent', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
   const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
   try {
     const first = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
@@ -197,9 +198,34 @@ it('copies a Cursor bundle into a fake home and is idempotent', async () => {
   }
 });
 
+it('fails closed when Cursor is not detected in the selected home', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  try {
+    const error = await installBundle({
+      from: fixture.from,
+      home,
+      host: 'cursor',
+      scope: 'user',
+    }).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7002',
+      target: 'cursor',
+    }]);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('refuses Cursor version and content collisions', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
   const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
   try {
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
@@ -236,6 +262,7 @@ it('refuses Cursor version and content collisions', async () => {
 it('refuses symlinks in a Cursor source bundle', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
   await symlink('/tmp', join(fixture.bundleRoot, 'unsafe-link'));
   try {
     const error = await installBundle({

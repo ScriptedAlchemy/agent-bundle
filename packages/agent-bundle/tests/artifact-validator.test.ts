@@ -745,6 +745,8 @@ it('rejects forged hook output for a target without a hook contract', async () =
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
   const files = [
+    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'portable/INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated' as const, path: 'portable/install.mjs' },
     {
       contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
       kind: 'generated' as const,
@@ -793,6 +795,8 @@ it('admits nested project assets in the target-owned recursive asset namespace',
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
   const files = [
+    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'portable/INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated' as const, path: 'portable/install.mjs' },
     {
       contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
       kind: 'generated' as const,
@@ -1772,6 +1776,7 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
     }],
   };
   const validFiles = [
+    { contents: '# Install codex-test\n', kind: 'generated' as const, path: 'codex/INSTALL.md' },
     { contents: `${JSON.stringify(plugin)}\n`, kind: 'generated' as const, path: 'codex/.codex-plugin/plugin.json' },
     { contents: `${JSON.stringify(marketplace)}\n`, kind: 'generated' as const, path: 'codex/.agents/plugins/marketplace.json' },
   ];
@@ -1782,6 +1787,7 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
 
     const invalidFiles = [
       validFiles[0]!,
+      validFiles[1]!,
       { contents: '{}\n', kind: 'generated' as const, path: 'codex/.agents/plugins/marketplace.json' },
     ];
     await writeFile(join(root, 'codex', '.agents', 'plugins', 'marketplace.json'), '{}\n');
