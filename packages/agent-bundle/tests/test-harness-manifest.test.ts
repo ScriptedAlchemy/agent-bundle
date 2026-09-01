@@ -46,6 +46,12 @@ describe('the compiled test manifest', () => {
     );
   });
 
+  it('names host-install as isolated real-host registration without overstating session or package proof', () => {
+    expect(proofLevelLabel('host-install')).toBe(
+      'host-install (built bundle installed into an isolated real host home through the public install path, registration observed via the host\'s own CLI; NOT session-behavior or packed-artifact evidence)',
+    );
+  });
+
   it('names browser-app as compiled browser evidence without overstating host or artifact proof', () => {
     expect(proofLevelLabel('browser-app')).toBe(
       'browser-app (MCP App HTML compiled through the production Rsbuild profile, mounted in a real browser page over the product bridge; NOT host embedding, packed-artifact, or Workbench evidence)',

@@ -35,6 +35,8 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/hooks.test.ts',
   'packages/agent-bundle/tests/host-adapters.native.test.ts',
   'packages/agent-bundle/tests/host-adapters.test.ts',
+  'packages/agent-bundle/tests/host-install-proof.test.ts',
+  'packages/agent-bundle/tests/host-install-session.test.ts',
   'packages/agent-bundle/tests/integration-matrix.test.ts',
   'packages/agent-bundle/tests/mcp-session-service.test.ts',
   'packages/agent-bundle/tests/mcp.test.ts',

@@ -1,8 +1,9 @@
 /**
  * `agent-bundle/test` — the consumer test harness helpers.
  *
- * Five Node proof levels ship here, and the browser-safe sixth level ships
- * from `agent-bundle/test/browser`. Each helper names the level it supplies,
+ * Six Node proof levels ship here, and the browser-safe seventh level ships
+ * from `agent-bundle/test/browser`. The repository's real-host install proof
+ * uses the same level convention. Each helper names the level it supplies,
  * stamps it into its provenance, and prints it in every failure:
  *
  * | level | helper | what it proves |
@@ -13,6 +14,7 @@
  * | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
  * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer` | the packed stdio process still runs after project source and configuration are removed and verified absent |
  * | `browser-app` | `mountBrowserApp` (`agent-bundle/test/browser`) | production-compiled MCP App HTML mounted over the product bridge in a real browser page |
+ * | `host-install` | repository real-host install proof | a built bundle accepted through a real host's public install path in an isolated home, with registration observed by that host |
  *
  * A pass at one level is never a receipt for another. The `deletedSource`
  * option upgrades `openPackedMcpServer` provenance only after every path in a
@@ -21,6 +23,7 @@
 export {
   BROWSER_APP_PROOF_LEVEL,
   CLI_DISPATCH_PROOF_LEVEL,
+  HOST_INSTALL_PROOF_LEVEL,
   MCP_IN_MEMORY_PROOF_LEVEL,
   PACKED_DELETED_SOURCE_PROOF_LEVEL,
   PACKED_STDIO_PROOF_LEVEL,

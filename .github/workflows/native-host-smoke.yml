@@ -51,3 +51,13 @@ jobs:
       - name: ${{ matrix.host }} installed-tarball native smoke
         if: inputs.host == 'both' || inputs.host == matrix.host
         run: ${{ matrix.packed_command }}
+      - name: ${{ matrix.host }} real host install proof
+        if: inputs.host == 'both' || inputs.host == matrix.host
+        run: pnpm test:host-install
+      # Claude only: the session-token proof needs a signed-in `claude -p` turn,
+      # and Codex and Cursor have no equivalent non-interactive surface.
+      - name: ${{ matrix.host }} real session token proof
+        if: matrix.host == 'claude' && (inputs.host == 'both' || inputs.host == matrix.host)
+        env:
+          AGENT_BUNDLE_HOST_INSTALL_CLAUDE_SESSION: '1'
+        run: pnpm test:host-install:session

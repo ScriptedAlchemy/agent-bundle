@@ -166,20 +166,34 @@ const digestNormalCodexState = async (codexHome: string) => Object.freeze({
   plugins: await digestTree(join(codexHome, 'plugins'), false),
 });
 
-const digestNormalClaudeState = async (
+/**
+ * The Claude state a proof must never mutate: settings and the installed
+ * plugin tree. Session bookkeeping (`.claude.json`) is deliberately excluded
+ * so a caller that runs a real turn can still assert this surface.
+ */
+const digestClaudeSettingsAndPlugins = async (
   environment: Readonly<NodeJS.ProcessEnv>,
   options: Readonly<{ readonly homeDirectory: string }>,
 ) => {
-  const customHome = environment.CLAUDE_CONFIG_DIR;
-  const claudeHome = customHome ?? join(options.homeDirectory, '.claude');
+  const claudeHome = environment.CLAUDE_CONFIG_DIR ?? join(options.homeDirectory, '.claude');
   return Object.freeze({
     config: await digestTree(join(claudeHome, 'config.json'), true),
     localSettings: await digestTree(join(claudeHome, 'settings.local.json'), true),
     plugins: await digestTree(join(claudeHome, 'plugins'), true),
     settings: await digestTree(join(claudeHome, 'settings.json'), true),
-    state: await digestTree(join(customHome ?? options.homeDirectory, '.claude.json'), true),
   });
 };
+
+const digestNormalClaudeState = async (
+  environment: Readonly<NodeJS.ProcessEnv>,
+  options: Readonly<{ readonly homeDirectory: string }>,
+) => Object.freeze({
+  ...(await digestClaudeSettingsAndPlugins(environment, options)),
+  state: await digestTree(
+    join(environment.CLAUDE_CONFIG_DIR ?? options.homeDirectory, '.claude.json'),
+    true,
+  ),
+});
 
 const sameClaudeState = (
   left: Awaited<ReturnType<typeof digestNormalClaudeState>>,
@@ -198,6 +212,26 @@ export const normalClaudeHomeUnchanged = async (
   const before = await digestNormalClaudeState(environment, options);
   await operation();
   return sameClaudeState(before, await digestNormalClaudeState(environment, options));
+};
+
+/**
+ * The guard for an operation that runs a real signed-in turn: Claude Code
+ * rewrites its own `.claude.json` session bookkeeping on every such turn, so
+ * `normalClaudeHomeUnchanged` cannot hold. This asserts the surface that must
+ * still hold — settings and the installed plugin tree.
+ */
+export const normalClaudeSettingsAndPluginsUnchanged = async (
+  environment: Readonly<NodeJS.ProcessEnv>,
+  operation: () => Promise<void>,
+  options: Readonly<{ readonly homeDirectory: string }> = { homeDirectory: homedir() },
+): Promise<boolean> => {
+  const before = await digestClaudeSettingsAndPlugins(environment, options);
+  await operation();
+  const after = await digestClaudeSettingsAndPlugins(environment, options);
+  return before.config === after.config
+    && before.localSettings === after.localSettings
+    && before.plugins === after.plugins
+    && before.settings === after.settings;
 };
 
 const summarizeEval = (host: PackedNativeHost, command: CommandResult) => {

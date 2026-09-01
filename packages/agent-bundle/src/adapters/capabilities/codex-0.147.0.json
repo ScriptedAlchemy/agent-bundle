@@ -3,9 +3,10 @@
   "install": {
     "evidence": [
       "codex plugin marketplace add accepts a local marketplace root.",
-      "codex plugin add installs plugin@marketplace from a configured snapshot."
+      "codex plugin add installs plugin@marketplace from a configured snapshot.",
+      "2026-09-01: Codex 0.147.0 accepts both `.` and `./`; emitted instructions use `./` consistently with the Claude Code 2.1.257 requirement."
     ],
-    "marketplaceAdd": "codex plugin marketplace add .",
+    "marketplaceAdd": "codex plugin marketplace add ./",
     "pluginInstall": "codex plugin add <plugin>@<marketplace>",
     "scopes": ["user"],
     "source": "https://developers.openai.com/codex/cli/reference",

@@ -53,7 +53,7 @@ it('emits always-installable Claude and Codex local marketplaces with exact comm
     name: 'install-fixture-marketplace',
     plugins: [{ name: 'install-fixture', source: './', version: '1.2.3' }],
   });
-  expect(claude.get('INSTALL.md')).toContain('claude plugin marketplace add .');
+  expect(claude.get('INSTALL.md')).toContain('claude plugin marketplace add ./');
   expect(claude.get('INSTALL.md')).toContain(
     'claude plugin install install-fixture@install-fixture-marketplace --scope user',
   );
@@ -62,7 +62,7 @@ it('emits always-installable Claude and Codex local marketplaces with exact comm
     name: 'install-fixture-marketplace',
     plugins: [{ name: 'install-fixture', source: { path: './', source: 'local' } }],
   });
-  expect(codex.get('INSTALL.md')).toContain('codex plugin marketplace add .');
+  expect(codex.get('INSTALL.md')).toContain('codex plugin marketplace add ./');
   expect(codex.get('INSTALL.md')).toContain(
     'codex plugin add install-fixture@install-fixture-marketplace',
   );
