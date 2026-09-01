@@ -213,24 +213,35 @@ export const routeCatalogHasKind = (catalog: RouteCatalog, kind: RouteManifestKi
 export const routeCatalogServerCount = (catalog: RouteCatalog): number =>
   catalog.servers.length;
 
-const defaultDraftValue = (schema: RouteInputPropertySchema): RouteInputDraftValue => {
+/**
+ * An optional boolean without a schema default stays out of the draft: a
+ * `false` initialization would submit `{ key: false }` where the author's
+ * handler observes an omitted property, defeating optional semantics.
+ */
+const defaultDraftValue = (
+  schema: RouteInputPropertySchema,
+  required: boolean,
+): RouteInputDraftValue | undefined => {
   if (schema.default !== undefined) {
     if (Array.isArray(schema.default)) {
       return Object.freeze(schema.default.map((value) => typeof value === 'boolean' ? value : String(value)));
     }
     return typeof schema.default === 'boolean' ? schema.default : String(schema.default);
   }
-  if (schema.type === 'boolean') return false;
+  if (schema.type === 'boolean') return required ? false : undefined;
   if (schema.type === 'array') return Object.freeze([]);
   return '';
 };
 
-export const createRouteInputDraft = (schema: RouteInputSchema): RouteInputDraft => Object.freeze(
-  Object.fromEntries(Object.keys(schema.properties).sort().map((key) => [
-    key,
-    defaultDraftValue(schema.properties[key]!),
-  ])),
-);
+export const createRouteInputDraft = (schema: RouteInputSchema): RouteInputDraft => {
+  const required = new Set(schema.required ?? []);
+  return Object.freeze(Object.fromEntries(
+    Object.keys(schema.properties).sort().flatMap((key) => {
+      const value = defaultDraftValue(schema.properties[key]!, required.has(key));
+      return value === undefined ? [] : [[key, value] as const];
+    }),
+  ));
+};
 
 export const routeInputLabel = (key: string): string => {
   const words = key
@@ -357,7 +368,11 @@ export const cliCommandUsage = (command: RouteManifestCliCommand): string => {
       : `[${option.option}${option.repeated ? '...' : ''}]`);
   const flags = command.options.filter((option) => option.positional === undefined)
     .map((option) => {
-      const value = option.kind === 'boolean' ? `--${option.option}` : `--${option.option} ${cliOperand(option)}`;
+      // Booleans are flags and the grammar rejects boolean arrays, so only
+      // value-carrying options can repeat; ` ...` mirrors cli-entry help rows.
+      const value = option.kind === 'boolean'
+        ? `--${option.option}`
+        : `--${option.option} ${cliOperand(option)}${option.repeated ? ' ...' : ''}`;
       return option.required ? value : `[${value}]`;
     });
   return [...command.path, ...positionals, ...flags].join(' ');

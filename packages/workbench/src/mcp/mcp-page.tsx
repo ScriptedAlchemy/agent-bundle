@@ -1240,7 +1240,13 @@ export const McpPage = (props: McpPageProps) => {
   const prompts = catalogItems(model.catalogs.prompts, 'Prompt');
   const resources = catalogItems(model.catalogs.resources, 'Resource');
   const resourceTemplates = catalogItems(model.catalogs.resourceTemplates, 'Resource template');
-  const selectedTool = tools.find((item) => item.name === toolName) ?? tools[0];
+  const matchedTool = tools.find((item) => item.name === toolName);
+  const selectedTool = matchedTool ?? (initialToolPrefill === undefined && toolName === '' ? tools[0] : undefined);
+  const missingToolName = initialToolPrefill !== undefined
+    && model.phase === 'ready'
+    && !tools.some((item) => item.name === initialToolPrefill.toolName)
+    ? initialToolPrefill.toolName
+    : undefined;
   const selectedPrompt = prompts.find((item) => item.name === promptName) ?? prompts[0];
   const active = Object.values(model.activeRequests);
   const controls = mcpPageSessionControls(model.phase, pendingActions, onResetSession !== undefined, serverCatalogState);
@@ -1428,6 +1434,9 @@ export const McpPage = (props: McpPageProps) => {
         <strong>Tool call prefilled from Routes</strong>
         <p>{initialToolPrefill.serverName} · {initialToolPrefill.toolName}</p>
         <pre><code>{display(initialToolPrefill.arguments)}</code></pre>
+        {missingToolName === undefined ? undefined : <p className="mcp-page-missing-tool">
+          The server no longer advertises the &quot;{missingToolName}&quot; tool. The prepared arguments were not applied to another tool.
+        </p>}
         <p>Open the session and use the existing call control when you are ready. Nothing runs automatically.</p>
       </aside>}
       <div className="mcp-page-catalog-grid">

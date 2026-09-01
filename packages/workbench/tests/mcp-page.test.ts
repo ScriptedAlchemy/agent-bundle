@@ -462,6 +462,33 @@ describe('MCP page', () => {
     expect(markup).toContain('weather');
     expect(markup).toContain('Berlin');
     expect(markup).toContain('Call weather');
+    expect(markup).not.toContain('no longer advertises');
+    expect(pageController.history).toHaveLength(1);
+  });
+
+  it('rejects a stale Routes-page tool prefill without selecting another tool', () => {
+    const pageController = controller();
+    const readyPageController: McpPageController = {
+      ...pageController,
+      model: { ...model, phase: 'ready' } as McpBrowserSessionModel,
+    };
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: readyPageController,
+      epochOptions: ['epoch-1'],
+      initialBinding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+      initialToolPrefill: {
+        arguments: { city: 'Berlin' },
+        serverName: 'weather',
+        toolName: 'retired_weather',
+      },
+      serverOptions: [{ name: 'weather', target: 'codex' }],
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('The server no longer advertises the &quot;retired_weather&quot; tool.');
+    expect(markup).not.toContain('id="mcp-tool-arguments"');
+    expect(markup).not.toContain('Call weather');
+    expect(markup).not.toContain('Call clock');
     expect(pageController.history).toHaveLength(1);
   });
 

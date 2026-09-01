@@ -77,13 +77,26 @@ const scalarControl = (
   routeId: string,
   key: string,
   schema: Exclude<RouteInputPropertySchema, { readonly type: 'array' }>,
+  required: boolean,
   value: RouteInputDraftValue | undefined,
-  setValue: (value: RouteInputDraftValue) => void,
+  setValue: (value: RouteInputDraftValue | undefined) => void,
 ): React.ReactNode => {
   const id = editorId(routeId, key);
   switch (schema.type) {
     case 'boolean':
-      return <input checked={value === true} id={id} onChange={(event) => setValue(event.currentTarget.checked)} type="checkbox" />;
+      // A checkbox cannot express "unset", so an optional boolean without a
+      // schema default keeps a third omitted state instead of submitting false.
+      return required || schema.default !== undefined
+        ? <input checked={value === true} id={id} onChange={(event) => setValue(event.currentTarget.checked)} type="checkbox" />
+        : <select
+            id={id}
+            onChange={(event) => setValue(event.currentTarget.value === '' ? undefined : event.currentTarget.value === 'true')}
+            value={value === true ? 'true' : value === false ? 'false' : ''}
+          >
+            <option value="">(omitted)</option>
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>;
     case 'number':
       return <input id={id} onChange={(event) => setValue(event.currentTarget.value)} type="number" value={typeof value === 'string' ? value : ''} />;
     case 'string':
@@ -123,8 +136,14 @@ const RouteInputEditor = ({ entry, group, onOpenMcp }: {
       ? undefined
       : cliCommandInvocation(entry.command, validated.arguments));
   };
-  const setValue = (key: string, value: RouteInputDraftValue): void => {
-    const next = Object.freeze({ ...draft, [key]: value });
+  const setValue = (key: string, value: RouteInputDraftValue | undefined): void => {
+    const entries = { ...draft };
+    if (value === undefined) {
+      delete entries[key];
+    } else {
+      entries[key] = value;
+    }
+    const next = Object.freeze(entries);
     setDraft(next);
     commitValidation(next);
   };
@@ -181,7 +200,7 @@ const RouteInputEditor = ({ entry, group, onOpenMcp }: {
           if (property.type !== 'array') {
             return <div className="route-input-field" key={key}>
               <label htmlFor={editorId(entry.id, key)}>{label}{required ? ' (required)' : ''}
-                {scalarControl(entry.id, key, property, draft[key], (value) => setValue(key, value))}
+                {scalarControl(entry.id, key, property, required, draft[key], (value) => setValue(key, value))}
               </label>
               {property.description === undefined ? undefined : <p>{property.description}</p>}
               {error === undefined ? undefined : <span className="route-input-error" role="alert">{error}</span>}
@@ -192,7 +211,9 @@ const RouteInputEditor = ({ entry, group, onOpenMcp }: {
             <legend>{label}{required ? ' (required)' : ''}</legend>
             {property.description === undefined ? undefined : <p>{property.description}</p>}
             {values.map((value, index) => <div className="route-input-array-row" key={`${key}-${String(index)}`}>
-              {scalarControl(entry.id, `${key}-${String(index)}`, property.items, value, (nextValue) => {
+              {/* Array rows exist only after "Add", so items are always set. */}
+              {scalarControl(entry.id, `${key}-${String(index)}`, property.items, true, value, (nextValue) => {
+                if (nextValue === undefined) return;
                 const next = [...values];
                 next[index] = nextValue as boolean | string;
                 setValue(key, Object.freeze(next));

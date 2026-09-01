@@ -337,6 +337,14 @@
   color: #a8b8ca;
 }
 
+.mcp-page-missing-tool {
+  background: #3a1f24;
+  border-left: 3px solid #f28b82;
+  color: #ffd9d4;
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.75rem;
+}
+
 @media (max-width: 42rem) {
   .mcp-page-heading,
   .mcp-page-catalog li,
