@@ -31,6 +31,40 @@ const claudeOnlyKeys = new Set([
 const sharedKeys = new Set(['disable-model-invocation', 'paths']);
 const cursorOnlyKeys = new Set(['color', 'globs', 'icon']);
 const authoringKeys = new Set(['targets']);
+const claudeTargetKeys = new Set([
+  ...claudeOnlyKeys,
+  ...sharedKeys,
+  'allowed-tools',
+  'allowedTools',
+  'argumentHint',
+  'disableModelInvocation',
+  'disallowedTools',
+  'userInvocable',
+  'whenToUse',
+]);
+const cursorTargetKeys = new Set([
+  ...cursorOnlyKeys,
+  ...sharedKeys,
+  'disableModelInvocation',
+]);
+const codexTargetKeys = new Set(['dependencies', 'interface', 'policy']);
+const codexInterfaceKeys = new Set([
+  'brandColor',
+  'brand_color',
+  'defaultPrompt',
+  'default_prompt',
+  'displayName',
+  'display_name',
+  'iconLarge',
+  'icon_large',
+  'iconSmall',
+  'icon_small',
+  'shortDescription',
+  'short_description',
+]);
+const codexPolicyKeys = new Set(['allowImplicitInvocation', 'allow_implicit_invocation']);
+const codexDependenciesKeys = new Set(['tools']);
+const codexToolKeys = new Set(['description', 'transport', 'type', 'url', 'value']);
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -202,6 +236,18 @@ const unknownField = (source: string, field: string): Diagnostic => ({
   sourcePath: source,
 });
 
+const reportUnknownFields = (
+  record: Readonly<Record<string, unknown>>,
+  allowed: ReadonlySet<string>,
+  prefix: string,
+  source: string,
+  diagnostics: Diagnostic[],
+): void => {
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) diagnostics.push(unknownField(source, `${prefix}.${key}`));
+  }
+};
+
 const sidecarFromResource = (document: SkillDocument): SkillSidecarRef | undefined => {
   const resource = document.resources.find((entry) => entry.relativePath === 'agents/openai.yaml');
   if (resource === undefined) return undefined;
@@ -229,6 +275,55 @@ const peelTargets = (
   }
   const unknown = Object.keys(value).filter((key) => key !== 'claude' && key !== 'codex' && key !== 'cursor');
   for (const key of unknown) diagnostics.push(unknownField(source, `targets.${key}`));
+  if (isPlainRecord(value.claude)) {
+    reportUnknownFields(value.claude, claudeTargetKeys, 'targets.claude', source, diagnostics);
+  }
+  if (isPlainRecord(value.cursor)) {
+    reportUnknownFields(value.cursor, cursorTargetKeys, 'targets.cursor', source, diagnostics);
+  }
+  if (isPlainRecord(value.codex)) {
+    reportUnknownFields(value.codex, codexTargetKeys, 'targets.codex', source, diagnostics);
+    if (isPlainRecord(value.codex.interface)) {
+      reportUnknownFields(
+        value.codex.interface,
+        codexInterfaceKeys,
+        'targets.codex.interface',
+        source,
+        diagnostics,
+      );
+    }
+    if (isPlainRecord(value.codex.policy)) {
+      reportUnknownFields(
+        value.codex.policy,
+        codexPolicyKeys,
+        'targets.codex.policy',
+        source,
+        diagnostics,
+      );
+    }
+    if (isPlainRecord(value.codex.dependencies)) {
+      reportUnknownFields(
+        value.codex.dependencies,
+        codexDependenciesKeys,
+        'targets.codex.dependencies',
+        source,
+        diagnostics,
+      );
+      if (Array.isArray(value.codex.dependencies.tools)) {
+        value.codex.dependencies.tools.forEach((tool, index) => {
+          if (isPlainRecord(tool)) {
+            reportUnknownFields(
+              tool,
+              codexToolKeys,
+              `targets.codex.dependencies.tools[${index}]`,
+              source,
+              diagnostics,
+            );
+          }
+        });
+      }
+    }
+  }
   const claude = isPlainRecord(value.claude)
     ? claudeFrom({
       ...value.claude,

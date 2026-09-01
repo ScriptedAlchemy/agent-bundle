@@ -831,18 +831,31 @@ const validateMcp = (
 };
 
 const validateSkill = (skill: SkillDocument): Diagnostic[] => {
+  const portableIssues = validateAgentSkillsFrontmatter({
+    ...(Object.hasOwn(skill.frontmatter, 'allowed-tools')
+      ? { 'allowed-tools': skill.frontmatter['allowed-tools'] }
+      : {}),
+    ...(Object.hasOwn(skill.frontmatter, 'compatibility')
+      ? { compatibility: skill.frontmatter.compatibility }
+      : {}),
+    ...(Object.hasOwn(skill.frontmatter, 'description')
+      ? { description: skill.frontmatter.description }
+      : {}),
+    ...(Object.hasOwn(skill.frontmatter, 'license')
+      ? { license: skill.frontmatter.license }
+      : {}),
+    ...(Object.hasOwn(skill.frontmatter, 'metadata')
+      ? { metadata: skill.frontmatter.metadata }
+      : {}),
+    ...(Object.hasOwn(skill.frontmatter, 'name')
+      ? { name: skill.frontmatter.name }
+      : {}),
+  });
   const ir = parseSkillIr(skill);
   const diagnostics = [...ir.diagnostics];
   const name = ir.portable.name ?? skill.frontmatter.name;
 
-  diagnostics.push(...validateAgentSkillsFrontmatter({
-    ...(ir.portable.allowedTools === undefined ? {} : { 'allowed-tools': ir.portable.allowedTools }),
-    ...(ir.portable.compatibility === undefined ? {} : { compatibility: ir.portable.compatibility }),
-    ...(ir.portable.description === undefined ? {} : { description: ir.portable.description }),
-    ...(ir.portable.license === undefined ? {} : { license: ir.portable.license }),
-    ...(ir.portable.metadata === undefined ? {} : { metadata: ir.portable.metadata }),
-    ...(ir.portable.name === undefined ? {} : { name: ir.portable.name }),
-  }).map((issue) => {
+  diagnostics.push(...portableIssues.map((issue) => {
     const location = issue.field ?? (issue.instancePath === '' ? 'root' : issue.instancePath);
     return sourceDiagnostic(
       issue.field === 'name' ? 'AB4002' : issue.field === 'description' ? 'AB4003' : 'AB4007',
