@@ -225,6 +225,25 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | Claude Code | Native package contract: `${CLAUDE_PLUGIN_ROOT}` MCP/hook paths and `Write|Edit` hook | Real host run is a skip-gated manual opt-in; no attached native evidence in this snapshot; never an iframe renderer |
 | Codex CLI | Native package contract: marketplace, relative MCP path, `${PLUGIN_ROOT}` hook, and `apply_patch` matcher | Real host run is a skip-gated manual opt-in; no attached native evidence in this snapshot; native PostToolUse/shared state remains unproven under `exec --ephemeral` |
 
+### Semantic event-route support
+
+| Event family | Cursor | Claude Code 2.1.250 | Codex 0.147.0 |
+| --- | --- | --- | --- |
+| `session/start` | Supported | `SessionStart` | `SessionStart` |
+| `tool/before` | Supported | `PreToolUse` | `PreToolUse` |
+| `tool/after` | Supported | `PostToolUse` | `PostToolUse` |
+| `stop` | Supported | `Stop` | `Stop` |
+| `agent/start` | `subagentStart` | `SubagentStart` | `SubagentStart` |
+| `agent/stop` | `subagentStop` | `SubagentStop` | `SubagentStop` |
+| `workspace/open` | `workspaceOpen` | Unavailable | Unavailable |
+
+`agent/start` is context-injection-only on Claude Code and Codex and cannot
+block subagent creation. Their `agent/stop` routes can continue the subagent
+with the native `decision: "block"` plus `reason` contract. Codex
+`SubagentStop` exit-0 output is always JSON; its generated 0.147.0 output
+schema has no `additionalContext` field, so the route projection rejects that
+unsupported effect rather than silently fabricating one.
+
 ## Extension-author guide
 
 The definition and lowerer keep serializable namespaced descriptor, resource, and result `_meta` opaque. Add a vendor extension as `_meta["vendor.example/feature"]`, merge it with `mergeSerializableMetadata`, and keep it out of model-visible text unless it belongs there. The optional Claude resource domain is added only to `resources/read` content metadata when an explicit public MCP URL is supplied; it is not added to resource registration by default.

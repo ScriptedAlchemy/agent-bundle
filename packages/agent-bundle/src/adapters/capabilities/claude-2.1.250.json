@@ -3,20 +3,16 @@
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {
+      "agentStart": "SubagentStart",
+      "agentStop": "SubagentStop",
       "afterTool": "PostToolUse",
       "beforeTool": "PreToolUse",
       "sessionStart": "SessionStart",
       "stop": "Stop"
     },
     "eventRoutes": {
-      "agent/start": {
-        "reason": "The pinned Claude Code 2.1.250 hooks contract has no subagent-start event.",
-        "state": "unavailable"
-      },
-      "agent/stop": {
-        "reason": "The pinned Claude Code 2.1.250 hooks contract has no subagent-stop event.",
-        "state": "unavailable"
-      },
+      "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
+      "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
       "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
       "stop": { "nativeEvent": "Stop", "state": "supported" },
       "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
@@ -92,7 +88,11 @@
       "Codex and Cursor publish no plugin LSP surface at their pinned revisions, so the unified bundle's .lsp.json reaches Claude Code only.",
       "Plugin developer tools reference: `claude plugin validate <dir>` checks plugin.json, hooks/hooks.json, and default-directory Skill, agent, and command frontmatter; manifest-less component directories require 2.1.233 or later.",
       "`claude plugin validate <dir> --strict` promotes tolerated warnings such as unrecognized or near-miss fields and non-object experimental/metadata values to exit failure; the reference recommends strict mode in CI.",
-      "Development tools include `claude --plugin-dir <dir> plugin list --json` for registration proof, `claude plugin details <name>` for component inventory and host-owned token estimates, `claude plugin tag`, and `claude --debug` for loading diagnostics."
+      "Development tools include `claude --plugin-dir <dir> plugin list --json` for registration proof, `claude plugin details <name>` for component inventory and host-owned token estimates, `claude plugin tag`, and `claude --debug` for loading diagnostics.",
+      "https://code.claude.com/docs/en/hooks documents SubagentStart when Agent spawns a subagent and SubagentStop when it finishes; both match agent_type, including anchored plugin-scoped identifiers such as ^my-plugin:reviewer$.",
+      "SubagentStart adds agent_id and agent_type to common hook fields. It cannot block subagent creation; hookSpecificOutput.additionalContext injects context before the first subagent prompt, and exit-2 stderr is only a non-blocking notice in the subagent transcript.",
+      "SubagentStop adds stop_hook_active, agent_id, agent_type, agent_transcript_path, and last_assistant_message. decision:block plus reason or exit 2 keeps the subagent running; hookSpecificOutput.additionalContext provides non-error feedback that also continues it.",
+      "The hooks reference states prompt_id requires Claude Code 2.1.196 or later; the pinned 2.1.250 release covers that input field without a version bump."
     ]
   }
 }

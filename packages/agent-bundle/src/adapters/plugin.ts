@@ -167,7 +167,7 @@ const artifactValidation = Object.freeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.2.0',
+  adapterRevision: '1.3.0',
   capabilityRevision: `claude ${claudeAdapter.metadata.observedVersion} + codex ${codexAdapter.metadata.observedVersion}`,
   capabilitySha256: claudeAdapter.metadata.capabilitySha256,
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}`,

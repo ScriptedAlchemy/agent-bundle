@@ -3,20 +3,16 @@
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {
+      "agentStart": "SubagentStart",
+      "agentStop": "SubagentStop",
       "afterTool": "PostToolUse",
       "beforeTool": "PreToolUse",
       "sessionStart": "SessionStart",
       "stop": "Stop"
     },
     "eventRoutes": {
-      "agent/start": {
-        "reason": "The pinned Codex 0.147.0 hooks contract has no subagent-start event.",
-        "state": "unavailable"
-      },
-      "agent/stop": {
-        "reason": "The pinned Codex 0.147.0 hooks contract has no subagent-stop event.",
-        "state": "unavailable"
-      },
+      "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
+      "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
       "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
       "stop": { "nativeEvent": "Stop", "state": "supported" },
       "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
@@ -46,5 +42,20 @@
     "pluginData": false,
     "pluginRoot": "relative-with-plugin-root-cwd",
     "workspaceRoot": false
+  },
+  "provenance": {
+    "observedAt": "2026-09-01",
+    "source": "https://learn.chatgpt.com/docs/hooks",
+    "evidence": [
+      "The Codex 0.147.0 hooks reference lists SubagentStart and SubagentStop as lifecycle events whose matcher filters agent_type; subagent hook session_id is the parent session id.",
+      "SubagentStart adds turn_id, agent_id, agent_type, and permission_mode. Plain stdout or hookSpecificOutput.additionalContext adds developer context to the subagent; continue:false is parsed but does not stop creation.",
+      "SubagentStop adds turn_id, agent_id, agent_type, agent_transcript_path, stop_hook_active, and last_assistant_message. Exit-0 stdout must be JSON; decision:block plus reason or exit 2 continues the subagent flow, while continue:false takes precedence.",
+      "Codex discovers enabled plugin hooks at plugin-root hooks/hooks.json by default or from a ./-prefixed path, path array, inline object, or inline-object array in .codex-plugin/plugin.json. Paths must remain inside the plugin root; installation does not auto-trust non-managed hooks.",
+      "Plugin hook commands receive PLUGIN_ROOT and PLUGIN_DATA plus CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA compatibility aliases.",
+      "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-start.command.input.schema.json (sha256 ce7dc9b5ae8826d1e0c59ffcea793e558aebceb7917a2eb9bb2edd8a7ac37aa9).",
+      "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-start.command.output.schema.json (sha256 34e8ec95393d2aa930d7932a34c3fb29a5e5f90c264fdbcc581393c5838b4660).",
+      "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-stop.command.input.schema.json (sha256 94dc8df29f4691195ac2338ae6de876230e5100a10b94ef48df4e732424b5df5).",
+      "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-stop.command.output.schema.json (sha256 8ba2cd7899ae4544193764e67e988235edebe984abe5788634d123bbf13e3e3a)."
+    ]
   }
 }

@@ -190,17 +190,24 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
 
 it('reports the evidence-backed G10 event family matrix without inferred support', () => {
   const registry = createDefaultRegistry();
-  const existing = ['event:session/start', 'event:tool/before', 'event:tool/after', 'event:stop'];
-  const cursorOnly = ['event:agent/start', 'event:agent/stop', 'event:workspace/open'];
+  const allNativeHosts = [
+    'event:agent/start',
+    'event:agent/stop',
+    'event:session/start',
+    'event:stop',
+    'event:tool/after',
+    'event:tool/before',
+  ];
+  const cursorOnly = ['event:workspace/open'];
 
-  for (const capability of [...existing, ...cursorOnly]) {
+  for (const capability of [...allNativeHosts, ...cursorOnly]) {
     expect(registry.get('cursor').capabilities[capability]).toMatchObject({
       evidence: { observedVersion: '2026-08-28', target: 'cursor' },
       state: 'supported',
     });
   }
   for (const target of ['claude', 'codex'] as const) {
-    for (const capability of existing) {
+    for (const capability of allNativeHosts) {
       expect(registry.get(target).capabilities[capability]).toMatchObject({
         evidence: { target },
         state: 'supported',
@@ -212,6 +219,12 @@ it('reports the evidence-backed G10 event family matrix without inferred support
         state: 'unavailable',
       });
     }
+  }
+  for (const capability of ['event:agent/start', 'event:agent/stop']) {
+    expect(registry.get('plugin').capabilities[capability]).toMatchObject({
+      evidence: { target: 'claude+codex' },
+      state: 'supported',
+    });
   }
   expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
     state: 'unavailable',

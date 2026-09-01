@@ -1,7 +1,8 @@
 {
   "observedCliVersion": "0.147.0",
-  "retrievedAt": "2026-08-14",
+  "retrievedAt": "2026-09-01",
   "schemaSource": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md",
+  "notes": "The generated/subagent-{start,stop}.command.{input,output}.schema.json evidence snapshots are byte-pinned from the rust-v0.147.0 tag at https://github.com/openai/codex/tree/rust-v0.147.0/codex-rs/hooks/schema/generated. Repository text files add one POSIX trailing newline; adapter-metadata.test.ts removes only that byte before comparing the authoritative upstream SHA-256 digests recorded in codex-0.147.0.json.",
   "schemas": {
     "hooks.schema.json": {
       "bytes": 1107,

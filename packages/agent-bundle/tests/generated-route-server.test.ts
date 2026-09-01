@@ -549,3 +549,72 @@ it('runs an explicitly standalone event route without a shared runtime', { timeo
     tool_use_id: 'tool-1',
   })).resolves.toEqual({ additional_context: 'standalone:Write' });
 });
+
+it('replays Claude and Codex subagent fixtures through standalone event-route wrappers', { timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-subagent-events-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({
+      dependencies: {
+        '@agent-bundle/runtime': 'workspace:*',
+        react: '19.2.8',
+      },
+      name: 'subagent-events-fixture',
+      type: 'module',
+      version: '1.0.0',
+    })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      "export default defineConfig({ plugin: { name: 'subagent-events-fixture', version: '1.0.0' }, targets: ['claude', 'codex'] });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/agent/start.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };",
+      'export default async function AgentStart({ native }) {',
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${native.session_id}:${native.agent_id}:${native.agent_type}`));',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/agent/stop.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };",
+      'export default async function AgentStop({ native }) {',
+      "  return createElement(Agent.Result, { value: { outcome: 'deny', reason: `Review ${native.agent_id} once more.` } });",
+      '}',
+      '',
+    ].join('\n')),
+  ]);
+
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['claude', 'codex'] });
+  expect(compiled.build.compiledHooks.filter((hook) => hook.event === 'agentStart')).toHaveLength(2);
+  expect(compiled.build.compiledHooks.filter((hook) => hook.event === 'agentStop')).toHaveLength(2);
+
+  for (const target of ['claude', 'codex'] as const) {
+    const start = compiled.build.compiledHooks.find((hook) => hook.target === target && hook.event === 'agentStart')!;
+    const stop = compiled.build.compiledHooks.find((hook) => hook.target === target && hook.event === 'agentStop')!;
+    const startInput = JSON.parse(await readFile(
+      new URL(`./fixtures/events/${target}-subagent-start.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const stopInput = JSON.parse(await readFile(
+      new URL(`./fixtures/events/${target}-subagent-stop.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+
+    await expect(runHook(start.output, startInput)).resolves.toEqual({
+      hookSpecificOutput: {
+        additionalContext: `${String(startInput.session_id)}:${String(startInput.agent_id)}:${String(startInput.agent_type)}`,
+        hookEventName: 'SubagentStart',
+      },
+    });
+    await expect(runHook(stop.output, stopInput)).resolves.toEqual({
+      decision: 'block',
+      reason: `Review ${String(stopInput.agent_id)} once more.`,
+    });
+  }
+});

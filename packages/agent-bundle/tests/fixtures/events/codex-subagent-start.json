@@ -1,0 +1,11 @@
+{
+  "agent_id": "agent-codex-1",
+  "agent_type": "explore",
+  "cwd": "/workspace",
+  "hook_event_name": "SubagentStart",
+  "model": "gpt-5.6-codex",
+  "permission_mode": "default",
+  "session_id": "parent-session-codex",
+  "transcript_path": "/workspace/.codex/rollout.jsonl",
+  "turn_id": "turn-codex-1"
+}
