@@ -37,6 +37,7 @@ import {
 } from './normalize.ts';
 import { type DiscoveredProject, payloadDeclarationEntry, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
+import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
 import type { SkillDocument } from './skill.ts';
 import { referencedResources } from './skill-references.ts';
 import { validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
@@ -1393,6 +1394,61 @@ const validatePackageIdentity = (loaded: LoadedConfig): Diagnostic[] => {
   return diagnostics;
 };
 
+/**
+ * The stage-1 script-route gate (#102): conventional `src/scripts/` routes
+ * ship through the explicit-`scripts` pipeline, so every discovered script
+ * route that pipeline cannot ship yet is a hard error naming its explicit
+ * resolution. Discovery is not a packaging choice - a route never
+ * disappears silently.
+ */
+const validateConventionalScripts = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  const configured = configuredScriptNames(loaded.config);
+  for (const route of discovered.routeGraph?.scripts ?? []) {
+    const relativePath = route.provenance.relativePath;
+    const judgment = judgeScriptRoute(route, configured);
+    switch (judgment) {
+      case 'shippable':
+        break;
+      case 'rendered':
+        diagnostics.push({
+          code: 'AB4807',
+          message: `Conventional script ${relativePath} is a rendered-script module; rendered scripts are not supported yet.`,
+          recovery: 'Rename the module to .ts to ship a plain script, prefix a path segment with "_" to keep it private, or declare it under scripts in config to opt into plain bundling.',
+          severity: 'error',
+          sourcePath: route.source,
+        });
+        break;
+      case 'nested':
+        diagnostics.push({
+          code: 'AB4808',
+          message: `Conventional script ${relativePath} nests below the src/scripts/ root; conventional scripts ship as direct children only.`,
+          recovery: 'Move the module directly under src/scripts/, prefix a path segment with "_" to keep it private, or declare it under scripts in config with a flat name.',
+          severity: 'error',
+          sourcePath: route.source,
+        });
+        break;
+      case 'conflicting':
+        diagnostics.push({
+          code: 'AB4809',
+          message: `Conventional script ${relativePath} and the configured script ${JSON.stringify(scriptRouteName(route))} share one script identity; the compiler never chooses silently.`,
+          recovery: `Point the scripts.${scriptRouteName(route)} config entry at ${relativePath} to claim the module, or rename one of the two scripts.`,
+          severity: 'error',
+          sourcePath: route.source,
+        });
+        break;
+      default: {
+        const unreachable: never = judgment;
+        throw new TypeError(`Unhandled script route judgment ${String(unreachable)}.`);
+      }
+    }
+  }
+  return diagnostics;
+};
+
 export const validateSource = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1465,6 +1521,10 @@ export const validateSource = (
   // Route-graph collisions (AB4800-AB4804) are compiled during discovery;
   // they are project-source errors, so they gate inspect and build here.
   diagnostics.push(...(discovered.routeGraph?.diagnostics ?? []));
+  // The stage-1 gate for conventional script routes rides beside the graph's
+  // own collisions: rendered, nested, and config-conflicting script routes
+  // stay hard errors until later #102 stages ship them.
+  diagnostics.push(...validateConventionalScripts(loaded, discovered));
 
   return diagnostics;
 };

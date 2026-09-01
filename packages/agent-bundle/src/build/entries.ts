@@ -67,7 +67,7 @@ export const planCompiledEntries = (
       ),
       outputKind: script.mode === 'copy' ? 'copy' as const : 'bundle' as const,
       source: script.source,
-      sourceInputs: Object.freeze([script.provenance.sourcePath, script.source]),
+      sourceInputs: Object.freeze([...new Set([script.provenance.sourcePath, script.source])]),
     };
   }).map((entry) => Object.freeze(entry)));
 };

@@ -11,6 +11,7 @@ import type { AgentBundleConfig } from '../src/core/types.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
 import type { DiscoveredProject } from '../src/config/discover.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
+import { emptyRouteConfig, type CompiledAgentRoute, type CompiledRouteGraph } from '../src/routes/types.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -759,4 +760,141 @@ it('validates the assets configuration shape, containment, and literal existence
   expect(diagnosticsFor(['definitely-missing-asset-entry'], process.cwd())).toEqual(['AB4602', 'AB4008']);
   expect(diagnosticsFor(['definitely-missing/*.svg'], process.cwd())).toEqual(['AB4008']);
   expect(diagnosticsFor(['package.json'], process.cwd())).toEqual(['AB4008']);
+});
+
+const scriptRouteFixture = (root: string, relativePath: string): CompiledAgentRoute => {
+  const identity = relativePath
+    .split('/')
+    .slice(2)
+    .join('/')
+    .replace(/\.[^./]+$/u, '');
+  return {
+    config: emptyRouteConfig,
+    id: `script:${identity}`,
+    kind: 'script',
+    provenance: { kind: 'conventional', relativePath },
+    source: `${root}/${relativePath}`,
+  };
+};
+
+const routeGraphWithScripts = (root: string, relativePaths: readonly string[]): CompiledRouteGraph => ({
+  diagnostics: [],
+  digest: 'fixture-digest',
+  events: [],
+  providers: [],
+  scripts: relativePaths.map((relativePath) => scriptRouteFixture(root, relativePath)),
+  servers: [],
+});
+
+it('normalizes shippable conventional script routes through the explicit scripts pipeline', async () => {
+  const root = '/workspace/project';
+  const loaded = loadedProject({
+    plugin: { name: 'review-tools', version: '1.0.0' },
+    scripts: { 'detect-risk': { entry: './src/tasks/detect-risk.ts', targets: ['claude'] } },
+  });
+  const discovered: DiscoveredProject = {
+    routeGraph: routeGraphWithScripts(root, [
+      'src/scripts/detect-risk.ts',
+      'src/scripts/release/tag.ts',
+      'src/scripts/render-notes.tsx',
+      'src/scripts/verify-release.ts',
+    ]),
+    skills: [],
+  };
+
+  const model = await normalizeProject(loaded, discovered, registry);
+
+  expect(model.scripts).toEqual([
+    {
+      id: 'script:detect-risk',
+      mode: 'bundle',
+      name: 'detect-risk',
+      provenance: { kind: 'config', sourcePath: `${root}/agent-bundle.config.ts` },
+      source: `${root}/src/tasks/detect-risk.ts`,
+      targets: ['claude'],
+    },
+    {
+      id: 'script:verify-release',
+      mode: 'bundle',
+      name: 'verify-release',
+      provenance: { kind: 'conventional', sourcePath: `${root}/src/scripts/verify-release.ts` },
+      source: `${root}/src/scripts/verify-release.ts`,
+      targets: ['portable'],
+    },
+  ]);
+});
+
+it('normalizes conventional scripts when config declares none', async () => {
+  const root = '/workspace/project';
+  const model = await normalizeProject(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { routeGraph: routeGraphWithScripts(root, ['src/scripts/verify-release.ts']), skills: [] },
+    registry,
+  );
+
+  expect(model.scripts).toEqual([
+    {
+      id: 'script:verify-release',
+      mode: 'bundle',
+      name: 'verify-release',
+      provenance: { kind: 'conventional', sourcePath: `${root}/src/scripts/verify-release.ts` },
+      source: `${root}/src/scripts/verify-release.ts`,
+      targets: ['portable'],
+    },
+  ]);
+});
+
+it('gates rendered, nested, and conflicting conventional script routes as AB4807-AB4809', () => {
+  const root = '/workspace/project';
+  const loaded = loadedProject({
+    plugin: { name: 'review-tools', version: '1.0.0' },
+    scripts: { 'detect-risk': './src/tasks/detect-risk.ts' },
+  });
+  const discovered: DiscoveredProject = {
+    routeGraph: routeGraphWithScripts(root, [
+      'src/scripts/detect-risk.ts',
+      'src/scripts/release/tag.ts',
+      'src/scripts/render-notes.tsx',
+      'src/scripts/verify-release.ts',
+    ]),
+    skills: [],
+  };
+
+  const gate = validateSource(loaded, discovered, registry)
+    .filter(({ code }) => code.startsWith('AB48'));
+
+  expect(gate).toEqual([
+    {
+      code: 'AB4809',
+      message: 'Conventional script src/scripts/detect-risk.ts and the configured script "detect-risk" share one script identity; the compiler never chooses silently.',
+      recovery: 'Point the scripts.detect-risk config entry at src/scripts/detect-risk.ts to claim the module, or rename one of the two scripts.',
+      severity: 'error',
+      sourcePath: `${root}/src/scripts/detect-risk.ts`,
+    },
+    {
+      code: 'AB4808',
+      message: 'Conventional script src/scripts/release/tag.ts nests below the src/scripts/ root; conventional scripts ship as direct children only.',
+      recovery: 'Move the module directly under src/scripts/, prefix a path segment with "_" to keep it private, or declare it under scripts in config with a flat name.',
+      severity: 'error',
+      sourcePath: `${root}/src/scripts/release/tag.ts`,
+    },
+    {
+      code: 'AB4807',
+      message: 'Conventional script src/scripts/render-notes.tsx is a rendered-script module; rendered scripts are not supported yet.',
+      recovery: 'Rename the module to .ts to ship a plain script, prefix a path segment with "_" to keep it private, or declare it under scripts in config to opt into plain bundling.',
+      severity: 'error',
+      sourcePath: `${root}/src/scripts/render-notes.tsx`,
+    },
+  ]);
+});
+
+it('keeps shippable conventional script routes free of stage-1 gate diagnostics', () => {
+  const root = '/workspace/project';
+  const diagnostics = validateSource(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { routeGraph: routeGraphWithScripts(root, ['src/scripts/verify-release.ts']), skills: [] },
+    registry,
+  );
+
+  expect(diagnostics.filter(({ code }) => code.startsWith('AB48'))).toEqual([]);
 });

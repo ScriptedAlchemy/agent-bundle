@@ -57,6 +57,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/cli.ts` | Package bin named after `plugin.name` (skipped when the name is not a safe output name). | `bin: false` |
 | `src/index.ts` | Library output with declarations. | `lib: false` |
 | `src/mcp/<server-id>.ts` | Stdio entry for the declared MCP server `<server-id>` that names no `entry`, `command`, or `url`. | Declare `entry` explicitly |
+| `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use. A `scripts` entry that references the file claims it. Rendered (`.tsx`) and nested modules are hard errors until later #102 stages (`AB4807`/`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 
 Conventions match `.ts` and `.tsx` files exactly.
 

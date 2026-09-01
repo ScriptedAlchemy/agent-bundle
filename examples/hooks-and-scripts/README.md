@@ -11,7 +11,10 @@ session-start Hook, a manifest-backed packaging check, and a risk-register
 check so the Workbench can show canonical Hook simulation, successful and
 blocking script traces, and live Logs. Both scripts export `main` and return
 their exit codes; the build generates the process envelope that owns argv,
-awaiting, and exit-code adoption.
+awaiting, and exit-code adoption. `verify-release` ships by convention — any
+unclaimed plain script under `src/scripts/` is discovered — while
+`detect-risk` stays explicitly configured to restrict its targets, so the
+example keeps both modes covered.
 
 ## Workbench walkthrough
 
