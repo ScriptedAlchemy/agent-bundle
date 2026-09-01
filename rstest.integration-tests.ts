@@ -101,6 +101,7 @@ export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/dev-workbench-packaging.test.ts',
   'packages/agent-bundle/tests/packed-consumer.test.ts',
   'packages/agent-bundle/tests/packed-native-smoke.test.ts',
+  'packages/agent-bundle/tests/packed-stdio-projection.test.ts',
   'packages/agent-bundle/tests/public-api-packed.test.ts',
   'packages/agent-bundle/tests/release-audit.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
@@ -128,6 +129,18 @@ export const packedReleaseOnlyTestFiles: readonly string[] = [
  */
 export const routeUnitTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/route-unit/**',
+];
+
+/**
+ * In-process projection tests (#103 stage 2): the `mcp-in-memory` and
+ * `cli-dispatch` proof levels. They render routes, so they need the same
+ * `react-server` process condition the route-unit level needs, but they get
+ * their own pool and their own directory so the levels stay visibly separate
+ * — `pnpm test:projection`. Neither level is process or artifact proof; the
+ * `packed-stdio` level lives in the packed pool.
+ */
+export const projectionTestFiles: readonly string[] = [
+  'packages/agent-bundle/tests/projection/**',
 ];
 
 /**

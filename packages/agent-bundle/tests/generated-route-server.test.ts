@@ -94,9 +94,11 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
       "document.body.textContent = 'Curator dashboard';",
       '',
     ].join('\n')),
+    // Authored as JSX with no React import, the way the documented route
+    // contract reads: the build has to select the automatic JSX runtime, or
+    // the emitted module calls a `React` factory that is not in scope.
     writeProjectFile(root, 'src/mcp/curator/tools/inspect.tsx', [
       "import { Agent, agent } from '@agent-bundle/runtime';",
-      "import { createElement } from 'react';",
       "import { z } from 'zod';",
       "export const config = { annotations: { readOnlyHint: true }, description: 'Inspect one source.' };",
       "export const inputSchema = z.object({ source: z.string() }).strict();",
@@ -105,7 +107,11 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
       '  const context = await agent();',
       '  const result = { invocationKind: context.invocation.kind, source: input.source };',
-      '  return createElement(Agent.Result, { value: result }, createElement(Agent.Markdown, null, `Inspected **${input.source}**.`));',
+      '  return (',
+      '    <Agent.Result value={result}>',
+      '      <Agent.Markdown>{`Inspected **${input.source}**.`}</Agent.Markdown>',
+      '    </Agent.Result>',
+      '  );',
       '}',
       '',
     ].join('\n')),

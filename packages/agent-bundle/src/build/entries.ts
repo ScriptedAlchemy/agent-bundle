@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { dirname, extname, relative, resolve } from 'node:path';
+import { extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -22,6 +22,8 @@ import {
   generatedStdioMcpEntrySource,
   mcpEntryRuntimePath,
   mcpEntryRuntimeSpecifier,
+  mcpServerRuntimePath,
+  mcpServerRuntimeSpecifier,
 } from './entry-shell.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
@@ -39,8 +41,17 @@ const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
   throw new Error(`Unable to locate the compiler-owned event ${module} runtime module.`);
 };
 
-const eventRuntimeIgnoredRoot = (path: string): string =>
-  resolve(dirname(path), path.replaceAll('\\', '/').includes('/dist/') ? '..' : '../..');
+/**
+ * The package root owning one compiler-provided runtime module. Provenance
+ * collects consumer sources, and a runtime module reaches its own siblings
+ * (`routes/public.ts`, `core/*`) as it is inlined, so the whole owning package
+ * is what has to be ignored rather than the single aliased file.
+ */
+const runtimeIgnoredRoot = (path: string): string => {
+  const normalized = path.replaceAll('\\', '/');
+  const marker = normalized.includes('/dist/') ? '/dist/' : '/src/';
+  return resolve(normalized.slice(0, normalized.lastIndexOf(marker)));
+};
 
 export interface CompiledEntry {
   readonly name: string;
@@ -273,6 +284,9 @@ export const compileMcpEntries = async (
   const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
   const eventIpcRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('ipc');
   const eventProjectRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('project');
+  const serverRuntime = generatedRouteSources.some((routeSource) => routeSource !== undefined)
+    ? mcpServerRuntimePath()
+    : undefined;
   const mainEntries = compiled.map(({ id, name, source, sourceInputs }, index) => ({
     ...(entryShells[index] === undefined || runtimeShell === undefined
       ? {}
@@ -285,6 +299,9 @@ export const compileMcpEntries = async (
               [eventIpcRuntimeSpecifier]: eventIpcRuntime,
               [eventProjectRuntimeSpecifier]: eventProjectRuntime,
             }),
+          ...(generatedRouteSources[index] === undefined || serverRuntime === undefined
+            ? {}
+            : { [mcpServerRuntimeSpecifier]: serverRuntime }),
         },
         virtualSource: entryShells[index],
       }),
@@ -322,12 +339,13 @@ export const compileMcpEntries = async (
   const evidence = await buildWithRslib({
     cwd: options.cwd,
     entries: [...mainEntries, ...workerEntries],
-    ...([runtimeShell, eventIpcRuntime].filter((path): path is string => path !== undefined).length === 0
+    ...([runtimeShell, eventIpcRuntime, serverRuntime].filter((path): path is string => path !== undefined).length === 0
       ? {}
       : {
         ignoredSourcePaths: [
           ...(runtimeShell === undefined ? [] : [runtimeShell]),
-          ...(eventIpcRuntime === undefined ? [] : [eventRuntimeIgnoredRoot(eventIpcRuntime)]),
+          ...(eventIpcRuntime === undefined ? [] : [runtimeIgnoredRoot(eventIpcRuntime)]),
+          ...(serverRuntime === undefined ? [] : [runtimeIgnoredRoot(serverRuntime)]),
         ],
       }),
     logLevel: 'error',
@@ -399,7 +417,7 @@ export const compileHooks = async (
     ...(eventIpcRuntime === undefined
       ? {}
       : {
-        ignoredSourcePaths: [eventRuntimeIgnoredRoot(eventIpcRuntime)],
+        ignoredSourcePaths: [runtimeIgnoredRoot(eventIpcRuntime)],
       }),
     outputRoot: options.outDir,
     ...(options.tools === undefined ? {} : { tools: options.tools }),

@@ -14,6 +14,7 @@ import {
 } from '../src/test/registry.ts';
 import { renderRoute } from '../src/test/render.ts';
 import { expectDocument } from '../src/test/matchers.ts';
+import { expectEvents } from '../src/test/events.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
 import type { AgentBundleTestManifest } from '../src/test/manifest.ts';
 
@@ -40,8 +41,12 @@ describe('the compiled test manifest', () => {
   it('names every conventional route the compiler discovered, with its extracted config', () => {
     expect(Object.keys(manifest.routes).sort()).toEqual([
       'app:harness/panel',
+      'cli:db/migrate',
+      'cli:inventory',
       'event:tool/after',
+      'prompt:harness/summarize',
       'resource:harness/notes',
+      'tool:harness/catalog',
       'tool:harness/echo',
       'tool:harness/unavailable',
     ]);
@@ -60,6 +65,31 @@ describe('the compiled test manifest', () => {
     expect(manifest.proofLevel).toBe('route-unit');
     expect(manifest.projectRoot).toBe(fixtureRoot);
     expect(manifest.targets).toEqual(['claude']);
+  });
+
+  it('carries the compiled command graph the CLI dispatch level dispatches over', () => {
+    expect(manifest.cliCommands).toEqual([
+      {
+        aliases: [],
+        description: 'Applies pending harness migrations.',
+        exitCode: 'result',
+        options: [expect.objectContaining({ key: 'dryRun', kind: 'boolean', option: 'dry-run' })],
+        path: ['db', 'migrate'],
+        routeId: 'cli:db/migrate',
+      },
+      {
+        aliases: ['inv'],
+        description: 'Lists the harness library inventory.',
+        exitCode: 'zero',
+        options: [
+          expect.objectContaining({ choices: ['json', 'text'], defaultValue: 'text', key: 'format' }),
+          expect.objectContaining({ key: 'limit', kind: 'number' }),
+          expect.objectContaining({ key: 'shelf', positional: 0, required: true }),
+        ],
+        path: ['inventory'],
+        routeId: 'cli:inventory',
+      },
+    ]);
   });
 
   it('reuses the compiler pass rather than compiling a second route graph', async () => {
@@ -197,6 +227,7 @@ describe('document matchers', () => {
       children: Object.freeze([
         Object.freeze({ kind: 'markdown', text: '# Inventory\n\n2 files' }),
         Object.freeze({ kind: 'text', text: 'workspace: /tmp/library' }),
+        Object.freeze({ kind: 'context', text: 'Recorded 2 files.' }),
       ]),
       kind: 'result',
     }),
@@ -210,8 +241,9 @@ describe('document matchers', () => {
       .toHaveStatus('success')
       .toContainMarkdown('2 files')
       .toContainText('/tmp/library')
+      .toContainContext('Recorded 2 files.')
       .toHaveValue({ files: 2 })
-      .toHaveNodeKinds(['result', 'markdown', 'text']);
+      .toHaveNodeKinds(['result', 'markdown', 'text', 'context']);
   });
 
   it('reports the expected and received value with the route provenance', () => {
@@ -266,8 +298,74 @@ describe('document matchers', () => {
     expect(() => expectDocument(document).toHaveStatus('failed')).toThrow('unexpected status');
     expect(() => expectDocument(document).toContainMarkdown('missing')).toThrow('no Markdown node');
     expect(() => expectDocument(document).toContainText('missing')).toThrow('no text node');
+    expect(() => expectDocument(document).toContainContext('missing')).toThrow('no context node');
     expect(() => expectDocument(document).toHaveError()).toThrow('no matching error');
     expect(() => expectDocument(document).toHaveNodeKinds(['result'])).toThrow('node kinds differ');
+  });
+});
+
+describe('render event matchers', () => {
+  const frame = Object.freeze({ root: { children: [], kind: 'result' }, status: 'success', version: 1 });
+  const event = (sequence: number, type: string, extra: Readonly<Record<string, unknown>> = {}) =>
+    Object.freeze({ document: frame, sequence, type, ...extra });
+  // A shell, two legitimate replaces for the same boundary, and a completion:
+  // the #120 shape that a pinned exact-array assertion called a regression.
+  const stream = Object.freeze([
+    event(0, 'shell'),
+    event(1, 'progress', { completed: 1, message: 'reading inventory', total: 2 }),
+    event(2, 'replace', { boundaryId: 'b:1' }),
+    event(3, 'replace', { boundaryId: 'b:1' }),
+    event(4, 'progress', { completed: 2, message: 'inventory ready', total: 2 }),
+    event(5, 'complete'),
+  ]) as never;
+
+  it('tolerates extra frames between the events the contract requires', () => {
+    expectEvents(stream)
+      .toContainSequence(['shell', 'replace', 'complete'])
+      .toHaveMonotonicSequence()
+      .toCompleteOnce()
+      .toHaveNoErrors()
+      .toBeBoundedBy(6)
+      .toHaveProgress({ atMost: 2, messages: ['reading', 'ready'] });
+  });
+
+  it('still fails a missing, reordered, or over-budget frame', () => {
+    expect(() => expectEvents(stream).toContainSequence(['complete', 'shell']))
+      .toThrow('do not contain the expected sequence');
+    expect(() => expectEvents(stream).toContainSequence(['shell', 'error']))
+      .toThrow('"error"');
+    expect(() => expectEvents(stream).toBeBoundedBy(3)).toThrow('more events than the bound');
+    expect(() => expectEvents(stream).toHaveProgress({ messages: ['ready', 'reading'] }))
+      .toThrow('in order');
+  });
+
+  it('rejects a repeated or regressed sequence number', () => {
+    const regressed = Object.freeze([event(0, 'shell'), event(0, 'complete')]) as never;
+
+    expect(() => expectEvents(regressed).toHaveMonotonicSequence())
+      .toThrow('not strictly increasing');
+  });
+
+  it('prints the timeline and the route the events came from', () => {
+    const subject = { events: stream, provenance: { kind: 'cli', proofLevel: 'cli-dispatch', routeId: 'cli:inventory', source: 'manifest', targets: ['claude'] } } as never;
+    const error = (() => {
+      try {
+        expectEvents(subject).toHaveErrorCode('AB9001');
+        return undefined;
+      } catch (thrown: unknown) {
+        return thrown as AgentTestError;
+      }
+    })();
+
+    expect(error?.code).toBe('assertion-failed');
+    expect(error?.message).toContain('0:shell 1:progress 2:replace 3:replace 4:progress 5:complete');
+    expect(error?.message).toContain('cli:inventory');
+    expect(error?.message).toContain('cli-dispatch (argv dispatched through the routed CLI shell in-process');
+  });
+
+  it('keeps the exact-array assertion available for a contract that needs it', () => {
+    expectEvents([event(0, 'shell'), event(1, 'complete')] as never).toHaveTypes(['shell', 'complete']);
+    expect(() => expectEvents(stream).toHaveTypes(['shell', 'complete'])).toThrow('toContainSequence tolerates');
   });
 });
 
@@ -313,7 +411,21 @@ describe('the harness package boundary', () => {
 
   it('keeps every optional peer out of the harness modules at value level', async () => {
     const sources = await Promise.all(
-      ['src/rstest/index.ts', 'src/rstest/setup-module.ts', 'src/test/index.ts', 'src/test/manifest.ts', 'src/test/matchers.ts', 'src/test/registry.ts', 'src/test/render.ts', 'src/test/types.ts', 'src/test/errors.ts']
+      [
+        'src/rstest/index.ts',
+        'src/rstest/setup-module.ts',
+        'src/test/cli.ts',
+        'src/test/errors.ts',
+        'src/test/events.ts',
+        'src/test/index.ts',
+        'src/test/manifest.ts',
+        'src/test/matchers.ts',
+        'src/test/mcp.ts',
+        'src/test/packed.ts',
+        'src/test/registry.ts',
+        'src/test/render.ts',
+        'src/test/types.ts',
+      ]
         .map(async (relativePath) => [relativePath, await readFile(resolve(packageRoot, relativePath), 'utf8')] as const),
     );
 

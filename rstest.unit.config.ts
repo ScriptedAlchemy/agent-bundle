@@ -4,6 +4,7 @@ import {
   integrationTestFiles,
   nightlyEvidenceTestFiles,
   packedTestFiles,
+  projectionTestFiles,
   routeUnitTestFiles,
   templateTestFiles,
 } from './rstest.integration-tests.ts';
@@ -19,6 +20,7 @@ export default defineConfig({
     ...integrationTestFiles,
     ...nightlyEvidenceTestFiles,
     ...packedTestFiles,
+    ...projectionTestFiles,
     ...routeUnitTestFiles,
     ...templateTestFiles,
   ],
