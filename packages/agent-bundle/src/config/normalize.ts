@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { basename, extname, relative, resolve } from 'node:path';
 
 import { digest } from '../core/digest.ts';
+import { deepFreeze } from '../core/freeze.ts';
 import { isInside } from '../core/paths.ts';
 import {
   defaultGeneratedRuntime,
@@ -581,18 +582,6 @@ const normalizeScripts = (
         targets: sortedUnique(typeof declaration === 'string' ? targetNames : (declaration.targets ?? targetNames)),
       };
     });
-};
-
-const deepFreeze = <Value>(value: Value): Value => {
-  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-
-  for (const child of Object.values(value)) {
-    deepFreeze(child);
-  }
-
-  return Object.freeze(value);
 };
 
 export const configExtensionFiniteJsonDiagnosticMessage = 'A registered config extension must contain strict finite JSON data.';

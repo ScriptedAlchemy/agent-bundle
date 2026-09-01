@@ -136,9 +136,9 @@ it('normalizes registered extensions and validates registered script and hook ta
     targetRegistry: NormalizationTargetRegistry,
   ) => Diagnostic[];
 
-  // Pin flip (#94 stages 1-2): this fixture is rooted at the workspace, whose
-  // package.json version (0.0.0) differs from the fixture's plugin.version,
-  // so the AB4008 mismatch warning is the only expected diagnostic.
+  // This fixture is rooted at the workspace, whose package.json version
+  // (0.0.0) differs from the fixture's plugin.version, so the AB4008
+  // mismatch warning (#94) is the only expected diagnostic.
   expect(sourceValidator(loaded, { skills: [] }, extensionRegistry).map(({ code }) => code)).toEqual(['AB4008']);
 
   const model = await normalizeProject(loaded, { skills: [] }, extensionRegistry);
@@ -258,8 +258,8 @@ it('reports unknown hook and script targets through the target registry', () => 
     registry: NormalizationTargetRegistry,
   ) => Diagnostic[];
 
-  // Pin flip (#94 stages 1-2): the workspace root package.json version
-  // (0.0.0) differs from the fixture's plugin.version, adding AB4008.
+  // The workspace root package.json version (0.0.0) differs from the
+  // fixture's plugin.version, adding the AB4008 mismatch warning (#94).
   expect(sourceValidator(loaded, { skills: [] }, targetRegistry).map(({ code }) => code)).toEqual([
     'AB4008',
     'AB4203',
@@ -753,8 +753,8 @@ it('validates the assets configuration shape, containment, and literal existence
   expect(diagnosticsFor('assets')).toEqual(['AB4600']);
   expect(diagnosticsFor([''])).toEqual(['AB4600']);
   expect(diagnosticsFor([42])).toEqual(['AB4600']);
-  // Pin flip (#94 stages 1-2): fixtures rooted at the workspace also report
-  // the AB4008 plugin.version/package version mismatch warning.
+  // Fixtures rooted at the workspace also report the AB4008
+  // plugin.version/package version mismatch warning (#94).
   expect(diagnosticsFor(['../outside'], process.cwd())).toEqual(['AB4601', 'AB4008']);
   expect(diagnosticsFor(['definitely-missing-asset-entry'], process.cwd())).toEqual(['AB4602', 'AB4008']);
   expect(diagnosticsFor(['definitely-missing/*.svg'], process.cwd())).toEqual(['AB4008']);

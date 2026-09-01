@@ -346,20 +346,13 @@ export class DevLock {
     })();
     this.#publishingUrl = url;
     this.#publishPromise = publishPromise;
-    void publishPromise.then(
-      () => {
-        if (this.#publishPromise === publishPromise) {
-          this.#publishPromise = undefined;
-          this.#publishingUrl = undefined;
-        }
-      },
-      () => {
-        if (this.#publishPromise === publishPromise) {
-          this.#publishPromise = undefined;
-          this.#publishingUrl = undefined;
-        }
-      },
-    );
+    const settlePublication = (): void => {
+      if (this.#publishPromise === publishPromise) {
+        this.#publishPromise = undefined;
+        this.#publishingUrl = undefined;
+      }
+    };
+    void publishPromise.then(settlePublication, settlePublication);
     return publishPromise;
   }
 

@@ -186,7 +186,7 @@ const claimedModuleEntry = (value: unknown): string | undefined => {
  * examples declare `scripts` entries under `src/scripts/`; this rule keeps
  * their layouts route-free without a migration.
  */
-export const configClaimedSources = (
+const configClaimedSources = (
   projectRoot: string,
   config: Readonly<AgentBundleConfig>,
 ): ReadonlySet<string> => {

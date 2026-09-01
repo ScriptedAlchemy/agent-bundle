@@ -21,7 +21,7 @@ export const rstestWorkerCacheDirectory = (name: string): string => {
 export const isolateWorkerEnvironment = (): void => {
   const root = rstestWorkerRoot();
   const cache = rstestWorkerCacheDirectory('xdg');
-  const env = process['env'];
+  const env = process.env;
   env['TMPDIR'] = root;
   env['TMP'] = root;
   env['TEMP'] = root;
