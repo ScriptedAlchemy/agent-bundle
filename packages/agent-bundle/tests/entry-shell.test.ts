@@ -127,12 +127,20 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   expect(source).toContain("from '@modelcontextprotocol/server'");
   expect(source).toContain("from 'agent-bundle/mcp-apps'");
   expect(source).toContain('createAgentRenderDispatcher');
+  expect(source).toContain('createWarmFlightHost');
+  expect(source).toContain('{ stderr: true, stdout: true }');
+  expect(source).toContain('projectMcpRenderStream');
+  expect(source).toContain('attachMcpStructuredContent');
   expect(source).toContain('runAgentRequest');
+  expect(source).toContain('notifications/progress');
+  expect(source).toContain('ARTIFACT_EPOCH');
+  expect(source).toContain('route-fixture@1.2.3');
   expect(source).toContain('server.registerTool("inspect"');
   expect(source).toContain('server.registerResource("catalog", "catalog://books"');
   expect(source).toContain('server.registerPrompt("curate"');
   expect(source).toContain('export default createGeneratedRouteServer');
   expect(source).not.toContain('lowerMcpResult');
+  expect(source).not.toContain('projectToolResult');
 });
 
 
@@ -143,6 +151,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(typeof generate).toBe('function');
   if (generate === undefined) return;
   const source = generate({
+    artifactEpoch: 'route-fixture@1.2.3',
     routes: [{
       config: {},
       id: 'tool:curator/inspect',
@@ -154,5 +163,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain("from '@agent-bundle/runtime/flight/server'");
   expect(source).toContain("from 'node:worker_threads'");
   expect(source).toContain('runAgentRequest');
+  expect(source).toContain('processLifetime');
+  expect(source).toContain('route-fixture@1.2.3');
   expect(source).toContain('/project/src/mcp/curator/tools/inspect.tsx');
 });

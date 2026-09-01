@@ -9,6 +9,7 @@ import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
 import {
   generatedExecutableEntrySource,
+  generatedRouteArtifactEpoch,
   generatedRouteFlightWorkerSource,
   generatedRouteMcpEntrySource,
   generatedStdioMcpEntrySource,
@@ -215,7 +216,11 @@ export const compileMcpEntries = async (
     const server = servers.find((candidate) => candidate.id === entry.id);
     return server?.generatedRoutes === undefined
       ? undefined
-      : generatedRouteFlightWorkerSource({ routes: server.generatedRoutes, serverName: server.name });
+      : generatedRouteFlightWorkerSource({
+        artifactEpoch: generatedRouteArtifactEpoch(options.plugin),
+        routes: server.generatedRoutes,
+        serverName: server.name,
+      });
   });
   // Factory-exporting entries (default export) are wrapped in the framework
   // stdio lifecycle shell; self-connecting entries keep today's behavior byte

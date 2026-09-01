@@ -100,6 +100,26 @@ describe('AgentRenderDispatcher', () => {
     })).rejects.toMatchObject({ name: 'AbortError' });
     expect(calls).toBe(0);
   });
+
+  it('forwards artifactEpoch to the execution host', () => {
+    const seen: Array<string | undefined> = [];
+    const dispatcher = createAgentRenderDispatcher({
+      execute: async (request) => {
+        seen.push(request.artifactEpoch);
+        return new ReadableStream({
+          start(controller) {
+            controller.close();
+          },
+        });
+      },
+    });
+    dispatcher.stream({
+      artifactEpoch: 'epoch-a',
+      invocation: { kind: 'event', props: { event: 'tool/after', payload: {} } },
+      signal: new AbortController().signal,
+    });
+    expect(seen).toEqual(['epoch-a']);
+  });
 });
 
 

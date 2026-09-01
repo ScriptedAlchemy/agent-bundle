@@ -29,7 +29,9 @@ export interface RunPromiseOptions {
 const TYPED_ERROR_NAMES = new Set([
   'AgentContractError',
   'AgentRequestError',
+  'AgentRuntimeError',
   'AgentStateError',
+  'McpProjectionError',
 ]);
 
 const interruptAs = <A, E, R>(): Effect.Effect<A, E, R> =>

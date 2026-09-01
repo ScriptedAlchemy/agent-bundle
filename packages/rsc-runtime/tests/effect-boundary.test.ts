@@ -45,6 +45,17 @@ describe('effect boundary', () => {
     await expect(runPromise(Effect.fail(stateError))).rejects.toBe(stateError);
   });
 
+  it('rethrows AgentRuntimeError and McpProjectionError by name', async () => {
+    const runtime = new Error('runtime unavailable');
+    runtime.name = 'AgentRuntimeError';
+    const projection = new Error('unsupported image');
+    projection.name = 'McpProjectionError';
+    expect(isTypedRuntimeError(runtime)).toBe(true);
+    expect(isTypedRuntimeError(projection)).toBe(true);
+    await expect(runPromise(Effect.fail(runtime))).rejects.toBe(runtime);
+    await expect(runPromise(Effect.fail(projection))).rejects.toBe(projection);
+  });
+
   it('maps interruption to DOMException AbortError', async () => {
     const mapped = mapCause(Cause.interrupt(1));
     expect(isAbortError(mapped)).toBe(true);
