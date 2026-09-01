@@ -37,7 +37,9 @@ const routeGlobs = [
   'src/events/*/*.{ts,tsx}',
   'src/providers/*.{ts,tsx}',
   'src/cli/**/*.{ts,tsx}',
-  'src/scripts/**/*.{ts,tsx}',
+  // Scripts also discover .jsx: the stage-1 script gate judges rendered
+  // modules (AB4807), so a .jsx script must surface there, never vanish.
+  'src/scripts/**/*.{ts,tsx,jsx}',
 ];
 
 const mcpRouteKinds: Readonly<Record<string, CompiledRouteKind>> = {
