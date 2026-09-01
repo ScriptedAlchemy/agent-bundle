@@ -61,8 +61,8 @@ the real destination hosts `claude`, `codex`, and `cursor`.
 - Claude and Codex validate the bundle's marketplace and plugin identity, check
   that the host executable exists, then execute the public CLI sequence without
   a shell.
-- Cursor validates either a Cursor Plugin manifest or a portable Agent Plugin
-  manifest and performs the same safe copy as `install.mjs`.
+- Cursor validates a Cursor Plugin manifest and performs the same safe copy as
+  `install.mjs`; portable bundles use their emitted installer directly.
 - `--from` accepts either a direct target root or an artifact root containing a
   matching target directory.
 - Claude accepts `user`, `project`, and `local`; Codex and Cursor reject scopes
