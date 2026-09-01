@@ -22,6 +22,12 @@ export interface AgentTextNode {
   readonly text: string;
 }
 
+/** Guidance intended for the host's immediate additional-context channel. */
+export interface AgentContextNode {
+  readonly kind: 'context';
+  readonly text: string;
+}
+
 export interface AgentJsonNode {
   readonly kind: 'json';
   readonly value: JsonValue;
@@ -63,6 +69,7 @@ export type AgentDocumentNode =
   | AgentResultNode
   | AgentMarkdownNode
   | AgentTextNode
+  | AgentContextNode
   | AgentJsonNode
   | AgentProgressNode
   | AgentImageNode
@@ -246,6 +253,8 @@ const snapshotNode = (node: AgentDocumentNode, depth: number, state: NodeSnapsho
         return Object.freeze({ kind: 'markdown', text: text(node.text, 'Agent markdown text') });
       case 'text':
         return Object.freeze({ kind: 'text', text: text(node.text, 'Agent text') });
+      case 'context':
+        return Object.freeze({ kind: 'context', text: text(node.text, 'Agent context text') });
       case 'json':
         return Object.freeze({
           kind: 'json',

@@ -28,12 +28,16 @@ const diagnostic = (
   recovery: string,
 ): Diagnostic => ({ code, message, recovery, severity: 'error', sourcePath });
 
-/** Validates G8's one executable route contract without evaluating the module. */
-export const validateRouteModuleContract = (
+interface RouteModuleShape {
+  readonly asyncDefault: boolean;
+  readonly named: ReadonlySet<string>;
+  readonly splitExport: boolean;
+}
+
+const inspectRouteModule = (
   moduleText: string,
   relativePath: string,
-  sourcePath: string,
-): readonly Diagnostic[] => {
+): RouteModuleShape => {
   const sourceFile = ts.createSourceFile(relativePath, moduleText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const named = new Set<string>();
   let asyncDefault = false;
@@ -71,6 +75,16 @@ export const validateRouteModuleContract = (
     }
   }
 
+  return { asyncDefault, named, splitExport };
+};
+
+/** Validates G8's one executable MCP route contract without evaluating the module. */
+export const validateRouteModuleContract = (
+  moduleText: string,
+  relativePath: string,
+  sourcePath: string,
+): readonly Diagnostic[] => {
+  const { asyncDefault, named, splitExport } = inspectRouteModule(moduleText, relativePath);
   const missing = ['inputSchema', 'resultSchema'].filter((name) => !named.has(name));
   const diagnostics: Diagnostic[] = [];
   if (missing.length > 0 || !asyncDefault) {
@@ -89,6 +103,33 @@ export const validateRouteModuleContract = (
     diagnostics.push(diagnostic(
       'AB4811',
       `Route module ${relativePath} exports execute or render; routed modules use one async default Server Component instead of an execute/render split.`,
+      sourcePath,
+      'Move execution into the async default component and render Agent.* elements from that component.',
+    ));
+  }
+  return Object.freeze(diagnostics);
+};
+
+/** Validates an event route's single async component contract without requiring MCP schemas. */
+export const validateEventRouteModuleContract = (
+  moduleText: string,
+  relativePath: string,
+  sourcePath: string,
+): readonly Diagnostic[] => {
+  const { asyncDefault, splitExport } = inspectRouteModule(moduleText, relativePath);
+  const diagnostics: Diagnostic[] = [];
+  if (!asyncDefault) {
+    diagnostics.push(diagnostic(
+      'AB4810',
+      `Event route module ${relativePath} does not satisfy the public route contract: default export is not an async function component.`,
+      sourcePath,
+      'Export one async default Server Component receiving { canonical, native, signal }.',
+    ));
+  }
+  if (splitExport) {
+    diagnostics.push(diagnostic(
+      'AB4811',
+      `Event route module ${relativePath} exports execute or render; routed modules use one async default Server Component instead of an execute/render split.`,
       sourcePath,
       'Move execution into the async default component and render Agent.* elements from that component.',
     ));

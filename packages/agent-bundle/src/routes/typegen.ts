@@ -31,10 +31,16 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     '  input: SchemaOutput<InputSchema>;',
     '  result: SchemaOutput<ResultSchema>;',
     '}>;',
+    'export type EventRouteContract<Component, Event extends string> = Readonly<{',
+    '  component: Component;',
+    '  event: Event;',
+    '}>;',
     '',
     'export interface AgentBundleRoutes {',
     ...routes.map((route, index) =>
-      `  ${JSON.stringify(route.id)}: RouteContract<typeof route${String(index)}.inputSchema, typeof route${String(index)}.resultSchema>;`),
+      route.kind === 'event-route'
+        ? `  ${JSON.stringify(route.id)}: EventRouteContract<typeof route${String(index)}.default, ${JSON.stringify(route.event)}>;`
+        : `  ${JSON.stringify(route.id)}: RouteContract<typeof route${String(index)}.inputSchema, typeof route${String(index)}.resultSchema>;`),
     '}',
     '',
     'export type RouteId = keyof AgentBundleRoutes;',

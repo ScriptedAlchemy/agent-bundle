@@ -13,6 +13,7 @@ const agentElementTypes = Object.freeze([
   'agent-result',
   'agent-markdown',
   'agent-text',
+  'agent-context',
   'agent-json',
   'agent-progress',
   'agent-image',
@@ -71,6 +72,8 @@ const decodeNode = (node: ReactNode, state: DecodeState): AgentDocumentNode => {
       return { kind: 'markdown', text: textChild(props.children, element.type) };
     case 'agent-text':
       return { kind: 'text', text: textChild(props.children, element.type) };
+    case 'agent-context':
+      return { kind: 'context', text: textChild(props.children, element.type) };
     case 'agent-json':
       return { kind: 'json', value: props.value as JsonValue };
     case 'agent-progress':

@@ -50,6 +50,7 @@ describe('Agent vocabulary', () => {
   it('exposes protocol-oriented leaves without DOM elements', () => {
     expect(Object.keys(Agent)).toEqual([
       'Audio',
+      'Context',
       'Error',
       'Image',
       'Json',
@@ -60,6 +61,7 @@ describe('Agent vocabulary', () => {
       'Text',
     ]);
     expect(Object.isFrozen(Agent)).toBe(true);
+    expect(Agent.Context({ children: 'route guidance' }).type).toBe('agent-context');
     expect(Agent.Markdown({ children: '# Ready' }).type).toBe('agent-markdown');
     expect(Agent.Resource({ name: 'Catalog', uri: 'catalog://root' }).type).toBe('agent-resource');
     expect(Agent.Error({ children: 'represented', code: 'E_DEMO' }).type).toBe('agent-error');

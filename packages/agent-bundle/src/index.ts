@@ -4,7 +4,25 @@ import type { PortableConfigExtension } from './adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts';
 
 export { defineConfig, pathTokens, pluginRootEnvAnchor } from './core/types.ts';
-export type { AppRouteConfig, PromptConfig, ResourceConfig, RouteSchema, RouteSchemaOutput, ToolConfig, ToolRouteProps } from './routes/public.ts';
+export { canonicalAgentEvents } from './routes/public.ts';
+export type {
+  AgentEventCanonicalIdentity,
+  AgentEventDelivery,
+  AgentEventFallbackMode,
+  AgentEventNativePayload,
+  AgentEventProvenance,
+  AgentEventRouteConfig,
+  AgentEventRouteProps,
+  AgentEventRuntimeMode,
+  AppRouteConfig,
+  CanonicalAgentEvent,
+  PromptConfig,
+  ResourceConfig,
+  RouteSchema,
+  RouteSchemaOutput,
+  ToolConfig,
+  ToolRouteProps,
+} from './routes/public.ts';
 export { compareEvals, runEvals, startDevServer } from './api.ts';
 export {
   createCodexEvalHarness,

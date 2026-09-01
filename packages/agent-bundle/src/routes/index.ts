@@ -18,5 +18,23 @@ export type {
   RouteProvenance,
 } from './types.ts';
 export { generateRouteTypes, routeTypesRelativePath, writeRouteTypes } from './typegen.ts';
-export { validateRouteModuleContract } from './contract.ts';
-export type { AppRouteConfig, PromptConfig, ResourceConfig, RouteSchema, RouteSchemaOutput, ToolConfig, ToolRouteProps } from './public.ts';
+export { validateEventRouteModuleContract, validateRouteModuleContract } from './contract.ts';
+export { canonicalAgentEvents } from './public.ts';
+export type {
+  AgentEventCanonicalIdentity,
+  AgentEventDelivery,
+  AgentEventFallbackMode,
+  AgentEventNativePayload,
+  AgentEventProvenance,
+  AgentEventRouteConfig,
+  AgentEventRouteProps,
+  AgentEventRuntimeMode,
+  AppRouteConfig,
+  CanonicalAgentEvent,
+  PromptConfig,
+  ResourceConfig,
+  RouteSchema,
+  RouteSchemaOutput,
+  ToolConfig,
+  ToolRouteProps,
+} from './public.ts';
