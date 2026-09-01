@@ -377,12 +377,19 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       }
     });
     const ownedReloadOrdinals = (): readonly number[] => [...new Set(ownedReloadFrames())].sort((left, right) => left - right);
-    const expectMonotonicReloadOrdinals = (ordinals: readonly number[]): void => {
-      expect(ordinals.every((generation, index) => index === 0 || generation > ordinals[index - 1]!)).toBe(true);
+    const reloadFrameDiagnostic = (): string =>
+      `generations=${JSON.stringify(ownedReloadFrames())} frames=${JSON.stringify(runtimePreviewHmrMessages)} eventHub=${JSON.stringify(fixture.eventHubState)}`;
+    const expectMonotonicReloadFrames = (): void => {
+      const generations = ownedReloadFrames();
+      for (let index = 1; index < generations.length; index += 1) {
+        if (generations[index]! < generations[index - 1]!) {
+          throw new Error(`Runtime App reload generations must be non-decreasing: ${reloadFrameDiagnostic()}`);
+        }
+      }
     };
     await expect.poll(() => ownedReloadFrames().some((generation) => generation > 0), { timeout: browserTimeout })
       .toBe(true);
-    expectMonotonicReloadOrdinals(ownedReloadOrdinals());
+    expectMonotonicReloadFrames();
     expect(Math.max(0, ...ownedReloadOrdinals())).toBeGreaterThan(0);
     const refreshedWidget = async () => {
       for (const frame of page.frames()) {
@@ -427,8 +434,8 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       await expect(runtimeIdentity).toHaveAttribute('data-runtime-source-revision', sourceRuntimeIdentity.sourceRevision);
       await expect(runtimeIdentity).toHaveAttribute('data-runtime-state-version', sourceRuntimeIdentity.stateVersion);
       expect(runtimePreviewHmrSockets).toHaveLength(1);
+      expectMonotonicReloadFrames();
       const reloadOrdinals = ownedReloadOrdinals();
-      expectMonotonicReloadOrdinals(reloadOrdinals);
       expect(reloadOrdinals.slice(0, reloadOrdinalsBeforeConfigReconcile.length)).toEqual(reloadOrdinalsBeforeConfigReconcile);
       expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
       expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
