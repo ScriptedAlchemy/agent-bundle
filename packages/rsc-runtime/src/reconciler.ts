@@ -300,19 +300,25 @@ type SettledBoundary = {
   readonly ok: boolean;
 };
 
-const waitPendingOrDeadline = (
-  pending: readonly PendingBoundary[],
+const waitOrDeadline = <A>(
+  wait: Effect.Effect<A, Error>,
   sequence: AgentRenderEventSequence,
-): Effect.Effect<SettledBoundary, Error> => {
+): Effect.Effect<A, Error> => {
   const remaining = sequence.remainingMs;
   if (remaining <= 0) return Effect.fail(elapsedTimeExceeded(sequence.maxElapsedMs));
   return Effect.raceFirst(
-    waitSettledBoundary(pending),
+    wait,
     Effect.sleep(Duration.millis(remaining)).pipe(
       Effect.flatMap(() => Effect.fail(elapsedTimeExceeded(sequence.maxElapsedMs))),
     ),
   );
 };
+
+const waitPendingOrDeadline = (
+  pending: readonly PendingBoundary[],
+  sequence: AgentRenderEventSequence,
+): Effect.Effect<SettledBoundary, Error> =>
+  waitOrDeadline(waitSettledBoundary(pending), sequence);
 
 const settledBoundaryInputs = (
   previous: TreeSnapshot,
@@ -365,7 +371,7 @@ const reconcileLoopStream = (
       Error
     > => {
       if (snapshot.pending.length === 0) {
-        return Deferred.await(flightDone).pipe(
+        return waitOrDeadline(Deferred.await(flightDone), sequence).pipe(
           Effect.andThen(Queue.clear(progressInputs)),
           Effect.flatMap((queued) =>
             Effect.try({
