@@ -362,16 +362,28 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     ]);
     // The owned reload channel carries provider-authored frames only; a
     // changed App compile advances the generation past the connect replay.
+    // Frames are at-least-once: the proxy replays the current ordinal on
+    // connect, and one source change may burn more than one ordinal before
+    // the App compile coalesces (same shape as #20). Consume unique ordinals
+    // monotonically instead of counting frames.
     const ownedReloadFrames = (): readonly number[] => runtimePreviewHmrMessages.flatMap((message) => {
       try {
         const parsed = JSON.parse(message) as Readonly<{ readonly generation?: unknown; readonly kind?: unknown }>;
-        return parsed.kind === 'runtime-app-reload' && typeof parsed.generation === 'number' ? [parsed.generation] : [];
+        return parsed.kind === 'runtime-app-reload' && typeof parsed.generation === 'number' && Number.isSafeInteger(parsed.generation)
+          ? [parsed.generation]
+          : [];
       } catch {
         return [];
       }
     });
+    const ownedReloadOrdinals = (): readonly number[] => [...new Set(ownedReloadFrames())].sort((left, right) => left - right);
+    const expectMonotonicReloadOrdinals = (ordinals: readonly number[]): void => {
+      expect(ordinals.every((generation, index) => index === 0 || generation > ordinals[index - 1]!)).toBe(true);
+    };
     await expect.poll(() => ownedReloadFrames().some((generation) => generation > 0), { timeout: browserTimeout })
       .toBe(true);
+    expectMonotonicReloadOrdinals(ownedReloadOrdinals());
+    expect(Math.max(0, ...ownedReloadOrdinals())).toBeGreaterThan(0);
     const refreshedWidget = async () => {
       for (const frame of page.frames()) {
         if (await frame.getByTestId('runtime-hmr-marker').count() === 1) return frame;
@@ -391,7 +403,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
     expect(runtimeAppResponses).toHaveLength(1);
-    const hmrMessagesBeforeConfigReconcile = [...runtimePreviewHmrMessages];
+    const reloadOrdinalsBeforeConfigReconcile = ownedReloadOrdinals();
     const runtimeAttribute = async (name: string): Promise<string> => {
       const value = await runtimeIdentity.getAttribute(name);
       if (value === null) throw new Error(`Runtime identity omitted ${name}.`);
@@ -415,7 +427,9 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       await expect(runtimeIdentity).toHaveAttribute('data-runtime-source-revision', sourceRuntimeIdentity.sourceRevision);
       await expect(runtimeIdentity).toHaveAttribute('data-runtime-state-version', sourceRuntimeIdentity.stateVersion);
       expect(runtimePreviewHmrSockets).toHaveLength(1);
-      expect(runtimePreviewHmrMessages).toEqual(hmrMessagesBeforeConfigReconcile);
+      const reloadOrdinals = ownedReloadOrdinals();
+      expectMonotonicReloadOrdinals(reloadOrdinals);
+      expect(reloadOrdinals.slice(0, reloadOrdinalsBeforeConfigReconcile.length)).toEqual(reloadOrdinalsBeforeConfigReconcile);
       expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
       expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
       expect(runtimeAppResponses).toHaveLength(1);

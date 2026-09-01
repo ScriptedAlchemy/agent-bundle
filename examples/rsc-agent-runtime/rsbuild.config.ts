@@ -80,7 +80,7 @@ const runtimeAppReloadPlugin = (
   onAppReload: NonNullable<RscRuntimeRsbuildConfigOptions['onAppReload']>,
 ): RsbuildPlugin => {
   let devServer: RsbuildDevServer | undefined;
-  let lastAppCompilation: object | string | undefined;
+  let lastAppCompilation: string | undefined;
   return {
     name: 'agent-bundle:rsc-runtime-app-reload',
     setup(api) {
@@ -99,9 +99,14 @@ const runtimeAppReloadPlugin = (
       });
       api.onAfterEnvironmentCompile(({ environment, isFirstCompile, stats }) => {
         if (devServer === undefined || environment.name !== 'app' || stats === undefined || stats.hasErrors()) return;
-        const compilation = typeof stats.hash === 'string' && stats.hash.length > 0 ? stats.hash : stats;
-        if (lastAppCompilation === compilation) return;
-        lastAppCompilation = compilation;
+        // Identity is the compilation hash. A missing hash cannot be proven
+        // distinct from the last changed App compile, and treating the stats
+        // object identity as a hash would emit a spurious reload on every
+        // hashless completion (the extra runtime-app-reload frame under load).
+        const hash = stats.hash;
+        if (typeof hash !== 'string' || hash.length === 0) return;
+        if (lastAppCompilation === hash) return;
+        lastAppCompilation = hash;
         if (isFirstCompile) return;
         onAppReload();
       });

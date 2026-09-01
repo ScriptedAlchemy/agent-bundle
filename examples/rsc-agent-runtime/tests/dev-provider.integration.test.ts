@@ -309,6 +309,8 @@ test('emits one owned App reload for each later successful changed App compilati
   const repeatedAppBUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-b' } });
   const failedAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => true } });
   const nonAppUpdate = Object.freeze({ environment: { name: 'widget' }, isFirstCompile: false, stats: { hasErrors: () => false } });
+  const hashlessAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false } });
+  const emptyHashAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: '' } });
 
   afterCompiler?.({ environments: { app: {}, widget: {} } });
   afterEnvironmentCompile?.(appBUpdate);
@@ -325,6 +327,11 @@ test('emits one owned App reload for each later successful changed App compilati
   afterEnvironmentCompile?.(appAUpdate);
   expect(reloads).toEqual([1, 2]);
   afterEnvironmentCompile?.(repeatedAppBUpdate);
+  expect(reloads).toEqual([1, 2, 3]);
+  // Hashless completions are unidentifiable: they must not mint a generation
+  // frame, or the overview e2e records an extra runtime-app-reload under load.
+  afterEnvironmentCompile?.(hashlessAppUpdate);
+  afterEnvironmentCompile?.(emptyHashAppUpdate);
   expect(reloads).toEqual([1, 2, 3]);
 
   await closeDevServer?.();
