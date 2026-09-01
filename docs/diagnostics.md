@@ -118,7 +118,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
-## Route graph (`AB4800`–`AB4806`)
+## Route graph (`AB4800`–`AB4809`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -142,6 +142,12 @@ accepted form. Anything else is dynamic: the route compiles with an empty
 config beside a named `AB4806` error. A module without a `config` export
 compiles silently with an empty config.
 
+Conventional `src/scripts/` routes ship through the same pipeline as
+explicit `scripts` entries (#102 stage 1): a plain module directly under
+`src/scripts/` compiles to `scripts/<name>.mjs` in every selected target
+artifact with `provenance.kind: 'conventional'`. Script routes that pipeline
+cannot ship yet are hard errors (`AB4807`–`AB4809`), never silent omissions.
+
 | Code | Severity | Trigger |
 | --- | --- | --- |
 | `AB4800` | error | An MCP server has both discovered route modules under `src/mcp/<id>/` and an existing entry claim (the conventional `src/mcp/<id>.ts` module, or a declared `entry`/`command`/`url`) without an explicit `routes.servers.<id>` mode. |
@@ -151,6 +157,9 @@ compiles silently with an empty config.
 | `AB4804` | error | A `routes` mode override is not `generated`/`custom`/`command`/`remote` for a server, or `generated`/`conventional` for the CLI. |
 | `AB4805` | error | A route module exports `config` through a rejected declaration shape (`let`/`var`, destructuring, `export { config }`, a function or class, a missing initializer), or the extracted value is not an object. |
 | `AB4806` | error | A route module's `config` initializer is dynamic — the message names the offending construct and position. |
+| `AB4807` | error | A conventional `src/scripts/` route is a rendered-script module (`.tsx`/`.jsx`); rendered scripts are not supported yet. Rename it to `.ts`, prefix a path segment with `_` to keep it private, or declare it under `scripts` in config to opt into plain bundling. |
+| `AB4808` | error | A conventional `src/scripts/` route nests below the scripts root; conventional scripts ship as direct children only. Move it up, prefix a path segment with `_`, or declare it under `scripts` in config with a flat name. |
+| `AB4809` | error | A conventional `src/scripts/` route and a configured `scripts` entry share one script identity through different files. Point the config entry at the module to claim it, or rename one of the two. |
 
 ## Development package build (`AB7103`)
 

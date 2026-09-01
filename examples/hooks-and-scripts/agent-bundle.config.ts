@@ -10,12 +10,14 @@ export default defineConfig({
     name: 'hooks-and-scripts',
     version: '1.0.0',
   },
+  // verify-release ships by convention: unclaimed plain scripts under
+  // src/scripts/ are discovered. detect-risk stays explicitly configured
+  // because it restricts targets.
   scripts: {
     'detect-risk': {
       entry: './src/scripts/detect-risk.ts',
       targets: ['portable'],
     },
-    'verify-release': './src/scripts/verify-release.ts',
   },
   targets: ['portable', 'codex', 'claude'],
 });

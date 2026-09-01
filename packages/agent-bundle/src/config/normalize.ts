@@ -46,6 +46,7 @@ import type {
 } from '../core/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
+import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
 
@@ -561,27 +562,40 @@ const scriptMode = (source: string): 'bundle' | 'copy' =>
 
 const normalizeScripts = (
   loaded: LoadedConfig,
+  discovered: DiscoveredProject,
   targetNames: readonly string[],
 ): readonly NormalizedScript[] => {
-  const configured = loaded.config.scripts;
-  if (configured === undefined) return [];
-
   const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
-  return Object.entries(configured)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, input]) => {
-      const declaration = input as AgentBundleScriptInput;
-      const entry = typeof declaration === 'string' ? declaration : declaration.entry;
-      const source = resolve(loaded.context.projectRoot, entry);
-      return {
-        id: `script:${name}`,
-        mode: scriptMode(source),
-        name,
-        provenance: { ...provenance },
-        source,
-        targets: sortedUnique(typeof declaration === 'string' ? targetNames : (declaration.targets ?? targetNames)),
-      };
-    });
+  const explicit = Object.entries(loaded.config.scripts ?? {}).map(([name, input]): NormalizedScript => {
+    const declaration = input as AgentBundleScriptInput;
+    const entry = typeof declaration === 'string' ? declaration : declaration.entry;
+    const source = resolve(loaded.context.projectRoot, entry);
+    return {
+      id: `script:${name}`,
+      mode: scriptMode(source),
+      name,
+      provenance: { ...provenance },
+      source,
+      targets: sortedUnique(typeof declaration === 'string' ? targetNames : (declaration.targets ?? targetNames)),
+    };
+  });
+  // Conventional `src/scripts/` routes ship through the same pipeline as
+  // explicit entries (#102 stage 1). The judgment is shared with source
+  // validation: routes the pipeline cannot ship (rendered, nested, or
+  // conflicting with a configured name) are AB4807-AB4809 errors there, so
+  // omitting them here is deterministic hygiene, never a silent choice.
+  const configured = configuredScriptNames(loaded.config);
+  const conventional = (discovered.routeGraph?.scripts ?? [])
+    .filter((route) => judgeScriptRoute(route, configured) === 'shippable')
+    .map((route): NormalizedScript => ({
+      id: route.id,
+      mode: scriptMode(route.source),
+      name: scriptRouteName(route),
+      provenance: { kind: 'conventional', sourcePath: route.source },
+      source: route.source,
+      targets: sortedUnique(targetNames),
+    }));
+  return [...explicit, ...conventional].sort((left, right) => left.name.localeCompare(right.name));
 };
 
 export const configExtensionFiniteJsonDiagnosticMessage = 'A registered config extension must contain strict finite JSON data.';
@@ -770,7 +784,7 @@ export const normalizeProject = async (
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
   const payloads = normalizePayloads(loaded, discovered, targetNames);
   const mcpServers = normalizeMcpServers(loaded, targetNames, payloads);
-  const scripts = normalizeScripts(loaded, targetNames);
+  const scripts = normalizeScripts(loaded, discovered, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
   const packageBuild = normalizePackageBuild(loaded.config, loaded.context.projectRoot, loaded.configPath);
   const model: NormalizedPlugin = {

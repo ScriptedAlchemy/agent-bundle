@@ -962,6 +962,99 @@ it('normalizes named top-level scripts with stable IDs, modes, and sorted target
   }
 });
 
+it('builds conventional src/scripts modules beside explicit entries', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-conventional-scripts-parent-'));
+  const root = join(parent, 'project with spaces');
+  await mkdir(join(root, 'src', 'scripts'), { recursive: true });
+  await Promise.all([
+    writeFile(
+      join(root, 'agent-bundle.config.ts'),
+      [
+        'export default {',
+        "  plugin: { name: 'conventional-scripts-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        "  scripts: { claimed: './src/scripts/claimed.ts' },",
+        '};',
+        '',
+      ].join('\n'),
+    ),
+    writeFile(
+      join(root, 'src', 'scripts', 'claimed.ts'),
+      "export const main = async (): Promise<number> => {\n  process.stdout.write('claimed script\\n');\n  return 0;\n};\n",
+    ),
+    writeFile(
+      join(root, 'src', 'scripts', 'greet.ts'),
+      "export const main = async (): Promise<number> => {\n  process.stdout.write('hello from convention\\n');\n  return 0;\n};\n",
+    ),
+  ]);
+  const output = join(root, 'artifact');
+
+  try {
+    const result = await build({ output, root });
+
+    expect(result.model.scripts).toEqual([
+      {
+        id: 'script:claimed',
+        mode: 'bundle',
+        name: 'claimed',
+        provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+        source: join(root, 'src', 'scripts', 'claimed.ts'),
+        targets: ['portable'],
+      },
+      {
+        id: 'script:greet',
+        mode: 'bundle',
+        name: 'greet',
+        provenance: { kind: 'conventional', sourcePath: join(root, 'src', 'scripts', 'greet.ts') },
+        source: join(root, 'src', 'scripts', 'greet.ts'),
+        targets: ['portable'],
+      },
+    ]);
+    await expect(readFile(join(output, 'portable', 'scripts', 'greet.mjs'), 'utf8')).resolves.toContain('hello from convention');
+    await expect(stat(join(output, 'portable', 'scripts', 'claimed.mjs'))).resolves.toBeDefined();
+  } finally {
+    await rm(parent, { force: true, recursive: true });
+  }
+});
+
+it('refuses unshippable conventional script routes with actionable diagnostics', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-unshippable-scripts-parent-'));
+  const root = join(parent, 'project');
+  await mkdir(join(root, 'src', 'scripts', 'release'), { recursive: true });
+  await mkdir(join(root, 'src', 'tasks'), { recursive: true });
+  await Promise.all([
+    writeFile(
+      join(root, 'agent-bundle.config.ts'),
+      [
+        'export default {',
+        "  plugin: { name: 'unshippable-scripts-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        "  scripts: { audit: './src/tasks/audit.ts' },",
+        '};',
+        '',
+      ].join('\n'),
+    ),
+    writeFile(join(root, 'src', 'tasks', 'audit.ts'), 'export const main = async (): Promise<number> => 0;\n'),
+    writeFile(join(root, 'src', 'scripts', 'audit.ts'), 'export const main = async (): Promise<number> => 0;\n'),
+    writeFile(join(root, 'src', 'scripts', 'render-notes.tsx'), 'export default async () => undefined;\n'),
+    writeFile(join(root, 'src', 'scripts', 'release', 'tag.ts'), 'export const main = async (): Promise<number> => 0;\n'),
+  ]);
+
+  try {
+    const result = await validate({ root });
+    const gate = result.diagnostics.filter(({ code }) => ['AB4807', 'AB4808', 'AB4809'].includes(code));
+
+    expect(gate.map(({ code }) => code).sort()).toEqual(['AB4807', 'AB4808', 'AB4809']);
+    for (const diagnostic of gate) {
+      expect(diagnostic.severity).toBe('error');
+      expect(diagnostic.recovery).toBeTruthy();
+      expect(diagnostic.sourcePath).toContain(join('src', 'scripts'));
+    }
+  } finally {
+    await rm(parent, { force: true, recursive: true });
+  }
+});
+
 it('copies every supported top-level script output suffix byte-for-byte with source modes', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-copy-scripts-parent-'));
   const root = join(parent, 'project with spaces');
