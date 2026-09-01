@@ -40,6 +40,13 @@ export type {
   AgentResultNode,
   AgentTextNode,
 } from './agent-document.js';
+export { createAgentRenderDispatcher, decodeAgentDocument } from './dispatcher.js';
+export type {
+  AgentFlightExecutionHost,
+  AgentRenderDispatch,
+  AgentRenderDispatcher,
+  AgentRenderDispatcherOptions,
+} from './dispatcher.js';
 export { lowerHookResult } from './lower-hook.js';
 export type { NativePostToolUseOutput } from './lower-hook.js';
 export { lowerMcpResult } from './lower-mcp.js';

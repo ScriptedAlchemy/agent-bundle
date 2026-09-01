@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 
-import { Hook, Mcp, agent } from '@agent-bundle/runtime';
+import { Agent, Mcp, agent } from '@agent-bundle/runtime';
 import type { CanonicalPostToolUse, RuntimeSnapshot } from '../runtime/contracts.js';
 
 const hookServices = async (): Promise<{ edit: CanonicalPostToolUse; snapshot: RuntimeSnapshot }> => {
@@ -22,11 +22,11 @@ export const AfterFileEdit = async () => {
   const editNoun = editCount === 1 ? 'edit' : 'edits';
 
   return (
-    <Hook.Result>
-      <Hook.AdditionalContext>
+    <Agent.Result>
+      <Agent.Text>
         {`Recorded ${basename(edit.path)} from ${edit.host}. Shared state now contains ${editCount} ${editNoun}.`}
-      </Hook.AdditionalContext>
-    </Hook.Result>
+      </Agent.Text>
+    </Agent.Result>
   );
 };
 

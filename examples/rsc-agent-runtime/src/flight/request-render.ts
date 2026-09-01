@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { createFromReadableStream } from 'react-server-dom-rspack/client.node';
 import type { ReactNode } from 'react';
 
+import { createAgentRenderDispatcher, type AgentDocument, type AgentRenderInvocation } from '@agent-bundle/runtime';
+
 import type { RenderRequest } from '../runtime/contracts.js';
 import { redactInspectionDiagnostics } from '../dev/inspection-security.js';
 
@@ -20,6 +22,10 @@ export interface FlightRenderResult {
   readonly node: ReactNode;
   /** Exact durable state identity captured by the render worker; never user-visible. */
   readonly stateVersion: number;
+}
+
+export interface AgentDocumentFlightRenderResult extends FlightRenderResult {
+  readonly document: AgentDocument;
 }
 
 export interface FlightRenderOptions {
@@ -188,3 +194,62 @@ export const requestFlightRenderWithFlight = async (
 
 export const requestFlightRender = async (request: RenderRequest): Promise<ReactNode> =>
   (await requestFlightRenderWithFlight(request)).node;
+
+const renderInvocationFor = (request: RenderRequest): AgentRenderInvocation => {
+  switch (request.type) {
+    case 'hook/after-file-edit':
+      return {
+        kind: 'event',
+        props: {
+          event: request.type,
+          payload: { event: { ...request.event }, stateFile: request.stateFile },
+        },
+      };
+    case 'mcp/render-timeline':
+      return {
+        kind: 'tool',
+        props: {
+          input: {
+            snapshot: {
+              edits: request.snapshot.edits.map((edit) => ({ ...edit })),
+              ...(request.snapshot.seed === undefined ? {} : { seed: request.snapshot.seed }),
+              stateVersion: request.snapshot.stateVersion,
+            },
+            stateFile: request.stateFile,
+          },
+          operationId: request.type,
+        },
+      };
+    case 'mcp/runtime-status':
+      return {
+        kind: 'tool',
+        props: { input: { stateFile: request.stateFile }, operationId: request.type },
+      };
+    default: {
+      const exhaustive: never = request;
+      return exhaustive;
+    }
+  }
+};
+
+export const requestAgentDocumentWithFlight = async (
+  request: RenderRequest,
+  options: FlightRenderOptions = {},
+): Promise<AgentDocumentFlightRenderResult> => {
+  let rendered: FlightRenderResult | undefined;
+  const signal = options.signal ?? new AbortController().signal;
+  const dispatcher = createAgentRenderDispatcher({
+    execute: async (dispatch) => {
+      rendered = await requestFlightRenderWithFlight(request, { ...options, signal: dispatch.signal });
+      return Readable.toWeb(Readable.from([rendered.flight])) as ReadableStream<Uint8Array>;
+    },
+  });
+  const document = await dispatcher.dispatch({ invocation: renderInvocationFor(request), signal });
+  if (rendered === undefined) throw new Error('Flight execution host returned no render result');
+  return Object.freeze({ ...rendered, document });
+};
+
+export const requestAgentDocument = async (
+  request: RenderRequest,
+  options: FlightRenderOptions = {},
+): Promise<AgentDocument> => (await requestAgentDocumentWithFlight(request, options)).document;

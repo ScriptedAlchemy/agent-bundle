@@ -1,6 +1,6 @@
-import { requestFlightRenderWithFlight } from '../flight/request-render.js';
+import { requestAgentDocumentWithFlight, requestFlightRenderWithFlight } from '../flight/request-render.js';
 import { writeSync } from 'node:fs';
-import { lowerHookResult, lowerMcpResult } from '@agent-bundle/runtime';
+import { lowerMcpResult } from '@agent-bundle/runtime';
 import type {
   DevRuntimeInspectionRequest,
   DevRuntimeInspectionResponse,
@@ -9,6 +9,7 @@ import type {
   RuntimeSnapshot,
 } from '../runtime/contracts.js';
 import { normalizeClaudeHook, normalizeCodexHook } from '../hook/normalize.js';
+import { projectHookDocument } from '../hook/project-document.js';
 
 import { hasInspectionCredential, isInspectionSensitiveKey } from './inspection-security.js';
 import { serializeInspection } from './serialize-inspection.js';
@@ -163,41 +164,46 @@ interface InvocationOutput {
 
 const invoke = async (signal?: AbortSignal): Promise<InvocationOutput> => {
   const request = await readRequest();
-  const rendered = await requestFlightRenderWithFlight(renderRequestFor(request), {
-    maximumFlightBytes: maximumInvocationFlightBytes,
-    signal,
-  });
+  const renderRequest = renderRequestFor(request);
 
   if (request.type === 'hook/after-file-edit') {
-    const native = lowerHookResult(rendered.node);
+    const rendered = await requestAgentDocumentWithFlight(renderRequest, {
+      maximumFlightBytes: maximumInvocationFlightBytes,
+      signal,
+    });
+    const native = projectHookDocument(rendered.document);
     return Object.freeze({
       flight: Buffer.from(rendered.flight),
       response: Object.freeze({
         flightBytes: rendered.flight.byteLength,
         inspection: serializeInspection({
-        agentVisible: native.hookSpecificOutput.additionalContext,
-        flight: rendered.flight,
-        native,
-        node: rendered.node,
-        stateStoreId: request.stateStoreId,
-        stateVersion: rendered.stateVersion,
+          agentVisible: native.hookSpecificOutput.additionalContext,
+          flight: rendered.flight,
+          native,
+          node: rendered.node,
+          stateStoreId: request.stateStoreId,
+          stateVersion: rendered.stateVersion,
         }),
       }),
     });
   }
 
+  const rendered = await requestFlightRenderWithFlight(renderRequest, {
+    maximumFlightBytes: maximumInvocationFlightBytes,
+    signal,
+  });
   const protocol = lowerMcpResult(rendered.node);
   return Object.freeze({
     flight: Buffer.from(rendered.flight),
     response: Object.freeze({
       flightBytes: rendered.flight.byteLength,
       inspection: serializeInspection({
-      flight: rendered.flight,
-      modelVisible: protocol.content,
-      node: rendered.node,
-      protocol,
-      stateStoreId: request.stateStoreId,
-      stateVersion: rendered.stateVersion,
+        flight: rendered.flight,
+        modelVisible: protocol.content,
+        node: rendered.node,
+        protocol,
+        stateStoreId: request.stateStoreId,
+        stateVersion: rendered.stateVersion,
       }),
     }),
   });

@@ -4,6 +4,7 @@ import type { JsonValue } from './lower-mcp.js';
 
 export interface AgentResultProps extends PropsWithChildren {
   readonly metadata?: JsonValue;
+  readonly value?: JsonValue;
 }
 
 export interface AgentTextProps {
@@ -35,8 +36,8 @@ export interface AgentErrorProps extends AgentTextProps {
   readonly code: string;
 }
 
-const AgentResult = ({ children, metadata }: AgentResultProps): ReactElement =>
-  createElement('agent-result', { metadata }, children);
+const AgentResult = ({ children, metadata, value }: AgentResultProps): ReactElement =>
+  createElement('agent-result', { metadata, value }, children);
 
 const AgentMarkdown = ({ children }: AgentTextProps): ReactElement =>
   createElement('agent-markdown', null, children);

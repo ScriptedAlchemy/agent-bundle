@@ -1,18 +1,20 @@
 # `@agent-bundle/runtime`
 
-Small React primitives for producing Agent Bundle hook and MCP protocol results with JSX.
+Agent Document contracts and React-owned Flight execution for Agent Bundle routes.
 No npm release is cut yet; install the pkg.pr.new preview of any `main` commit or pull
 request — see [Preview packages](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md).
 
-The runtime package does **not yet execute React Server Components or
-Flight**. Its current lowerers form a synchronous React-element protocol DSL —
-an *MCP result DSL*: `lowerMcpResult` walks an
-element tree, calling your function components as it goes, and lowers it
-into a plain MCP `CallToolResult`. `lowerHookResult` lowers a `Hook.Result`
-tree into a native `PostToolUse` output the same way, except that it
-resolves only the `Hook` elements themselves — a hook tree returned from
-your own component is rejected. Nothing streams components, hydrates, or
-holds server component state.
+The runtime now executes route models through React-owned RSC/Flight behind
+the `AgentRenderDispatcher` execution-host seam. This first renderer slice is
+final-only: it buffers one Flight result, decodes only intrinsic `Agent.*`
+protocol elements into one immutable `AgentDocument`, and propagates the
+request `AbortSignal` through the host and decoder. Streaming Suspense shell
+and replacement events arrive in stage 3.
+
+The existing lowerers remain synchronous compatibility APIs. `lowerMcpResult`
+walks an MCP element tree, calling function components itself, and lowers it
+into a plain `CallToolResult`; `lowerHookResult` does the same for `Hook.*`.
+They remain the operative MCP path until the later projector migration.
 
 ```tsx
 import { Mcp, lowerMcpResult } from '@agent-bundle/runtime';
@@ -34,9 +36,13 @@ error. These contracts land beside the existing `Hook`/`Mcp` lowerers; those
 synchronous compatibility APIs remain operative.
 
 The package exports `Hook`, `Mcp`, `Agent`, both lowerers, the request-store
-APIs, and the Agent Document contracts. It does not yet own application state,
-transport, persistence, or host packaging. React 19 is a peer dependency and
-Node 22.19 or newer is required.
+APIs, the Agent Document contracts, `createAgentRenderDispatcher`, and the
+`@agent-bundle/runtime/flight/server` render entry. The Flight-facing versions
+are exact compatibility pins: React/React DOM `19.2.8` and
+`react-server-dom-rspack` `0.1.0`; the proof example compiles them with
+`rsbuild-plugin-rsc` `0.1.1`. The package does not own application state,
+persistence, a concrete execution host, or host packaging. Node 22.19 or newer
+is required.
 
 Async server utilities and Server Components read the framework request store
 with `const context = await agent()`. The store is a versioned realm singleton
