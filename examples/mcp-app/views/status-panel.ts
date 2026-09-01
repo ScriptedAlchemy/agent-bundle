@@ -6,6 +6,7 @@ const statusIndicator = document.querySelector<HTMLElement>('#status-indicator')
 const status = document.querySelector<HTMLElement>('#status')!;
 const summary = document.querySelector<HTMLParagraphElement>('#summary')!;
 const checks = document.querySelector<HTMLUListElement>('#checks')!;
+const bridgeOutcome = document.querySelector<HTMLParagraphElement>('#bridge-outcome')!;
 
 type StatusState = 'checking' | 'healthy' | 'degraded' | 'unknown';
 
@@ -69,6 +70,30 @@ app.addEventListener('toolresult', (result) => {
 
 document.querySelector('#toggle-details')!.addEventListener('click', () => {
   document.querySelector('#details')!.toggleAttribute('hidden');
+});
+
+document.querySelector('#read-policy')!.addEventListener('click', async () => {
+  try {
+    const result = await app.readServerResource({ uri: 'ui://mcp-app-example/readiness-policy' });
+    const content = result.contents[0];
+    bridgeOutcome.textContent = content !== undefined && 'text' in content
+      ? content.text
+      : 'Readiness policy unavailable.';
+  } catch {
+    bridgeOutcome.textContent = 'Readiness policy unavailable.';
+  }
+});
+
+document.querySelector('#refresh-status')!.addEventListener('click', async () => {
+  try {
+    const result = await app.callServerTool({
+      arguments: { service: serviceHeading.textContent ?? 'service' },
+      name: 'refresh-status',
+    });
+    bridgeOutcome.textContent = result.isError === true ? 'Refresh unavailable.' : 'Status refreshed.';
+  } catch {
+    bridgeOutcome.textContent = 'Refresh unavailable.';
+  }
 });
 
 await app.connect(new PostMessageTransport(window.parent, window.parent));

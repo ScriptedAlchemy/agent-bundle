@@ -117,9 +117,21 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
+      '@rstest/browser':
+        specifier: 0.11.10
+        version: 0.11.10(@rstest/core@0.11.10)(playwright@1.62.1)
+      '@rstest/core':
+        specifier: 0.11.10
+        version: 0.11.10
+      '@rstest/playwright':
+        specifier: 0.11.10
+        version: 0.11.10(@rstest/core@0.11.10)(playwright@1.62.1)
       agent-bundle:
         specifier: workspace:*
         version: link:../../packages/agent-bundle
+      playwright:
+        specifier: 1.62.1
+        version: 1.62.1
       zod:
         specifier: 4.4.3
         version: 4.4.3
