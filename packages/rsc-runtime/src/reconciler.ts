@@ -387,6 +387,12 @@ const decodeFlightRoot = (
 ): Effect.Effect<ReactNode, Error, Scope.Scope> =>
   Effect.gen(function*() {
     ensureAgentFlightManifest();
+    // Teardown must interrupt the Flight source, never `readable.cancel()`:
+    // the Flight client below holds this readable's reader, so cancel() on
+    // the locked stream rejects (ERR_INVALID_STATE), and that rejection
+    // would defect the closing scope and wedge the event stream's exit
+    // (the maxEvents hang). The scoped signal interrupts the source stream
+    // without touching the locked ReadableStream.
     const flightAbort = yield* scopedAbortSignal;
     const readable = streamToReadableStream(gatedFlightStream(flight, demand), {
       signal: flightAbort,

@@ -214,9 +214,10 @@ export const streamToReadableStream = <A, E>(
       const running = fiber;
       fiber = undefined;
       if (running === undefined) return;
-      // Never `runPromise` here: this cancel is invoked from an Effect
-      // acquireRelease finalizer (Flight bytes). Blocking on interrupt
-      // deadlocks the parent fiber and hides contract / abort errors.
+      // Fork, never `runPromise`: cancel may run inside Effect teardown
+      // (or a consumer's cancel path), and blocking a finalizer on the
+      // producer fiber's exit risks deadlock and hides contract / abort
+      // errors. Interrupt in the background and return immediately.
       void Effect.runFork(Effect.asVoid(Fiber.interrupt(running)));
     },
     pull() {
