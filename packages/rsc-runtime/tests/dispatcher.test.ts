@@ -402,6 +402,50 @@ describe('AgentRenderDispatcher streaming', () => {
     await expect(reader.read()).rejects.toMatchObject({ name: 'AbortError' });
   });
 
+  it('finalizes progress with an abort when Flight setup is interrupted', async () => {
+    let progress: AgentProgressReporter | undefined;
+    const host: AgentFlightExecutionHost = {
+      execute: (request) => {
+        progress = request.progress;
+        return new Promise<ReadableStream<Uint8Array>>(() => undefined);
+      },
+    };
+    const dispatcher = createAgentRenderDispatcher(host);
+    const controller = new AbortController();
+    const reader = dispatcher.stream({ invocation, signal: controller.signal }).getReader();
+    const pending = reader.read();
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    if (progress === undefined) throw new Error('expected the dispatcher to install a progress reporter');
+    await expect(progress.report({ completed: 1, message: 'after-abort' })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
+
+  it('finalizes progress with an abort when the event stream is interrupted', { retry: 2 }, async () => {
+    let progress: AgentProgressReporter | undefined;
+    const inner = createWorkerHost('single');
+    const host: AgentFlightExecutionHost = {
+      execute: async (request) => {
+        progress = request.progress;
+        return inner.execute(request);
+      },
+    };
+    const dispatcher = createAgentRenderDispatcher(host);
+    const controller = new AbortController();
+    const reader = dispatcher.stream({ invocation, signal: controller.signal }).getReader();
+    const shell = await reader.read();
+    if (shell.value?.type !== 'shell') throw new Error('expected a shell event');
+    controller.abort();
+
+    await expect(reader.read()).rejects.toMatchObject({ name: 'AbortError' });
+    if (progress === undefined) throw new Error('expected the dispatcher to install a progress reporter');
+    await expect(progress.report({ completed: 1, message: 'after-abort' })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
+
   it('rejects a post-completion progress producer with a typed handoff', { retry: 2 }, async () => {
     let progress: AgentProgressReporter | undefined;
     const inner = createWorkerHost('ready');
@@ -587,5 +631,31 @@ describe('AgentRenderDispatcher streaming', () => {
     await expect(reader.read()).rejects.toThrow('flight setup failed');
     if (progress === undefined) throw new Error('expected the dispatcher to install a progress reporter');
     await expect(progress.report({ completed: 1, message: 'after-fail' })).rejects.toThrow('flight setup failed');
+  });
+
+  it('surfaces a Flight reader cancel rejection without a prior stream failure', { retry: 2 }, async () => {
+    const inner = createWorkerHost('ready');
+    let cancelCalls = 0;
+    const host: AgentFlightExecutionHost = {
+      execute: async (request) => {
+        const flight = await inner.execute(request);
+        const reader = flight.getReader();
+        return {
+          getReader: () => ({
+            cancel: async () => {
+              cancelCalls += 1;
+              throw new Error('flight cancel failed');
+            },
+            read: () => reader.read(),
+          }),
+        } as ReadableStream<Uint8Array>;
+      },
+    };
+    const dispatcher = createAgentRenderDispatcher(host);
+
+    await expect(collectEvents(
+      dispatcher.stream({ invocation, signal: new AbortController().signal }),
+    )).rejects.toThrow('flight cancel failed');
+    expect(cancelCalls).toBe(1);
   });
 });
