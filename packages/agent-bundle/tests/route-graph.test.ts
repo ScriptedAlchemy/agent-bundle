@@ -139,6 +139,25 @@ it('skips ignored paths, private segments, and declaration files', async () => {
   expect(graph.scripts).toEqual([]);
 });
 
+it('discovers .jsx script routes so the rendered-script gate can judge them', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/scripts/rebuild-index.ts': moduleSource,
+    'src/scripts/render-poster.jsx': 'export default async () => <section>poster</section>;\n',
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  // Discovery is not a packaging choice: the .jsx module compiles into the
+  // graph so source validation can gate it as AB4807 instead of dropping it.
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.scripts.map((route) => route.id)).toEqual(['script:rebuild-index', 'script:render-poster']);
+  expect(graph.scripts.find((route) => route.id === 'script:render-poster')).toMatchObject({
+    kind: 'script',
+    provenance: { kind: 'conventional', relativePath: 'src/scripts/render-poster.jsx' },
+    source: join(root, 'src/scripts/render-poster.jsx'),
+  });
+});
+
 it('never compiles a module explicit configuration claims: config always wins', async () => {
   const root = await createRoot();
   await writeTree(root, {
