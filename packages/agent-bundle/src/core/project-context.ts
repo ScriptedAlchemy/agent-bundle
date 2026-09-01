@@ -1,6 +1,8 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
+import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
+import type { Diagnostic } from './diagnostics.ts';
 import { digest } from './digest.ts';
 import { deepFreeze } from './freeze.ts';
 import { isInsideOrEqual } from './paths.ts';
@@ -209,6 +211,46 @@ const canonicalProvenance = (root: string, provenance: SourceProvenance): Source
   sourcePath: canonicalCompilerPath(root, provenance.sourcePath, 'Model provenance path'),
 });
 
+const canonicalDiagnostic = (root: string, diagnostic: Diagnostic): Diagnostic => ({
+  ...diagnostic,
+  ...(diagnostic.generatedPath === undefined
+    ? {}
+    : { generatedPath: canonicalCompilerPath(root, diagnostic.generatedPath, 'Diagnostic generated path') }),
+  ...(diagnostic.sourcePath === undefined
+    ? {}
+    : { sourcePath: canonicalCompilerPath(root, diagnostic.sourcePath, 'Diagnostic source path') }),
+});
+
+const canonicalSkillSidecar = (root: string, sidecar: SkillSidecarRef): SkillSidecarRef => ({
+  ...sidecar,
+  ...(sidecar.source === undefined
+    ? {}
+    : { source: canonicalCompilerPath(root, sidecar.source, 'Skill sidecar source path') }),
+});
+
+const canonicalSkillIr = (root: string, skillIr: SkillIr): SkillIr => ({
+  ...skillIr,
+  diagnostics: skillIr.diagnostics.map((diagnostic) => canonicalDiagnostic(root, diagnostic)),
+  resources: skillIr.resources.map((resource) => ({
+    ...resource,
+    source: canonicalCompilerPath(root, resource.source, 'Skill IR resource path'),
+  })),
+  sidecars: skillIr.sidecars.map((sidecar) => canonicalSkillSidecar(root, sidecar)),
+  source: canonicalCompilerPath(root, skillIr.source, 'Skill IR source path'),
+});
+
+const canonicalHostDocuments = (
+  root: string,
+  hostDocuments: Readonly<Record<string, SkillHostDocument>>,
+): Readonly<Record<string, SkillHostDocument>> =>
+  Object.fromEntries(Object.entries(hostDocuments)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([host, document]) => [host, {
+      ...document,
+      diagnostics: document.diagnostics.map((diagnostic) => canonicalDiagnostic(root, diagnostic)),
+      sidecars: document.sidecars.map((sidecar) => canonicalSkillSidecar(root, sidecar)),
+    }]));
+
 const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   model.metadata.provenance.sourcePath,
   ...(model.assets ?? []).flatMap((asset) => [asset.provenance.sourcePath, asset.source]),
@@ -226,6 +268,22 @@ const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
     skill.provenance.sourcePath,
     skill.source,
     ...skill.resources.map((resource) => resource.source),
+    ...(skill.skillIr === undefined
+      ? []
+      : [
+        skill.skillIr.source,
+        ...skill.skillIr.resources.map((resource) => resource.source),
+        ...skill.skillIr.sidecars.flatMap((sidecar) => sidecar.source === undefined ? [] : [sidecar.source]),
+        ...skill.skillIr.diagnostics.flatMap((diagnostic) =>
+          diagnostic.sourcePath === undefined ? [] : [diagnostic.sourcePath]),
+      ]),
+    ...(skill.hostDocuments === undefined
+      ? []
+      : Object.values(skill.hostDocuments).flatMap((document) => [
+        ...document.diagnostics.flatMap((diagnostic) =>
+          diagnostic.sourcePath === undefined ? [] : [diagnostic.sourcePath]),
+        ...document.sidecars.flatMap((sidecar) => sidecar.source === undefined ? [] : [sidecar.source]),
+      ])),
   ]),
   ...model.scripts.flatMap((script) => [script.provenance.sourcePath, script.source]),
   ...model.mcpServers.flatMap((server) => [
@@ -367,11 +425,15 @@ export const canonicalizeNormalizedModel = (
     skills: detached.skills.map((skill) => ({
       ...skill,
       dir: canonicalCompilerPath(root, skill.dir, 'Skill directory path'),
+      ...(skill.hostDocuments === undefined
+        ? {}
+        : { hostDocuments: canonicalHostDocuments(root, skill.hostDocuments) }),
       provenance: canonicalProvenance(root, skill.provenance),
       resources: skill.resources.map((resource) => ({
         ...resource,
         source: canonicalCompilerPath(root, resource.source, 'Skill resource path'),
       })),
+      ...(skill.skillIr === undefined ? {} : { skillIr: canonicalSkillIr(root, skill.skillIr) }),
       source: canonicalCompilerPath(root, skill.source, 'Skill source path'),
     })),
     targets: detached.targets.map((target) => ({
