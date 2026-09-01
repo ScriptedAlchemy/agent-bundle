@@ -45,12 +45,57 @@ export const runtimeSpecForFramework = (frameworkSpec: string): string => {
   );
 };
 
-const localTarballPackageName = async (packageSpec: string): Promise<string> => {
-  const path = resolve(packageSpec.slice('file:'.length));
+const tarBlockSize = 512;
+const tarChecksumOffset = 148;
+const tarChecksumLength = 8;
+
+/** An all-zero block is the end-of-archive marker, not a header to verify. */
+const isEndOfArchiveBlock = (header: Buffer): boolean => !header.some((byte) => byte !== 0);
+
+/**
+ * ustar checksums the 512-byte header with its own checksum field read as
+ * ASCII spaces. npm packs with node-tar, which writes the unsigned sum, so
+ * that is the authoritative value; the historical signed sum is accepted as
+ * well, as GNU tar does, so an archive written by an older packer is not
+ * reported as corrupt.
+ */
+const tarHeaderChecksumMatches = (header: Buffer): boolean => {
+  const storedText = header
+    .subarray(tarChecksumOffset, tarChecksumOffset + tarChecksumLength)
+    .toString('ascii')
+    .replace(/\0.*$/u, '')
+    .trim();
+  const stored = Number.parseInt(storedText, 8);
+  if (!Number.isSafeInteger(stored)) return false;
+  let unsigned = 0;
+  let signed = 0;
+  for (let index = 0; index < tarBlockSize; index += 1) {
+    if (index >= tarChecksumOffset && index < tarChecksumOffset + tarChecksumLength) {
+      unsigned += 0x20;
+      signed += 0x20;
+      continue;
+    }
+    unsigned += header[index]!;
+    signed += header.readInt8(index);
+  }
+  return stored === unsigned || stored === signed;
+};
+
+/**
+ * `baseDirectory` is the scaffolded project root, because a relative `file:`
+ * spec is written verbatim into that project's `package.json` and npm resolves
+ * it from there — never from this CLI's working directory.
+ */
+const localTarballPackageName = async (packageSpec: string, baseDirectory: string): Promise<string> => {
+  const path = resolve(baseDirectory, packageSpec.slice('file:'.length));
   try {
     const archive = await unzip(await readFile(path));
-    for (let offset = 0; offset + 512 <= archive.length;) {
-      const header = archive.subarray(offset, offset + 512);
+    for (let offset = 0; offset + tarBlockSize <= archive.length;) {
+      const header = archive.subarray(offset, offset + tarBlockSize);
+      if (isEndOfArchiveBlock(header)) break;
+      if (!tarHeaderChecksumMatches(header)) {
+        throw new Error(`Invalid tar header checksum at offset ${offset}: the archive is corrupt.`);
+      }
       const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/u, '');
       if (name === '') break;
       const sizeText = header.subarray(124, 136).toString('ascii').replace(/\0.*$/u, '').trim();
@@ -58,7 +103,7 @@ const localTarballPackageName = async (packageSpec: string): Promise<string> => 
       if (!Number.isSafeInteger(size) || size < 0) {
         throw new Error(`Invalid tar entry size "${sizeText}".`);
       }
-      const contentsOffset = offset + 512;
+      const contentsOffset = offset + tarBlockSize;
       if (name === 'package/package.json') {
         const manifest = JSON.parse(archive.subarray(contentsOffset, contentsOffset + size).toString('utf8')) as {
           readonly name?: unknown;
@@ -66,7 +111,7 @@ const localTarballPackageName = async (packageSpec: string): Promise<string> => 
         if (typeof manifest.name === 'string') return manifest.name;
         throw new Error('Packed package manifest has no string name.');
       }
-      offset = contentsOffset + Math.ceil(size / 512) * 512;
+      offset = contentsOffset + Math.ceil(size / tarBlockSize) * tarBlockSize;
     }
     throw new Error('Packed package manifest was not found.');
   } catch (error) {
@@ -82,10 +127,13 @@ const localTarballPackageName = async (packageSpec: string): Promise<string> => 
  * instead of surfacing as an install failure — or, under `--no-install`, as a
  * project reported ready with an unusable dependency. Non-`file:` specs stay
  * npm's business: no filesystem read, no registry lookup.
+ *
+ * `baseDirectory` is the scaffold target directory, so a relative `file:` spec
+ * is probed exactly where the emitted `package.json` will point.
  */
-export const assertLocalFrameworkTarball = async (frameworkSpec: string): Promise<void> => {
+export const assertLocalFrameworkTarball = async (frameworkSpec: string, baseDirectory: string): Promise<void> => {
   if (!frameworkSpec.startsWith('file:')) return;
-  const frameworkName = await localTarballPackageName(frameworkSpec);
+  const frameworkName = await localTarballPackageName(frameworkSpec, baseDirectory);
   if (frameworkName !== 'agent-bundle') {
     throw new UsageError(
       `Local package tarball "${frameworkSpec}" is not the agent-bundle package: expected agent-bundle, `
@@ -94,13 +142,19 @@ export const assertLocalFrameworkTarball = async (frameworkSpec: string): Promis
   }
 };
 
-/** Derives and verifies a coherent local framework/runtime tarball pair. */
-export const validatedRuntimeSpecForFramework = async (frameworkSpec: string): Promise<string> => {
+/**
+ * Derives and verifies a coherent local framework/runtime tarball pair,
+ * resolving relative `file:` specs against the scaffold target directory.
+ */
+export const validatedRuntimeSpecForFramework = async (
+  frameworkSpec: string,
+  baseDirectory: string,
+): Promise<string> => {
   const runtimeSpec = runtimeSpecForFramework(frameworkSpec);
   if (!frameworkSpec.startsWith('file:')) return runtimeSpec;
   const [frameworkName, runtimeName] = await Promise.all([
-    localTarballPackageName(frameworkSpec),
-    localTarballPackageName(runtimeSpec),
+    localTarballPackageName(frameworkSpec, baseDirectory),
+    localTarballPackageName(runtimeSpec, baseDirectory),
   ]);
   if (frameworkName !== 'agent-bundle' || runtimeName !== '@agent-bundle/runtime') {
     throw new UsageError(

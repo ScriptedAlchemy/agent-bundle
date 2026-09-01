@@ -96,9 +96,9 @@ export const scaffold = async (request: ScaffoldRequest): Promise<readonly strin
     .some((section) => section?.['@agent-bundle/runtime'] === 'workspace:*');
   let runtimeSpec: string | undefined;
   if (usesWorkspaceRuntime) {
-    runtimeSpec = await validatedRuntimeSpecForFramework(request.frameworkSpec);
+    runtimeSpec = await validatedRuntimeSpecForFramework(request.frameworkSpec, request.targetDirectory);
   } else {
-    await assertLocalFrameworkTarball(request.frameworkSpec);
+    await assertLocalFrameworkTarball(request.frameworkSpec, request.targetDirectory);
   }
   const emitted: string[] = [];
   const copyDirectory = async (from: string, to: string, relative: string): Promise<void> => {

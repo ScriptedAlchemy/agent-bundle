@@ -1,24 +1,15 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { gzipSync } from 'node:zlib';
 
 import { describe, expect, it } from '@rstest/core';
 
 import { runtimeSpecForFramework } from '../src/framework.ts';
 import { UsageError, type TargetName } from '../src/options.ts';
 import { assertScaffoldTarget, placeholderName, scaffold } from '../src/scaffold.ts';
+import { packageTarball, tamperedPackageTarball } from './support/package-tarball.ts';
 
 const templatesRoot = join(process.cwd(), 'packages', 'create-agent-bundle', 'templates');
-
-const packageTarball = (name: string): Buffer => {
-  const manifest = Buffer.from(JSON.stringify({ name }));
-  const archive = Buffer.alloc(512 + Math.ceil(manifest.length / 512) * 512 + 1024);
-  archive.write('package/package.json', 0, 'utf8');
-  archive.write(`${manifest.length.toString(8).padStart(11, '0')}\0`, 124, 'ascii');
-  manifest.copy(archive, 512);
-  return gzipSync(archive);
-};
 
 const scaffoldTemplate = async (
   template: string,
@@ -237,6 +228,62 @@ describe('scaffold', () => {
       };
       expect(manifest.devDependencies['agent-bundle']).toBe(frameworkSpec);
     });
+  });
+
+  it('rejects a local framework tarball with a tampered tar header', async () => {
+    await scaffoldFrameworkOnly(tamperedPackageTarball('agent-bundle'), async (scaffolded, targetDirectory) => {
+      await expect(scaffolded).rejects.toThrow(UsageError);
+      await expect(scaffolded).rejects.toThrow('Invalid tar header checksum');
+      await expect(readdir(targetDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('resolves a relative framework tarball spec against the target directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'create-agent-bundle-relative-'));
+    try {
+      await writeFile(join(root, 'agent-bundle-0.0.0.tgz'), packageTarball('agent-bundle'));
+      const targetDirectory = join(root, 'project');
+      const frameworkSpec = 'file:../agent-bundle-0.0.0.tgz';
+      await expect(scaffold({
+        frameworkSpec,
+        packageName: 'status-plugin',
+        pluginName: 'status-plugin',
+        targetDirectory,
+        targets: ['portable'],
+        templateRoot: join(templatesRoot, 'minimal'),
+      })).resolves.toContain('package.json');
+      const manifest = JSON.parse(await readFile(join(targetDirectory, 'package.json'), 'utf8')) as {
+        readonly devDependencies: Record<string, string>;
+      };
+      expect(manifest.devDependencies['agent-bundle']).toBe(frameworkSpec);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('resolves a relative framework/runtime tarball pair against the target directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'create-agent-bundle-relative-pair-'));
+    try {
+      await Promise.all([
+        writeFile(join(root, 'agent-bundle-0.0.0.tgz'), packageTarball('agent-bundle')),
+        writeFile(join(root, 'agent-bundle-runtime-0.0.0.tgz'), packageTarball('@agent-bundle/runtime')),
+      ]);
+      const targetDirectory = join(root, 'project');
+      await expect(scaffold({
+        frameworkSpec: 'file:../agent-bundle-0.0.0.tgz',
+        packageName: 'status-plugin',
+        pluginName: 'status-plugin',
+        targetDirectory,
+        targets: ['portable'],
+        templateRoot: join(templatesRoot, 'mcp-server'),
+      })).resolves.toContain('package.json');
+      const manifest = JSON.parse(await readFile(join(targetDirectory, 'package.json'), 'utf8')) as {
+        readonly dependencies: Record<string, string>;
+      };
+      expect(manifest.dependencies['@agent-bundle/runtime']).toBe('file:../agent-bundle-runtime-0.0.0.tgz');
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 });
 
