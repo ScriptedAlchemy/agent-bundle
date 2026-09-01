@@ -14,7 +14,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
+import { canonicalHookEvents, isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleHookEntry,
@@ -41,6 +41,7 @@ import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './scri
 import type { SkillDocument } from './skill.ts';
 import { referencedResources } from './skill-references.ts';
 import { validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
+import { parseSkillIr } from '../skills/parse-ir.ts';
 
 const sourceDiagnostic = (
   code: string,
@@ -60,12 +61,7 @@ const nudgeDiagnostic = (
   recovery: string,
 ): Diagnostic => ({ code, message, recovery, severity: 'info', sourcePath });
 
-const hookEvents: readonly CanonicalHookEvent[] = [
-  'sessionStart',
-  'beforeTool',
-  'afterTool',
-  'stop',
-];
+const hookEvents: readonly CanonicalHookEvent[] = canonicalHookEvents;
 
 const hookTools = new Set(['shell', 'file.read', 'file.write', 'mcp', 'agent']);
 
@@ -835,10 +831,18 @@ const validateMcp = (
 };
 
 const validateSkill = (skill: SkillDocument): Diagnostic[] => {
-  const diagnostics = [...skill.diagnostics];
-  const name = skill.frontmatter.name;
+  const ir = parseSkillIr(skill);
+  const diagnostics = [...ir.diagnostics];
+  const name = ir.portable.name ?? skill.frontmatter.name;
 
-  diagnostics.push(...validateAgentSkillsFrontmatter(skill.frontmatter).map((issue) => {
+  diagnostics.push(...validateAgentSkillsFrontmatter({
+    ...(ir.portable.allowedTools === undefined ? {} : { 'allowed-tools': ir.portable.allowedTools }),
+    ...(ir.portable.compatibility === undefined ? {} : { compatibility: ir.portable.compatibility }),
+    ...(ir.portable.description === undefined ? {} : { description: ir.portable.description }),
+    ...(ir.portable.license === undefined ? {} : { license: ir.portable.license }),
+    ...(ir.portable.metadata === undefined ? {} : { metadata: ir.portable.metadata }),
+    ...(ir.portable.name === undefined ? {} : { name: ir.portable.name }),
+  }).map((issue) => {
     const location = issue.field ?? (issue.instancePath === '' ? 'root' : issue.instancePath);
     return sourceDiagnostic(
       issue.field === 'name' ? 'AB4002' : issue.field === 'description' ? 'AB4003' : 'AB4007',
@@ -1681,6 +1685,14 @@ export const validateModel = (
     }
   }
 
+  for (const skill of model.skills) {
+    for (const document of Object.values(skill.hostDocuments ?? {})) {
+      diagnostics.push(...document.diagnostics.filter((diagnostic) =>
+        diagnostic.code === 'AB3008' || diagnostic.code === 'AB3009' || diagnostic.code === 'AB3010',
+      ));
+    }
+  }
+
   for (const hook of model.hooks) {
     for (const target of hook.targets) {
       if (!registry.has(target)) {
@@ -1695,6 +1707,21 @@ export const validateModel = (
         diagnostics.push({
           code: 'AB4204',
           message: `Target ${JSON.stringify(target)} cannot emit hook ${hook.event}.`,
+          severity: 'error',
+          sourcePath: hook.provenance.sourcePath,
+          target,
+        });
+      }
+    }
+    if (hook.eventRoute?.runtime === 'shared' && hook.eventRoute.fallback === 'none') {
+      for (const target of hook.targets) {
+        const runtimeHost = model.mcpServers.some((server) =>
+          server.generatedRoutes !== undefined && server.targets.includes(target));
+        if (runtimeHost) continue;
+        diagnostics.push({
+          code: 'AB4816',
+          message: `Event route ${hook.eventRoute.event} requires the shared runtime on ${target}, but no generated MCP entry hosts it.`,
+          recovery: 'Add a generated MCP route server, or explicitly set event config.runtime to standalone or config.fallback to standalone.',
           severity: 'error',
           sourcePath: hook.provenance.sourcePath,
           target,
@@ -1822,14 +1849,35 @@ export const validateModel = (
   };
   for (const target of model.targets) {
     for (const skill of model.skills) {
-      if (skill.markdown !== undefined) {
+      const hostDocument = skill.hostDocuments?.[target.name];
+      const generatedSkill = hostDocument !== undefined && !hostDocument.passThrough;
+      if (generatedSkill) {
+        recordOutput(
+          posix.join(target.name, 'skills', skill.name, 'SKILL.md'),
+          skill.source,
+          target.name,
+        );
+        for (const sidecar of hostDocument.sidecars) {
+          recordOutput(
+            posix.join(target.name, 'skills', skill.name, sidecar.relativePath),
+            sidecar.source ?? skill.source,
+            target.name,
+          );
+        }
+      } else if (skill.markdown !== undefined) {
         recordOutput(
           posix.join(target.name, 'skills', skill.name, 'SKILL.md'),
           skill.source,
           target.name,
         );
       }
+      const generatedSidecars = new Set(
+        generatedSkill ? hostDocument.sidecars.map((sidecar) => sidecar.relativePath) : [],
+      );
       for (const resource of skill.resources) {
+        if (generatedSkill && (resource.relativePath === 'SKILL.md' || generatedSidecars.has(resource.relativePath))) {
+          continue;
+        }
         recordOutput(
           posix.join(target.name, 'skills', skill.name, resource.relativePath),
           resource.source,

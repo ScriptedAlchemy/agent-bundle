@@ -1,0 +1,28 @@
+{
+  "derivedSchemas": {
+    "claude-skill-frontmatter.schema.json": {
+      "bytes": 1837,
+      "sha256": "9c21ad7aaf73625e2b6d4e7da2fe96fb2d2b9e872c4bdfd7d2d37a7726d47221",
+      "url": "https://code.claude.com/docs/en/skills"
+    },
+    "codex-openai-yaml.schema.json": {
+      "bytes": 1387,
+      "sha256": "39e7ebf8eb004fd99b2cdf4b45019c37d464269fca6f2d4297f91a6b58be3d1a",
+      "url": "https://learn.chatgpt.com/docs/build-skills"
+    },
+    "cursor-skill-frontmatter.schema.json": {
+      "bytes": 1269,
+      "sha256": "f1fc5befced2cdb8a74af4859bd8fdd25266bfa4994b6884a6e42b22f960a40f",
+      "url": "https://prod.cursor.com/docs/skills"
+    }
+  },
+  "normativeTextWinsOnConflict": true,
+  "notes": "Closed, documentation-derived Skill host schemas for #108. Claude fields are the Claude Code Skill frontmatter extensions documented against the 2.1.250 adapter pin. Cursor fields are the Skills page (paths, disable-model-invocation, icon, color, legacy globs) against the 2026-08-28 Cursor pin; plugin-config ${VAR} interpolation is intentionally absent from Skill Markdown. Codex agents/openai.yaml is the documented interface/policy/dependencies sidecar; Codex documents no Skill Markdown interpolation engine. These schemas are not host-published machine-readable artifacts; they reject unknown fields the way the portable Agent Skills schema does.",
+  "observedVersions": {
+    "claude": "2.1.250",
+    "codex": "0.147.0",
+    "cursor": "2026-08-28"
+  },
+  "retrievedAt": "2026-09-01",
+  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Package builds do not download schemas or invoke host-side validators."
+}

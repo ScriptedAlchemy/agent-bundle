@@ -34,6 +34,7 @@ export const isRenderedSkillSourceName = (fileName: string): boolean =>
   (renderedSkillFileNames as readonly string[]).includes(fileName);
 
 export interface CompiledRenderedSkill {
+  readonly authoredTargets?: unknown;
   readonly body: string;
   readonly frontmatter: Record<string, unknown>;
   /** The full compiled document: YAML frontmatter followed by the rendered body. */
@@ -120,8 +121,15 @@ export const compileRenderedSkill = async (source: string): Promise<RenderedSkil
   }
 
   const snapshot = structuredClone(frontmatter);
+  const skillExport = moduleExports.skill;
+  const authoredTargets = isPlainRecord(moduleExports.targets)
+    ? structuredClone(moduleExports.targets)
+    : isPlainRecord(skillExport) && isPlainRecord(skillExport.targets)
+      ? structuredClone(skillExport.targets)
+      : undefined;
   return {
     document: {
+      ...(authoredTargets === undefined ? {} : { authoredTargets }),
       body,
       frontmatter: snapshot,
       markdown: `---\n${serializedFrontmatter}---\n\n${body}`,

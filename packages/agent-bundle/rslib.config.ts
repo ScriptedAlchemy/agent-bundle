@@ -33,6 +33,8 @@ export default defineConfig({
       'cli-entry': './src/cli-entry.ts',
       config: './src/config/index.ts',
       eval: './src/eval/index.ts',
+      'event-ipc': './src/events/ipc.ts',
+      'event-project': './src/events/project.ts',
       index: './src/index.ts',
       'mcp-apps': './src/mcp-apps.ts',
       'mcp-entry': './src/mcp-entry.ts',

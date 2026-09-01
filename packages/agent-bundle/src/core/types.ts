@@ -1,6 +1,12 @@
 import type { EnvironmentConfig } from '@rsbuild/core';
 
+import type {
+  AgentEventFallbackMode,
+  AgentEventRuntimeMode,
+  CanonicalAgentEvent,
+} from '../routes/public.ts';
 import type { CompiledAgentRoute, CompiledCliCommand } from '../routes/types.ts';
+import type { SkillHostDocument, SkillIr, SkillTreeLayoutDecision } from '../skills/ir.ts';
 import type { CapabilityState } from './capabilities.ts';
 
 export interface AgentBundlePluginConfig {
@@ -10,7 +16,15 @@ export interface AgentBundlePluginConfig {
   [key: string]: unknown;
 }
 
-export const canonicalHookEvents = Object.freeze(['sessionStart', 'beforeTool', 'afterTool', 'stop'] as const);
+export const canonicalHookEvents = Object.freeze([
+  'sessionStart',
+  'beforeTool',
+  'afterTool',
+  'stop',
+  'agentStart',
+  'agentStop',
+  'workspaceOpen',
+] as const);
 
 export type CanonicalHookEvent = (typeof canonicalHookEvents)[number];
 
@@ -286,6 +300,11 @@ export interface NormalizedSkill {
   readonly description?: string;
   readonly dir: string;
   readonly frontmatter: Readonly<Record<string, unknown>>;
+  /**
+   * Per-host lowered Skill documents. The artifact planner emits these
+   * instead of the authored bytes when `passThrough` is false.
+   */
+  readonly hostDocuments?: Readonly<Record<string, SkillHostDocument>>;
   readonly id: string;
   /**
    * The compiled SKILL.md document of a rendered skill (`SKILL.tsx`
@@ -296,6 +315,8 @@ export interface NormalizedSkill {
   readonly name: string;
   readonly provenance: SourceProvenance;
   readonly resources: readonly NormalizedSkillResource[];
+  readonly skillIr?: SkillIr;
+  readonly skillTreeLayout?: SkillTreeLayoutDecision;
   readonly source: string;
   readonly targets: readonly string[];
 }
@@ -385,6 +406,12 @@ export interface NormalizedHook {
   /** Extra command arguments appended after the handler path; prebuilt hooks only. */
   readonly args?: readonly string[];
   readonly event: CanonicalHookEvent;
+  /** Filesystem event-route execution metadata; absent for config-declared hook escape hatches. */
+  readonly eventRoute?: Readonly<{
+    readonly event: CanonicalAgentEvent;
+    readonly fallback: AgentEventFallbackMode;
+    readonly runtime: AgentEventRuntimeMode;
+  }>;
   readonly id: string;
   readonly name: string;
   /** Host-native tools selected explicitly per target, alongside the canonical selectors. */

@@ -11,24 +11,6 @@ export default defineConfig({
   claude: {},
   codex: {},
   dev: { runtime: { provider: './src/dev/provider.ts' } },
-  hooks: {
-    afterTool: [
-      {
-        args: ['--host', 'claude'],
-        handler: { prebuilt: './dist/runtime/hook/index.js' },
-        targets: ['claude'],
-        timeout: 30,
-        tools: ['file.write'],
-      },
-      {
-        args: ['--host', 'codex'],
-        handler: { prebuilt: './dist/runtime/hook/index.js' },
-        targets: ['codex'],
-        timeout: 30,
-        tools: ['file.write'],
-      },
-    ],
-  },
   marketplace: true,
   mcp: {
     servers: {

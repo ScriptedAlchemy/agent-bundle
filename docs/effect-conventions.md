@@ -26,7 +26,7 @@ Each Effect-consuming package has exactly one `src/effect/boundary.ts`:
 
 The boundary owns:
 
-- `runPromise` / `runPromiseExit` / `runSync` / `runSyncExit`
+- `runPromise` / `runSync` (plus `runPromiseExit` where a caller branches on `Exit`)
 - `AbortSignal` ↔ interruption (`interruptWhenAborted`, `scopedAbortSignal`, `signal` on `runPromise`)
 - mapping the Effect error channel onto the existing typed Error contracts
 
@@ -63,6 +63,7 @@ public or MCP-facing contracts. Internals keep the existing classes.
 | Success `A` | Promise resolves `A` |
 | Fail `AgentRequestError` | rethrow (`invalid-invocation`, `outside-invocation`, `request-closed`, `store-version-conflict`) |
 | Fail `AgentContractError` | rethrow (document / event / elapsed bounds) |
+| Fail `AgentNoticeError` | rethrow (`aborted`, `invalid-input`, `request-closed`, `unauthorized`) |
 | Fail `AgentStateError` | rethrow. Matched by `error.name` in the root boundary so `./state/contract` never enters the package-root graph. |
 | Fail other `Error` | rethrow |
 | Fail non-Error | `new Error(String(value))` |
@@ -157,6 +158,14 @@ Hurt / gotchas:
   Construct `Semaphore`/`Deferred` with the boundary's `runSync` and keep the
   admission bookkeeping synchronous.
 
+## Stage 4 (#99 notice ledger) outcome
+
+The optional notice ledger composes state-kernel reads and dispatches inside
+Effect programs, runs publish- and delivery-time authorization on the typed
+error channel, and crosses back to the public Promise API only through the
+runtime boundary. It adopts no unstable Effect modules and starts no fibers,
+timers, or workers between invocations.
+
 ## Banned modules and APIs
 
 - `Effect.runPromise` / `runSync` / `runFork` / `runCallback` (and `*With` /
@@ -166,7 +175,7 @@ Hurt / gotchas:
 - `@effect/vitest` — this repo uses rstest.
 - `NodeRuntime.runMain` / `BunRuntime` as a substitute for the boundary.
 - Ad-hoc `ManagedRuntime` outside a boundary module.
-- `effect/unstable/*` until listed below (Stages 2 and 3 listed none).
+- `effect/unstable/*` until listed below (Stages 2, 3, and the #99 notice ledger listed none).
 
 ## Unstable-module adoptions
 
@@ -174,6 +183,8 @@ Re-pin chores re-verify every row. Stage 2 adopts none: Flight is a React
 binary stream, not Ndjson/SchemaBinary, and no other `effect/unstable/*`
 module fits the dispatcher rewrite. Stage 3 also adopts none: the dev seam
 needed only stable `Semaphore`, `Deferred`, `Scope`, and `Exit`.
+The #99 notice ledger also adopts none: it needs only stable `Effect` and
+`forEach` over the existing Promise-returning state authority.
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |

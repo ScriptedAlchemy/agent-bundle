@@ -277,6 +277,39 @@ it('rejects missing and blank native event mappings before creating hook entries
   }
 });
 
+it('plans a thin epoch-bound event-route client and keeps standalone execution explicit', () => {
+  const contract: TargetHookContract = {
+    capabilityRevision: 'synthetic-1',
+    commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    ...playgroundCodec,
+    eventNames: {},
+    eventRouteNames: { 'tool/after': 'SyntheticAfterTool' },
+    manifestPath: 'native-events/registration.json',
+    matchers: {},
+    readNativeCommands: () => ({ commands: [], status: 'found' as const }),
+    wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
+    wrapperSource: () => 'config-hook-only\n',
+  };
+  const shared: NormalizedHook = {
+    ...planningHook('afterTool', []),
+    eventRoute: { event: 'tool/after', fallback: 'none', runtime: 'shared' },
+  };
+  const sharedSource = planHooks(planningModel([shared]), 'synthetic', contract).hookEntries[0]!.virtualSource;
+
+  expect(sharedSource).toContain('requestEventRuntime');
+  expect(sharedSource).toContain('__AGENT_BUNDLE_EVENT_ARTIFACT_EPOCH__');
+  expect(sharedSource).toContain('hostContractRevision: capabilityRevision');
+  expect(sharedSource).not.toContain('import * as routeModule');
+
+  const degraded: NormalizedHook = {
+    ...shared,
+    eventRoute: { event: 'tool/after', fallback: 'standalone', runtime: 'shared' },
+  };
+  const degradedSource = planHooks(planningModel([degraded]), 'synthetic', contract).hookEntries[0]!.virtualSource;
+  expect(degradedSource).toContain('import * as routeModule');
+  expect(degradedSource).toContain('error.code === "runtime-unavailable"');
+});
+
 it('continues planning valid hooks after a prior hook mapping error', () => {
   const plan = planHooks(planningModel([
     planningHook('beforeTool', ['shell']),

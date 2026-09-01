@@ -62,7 +62,7 @@ export const isTypedDevError = (error: unknown): error is Error =>
 export const toDevError = (value: unknown): Error => {
   if (isAbortError(value) || isTypedDevError(value)) return value;
   if (value instanceof Error) return value;
-  return new Error(typeof value === 'string' ? value : String(value));
+  return new Error(String(value));
 };
 
 export const mapCause = <E>(cause: Cause.Cause<E>): Error => {
@@ -99,9 +99,6 @@ export const runPromiseExit = async <A, E>(
  */
 export const runSync = <A, E>(effect: Effect.Effect<A, E>): A =>
   throwExitFailure(Effect.runSyncExit(effect));
-
-export const runSyncExit = <A, E>(effect: Effect.Effect<A, E>): Exit.Exit<A, E> =>
-  Effect.runSyncExit(effect);
 
 /**
  * Internal long-lived Effect runtime. Its Layer owns one Scope, which stays

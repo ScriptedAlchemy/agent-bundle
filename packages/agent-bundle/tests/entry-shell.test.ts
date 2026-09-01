@@ -96,6 +96,17 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   if (generate === undefined) return;
 
   const source = generate({
+    artifactEpoch: 'epoch-1',
+    eventRoutes: [{
+      event: 'afterTool',
+      eventRoute: { event: 'tool/after', fallback: 'none', runtime: 'shared' },
+      id: 'hook:event-route:tool-after',
+      name: 'event-route-tool-after',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/after.tsx' },
+      source: '/project/src/events/tool/after.tsx',
+      targets: ['claude'],
+      tools: [],
+    }],
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [
       {
@@ -118,6 +129,7 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
       },
     ],
     serverName: 'curator',
+    target: 'claude',
     workerFile: 'mcp-curator-flight.mjs',
   });
 
@@ -131,6 +143,9 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   expect(source).toContain('{ stderr: true, stdout: true }');
   expect(source).toContain('projectMcpRenderStream');
   expect(source).toContain('attachMcpStructuredContent');
+  expect(source).toContain('createEventRuntimeServer');
+  expect(source).toContain("kind: 'event'");
+  expect(source).toContain('projectEventDocument');
   expect(source).toContain('runAgentRequest');
   expect(source).toContain('notifications/progress');
   expect(source).toContain('ARTIFACT_EPOCH');
@@ -152,6 +167,16 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   if (generate === undefined) return;
   const source = generate({
     artifactEpoch: 'route-fixture@1.2.3',
+    eventRoutes: [{
+      event: 'afterTool',
+      eventRoute: { event: 'tool/after', fallback: 'none', runtime: 'shared' },
+      id: 'hook:event-route:tool-after',
+      name: 'event-route-tool-after',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/after.tsx' },
+      source: '/project/src/events/tool/after.tsx',
+      targets: ['claude'],
+      tools: [],
+    }],
     routes: [{
       config: {},
       id: 'tool:curator/inspect',
@@ -166,4 +191,6 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain('processLifetime');
   expect(source).toContain('route-fixture@1.2.3');
   expect(source).toContain('/project/src/mcp/curator/tools/inspect.tsx');
+  expect(source).toContain('/project/src/events/tool/after.tsx');
+  expect(source).toContain("message.invocation.kind === 'event'");
 });

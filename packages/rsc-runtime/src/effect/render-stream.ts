@@ -37,6 +37,15 @@ export const createFlightDemand = (): FlightDemand => {
   };
 };
 
+export const emitBoundRenderEvent = (
+  sequence: ReturnType<typeof createAgentRenderEventSequence>,
+  input: AgentRenderEventInput,
+): Effect.Effect<AgentRenderEvent, Error> =>
+  Effect.try({
+    catch: (error) => toRuntimeError(error),
+    try: () => sequence.emit(input),
+  });
+
 /**
  * Contract bounds as a stream stage: sequence numbers, elapsed / rate /
  * count / event-bytes, document snapshot bounds (depth / nodes / bytes),
@@ -50,20 +59,5 @@ export const boundRenderEventStream = (
   stream: Stream.Stream<AgentRenderEventInput, E, R>,
 ) => Stream.Stream<AgentRenderEvent, E | Error, R> => {
   const sequence = createAgentRenderEventSequence(limits);
-  return <E, R>(stream: Stream.Stream<AgentRenderEventInput, E, R>) =>
-    Stream.mapEffect(stream, (input) =>
-      Effect.try({
-        catch: (error) => toRuntimeError(error),
-        try: () => sequence.emit(input),
-      }),
-    );
+  return (stream) => Stream.mapEffect(stream, (input) => emitBoundRenderEvent(sequence, input));
 };
-
-export const emitBoundRenderEvent = (
-  sequence: ReturnType<typeof createAgentRenderEventSequence>,
-  input: AgentRenderEventInput,
-): Effect.Effect<AgentRenderEvent, Error> =>
-  Effect.try({
-    catch: (error) => toRuntimeError(error),
-    try: () => sequence.emit(input),
-  });

@@ -255,7 +255,25 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
   }
   for (const skill of input.sharedCopyEntries === false ? [] : model.skills) {
     if (!isSelected(skill.targets)) continue;
-    if (skill.markdown !== undefined) {
+    const hostDocument = skill.hostDocuments?.[targetName];
+    const generatedSkill = hostDocument !== undefined && !hostDocument.passThrough;
+    if (generatedSkill) {
+      entries.push({
+        content: hostDocument.skillMarkdown,
+        kind: 'write',
+        relativePath: `skills/${skill.name}/SKILL.md`,
+        sourceInputs: sourceInputs(skill.source),
+      });
+      for (const sidecar of hostDocument.sidecars) {
+        if (sidecar.content === undefined) continue;
+        entries.push({
+          content: sidecar.content.endsWith('\n') ? sidecar.content : `${sidecar.content}\n`,
+          kind: 'write',
+          relativePath: `skills/${skill.name}/${sidecar.relativePath}`,
+          sourceInputs: sourceInputs(skill.source, sidecar.source),
+        });
+      }
+    } else if (skill.markdown !== undefined) {
       // A rendered skill's SKILL.md is compiled from its component module.
       entries.push({
         content: skill.markdown,
@@ -264,7 +282,11 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
         sourceInputs: sourceInputs(skill.source),
       });
     }
+    const skipCopies = new Set(generatedSkill
+      ? ['SKILL.md', ...hostDocument.sidecars.map((sidecar) => sidecar.relativePath)]
+      : []);
     for (const resource of skill.resources) {
+      if (skipCopies.has(resource.relativePath)) continue;
       entries.push({
         bytes: resource.bytes,
         kind: 'copy',

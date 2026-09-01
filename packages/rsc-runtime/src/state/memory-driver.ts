@@ -31,6 +31,7 @@ import {
   runStateMigrations,
 } from './journal.js';
 import { stateEffect } from './effect.js';
+import { createPendingOpenTracker } from './pending-opens.js';
 
 /**
  * In-memory state driver (#98).
@@ -135,7 +136,7 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
   );
   const runStore = <A>(effect: Effect.Effect<A, AgentStateError>): Promise<A> =>
     internals.closed
-      ? runPromise(Effect.fail(new AgentStateError('store-closed', `State '${internals.definition.id}' store is closed`)))
+      ? Promise.reject(new AgentStateError('store-closed', `State '${internals.definition.id}' store is closed`))
       : runtime.run(effect);
 
   /**
@@ -340,21 +341,9 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
   // retrieval site below, keyed by the definition id they were created for.
   const registry = new Map<string, MemoryStoreEntry<unknown, AgentStateEventSchemas>>();
   const openStores = new Set<MemoryStoreEntry<unknown, AgentStateEventSchemas>>();
-  const pendingOpens = new Set<Promise<void>>();
+  const pendingOpens = createPendingOpenTracker();
   let closed = false;
   let closing: Promise<void> | undefined;
-
-  const trackPendingOpen = <T>(operation: Promise<T>): Promise<T> => {
-    const settled = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    pendingOpens.add(settled);
-    void settled.then(() => {
-      pendingOpens.delete(settled);
-    });
-    return operation;
-  };
 
   return Object.freeze({
     durable: false,
@@ -365,9 +354,7 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
       if (closing !== undefined) return closing;
       closed = true;
       closing = (async () => {
-        while (pendingOpens.size > 0) {
-          await Promise.all([...pendingOpens]);
-        }
+        await pendingOpens.settle();
         for (const entry of [...openStores]) {
           await entry.store.close();
         }
@@ -380,7 +367,7 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
     open<TState, TEvents extends AgentStateEventSchemas>(
       definition: AgentStateDefinition<TState, TEvents>,
     ): Promise<AgentStateStore<TState, TEvents>> {
-      return trackPendingOpen(
+      return pendingOpens.track(
         (async () => {
           const entry = await runPromise(
             stateEffect(() => {
@@ -427,9 +414,7 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
           await entry.activate();
           if (closed) {
             await entry.store.close();
-            return runPromise(
-              Effect.fail(new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`)),
-            );
+            throw new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`);
           }
           return entry.store;
         })(),

@@ -1,0 +1,14 @@
+{
+  "cwd": "/tmp/agent-bundle-schema-conformance",
+  "hook_event_name": "PostToolUse",
+  "session_id": "schema-conformance-claude",
+  "tool_input": {
+    "file_path": "claude-note.txt"
+  },
+  "tool_name": "Write",
+  "tool_response": {
+    "success": true
+  },
+  "tool_use_id": "schema-conformance-claude-write",
+  "transcript_path": "/tmp/agent-bundle-schema-conformance/claude-transcript.jsonl"
+}

@@ -18,6 +18,7 @@ import {
   capabilityEvidence,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
+  supportedEventRouteNamesFrom,
   supportedCapability,
 } from './capability-state.ts';
 import capabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
@@ -117,10 +118,12 @@ const validateLsp = validator.compile(lspSchema);
 /** The pinned Claude hooks validator, shared with the unified bundle adapter. */
 export const claudeHooksValidator = validateHooks;
 const hookContract = Object.freeze({
+  capabilityRevision: capabilityTable.observedCliVersion,
   commandRoot: '${CLAUDE_PLUGIN_ROOT}',
   encodePlaygroundInput: encodeNativeHookPlaygroundInput,
   encodePlaygroundOutput: encodeNativeHookPlaygroundOutput,
   eventNames: capabilityTable.hooks.events,
+  eventRouteNames: supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes),
   manifestPath: 'hooks/hooks.json',
   matchers: capabilityTable.hooks.matchers,
   readNativeCommands: readStandardNativeHookCommands,

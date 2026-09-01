@@ -18,6 +18,7 @@ import {
   capabilityEvidence,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
+  supportedEventRouteNamesFrom,
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
@@ -104,10 +105,12 @@ export const codexPluginDocumentValidator = (mcpRelativePath: string): TargetArt
   validateJsonSchemaDocument(pluginValidatorFor(mcpRelativePath));
 const validateHooks = validator.compile(hooksSchema);
 const hookContract = Object.freeze({
+  capabilityRevision: capabilityTable.observedCliVersion,
   commandRoot: '${PLUGIN_ROOT}',
   encodePlaygroundInput: encodeNativeHookPlaygroundInput,
   encodePlaygroundOutput: encodeNativeHookPlaygroundOutput,
   eventNames: capabilityTable.hooks.events,
+  eventRouteNames: supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes),
   manifestPath: 'hooks/hooks.json',
   matchers: capabilityTable.hooks.matchers,
   readNativeCommands: readStandardNativeHookCommands,

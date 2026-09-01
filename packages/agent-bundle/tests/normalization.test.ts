@@ -436,8 +436,9 @@ it('maps pinned Agent Skills schema issues to stable source diagnostics without 
     registry,
   )).toEqual([
     {
-      code: 'AB4007',
-      message: 'Skill frontmatter unknown must NOT have additional properties.',
+      code: 'AB3006',
+      message: 'Skill frontmatter field "unknown" is not a portable Agent Skills field or a typed host extension.',
+      recovery: 'Move host-only fields into `targets.<host>` or a documented host key, or remove the unknown field.',
       severity: 'error',
       sourcePath: document.source,
     },

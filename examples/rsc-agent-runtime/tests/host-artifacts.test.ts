@@ -144,10 +144,10 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
   expect(JSON.stringify(codexMcp)).not.toMatch(/\$\{|workspace/i);
   expect(claudeHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: '^(?:Write|Edit)$' });
   expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('${CLAUDE_PLUGIN_ROOT}');
-  expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('--host claude');
+  expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('hooks/event-route-tool-after.mjs');
   expect(codexHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: '^(?:apply_patch|Edit|Write)$' });
   expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('${PLUGIN_ROOT}');
-  expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('--host codex');
+  expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('hooks/event-route-tool-after.mjs');
   expect(JSON.stringify({ claudeMcp, claudeHooks, codexMcp, codexHooks })).not.toMatch(/api[ _-]?key/i);
 
   const runtimeRoot = join(exampleRoot, 'dist/runtime');
@@ -243,7 +243,7 @@ test('runs the packaged MCP server after its artifact is isolated from the examp
   }
 });
 
-test('runs each packaged native hook from one shell argv path when its plugin root contains spaces and metacharacters', async () => {
+test('replays schema-conformance fixtures through each packaged native event route', async () => {
   await runPackageHosts();
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-hook-root-'));
   try {
@@ -255,33 +255,19 @@ test('runs each packaged native hook from one shell argv path when its plugin ro
 
     for (const host of ['claude', 'codex'] as const) {
       const pluginRoot = join(temporaryRoot, `${host} plugin root ; ordinary`);
-      const workspace = join(temporaryRoot, `${host}-workspace`);
       const stateFile = join(temporaryRoot, `${host}-state.sqlite`);
       const manifestPath = join(pluginRoot, 'hooks/hooks.json');
       const rootVariable = host === 'claude' ? 'CLAUDE_PLUGIN_ROOT' : 'PLUGIN_ROOT';
       const filename = `${host}-note.txt`;
       await cp(join(pluginsRoot, host), pluginRoot, { recursive: true });
-      await mkdir(workspace);
       const manifest = await readJson<{ hooks: { PostToolUse: Array<{ hooks: Array<{ command: string }> }> } }>(manifestPath);
       const command = manifest.hooks.PostToolUse[0]?.hooks[0]?.command;
       expect(command).toBeTypeOf('string');
-      const input = host === 'claude'
-        ? {
-            cwd: workspace,
-            hook_event_name: 'PostToolUse',
-            session_id: `${host}-session`,
-            tool_input: { file_path: join(workspace, filename) },
-            tool_name: 'Write',
-            tool_use_id: `${host}-tool`,
-          }
-        : {
-            cwd: workspace,
-            event_id: `${host}-event`,
-            hook_event_name: 'PostToolUse',
-            session_id: `${host}-session`,
-            tool_input: { command: `*** Begin Patch\n*** Add File: ${filename}\n+recorded\n*** End Patch` },
-            tool_name: 'apply_patch',
-          };
+      // These checked-in payloads establish schema conformance only; replay
+      // through a local command is not evidence of commercial-host dispatch.
+      const input = await readJson<Record<string, unknown>>(
+        join(exampleRoot, `tests/fixtures/events/${host}-post-tool-use.json`),
+      );
       const result = await runDeclaredHook(command!, {
         [rootVariable]: pluginRoot,
         AGENT_RUNTIME_HOOK_ARGV_FILE: argvFile,
@@ -299,11 +285,11 @@ test('runs each packaged native hook from one shell argv path when its plugin ro
         },
       });
       expect((await readFile(argvFile)).toString('utf8').split('\0').filter(Boolean)).toEqual([
-        join(pluginRoot, 'runtime/hook/index.js'), '--host', host,
+        join(pluginRoot, 'hooks/event-route-tool-after.mjs'),
       ]);
       const recorded = await createFileRuntimeKernel({ stateFile }).readSnapshot();
       expect(recorded.edits.map((edit) => edit.host)).toEqual([host]);
-      expect(command).toBe(`node "\${${rootVariable}}/runtime/hook/index.js" --host ${host}`);
+      expect(command).toBe(`node "\${${rootVariable}}/hooks/event-route-tool-after.mjs"`);
       expect(command).not.toMatch(/(?:api[ _-]?key|echo|printenv|AGENT_RUNTIME_)/iu);
     }
   } finally {

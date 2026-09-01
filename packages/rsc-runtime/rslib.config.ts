@@ -22,6 +22,19 @@ export default defineConfig({
     },
     {
       ...sharedLib,
+      // Notices are optional and reuse the state entry's kernel runtime.
+      // Keeping this entry separate means stateless package-root consumers
+      // receive no ledger code and the notice entry never loads node:sqlite.
+      output: {
+        cleanDistPath: false,
+        externals: { '../state/index.js': './state.js' },
+      },
+      source: {
+        entry: { notices: './src/notices/index.ts' },
+      },
+    },
+    {
+      ...sharedLib,
       // The sqlite driver is its own entry so `node:sqlite` (and its
       // ExperimentalWarning) never loads for volatile-state or stateless
       // consumers. It imports the state entry's runtime instead of
