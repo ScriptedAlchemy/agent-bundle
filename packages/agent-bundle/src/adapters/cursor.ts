@@ -13,7 +13,13 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
-import { capabilityEvidence, capabilityStateFromSupport, supportedCapability, unavailableCapability } from './capability-state.ts';
+import {
+  capabilityEvidence,
+  capabilityStateFromSupport,
+  eventRouteCapabilitiesFrom,
+  supportedCapability,
+  unavailableCapability,
+} from './capability-state.ts';
 import capabilityTable from './capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import {
   cursorHookWrapperSource,
@@ -246,7 +252,7 @@ export const cursorManifest = (
 const metadata = Object.freeze({
   adapterRevision: '1.3.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '234920e63508664ae79db4e1a5422c1022d93ad572fae345a179bfd774f6f6d7',
+  capabilitySha256: '20fc70ad5ba67d984826c3ac917fca66f28e61a8c74edb65dace53c29cc67279',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -358,6 +364,7 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
+    ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
     hooks: supportedCapability(evidence),
     marketplace: unavailableCapability('The pinned Cursor Plugin contract does not define a marketplace document.'),
     mcp: capabilityStateFromSupport(

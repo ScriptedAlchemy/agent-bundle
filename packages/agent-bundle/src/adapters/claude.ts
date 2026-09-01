@@ -14,7 +14,12 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
-import { capabilityEvidence, capabilityStateFromSupport, supportedCapability } from './capability-state.ts';
+import {
+  capabilityEvidence,
+  capabilityStateFromSupport,
+  eventRouteCapabilitiesFrom,
+  supportedCapability,
+} from './capability-state.ts';
 import capabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import {
   mergeHookDocuments,
@@ -125,7 +130,7 @@ const hookContract = Object.freeze({
 const metadata = Object.freeze({
   adapterRevision: '1.2.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '952788d759db5152e8bcb7128ba778bb74f51fac79403011f669eecdcb1f45f3',
+  capabilitySha256: '5beb395c075c22a290a70f76b1670fab82b16d933af37cda89da850dbd8d483c',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -489,6 +494,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
+    ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
     lsp: capabilityStateFromSupport(

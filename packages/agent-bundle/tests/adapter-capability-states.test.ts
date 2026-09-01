@@ -181,9 +181,39 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
   if (cursor.capabilities.mcp?.state !== 'supported') throw new Error('Expected Cursor MCP support evidence.');
   expect(cursor.capabilities.mcp.evidence).toEqual({
     capabilityRevision: '2026-08-28',
-    capabilitySha256: '234920e63508664ae79db4e1a5422c1022d93ad572fae345a179bfd774f6f6d7',
+    capabilitySha256: '20fc70ad5ba67d984826c3ac917fca66f28e61a8c74edb65dace53c29cc67279',
     observedVersion: '2026-08-28',
     target: 'cursor',
   });
   expect(Object.isFrozen(cursor.capabilities.mcp.evidence)).toBe(true);
+});
+
+it('reports the evidence-backed G10 event family matrix without inferred support', () => {
+  const registry = createDefaultRegistry();
+  const existing = ['event:session/start', 'event:tool/before', 'event:tool/after', 'event:stop'];
+  const cursorOnly = ['event:agent/start', 'event:agent/stop', 'event:workspace/open'];
+
+  for (const capability of [...existing, ...cursorOnly]) {
+    expect(registry.get('cursor').capabilities[capability]).toMatchObject({
+      evidence: { observedVersion: '2026-08-28', target: 'cursor' },
+      state: 'supported',
+    });
+  }
+  for (const target of ['claude', 'codex'] as const) {
+    for (const capability of existing) {
+      expect(registry.get(target).capabilities[capability]).toMatchObject({
+        evidence: { target },
+        state: 'supported',
+      });
+    }
+    for (const capability of cursorOnly) {
+      expect(registry.get(target).capabilities[capability]).toMatchObject({
+        reason: expect.stringContaining('pinned'),
+        state: 'unavailable',
+      });
+    }
+  }
+  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
+    state: 'unavailable',
+  });
 });

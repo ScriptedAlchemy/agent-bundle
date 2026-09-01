@@ -17,6 +17,7 @@ import { createTargetMcpRuntime, resolveTargetRelativeStdioArgument } from '../s
 import {
   capabilityEvidence,
   capabilityStateFromSupport,
+  eventRouteCapabilitiesFrom,
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
@@ -116,7 +117,7 @@ const hookContract = Object.freeze({
 const metadata = Object.freeze({
   adapterRevision: '1.1.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '4b08c8820ace59ca068677dcb1863a9fd4cb730b7e00733b994b0076958beaf0',
+  capabilitySha256: 'f2c7109e3572ebde8739e08f6fdfa7a7b5d7817e3e216406b9c855f1570e2bd9',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -405,6 +406,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
+    ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
     // The pinned Codex plugin contract documents no LSP surface at all, so

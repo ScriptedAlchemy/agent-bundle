@@ -14,7 +14,12 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
-import { capabilityEvidence, capabilityStateFromSupport, unavailableCapability } from './capability-state.ts';
+import {
+  capabilityEvidence,
+  capabilityStateFromSupport,
+  eventRouteCapabilitiesFrom,
+  unavailableCapability,
+} from './capability-state.ts';
 import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'json' };
 import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
@@ -52,7 +57,7 @@ const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
   adapterRevision: '1.1.0',
   capabilityRevision: capabilityTable.observedSpecificationVersion,
-  capabilitySha256: '642da9f921374a4d0143da21ed4b4b2260a2375a5eb33c4cbb4ef531f2bb7352',
+  capabilitySha256: '99a27bd327f2afdb0a71fa869e9fad27438f07d843c5e61062d2dc3f978dce9a',
   observedVersion: capabilityTable.observedSpecificationVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.version),
 });
@@ -322,6 +327,7 @@ export const portableAdapter: TargetAdapter = Object.freeze({
     skills: 'skills',
   }),
   capabilities: Object.freeze({
+    ...eventRouteCapabilitiesFrom(capabilityTable.eventRoutes, evidence),
     hooks: unavailableCapability('Agent Plugins 1.0.0 does not define a hooks component.'),
     marketplace: unavailableCapability('Agent Plugins 1.0.0 does not define a marketplace document.'),
     mcp: capabilityStateFromSupport(
