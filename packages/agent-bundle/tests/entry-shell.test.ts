@@ -1,4 +1,6 @@
+import { execFile as executeFile } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
@@ -6,12 +8,15 @@ import { scanEntryExportsSource, stripCommentsAndStrings } from '../src/build/en
 import * as entryShellModule from '../src/build/entry-shell.ts';
 import {
   generatedExecutableEntrySource,
+  generatedRenderedScriptEntrySource,
   generatedStdioMcpEntrySource,
   mcpEntryRuntimePath,
   mcpEntryRuntimeSpecifier,
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
 } from '../src/build/entry-shell.ts';
+
+const execFile = promisify(executeFile);
 
 describe('entry export scanning', () => {
   it('detects declaration-form main exports', () => {
@@ -86,6 +91,60 @@ describe('generated entry templates', () => {
     expect(source).toContain('await main(process.argv.slice(2))');
     expect(source).toContain("if (typeof code === 'number') process.exitCode = code;");
     expect(generatedExecutableEntrySource({ entrySource: '/e.ts', exportName: 'default' })).toContain('entry["default"]');
+  });
+
+  it('routes a rejected progress report into the generated request failure path', async () => {
+    const generated = generatedRenderedScriptEntrySource({
+      name: 'report',
+      routeId: 'script:report',
+      workerFile: 'report-flight.mjs',
+    });
+    const factoryStart = generated.indexOf('const openRenderedSession');
+    const factoryEnd = generated.indexOf('\nawait runGeneratedRenderedScriptProcess');
+    const factory = generated.slice(factoryStart, factoryEnd)
+      .replaceAll('import.meta.url', JSON.stringify(import.meta.url));
+    const harness = [
+      "import { EventEmitter } from 'node:events';",
+      factory,
+      'class FakeWorker extends EventEmitter {',
+      '  stdout = new EventEmitter();',
+      '  stderr = new EventEmitter();',
+      '  postMessage(message) {',
+      "    if (message.type === 'render') queueMicrotask(() => this.emit('message', { id: message.id, type: 'progress', update: { completed: 1 } }));",
+      '  }',
+      '  async terminate() { return 0; }',
+      '}',
+      'const Worker = FakeWorker;',
+      'const createAgentRenderDispatcher = (host) => ({',
+      '  stream: ({ signal }) => new ReadableStream({',
+      '    async start(controller) {',
+      '      try {',
+      "        const flight = await host.execute({ progress: { report: async () => { throw new Error('progress rejected'); } }, signal });",
+      '        await flight.getReader().read();',
+      '        controller.close();',
+      '      } catch (error) { controller.error(error); }',
+      '    },',
+      '  }),',
+      '});',
+      "process.on('unhandledRejection', (error) => process.stderr.write(`UNHANDLED:${error instanceof Error ? error.message : String(error)}\\n`));",
+      'const signal = new AbortController().signal;',
+      "const session = openRenderedSession({ invocation: {}, props: {}, request: {}, routeId: 'script:report', signal, validate: (value) => value });",
+      'try {',
+      '  await Promise.race([',
+      '    session.events().getReader().read(),',
+      "    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 100)),",
+      '  ]);',
+      "  process.stdout.write('RESOLVED\\n');",
+      '} catch (error) {',
+      "  process.stdout.write(`REJECTED:${error instanceof Error ? error.message : String(error)}\\n`);",
+      '} finally {',
+      '  await session.close();',
+      '  await new Promise((resolve) => setImmediate(resolve));',
+      '}',
+    ].join('\n');
+
+    const result = await execFile(process.execPath, ['--input-type=module', '--eval', harness]);
+    expect(result).toMatchObject({ stderr: '', stdout: 'REJECTED:progress rejected\n' });
   });
 });
 

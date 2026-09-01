@@ -544,3 +544,38 @@ it('reports source validation diagnostics on stderr before staging an artifact',
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
 }, 30_000 * timeScale);
+
+it('reports a generated Flight worker collision before compiling scripts', async () => {
+  const project = await createCliProject();
+  try {
+    await mkdir(join(project.root, 'src', 'scripts'), { recursive: true });
+    await Promise.all([
+      writeFile(
+        join(project.root, 'src', 'scripts', 'report.tsx'),
+        'export default async function Report() { return null; }\n',
+      ),
+      writeFile(
+        join(project.root, 'src', 'scripts', 'report-flight.ts'),
+        'export const main = async () => 0;\n',
+      ),
+    ]);
+
+    const result = await runSourceCliWithOutput([
+      'build',
+      '--root', project.root,
+      '--output', project.output,
+      '--target', 'portable',
+      '--json',
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(JSON.parse(result.stderr)).toMatchObject([{
+      code: 'AB5000',
+      message: 'Duplicate compiled script destination "scripts/report-flight.mjs".',
+      severity: 'error',
+    }]);
+  } finally {
+    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+  }
+}, 30_000 * timeScale);

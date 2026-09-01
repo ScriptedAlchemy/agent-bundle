@@ -6,6 +6,7 @@ import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts'
 import { assertInside } from '../core/paths.ts';
 import { listArtifactFiles, publishArtifact, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
+import { runtimeIgnoredRoot } from './entries.ts';
 import {
   cliEntryRuntimePath,
   cliEntryRuntimeSpecifier,
@@ -219,7 +220,7 @@ export const buildPackageOutputs = async (options: {
     const evidence = await buildWithRslib({
       cwd: projectRoot,
       entries,
-      ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [cliRuntimeShell] }),
+      ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(cliRuntimeShell)] }),
       logLevel: 'error',
       outputRoot: stageRoot,
       ...(options.tools === undefined ? {} : { tools: options.tools }),
