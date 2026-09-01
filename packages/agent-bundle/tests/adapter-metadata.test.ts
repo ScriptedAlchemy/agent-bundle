@@ -136,7 +136,7 @@ it('records exact immutable metadata for every built-in target', () => {
   expect(registryMetadata(registry, 'cursor')).toEqual({
     adapterRevision: '1.3.0',
     capabilityRevision: '2026-08-28',
-    capabilitySha256: '20fc70ad5ba67d984826c3ac917fca66f28e61a8c74edb65dace53c29cc67279',
+    capabilitySha256: '20e93666770d97c0f5c1338de395f326c869684843b3b06bbd7ba3c45a0abc3e',
     observedVersion: '2026-08-28',
     schemas: [
       {

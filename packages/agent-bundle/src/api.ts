@@ -235,7 +235,7 @@ export type InspectionSkipReason = 'excluded-by-targets' | 'unsupported-capabili
 /** One component the plan silently omits for this target, with the intersection-rule cause. */
 export interface InspectionSkippedComponent {
   readonly id: string;
-  readonly kind: 'hook' | 'mcp-app' | 'mcp-server' | 'script' | 'skill';
+  readonly kind: 'hook' | 'mcp-app' | 'mcp-server' | 'rule' | 'script' | 'skill';
   readonly name: string;
   readonly reason: InspectionSkipReason;
 }
@@ -464,6 +464,7 @@ const inspectableComponents = (model: NormalizedPlugin): readonly InspectableCom
   ...model.hooks.map((hook) => ({ capability: 'hooks', id: hook.id, kind: 'hook' as const, name: hook.event, targets: hook.targets })),
   ...(model.mcpApps ?? []).map((app) => ({ capability: 'mcp', id: app.id, kind: 'mcp-app' as const, name: app.name, targets: app.targets })),
   ...model.mcpServers.map((server) => ({ capability: 'mcp', id: server.id, kind: 'mcp-server' as const, name: server.name, targets: server.targets })),
+  ...(model.rules ?? []).map((rule) => ({ capability: 'rules', id: rule.id, kind: 'rule' as const, name: rule.name, targets: rule.targets })),
   ...model.scripts.map((script) => ({ id: script.id, kind: 'script' as const, name: script.name, targets: script.targets })),
   ...model.skills.map((skill) => ({ capability: 'skills', id: skill.id, kind: 'skill' as const, name: skill.name, targets: skill.targets })),
 ];

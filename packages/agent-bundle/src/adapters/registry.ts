@@ -188,6 +188,7 @@ const snapshotArtifactLayout = (
   const mcpEntries = layout.mcpEntries === undefined
     ? undefined
     : snapshotOutputLayout(layout.mcpEntries, 'MCP entries');
+  const rules = layout.rules === undefined ? undefined : snapshotOutputLayout(layout.rules, 'rules');
   const scripts = layout.scripts === undefined ? undefined : snapshotOutputLayout(layout.scripts, 'scripts');
   const assets = layout.assets === undefined
     ? undefined
@@ -218,6 +219,7 @@ const snapshotArtifactLayout = (
     ...(mcpApps === undefined ? {} : { mcpApps }),
     ...(mcpEntries === undefined ? {} : { mcpEntries }),
     ...(rootDocuments === undefined ? {} : { rootDocuments }),
+    ...(rules === undefined ? {} : { rules }),
     ...(scripts === undefined ? {} : { scripts }),
     ...(skills === undefined ? {} : { skills }),
   });

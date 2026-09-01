@@ -246,6 +246,42 @@ it('emits each shared surface exactly once with no duplicate artifact paths', ()
   expect(new Set(hookEntries.map((entry) => entry.target))).toEqual(new Set(['plugin']));
 });
 
+it('emits Cursor-only rules once at the shared root and documents the honest host boundary', () => {
+  const markdown = '---\ndescription: Keep changes focused\n---\nStay focused.';
+  const model: NormalizedPlugin = {
+    ...bundleModel,
+    rules: [{
+      body: 'Stay focused.',
+      emittedMarkdown: markdown,
+      frontmatter: { description: 'Keep changes focused' },
+      id: 'rule:focused',
+      markdown,
+      name: 'focused',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/rules/focused.mdc' },
+      source: '/workspace/rules/focused.mdc',
+      targets: ['plugin'],
+    }],
+  };
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+  const paths = plan.entries.map((entry) => entry.relativePath);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(paths.filter((path) => path === 'rules/focused.mdc')).toHaveLength(1);
+  expect(documents['rules/focused.mdc']).toBe(markdown);
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({ rules: './rules/' });
+  expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('rules');
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('rules');
+  expect(documents['AGENTS.md']).toContain(
+    '- `rules/` — Cursor rules (`.mdc`), Cursor only; Claude Code and Codex have no rules surface.',
+  );
+
+  const ruleFree = planBundle(bundleModel);
+  expect(ruleFree.entries.some((entry) => entry.relativePath.startsWith('rules/'))).toBe(false);
+  expect(writeContents(bundleModel)['AGENTS.md']).not.toContain('`rules/`');
+  expect(JSON.parse(writeContents(bundleModel)['.cursor-plugin/plugin.json']!)).not.toHaveProperty('rules');
+});
+
 it('bakes runtime host detection into the universal wrapper source', () => {
   const plan = planBundle(bundleModel);
   const wrapper = (plan.hookEntries ?? []).find((entry) => entry.relativePath === 'hooks/session-start.mjs');

@@ -10,6 +10,7 @@ import { compileRouteGraph, isEmptyRouteGraph } from '../routes/graph.ts';
 import type { CompiledRouteGraph } from '../routes/types.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from './ignore.ts';
 import { isRenderedSkillSourceName } from './rendered-skill.ts';
+import { parseRule, type RuleDocument } from './rule.ts';
 import { parseSkill, type SkillDocument } from './skill.ts';
 
 /** A skill directory is identified by SKILL.md or a rendered-skill source module. */
@@ -40,6 +41,8 @@ export interface DiscoveredPayload {
 export interface DiscoveredProject {
   assets?: DiscoveredAsset[];
   payloads?: DiscoveredPayload[];
+  /** Conventional flat `rules/*.mdc` documents; absent when none are discovered. */
+  rules?: readonly RuleDocument[];
   /**
    * The compiled conventional route graph (#93). Present only when route
    * discovery found modules or produced diagnostics, so route-free projects
@@ -238,10 +241,21 @@ export const discoverProject = async (
 
   const payloads = await discoverPayloads(projectRoot, config.payload);
   const routeGraph = await compileRouteGraph(projectRoot, config, rules);
+  const ruleSources = (await fastGlob('rules/*.mdc', {
+    absolute: true,
+    cwd: projectRoot,
+    dot: true,
+    followSymbolicLinks: false,
+    onlyFiles: true,
+  }))
+    .filter((source) => !isProjectPathIgnored(rules, projectRoot, source))
+    .sort((left, right) => left.localeCompare(right));
+  const discoveredRules = await Promise.all(ruleSources.map((source) => parseRule(source)));
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
     ...(payloads.length === 0 ? {} : { payloads }),
     ...(routeGraph === undefined || isEmptyRouteGraph(routeGraph) ? {} : { routeGraph }),
+    ...(discoveredRules.length === 0 ? {} : { rules: discoveredRules }),
     ...(shadowedConventionalSkills.length === 0 ? {} : { shadowedConventionalSkills }),
     skills: await Promise.all(
       skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules)),

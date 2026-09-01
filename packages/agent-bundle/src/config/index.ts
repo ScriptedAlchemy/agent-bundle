@@ -11,6 +11,8 @@ export type { DiscoveredProject } from './discover.ts';
 export { loadConfig } from './load.ts';
 export type { LoadedConfig, LoadConfigOptions } from './load.ts';
 export { normalizeProject } from './normalize.ts';
+export { parseRule } from './rule.ts';
+export type { RuleDocument } from './rule.ts';
 export { parseSkill } from './skill.ts';
 export type { SkillDocument, SkillResource } from './skill.ts';
 export { defineSkill, Skill } from '../skills/define.ts';
@@ -47,6 +49,7 @@ export type {
   NormalizedPayloadFile,
   NormalizedPlugin,
   NormalizedRuntime,
+  NormalizedRule,
   NormalizedScript,
   NormalizedSkill,
   NormalizedSkillResource,

@@ -81,6 +81,7 @@ it('registers cursor as a first-class target with pinned schema validation', () 
   expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor', 'plugin']);
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(registry.supports('cursor', 'mcp')).toBe(true);
+  expect(registry.supports('cursor', 'rules')).toBe(true);
   expect(registry.supports('cursor', 'skills')).toBe(true);
   expect(registry.supports('cursor', 'hooks')).toBe(true);
   expect(registry.hookContract('cursor')?.commandRoot).toBe('${CURSOR_PLUGIN_ROOT}');
@@ -89,6 +90,10 @@ it('registers cursor as a first-class target with pinned schema validation', () 
     { path: 'hooks/hooks.json', required: false, schema: 'hooks' },
     { path: 'mcp.json', required: false, schema: 'mcp' },
   ]);
+  expect(registry.artifactLayout('cursor').rules).toEqual({
+    allowedSuffixes: ['.mdc'],
+    directory: 'rules',
+  });
 });
 
 it('holds the 64-character plugin-name bound in both Cursor-producing planners', () => {
@@ -195,6 +200,54 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
 
   const skillCopies = plan.entries.filter((entry) => entry.kind === 'copy').map((entry) => entry.relativePath);
   expect(skillCopies).toEqual(['skills/review/SKILL.md', 'skills/review/references/guide.md']);
+});
+
+it('emits selected rules byte-faithfully and omits the entire surface when rule-free', () => {
+  const model = plugin();
+  const markdown = '---\r\ndescription: Review TypeScript\r\nglobs: "**/*.ts"\r\n---\r\nCheck types.';
+  const withRule: NormalizedPlugin = {
+    ...model,
+    rules: [{
+      body: 'Check types.',
+      emittedMarkdown: markdown,
+      frontmatter: { description: 'Review TypeScript', globs: '**/*.ts' },
+      id: 'rule:typescript',
+      markdown,
+      name: 'typescript',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/rules/typescript.mdc' },
+      source: '/workspace/rules/typescript.mdc',
+      targets: ['cursor'],
+    }, {
+      body: 'Keep changes focused.',
+      emittedMarkdown: '---\ndescription: Focus changes\nalwaysApply: true\n---\n\nKeep changes focused.',
+      frontmatter: { alwaysApply: true, description: 'Focus changes' },
+      id: 'rule:focused',
+      markdown: '---\ndescription: Focus changes\nalwaysApply: true\ntargets:\n  - cursor\n---\nKeep changes focused.',
+      name: 'focused',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/rules/focused.mdc' },
+      source: '/workspace/rules/focused.mdc',
+      targets: ['cursor'],
+    }],
+  };
+
+  const plan = cursorAdapter.plan(withRule);
+  const documents = writeContents(withRule);
+  expect(plan.diagnostics).toEqual([]);
+  expect(documents['rules/typescript.mdc']).toBe(markdown);
+  expect(documents['rules/focused.mdc']).toBe(
+    '---\ndescription: Focus changes\nalwaysApply: true\n---\n\nKeep changes focused.',
+  );
+  expect(documents['rules/focused.mdc']).not.toContain('targets:');
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({
+    rules: './rules/',
+  });
+  expect(plan.entries.find((entry) => entry.relativePath === 'rules/typescript.mdc')?.sourceInputs).toEqual([
+    '/workspace/rules/typescript.mdc',
+  ]);
+
+  const ruleFree = cursorAdapter.plan(model);
+  expect(ruleFree.entries.some((entry) => entry.relativePath.startsWith('rules/'))).toBe(false);
+  expect(JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!)).not.toHaveProperty('rules');
 });
 
 it('rejects portable Agent Plugin tokens instead of emitting a hybrid Cursor artifact', () => {

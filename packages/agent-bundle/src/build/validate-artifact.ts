@@ -423,6 +423,7 @@ const isTargetArtifactPath = (
     isDirectOutputLayoutPath(relativePath, layout.hookWrappers) ||
     isDirectOutputLayoutPath(relativePath, layout.mcpApps) ||
     isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||
+    isDirectOutputLayoutPath(relativePath, layout.rules) ||
     isDirectOutputLayoutPath(relativePath, layout.scripts) ||
     isSkillArtifactPath(relativePath, layout.skills) ||
     isAdapterRootDocument(relativePath, layout.rootDocuments) ||

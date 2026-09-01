@@ -187,10 +187,11 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
   },
   artifactLayout: {
     assets: 'assets',
+    rules: { allowedSuffixes: ['.mdc'], directory: 'rules' },
     scripts: { allowedSuffixes: ['.json', '.mjs', '.sh'], directory: 'scripts' },
     skills: 'skills',
   },
-  capabilities: supportedCapabilities('skills'),
+  capabilities: supportedCapabilities('rules', 'skills'),
   metadata: customMetadata,
   name: customTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
@@ -223,6 +224,35 @@ const customSkillFiles = (body: string, resources: readonly ArtifactFixtureFile[
   },
   ...resources,
 ];
+
+it('admits only direct .mdc files in a declared rules layout', async () => {
+  const registry = customRegistry();
+  const target = targetFromRegistry(registry, customTarget);
+  const validRoot = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '# Rule\n', kind: 'generated', path: 'custom/rules/review.mdc' },
+  ], true, [target]);
+  const invalidRoot = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '# Rule\n', kind: 'generated', path: 'custom/rules/review.md' },
+  ], true, [target]);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: validRoot, registry })).toEqual([]);
+    expect(await validateArtifact({ artifactRoot: invalidRoot, registry })).toContainEqual(
+      expect.objectContaining({
+        code: 'AB6014',
+        generatedPath: 'custom/rules/review.md',
+        target: customTarget,
+      }),
+    );
+  } finally {
+    await Promise.all([
+      rm(validRoot, { force: true, recursive: true }),
+      rm(invalidRoot, { force: true, recursive: true }),
+    ]);
+  }
+});
 
 it('reports every legacy SSE MCP issue in lexical order with escaped JSON Pointer paths', () => {
   let schemaCalls = 0;

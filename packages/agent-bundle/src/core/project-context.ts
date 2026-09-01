@@ -254,6 +254,7 @@ const canonicalHostDocuments = (
 const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   model.metadata.provenance.sourcePath,
   ...(model.assets ?? []).flatMap((asset) => [asset.provenance.sourcePath, asset.source]),
+  ...(model.rules ?? []).flatMap((rule) => [rule.provenance.sourcePath, rule.source]),
   ...Object.values(model.extensions).map((extension) => extension.provenance.sourcePath),
   ...model.targets.map((target) => target.provenance.sourcePath),
   // A prebuilt hook's source is its payload file, which may not exist yet
@@ -416,6 +417,15 @@ export const canonicalizeNormalizedModel = (
               },
             }),
         },
+      }),
+    ...(detached.rules === undefined
+      ? {}
+      : {
+        rules: detached.rules.map((rule) => ({
+          ...rule,
+          provenance: canonicalProvenance(root, rule.provenance),
+          source: canonicalCompilerPath(root, rule.source, 'Rule source path'),
+        })),
       }),
     scripts: detached.scripts.map((script) => ({
       ...script,

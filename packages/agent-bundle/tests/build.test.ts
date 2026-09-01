@@ -339,6 +339,7 @@ it('low-level build writes and returns the exact canonical manifest for a config
     const files = (await treeDigest(project.outputRoot)).filter(
       (entry) => entry.path !== 'agent-bundle.manifest.json',
     );
+    expect(files.some((entry) => entry.path.includes('/rules/'))).toBe(false);
     expect(result.manifest).toEqual(manifest);
     expect(manifestBytes).toBe(serializeArtifactManifest(result.manifest));
     expect(manifest).toMatchObject({

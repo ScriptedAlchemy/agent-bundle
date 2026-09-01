@@ -23,11 +23,35 @@ const state = (value: CapabilityState): CapabilityState => Object.freeze(value);
 it('keeps the plugin Boolean capability view as the Claude and Codex intersection', () => {
   const registry = createDefaultRegistry();
 
-  for (const capability of ['marketplace', 'hooks', 'lsp', 'mcp', 'skills']) {
+  for (const capability of ['marketplace', 'hooks', 'lsp', 'mcp', 'rules', 'skills']) {
     expect(registry.supports('plugin', capability)).toBe(
       registry.supports('claude', capability) && registry.supports('codex', capability),
     );
   }
+});
+
+it('records an honest four-state rules row on every adapter', () => {
+  const registry = createDefaultRegistry();
+  expect(registry.get('cursor').capabilities.rules).toMatchObject({
+    evidence: { observedVersion: '2026-08-28', target: 'cursor' },
+    state: 'supported',
+  });
+  expect(registry.get('claude').capabilities.rules).toEqual({
+    reason: 'The pinned Claude Code plugin contract (2.1.250) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
+    state: 'unavailable',
+  });
+  expect(registry.get('codex').capabilities.rules).toEqual({
+    reason: 'The pinned Codex plugin contract (0.147.0) defines no rules component; Codex guidance remains outside the plugin component surface.',
+    state: 'unavailable',
+  });
+  expect(registry.get('portable').capabilities.rules).toEqual({
+    reason: 'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no rules surface.',
+    state: 'unavailable',
+  });
+  expect(registry.get('plugin').capabilities.rules).toEqual(intersectCapabilityStates(
+    registry.get('claude').capabilities.rules!,
+    registry.get('codex').capabilities.rules!,
+  ));
 });
 
 it('reports Claude LSP support and honest unavailable composite coverage', () => {
@@ -181,7 +205,7 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
   if (cursor.capabilities.mcp?.state !== 'supported') throw new Error('Expected Cursor MCP support evidence.');
   expect(cursor.capabilities.mcp.evidence).toEqual({
     capabilityRevision: '2026-08-28',
-    capabilitySha256: '20fc70ad5ba67d984826c3ac917fca66f28e61a8c74edb65dace53c29cc67279',
+    capabilitySha256: '20e93666770d97c0f5c1338de395f326c869684843b3b06bbd7ba3c45a0abc3e',
     observedVersion: '2026-08-28',
     target: 'cursor',
   });

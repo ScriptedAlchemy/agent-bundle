@@ -2,14 +2,15 @@ import { posix } from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
 
-export type ParsedSkillMarkdown =
+export type ParsedMarkdownFrontmatter =
   | { readonly body: string; readonly status: 'missing-frontmatter' }
   | { readonly body: string; readonly message: string; readonly status: 'malformed-frontmatter' }
   | { readonly body: string; readonly frontmatter: Record<string, unknown>; readonly status: 'valid' };
 
 const frontmatterPattern = /^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
-export const parseSkillMarkdown = (markdown: string): ParsedSkillMarkdown => {
+/** Splits optional YAML frontmatter without imposing a component-specific schema. */
+export const parseMarkdownFrontmatter = (markdown: string): ParsedMarkdownFrontmatter => {
   const match = frontmatterPattern.exec(markdown);
   if (match === null) {
     return { body: markdown, status: 'missing-frontmatter' };
@@ -30,6 +31,10 @@ export const parseSkillMarkdown = (markdown: string): ParsedSkillMarkdown => {
     };
   }
 };
+
+export type ParsedSkillMarkdown = ParsedMarkdownFrontmatter;
+
+export const parseSkillMarkdown = parseMarkdownFrontmatter;
 
 const withoutMarkdownCode = (body: string): string => {
   let fence: { character: string; length: number } | undefined;
