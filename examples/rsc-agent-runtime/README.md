@@ -15,16 +15,17 @@ Native hooks are fresh requests: a process normalizes one host event, invokes th
 
 ```tsx
 // A Hook JSX route reads request-scoped context.
-import { Hook } from '@agent-bundle/rsc-runtime';
-import { useEdit, useRuntimeSnapshot } from '../runtime/request-context.js';
+import { Hook, agent } from '@agent-bundle/rsc-runtime';
+import type { CanonicalPostToolUse, RuntimeSnapshot } from '../runtime/contracts.js';
 
-export function AfterFileEdit() {
-  const edit = useEdit();
-  const snapshot = useRuntimeSnapshot();
+export async function AfterFileEdit() {
+  const context = await agent();
+  const edit = context.services.edit as CanonicalPostToolUse;
+  const snapshot = context.services.snapshot as RuntimeSnapshot;
   return (
     <Hook.Result>
       <Hook.AdditionalContext>
-        Recorded {edit.path}; {snapshot.edits.length} edits exist.
+        {`Recorded ${edit.path}; ${snapshot.edits.length} edits exist.`}
       </Hook.AdditionalContext>
     </Hook.Result>
   );

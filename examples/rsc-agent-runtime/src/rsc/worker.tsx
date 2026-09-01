@@ -3,10 +3,10 @@ import { finished } from 'node:stream/promises';
 import { resolve } from 'node:path';
 import { writeSync } from 'node:fs';
 
+import { available, runAgentRequest } from '@agent-bundle/rsc-runtime';
 import { renderToReadableStream } from 'react-server-dom-rspack/server.node';
 
 import type { CanonicalPostToolUse, RenderRequest, RuntimeSnapshot } from '../runtime/contracts.js';
-import { withRenderContext } from '../runtime/request-context.js';
 import { createFileRuntimeKernel } from '../runtime/state-file.js';
 import { renderRoute } from './routes.js';
 
@@ -135,9 +135,25 @@ const render = async (): Promise<void> => {
   };
 
   if (request.type === 'hook/after-file-edit') {
-    await withRenderContext({ edit: request.event, snapshot }, renderFlight);
+    await runAgentRequest({
+      host: available({ name: request.event.host }, 'native'),
+      invocation: {
+        id: request.event.idempotencyKey,
+        kind: 'event',
+        surface: request.type,
+      },
+      session: available({ sessionId: request.event.sessionId }, 'native'),
+      services: { edit: request.event, snapshot },
+      workspace: available({ root: request.event.cwd }, 'native'),
+    }, renderFlight);
   } else {
-    await renderFlight();
+    await runAgentRequest({
+      invocation: {
+        kind: 'tool',
+        surface: request.type,
+      },
+      services: { snapshot },
+    }, renderFlight);
   }
   writeSnapshotMetadata();
 };

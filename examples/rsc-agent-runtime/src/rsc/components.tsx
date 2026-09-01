@@ -1,12 +1,23 @@
 import { basename } from 'node:path';
 
-import { Hook, Mcp } from '@agent-bundle/rsc-runtime';
-import type { RuntimeSnapshot } from '../runtime/contracts.js';
-import { useEdit, useRuntimeSnapshot } from '../runtime/request-context.js';
+import { Hook, Mcp, agent } from '@agent-bundle/rsc-runtime';
+import type { CanonicalPostToolUse, RuntimeSnapshot } from '../runtime/contracts.js';
 
-export const AfterFileEdit = () => {
-  const edit = useEdit();
-  const snapshot = useRuntimeSnapshot();
+const hookServices = async (): Promise<{ edit: CanonicalPostToolUse; snapshot: RuntimeSnapshot }> => {
+  const context = await agent();
+  const edit = context.services.edit;
+  const snapshot = context.services.snapshot;
+  if (edit === undefined || snapshot === undefined) {
+    throw new Error('Hook render requires edit and snapshot services');
+  }
+  return {
+    edit: edit as CanonicalPostToolUse,
+    snapshot: snapshot as RuntimeSnapshot,
+  };
+};
+
+export const AfterFileEdit = async () => {
+  const { edit, snapshot } = await hookServices();
   const editCount = snapshot.stateVersion;
   const editNoun = editCount === 1 ? 'edit' : 'edits';
 
