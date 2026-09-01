@@ -5,8 +5,28 @@ import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
+import { loadConfig } from './config/load.ts';
 import { isInsideOrEqual } from './core/paths.ts';
+import { compileRouteGraph } from './routes/graph.ts';
+import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
+export { compileRouteGraph, isEmptyRouteGraph } from './routes/graph.ts';
+export { inspectRouteGraph } from './routes/inspect.ts';
+export type { RouteGraphInspection } from './routes/inspect.ts';
+export { emptyRouteConfig } from './routes/types.ts';
+export type {
+  CapabilityEvidence,
+  CapabilityState,
+  CompiledAgentRoute,
+  CompiledCliMode,
+  CompiledCliSurface,
+  CompiledProvider,
+  CompiledRouteGraph,
+  CompiledRouteKind,
+  CompiledServerMode,
+  CompiledServerSurface,
+  RouteProvenance,
+} from './routes/types.ts';
 export type { BuildResult } from './build/build.ts';
 export type { PackageBuildResult, PackageOutputFile } from './build/package-build.ts';
 export type { ArtifactOutputKind, ArtifactOutputProvenance } from './build/provenance.ts';
@@ -199,7 +219,7 @@ export interface InspectionPlan {
 }
 
 export interface InspectOptions extends ProjectOptions {
-  readonly focus?: 'bundler' | 'hooks' | 'skills';
+  readonly focus?: 'bundler' | 'hooks' | 'routes' | 'skills';
   readonly target?: string;
 }
 
@@ -211,6 +231,7 @@ export interface ReadyInspectResult {
   readonly selected?: {
     readonly bundler?: BundlerInspection;
     readonly hooks?: NormalizedPlugin['hooks'];
+    readonly routes?: RouteGraphInspection;
     readonly skills?: NormalizedPlugin['skills'];
   };
   readonly state: 'ready';
@@ -472,11 +493,37 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
       ]));
     }
   }
+  let routes: RouteGraphInspection | undefined;
+  if (options.focus === 'routes') {
+    try {
+      // The route focus recompiles from the loaded config rather than the
+      // normalized model: the graph is source-tree IR, and hard route
+      // diagnostics already invalidated the inspection above.
+      const loaded = await loadConfig({
+        command: 'inspect',
+        ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
+        mode: options.mode ?? 'production',
+        root: options.root,
+        ...(options.targets === undefined ? {} : { targets: options.targets }),
+      });
+      routes = inspectRouteGraph(await compileRouteGraph(loaded.context.projectRoot, loaded.config));
+    } catch {
+      return invalidInspection(freezeDiagnostics([
+        ...prepared.diagnostics,
+        projectDiagnostic(
+          'AB7001',
+          'Unable to compile the route-graph inspection.',
+          { sourcePath: prepared.configPath },
+        ),
+      ]));
+    }
+  }
   const selected = options.focus === undefined
     ? undefined
     : Object.freeze({
       ...(bundler === undefined ? {} : { bundler }),
       ...(options.focus === 'hooks' ? { hooks: model.hooks } : {}),
+      ...(routes === undefined ? {} : { routes }),
       ...(options.focus === 'skills' ? { skills: model.skills } : {}),
     });
   return Object.freeze({

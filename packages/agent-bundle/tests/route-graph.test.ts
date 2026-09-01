@@ -1,0 +1,289 @@
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { afterEach, expect, it } from '@rstest/core';
+
+import { inspect, type ReadyInspectResult } from '../src/api.ts';
+import { runCli } from '../src/cli.ts';
+import { discoverProject } from '../src/config/discover.ts';
+import type { AgentBundleConfig } from '../src/core/types.ts';
+import { compileRouteGraph, isEmptyRouteGraph } from '../src/routes/graph.ts';
+import { emptyRouteConfig } from '../src/routes/types.ts';
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+});
+
+const createRoot = async (): Promise<string> => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-route-graph-')));
+  roots.push(root);
+  return root;
+};
+
+const moduleSource = 'export default async () => undefined;\n';
+
+const writeTree = async (root: string, files: Readonly<Record<string, string>>): Promise<void> => {
+  for (const [path, contents] of Object.entries(files)) {
+    const target = join(root, path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, contents);
+  }
+};
+
+const fixtureConfig = (extra: Readonly<Record<string, unknown>> = {}): AgentBundleConfig => ({
+  plugin: { name: 'routes-fixture', version: '1.0.0' },
+  ...extra,
+});
+
+const conventionalTree: Readonly<Record<string, string>> = {
+  'src/cli/doctor.tsx': moduleSource,
+  'src/cli/library/audit.ts': moduleSource,
+  'src/events/file/saved.tsx': moduleSource,
+  'src/mcp/curator/apps/dashboard.tsx': moduleSource,
+  'src/mcp/curator/prompts/curate.tsx': moduleSource,
+  'src/mcp/curator/resources/catalog.ts': moduleSource,
+  'src/mcp/curator/tools/inspect.tsx': moduleSource,
+  'src/providers/git-worktree.ts': moduleSource,
+  'src/scripts/rebuild-index.ts': moduleSource,
+};
+
+const codesOf = (diagnostics: readonly { readonly code: string }[]): string[] =>
+  diagnostics.map((diagnostic) => diagnostic.code);
+
+const createInspectProject = async (files: Readonly<Record<string, string>>): Promise<string> => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    'package.json': '{"type":"module"}\n',
+    ...files,
+  });
+  return root;
+};
+
+it('compiles the conventional tree into one frozen graph with a machine-independent digest', async () => {
+  const root = await createRoot();
+  await writeTree(root, conventionalTree);
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.servers).toHaveLength(1);
+  const [curator] = graph.servers;
+  expect(curator).toMatchObject({ id: 'mcp:curator', mode: 'generated', name: 'curator' });
+  expect(curator!.routes.map((route) => route.id)).toEqual([
+    'app:curator/dashboard',
+    'prompt:curator/curate',
+    'resource:curator/catalog',
+    'tool:curator/inspect',
+  ]);
+  expect(curator!.routes.map((route) => route.kind)).toEqual(['app', 'prompt', 'resource', 'tool']);
+  expect(curator!.routes.every((route) => route.serverId === 'mcp:curator')).toBe(true);
+  expect(graph.events.map((route) => route.id)).toEqual(['event:file/saved']);
+  expect(graph.events[0]).toMatchObject({
+    kind: 'event-route',
+    provenance: { kind: 'conventional', relativePath: 'src/events/file/saved.tsx' },
+    source: join(root, 'src/events/file/saved.tsx'),
+  });
+  expect(graph.cli).toMatchObject({ mode: 'generated' });
+  expect(graph.cli!.routes.map((route) => route.id)).toEqual(['cli:doctor', 'cli:library/audit']);
+  expect(graph.scripts.map((route) => route.id)).toEqual(['script:rebuild-index']);
+  expect(graph.providers).toEqual([{
+    id: 'provider:git-worktree',
+    name: 'git-worktree',
+    provenance: { kind: 'conventional', relativePath: 'src/providers/git-worktree.ts' },
+    source: join(root, 'src/providers/git-worktree.ts'),
+  }]);
+
+  // The IR is immutable and every route carries the shared frozen empty config.
+  expect(Object.isFrozen(graph)).toBe(true);
+  expect(Object.isFrozen(graph.servers)).toBe(true);
+  expect(Object.isFrozen(curator!.routes[0])).toBe(true);
+  expect(Object.isFrozen(graph.cli!.routes)).toBe(true);
+  expect(curator!.routes.every((route) => route.config === emptyRouteConfig)).toBe(true);
+  expect(graph.events[0]!.config).toEqual({});
+
+  // The digest covers relative identity only: the same tree in a different
+  // absolute root produces the same digest.
+  const otherRoot = await createRoot();
+  await writeTree(otherRoot, conventionalTree);
+  const otherGraph = await compileRouteGraph(otherRoot, fixtureConfig());
+  expect(otherGraph.digest).toBe(graph.digest);
+  expect(isEmptyRouteGraph(graph)).toBe(false);
+});
+
+it('skips ignored paths, private segments, and declaration files', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    '.gitignore': 'src/scripts/generated.ts\n',
+    'src/events/.internal/probe.ts': moduleSource,
+    'src/mcp/curator/tools/_draft.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/types.d.ts': 'export type Probe = string;\n',
+    'src/scripts/generated.ts': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.servers[0]!.routes.map((route) => route.id)).toEqual(['tool:curator/inspect']);
+  expect(graph.events).toEqual([]);
+  expect(graph.scripts).toEqual([]);
+});
+
+it('errors with AB4800 when an entry module and route modules claim one MCP server, and inspect turns invalid', async () => {
+  const files = {
+    'src/mcp/curator.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  };
+  const root = await createRoot();
+  await writeTree(root, files);
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  expect(codesOf(graph.diagnostics)).toEqual(['AB4800']);
+  // Discovery is not a packaging choice: the conflicting surface keeps its routes.
+  expect(graph.servers[0]).toMatchObject({ mode: 'conflict' });
+  expect(graph.servers[0]!.routes.map((route) => route.id)).toEqual(['tool:curator/inspect']);
+
+  const project = await createInspectProject(files);
+  const result = await inspect({ root: project });
+  expect(result.state).toBe('invalid');
+  expect(codesOf(result.diagnostics)).toContain('AB4800');
+});
+
+it('keeps routes and silences AB4800 under an explicit generated mode', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/mcp/curator.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig({
+    routes: { servers: { curator: 'generated' } },
+  }));
+
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.servers[0]).toMatchObject({ mode: 'generated' });
+  expect(graph.servers[0]!.routes.map((route) => route.id)).toEqual(['tool:curator/inspect']);
+});
+
+it('omits a server\'s routes and silences AB4800 under an explicit custom mode', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/mcp/curator.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig({
+    mcp: { servers: { curator: { entry: './src/mcp/curator.ts' } } },
+    routes: { servers: { curator: 'custom' } },
+  }));
+
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.servers[0]).toMatchObject({ id: 'mcp:curator', mode: 'custom' });
+  expect(graph.servers[0]!.routes).toEqual([]);
+});
+
+it('errors with AB4801 when the conventional CLI entry and command routes both exist', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/cli.ts': moduleSource,
+    'src/cli/doctor.tsx': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(codesOf(graph.diagnostics)).toEqual(['AB4801']);
+  expect(graph.cli).toMatchObject({ mode: 'conflict' });
+  expect(graph.cli!.routes.map((route) => route.id)).toEqual(['cli:doctor']);
+});
+
+it('errors with AB4802 when two route modules derive one id', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.tsx': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(codesOf(graph.diagnostics)).toEqual(['AB4802']);
+  expect(graph.diagnostics[0]!.message).toContain('src/mcp/curator/tools/inspect.ts');
+  expect(graph.diagnostics[0]!.message).toContain('src/mcp/curator/tools/inspect.tsx');
+  expect(graph.servers[0]!.routes).toHaveLength(1);
+});
+
+it('errors with AB4803 on unsafe identity segments', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/cli/-doctor.ts': moduleSource,
+    'src/mcp/bad name/tools/inspect.ts': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(codesOf(graph.diagnostics)).toEqual(['AB4803', 'AB4803']);
+  expect(graph.servers).toEqual([]);
+  expect(graph.cli).toBeUndefined();
+});
+
+it('errors with AB4804 on invalid routes mode overrides', async () => {
+  const root = await createRoot();
+  await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': moduleSource });
+  const graph = await compileRouteGraph(root, fixtureConfig({
+    routes: { cli: 42, servers: { curator: 'bogus' } },
+  }));
+
+  expect(codesOf(graph.diagnostics)).toEqual(['AB4804', 'AB4804']);
+  // The invalid override is ignored; the conflict-free server stays generated.
+  expect(graph.servers[0]).toMatchObject({ mode: 'generated' });
+});
+
+it('attaches no routeGraph key to a route-free discovered project', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'skills/review/SKILL.md': '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
+  });
+  const discovered = await discoverProject(root, fixtureConfig());
+
+  expect(discovered.skills).toHaveLength(1);
+  expect('routeGraph' in discovered).toBe(false);
+});
+
+it('selects the compiled graph under the routes inspect focus', async () => {
+  const root = await createInspectProject({
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/scripts/rebuild-index.ts': moduleSource,
+  });
+  const result = await inspect({ focus: 'routes', root });
+
+  expect(result.state).toBe('ready');
+  const routes = (result as ReadyInspectResult).selected?.routes;
+  expect(routes).toBeDefined();
+  expect(routes!.servers[0]!.routes.map((route) => route.id)).toEqual(['tool:curator/inspect']);
+  expect(routes!.scripts.map((route) => route.id)).toEqual(['script:rebuild-index']);
+  expect(routes!.digest).toMatch(/^[a-f\d]{64}$/u);
+});
+
+it('dumps the graph through the CLI --routes focus and rejects ambiguous focuses', async () => {
+  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
+  const root = await createInspectProject({
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  });
+  const stdout: string[] = [];
+  const code = await runCli(['inspect', '--root', root, '--routes', '--json'], {
+    stderr: { write: () => undefined },
+    stdout: { write: (chunk: string) => stdout.push(chunk) },
+  });
+  expect(code).toBe(0);
+  const document = JSON.parse(stdout.join('')) as ReadyInspectResult;
+  expect(document.selected?.routes?.servers?.[0]).toMatchObject({ id: 'mcp:curator', mode: 'generated' });
+
+  const stderr: string[] = [];
+  const ambiguous = await runCli(['inspect', '--root', root, '--routes', '--skills'], {
+    stderr: { write: (chunk: string) => stderr.push(chunk) },
+    stdout: { write: () => undefined },
+  });
+  expect(ambiguous).toBe(1);
+  expect(stderr.join('')).toContain('Choose at most one inspect focus.');
+});
