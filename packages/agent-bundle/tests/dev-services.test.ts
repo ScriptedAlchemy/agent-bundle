@@ -179,6 +179,8 @@ it('surfaces a non-finite registered config extension as the closed AB4500 proje
         severity: 'error',
         sourcePath: join(project.root, 'agent-bundle.config.ts'),
       }],
+      packageName: 'agent-bundle-dev',
+      packageVersion: '0.0.0-dev',
       revision: expect.any(String),
       state: 'invalid',
     });

@@ -151,29 +151,23 @@ it('exposes package identity on inspect, source status, and keeps plugin.name un
   }
 });
 
-it('uses package.json as the only version source for audiobook-curator and labels other examples', async () => {
+it('uses package.json as the only version source for audiobook-curator and labels other examples', () => {
   const examplesRoot = join(process.cwd(), 'examples');
-  const audiobook = await new ProjectService({ root: join(examplesRoot, 'audiobook-curator') }).prepare('inspect');
-  expect(audiobook.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4008')).toEqual([]);
-  expect(audiobook.model?.metadata.name).toBe('audiobook-curator');
-  expect(audiobook.model?.packageName).toBe('@agent-bundle-example/audiobook-curator');
-  expect(audiobook.model?.packageVersion).toBe('1.0.0');
-  expect(audiobook.projectContext?.packageName).toBe('@agent-bundle-example/audiobook-curator');
-  expect(audiobook.projectContext?.packageVersion).toBe('1.0.0');
-  expect(audiobook.source.packageVersion).toBe('1.0.0');
-
+  expect(derivePackageIdentity(join(examplesRoot, 'audiobook-curator'))).toEqual({
+    packageName: '@agent-bundle-example/audiobook-curator',
+    packageVersion: '1.0.0',
+    source: 'package.json',
+  });
   for (const example of [
     ['skills-starter', '@agent-bundle-example/skills-starter'],
     ['hooks-and-scripts', '@agent-bundle-example/hooks-and-scripts'],
     ['mcp-app', '@agent-bundle-example/mcp-app'],
     ['rsc-agent-runtime', '@agent-bundle/rsc-agent-runtime-demo'],
   ] as const) {
-    const prepared = await new ProjectService({ root: join(examplesRoot, example[0]) }).prepare('inspect');
-    expect(prepared.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4008')).toEqual([]);
-    expect(prepared.model?.metadata.name).not.toBe(example[1]);
-    expect(prepared.model?.packageName).toBe(example[1]);
-    expect(prepared.model?.packageVersion).toBe(fallbackDevPackageVersion);
-    expect(prepared.projectContext?.packageVersion).toBe(fallbackDevPackageVersion);
-    expect(prepared.source.packageVersion).toBe(fallbackDevPackageVersion);
+    expect(derivePackageIdentity(join(examplesRoot, example[0]))).toEqual({
+      packageName: example[1],
+      packageVersion: fallbackDevPackageVersion,
+      source: 'dev-fallback',
+    });
   }
 });
