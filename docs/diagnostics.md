@@ -118,7 +118,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
-## Route graph (`AB4800`–`AB4804`)
+## Route graph (`AB4800`–`AB4806`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -129,6 +129,19 @@ and the compiler never silently picks a side. Modules that explicit
 claimed by that declaration and never become routes — config always wins.
 `agent-bundle inspect --routes` dumps the compiled graph.
 
+Each route's `config` export is extracted statically — the module is parsed
+with the TypeScript compiler, never executed — from a single top-level
+`export const config = <expression>` declaration. The accepted expression
+grammar is: object literals whose property names are identifiers, string
+literals, or numeric literals (no computed names, spreads, shorthand
+references, methods, or accessors); array literals without spreads or holes;
+string literals and substitution-free template literals; numeric literals,
+optionally wrapped in unary `+`/`-`; `true`, `false`, and `null`; and
+`as`/`satisfies` casts, non-null assertions, and parentheses around any
+accepted form. Anything else is dynamic: the route compiles with an empty
+config beside a named `AB4806` error. A module without a `config` export
+compiles silently with an empty config.
+
 | Code | Severity | Trigger |
 | --- | --- | --- |
 | `AB4800` | error | An MCP server has both discovered route modules under `src/mcp/<id>/` and an existing entry claim (the conventional `src/mcp/<id>.ts` module, or a declared `entry`/`command`/`url`) without an explicit `routes.servers.<id>` mode. |
@@ -136,6 +149,8 @@ claimed by that declaration and never become routes — config always wins.
 | `AB4802` | error | Two route modules derive the same route id (for example `.ts` and `.tsx` siblings with one stem). |
 | `AB4803` | error | A route path derives an unsafe identity segment (each segment must match `^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$`). |
 | `AB4804` | error | A `routes` mode override is not `generated`/`custom`/`command`/`remote` for a server, or `generated`/`conventional` for the CLI. |
+| `AB4805` | error | A route module exports `config` through a rejected declaration shape (`let`/`var`, destructuring, `export { config }`, a function or class, a missing initializer), or the extracted value is not an object. |
+| `AB4806` | error | A route module's `config` initializer is dynamic — the message names the offending construct and position. |
 
 ## Development package build (`AB7103`)
 

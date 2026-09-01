@@ -1,9 +1,11 @@
 import { existsSync, statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
 
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
+import { extractRouteConfig } from './config-extract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -292,8 +294,11 @@ const declaredMcpServer = (
   return isRecord(server) ? server : undefined;
 };
 
-const compiledRoute = (module: DiscoveredRouteModule): CompiledAgentRoute => ({
-  config: emptyRouteConfig,
+const compiledRoute = (
+  module: DiscoveredRouteModule,
+  config: Readonly<Record<string, unknown>>,
+): CompiledAgentRoute => ({
+  config,
   id: module.id,
   kind: module.kind,
   provenance: { kind: 'conventional', relativePath: module.relativePath },
@@ -301,7 +306,28 @@ const compiledRoute = (module: DiscoveredRouteModule): CompiledAgentRoute => ({
   source: module.source,
 });
 
+/**
+ * Statically extracts one route module's `config` export from disk. A module
+ * a racing deletion removed simply has no config; extraction diagnostics
+ * (AB4805/AB4806) accumulate beside the discovery diagnostics.
+ */
+const extractedModuleConfig = async (
+  module: DiscoveredRouteModule,
+  diagnostics: Diagnostic[],
+): Promise<Readonly<Record<string, unknown>>> => {
+  let moduleText: string;
+  try {
+    moduleText = await readFile(module.source, 'utf8');
+  } catch {
+    return emptyRouteConfig;
+  }
+  const extracted = extractRouteConfig(moduleText, module.relativePath, module.source);
+  diagnostics.push(...extracted.diagnostics);
+  return extracted.config;
+};
+
 const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unknown>> => ({
+  config: route.config,
   id: route.id,
   kind: route.kind,
   relativePath: route.provenance.relativePath,
@@ -402,7 +428,7 @@ export const compileRouteGraph = async (
       });
       continue;
     }
-    const route = compiledRoute(module);
+    const route = compiledRoute(module, await extractedModuleConfig(module, diagnostics));
     switch (route.kind) {
       case 'tool':
       case 'resource':

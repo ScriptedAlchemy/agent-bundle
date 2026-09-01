@@ -383,3 +383,54 @@ it('evaluates a stateful config factory once when inspecting the routes focus', 
     discovered.routeGraph!.servers[0]!.routes.map((route) => route.id),
   );
 });
+
+it('extracts each route module static config export into the graph', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/mcp/curator/tools/search.ts': [
+      "export const config = { annotations: { readOnlyHint: true }, title: 'Search' } as const;",
+      moduleSource,
+    ].join('\n'),
+    'src/scripts/rebuild.ts': moduleSource,
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  expect(codesOf(graph.diagnostics)).toEqual([]);
+  const tool = graph.servers[0]!.routes[0]!;
+  expect(tool.config).toEqual({ annotations: { readOnlyHint: true }, title: 'Search' });
+  expect(Object.isFrozen(tool.config)).toBe(true);
+  expect(graph.scripts[0]!.config).toBe(emptyRouteConfig);
+});
+
+it('compiles dynamic-config routes with an empty config beside the named error', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/mcp/curator/tools/search.ts': [
+      'const title = process.env.TITLE;',
+      'export const config = { title };',
+      moduleSource,
+    ].join('\n'),
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  expect(codesOf(graph.diagnostics)).toEqual(['AB4806']);
+  expect(graph.diagnostics[0]!.sourcePath).toBe(join(root, 'src/mcp/curator/tools/search.ts'));
+  expect(graph.servers[0]!.routes[0]!.config).toBe(emptyRouteConfig);
+});
+
+it('covers the route config in the graph digest', async () => {
+  const withTitle = async (title: string): Promise<string> => {
+    const root = await createRoot();
+    await writeTree(root, {
+      'src/scripts/rebuild.ts': [
+        `export const config = { title: '${title}' };`,
+        moduleSource,
+      ].join('\n'),
+    });
+    return (await compileRouteGraph(root, fixtureConfig())).digest;
+  };
+
+  const [left, sameAsLeft, right] = await Promise.all([withTitle('a'), withTitle('a'), withTitle('b')]);
+  expect(left).toBe(sameAsLeft);
+  expect(left).not.toBe(right);
+});

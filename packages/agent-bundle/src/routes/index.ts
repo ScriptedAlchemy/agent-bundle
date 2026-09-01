@@ -1,4 +1,6 @@
 export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './graph.ts';
+export { extractRouteConfig, routeConfigGrammar } from './config-extract.ts';
+export type { ExtractedRouteConfig } from './config-extract.ts';
 export { inspectRouteGraph } from './inspect.ts';
 export type { RouteGraphInspection } from './inspect.ts';
 export { emptyRouteConfig } from './types.ts';
