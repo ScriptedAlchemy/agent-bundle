@@ -11,11 +11,11 @@ This private, opt-in example shows one React Server Components (RSC) runtime sha
 | RSC render | Hook and MCP result component trees, lowered from Flight | One request |
 | MCP App UI | Mounted timeline, Refresh, and recoverable row selection | One UI instance |
 
-Native hooks are fresh requests: a process normalizes one host event, invokes the RSC worker, lowers the Flight result, and exits. The durable kernel—not a Node module cache or React state—connects later hook processes and MCP calls.
+Native hooks are fresh requests: a process normalizes one host event, invokes the RSC worker through the runtime dispatcher seam, projects the final Agent Document, and exits. The durable kernel—not a Node module cache or React state—connects later hook processes and MCP calls.
 
 ```tsx
-// A Hook JSX route reads request-scoped context.
-import { Hook, agent } from '@agent-bundle/runtime';
+// An Agent Document route reads request-scoped context.
+import { Agent, agent } from '@agent-bundle/runtime';
 import type { CanonicalPostToolUse, RuntimeSnapshot } from '../runtime/contracts.js';
 
 export async function AfterFileEdit() {
@@ -23,11 +23,11 @@ export async function AfterFileEdit() {
   const edit = context.services.edit as CanonicalPostToolUse;
   const snapshot = context.services.snapshot as RuntimeSnapshot;
   return (
-    <Hook.Result>
-      <Hook.AdditionalContext>
+    <Agent.Result>
+      <Agent.Text>
         {`Recorded ${edit.path}; ${snapshot.edits.length} edits exist.`}
-      </Hook.AdditionalContext>
-    </Hook.Result>
+      </Agent.Text>
+    </Agent.Result>
   );
 }
 ```

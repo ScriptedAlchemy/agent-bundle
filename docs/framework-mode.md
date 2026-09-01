@@ -124,14 +124,17 @@ validation cannot drift between surfaces. Only the last step differs:
 
 ## Why `.tsx`, and current renderer status
 
-`@agent-bundle/runtime` does **not yet execute React Server Components or
-Flight**. Its current compatibility lowerers do not stream a component tree,
-hydrate, or hold server component state. What the MCP projection uses is an **MCP
-result DSL**: `render` returns ordinary React elements, and
-`lowerMcpResult` walks that tree synchronously — function components are
-simply called — to produce the `CallToolResult` the MCP SDK sends. The
-package owns no transport, persistence, or application state; those remain
-explicit dependencies of `execute` implementations.
+The operation model shown above still uses the **synchronous MCP result DSL**:
+`render` returns ordinary React elements and `lowerMcpResult` walks that tree
+to produce the `CallToolResult` the MCP SDK sends. That compatibility path does
+not involve Flight and remains the operative MCP projection.
+
+Separately, `@agent-bundle/runtime` now exposes a final-only React-owned Flight
+dispatcher for generated routes. An execution host supplies Flight bytes, the
+dispatcher decodes intrinsic `Agent.*` elements into one immutable
+`AgentDocument`, and cancellation follows the request `AbortSignal`. Streaming
+Suspense replacement and public filesystem-route authoring are later stages;
+the package still owns no persistence or application state.
 
 Operation modules are `.tsx` for exactly one reason: the `render` callback
 returns JSX. Everything else in an operation — schemas, argv parsing, MCP
@@ -148,9 +151,9 @@ For a new reader, in one breath:
    around them).
 3. **Which projection consumes `render`?** Only MCP, though every operation
    must declare one. The CLI serializes the validated result as JSON.
-4. **Is any React Server Components renderer or Flight transport
-   involved?** No. `lowerMcpResult` is a synchronous element-tree lowering,
-   not a renderer or transport.
+4. **Is Flight involved in this operation projection?** No.
+   `lowerMcpResult` remains synchronous. The separate generated-route path uses
+   the final-only `AgentRenderDispatcher` described above.
 5. **Why are operation modules `.tsx`?** Only because `render` returns JSX.
 
 ## Rendered skills (power tier, never required)

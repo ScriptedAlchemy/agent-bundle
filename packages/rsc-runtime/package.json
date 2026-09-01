@@ -1,7 +1,7 @@
 {
   "name": "@agent-bundle/runtime",
   "version": "0.0.0",
-  "description": "Versioned Agent Document contracts and React protocol primitives for Agent Bundle runtimes.",
+  "description": "Agent Document contracts and final-only React Flight dispatch for Agent Bundle runtimes.",
   "license": "MIT",
   "keywords": [
     "agent-bundle",
@@ -36,6 +36,10 @@
     "./plugin": {
       "types": "./dist/plugin.d.ts",
       "import": "./dist/plugin.js"
+    },
+    "./flight/server": {
+      "types": "./dist/flight/server.d.ts",
+      "import": "./dist/flight/server.js"
     }
   },
   "scripts": {
@@ -44,18 +48,23 @@
     "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "peerDependencies": {
-    "react": "^19.2.0"
+    "@rspack/core": "^2.2.0-0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "@modelcontextprotocol/server": "2.0.0",
+    "react-server-dom-rspack": "0.1.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",
     "@rslib/core": "0.23.2",
+    "@rspack/core": "2.2.1",
     "@rstest/core": "0.11.10",
     "@types/react": "19.2.18",
-    "react": "19.2.8"
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   }
 }

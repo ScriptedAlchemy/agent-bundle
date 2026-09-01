@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { writeSync } from 'node:fs';
 
 import { available, runAgentRequest } from '@agent-bundle/runtime';
-import { renderToReadableStream } from 'react-server-dom-rspack/server.node';
+import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';
 
 import type { CanonicalPostToolUse, RenderRequest, RuntimeSnapshot } from '../runtime/contracts.js';
 import { createFileRuntimeKernel } from '../runtime/state-file.js';
@@ -103,7 +103,7 @@ const readRequest = async (): Promise<RenderRequest> => {
   return parseRequest(JSON.parse(contents));
 };
 
-const render = async (): Promise<void> => {
+const render = async (signal: AbortSignal): Promise<void> => {
   const request = await readRequest();
   const runtime = createFileRuntimeKernel({ stateFile: request.stateFile });
   const snapshot =
@@ -120,7 +120,7 @@ const render = async (): Promise<void> => {
         : await runtime.readSnapshot();
 
   const renderFlight = async (): Promise<void> => {
-    const flight = renderToReadableStream(renderRoute(request, snapshot));
+    const flight = renderAgentFlight(renderRoute(request, snapshot), { signal });
     const output = Readable.from(flight);
     output.pipe(process.stdout, { end: false });
     await finished(output);
@@ -145,6 +145,7 @@ const render = async (): Promise<void> => {
       session: available({ sessionId: request.event.sessionId }, 'native'),
       services: { edit: request.event, snapshot },
       workspace: available({ root: request.event.cwd }, 'native'),
+      signal,
     }, renderFlight);
   } else {
     await runAgentRequest({
@@ -153,13 +154,22 @@ const render = async (): Promise<void> => {
         surface: request.type,
       },
       services: { snapshot },
+      signal,
     }, renderFlight);
   }
   writeSnapshotMetadata();
 };
 
-render().catch((error: unknown) => {
+const controller = new AbortController();
+const abort = (): void => controller.abort();
+process.once('SIGINT', abort);
+process.once('SIGTERM', abort);
+
+render(controller.signal).catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`${message}\n`);
   process.exitCode = 1;
+}).finally(() => {
+  process.removeListener('SIGINT', abort);
+  process.removeListener('SIGTERM', abort);
 });

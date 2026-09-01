@@ -1,10 +1,10 @@
 import { appendFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { requestFlightRender } from '../flight/request-render.js';
-import { lowerHookResult } from '@agent-bundle/runtime';
+import { requestAgentDocument } from '../flight/request-render.js';
 import { resolveImplicitRuntimeStateFile } from '../runtime/state-file.js';
 import { normalizeClaudeHook, normalizeCodexHook } from './normalize.js';
+import { projectHookDocument } from './project-document.js';
 
 let probeInput: Record<string, unknown> | undefined;
 
@@ -59,7 +59,7 @@ const readHost = (): 'claude' | 'codex' => {
   return host;
 };
 
-const run = async (): Promise<void> => {
+const run = async (signal: AbortSignal): Promise<void> => {
   const host = readHost();
   const input = await readInput();
   probeInput = input;
@@ -69,18 +69,26 @@ const run = async (): Promise<void> => {
     ? await resolveImplicitRuntimeStateFile(event.cwd)
     : resolve(configuredStateFile);
 
-  const result = await requestFlightRender({
+  const document = await requestAgentDocument({
     event,
     stateFile,
     type: 'hook/after-file-edit',
-  });
-  process.stdout.write(`${JSON.stringify(lowerHookResult(result))}\n`);
+  }, { signal });
+  process.stdout.write(`${JSON.stringify(projectHookDocument(document))}\n`);
   await writeEvalProbe(input, 0);
 };
 
-run().catch(async (error: unknown) => {
+const controller = new AbortController();
+const abort = (): void => controller.abort();
+process.once('SIGINT', abort);
+process.once('SIGTERM', abort);
+
+run(controller.signal).catch(async (error: unknown) => {
   if (probeInput !== undefined) await writeEvalProbe(probeInput, 1).catch(() => undefined);
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`${message}\n`);
   process.exitCode = 1;
+}).finally(() => {
+  process.removeListener('SIGINT', abort);
+  process.removeListener('SIGTERM', abort);
 });

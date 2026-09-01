@@ -17,6 +17,7 @@ export default defineConfig({
   root: import.meta.dirname,
   source: {
     entry: {
+      'flight/server': './src/flight/server.ts',
       index: './src/index.ts',
       plugin: './src/plugin.ts',
     },
