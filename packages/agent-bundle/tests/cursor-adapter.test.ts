@@ -1,7 +1,12 @@
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { cursorAdapter } from '../src/adapters/cursor.ts';
+import {
+  cursorAdapter,
+  cursorHooksValidator,
+  cursorMcpValidator,
+  cursorPluginValidator,
+} from '../src/adapters/cursor.ts';
 import { readTargetMcpServers } from '../src/services/mcp-runtime.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
@@ -21,7 +26,7 @@ const plugin = (): NormalizedPlugin => ({
     {
       args: ['--root', `${pathTokens.pluginRoot}/tools/server.mjs`],
       command: 'node',
-      env: { CACHE_DIR: `${pathTokens.workspaceRoot}/cache` },
+      env: { API_TOKEN: '${API_TOKEN}', CACHE_DIR: `${pathTokens.workspaceRoot}/cache` },
       id: 'mcp:status',
       name: 'status',
       provenance: { kind: 'config', sourcePath: configPath },
@@ -83,6 +88,32 @@ it('registers cursor as a first-class target with pinned schema validation', () 
   ]);
 });
 
+it('validates Cursor documents against the vendored real-host schemas', () => {
+  expect(cursorPluginValidator({
+    minClientVersions: { cursor: '3.5.0' },
+    name: 'cursor-review',
+    publisher: 'Cursor',
+    variables: { properties: { API_TOKEN: { type: 'string' } }, type: 'object' },
+    version: '1.2.3',
+  })).toBe(true);
+  expect(cursorPluginValidator({ name: 'Cursor Review' })).toBe(false);
+  expect(cursorPluginValidator({ name: 'cursor-review', unknown: true })).toBe(false);
+
+  expect(cursorMcpValidator({
+    mcpServers: { status: { args: ['serve'], command: 'node', envFile: '.env', type: 'stdio' } },
+  })).toBe(true);
+  expect(cursorMcpValidator({ mcpServers: { status: { args: ['serve'] } } })).toBe(false);
+  expect(cursorMcpValidator({ mcpservers: {} })).toBe(false);
+
+  expect(cursorHooksValidator({
+    hooks: { afterShellExecution: [{ command: 'echo ok', failClosed: true }] },
+    version: 1,
+  })).toBe(true);
+  expect(cursorHooksValidator({ hooks: { afterShellExecutionn: [{ command: 'echo typo' }] }, version: 1 })).toBe(false);
+  expect(cursorHooksValidator({ hooks: { stop: [{ timeout: 5 }] }, version: 1 })).toBe(false);
+  expect(cursorHooksValidator({ hooks: {}, version: 2 })).toBe(false);
+});
+
 it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit manifest pointers', () => {
   const model = plugin();
   const plan = cursorAdapter.plan(model);
@@ -92,20 +123,33 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
   const documents = writeContents(model);
   expect(Object.keys(documents).sort()).toEqual(['.cursor-plugin/plugin.json', 'mcp.json']);
 
-  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toEqual({
+  const manifest = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest).toEqual({
     description: 'Review helpers for Cursor.',
     displayName: 'cursor-review',
     mcpServers: './mcp.json',
     name: 'cursor-review',
     skills: './skills/',
+    variables: {
+      properties: { API_TOKEN: { type: 'string' } },
+      type: 'object',
+    },
     version: '1.2.3',
   });
+  for (const field of ['mcpServers', 'skills'] as const) {
+    const declaredPath = manifest[field] as string;
+    expect(declaredPath.startsWith('/')).toBe(false);
+    expect(declaredPath.split('/')).not.toContain('..');
+    const artifactPath = declaredPath.replace(/^\.\//u, '').replace(/\/$/u, '');
+    expect(plan.entries.some((entry) =>
+      entry.relativePath === artifactPath || entry.relativePath.startsWith(`${artifactPath}/`))).toBe(true);
+  }
 
   const mcp = JSON.parse(documents['mcp.json']!) as { readonly mcpServers: Record<string, Record<string, unknown>> };
   expect(mcp.mcpServers['status']).toEqual({
     args: ['--root', '${CURSOR_PLUGIN_ROOT}/tools/server.mjs'],
     command: 'node',
-    env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CURSOR_PLUGIN_ROOT}', CACHE_DIR: '${workspaceFolder}/cache' },
+    env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CURSOR_PLUGIN_ROOT}', API_TOKEN: '${API_TOKEN}', CACHE_DIR: '${workspaceFolder}/cache' },
   });
   expect(mcp.mcpServers['remote']).toEqual({
     headers: { Authorization: 'Bearer literal' },
@@ -116,6 +160,23 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
 
   const skillCopies = plan.entries.filter((entry) => entry.kind === 'copy').map((entry) => entry.relativePath);
   expect(skillCopies).toEqual(['skills/review/SKILL.md', 'skills/review/references/guide.md']);
+});
+
+it('rejects portable Agent Plugin tokens instead of emitting a hybrid Cursor artifact', () => {
+  const model = plugin();
+  const candidate: NormalizedPlugin = {
+    ...model,
+    mcpServers: [{
+      ...model.mcpServers[0]!,
+      env: { PORTABLE_ROOT: '${PLUGIN_ROOT}' },
+    }],
+  };
+  const plan = cursorAdapter.plan(candidate);
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain('cursor.mcp.token');
+  expect(plan.entries.map((entry) => entry.relativePath)).not.toContain('mcp.json');
+  const manifest = JSON.parse(writeContents(candidate)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest).not.toHaveProperty('mcpServers');
+  expect(manifest).not.toHaveProperty('variables');
 });
 
 it('rejects the plugin-data token and omits the failed server from the document', () => {

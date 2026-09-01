@@ -1,3 +1,4 @@
+import { Ajv } from 'ajv/dist/ajv.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 
@@ -66,11 +67,18 @@ export interface TargetSchemaDescriptor {
 }
 
 /** ajv-formats ships CJS-flavored typings; this single cast localizes the mismatch. */
-const installFormats = addFormats as unknown as (target: Ajv2020) => void;
+const installFormats = addFormats as unknown as (target: Ajv | Ajv2020) => void;
 
 /** The one AJV configuration every adapter's pinned schema validators share. */
 export const createAdapterValidator = (): Ajv2020 => {
   const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  return validator;
+};
+
+/** Draft-07 validator for official host schemas that declare that dialect. */
+export const createDraft7AdapterValidator = (): Ajv => {
+  const validator = new Ajv({ allErrors: true, strict: false });
   installFormats(validator);
   return validator;
 };
