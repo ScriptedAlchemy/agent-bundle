@@ -14,8 +14,8 @@ import { ensureExampleBuilt } from './support/ensure-built.js';
 // This is the ordinary-CI micro-eval spot-check (`npm run eval:spot`): one
 // deterministic pass over the built production artifacts, with no real Claude
 // or Codex host. It proves the end-to-end runtime path in a small way: a
-// native-shaped hook event renders through the RSC worker into the framework
-// state kernel's workspace-durable sqlite store (#98), a second hook process
+// native-shaped hook event renders through the compiled semantic event route
+// into the framework state kernel's workspace-durable sqlite store (#98), a second hook process
 // replaying the same native tool id commits nothing new, and the MCP server
 // then RSC-lowers that same shared state for a tool call while linking the
 // MCP App resource.
@@ -32,7 +32,7 @@ test('micro-eval spot-check: built hook and MCP server share one RSC-rendered ru
   });
 
   const runHookOnce = async (): Promise<void> => {
-    const hook = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/hook/index.js'), '--host', 'claude'], {
+    const hook = spawn(process.execPath, [join(process.cwd(), 'dist/plugins/claude/hooks/event-route-tool-after.mjs')], {
       env: { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -44,6 +44,7 @@ test('micro-eval spot-check: built hook and MCP server share one RSC-rendered ru
       tool_name: 'Write',
       tool_response: { success: true },
       tool_use_id: 'micro-eval-tool-1',
+      transcript_path: join(workspace, 'transcript.jsonl'),
     }));
     const hookStdout: Buffer[] = [];
     const hookStderr: Buffer[] = [];

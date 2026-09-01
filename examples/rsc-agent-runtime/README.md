@@ -11,22 +11,19 @@ This private, opt-in example shows one React Server Components (RSC) runtime sha
 | RSC render | Hook and MCP result component trees, lowered from Flight | One request |
 | MCP App UI | Mounted timeline, Refresh, and recoverable row selection | One UI instance |
 
-Native hooks are fresh requests: a process normalizes one host event, invokes the RSC worker through the runtime dispatcher seam, projects the final Agent Document, and exits. The durable kernel—not a Node module cache or React state—connects later hook processes and MCP calls.
+Native hooks are fresh requests: the compiler-generated client validates one host event, invokes `src/events/tool/after.tsx` in its explicit standalone mode, projects the final Agent Document, and exits. The durable kernel—not a Node module cache or React state—connects later hook processes and MCP calls.
 
 ```tsx
-// An Agent Document route reads request-scoped context.
-import { Agent, agent } from '@agent-bundle/runtime';
-import type { CanonicalPostToolUse, RuntimeSnapshot } from '../runtime/contracts.js';
+// The semantic event route receives canonical identity plus the complete native payload.
+import { Agent } from '@agent-bundle/runtime';
+import type { AgentEventRouteProps } from 'agent-bundle';
 
-export async function AfterFileEdit() {
-  const context = await agent();
-  const edit = context.services.edit as CanonicalPostToolUse;
-  const snapshot = context.services.snapshot as RuntimeSnapshot;
+export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };
+
+export default async function AfterFileEdit({ canonical, native }: AgentEventRouteProps) {
   return (
     <Agent.Result>
-      <Agent.Text>
-        {`Recorded ${edit.path}; ${snapshot.edits.length} edits exist.`}
-      </Agent.Text>
+      <Agent.Context>{`Recorded ${String(native.tool_name)} from ${canonical.provenance.host}.`}</Agent.Context>
     </Agent.Result>
   );
 }
@@ -97,8 +94,8 @@ To exercise one hook manually, give it an explicit state file and native Claude-
 
 ```bash
 AGENT_RUNTIME_STATE_FILE=/tmp/rsc-agent-state.sqlite \
-  node examples/rsc-agent-runtime/dist/runtime/hook/index.js --host claude <<JSON
-{"hook_event_name":"PostToolUse","session_id":"manual","cwd":"$PWD","tool_name":"Write","tool_input":{"file_path":"README.md"}}
+  node examples/rsc-agent-runtime/dist/plugins/claude/hooks/event-route-tool-after.mjs <<JSON
+{"hook_event_name":"PostToolUse","session_id":"manual","cwd":"$PWD","transcript_path":"$PWD/transcript.jsonl","tool_name":"Write","tool_input":{"file_path":"README.md"},"tool_response":{"success":true},"tool_use_id":"manual-write-1"}
 JSON
 ```
 
@@ -150,7 +147,7 @@ pnpm eval:spot
 ```
 
 It builds this example, replays one native-shaped Claude `PostToolUse` event
-through the built hook binary (RSC worker render, Flight lowering, a durable
+through the compiled `src/events/tool/after.tsx` route (Agent Document projection, a durable
 state-kernel commit), replays the same native tool id from a second hook
 process to prove cross-process idempotency, then connects a real stdio MCP
 client to the built server over the same state file and asserts the
