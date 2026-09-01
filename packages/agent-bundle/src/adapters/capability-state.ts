@@ -207,3 +207,49 @@ export const intersectCapabilityStates = (
     }
   }
 };
+
+/**
+ * Unions two host judgments for composite emission dispatch: a composite
+ * emits a surface if any host side does. Support dominates degradation,
+ * unavailability, and prohibition; equally ranked supporting sides merge
+ * evidence, while equally ranked non-supported sides merge reasons.
+ */
+export const unionCapabilityStates = (
+  left: CapabilityState,
+  right: CapabilityState,
+): CapabilityState => {
+  const leftPrecedence = precedenceFor(left);
+  const rightPrecedence = precedenceFor(right);
+  const precedence = leftPrecedence < rightPrecedence ? leftPrecedence : rightPrecedence;
+  switch (precedence) {
+    case 0:
+      if (left.state === 'supported' && right.state === 'supported') {
+        return supportedCapability(mergeCapabilityEvidence(left.evidence, right.evidence));
+      }
+      if (left.state === 'supported') return supportedCapability(left.evidence);
+      if (right.state === 'supported') return supportedCapability(right.evidence);
+      throw new Error('Supported capability union lost its evidence invariant.');
+    case 1: {
+      const leftEvidence = left.state === 'degraded' ? left.evidence : undefined;
+      const rightEvidence = right.state === 'degraded' ? right.evidence : undefined;
+      const evidence = leftEvidence === undefined
+        ? rightEvidence
+        : rightEvidence === undefined
+          ? leftEvidence
+          : mergeCapabilityEvidence(leftEvidence, rightEvidence);
+      return Object.freeze({
+        ...(evidence === undefined ? {} : { evidence }),
+        reason: mergedReason(left, right, precedence),
+        state: 'degraded',
+      });
+    }
+    case 2:
+      return Object.freeze({ reason: mergedReason(left, right, precedence), state: 'unavailable' });
+    case 3:
+      return Object.freeze({ reason: mergedReason(left, right, precedence), state: 'prohibited' });
+    default: {
+      const exhaustive: never = precedence;
+      throw new CapabilityStateError(`Capability precedence ${String(exhaustive)} has no union rule.`);
+    }
+  }
+};

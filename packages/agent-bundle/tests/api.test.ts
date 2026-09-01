@@ -542,7 +542,7 @@ it('returns an invalid inspection for selected targets outside the normalized pr
   }
 });
 
-it('reports skipped target/component pairs with intersection-rule reasons', async () => {
+it('reports skipped target/component pairs against each target emission surface', async () => {
   const root = await createProject();
   try {
     await Promise.all([
@@ -566,7 +566,7 @@ it('reports skipped target/component pairs with intersection-rule reasons', asyn
         "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
         "  plugin: { name: 'api-fixture', version: '1.0.0' },",
         "  scripts: { report: { entry: './src/report.ts', targets: ['codex'] } },",
-        "  targets: ['portable', 'codex', 'claude', 'cursor'],",
+        "  targets: ['portable', 'codex', 'claude', 'cursor', 'plugin'],",
         '};',
         '',
       ].join('\n')),
@@ -602,6 +602,15 @@ it('reports skipped target/component pairs with intersection-rule reasons', asyn
       component.kind === 'command' && component.name === 'shared')).toBe(false);
     expect(planFor('cursor')?.skipped.some((component) => component.kind === 'command')).toBe(false);
     expect(planFor('cursor')?.skipped.some((component) => component.kind === 'rule')).toBe(false);
+    expect(planFor('plugin')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
+    ]);
+    expect(planFor('plugin')?.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relativePath: 'commands/shared.md' }),
+      expect.objectContaining({ relativePath: 'rules/shared.mdc' }),
+    ]));
     expect(Object.isFrozen(planFor('portable')?.skipped)).toBe(true);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });

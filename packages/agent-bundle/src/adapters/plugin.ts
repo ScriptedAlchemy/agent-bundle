@@ -12,6 +12,7 @@ import {
   intersectCapabilityStates,
   supportedEventRouteNamesFrom,
   unavailableCapability,
+  unionCapabilityStates,
 } from './capability-state.ts';
 import claudeCapabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
@@ -528,6 +529,19 @@ const compositeEventCapabilities = Object.freeze(Object.fromEntries(
     }),
 ));
 
+const componentCapabilities = Object.freeze(Object.fromEntries(
+  ['commands', 'hooks', 'mcp', 'rules', 'skills'].map((capability) => [
+    capability,
+    unionCapabilityStates(
+      unionCapabilityStates(
+        claudeAdapter.capabilities[capability]!,
+        codexAdapter.capabilities[capability]!,
+      ),
+      cursorAdapter.capabilities[capability]!,
+    ),
+  ]),
+));
+
 export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout,
@@ -568,6 +582,7 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
       cursorAdapter.capabilities.skills!,
     ),
   }),
+  componentCapabilities,
   hookContract: bundleHookContract,
   metadata,
   mcpRuntime,

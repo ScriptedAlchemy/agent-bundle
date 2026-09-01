@@ -373,6 +373,20 @@ const assertCapabilityContract = (adapter: TargetAdapter): void => {
         `${capabilityStateNames.join('/')} with that state's required fields.`,
     );
   }
+  if (adapter.componentCapabilities === undefined) return;
+  const componentCapabilities = record(adapter.componentCapabilities);
+  if (componentCapabilities === undefined) {
+    throw new CapabilityStateError(
+      `Target adapter "${adapter.name}" must declare component capabilities as a record.`,
+    );
+  }
+  for (const [capability, state] of Object.entries(componentCapabilities)) {
+    if (state === undefined || isCapabilityState(state)) continue;
+    throw new CapabilityStateError(
+      `Target adapter "${adapter.name}" component capability "${capability}" must declare one of ` +
+        `${capabilityStateNames.join('/')} with that state's required fields.`,
+    );
+  }
 };
 
 export class TargetRegistry implements NormalizationTargetRegistry {
