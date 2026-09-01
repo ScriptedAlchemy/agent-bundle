@@ -15,7 +15,7 @@ Native hooks are fresh requests: a process normalizes one host event, invokes th
 
 ```tsx
 // A Hook JSX route reads request-scoped context.
-import { Hook, agent } from '@agent-bundle/rsc-runtime';
+import { Hook, agent } from '@agent-bundle/runtime';
 import type { CanonicalPostToolUse, RuntimeSnapshot } from '../runtime/contracts.js';
 
 export async function AfterFileEdit() {
@@ -34,7 +34,7 @@ export async function AfterFileEdit() {
 
 ```tsx
 // An MCP JSX route describes protocol blocks, not browser HTML.
-import { Mcp } from '@agent-bundle/rsc-runtime';
+import { Mcp } from '@agent-bundle/runtime';
 
 export function RenderTimeline({ snapshot }: { snapshot: { edits: unknown[]; stateVersion: number } }) {
   return (

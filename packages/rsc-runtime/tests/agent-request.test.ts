@@ -22,7 +22,7 @@ import {
   runAgentRequest as pluginRunAgentRequest,
 } from '../src/plugin.js';
 
-const STORE_SYMBOL = Symbol.for('@agent-bundle/rsc-runtime/request-store');
+const STORE_SYMBOL = Symbol.for('@agent-bundle/runtime/request-store');
 
 const init = (kind: 'tool' | 'event' | 'cli' | 'script' | 'workbench', id?: string) => ({
   invocation: { ...(id === undefined ? {} : { id }), kind },

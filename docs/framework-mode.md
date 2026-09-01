@@ -68,8 +68,8 @@ like this in full, including the JSX:
 
 ```tsx
 // src/operations/status.tsx
-import { defineOperation } from '@agent-bundle/rsc-runtime/plugin';
-import { Mcp } from '@agent-bundle/rsc-runtime';
+import { defineOperation } from '@agent-bundle/runtime/plugin';
+import { Mcp } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 export const status = defineOperation({
@@ -122,12 +122,11 @@ validation cannot drift between surfaces. Only the last step differs:
   lowering is strict — `Mcp.Text` takes exactly one string child, hence the
   template literal above.
 
-## Why `.tsx`, and what "RSC runtime" is not
+## Why `.tsx`, and current renderer status
 
-Despite the package name, `@agent-bundle/rsc-runtime` is **not a React
-Server Components renderer or runtime, and no Flight transport is
-involved**. Nothing streams a component tree to a client, hydrates, or
-holds server component state. What the MCP projection uses is an **MCP
+`@agent-bundle/runtime` does **not yet execute React Server Components or
+Flight**. Its current compatibility lowerers do not stream a component tree,
+hydrate, or hold server component state. What the MCP projection uses is an **MCP
 result DSL**: `render` returns ordinary React elements, and
 `lowerMcpResult` walks that tree synchronously — function components are
 simply called — to produce the `CallToolResult` the MCP SDK sends. The

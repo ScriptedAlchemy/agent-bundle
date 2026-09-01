@@ -1,4 +1,4 @@
-import { createRscMcpServer } from '@agent-bundle/rsc-runtime/plugin';
+import { createRscMcpServer } from '@agent-bundle/runtime/plugin';
 
 import { audiobookCuratorApplication } from '../application.js';
 

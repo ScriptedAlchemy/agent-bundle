@@ -9,7 +9,7 @@ import {
   lowerMcpResult,
 } from '../src/index.js';
 
-describe('@agent-bundle/rsc-runtime', () => {
+describe('@agent-bundle/runtime', () => {
   it('lowers one Hook result', () => {
     expect(lowerHookResult(
       createElement(Hook.Result, null, createElement(Hook.AdditionalContext, null, 'ready')),

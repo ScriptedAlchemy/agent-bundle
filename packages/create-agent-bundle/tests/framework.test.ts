@@ -1,7 +1,14 @@
 import { describe, expect, it } from '@rstest/core';
 
-import { resolveFrameworkSpec } from '../src/framework.ts';
+import { previewPackageSpec, resolveFrameworkSpec } from '../src/framework.ts';
 import { UsageError } from '../src/options.ts';
+
+describe('previewPackageSpec', () => {
+  it('derives the renamed runtime pkg.pr.new URL', () => {
+    expect(previewPackageSpec('@agent-bundle/runtime', 'da5df1d'))
+      .toBe('https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@da5df1d');
+  });
+});
 
 describe('resolveFrameworkSpec', () => {
   it('derives the paired pkg.pr.new preview from the scaffolder preview version', () => {

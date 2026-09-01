@@ -103,7 +103,7 @@ the framework lifecycle:
 
 ```ts
 // src/mcp/curator.ts — the whole stdio entry a consumer writes
-import { createRscMcpServer } from '@agent-bundle/rsc-runtime/plugin';
+import { createRscMcpServer } from '@agent-bundle/runtime/plugin';
 import { application } from '../application.js';
 
 export default () => createRscMcpServer(application, 'curator');

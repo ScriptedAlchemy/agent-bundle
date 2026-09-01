@@ -4,7 +4,7 @@
  * `../integrity-audit.ts`. Conversion and preparation plan by default and
  * mutate only a derived destination; the audit never mutates.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/rsc-runtime/plugin';
+import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
 import React from 'react';
 import { z } from 'zod';
 

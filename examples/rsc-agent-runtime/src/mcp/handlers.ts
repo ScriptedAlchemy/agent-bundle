@@ -1,5 +1,5 @@
 import { createFileRuntimeKernel } from '../runtime/state-file.js';
-import { lowerMcpResult } from '@agent-bundle/rsc-runtime';
+import { lowerMcpResult } from '@agent-bundle/runtime';
 import { requestFlightRender } from '../flight/request-render.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 

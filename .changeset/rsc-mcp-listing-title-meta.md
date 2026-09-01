@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/rsc-runtime": minor
+"@agent-bundle/runtime": minor
 ---
 
 `RscMcpDefinition` gains optional listing-level `title` and `_meta` slots;

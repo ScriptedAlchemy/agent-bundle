@@ -3,7 +3,7 @@
  * and `audible-cache`, backed by `../audible.ts`. Ranking is evidence only;
  * `audible-select` records the required human edition choice.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/rsc-runtime/plugin';
+import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
 import React from 'react';
 import { z } from 'zod';
 

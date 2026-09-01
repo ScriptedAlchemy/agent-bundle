@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/rsc-runtime": minor
+"@agent-bundle/runtime": minor
 ---
 
 `defineRscAgentBundle` element trees can declare MCP Apps first-class:

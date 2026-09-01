@@ -1,4 +1,4 @@
-import { runRscCli } from '@agent-bundle/rsc-runtime/plugin';
+import { runRscCli } from '@agent-bundle/runtime/plugin';
 
 import {
   createAudiobookCuratorApplication,

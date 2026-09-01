@@ -1,7 +1,7 @@
 import { expect, test } from '@rstest/core';
 import React from 'react';
 
-import { Mcp, lowerMcpResult } from '@agent-bundle/rsc-runtime';
+import { Mcp, lowerMcpResult } from '@agent-bundle/runtime';
 
 test('lowers every supported MCP result block in authored order', () => {
   const result = lowerMcpResult(

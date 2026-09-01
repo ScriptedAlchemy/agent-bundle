@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/rsc-runtime": patch
+"@agent-bundle/runtime": patch
 ---
 
 Docs-only clarification of the operation/JSX model (#88). The published

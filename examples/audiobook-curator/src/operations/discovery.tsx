@@ -3,7 +3,7 @@
  * `library-audit`, and `select`, backed by `../curator-core.ts` and
  * `../library.ts`. All four retain evidence and never mutate media.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/rsc-runtime/plugin';
+import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
 import React from 'react';
 import { z } from 'zod';
 
