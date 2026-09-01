@@ -14,7 +14,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
+import { canonicalHookEvents, isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
 import { isRenderedCliRoute } from '../routes/cli-commands.ts';
 import type {
   AgentBundleBinEntry,
@@ -61,12 +61,7 @@ const nudgeDiagnostic = (
   recovery: string,
 ): Diagnostic => ({ code, message, recovery, severity: 'info', sourcePath });
 
-const hookEvents: readonly CanonicalHookEvent[] = [
-  'sessionStart',
-  'beforeTool',
-  'afterTool',
-  'stop',
-];
+const hookEvents: readonly CanonicalHookEvent[] = canonicalHookEvents;
 
 const hookTools = new Set(['shell', 'file.read', 'file.write', 'mcp', 'agent']);
 
@@ -1712,6 +1707,21 @@ export const validateModel = (
         diagnostics.push({
           code: 'AB4204',
           message: `Target ${JSON.stringify(target)} cannot emit hook ${hook.event}.`,
+          severity: 'error',
+          sourcePath: hook.provenance.sourcePath,
+          target,
+        });
+      }
+    }
+    if (hook.eventRoute?.runtime === 'shared' && hook.eventRoute.fallback === 'none') {
+      for (const target of hook.targets) {
+        const runtimeHost = model.mcpServers.some((server) =>
+          server.generatedRoutes !== undefined && server.targets.includes(target));
+        if (runtimeHost) continue;
+        diagnostics.push({
+          code: 'AB4816',
+          message: `Event route ${hook.eventRoute.event} requires the shared runtime on ${target}, but no generated MCP entry hosts it.`,
+          recovery: 'Add a generated MCP route server, or explicitly set event config.runtime to standalone or config.fallback to standalone.',
           severity: 'error',
           sourcePath: hook.provenance.sourcePath,
           target,

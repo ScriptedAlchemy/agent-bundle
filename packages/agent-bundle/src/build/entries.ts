@@ -1,8 +1,15 @@
+import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, relative, resolve } from 'node:path';
+import { dirname, extname, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import type { TargetHookEntry } from '../adapters/types.ts';
-import type { AgentBundleToolsConfig, NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
+import {
+  eventArtifactEpochToken,
+  eventIpcRuntimeSpecifier,
+  eventProjectRuntimeSpecifier,
+  type TargetHookEntry,
+} from '../adapters/hook-contract.ts';
+import type { AgentBundleToolsConfig, NormalizedHook, NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
 import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
@@ -19,6 +26,21 @@ import {
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
 import { buildWithRslib } from './rslib.ts';
+
+const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
+  for (const candidate of [
+    new URL(`./event-${module}.js`, import.meta.url),
+    new URL(`../../dist/event-${module}.js`, import.meta.url),
+    new URL(`../events/${module}.ts`, import.meta.url),
+  ]) {
+    const path = fileURLToPath(candidate);
+    if (existsSync(path)) return path;
+  }
+  throw new Error(`Unable to locate the compiler-owned event ${module} runtime module.`);
+};
+
+const eventRuntimeIgnoredRoot = (path: string): string =>
+  resolve(dirname(path), path.replaceAll('\\', '/').includes('/dist/') ? '..' : '../..');
 
 export interface CompiledEntry {
   readonly name: string;
@@ -175,7 +197,9 @@ export const compileMcpEntries = async (
   servers: readonly NormalizedMcpServer[],
   options: {
     readonly apps?: readonly CompiledMcpApp[];
+    readonly artifactEpoch: string;
     readonly cwd: string;
+    readonly eventHooks: readonly NormalizedHook[];
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
     readonly target: string;
@@ -183,6 +207,8 @@ export const compileMcpEntries = async (
   },
 ): Promise<readonly CompiledMcpEntry[]> => {
   const compiled = planCompiledMcpEntries(servers, options);
+  const eventHostId = compiled.find((entry) =>
+    servers.find((server) => server.id === entry.id)?.generatedRoutes !== undefined)?.id;
   const virtualSources = await Promise.all(compiled.map(async (entry) => {
     const records = await Promise.all((options.apps ?? [])
       .filter((app) => app.serverIds.includes(entry.id))
@@ -206,9 +232,12 @@ export const compileMcpEntries = async (
     return server?.generatedRoutes === undefined
       ? undefined
       : generatedRouteMcpEntrySource({
+        artifactEpoch: options.artifactEpoch,
+        eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
         plugin: options.plugin,
         routes: server.generatedRoutes,
         serverName: server.name,
+        target: options.target,
         workerFile: `${entry.name}-flight.mjs`,
       });
   });
@@ -218,6 +247,7 @@ export const compileMcpEntries = async (
       ? undefined
       : generatedRouteFlightWorkerSource({
         artifactEpoch: generatedRouteArtifactEpoch(options.plugin),
+        eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
         routes: server.generatedRoutes,
         serverName: server.name,
       });
@@ -241,11 +271,21 @@ export const compileMcpEntries = async (
       : undefined;
   }));
   const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
+  const eventIpcRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('ipc');
+  const eventProjectRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('project');
   const mainEntries = compiled.map(({ id, name, source, sourceInputs }, index) => ({
     ...(entryShells[index] === undefined || runtimeShell === undefined
       ? {}
       : {
-        aliases: { [mcpEntryRuntimeSpecifier]: runtimeShell },
+        aliases: {
+          [mcpEntryRuntimeSpecifier]: runtimeShell,
+          ...(id !== eventHostId || eventIpcRuntime === undefined || eventProjectRuntime === undefined
+            ? {}
+            : {
+              [eventIpcRuntimeSpecifier]: eventIpcRuntime,
+              [eventProjectRuntimeSpecifier]: eventProjectRuntime,
+            }),
+        },
         virtualSource: entryShells[index],
       }),
     name,
@@ -282,7 +322,14 @@ export const compileMcpEntries = async (
   const evidence = await buildWithRslib({
     cwd: options.cwd,
     entries: [...mainEntries, ...workerEntries],
-    ...(runtimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeShell] }),
+    ...([runtimeShell, eventIpcRuntime].filter((path): path is string => path !== undefined).length === 0
+      ? {}
+      : {
+        ignoredSourcePaths: [
+          ...(runtimeShell === undefined ? [] : [runtimeShell]),
+          ...(eventIpcRuntime === undefined ? [] : [eventRuntimeIgnoredRoot(eventIpcRuntime)]),
+        ],
+      }),
     logLevel: 'error',
     outputRoot: options.outDir,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
@@ -315,9 +362,20 @@ export const planCompiledHooks = (
 
 export const compileHooks = async (
   entries: readonly TargetHookEntry[],
-  options: { readonly cwd: string; readonly outDir: string; readonly tools?: AgentBundleToolsConfig },
+  options: {
+    readonly artifactEpoch: string;
+    readonly cwd: string;
+    readonly outDir: string;
+    readonly tools?: AgentBundleToolsConfig;
+  },
 ): Promise<readonly CompiledHookEntry[]> => {
   const compiled = planCompiledHooks(entries, options);
+  const routeEntries = entries.filter((entry) => entry.hook.eventRoute !== undefined);
+  const eventIpcRuntime = routeEntries.length === 0 ? undefined : eventRuntimeModulePath('ipc');
+  const eventProjectRuntime = routeEntries.some((entry) =>
+    entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone')
+    ? eventRuntimeModulePath('project')
+    : undefined;
   const evidence = await buildWithRslib({
     cwd: options.cwd,
     entries: compiled.map((entry, index) => ({
@@ -326,10 +384,23 @@ export const compileHooks = async (
       // library id derives from the unique output path, not the hook name.
       name: entries[index]!.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
       outputRelativePath: entries[index]!.relativePath,
+      ...(entries[index]!.hook.eventRoute === undefined || eventIpcRuntime === undefined
+        ? {}
+        : {
+          aliases: {
+            [eventIpcRuntimeSpecifier]: eventIpcRuntime,
+            ...(eventProjectRuntime === undefined ? {} : { [eventProjectRuntimeSpecifier]: eventProjectRuntime }),
+          },
+        }),
       source: entry.source,
       sourceInputs: entry.sourceInputs,
-      virtualSource: entries[index]!.virtualSource,
+      virtualSource: entries[index]!.virtualSource.replaceAll(eventArtifactEpochToken, options.artifactEpoch),
     })),
+    ...(eventIpcRuntime === undefined
+      ? {}
+      : {
+        ignoredSourcePaths: [eventRuntimeIgnoredRoot(eventIpcRuntime)],
+      }),
     outputRoot: options.outDir,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   });

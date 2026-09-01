@@ -17,6 +17,7 @@ import {
   capabilityEvidence,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
+  supportedEventRouteNamesFrom,
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
@@ -127,12 +128,14 @@ export interface CursorHookContractOptions {
  * Claude/Codex format; see cursorHookWrapperSource).
  */
 export const createCursorHookContract = (options: CursorHookContractOptions): TargetHookContract => Object.freeze({
+  capabilityRevision: capabilityTable.observedCliVersion,
   commandRoot: '${CURSOR_PLUGIN_ROOT}',
   documentEntry: cursorHookDocumentEntry,
   documentEnvelope: cursorHookDocumentEnvelope,
   encodePlaygroundInput: encodeCursorPlaygroundInput,
   encodePlaygroundOutput: (result, canonicalEvent) => encodeCursorPlaygroundOutput(result, canonicalEvent),
   eventNames: capabilityTable.hooks.events,
+  eventRouteNames: supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes),
   ...(options.indexedWrappers === false ? { indexedWrappers: false as const } : {}),
   manifestPath: options.manifestPath,
   matchers: capabilityTable.hooks.matchers,

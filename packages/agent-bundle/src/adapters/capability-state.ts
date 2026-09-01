@@ -54,6 +54,14 @@ export const eventRouteCapabilitiesFrom = (
   }),
 ));
 
+export const supportedEventRouteNamesFrom = (
+  routes: Readonly<Record<string, EventRouteCapabilityTableEntry>>,
+): Readonly<Record<string, string>> => Object.freeze(Object.fromEntries(
+  Object.entries(routes)
+    .filter(([, capability]) => capability.state === 'supported' && typeof capability.nativeEvent === 'string')
+    .map(([event, capability]) => [event, capability.nativeEvent!]),
+));
+
 export const capabilityStateFromSupport = (
   supported: boolean,
   evidence: CapabilityEvidence,
