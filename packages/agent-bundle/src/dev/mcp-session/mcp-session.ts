@@ -7,12 +7,14 @@ import type {
   Tool,
   Transport,
 } from '@modelcontextprotocol/client';
+import { Effect, Semaphore } from 'effect';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import type { Stream } from 'node:stream';
 
-import { serialQueue } from '../../core/async.ts';
 import { isRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';
+import { runPromise, runSync } from '../../effect/boundary.ts';
+import { liftPromise, liftTry } from '../../effect/lift.ts';
 import type { EpochReference } from '../epoch-store.ts';
 import type {
   McpSessionBinding,
@@ -151,7 +153,8 @@ export class McpSession {
   #closed = false;
   #connection: McpSessionConnectionState | undefined;
   #droppedThroughSequence = 0;
-  readonly #lifecycle = serialQueue();
+  /** Serializes initialize / restart / close, replacing the pre-Effect serial queue. */
+  readonly #lifecycle: Semaphore.Semaphore = runSync(Semaphore.make(1));
   #sequence = 0;
   #stderrOutput = '';
   #stderrOverflow = false;
@@ -253,12 +256,14 @@ export class McpSession {
   }
 
   async initialize(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    return this.#operation('initialize', () => this.#lifecycle.run(async () => {
-      this.#assertOpen();
-      if (this.#connection === undefined) await this.#connect(options);
-      this.#assertOpen();
-      return this.connection;
-    }));
+    return this.#operation('initialize', () => runPromise(this.#lifecycle.withPermit(
+      Effect.gen({ self: this }, function* (this: McpSession) {
+        yield* this.#assertOpenEffect();
+        if (this.#connection === undefined) yield* this.#connectEffect(options);
+        yield* this.#assertOpenEffect();
+        return this.connection;
+      }),
+    )));
   }
 
   async listTools(options?: McpSessionRequestOptions): Promise<readonly Tool[]> {
@@ -305,37 +310,58 @@ export class McpSession {
     if (options.signal?.aborted) {
       throw options.signal.reason ?? new Error('MCP session tool call was aborted.');
     }
-    return this.#operation('callTool', async () => {
-      await this.#assertEpochCurrent();
+    return this.#operation('callTool', () => runPromise(this.#callToolEffect(options)));
+  }
+
+  #callToolEffect(options: McpSessionToolCallOptions): Effect.Effect<CallToolResult, unknown> {
+    return this.#assertEpochCurrentEffect().pipe(Effect.andThen(Effect.suspend(() => {
       const requestId = options.requestId ?? randomUUID();
-      if (requestId.trim().length === 0) throw new Error('MCP session requestId must be nonempty.');
-      if (this.#requests.has(requestId)) throw new Error(`MCP session request ${JSON.stringify(requestId)} is already active.`);
+      if (requestId.trim().length === 0) {
+        return Effect.fail(new Error('MCP session requestId must be nonempty.'));
+      }
+      if (this.#requests.has(requestId)) {
+        return Effect.fail(new Error(`MCP session request ${JSON.stringify(requestId)} is already active.`));
+      }
       const controller = new AbortController();
       const onAbort = () => controller.abort(options.signal?.reason);
       options.signal?.addEventListener('abort', onAbort, { once: true });
       this.#requests.set(requestId, controller);
-      try {
-        const result = await this.#clientFor().callTool({ arguments: options.arguments, name: options.name }, {
+      return Effect.gen({ self: this }, function* (this: McpSession) {
+        const client = yield* liftTry(() => this.#clientFor());
+        const result = yield* liftPromise(() => client.callTool({ arguments: options.arguments, name: options.name }, {
           signal: controller.signal,
           timeout: requestOptions(options, this.#timeoutMs).timeout,
+        }));
+        yield* liftTry(() => {
+          this.#throwIfStderrExceeded();
         });
-        this.#throwIfStderrExceeded();
         return result;
-      } catch (error) {
-        // A call that failed while the epoch vanished mid-flight reports the
-        // stale epoch, not the incidental abort or timeout it produced.
-        if (this.#staleEpochFailure === undefined && !this.#closed && this.#assertEpochAvailable !== undefined) {
-          try {
-            await this.#assertEpochAvailable();
-          } catch (cause) {
-            this.#failStaleEpoch(cause);
-          }
-        }
-        throw this.#staleEpochFailure ?? error;
-      } finally {
-        options.signal?.removeEventListener('abort', onAbort);
-        this.#requests.delete(requestId);
+      }).pipe(
+        Effect.catch((error) => this.#substituteStaleEpochFailure(error)),
+        Effect.ensuring(Effect.sync(() => {
+          options.signal?.removeEventListener('abort', onAbort);
+          this.#requests.delete(requestId);
+        })),
+      );
+    })));
+  }
+
+  /**
+   * A call that failed while the epoch vanished mid-flight reports the
+   * stale epoch, not the incidental abort or timeout it produced.
+   */
+  #substituteStaleEpochFailure(error: unknown): Effect.Effect<never, unknown> {
+    return Effect.suspend(() => {
+      const probe = this.#assertEpochAvailable;
+      if (this.#staleEpochFailure !== undefined || this.#closed || probe === undefined) {
+        return Effect.fail(this.#staleEpochFailure ?? error);
       }
+      return liftPromise(() => probe()).pipe(
+        Effect.catch((cause) => Effect.sync(() => {
+          this.#failStaleEpoch(cause);
+        })),
+        Effect.andThen(Effect.suspend(() => Effect.fail(this.#staleEpochFailure ?? error))),
+      );
     });
   }
 
@@ -352,16 +378,18 @@ export class McpSession {
   }
 
   async restart(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    return this.#operation('restart', () => this.#lifecycle.run(async () => {
-      this.#assertOpen();
-      this.#cancelAll('MCP session restarted.');
-      await this.#closeClient();
-      this.#assertOpen();
-      this.#connection = undefined;
-      await this.#connect(options);
-      this.#assertOpen();
-      return this.connection;
-    }));
+    return this.#operation('restart', () => runPromise(this.#lifecycle.withPermit(
+      Effect.gen({ self: this }, function* (this: McpSession) {
+        yield* this.#assertOpenEffect();
+        this.#cancelAll('MCP session restarted.');
+        yield* liftPromise(() => this.#closeClient());
+        yield* this.#assertOpenEffect();
+        this.#connection = undefined;
+        yield* this.#connectEffect(options);
+        yield* this.#assertOpenEffect();
+        return this.connection;
+      }),
+    )));
   }
 
   close(): Promise<void> {
@@ -374,29 +402,49 @@ export class McpSession {
     } catch {
       // Lifecycle observers cannot prevent client, temporary-data, or epoch cleanup.
     }
-    void this.#operation('close', () => this.#lifecycle.run(() => this.#close())).then(closing.resolve, closing.reject);
+    void this.#operation('close', () => runPromise(this.#lifecycle.withPermit(this.#closeEffect())))
+      .then(closing.resolve, closing.reject);
     return closing.promise;
   }
 
-  async #close(): Promise<void> {
-    this.#cancelAll('MCP session closed.');
-    try {
-      await this.#closeClient();
-    } finally {
-      try {
-        await rm(this.#pluginData, { force: true, recursive: true });
-      } finally {
-        try {
-          await this.#epochReference.close();
-        } finally {
-          this.#onClose();
+  /**
+   * Session teardown as one Effect. Every release step always runs, in
+   * order — drain the client, remove plugin data, release the epoch lease,
+   * notify the owner — and the last failing step's error is re-raised once
+   * every resource has been visited (the pre-Effect nested `finally` chain
+   * had the same last-failure-wins contract).
+   */
+  #closeEffect(): Effect.Effect<void, unknown> {
+    return Effect.suspend(() => {
+      const failures: unknown[] = [];
+      const step = (release: () => Promise<void>): Effect.Effect<void> =>
+        liftPromise(release).pipe(
+          Effect.catch((error) => Effect.sync(() => {
+            failures.push(error);
+          })),
+          Effect.asVoid,
+        );
+      return Effect.gen({ self: this }, function* (this: McpSession) {
+        this.#cancelAll('MCP session closed.');
+        yield* step(() => this.#closeClient());
+        yield* step(() => rm(this.#pluginData, { force: true, recursive: true }));
+        yield* step(() => this.#epochReference.close());
+        this.#onClose();
+        if (failures.length > 0) {
+          return yield* Effect.fail(failures[failures.length - 1]);
         }
-      }
-    }
+      });
+    });
   }
 
   #assertOpen(): void {
     if (this.#closed) throw new Error('MCP session is closed.');
+  }
+
+  #assertOpenEffect(): Effect.Effect<void, Error> {
+    return Effect.suspend(() => this.#closed
+      ? Effect.fail(new Error('MCP session is closed.'))
+      : Effect.void);
   }
 
   /**
@@ -404,16 +452,19 @@ export class McpSession {
    * project changed underneath the session (often another process's build
    * retention, which cannot observe this process's epoch leases). Discovery
    * cancels every in-flight request with the same typed failure and closes
-   * the session, mirroring the stderr-overflow contract.
+   * the session, mirroring the stderr-overflow contract. The #134 contract
+   * rides the typed error channel as `McpSessionStaleEpochError`.
    */
-  async #assertEpochCurrent(): Promise<void> {
-    if (this.#staleEpochFailure !== undefined) throw this.#staleEpochFailure;
-    if (this.#assertEpochAvailable === undefined) return;
-    try {
-      await this.#assertEpochAvailable();
-    } catch (cause) {
-      throw this.#failStaleEpoch(cause);
-    }
+  #assertEpochCurrentEffect(): Effect.Effect<void, McpSessionStaleEpochError> {
+    return Effect.suspend(() => {
+      if (this.#staleEpochFailure !== undefined) return Effect.fail(this.#staleEpochFailure);
+      const probe = this.#assertEpochAvailable;
+      if (probe === undefined) return Effect.void;
+      return liftPromise(() => probe()).pipe(
+        Effect.catch((cause) => Effect.fail(this.#failStaleEpoch(cause))),
+        Effect.asVoid,
+      );
+    });
   }
 
   #failStaleEpoch(cause: unknown): McpSessionStaleEpochError {
@@ -445,33 +496,43 @@ export class McpSession {
     return this.#client!;
   }
 
-  async #connect(options?: McpSessionRequestOptions): Promise<void> {
-    const client = this.#createClient();
-    let capture: StderrCapture | undefined;
-    try {
-      const transport = this.#transport((nextCapture) => {
-        capture = nextCapture;
-      });
-      const recording = new RecordingTransport(transport, (direction, message) => this.#recordFrame(direction, message));
-      await client.connect(recording, requestOptions(options, this.#timeoutMs));
-      this.#throwIfStderrExceeded(capture);
-      this.#assertOpen();
-      this.#client = client;
-      this.#capture = capture;
-      this.#connection = Object.freeze({
-        capabilities: client.getServerCapabilities(),
-        protocolEra: client.getProtocolEra?.(),
-        protocolVersion: client.getNegotiatedProtocolVersion?.(),
-        server: client.getServerVersion(),
-      });
-    } catch (error) {
-      try {
-        await client.close();
-      } finally {
-        capture?.stop();
-      }
-      throw error;
-    }
+  #connectEffect(options?: McpSessionRequestOptions): Effect.Effect<void, unknown> {
+    return Effect.suspend(() => {
+      const client = this.#createClient();
+      const connectState: { capture?: StderrCapture } = {};
+      return Effect.gen({ self: this }, function* (this: McpSession) {
+        const recording = yield* liftTry(() => {
+          const transport = this.#transport((nextCapture) => {
+            connectState.capture = nextCapture;
+          });
+          return new RecordingTransport(transport, (direction, message) => this.#recordFrame(direction, message));
+        });
+        yield* liftPromise(() => client.connect(recording, requestOptions(options, this.#timeoutMs)));
+        yield* liftTry(() => {
+          this.#throwIfStderrExceeded(connectState.capture);
+          this.#assertOpen();
+          this.#client = client;
+          this.#capture = connectState.capture;
+          this.#connection = Object.freeze({
+            capabilities: client.getServerCapabilities(),
+            protocolEra: client.getProtocolEra?.(),
+            protocolVersion: client.getNegotiatedProtocolVersion?.(),
+            server: client.getServerVersion(),
+          });
+        });
+      }).pipe(
+        // A failed connect drains the replacement client and stops its
+        // stderr capture before the failure re-raises; a cleanup failure
+        // replaces the original error, exactly as the pre-Effect catch did.
+        Effect.catch((error) => liftPromise(async () => {
+          try {
+            await client.close();
+          } finally {
+            connectState.capture?.stop();
+          }
+        }).pipe(Effect.andThen(Effect.fail(error)))),
+      );
+    });
   }
 
   async #closeClient(): Promise<void> {
