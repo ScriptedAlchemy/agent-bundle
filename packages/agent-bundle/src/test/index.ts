@@ -1,7 +1,7 @@
 /**
  * `agent-bundle/test` — the consumer test harness helpers.
  *
- * Four Node proof levels ship here, and the browser-safe fifth level ships
+ * Five Node proof levels ship here, and the browser-safe sixth level ships
  * from `agent-bundle/test/browser`. Each helper names the level it supplies,
  * stamps it into its provenance, and prints it in every failure:
  *
@@ -11,15 +11,18 @@
  * | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
  * | `cli-dispatch` | `invokeCli`, `cliJson` | a compiled CLI command dispatched through the routed CLI's own shell, in this process |
  * | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
+ * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer` | the packed stdio process still runs after project source and configuration are removed and verified absent |
  * | `browser-app` | `mountBrowserApp` (`agent-bundle/test/browser`) | production-compiled MCP App HTML mounted over the product bridge in a real browser page |
  *
- * A pass at one level is never a receipt for another. Deleted-source artifact
- * proof is a later stage; nothing here stands in for it.
+ * A pass at one level is never a receipt for another. The `deletedSource`
+ * option upgrades `openPackedMcpServer` provenance only after every path in a
+ * non-empty removal receipt is verified absent immediately before spawn.
  */
 export {
   BROWSER_APP_PROOF_LEVEL,
   CLI_DISPATCH_PROOF_LEVEL,
   MCP_IN_MEMORY_PROOF_LEVEL,
+  PACKED_DELETED_SOURCE_PROOF_LEVEL,
   PACKED_STDIO_PROOF_LEVEL,
   ROUTE_UNIT_PROOF_LEVEL,
   compileTestManifest,
@@ -75,8 +78,13 @@ export type {
 } from './mcp.ts';
 export { cliJson, invokeCli } from './cli.ts';
 export type { CliDispatchProvenance, CliInvocation, InvokeCliOptions } from './cli.ts';
-export { openPackedMcpServer } from './packed.ts';
-export type { PackedMcpProvenance, PackedMcpSession, PackedMcpSessionOptions } from './packed.ts';
+export { openPackedMcpServer, removeProjectSource } from './packed.ts';
+export type {
+  DeletedSourceReceipt,
+  PackedMcpProvenance,
+  PackedMcpSession,
+  PackedMcpSessionOptions,
+} from './packed.ts';
 export type {
   AgentRouteModule,
   AgentRouteModuleLoader,

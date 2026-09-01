@@ -28,6 +28,24 @@ const asString = (value, message) => {
   return value;
 };
 
+const packOutputFromJson = (stdout) => {
+  const parsed = JSON.parse(stdout);
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : parsed !== null && typeof parsed === 'object'
+      ? Object.values(parsed)
+      : undefined;
+  if (entries === undefined) fail('npm pack --json returned neither an array nor a package-keyed object');
+  if (entries.length !== 1) {
+    fail(`npm pack --json returned ${String(entries.length)} entries; expected exactly one`);
+  }
+  const [entry] = entries;
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    fail('npm pack --json returned an invalid pack entry; expected one object');
+  }
+  return entry;
+};
+
 /** Every name -> Set(version) reachable under the consumer's own node_modules tree. */
 const collectInstalledPackages = async (nodeModulesRoot) => {
   const installed = new Map();
@@ -151,7 +169,7 @@ const auditPackedRelease = async () => {
       version: '1.0.0',
     }) + '\n');
 
-    const [{ filename }] = JSON.parse((await execNpm([
+    const { filename } = packOutputFromJson((await execNpm([
       'pack',
       '--json',
       '--pack-destination', tarballs,

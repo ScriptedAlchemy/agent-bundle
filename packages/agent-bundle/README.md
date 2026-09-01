@@ -276,6 +276,7 @@ is never a receipt for another.
 | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
 | `cli-dispatch` | `invokeCli`, `cliJson` | an argv vector resolved and run through the routed CLI's own shell, in-process |
 | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
+| `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })` | the packed stdio process still runs after project source and configuration are removed and verified absent |
 
 ```ts
 import { cliJson, expectEvents, invokeCli, invokeMcpTool } from 'agent-bundle/test';
@@ -296,10 +297,13 @@ turn a passing render red — while a missing frame, a reordering, or a regresse
 ordinal still fails; `toHaveMonotonicSequence`, `toCompleteOnce`,
 `toHaveProgress`, and `toHaveNoErrors` cover the rest of the contract.
 
-Only `packed-stdio` is process evidence, and it is deliberately expensive: pack
-once, install once, spawn once, and iterate every per-route assertion inside
-that one session. Browser-App surfaces and deleted-source artifact proofs are
-later stages; nothing here stands in for them.
+Only `packed-stdio` and its strictly stronger `packed-deleted-source` upgrade
+are process evidence, and they are deliberately expensive: pack once, install
+once, build once, remove and verify source once, spawn once, and iterate every
+per-route assertion inside that one session. The deleted-source journey also
+reads the embedded MCP App resource from the generated server; it does not
+prove native-host install or dispatch, or an install mode that copies the
+artifact elsewhere.
 
 ## Evaluation
 
