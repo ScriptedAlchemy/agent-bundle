@@ -225,7 +225,32 @@ it('uses only an installed tarball after source deletion', async () => {
     const { stdout: validation } = await runInstalled(cli, projectRoot, [
       'validate', '--json', '--root', projectRoot, '--artifact', artifact,
     ]);
-    expect(validation).toBe('{"diagnostics":[]}\n');
+    const validationDocument = JSON.parse(validation) as {
+      readonly diagnostics: readonly { readonly code: string; readonly severity: string }[];
+      readonly hostValidation: readonly {
+        readonly diagnostics: readonly { readonly code: string; readonly severity: string }[];
+        readonly host: string;
+        readonly status: string;
+        readonly target: string;
+      }[];
+    };
+    expect(validationDocument.hostValidation).toHaveLength(1);
+    expect(validationDocument.hostValidation[0]).toMatchObject({
+      host: 'claude',
+      target: 'claude',
+    });
+    if (validationDocument.hostValidation[0]!.status === 'passed') {
+      expect(validationDocument.diagnostics).toEqual([]);
+      expect(validationDocument.hostValidation[0]!.diagnostics).toEqual([]);
+    } else {
+      expect(validationDocument.hostValidation[0]).toMatchObject({
+        diagnostics: [{ code: 'AB6019', severity: 'info' }],
+        status: 'unavailable',
+      });
+      expect(validationDocument.diagnostics).toEqual([
+        expect.objectContaining({ code: 'AB6019', severity: 'info' }),
+      ]);
+    }
 
     const bundlePath = join(artifact, 'portable', 'scripts', 'bundle.mjs');
     await expect(execFile(process.execPath, [
