@@ -279,3 +279,32 @@ it('rejects whitespace, key-order drift, and trailing input outside the canonica
   expect(() => parseArtifactManifest(reordered)).toThrow(/canonical/i);
   expect(() => parseArtifactManifest(`${bytes} `)).toThrow(/canonical|JSON/i);
 });
+
+it('round-trips the optional package identity axes distinctly', () => {
+  const manifest = validManifest();
+  (manifest.project as { packageName?: string }).packageName = '@agent-bundle-example/audiobook-curator';
+  (manifest.project as { packageVersion?: string }).packageVersion = '1.0.0';
+  const assembled = assembleArtifactManifest(manifest);
+  expect(assembled.manifest.project.packageName).toBe('@agent-bundle-example/audiobook-curator');
+  expect(assembled.manifest.project.packageVersion).toBe('1.0.0');
+  expect(parseArtifactManifest(assembled.bytes).project).toMatchObject({
+    packageName: '@agent-bundle-example/audiobook-curator',
+    packageVersion: '1.0.0',
+  });
+});
+
+it('accepts a project without package identity and rejects invalid identity values', () => {
+  const withoutIdentity = assembleArtifactManifest(validManifest());
+  expect(withoutIdentity.manifest.project.packageName).toBeUndefined();
+  expect(withoutIdentity.manifest.project.packageVersion).toBeUndefined();
+
+  const invalidName = validManifest();
+  (invalidName.project as { packageName?: string }).packageName = 'Not A Valid Name';
+  expect(() => serializeArtifactManifest(invalidName))
+    .toThrow('project.packageName must be a valid npm package name.');
+
+  const invalidVersion = validManifest();
+  (invalidVersion.project as { packageVersion?: string }).packageVersion = 'v1.0.0';
+  expect(() => serializeArtifactManifest(invalidVersion))
+    .toThrow('project.packageVersion must be a valid semantic version.');
+});

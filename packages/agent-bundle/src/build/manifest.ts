@@ -4,6 +4,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
+import { isValidPackageName, isValidPackageVersion } from '../core/project-context.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
@@ -43,6 +44,10 @@ export interface ArtifactManifestProject {
   readonly configDigest: string;
   readonly configPath: string;
   readonly modelDigest: string;
+  /** The validated npm package name axis; absent for unpackaged development projects. */
+  readonly packageName?: string;
+  /** The validated semantic release-version axis; absent for unpackaged development projects. */
+  readonly packageVersion?: string;
   readonly revision: string;
   readonly sourceInputs: readonly ArtifactManifestSourceInput[];
 }
@@ -307,7 +312,24 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   if (producer.name !== 'agent-bundle') fail('producer.name must be "agent-bundle".');
 
   const project = requireRecord(manifest.project, 'project');
-  requireExactKeys(project, 'project', ['configDigest', 'configPath', 'modelDigest', 'revision', 'sourceInputs']);
+  requireExactKeys(
+    project,
+    'project',
+    ['configDigest', 'configPath', 'modelDigest', 'revision', 'sourceInputs'],
+    ['packageName', 'packageVersion'],
+  );
+  const packageName = project.packageName === undefined
+    ? undefined
+    : requireString(project.packageName, 'project.packageName');
+  if (packageName !== undefined && !isValidPackageName(packageName)) {
+    fail('project.packageName must be a valid npm package name.');
+  }
+  const packageVersion = project.packageVersion === undefined
+    ? undefined
+    : requireString(project.packageVersion, 'project.packageVersion');
+  if (packageVersion !== undefined && !isValidPackageVersion(packageVersion)) {
+    fail('project.packageVersion must be a valid semantic version.');
+  }
   const sourceInputs = parseSourceInputs(project.sourceInputs, 'project.sourceInputs');
   const configPath = requirePath(project.configPath, 'project.configPath');
   const configDigest = requireHash(project.configDigest, 'project.configDigest');
@@ -354,6 +376,8 @@ const validateManifest = (value: unknown): ArtifactManifest => {
       configDigest,
       configPath,
       modelDigest: requireHash(project.modelDigest, 'project.modelDigest'),
+      ...(packageName === undefined ? {} : { packageName }),
+      ...(packageVersion === undefined ? {} : { packageVersion }),
       revision,
       sourceInputs,
     },
