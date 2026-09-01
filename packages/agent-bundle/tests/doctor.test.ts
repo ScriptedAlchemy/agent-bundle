@@ -471,6 +471,17 @@ const close = (server: Server): Promise<void> => new Promise((resolvePromise, re
   });
 });
 
+const findDeadPid = (): number => {
+  for (let pid = 4_194_000; pid > 0; pid -= 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return pid;
+    }
+  }
+  throw new Error('No dead pid found.');
+};
+
 it('scans live sockets and a lock with a live sibling without warnings', async () => {
   const fixture = await temporaryDoctor();
   const endpoint = join(fixture.endpointDirectory, 'event-live.sock');
@@ -511,8 +522,104 @@ it('reports stale sockets and stale locks as warnings', async () => {
       expect.objectContaining({ path: staleSocket, state: 'stale-socket' }),
       expect.objectContaining({ path: staleLock, state: 'stale-lock' }),
     ]));
-    expect(report.diagnostics.filter((entry) => entry.code === 'AB7314')).toHaveLength(2);
-    expect(report.diagnostics.filter((entry) => entry.code === 'AB7314')[0]?.severity).toBe('warning');
+    expect(report.endpoints.summary.staleLocks).toBe(1);
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7314',
+        message: expect.stringMatching(/no valid owner record/u),
+        severity: 'warning',
+      }),
+      expect.objectContaining({
+        code: 'AB7314',
+        message: expect.stringMatching(/refuses connections and is stale/u),
+        severity: 'warning',
+      }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports a lock with a provably dead owner as a stale lock warning', async () => {
+  const fixture = await temporaryDoctor();
+  const staleLock = join(fixture.endpointDirectory, 'event-dead-claim.sock.lock');
+  const deadPid = findDeadPid();
+  try {
+    await mkdir(fixture.endpointDirectory, { recursive: true });
+    await writeFile(staleLock, `${JSON.stringify({ pid: deadPid })}\n`);
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: [],
+    });
+    expect(report.endpoints.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: staleLock, state: 'stale-lock' }),
+    ]));
+    expect(report.endpoints.summary.staleLocks).toBe(1);
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7314',
+        message: expect.stringMatching(new RegExp(`owner pid ${deadPid} is provably dead`, 'u')),
+        severity: 'warning',
+      }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports a lock held by a live owner as live with an info diagnostic', async () => {
+  const fixture = await temporaryDoctor();
+  const liveLock = join(fixture.endpointDirectory, 'event-live-claim.sock.lock');
+  try {
+    await mkdir(fixture.endpointDirectory, { recursive: true });
+    await writeFile(liveLock, `${JSON.stringify({ pid: process.pid })}\n`);
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: [],
+    });
+    expect(report.endpoints.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: liveLock, state: 'live' }),
+    ]));
+    expect(report.endpoints.summary).toMatchObject({ staleLocks: 0 });
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7314',
+        message: expect.stringMatching(new RegExp(`held by pid ${process.pid}`, 'u')),
+        severity: 'info',
+      }),
+    ]));
+    expect(report.diagnostics.some((entry) => entry.severity === 'warning')).toBe(false);
+    expect(report.diagnostics.some((entry) => entry.severity === 'error')).toBe(false);
+    expect(report.summary).toMatchObject({ errors: 0, warnings: 0, infos: 1 });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports a lock with an invalid owner shape as a stale lock warning', async () => {
+  const fixture = await temporaryDoctor();
+  const invalidLock = join(fixture.endpointDirectory, 'event-invalid-claim.sock.lock');
+  try {
+    await mkdir(fixture.endpointDirectory, { recursive: true });
+    await writeFile(invalidLock, `${JSON.stringify({ pid: -1 })}\n`);
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: [],
+    });
+    expect(report.endpoints.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: invalidLock, state: 'stale-lock' }),
+    ]));
+    expect(report.endpoints.summary.staleLocks).toBe(1);
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7314',
+        message: expect.stringMatching(/no valid owner record/u),
+        severity: 'warning',
+      }),
+    ]));
   } finally {
     await fixture.cleanup();
   }

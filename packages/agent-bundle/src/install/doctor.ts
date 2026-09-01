@@ -718,6 +718,67 @@ const codexBundle = (
 
 type EndpointProbe = 'live' | 'missing' | 'stale';
 
+interface EndpointClaimOwner {
+  readonly linuxStartTime?: string;
+  readonly pid: number;
+}
+
+// Keep claim-owner validation paired with events/ipc.ts endpointClaimOwnerSchema.
+const parseEndpointClaimOwner = (raw: string): EndpointClaimOwner | undefined => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  const record = parsed as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (key !== 'pid' && key !== 'linuxStartTime') return undefined;
+  }
+  if (typeof record.pid !== 'number' || !Number.isInteger(record.pid) || record.pid <= 0) {
+    return undefined;
+  }
+  if (record.linuxStartTime !== undefined) {
+    if (typeof record.linuxStartTime !== 'string' || !/^\d+$/u.test(record.linuxStartTime)) {
+      return undefined;
+    }
+  }
+  return {
+    ...(record.linuxStartTime !== undefined ? { linuxStartTime: record.linuxStartTime } : {}),
+    pid: record.pid,
+  };
+};
+
+const linuxProcessStartTime = async (pid: number): Promise<string> => {
+  const processStat = await readFile(`/proc/${pid}/stat`, 'utf8');
+  const commEnd = processStat.lastIndexOf(')');
+  if (commEnd === -1) throw new Error(`Unable to parse process stat for pid ${pid}.`);
+  const fieldsAfterComm = processStat.slice(commEnd + 1).trim().split(/\s+/u);
+  const startTime = fieldsAfterComm[19];
+  if (startTime === undefined) throw new Error(`Process stat for pid ${pid} has no start time.`);
+  return startTime;
+};
+
+const isEndpointClaimOwnerProvablyDead = async (
+  owner: EndpointClaimOwner,
+  platform: NodeJS.Platform,
+): Promise<boolean> => {
+  try {
+    process.kill(owner.pid, 0);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return true;
+    if (code !== 'EPERM') return false;
+  }
+  if (platform !== 'linux' || owner.linuxStartTime === undefined) return false;
+  try {
+    return await linuxProcessStartTime(owner.pid) !== owner.linuxStartTime;
+  } catch {
+    return false;
+  }
+};
+
 const probeEndpoint = (path: string): Promise<EndpointProbe> => new Promise((resolvePromise, reject) => {
   const socket = createConnection(path);
   const cleanup = (): void => {
@@ -836,13 +897,42 @@ const scanEndpoints = async (
         findings.push({ path, state: 'live' });
         continue;
       }
-      staleLocks += 1;
-      findings.push({ path, state: 'stale-lock' });
+      let rawOwner: string;
+      try {
+        rawOwner = await readFile(path, 'utf8');
+      } catch (error) {
+        if (isErrno(error, 'ENOENT')) continue;
+        throw error;
+      }
+      const owner = parseEndpointClaimOwner(rawOwner);
+      if (owner === undefined) {
+        staleLocks += 1;
+        findings.push({ path, state: 'stale-lock' });
+        diagnostics.push(diagnostic(
+          'AB7314',
+          `Runtime claim ${JSON.stringify(path)} has no valid owner record, so the runtime cannot verify it and fails closed.`,
+          'After verifying no runtime is starting, remove the lock manually.',
+          'warning',
+        ));
+        continue;
+      }
+      if (await isEndpointClaimOwnerProvablyDead(owner, platform)) {
+        staleLocks += 1;
+        findings.push({ path, state: 'stale-lock' });
+        diagnostics.push(diagnostic(
+          'AB7314',
+          `Runtime claim ${JSON.stringify(path)} is orphaned because owner pid ${owner.pid} is provably dead.`,
+          'The runtime reclaims provably-dead claims automatically at the next start, or remove the lock manually.',
+          'warning',
+        ));
+        continue;
+      }
+      findings.push({ path, state: 'live' });
       diagnostics.push(diagnostic(
         'AB7314',
-        `Runtime claim ${JSON.stringify(path)} has no live socket.`,
-        'The runtime uses bounded retries rather than stealing claims; after verifying no runtime is starting, remove the lock manually.',
-        'warning',
+        `Runtime claim ${JSON.stringify(path)} is held by pid ${owner.pid}, which cannot be proven dead, so the runtime fails closed rather than stealing it.`,
+        'If runtimes hang at startup, verify the owning process and remove the lock manually only once it is gone.',
+        'info',
       ));
     } catch (error) {
       diagnostics.push(diagnostic(
