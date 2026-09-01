@@ -43,7 +43,26 @@ describe('runtimeSpecForFramework', () => {
   it('mirrors npm registry framework specs onto the runtime package', () => {
     expect(runtimeSpecForFramework('0.1.0')).toBe('0.1.0');
     expect(runtimeSpecForFramework('^0.1.0')).toBe('^0.1.0');
+    expect(runtimeSpecForFramework('>=0.1.0 <1')).toBe('>=0.1.0 <1');
+    expect(runtimeSpecForFramework('1.x')).toBe('1.x');
     expect(runtimeSpecForFramework('next')).toBe('next');
+  });
+
+  it('rejects package specs that cannot resolve independently under the runtime name', () => {
+    const unsupportedSpecs = [
+      'https://example.com/agent-bundle.tgz',
+      'git+ssh://git@github.com/ScriptedAlchemy/agent-bundle.git',
+      'github:ScriptedAlchemy/agent-bundle',
+      'npm:@scope/agent-bundle@1.0.0',
+      '/tmp/agent-bundle.tgz',
+      '../agent-bundle',
+      'agent-bundle.tgz',
+      'agent-bundle.tar.gz',
+    ];
+    for (const spec of unsupportedSpecs) {
+      expect(() => runtimeSpecForFramework(spec)).toThrow(UsageError);
+      expect(() => runtimeSpecForFramework(spec)).toThrow('cannot be reused for @agent-bundle/runtime');
+    }
   });
 
   it('fails closed when a paired runtime spec cannot be derived', () => {

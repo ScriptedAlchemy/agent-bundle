@@ -100,7 +100,7 @@ describe('effect-boundary lint', () => {
     expect(reports).toEqual([]);
   });
 
-  it('rejects aliased Effect namespaces (named and star imports)', () => {
+  it('rejects aliased Effect namespaces (named and subpath star imports)', () => {
     const named = apply('packages/rsc-runtime/src/dispatcher.ts', (listeners) => {
       listeners.ImportSpecifier?.({
         imported: { name: 'Effect' },
@@ -118,7 +118,7 @@ describe('effect-boundary lint', () => {
     const star = apply('packages/agent-bundle/src/dev/coordinator.ts', (listeners) => {
       listeners.ImportNamespaceSpecifier?.({
         local: { name: 'E' },
-        parent: { source: { value: 'effect' } },
+        parent: { source: { value: 'effect/Runtime' } },
       });
       listeners.MemberExpression?.({
         computed: false,
@@ -129,7 +129,7 @@ describe('effect-boundary lint', () => {
     expect(star).toEqual([{ data: { name: 'E.runSync' }, messageId: 'forbiddenCall' }]);
   });
 
-  it('rejects runners reached through a renamed nested effect namespace', () => {
+  it('rejects Effect and Runtime runners reached through a whole-module namespace', () => {
     const reports = apply('packages/rsc-runtime/src/dispatcher.ts', (listeners) => {
       listeners.ImportNamespaceSpecifier?.({
         local: { name: 'E' },
@@ -146,8 +146,54 @@ describe('effect-boundary lint', () => {
         property: { name: 'runPromise', type: 'Identifier' },
         type: 'MemberExpression',
       });
+      listeners.MemberExpression?.({
+        computed: false,
+        object: {
+          computed: false,
+          object: { name: 'E', type: 'Identifier' },
+          property: { name: 'Runtime', type: 'Identifier' },
+          type: 'MemberExpression',
+        },
+        property: { name: 'runSync', type: 'Identifier' },
+        type: 'MemberExpression',
+      });
     });
-    expect(reports).toEqual([{ data: { name: 'E.Effect.runPromise' }, messageId: 'forbiddenCall' }]);
+    expect(reports).toEqual([
+      { data: { name: 'E.Effect.runPromise' }, messageId: 'forbiddenCall' },
+      { data: { name: 'E.Runtime.runSync' }, messageId: 'forbiddenCall' },
+    ]);
+  });
+
+  it('ignores runner-shaped methods below non-Effect namespaces', () => {
+    const reports = apply('packages/rsc-runtime/src/dispatcher.ts', (listeners) => {
+      listeners.ImportNamespaceSpecifier?.({
+        local: { name: 'E' },
+        parent: { source: { value: 'effect' } },
+      });
+      listeners.MemberExpression?.({
+        computed: false,
+        object: {
+          computed: false,
+          object: { name: 'Effect', type: 'Identifier' },
+          property: { name: 'adapter', type: 'Identifier' },
+          type: 'MemberExpression',
+        },
+        property: { name: 'runPromise', type: 'Identifier' },
+        type: 'MemberExpression',
+      });
+      listeners.MemberExpression?.({
+        computed: false,
+        object: {
+          computed: false,
+          object: { name: 'E', type: 'Identifier' },
+          property: { name: 'worker', type: 'Identifier' },
+          type: 'MemberExpression',
+        },
+        property: { name: 'runSync', type: 'Identifier' },
+        type: 'MemberExpression',
+      });
+    });
+    expect(reports).toEqual([]);
   });
 
   it('does not flag aliased Effect used for non-runners', () => {

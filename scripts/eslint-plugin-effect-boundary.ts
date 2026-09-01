@@ -20,7 +20,7 @@ const RUN_NAMES = new Set([
 
 const EFFECT_MODULES = new Set(['effect']);
 const EFFECT_NAMESPACES = new Set(['Effect', 'Runtime']);
-const EFFECT_NAMESPACE_MODULES = new Set(['effect', 'effect/Effect', 'effect/Runtime']);
+const EFFECT_RUNNER_NAMESPACE_MODULES = new Set(['effect/Effect', 'effect/Runtime']);
 
 const posixPath = (filename: string): string => filename.replaceAll('\\', '/');
 
@@ -85,6 +85,7 @@ export const effectBoundaryPlugin = {
       }) {
         if (isEffectBoundaryFile(context.filename)) return {};
         const runnerNamespaces = new Set<string>(EFFECT_NAMESPACES);
+        const effectModuleNamespaces = new Set<string>();
         const rememberNamespace = (name: string | undefined): void => {
           if (name !== undefined) runnerNamespaces.add(name);
         };
@@ -106,8 +107,12 @@ export const effectBoundaryPlugin = {
             readonly parent?: { readonly source?: { readonly value?: unknown } };
           }) {
             const source = moduleName(node.parent ?? {});
-            if (source === undefined || !EFFECT_NAMESPACE_MODULES.has(source)) return;
-            rememberNamespace(localName(node));
+            const name = localName(node);
+            if (source === 'effect') {
+              if (name !== undefined) effectModuleNamespaces.add(name);
+              return;
+            }
+            if (source !== undefined && EFFECT_RUNNER_NAMESPACE_MODULES.has(source)) rememberNamespace(name);
           },
           MemberExpression(node: {
             readonly computed?: boolean;
@@ -118,7 +123,12 @@ export const effectBoundaryPlugin = {
             const name = node.property?.name;
             if (name === undefined || !RUN_NAMES.has(name)) return;
             const objectPath = staticMemberPath(node.object);
-            if (objectPath === undefined || !runnerNamespaces.has(objectPath[0]!)) return;
+            if (objectPath === undefined) return;
+            const isDirectRunner = objectPath.length === 1 && runnerNamespaces.has(objectPath[0]!);
+            const isNestedRunner = objectPath.length === 2
+              && effectModuleNamespaces.has(objectPath[0]!)
+              && EFFECT_NAMESPACES.has(objectPath[1]!);
+            if (!isDirectRunner && !isNestedRunner) return;
             context.report({ data: { name: [...objectPath, name].join('.') }, messageId: 'forbiddenCall', node });
           },
         };

@@ -6,6 +6,7 @@ import { gunzip } from 'node:zlib';
 import { UsageError } from './options.ts';
 
 const previewPattern = /-preview-([0-9a-f]{7,40})$/u;
+const npmRegistrySelectorPattern = /^[0-9A-Za-z*._+<>=~^|\-\s]+$/u;
 const unzip = promisify(gunzip);
 
 export type PreviewPackageName = 'agent-bundle' | '@agent-bundle/runtime' | 'create-agent-bundle';
@@ -15,7 +16,11 @@ export const previewPackageSpec = (packageName: PreviewPackageName, sha: string)
 
 export const previewFrameworkSpec = (sha: string): string => previewPackageSpec('agent-bundle', sha);
 
-/** Derives the paired runtime package from the selected framework build. */
+/**
+ * Derives a paired runtime package from an exact preview/local framework
+ * build, or reuses an npm version, range, or tag that resolves independently
+ * under each package name.
+ */
 export const runtimeSpecForFramework = (frameworkSpec: string): string => {
   const preview = /^(https:\/\/pkg\.pr\.new\/ScriptedAlchemy\/agent-bundle\/)agent-bundle@([0-9a-f]{7,40})$/u.exec(frameworkSpec);
   if (preview !== null) return `${preview[1]}@agent-bundle/runtime@${preview[2]}`;
@@ -23,12 +28,19 @@ export const runtimeSpecForFramework = (frameworkSpec: string): string => {
   if (localTarball !== null) {
     return `${localTarball[1]}agent-bundle-runtime${localTarball[2] ?? ''}.tgz`;
   }
-  if (!frameworkSpec.startsWith('file:') && !frameworkSpec.startsWith('https://pkg.pr.new/')) {
+  if (
+    frameworkSpec !== ''
+    && frameworkSpec.trim() === frameworkSpec
+    && npmRegistrySelectorPattern.test(frameworkSpec)
+    && !frameworkSpec.endsWith('.tgz')
+    && !frameworkSpec.endsWith('.tar.gz')
+  ) {
     return frameworkSpec;
   }
   throw new UsageError(
     `Cannot derive a paired @agent-bundle/runtime package from agent-bundle spec "${frameworkSpec}". `
-    + 'Use an npm registry version, range, or tag; an exact pkg.pr.new preview URL; or a file: tarball '
+    + 'This package spec cannot be reused for @agent-bundle/runtime. Use an npm registry version, range, or tag; '
+    + 'an exact pkg.pr.new preview URL; or a file: tarball '
     + 'named agent-bundle.tgz or agent-bundle-<version>.tgz.',
   );
 };
