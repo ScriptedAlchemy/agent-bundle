@@ -219,7 +219,7 @@ it('lowers Claude commands with documented kebab-case frontmatter and body-only 
           model: 'sonnet',
         },
         id: 'command:review',
-        markdown: 'authored bytes are regenerated for Claude',
+        markdown: '---\ndescription: Review changes\ntargets:\n  - claude\n---\nReview the staged diff.\n',
         name: 'review',
         provenance: { kind: 'conventional', sourcePath: '/workspace/commands/review.md' },
         source: '/workspace/commands/review.md',
@@ -252,6 +252,7 @@ it('lowers Claude commands with documented kebab-case frontmatter and body-only 
     'Review the staged diff.',
     '',
   ].join('\n'));
+  expect(documents['commands/review.md']).not.toContain('targets:');
   expect(documents['commands/explain.md']).toBe('# Explain\n\nExplain this code.');
   expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('commands');
 

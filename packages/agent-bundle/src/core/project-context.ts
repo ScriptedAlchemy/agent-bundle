@@ -254,6 +254,7 @@ const canonicalHostDocuments = (
 const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   model.metadata.provenance.sourcePath,
   ...(model.assets ?? []).flatMap((asset) => [asset.provenance.sourcePath, asset.source]),
+  ...(model.commands ?? []).flatMap((command) => [command.provenance.sourcePath, command.source]),
   ...(model.rules ?? []).flatMap((rule) => [rule.provenance.sourcePath, rule.source]),
   ...Object.values(model.extensions).map((extension) => extension.provenance.sourcePath),
   ...model.targets.map((target) => target.provenance.sourcePath),
@@ -336,6 +337,15 @@ export const canonicalizeNormalizedModel = (
           ...asset,
           provenance: canonicalProvenance(root, asset.provenance),
           source: canonicalCompilerPath(root, asset.source, 'Asset source path'),
+        })),
+      }),
+    ...(detached.commands === undefined
+      ? {}
+      : {
+        commands: detached.commands.map((command) => ({
+          ...command,
+          provenance: canonicalProvenance(root, command.provenance),
+          source: canonicalCompilerPath(root, command.source, 'Command source path'),
         })),
       }),
     extensions: Object.fromEntries(Object.entries(detached.extensions)

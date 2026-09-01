@@ -235,7 +235,7 @@ export type InspectionSkipReason = 'excluded-by-targets' | 'unsupported-capabili
 /** One component the plan silently omits for this target, with the intersection-rule cause. */
 export interface InspectionSkippedComponent {
   readonly id: string;
-  readonly kind: 'hook' | 'mcp-app' | 'mcp-server' | 'rule' | 'script' | 'skill';
+  readonly kind: 'command' | 'hook' | 'mcp-app' | 'mcp-server' | 'rule' | 'script' | 'skill';
   readonly name: string;
   readonly reason: InspectionSkipReason;
 }
@@ -461,6 +461,7 @@ interface InspectableComponent {
 }
 
 const inspectableComponents = (model: NormalizedPlugin): readonly InspectableComponent[] => [
+  ...(model.commands ?? []).map((command) => ({ capability: 'commands', id: command.id, kind: 'command' as const, name: command.name, targets: command.targets })),
   ...model.hooks.map((hook) => ({ capability: 'hooks', id: hook.id, kind: 'hook' as const, name: hook.event, targets: hook.targets })),
   ...(model.mcpApps ?? []).map((app) => ({ capability: 'mcp', id: app.id, kind: 'mcp-app' as const, name: app.name, targets: app.targets })),
   ...model.mcpServers.map((server) => ({ capability: 'mcp', id: server.id, kind: 'mcp-server' as const, name: server.name, targets: server.targets })),

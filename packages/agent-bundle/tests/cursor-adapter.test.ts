@@ -263,7 +263,7 @@ it('emits Cursor command bodies, strips authored frontmatter, and omits the comm
         body: 'Review the staged diff.\r\n',
         frontmatter: { argumentHint: '[path]', description: 'Review changes' },
         id: 'command:review',
-        markdown: '---\r\ndescription: Review changes\r\nargumentHint: "[path]"\r\n---\r\nReview the staged diff.\r\n',
+        markdown: '---\r\ndescription: Review changes\r\nargumentHint: "[path]"\r\ntargets:\r\n  - cursor\r\n---\r\nReview the staged diff.\r\n',
         name: 'review',
         provenance: { kind: 'conventional', sourcePath: '/workspace/commands/review.md' },
         source: '/workspace/commands/review.md',
@@ -286,6 +286,7 @@ it('emits Cursor command bodies, strips authored frontmatter, and omits the comm
   const documents = writeContents(withCommands);
   expect(plan.diagnostics).toEqual([]);
   expect(documents['commands/review.md']).toBe('Review the staged diff.\r\n');
+  expect(documents['commands/review.md']).not.toContain('targets:');
   expect(documents['commands/explain.md']).toBe('# Explain\n\nExplain this code.');
   expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({ commands: './commands/' });
 
