@@ -361,7 +361,7 @@ export class EpochStore {
   /** The process-wide lease mutex shared by every store over this project. */
   readonly #leaseTransitions: Semaphore.Semaphore;
   readonly #staging = new Map<symbol, StagingRecord>();
-  /** Serializes this store's state transitions, replacing the pre-Effect serial queue. */
+  /** Serializes this store's state transitions. */
   readonly #transitions: Semaphore.Semaphore = runSync(Semaphore.make(1));
 
   constructor(options: EpochStoreOptions) {
@@ -611,9 +611,8 @@ export class EpochStore {
         return yield* this.#publishVerifiedStaging(record, beforeActivate);
       });
       // The staging root is removed whether the publish committed or failed;
-      // a removal failure replaces the outcome, exactly as the pre-Effect
-      // `finally` did (so it is deliberately not a scope finalizer, which
-      // would have to swallow it).
+      // a removal failure replaces the outcome, so it is deliberately not a
+      // scope finalizer (which would have to swallow it).
       return Effect.gen({ self: this }, function* (this: EpochStore) {
         const outcome = yield* Effect.exit(attempt);
         yield* liftPromise(() => rm(record.root, { force: true, recursive: true }));

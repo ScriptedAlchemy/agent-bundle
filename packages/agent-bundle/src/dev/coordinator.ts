@@ -399,7 +399,7 @@ export class DevCoordinator {
   /**
    * Runs one build pass as an Effect fiber holding the build permit; the
    * exit hook drains the coalesced follow-up slot before the caller's
-   * promise settles, exactly where the pre-Effect `finally` chain sat.
+   * promise settles.
    */
   #startBuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
     const current = runPromise(this.#buildPermit.withPermit(

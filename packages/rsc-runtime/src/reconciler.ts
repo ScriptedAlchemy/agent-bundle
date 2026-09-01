@@ -417,7 +417,9 @@ const gatedFlightStream = (
     Effect.gen(function*() {
       const reader = yield* Effect.acquireRelease(
         Effect.sync(() => flight.getReader()),
-        (handle) => Effect.promise(() => handle.cancel().then(() => undefined)),
+        // cancel() rejects when the source already errored; a defect inside
+        // this closing scope must not replace the stream's own failure.
+        (handle) => Effect.promise(() => handle.cancel().then(() => undefined, () => undefined)),
       );
       return Stream.unfold(undefined, () =>
         demand.wait.pipe(
