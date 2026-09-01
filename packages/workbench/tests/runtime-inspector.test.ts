@@ -113,8 +113,8 @@ describe('Runtime inspector', () => {
 
       await page.getByRole('tab', { name: 'Document' }).click();
       await page.getByRole('heading', { name: 'Customer document' }).waitFor({ timeout: 5_000 });
-      expect(await page.getByLabel('Agent Document').textContent()).toContain('Version 1 · success');
-      expect(await page.getByLabel('Agent Document').textContent()).toContain('Loaded · 1 / 1');
+      expect(await page.getByLabel('Agent Document', { exact: true }).textContent()).toContain('Version 1 · success');
+      expect(await page.getByLabel('Agent Document', { exact: true }).textContent()).toContain('Loaded · 1 / 1');
 
       await page.getByRole('tab', { name: 'Protocol' }).click();
       await page.getByText('Provider MCP protocol', { exact: true }).waitFor({ timeout: 5_000 });

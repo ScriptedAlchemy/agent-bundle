@@ -202,13 +202,12 @@ const renderReadyFlight = async (): Promise<Uint8Array> => new Promise((resolve,
 });
 
 const realAgentDocumentRuntime = async () => ({
-  DEFAULT_AGENT_RENDER_LIMITS,
-  decodeAgentFlightStream,
+  decodeAgentFlight: (flight: ReadableStream<Uint8Array>, signal: AbortSignal) =>
+    decodeAgentFlightStream(flight, { limits: DEFAULT_AGENT_RENDER_LIMITS, signal }),
 });
 
 const emptyAgentDocumentRuntime = async () => ({
-  DEFAULT_AGENT_RENDER_LIMITS,
-  decodeAgentFlightStream: () => new ReadableStream({
+  decodeAgentFlight: () => new ReadableStream({
     start(controller) {
       controller.close();
     },
@@ -327,12 +326,11 @@ it('aborts decoding when Agent Document events exceed the aggregate response bud
   const largeText = 'x'.repeat(512 * 1024);
   const server = await start(new MemoryRuntime(), {
     loadAgentDocumentRuntime: async () => ({
-      DEFAULT_AGENT_RENDER_LIMITS,
-      decodeAgentFlightStream: (_flight, options) => {
+      decodeAgentFlight: (_flight: ReadableStream<Uint8Array>, signal: AbortSignal) => {
         let sequence = 0;
         return new ReadableStream({
           start(controller) {
-            options?.signal?.addEventListener('abort', () => {
+            signal.addEventListener('abort', () => {
               aborted = true;
               controller.error(new DOMException('Agent render was aborted', 'AbortError'));
             }, { once: true });
@@ -393,8 +391,7 @@ it('returns honest diagnostics when the Agent runtime is absent or stored Flight
 
   const invalid = await start(new MemoryRuntime(), {
     loadAgentDocumentRuntime: async () => ({
-      DEFAULT_AGENT_RENDER_LIMITS,
-      decodeAgentFlightStream: () => {
+      decodeAgentFlight: () => {
         throw new Error('invalid Flight');
       },
     }),

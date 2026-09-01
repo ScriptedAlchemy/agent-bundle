@@ -1,7 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import type { AgentRenderEvent, AgentRenderLimits } from '@agent-bundle/runtime';
-
 import {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
@@ -33,12 +31,18 @@ type Route =
   | Readonly<{ readonly id: string; readonly kind: 'run' | 'document' | 'flight' | 'replay' }>
   | Readonly<{ readonly generation: string; readonly kind: 'asset'; readonly path: readonly string[]; readonly surfaceId: string }>;
 
+/**
+ * Structural view of the optional `@agent-bundle/runtime` peer. The peer's own
+ * types must never appear here: this interface reaches the emitted root
+ * declarations, and consumers without the optional peer installed could no
+ * longer compile against them. Events stay opaque — this route only
+ * re-serializes them.
+ */
 export interface AgentDocumentRuntimeModule {
-  readonly DEFAULT_AGENT_RENDER_LIMITS: AgentRenderLimits;
-  readonly decodeAgentFlightStream: (
+  readonly decodeAgentFlight: (
     flight: ReadableStream<Uint8Array>,
-    options?: Readonly<{ readonly limits?: Partial<AgentRenderLimits>; readonly signal?: AbortSignal }>,
-  ) => ReadableStream<AgentRenderEvent>;
+    signal: AbortSignal,
+  ) => AsyncIterable<unknown>;
 }
 
 export interface RuntimeRoutesOptions {
@@ -56,8 +60,8 @@ let agentDocumentRuntimePromise: Promise<AgentDocumentRuntimeModule> | undefined
 const loadAgentDocumentRuntime = async (): Promise<AgentDocumentRuntimeModule> => {
   agentDocumentRuntimePromise ??= import('@agent-bundle/runtime')
     .then((runtime) => Object.freeze({
-      DEFAULT_AGENT_RENDER_LIMITS: runtime.DEFAULT_AGENT_RENDER_LIMITS,
-      decodeAgentFlightStream: runtime.decodeAgentFlightStream,
+      decodeAgentFlight: (flight: ReadableStream<Uint8Array>, signal: AbortSignal) =>
+        runtime.decodeAgentFlightStream(flight, { limits: runtime.DEFAULT_AGENT_RENDER_LIMITS, signal }),
     }))
     .catch((error: unknown) => {
       agentDocumentRuntimePromise = undefined;
@@ -427,12 +431,9 @@ export class RuntimeRoutes {
             controller.close();
           },
         });
-        const events: AgentRenderEvent[] = [];
+        const events: unknown[] = [];
         let responseBytes = Buffer.byteLength('{"events":[]}');
-        for await (const event of runtime.decodeAgentFlightStream(flight, {
-          limits: runtime.DEFAULT_AGENT_RENDER_LIMITS,
-          signal: abortController.signal,
-        })) {
+        for await (const event of runtime.decodeAgentFlight(flight, abortController.signal)) {
           const eventBytes = Buffer.byteLength(JSON.stringify(event));
           const separatorBytes = events.length === 0 ? 0 : 1;
           if (responseBytes + separatorBytes + eventBytes > agentDocumentResponseLimit) {
