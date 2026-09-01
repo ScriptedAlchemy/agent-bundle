@@ -20,11 +20,18 @@ const distFile = async (...segments: string[]): Promise<string> =>
 
 describe.sequential('state kernel packaging boundaries', () => {
   it('keeps every kernel and storage identifier out of the root and plugin entries', async () => {
+    const kernel = ['node:sqlite', 'defineState', 'AgentStateError', 'DatabaseSync', 'agent_state_journal'] as const;
     for (const entry of ['index.js', 'plugin.js']) {
       const source = await distFile(entry);
-      for (const identifier of ['node:sqlite', 'defineState', 'AgentStateError', 'DatabaseSync', 'agent_state_journal', 'from "effect"', 'Effect.runPromise']) {
+      for (const identifier of kernel) {
         expect(source, `${entry} must not contain ${identifier}`).not.toContain(identifier);
       }
+    }
+    // Stage 2 puts Effect on the dispatcher, which is part of the root graph.
+    // The plugin entry stays Effect-free so hook-only artifacts still skip it.
+    const plugin = await distFile('plugin.js');
+    for (const identifier of ['from "effect"', 'Effect.runPromise']) {
+      expect(plugin, `plugin.js must not contain ${identifier}`).not.toContain(identifier);
     }
   });
 

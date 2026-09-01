@@ -84,9 +84,15 @@ on the Promise edge. Do not widen public error types to satisfy Effect.
 
 ## Streams and concurrency
 
-Stage 2+ use Effect `Stream` (native backpressure replaces the pull-gated
-`TransformStream`), fibers instead of internal signal threading, and
-`PubSub` / `Semaphore` / `Latch` for the dev seam. Pattern files:
+Stage 2 uses Effect `Stream` for the #145 dispatcher: Flight bytes via
+`Stream.unfold` that waits for event-stream demand *before* `reader.read()`,
+pending boundaries via `Stream.paginate`, contract bounds as the emit stage
+(`boundRenderEventStream` / `createAgentRenderEventSequence`), and progress
+via `Stream.merge` + `takeUntil(complete)` (not `Stream.callback` — a failed
+callback producer does not fail the stream). A `Latch` opened from the
+public event-stream pull gates Flight bytes after the shell. Host
+`AbortSignal` becomes `Stream.interruptWhen` + `abortToInterrupt` at the
+public edge. Pattern files:
 
 - [agent-patterns/effect-stream.md](../agent-patterns/effect-stream.md)
 - [agent-patterns/effect-scope.md](../agent-patterns/effect-scope.md)
@@ -102,11 +108,13 @@ Stage 2+ use Effect `Stream` (native backpressure replaces the pull-gated
 - `@effect/vitest` — this repo uses rstest.
 - `NodeRuntime.runMain` / `BunRuntime` as a substitute for the boundary.
 - Ad-hoc `ManagedRuntime` outside a boundary module.
-- `effect/unstable/*` until listed below.
+- `effect/unstable/*` until listed below (Stage 2 listed none).
 
 ## Unstable-module adoptions
 
-Re-pin chores re-verify every row. Stage 0 adopts none.
+Re-pin chores re-verify every row. Stage 2 adopts none: Flight is a React
+binary stream, not Ndjson/SchemaBinary, and no other `effect/unstable/*`
+module fits the dispatcher rewrite.
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |

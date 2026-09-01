@@ -4,8 +4,9 @@ import {
   type AgentRenderEvent,
   type AgentRenderLimits,
 } from './agent-document.js';
-import type { AgentProgressReporter, AgentProgressUpdate, AgentRenderInvocation } from './agent-request.js';
-import { createAgentFlightEventSession, decodeAgentFlightStream } from './reconciler.js';
+import type { AgentProgressReporter, AgentRenderInvocation } from './agent-request.js';
+import { createFlightDemand } from './effect/render-stream.js';
+import { createAgentRenderEventSession, toPublicEventStream } from './reconciler.js';
 
 export { decodeAgentDocument } from './decode-document.js';
 
@@ -29,6 +30,13 @@ export interface AgentRenderDispatcherOptions {
 }
 
 const abortError = (): DOMException => new DOMException('Agent render was aborted', 'AbortError');
+
+const abortedStream = (): ReadableStream<AgentRenderEvent> =>
+  new ReadableStream({
+    start(controller) {
+      controller.error(abortError());
+    },
+  });
 
 const drainCompleteDocument = async (
   events: ReadableStream<AgentRenderEvent>,
@@ -69,43 +77,27 @@ export const createAgentRenderDispatcher = (
   options: AgentRenderDispatcherOptions = {},
 ): AgentRenderDispatcher => {
   const stream = (request: AgentRenderDispatch): ReadableStream<AgentRenderEvent> => {
-    if (request.signal.aborted) {
-      return new ReadableStream({
-        start(controller) {
-          controller.error(abortError());
-        },
-      });
-    }
-    const session = createAgentFlightEventSession({ limits: options.limits, signal: request.signal });
-    const progress: AgentProgressReporter = Object.freeze({
-      report: async (update: AgentProgressUpdate) => {
-        await session.live.emit(session.sequence.emit({
-          completed: update.completed ?? 0,
-          ...(update.message === undefined ? {} : { message: update.message }),
-          ...(update.total === undefined ? {} : { total: update.total }),
-          type: 'progress',
-        }));
+    if (request.signal.aborted) return abortedStream();
+    const demand = createFlightDemand();
+    const pendingFlight: { current?: Promise<ReadableStream<Uint8Array>> } = {};
+    const session = createAgentRenderEventSession({
+      demand,
+      get flight() {
+        const current = pendingFlight.current;
+        if (current === undefined) {
+          return Promise.reject(new AgentContractError('invalid-document', 'Flight worker is not running'));
+        }
+        return current;
       },
+      limits: options.limits,
+      signal: request.signal,
     });
-    void (async () => {
-      try {
-        if (request.signal.aborted) throw abortError();
-        const flight = await host.execute({
-          invocation: request.invocation,
-          progress,
-          signal: request.signal,
-        });
-        if (request.signal.aborted) throw abortError();
-        decodeAgentFlightStream(flight, {
-          limits: options.limits,
-          session,
-          signal: request.signal,
-        });
-      } catch (error) {
-        session.live.fail(request.signal.aborted ? abortError() : error);
-      }
-    })();
-    return session.readable;
+    pendingFlight.current = host.execute({
+      invocation: request.invocation,
+      progress: session.progress,
+      signal: request.signal,
+    });
+    return toPublicEventStream(session.events, demand, request.signal);
   };
 
   return Object.freeze({

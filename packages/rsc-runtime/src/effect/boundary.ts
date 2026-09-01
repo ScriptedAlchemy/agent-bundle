@@ -2,6 +2,9 @@ import {
   Cause,
   Effect,
   Exit,
+  Fiber,
+  Latch,
+  Stream,
   type Layer,
   ManagedRuntime,
   type Scope,
@@ -127,6 +130,29 @@ export const makeScopedEffectRuntime = <R, E>(
 };
 
 /**
+ * Host AbortSignal → Effect interruption. Re-checks `signal.aborted` when
+ * the effect starts (not only when this helper is constructed) so a signal
+ * that aborts between construction and run still interrupts.
+ */
+export const abortToInterrupt = (signal: AbortSignal): Effect.Effect<never> =>
+  Effect.suspend(() => {
+    if (signal.aborted) return interruptAs();
+    return Effect.callback<never>((resume) => {
+      if (signal.aborted) {
+        resume(Effect.interrupt);
+        return undefined;
+      }
+      const onAbort = (): void => {
+        resume(Effect.interrupt);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      return Effect.sync(() => {
+        signal.removeEventListener('abort', onAbort);
+      });
+    });
+  });
+
+/**
  * AbortSignal → Effect interruption, for programs that still run inside
  * Effect and receive a host signal. The Promise edge also accepts `signal`
  * directly via {@link runPromise}.
@@ -134,20 +160,117 @@ export const makeScopedEffectRuntime = <R, E>(
 export const interruptWhenAborted = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   signal: AbortSignal,
-): Effect.Effect<A, E, R> => {
-  if (signal.aborted) return interruptAs();
-  return Effect.raceFirst(
-    effect,
-    Effect.callback<never>((resume) => {
-      const onAbort = () => {
-        resume(Effect.interrupt);
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-      return Effect.sync(() => {
-        signal.removeEventListener('abort', onAbort);
+): Effect.Effect<A, E, R> => Effect.raceFirst(effect, abortToInterrupt(signal));
+
+export interface StreamToReadableOptions<A> {
+  readonly closeOn?: (value: A) => boolean;
+  readonly onPull?: () => void;
+  readonly onPullDelivered?: () => void;
+  readonly signal?: AbortSignal;
+  readonly strategy?: QueuingStrategy<A>;
+}
+
+/**
+ * Stream → web ReadableStream. Owns the `runFork` / cancel `runPromise` pair
+ * that Effect's `Stream.toReadableStream` would otherwise call. Failures map
+ * through {@link mapCause} so interrupt-only causes stay `AbortError`
+ * (Effect's helper uses `Cause.squash`, which is the wrong public contract).
+ */
+export const streamToReadableStream = <A, E>(
+  stream: Stream.Stream<A, E>,
+  options: StreamToReadableOptions<A> = {},
+): ReadableStream<A> => {
+  let currentPull: { readonly resolve: () => void; readonly reject: (error: Error) => void } | undefined;
+  let fiber: Fiber.Fiber<void, E> | undefined;
+  let terminal: { readonly error?: Error } | undefined;
+  const latch = Latch.makeUnsafe(false);
+  const source = options.signal === undefined
+    ? stream
+    : Stream.interruptWhen(stream, abortToInterrupt(options.signal));
+  const settlePull = (error?: Error): void => {
+    const waiter = currentPull;
+    currentPull = undefined;
+    if (waiter === undefined) return;
+    if (error === undefined) waiter.resolve();
+    else waiter.reject(error);
+  };
+  const finish = (error?: Error): void => {
+    if (terminal !== undefined) return;
+    terminal = { error };
+    settlePull(error);
+  };
+
+  const failController = (controller: ReadableStreamDefaultController<A>, error: Error): void => {
+    try {
+      controller.error(error);
+    } catch {
+      // Already closed or errored — pull() still rejects via `terminal`.
+    }
+    finish(error);
+  };
+
+  return new ReadableStream<A>({
+    cancel() {
+      const running = fiber;
+      fiber = undefined;
+      if (running === undefined) return;
+      // Fork, never `runPromise`: cancel may run inside Effect teardown
+      // (or a consumer's cancel path), and blocking a finalizer on the
+      // producer fiber's exit risks deadlock and hides contract / abort
+      // errors. Interrupt in the background and return immediately.
+      void Effect.runFork(Effect.asVoid(Fiber.interrupt(running)));
+    },
+    pull() {
+      if (terminal !== undefined) {
+        return terminal.error === undefined ? Promise.resolve() : Promise.reject(terminal.error);
+      }
+      options.onPull?.();
+      return new Promise<void>((resolve, reject) => {
+        currentPull = { reject, resolve };
+        latch.openUnsafe();
       });
-    }),
-  );
+    },
+    start(controller) {
+      const watched = Stream.tapError(source, (error) =>
+        Effect.sync(() => {
+          failController(controller, toRuntimeError(error));
+        }),
+      );
+      fiber = Effect.runFork(Stream.runForEachArray(watched, (chunk) =>
+        latch.whenOpen(Effect.sync(() => {
+          if (terminal !== undefined) return;
+          latch.closeUnsafe();
+          for (const item of chunk) {
+            controller.enqueue(item);
+            if (options.closeOn?.(item) === true) {
+              controller.close();
+              options.onPullDelivered?.();
+              finish();
+              if (fiber !== undefined) {
+                void Effect.runFork(Fiber.interrupt(fiber));
+              }
+              return;
+            }
+          }
+          options.onPullDelivered?.();
+          settlePull();
+        })),
+      ));
+      fiber.addObserver((exit) => {
+        if (terminal !== undefined) return;
+        if (Exit.isFailure(exit)) {
+          failController(controller, mapCause(exit.cause));
+          return;
+        }
+        try {
+          controller.close();
+        } catch {
+          // Already closed by closeOn.
+        }
+        finish();
+      });
+    },
+  }, options.strategy);
 };
 
 /**
