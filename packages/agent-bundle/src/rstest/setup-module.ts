@@ -27,6 +27,13 @@ const renderableRoutes = (manifest: AgentBundleTestManifest): readonly TestableR
 /** Bundler-resolvable module specifier for one route module path. */
 const specifier = (source: string): string => source.replaceAll('\\', '/');
 
+/**
+ * The generated registry is assigned to the realm global directly rather than
+ * through `registerTestRoutes`, so that this file imports nothing but the
+ * project's own route modules. `version` is therefore validated by the helpers
+ * when they read the registry, which is also the only side that knows which
+ * `agent-bundle/test` the test file actually resolved.
+ */
 export const routeTestSetupSource = (manifest: AgentBundleTestManifest): string => {
   const loaders = renderableRoutes(manifest)
     .map((route) => `    ${JSON.stringify(route.id)}: () => import(${JSON.stringify(specifier(route.source))}),`);

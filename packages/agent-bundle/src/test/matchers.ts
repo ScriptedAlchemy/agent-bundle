@@ -38,7 +38,11 @@ export interface DocumentAssertions {
   /** Asserts the document's node kinds in document order. */
   readonly toHaveNodeKinds: (kinds: readonly AgentDocumentNodeKind[]) => DocumentAssertions;
   readonly toHaveStatus: (status: AgentDocumentStatus) => DocumentAssertions;
-  /** Asserts the document's structured value equals `value` (JSON structural equality). */
+  /**
+   * Asserts the document's structured value equals `value` (JSON structural
+   * equality). `undefined` asserts the document emitted no value at all, which
+   * `null` does not satisfy.
+   */
   readonly toHaveValue: (value: unknown) => DocumentAssertions;
 }
 
@@ -106,10 +110,15 @@ export const expectDocument = (subject: DocumentSubject): DocumentAssertions => 
       return assertions;
     },
     toHaveValue(value) {
-      if (stableJson(document.value ?? null) !== stableJson(value ?? null)) {
+      // `AgentDocument.value` is optional, so an absent value and an emitted
+      // `null` are distinct states. Collapsing them would pass a route that
+      // emitted no structured value at all.
+      const absent = document.value === undefined;
+      const expectAbsent = value === undefined;
+      if (absent !== expectAbsent || (!absent && stableJson(document.value) !== stableJson(value))) {
         fail('The Agent Document value differs from the expected structured value.', [
-          `expected:     ${captured(value)}`,
-          `received:     ${document.value === undefined ? 'no document value' : captured(document.value)}`,
+          `expected:     ${expectAbsent ? 'no document value' : captured(value)}`,
+          `received:     ${absent ? 'no document value' : captured(document.value)}`,
         ]);
       }
       return assertions;
