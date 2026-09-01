@@ -21,9 +21,13 @@ examples/release/micro-eval gates, so it is a fast signal, not a merge gate.
 
 Every leg is an isolated git worktree pinned to the HEAD commit (uncommitted
 changes are not covered — the runner warns), with its own `node_modules` and
-its own `TMPDIR` (`.worktrees/local-ci/tmp/<leg>`, recreated every run).
-The private temp root keeps concurrent legs from observing each other's
-temp traffic: suites that assert temp-root hygiene (for example
+its own `TMPDIR` (`<system tmp>/abci-<hash8>-<leg>`, where `<hash8>` is
+derived from the repo root path; recreated every run). The temp roots live
+under the short system temp directory rather than the repo worktree because
+Chrome creates AF_UNIX sockets inside `TMPDIR` and the kernel caps socket
+paths at 108 bytes; the hash keeps concurrent runs from different checkouts
+from colliding. The private temp root keeps concurrent legs from observing
+each other's temp traffic: suites that assert temp-root hygiene (for example
 `cli.test.ts` scans `os.tmpdir()` for leaked `agent-bundle-artifact-*`
 directories) only ever see their own leg's directories, so a sibling leg's
 in-flight work cannot fail them — while a directory the leg itself leaks
