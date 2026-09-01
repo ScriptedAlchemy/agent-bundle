@@ -88,5 +88,14 @@ export { createRscRequestContext } from './request-context.js';
 // Type-only: the state kernel itself ships behind the './state' subpath so
 // stateless artifacts include none of it (#98).
 export type { AgentStateHandle, AgentStateLifetime } from './state/contract.js';
+// Type-only: the notice ledger itself ships behind the './notices' subpath.
+export type {
+  AgentNotice,
+  AgentNoticeDelivery,
+  AgentNoticeLedger,
+  AgentNoticeState,
+  AgentNoticesHandle,
+  AgentRecipient,
+} from './notices/contract.js';
 export type { RscRequestContext } from './request-context.js';
 export * from './plugin.js';

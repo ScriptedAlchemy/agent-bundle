@@ -36,6 +36,11 @@ export type {
   Observed,
   ObservedSource,
 } from './agent-request.js';
+// Type-only: the optional ledger implementation stays behind './notices'.
+export type {
+  AgentNoticeLedger,
+  AgentNoticesHandle,
+} from './notices/contract.js';
 export { defineRscApplication } from './application.js';
 export type { RscApplication, RscApplicationOptions } from './application.js';
 export { runRscCli } from './cli.js';

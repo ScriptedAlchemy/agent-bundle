@@ -20,7 +20,15 @@ const distFile = async (...segments: string[]): Promise<string> =>
 
 describe.sequential('state kernel packaging boundaries', () => {
   it('keeps every kernel and storage identifier out of the root and plugin entries', async () => {
-    const kernel = ['node:sqlite', 'defineState', 'AgentStateError', 'DatabaseSync', 'agent_state_journal'] as const;
+    const kernel = [
+      'node:sqlite',
+      'defineState',
+      'AgentStateError',
+      'DatabaseSync',
+      'agent_state_journal',
+      'createAgentNoticeLedger',
+      'agent-notice-ledger/v1',
+    ] as const;
     for (const entry of ['index.js', 'plugin.js']) {
       const source = await distFile(entry);
       for (const identifier of kernel) {
@@ -42,6 +50,14 @@ describe.sequential('state kernel packaging boundaries', () => {
     expect(source).not.toContain('DatabaseSync');
   });
 
+  it('keeps the optional notice ledger out of stateless entries and node:sqlite out of its core entry', async () => {
+    const source = await distFile('notices.js');
+    expect(source).toContain('createAgentNoticeLedger');
+    expect(source).toContain('agent-notice-ledger/v1');
+    expect(source).not.toContain('node:sqlite');
+    expect(source).not.toContain('DatabaseSync');
+  });
+
   it('gives the sqlite entry its own subpath that shares the state runtime', async () => {
     const source = await distFile('state', 'sqlite.js');
     expect(source).toContain('node:sqlite');
@@ -49,7 +65,14 @@ describe.sequential('state kernel packaging boundaries', () => {
     const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8')) as {
       exports: Record<string, { import: string; types: string }>;
     };
-    expect(Object.keys(packageJson.exports)).toEqual(['.', './plugin', './flight/server', './state', './state/sqlite']);
+    expect(Object.keys(packageJson.exports)).toEqual([
+      '.',
+      './plugin',
+      './flight/server',
+      './state',
+      './state/sqlite',
+      './notices',
+    ]);
     for (const subpath of Object.keys(packageJson.exports)) {
       const target = packageJson.exports[subpath]!;
       await expect(distFile(...target.import.replace('./dist/', '').split('/'))).resolves.toBeTruthy();
