@@ -1,0 +1,8 @@
+{
+  "agent_id": "agent-claude-1",
+  "agent_type": "Explore",
+  "cwd": "/workspace",
+  "hook_event_name": "SubagentStart",
+  "session_id": "parent-session-claude",
+  "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

@@ -1001,6 +1001,87 @@ it('runs the embedded Codex and Claude native codecs through their published wra
   }
 }, 15_000);
 
+it('round-trips Claude and Codex subagent fields through published wrappers', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-subagent-hook-codecs-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const base = hookModel(root);
+  const model: NormalizedPlugin = {
+    ...base,
+    hooks: [
+      {
+        ...base.hooks[0]!,
+        event: 'agentStart',
+        id: 'hook:agent-start:subagent-start',
+        name: 'subagent-start',
+        source: join(sourceRoot, 'subagent-start.ts'),
+      },
+      {
+        ...base.hooks[3]!,
+        event: 'agentStop',
+        id: 'hook:agent-stop:subagent-stop',
+        name: 'subagent-stop',
+        source: join(sourceRoot, 'subagent-stop.ts'),
+      },
+    ],
+  };
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(
+        join(sourceRoot, 'subagent-start.ts'),
+        "export default (event: Record<string, unknown>) => ({ outcome: 'continue' as const, additionalContext: `${String(event.sessionId)}:${String(event.agentId)}:${String(event.agentType)}:${String(event.turnId)}` });\n",
+      ),
+      writeFile(
+        join(sourceRoot, 'subagent-stop.ts'),
+        "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.agentTranscriptPath)}:${String(event.stopHookActive)}:${String(event.lastAssistantMessage)}` });\n",
+      ),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    for (const target of ['codex', 'claude'] as const) {
+      const manifest = JSON.parse(await readFile(join(outputRoot, target, 'hooks', 'hooks.json'), 'utf8')) as {
+        readonly hooks: Readonly<Record<string, readonly unknown[]>>;
+      };
+      expect(manifest.hooks.SubagentStart).toHaveLength(1);
+      expect(manifest.hooks.SubagentStop).toHaveLength(1);
+
+      const startInput = JSON.parse(await readFile(
+        new URL(`./fixtures/events/${target}-subagent-start.json`, import.meta.url),
+        'utf8',
+      )) as Record<string, unknown>;
+      const stopInput = JSON.parse(await readFile(
+        new URL(`./fixtures/events/${target}-subagent-stop.json`, import.meta.url),
+        'utf8',
+      )) as Record<string, unknown>;
+      const expectedTurn = target === 'codex' ? 'turn-codex-1' : 'undefined';
+      await expect(runNativeHook(join(outputRoot, target, 'hooks', 'subagent-start.mjs'), startInput)).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: JSON.stringify({
+          hookSpecificOutput: {
+            additionalContext: `${String(startInput.session_id)}:${String(startInput.agent_id)}:${String(startInput.agent_type)}:${expectedTurn}`,
+            hookEventName: 'SubagentStart',
+          },
+        }),
+      });
+      await expect(runNativeHook(join(outputRoot, target, 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: JSON.stringify({
+          decision: 'block',
+          reason: `${String(stopInput.agent_transcript_path)}:${String(stopInput.stop_hook_active)}:${String(stopInput.last_assistant_message)}`,
+        }),
+      });
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 15_000);
+
 it('rejects malformed event-specific native input before calling generated Codex and Claude hooks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-input-'));
   const sourceRoot = join(root, 'src', 'hooks');
@@ -1091,11 +1172,11 @@ it('rejects canonical reason combinations whose selected native hook cannot repr
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
     const hooksRoot = join(outputRoot, 'codex', 'hooks');
     const assertions: readonly [string, Record<string, unknown>, string][] = [
-      ['session-reason-00000001.mjs', { ...common, hook_event_name: 'SessionStart', source: 'startup' }, 'reason is only valid for a denied beforeTool or stop hook'],
-      ['before-allow-reason-00000002.mjs', { ...common, hook_event_name: 'PreToolUse', tool_input: {}, tool_name: 'Bash', tool_use_id: 'use-1' }, 'reason is only valid for a denied beforeTool or stop hook'],
+      ['session-reason-00000001.mjs', { ...common, hook_event_name: 'SessionStart', source: 'startup' }, 'reason is only valid for a denied beforeTool, stop, or agentStop hook'],
+      ['before-allow-reason-00000002.mjs', { ...common, hook_event_name: 'PreToolUse', tool_input: {}, tool_name: 'Bash', tool_use_id: 'use-1' }, 'reason is only valid for a denied beforeTool, stop, or agentStop hook'],
       ['before-deny-reason-00000003.mjs', { ...common, hook_event_name: 'PreToolUse', tool_input: {}, tool_name: 'Bash', tool_use_id: 'use-2' }, 'denied beforeTool hook requires a nonempty reason'],
-      ['after-reason-00000004.mjs', { ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_response: {}, tool_use_id: 'use-3' }, 'reason is only valid for a denied beforeTool or stop hook'],
-      ['stop-continue-reason-00000005.mjs', { ...common, hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: false }, 'reason is only valid for a denied beforeTool or stop hook'],
+      ['after-reason-00000004.mjs', { ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_response: {}, tool_use_id: 'use-3' }, 'reason is only valid for a denied beforeTool, stop, or agentStop hook'],
+      ['stop-continue-reason-00000005.mjs', { ...common, hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: false }, 'reason is only valid for a denied beforeTool, stop, or agentStop hook'],
       ['stop-deny-reason-00000006.mjs', { ...common, hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: false }, 'denied stop hook requires a nonempty reason'],
     ];
     for (const [name, input, message] of assertions) {

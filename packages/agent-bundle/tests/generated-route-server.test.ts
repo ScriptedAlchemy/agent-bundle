@@ -25,8 +25,16 @@ const writeProjectFile = async (root: string, path: string, contents: string): P
 const runHook = async (
   entry: string,
   input: Readonly<Record<string, unknown>>,
+  env: Readonly<NodeJS.ProcessEnv> = {},
 ): Promise<Readonly<Record<string, unknown>> | undefined> => new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, [entry], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const childEnv = { ...process.env, ...env };
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete childEnv[key];
+  }
+  const child = spawn(process.execPath, [entry], {
+    env: childEnv,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', (chunk) => { stdout += String(chunk); });
@@ -548,4 +556,159 @@ it('runs an explicitly standalone event route without a shared runtime', { timeo
     tool_output: '{"ok":true}',
     tool_use_id: 'tool-1',
   })).resolves.toEqual({ additional_context: 'standalone:Write' });
+});
+
+it('replays Claude and Codex subagent fixtures through standalone event-route wrappers', { timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-subagent-events-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({
+      dependencies: {
+        '@agent-bundle/runtime': 'workspace:*',
+        react: '19.2.8',
+      },
+      name: 'subagent-events-fixture',
+      type: 'module',
+      version: '1.0.0',
+    })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      "export default defineConfig({ plugin: { name: 'subagent-events-fixture', version: '1.0.0' }, targets: ['claude', 'codex'] });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/agent/start.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };",
+      'export default async function AgentStart({ native }) {',
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${native.session_id}:${native.agent_id}:${native.agent_type}`));',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/agent/stop.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };",
+      'export default async function AgentStop({ native }) {',
+      "  return createElement(Agent.Result, { value: { outcome: 'deny', reason: `Review ${native.agent_id} once more.` } });",
+      '}',
+      '',
+    ].join('\n')),
+  ]);
+
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['claude', 'codex'] });
+  expect(compiled.build.compiledHooks.filter((hook) => hook.event === 'agentStart')).toHaveLength(2);
+  expect(compiled.build.compiledHooks.filter((hook) => hook.event === 'agentStop')).toHaveLength(2);
+
+  for (const target of ['claude', 'codex'] as const) {
+    const start = compiled.build.compiledHooks.find((hook) => hook.target === target && hook.event === 'agentStart')!;
+    const stop = compiled.build.compiledHooks.find((hook) => hook.target === target && hook.event === 'agentStop')!;
+    const startInput = JSON.parse(await readFile(
+      new URL(`./fixtures/events/${target}-subagent-start.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const stopInput = JSON.parse(await readFile(
+      new URL(`./fixtures/events/${target}-subagent-stop.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+
+    await expect(runHook(start.output, startInput)).resolves.toEqual({
+      hookSpecificOutput: {
+        additionalContext: `${String(startInput.session_id)}:${String(startInput.agent_id)}:${String(startInput.agent_type)}`,
+        hookEventName: 'SubagentStart',
+      },
+    });
+    await expect(runHook(stop.output, stopInput)).resolves.toEqual({
+      decision: 'block',
+      reason: `Review ${String(stopInput.agent_id)} once more.`,
+    });
+  }
+});
+
+it('dispatches composite plugin event routes through the invoking host contract', { timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-plugin-subagent-events-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({
+      dependencies: {
+        '@agent-bundle/runtime': 'workspace:*',
+        react: '19.2.8',
+      },
+      name: 'plugin-subagent-events-fixture',
+      type: 'module',
+      version: '1.0.0',
+    })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      "export default defineConfig({ plugin: { name: 'plugin-subagent-events-fixture', version: '1.0.0' }, targets: ['plugin'] });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/agent/start.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { runtime: 'standalone', targets: ['plugin'] };",
+      'export default async function AgentStart({ canonical, native }) {',
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${canonical.provenance.host}:${native.agent_id}`));',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/agent/stop.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { runtime: 'standalone', targets: ['plugin'] };",
+      'export default async function AgentStop() {',
+      "  return createElement(Agent.Result, null, createElement(Agent.Context, null, 'Check the final result.'));",
+      '}',
+      '',
+    ].join('\n')),
+  ]);
+
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['plugin'] });
+  const start = compiled.build.compiledHooks.find((hook) => hook.event === 'agentStart')!;
+  const stop = compiled.build.compiledHooks.find((hook) => hook.event === 'agentStop')!;
+
+  for (const target of ['claude', 'codex'] as const) {
+    const input = JSON.parse(await readFile(
+      new URL(`./fixtures/events/${target}-subagent-start.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    if (target === 'codex') input.transcript_path = null;
+    const env = target === 'codex'
+      ? { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output }
+      : { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined };
+    await expect(runHook(start.output, input, env)).resolves.toEqual({
+      hookSpecificOutput: {
+        additionalContext: `${target}:${String(input.agent_id)}`,
+        hookEventName: 'SubagentStart',
+      },
+    });
+  }
+
+  const claudeStop = JSON.parse(await readFile(
+    new URL('./fixtures/events/claude-subagent-stop.json', import.meta.url),
+    'utf8',
+  )) as Record<string, unknown>;
+  await expect(runHook(stop.output, claudeStop, {
+    AGENT_BUNDLE_HOOK_HOST: undefined,
+    PLUGIN_ROOT: undefined,
+  })).resolves.toEqual({
+    hookSpecificOutput: {
+      additionalContext: 'Check the final result.',
+      hookEventName: 'SubagentStop',
+    },
+  });
+
+  const codexStop = JSON.parse(await readFile(
+    new URL('./fixtures/events/codex-subagent-stop.json', import.meta.url),
+    'utf8',
+  )) as Record<string, unknown>;
+  codexStop.transcript_path = null;
+  await expect(runHook(stop.output, codexStop, {
+    AGENT_BUNDLE_HOOK_HOST: undefined,
+    PLUGIN_ROOT: output,
+  })).rejects.toThrow(/not supported by the Codex SubagentStop output schema/u);
 });

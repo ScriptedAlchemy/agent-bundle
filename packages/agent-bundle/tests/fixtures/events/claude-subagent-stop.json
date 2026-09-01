@@ -1,0 +1,14 @@
+{
+  "agent_id": "agent-claude-1",
+  "agent_transcript_path": "/workspace/.claude/projects/session/subagents/agent-agent-claude-1.jsonl",
+  "agent_type": "Explore",
+  "background_tasks": [],
+  "cwd": "/workspace",
+  "hook_event_name": "SubagentStop",
+  "last_assistant_message": "Analysis complete.",
+  "permission_mode": "default",
+  "session_crons": [],
+  "session_id": "parent-session-claude",
+  "stop_hook_active": false,
+  "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

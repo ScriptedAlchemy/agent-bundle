@@ -100,16 +100,68 @@ export const projectEventDocument = (
   target: string,
   nativeEvent: string,
 ): Readonly<Record<string, unknown>> | undefined => {
+  if (target === 'plugin') {
+    throw new TypeError('Composite plugin event projection must resolve the invoking host before projecting output.');
+  }
   const contexts: string[] = [];
   appendContext(document.root, contexts);
   const additionalContext = contexts.length === 0 ? undefined : contexts.join('');
   const parsedValue = document.value === undefined ? undefined : resultValueSchema.parse(document.value);
+  const requireDenyReason = (): string => {
+    if (parsedValue?.outcome !== 'deny') {
+      throw new TypeError(`${event} did not request a blocking outcome.`);
+    }
+    if (parsedValue.reason === undefined) {
+      throw new TypeError(`${event} requires a nonempty reason when outcome is deny.`);
+    }
+    return parsedValue.reason;
+  };
 
   if (event === 'stop') {
     if (parsedValue?.outcome !== 'deny') return undefined;
     return target === 'cursor'
-      ? Object.freeze({ followup_message: parsedValue.reason })
-      : Object.freeze({ decision: 'block', reason: parsedValue.reason });
+      ? Object.freeze({ followup_message: requireDenyReason() })
+      : Object.freeze({ decision: 'block', reason: requireDenyReason() });
+  }
+  if (event === 'agent/start') {
+    if (parsedValue?.outcome === 'deny') {
+      throw new TypeError('agent/start cannot block subagent creation on any supported host.');
+    }
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('agent/start cannot replace native input.');
+    }
+    if (additionalContext === undefined) return undefined;
+    return target === 'cursor'
+      ? Object.freeze({ additional_context: additionalContext })
+      : Object.freeze({
+          hookSpecificOutput: Object.freeze({
+            additionalContext,
+            hookEventName: nativeEvent,
+          }),
+        });
+  }
+  if (event === 'agent/stop') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('agent/stop cannot replace native input.');
+    }
+    if (parsedValue?.outcome === 'deny') {
+      if (target === 'cursor') {
+        throw new TypeError('agent/stop cannot block subagent completion on cursor.');
+      }
+      return Object.freeze({ decision: 'block', reason: requireDenyReason() });
+    }
+    if (additionalContext === undefined) return undefined;
+    if (target === 'codex') {
+      throw new TypeError('agent/stop additional context is not supported by the Codex SubagentStop output schema.');
+    }
+    return target === 'cursor'
+      ? Object.freeze({ additional_context: additionalContext })
+      : Object.freeze({
+          hookSpecificOutput: Object.freeze({
+            additionalContext,
+            hookEventName: nativeEvent,
+          }),
+        });
   }
   if (event === 'tool/before') {
     if (target === 'cursor') {

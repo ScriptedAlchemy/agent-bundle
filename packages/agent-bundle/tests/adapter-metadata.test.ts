@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { expect, it } from '@rstest/core';
 
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
+import { createDraft7AdapterValidator } from '../src/adapters/types.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 
 const validMetadata = () => ({
@@ -72,9 +73,9 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
-    adapterRevision: '1.1.0',
+    adapterRevision: '1.2.0',
     capabilityRevision: '0.147.0',
-    capabilitySha256: 'f2c7109e3572ebde8739e08f6fdfa7a7b5d7817e3e216406b9c855f1570e2bd9',
+    capabilitySha256: '44e697be71a29db9ec029ed7d9eb8807b90e95d6a15f3a71a47148125c902194',
     observedVersion: '0.147.0',
     schemas: [
       {
@@ -100,9 +101,9 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.2.0',
+    adapterRevision: '1.3.0',
     capabilityRevision: '2.1.250',
-    capabilitySha256: '13bc41224c5343b33d259986a66feb279e15431c5019bb2a1c443eaa60e9a9ea',
+    capabilitySha256: 'a9c8821ee5cbc6aef65816c5025170389fd490b6d1c4e4e893599aa6a36f2265',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -193,6 +194,50 @@ it('rehashes every declared capability and schema snapshot against its pinned pr
       expect(schema.sha256).toBe(provenance.schemas[fileName]?.sha256);
       expect(schema.revision).toBe(metadata.observedVersion);
     }
+  }
+});
+
+it('pins and validates the Codex 0.147.0 subagent wire schemas', async () => {
+  const schemas = [
+    {
+      fixture: 'codex-subagent-start.json',
+      name: 'subagent-start.command.input.schema.json',
+      sha256: 'ce7dc9b5ae8826d1e0c59ffcea793e558aebceb7917a2eb9bb2edd8a7ac37aa9',
+    },
+    {
+      name: 'subagent-start.command.output.schema.json',
+      output: {
+        hookSpecificOutput: {
+          additionalContext: 'Review the repository test conventions first.',
+          hookEventName: 'SubagentStart',
+        },
+      },
+      sha256: '34e8ec95393d2aa930d7932a34c3fb29a5e5f90c264fdbcc581393c5838b4660',
+    },
+    {
+      fixture: 'codex-subagent-stop.json',
+      name: 'subagent-stop.command.input.schema.json',
+      sha256: '94dc8df29f4691195ac2338ae6de876230e5100a10b94ef48df4e732424b5df5',
+    },
+    {
+      name: 'subagent-stop.command.output.schema.json',
+      output: { decision: 'block', reason: 'Run one more focused pass.' },
+      sha256: '8ba2cd7899ae4544193764e67e988235edebe984abe5788634d123bbf13e3e3a',
+    },
+  ] as const;
+  const validator = createDraft7AdapterValidator();
+
+  for (const schema of schemas) {
+    const bytes = await readFile(new URL(`../src/adapters/schemas/codex/generated/${schema.name}`, import.meta.url));
+    // Repository text files carry one POSIX trailing newline; the pinned
+    // upstream generated files do not. Hash the byte-identical upstream body.
+    expect(bytes.at(-1)).toBe(10);
+    expect(sha256Hex(bytes.subarray(0, -1))).toBe(schema.sha256);
+    const validate = validator.compile(JSON.parse(bytes.toString()));
+    const value = 'fixture' in schema
+      ? JSON.parse(await readFile(new URL(`./fixtures/events/${schema.fixture}`, import.meta.url), 'utf8'))
+      : schema.output;
+    expect(validate(value), JSON.stringify(validate.errors)).toBe(true);
   }
 });
 

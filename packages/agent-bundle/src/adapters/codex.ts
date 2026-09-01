@@ -108,7 +108,8 @@ const hookContract = Object.freeze({
   capabilityRevision: capabilityTable.observedCliVersion,
   commandRoot: '${PLUGIN_ROOT}',
   encodePlaygroundInput: encodeNativeHookPlaygroundInput,
-  encodePlaygroundOutput: encodeNativeHookPlaygroundOutput,
+  encodePlaygroundOutput: (result, event, nativeEvent) =>
+    encodeNativeHookPlaygroundOutput(result, event, nativeEvent, 'codex'),
   eventNames: capabilityTable.hooks.events,
   eventRouteNames: supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes),
   manifestPath: 'hooks/hooks.json',
@@ -118,9 +119,9 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.1.0',
+  adapterRevision: '1.2.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'f2c7109e3572ebde8739e08f6fdfa7a7b5d7817e3e216406b9c855f1570e2bd9',
+  capabilitySha256: '44e697be71a29db9ec029ed7d9eb8807b90e95d6a15f3a71a47148125c902194',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });

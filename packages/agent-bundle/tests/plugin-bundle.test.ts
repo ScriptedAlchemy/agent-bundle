@@ -158,6 +158,39 @@ it('lays both host manifests over one shared bundle root', () => {
   });
 });
 
+it('bundles subagent hooks at Codex default hooks/hooks.json location', () => {
+  const model: NormalizedPlugin = {
+    ...bundleModel,
+    hooks: [
+      {
+        ...bundleModel.hooks[0]!,
+        event: 'agentStart',
+        id: 'hook:agent-start',
+        name: 'agent-start',
+        source: '/workspace/src/hooks/agent-start.ts',
+      },
+      {
+        ...bundleModel.hooks[0]!,
+        event: 'agentStop',
+        id: 'hook:agent-stop',
+        name: 'agent-stop',
+        source: '/workspace/src/hooks/agent-stop.ts',
+      },
+    ],
+  };
+  const documents = writeContents(model);
+  const codexManifest = JSON.parse(documents['.codex-plugin/plugin.json']!) as Record<string, unknown>;
+  const hooks = JSON.parse(documents['hooks/hooks.json']!) as {
+    readonly hooks: Readonly<Record<string, readonly unknown[]>>;
+  };
+
+  // Codex discovers this plugin-root path by convention when the manifest
+  // omits `hooks`; both documented plugin-bundled forms are compliant.
+  expect(codexManifest).not.toHaveProperty('hooks');
+  expect(hooks.hooks.SubagentStart).toHaveLength(1);
+  expect(hooks.hooks.SubagentStop).toHaveLength(1);
+});
+
 it('emits Claude-only LSP configuration at the shared composite root', () => {
   const model = {
     ...bundleModel,
