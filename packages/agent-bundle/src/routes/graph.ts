@@ -6,6 +6,7 @@ import fastGlob from 'fast-glob';
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
+import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
 import {
@@ -291,16 +292,6 @@ const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unkno
   relativePath: route.provenance.relativePath,
   ...(route.serverId === undefined ? {} : { serverId: route.serverId }),
 });
-
-const deepFreeze = <Value>(value: Value): Value => {
-  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const child of Object.values(value)) {
-    deepFreeze(child);
-  }
-  return Object.freeze(value);
-};
 
 /**
  * The graph of a route-free project: what {@link compileRouteGraph} returns
