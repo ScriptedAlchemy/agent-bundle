@@ -55,16 +55,14 @@ interface TemplateManifest {
   name?: string;
 }
 
-const rewriteManifest = async (contents: string, request: ScaffoldRequest): Promise<string> => {
+const rewriteManifest = (contents: string, request: ScaffoldRequest, runtimeSpec: string): string => {
   const manifest = JSON.parse(contents) as TemplateManifest;
   manifest.name = request.packageName;
-  let runtimeSpec: string | undefined;
   for (const section of [manifest.dependencies, manifest.devDependencies]) {
     if (section === undefined) continue;
     for (const [dependency, range] of Object.entries(section)) {
       if (range !== 'workspace:*') continue;
       if (dependency === '@agent-bundle/runtime') {
-        runtimeSpec ??= await validatedRuntimeSpecForFramework(request.frameworkSpec);
         section[dependency] = runtimeSpec;
       } else {
         section[dependency] = request.frameworkSpec;
@@ -88,6 +86,7 @@ const rewriteConfigTargets = (contents: string, targets: readonly TargetName[]):
  * config's target list. Returns the emitted project-relative paths, sorted.
  */
 export const scaffold = async (request: ScaffoldRequest): Promise<readonly string[]> => {
+  const runtimeSpec = await validatedRuntimeSpecForFramework(request.frameworkSpec);
   const emitted: string[] = [];
   const copyDirectory = async (from: string, to: string, relative: string): Promise<void> => {
     await mkdir(to, { recursive: true });
@@ -101,7 +100,7 @@ export const scaffold = async (request: ScaffoldRequest): Promise<readonly strin
         continue;
       }
       let contents = (await readFile(source, 'utf8')).replaceAll(placeholderName, request.pluginName);
-      if (relativePath === 'package.json') contents = await rewriteManifest(contents, request);
+      if (relativePath === 'package.json') contents = rewriteManifest(contents, request, runtimeSpec);
       if (relativePath === 'agent-bundle.config.ts') contents = rewriteConfigTargets(contents, request.targets);
       await writeFile(destination, contents);
       emitted.push(relativePath);

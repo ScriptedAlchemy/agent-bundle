@@ -23,9 +23,13 @@ export const runtimeSpecForFramework = (frameworkSpec: string): string => {
   if (localTarball !== null) {
     return `${localTarball[1]}agent-bundle-runtime${localTarball[2] ?? ''}.tgz`;
   }
+  if (!frameworkSpec.startsWith('file:') && !frameworkSpec.startsWith('https://pkg.pr.new/')) {
+    return frameworkSpec;
+  }
   throw new UsageError(
     `Cannot derive a paired @agent-bundle/runtime package from agent-bundle spec "${frameworkSpec}". `
-    + 'Use a pkg.pr.new preview URL or a file: tarball named agent-bundle.tgz or agent-bundle-<version>.tgz.',
+    + 'Use an npm registry version, range, or tag; an exact pkg.pr.new preview URL; or a file: tarball '
+    + 'named agent-bundle.tgz or agent-bundle-<version>.tgz.',
   );
 };
 
