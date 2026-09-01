@@ -268,10 +268,13 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
 
   const codex = planEntries(plugin, 'codex');
   const claude = planEntries(plugin, 'claude');
+  const codexPluginEntries = codex.filter((entry) => entry.relativePath !== 'INSTALL.md');
+  const claudePluginEntries = claude.filter((entry) => entry.relativePath !== 'INSTALL.md');
   expect(codex.map((entry) => entry.relativePath)).toEqual([
     '.agents/plugins/marketplace.json',
     '.codex-plugin/plugin.json',
     '.mcp.json',
+    'INSTALL.md',
     'skills/review/SKILL.md',
     'skills/review/assets/icon.bin',
     'skills/review/references/guide.md',
@@ -280,11 +283,12 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
     '.claude-plugin/marketplace.json',
     '.claude-plugin/plugin.json',
     '.mcp.json',
+    'INSTALL.md',
     'skills/review/SKILL.md',
     'skills/review/assets/icon.bin',
     'skills/review/references/guide.md',
   ]);
-  expect(codex).toMatchObject([
+  expect(codexPluginEntries).toMatchObject([
     {
       content: '{"interface":{"displayName":"review-tools"},"name":"review-tools-marketplace","plugins":[{"category":"Productivity","name":"review-tools","policy":{"authentication":"ON_INSTALL","installation":"AVAILABLE"},"source":{"path":"./","source":"local"}}]}\n',
       kind: 'write',
@@ -304,7 +308,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
     { bytes: 3, kind: 'copy', relativePath: 'skills/review/assets/icon.bin', source: '/workspace/skills/review/assets/icon.bin' },
     { bytes: 8, kind: 'copy', relativePath: 'skills/review/references/guide.md', source: '/workspace/skills/review/references/guide.md' },
   ]);
-  expect(claude).toMatchObject([
+  expect(claudePluginEntries).toMatchObject([
     {
       content: '{"description":"Review code and explain findings.","name":"review-tools-marketplace","owner":{"name":"review-tools"},"plugins":[{"description":"Review code and explain findings.","name":"review-tools","source":"./","version":"1.2.3"}]}\n',
       kind: 'write',
@@ -324,7 +328,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
     { bytes: 3, kind: 'copy', relativePath: 'skills/review/assets/icon.bin', source: '/workspace/skills/review/assets/icon.bin' },
     { bytes: 8, kind: 'copy', relativePath: 'skills/review/references/guide.md', source: '/workspace/skills/review/references/guide.md' },
   ]);
-  expect(codex.map((entry) => entry.sourceInputs)).toEqual([
+  expect(codexPluginEntries.map((entry) => entry.sourceInputs)).toEqual([
     ['/workspace/agent-bundle.config.ts'],
     ['/workspace/agent-bundle.config.ts', '/workspace/skills/review/SKILL.md'],
     ['/workspace/agent-bundle.config.ts'],
@@ -332,7 +336,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
     ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/assets/icon.bin'],
     ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/references/guide.md'],
   ]);
-  expect(claude.map((entry) => entry.sourceInputs)).toEqual([
+  expect(claudePluginEntries.map((entry) => entry.sourceInputs)).toEqual([
     ['/workspace/agent-bundle.config.ts'],
     ['/workspace/agent-bundle.config.ts', '/workspace/skills/review/SKILL.md'],
     ['/workspace/agent-bundle.config.ts'],
@@ -923,6 +927,7 @@ it('filters host components and builds portable, Codex, and Claude target roots'
   expect(filteredPlan.entries.map((entry) => entry.relativePath)).toEqual([
     '.agents/plugins/marketplace.json',
     '.codex-plugin/plugin.json',
+    'INSTALL.md',
   ]);
 
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-host-adapter-'));

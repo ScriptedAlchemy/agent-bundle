@@ -216,6 +216,10 @@ it('allows only an exact epoch store marker as an extra staged artifact file', a
       join(root, 'portable', 'plugin.json'),
       '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid staged plugin.","name":"valid","version":"1.0.0"}\n',
     );
+    await Promise.all([
+      writeFile(join(root, 'portable', 'INSTALL.md'), '# Install valid\n'),
+      writeFile(join(root, 'portable', 'install.mjs'), 'export {};\n'),
+    ]);
     await writeFixtureManifest({ artifactRoot: root, targets: ['portable'] });
     await writeFile(join(root, marker), '{"token":"8f2aa8b7-bdd2-4065-8cd3-5184c6bd9f74"}\n');
 
