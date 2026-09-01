@@ -35,6 +35,7 @@
   },
   "observedCliVersion": "2.1.250",
   "plugin": {
+    "commands": true,
     "devtools": {
       "details": true,
       "listJson": true,
@@ -87,6 +88,7 @@
       "Placeholder substitution for LSP servers is limited to command, args, env, and workspaceFolder.",
       "Codex and Cursor publish no plugin LSP surface at their pinned revisions, so the unified bundle's .lsp.json reaches Claude Code only.",
       "Plugin developer tools reference: `claude plugin validate <dir>` checks plugin.json, hooks/hooks.json, and default-directory Skill, agent, and command frontmatter; manifest-less component directories require 2.1.233 or later.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents plugin commands/ as Markdown files with optional YAML frontmatter fields description, argument-hint, allowed-tools, model, and disable-model-invocation; the filename stem is the plugin-namespaced command name.",
       "`claude plugin validate <dir> --strict` promotes tolerated warnings such as unrecognized or near-miss fields and non-object experimental/metadata values to exit failure; the reference recommends strict mode in CI.",
       "Development tools include `claude --plugin-dir <dir> plugin list --json` for registration proof, `claude plugin details <name>` for component inventory and host-owned token estimates, `claude plugin tag`, and `claude --debug` for loading diagnostics.",
       "https://code.claude.com/docs/en/hooks documents SubagentStart when Agent spawns a subagent and SubagentStop when it finishes; both match agent_type, including anchored plugin-scoped identifiers such as ^my-plugin:reviewer$.",

@@ -545,8 +545,16 @@ it('returns an invalid inspection for selected targets outside the normalized pr
 it('reports skipped target/component pairs with intersection-rule reasons', async () => {
   const root = await createProject();
   try {
-    await mkdir(join(root, 'rules'));
     await Promise.all([
+      mkdir(join(root, 'commands')),
+      mkdir(join(root, 'rules')),
+    ]);
+    await Promise.all([
+      writeFile(join(root, 'commands', 'shared.md'), '---\ndescription: Shared command\n---\nShared command prompt.\n'),
+      writeFile(
+        join(root, 'commands', 'cursor-only.md'),
+        '---\ndescription: Cursor-only command\ntargets:\n  - cursor\n---\nCursor command prompt.\n',
+      ),
       writeFile(join(root, 'src', 'report.ts'), 'export const report = true;\n'),
       writeFile(join(root, 'rules', 'shared.mdc'), '---\ndescription: Shared rule\n---\nShared guidance.\n'),
       writeFile(
@@ -568,16 +576,21 @@ it('reports skipped target/component pairs with intersection-rule reasons', asyn
     const planFor = (target: string) => result.plans.find((plan) => plan.target === target);
 
     expect(planFor('portable')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'command', name: 'shared', reason: 'unsupported-capability' }),
       expect.objectContaining({ kind: 'hook', name: 'sessionStart', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
       expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
     ]);
     expect(planFor('codex')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'command', name: 'shared', reason: 'unsupported-capability' }),
       expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
     ]);
     expect(planFor('claude')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
       expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
@@ -585,6 +598,9 @@ it('reports skipped target/component pairs with intersection-rule reasons', asyn
     expect(planFor('cursor')?.skipped).toEqual([
       expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
     ]);
+    expect(planFor('claude')?.skipped.some((component) =>
+      component.kind === 'command' && component.name === 'shared')).toBe(false);
+    expect(planFor('cursor')?.skipped.some((component) => component.kind === 'command')).toBe(false);
     expect(planFor('cursor')?.skipped.some((component) => component.kind === 'rule')).toBe(false);
     expect(Object.isFrozen(planFor('portable')?.skipped)).toBe(true);
   } finally {
@@ -799,7 +815,7 @@ it('returns an output-independent project context without absolute project paths
   }
 }, 30_000);
 
-it('keeps rule model digests root-independent and sensitive to rule content', async () => {
+it('keeps rule and command model digests root-independent and sensitive to content', async () => {
   const [leftRoot, rightRoot] = await Promise.all([createProject(), createProject()]);
   const config = [
     'export default {',
@@ -818,14 +834,30 @@ it('keeps rule model digests root-independent and sensitive to rule content', as
     '',
   ].join('\n');
   const sharedRule = '---\ndescription: Shared guidance\n---\nShared body.\n';
+  const targetedCommand = [
+    '---',
+    'description: Cursor-only command',
+    'targets:',
+    '  - cursor',
+    '---',
+    'Targeted command body.',
+    '',
+  ].join('\n');
+  const sharedCommand = '---\ndescription: Shared command\n---\nShared command body.\n';
   try {
     await Promise.all([
+      mkdir(join(leftRoot, 'commands')),
+      mkdir(join(rightRoot, 'commands')),
       mkdir(join(leftRoot, 'rules')),
       mkdir(join(rightRoot, 'rules')),
     ]);
     await Promise.all([
       writeFile(join(leftRoot, 'agent-bundle.config.ts'), config),
       writeFile(join(rightRoot, 'agent-bundle.config.ts'), config),
+      writeFile(join(leftRoot, 'commands', 'cursor-only.md'), targetedCommand),
+      writeFile(join(rightRoot, 'commands', 'cursor-only.md'), targetedCommand),
+      writeFile(join(leftRoot, 'commands', 'shared.md'), sharedCommand),
+      writeFile(join(rightRoot, 'commands', 'shared.md'), sharedCommand),
       writeFile(join(leftRoot, 'rules', 'cursor-only.mdc'), targetedRule),
       writeFile(join(rightRoot, 'rules', 'cursor-only.mdc'), targetedRule),
       writeFile(join(leftRoot, 'rules', 'shared.mdc'), sharedRule),
@@ -838,13 +870,25 @@ it('keeps rule model digests root-independent and sensitive to rule content', as
     ]);
     expect(left.projectContext.modelDigest).toBe(right.projectContext.modelDigest);
     expect(left.projectContext.sourceInputs.map((input) => input.path)).toEqual(expect.arrayContaining([
+      'commands/cursor-only.md',
+      'commands/shared.md',
       'rules/cursor-only.mdc',
       'rules/shared.mdc',
     ]));
 
     await writeFile(join(rightRoot, 'rules', 'shared.mdc'), sharedRule.replace('Shared body.', 'Changed body.'));
-    const changed = await readyInspection({ root: rightRoot });
-    expect(changed.projectContext.modelDigest).not.toBe(left.projectContext.modelDigest);
+    const changedRule = await readyInspection({ root: rightRoot });
+    expect(changedRule.projectContext.modelDigest).not.toBe(left.projectContext.modelDigest);
+
+    await Promise.all([
+      writeFile(join(rightRoot, 'rules', 'shared.mdc'), sharedRule),
+      writeFile(
+        join(rightRoot, 'commands', 'shared.md'),
+        sharedCommand.replace('Shared command body.', 'Changed command body.'),
+      ),
+    ]);
+    const changedCommand = await readyInspection({ root: rightRoot });
+    expect(changedCommand.projectContext.modelDigest).not.toBe(left.projectContext.modelDigest);
   } finally {
     await Promise.all([
       rm(join(leftRoot, '..'), { force: true, recursive: true }),

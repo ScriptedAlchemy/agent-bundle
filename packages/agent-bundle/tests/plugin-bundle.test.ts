@@ -282,6 +282,46 @@ it('emits Cursor-only rules once at the shared root and documents the honest hos
   expect(JSON.parse(writeContents(bundleModel)['.cursor-plugin/plugin.json']!)).not.toHaveProperty('rules');
 });
 
+it('emits Claude-format commands without pointing Cursor at the shared directory', () => {
+  const model: NormalizedPlugin = {
+    ...bundleModel,
+    commands: [{
+      body: 'Review the staged diff.\n',
+      frontmatter: {
+        argumentHint: '[path]',
+        description: 'Review changes',
+      },
+      id: 'command:review',
+      markdown: '---\ndescription: Review changes\nargumentHint: "[path]"\n---\nReview the staged diff.\n',
+      name: 'review',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/commands/review.md' },
+      source: '/workspace/commands/review.md',
+      targets: ['plugin'],
+    }],
+  };
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(documents['commands/review.md']).toBe([
+    '---',
+    'argument-hint: "[path]"',
+    'description: Review changes',
+    '---',
+    'Review the staged diff.',
+    '',
+  ].join('\n'));
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('commands');
+  expect(documents['AGENTS.md']).toContain(
+    '- `commands/` — Claude Code command prompts; Codex has no commands surface; the Cursor manifest deliberately does not point at Claude-format command files.',
+  );
+
+  const commandFree = planBundle(bundleModel);
+  expect(commandFree.entries.some((entry) => entry.relativePath.startsWith('commands/'))).toBe(false);
+  expect(writeContents(bundleModel)['AGENTS.md']).not.toContain('`commands/`');
+  expect(JSON.parse(writeContents(bundleModel)['.cursor-plugin/plugin.json']!)).not.toHaveProperty('commands');
+});
+
 it('bakes runtime host detection into the universal wrapper source', () => {
   const plan = planBundle(bundleModel);
   const wrapper = (plan.hookEntries ?? []).find((entry) => entry.relativePath === 'hooks/session-start.mjs');

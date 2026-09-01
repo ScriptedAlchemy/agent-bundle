@@ -420,6 +420,7 @@ const isTargetArtifactPath = (
   const hookContract = registry.hookContract(target);
   const mcpRuntime = registry.mcpRuntime(target);
   return isRecursiveArtifactPath(relativePath, layout.assets) ||
+    isDirectOutputLayoutPath(relativePath, layout.commands) ||
     isDirectOutputLayoutPath(relativePath, layout.hookWrappers) ||
     isDirectOutputLayoutPath(relativePath, layout.mcpApps) ||
     isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||

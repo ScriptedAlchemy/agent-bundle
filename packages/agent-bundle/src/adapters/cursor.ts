@@ -36,6 +36,7 @@ import hooksSchema from './schemas/cursor/hooks.schema.json' with { type: 'json'
 import mcpSchema from './schemas/cursor/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/cursor/plugin.schema.json' with { type: 'json' };
 import {
+  commandWriteEntries,
   createDraft7AdapterValidator,
   ruleWriteEntries,
   schemaDescriptorsFrom,
@@ -234,6 +235,7 @@ export const planCursorMcpServer = (
 };
 
 export interface CursorManifestPointers {
+  readonly commands?: string;
   readonly hooks?: string;
   readonly mcp?: string;
   readonly rules?: string;
@@ -246,6 +248,7 @@ export const cursorManifest = (
   model: NormalizedPlugin,
   pointers: CursorManifestPointers,
 ): Record<string, unknown> => ({
+  ...(pointers.commands === undefined ? {} : { commands: pointers.commands }),
   description: model.metadata.description ?? model.metadata.name,
   displayName: model.metadata.name,
   ...(pointers.hooks === undefined ? {} : { hooks: pointers.hooks }),
@@ -258,9 +261,9 @@ export const cursorManifest = (
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.3.0',
+  adapterRevision: '1.4.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '20e93666770d97c0f5c1338de395f326c869684843b3b06bbd7ba3c45a0abc3e',
+  capabilitySha256: '9884e0ffdb1c7fd1fe6d1071fa6944729d596e51f0ab87ad5ef2b0dd6fd8a981',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -319,6 +322,10 @@ const mcpPlanContext: CursorMcpServerPlanContext = Object.freeze({ codePrefix: c
 
 const artifactLayout: TargetArtifactLayout = Object.freeze({
   ...standardArtifactLayout,
+  commands: Object.freeze({
+    allowedSuffixes: Object.freeze(['.md']),
+    directory: 'commands',
+  }),
   rules: Object.freeze({
     allowedSuffixes: Object.freeze(['.mdc']),
     directory: 'rules',
@@ -327,6 +334,7 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
 
 export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan => {
   const isSelected = (targets: readonly string[]): boolean => targets.includes(cursorName);
+  const selectedCommands = (model.commands ?? []).filter((command) => isSelected(command.targets));
   const selectedRules = (model.rules ?? []).filter((rule) => isSelected(rule.targets));
   const diagnostics: Diagnostic[] = [];
   if (!isValidCursorPluginName(model.metadata.name)) {
@@ -351,6 +359,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
 
   const variables = cursorVariables(mcp);
   const plugin = cursorManifest(model, {
+    ...(selectedCommands.length === 0 ? {} : { commands: './commands/' }),
     ...(hookDocument !== undefined && hookDocumentValid ? { hooks: `./${cursorArtifactPaths.hooks}` } : {}),
     ...(mcp !== undefined && mcpValid ? { mcp: `./${cursorArtifactPaths.mcp}` } : {}),
     ...(selectedRules.length === 0 ? {} : { rules: './rules/' }),
@@ -360,7 +369,10 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
 
   const basePlan = standardPluginArtifactPlan({
-    additionalPluginSourceInputs: selectedRules.map((rule) => rule.source),
+    additionalPluginSourceInputs: [
+      ...selectedCommands.map((command) => command.source),
+      ...selectedRules.map((rule) => rule.source),
+    ],
     diagnostics,
     hookDocument,
     hookDocumentValid,
@@ -379,7 +391,12 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   });
   return Object.freeze({
     ...basePlan,
-    entries: sortedEntries([...basePlan.entries, ...ruleWriteEntries(model, isSelected)]),
+    entries: sortedEntries([
+      ...basePlan.entries,
+      ...commandWriteEntries(model, isSelected, (command) =>
+        command.markdown === command.body ? command.markdown : command.body),
+      ...ruleWriteEntries(model, isSelected),
+    ]),
   });
 };
 
@@ -388,6 +405,11 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
   artifactLayout,
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    commands: capabilityStateFromSupport(
+      capabilityTable.plugin.commands,
+      evidence,
+      'The pinned Cursor Plugin contract does not support commands.',
+    ),
     hooks: supportedCapability(evidence),
     marketplace: unavailableCapability('The pinned Cursor Plugin contract does not define a marketplace document.'),
     mcp: capabilityStateFromSupport(

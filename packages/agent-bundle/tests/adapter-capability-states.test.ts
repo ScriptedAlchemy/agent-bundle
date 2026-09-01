@@ -23,11 +23,33 @@ const state = (value: CapabilityState): CapabilityState => Object.freeze(value);
 it('keeps the plugin Boolean capability view as the Claude and Codex intersection', () => {
   const registry = createDefaultRegistry();
 
-  for (const capability of ['marketplace', 'hooks', 'lsp', 'mcp', 'rules', 'skills']) {
+  for (const capability of ['commands', 'marketplace', 'hooks', 'lsp', 'mcp', 'rules', 'skills']) {
     expect(registry.supports('plugin', capability)).toBe(
       registry.supports('claude', capability) && registry.supports('codex', capability),
     );
   }
+});
+
+it('records an honest four-state commands row on every adapter', () => {
+  const registry = createDefaultRegistry();
+  for (const target of ['cursor', 'claude'] as const) {
+    expect(registry.get(target).capabilities.commands).toMatchObject({
+      evidence: { target },
+      state: 'supported',
+    });
+  }
+  expect(registry.get('codex').capabilities.commands).toEqual({
+    reason: 'The pinned Codex plugin contract (0.147.0) defines no commands component.',
+    state: 'unavailable',
+  });
+  expect(registry.get('portable').capabilities.commands).toEqual({
+    reason: 'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no commands surface.',
+    state: 'unavailable',
+  });
+  expect(registry.get('plugin').capabilities.commands).toEqual(intersectCapabilityStates(
+    registry.get('claude').capabilities.commands!,
+    registry.get('codex').capabilities.commands!,
+  ));
 });
 
 it('records an honest four-state rules row on every adapter', () => {
@@ -205,7 +227,7 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
   if (cursor.capabilities.mcp?.state !== 'supported') throw new Error('Expected Cursor MCP support evidence.');
   expect(cursor.capabilities.mcp.evidence).toEqual({
     capabilityRevision: '2026-08-28',
-    capabilitySha256: '20e93666770d97c0f5c1338de395f326c869684843b3b06bbd7ba3c45a0abc3e',
+    capabilitySha256: '9884e0ffdb1c7fd1fe6d1071fa6944729d596e51f0ab87ad5ef2b0dd6fd8a981',
     observedVersion: '2026-08-28',
     target: 'cursor',
   });

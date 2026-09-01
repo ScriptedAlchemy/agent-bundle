@@ -411,6 +411,9 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    commands: unavailableCapability(
+      'The pinned Codex plugin contract (0.147.0) defines no commands component.',
+    ),
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
     // The pinned Codex plugin contract documents no LSP surface at all, so

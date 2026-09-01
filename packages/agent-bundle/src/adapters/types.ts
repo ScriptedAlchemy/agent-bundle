@@ -10,6 +10,7 @@ import {
   pathTokens,
   pluginRootEnvAnchor,
   type AgentBundleConfig,
+  type NormalizedCommand,
   type NormalizedPlugin,
 } from '../core/types.ts';
 import type { TargetHookContract, TargetHookEntry } from './hook-contract.ts';
@@ -131,6 +132,20 @@ export const payloadCopyEntries = (
     source: file.source,
     sourceInputs: sourceInputs(payload.provenance.sourcePath, file.source),
   })));
+
+/** Host-specific command writes selected by one target plan. */
+export const commandWriteEntries = (
+  model: NormalizedPlugin,
+  isSelected: (targets: readonly string[]) => boolean,
+  serialize: (command: NormalizedCommand) => string,
+): TargetArtifactWrite[] => (model.commands ?? [])
+  .filter((command) => isSelected(command.targets))
+  .map((command) => ({
+    content: serialize(command),
+    kind: 'write',
+    relativePath: `commands/${command.name}.md`,
+    sourceInputs: sourceInputs(command.source),
+  }));
 
 /** Host-emitted write entries for rules selected by one target plan. */
 export const ruleWriteEntries = (
@@ -393,6 +408,7 @@ const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = Object.
  */
 export interface TargetArtifactLayout {
   readonly assets?: string;
+  readonly commands?: TargetArtifactOutputLayout;
   readonly hookWrappers?: TargetArtifactOutputLayout;
   readonly mcpApps?: TargetArtifactOutputLayout;
   readonly mcpEntries?: TargetArtifactOutputLayout;

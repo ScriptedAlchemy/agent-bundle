@@ -205,6 +205,61 @@ it.each(['codex', 'claude'] as const)('copies project assets selected for %s and
   }]);
 });
 
+it('lowers Claude commands with documented kebab-case frontmatter and body-only passthrough', () => {
+  const model: NormalizedPlugin = {
+    ...plugin,
+    commands: [
+      {
+        body: 'Review the staged diff.\n',
+        frontmatter: {
+          allowedTools: ['Read', 'Grep'],
+          argumentHint: '[path]',
+          description: 'Review changes',
+          disableModelInvocation: true,
+          model: 'sonnet',
+        },
+        id: 'command:review',
+        markdown: '---\ndescription: Review changes\ntargets:\n  - claude\n---\nReview the staged diff.\n',
+        name: 'review',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/commands/review.md' },
+        source: '/workspace/commands/review.md',
+        targets: ['claude'],
+      },
+      {
+        body: '# Explain\n\nExplain this code.',
+        frontmatter: {},
+        id: 'command:explain',
+        markdown: '# Explain\n\nExplain this code.',
+        name: 'explain',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/commands/explain.md' },
+        source: '/workspace/commands/explain.md',
+        targets: ['claude'],
+      },
+    ],
+  };
+  const documents = writeContents(model, 'claude');
+
+  expect(documents['commands/review.md']).toBe([
+    '---',
+    'allowed-tools:',
+    '  - Read',
+    '  - Grep',
+    'argument-hint: "[path]"',
+    'description: Review changes',
+    'disable-model-invocation: true',
+    'model: sonnet',
+    '---',
+    'Review the staged diff.',
+    '',
+  ].join('\n'));
+  expect(documents['commands/review.md']).not.toContain('targets:');
+  expect(documents['commands/explain.md']).toBe('# Explain\n\nExplain this code.');
+  expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('commands');
+
+  const commandFree = planEntries(plugin, 'claude');
+  expect(commandFree.some((entry) => entry.relativePath.startsWith('commands/'))).toBe(false);
+});
+
 it('plans byte-stable native Codex and Claude plugin trees from the same frozen model', async () => {
   const registry = createDefaultRegistry();
   expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor', 'plugin']);

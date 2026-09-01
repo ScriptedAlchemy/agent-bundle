@@ -35,6 +35,7 @@ import type {
   NormalizationTargetRegistry,
   NormalizedAsset,
   NormalizedBinEntry,
+  NormalizedCommand,
   NormalizedConfigExtension,
   NormalizedHook,
   NormalizedLibEntry,
@@ -293,6 +294,7 @@ export const normalizePackageBuild = (
 export const reservedPayloadDestinations = Object.freeze(new Set([
   'AGENTS.md',
   'assets',
+  'commands',
   'hooks',
   'mcp',
   'mcp-apps',
@@ -904,6 +906,26 @@ const normalizeAssets = (
   targets: [...targetNames],
 }));
 
+const normalizeCommands = (
+  discovered: DiscoveredProject,
+  targetNames: readonly string[],
+): readonly NormalizedCommand[] => (discovered.commands ?? []).map((command) => {
+  const name = basename(command.source, extname(command.source));
+  const targets = command.authoredTargets === undefined
+    ? [...targetNames]
+    : sortedUnique(command.authoredTargets.filter((target) => targetNames.includes(target)));
+  return {
+    body: command.body,
+    frontmatter: structuredClone(command.frontmatter),
+    id: `command:${name}`,
+    markdown: command.markdown,
+    name,
+    provenance: { kind: 'conventional', sourcePath: command.source },
+    source: command.source,
+    targets,
+  };
+});
+
 const normalizeRules = (
   discovered: DiscoveredProject,
   targetNames: readonly string[],
@@ -986,6 +1008,7 @@ export const normalizeProject = async (
   const mcpServers = normalizeMcpServers(loaded, discovered, targetNames, payloads);
   const scripts = normalizeScripts(loaded, discovered, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
+  const commands = normalizeCommands(discovered, targetNames);
   const rules = normalizeRules(discovered, targetNames);
   const packageBuild = normalizePackageBuild(
     loaded.config,
@@ -995,6 +1018,7 @@ export const normalizeProject = async (
   );
   const model: NormalizedPlugin = {
     ...(assets.length === 0 ? {} : { assets }),
+    ...(commands.length === 0 ? {} : { commands }),
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
     extensions: normalizeExtensions(loaded, registry, configProvenance),
     metadata: {
