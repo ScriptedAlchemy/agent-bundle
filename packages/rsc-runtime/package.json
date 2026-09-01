@@ -1,7 +1,7 @@
 {
   "name": "@agent-bundle/runtime",
   "version": "0.0.0",
-  "description": "Agent Document contracts and final-only React Flight dispatch for Agent Bundle runtimes.",
+  "description": "Agent Document contracts and streaming React Flight dispatch for Agent Bundle runtimes.",
   "license": "MIT",
   "keywords": [
     "agent-bundle",

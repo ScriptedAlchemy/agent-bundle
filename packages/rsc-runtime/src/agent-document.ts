@@ -119,7 +119,9 @@ export interface AgentRenderLimits {
   readonly maxDocumentBytes: number;
   readonly maxDocumentDepth: number;
   readonly maxDocumentNodes: number;
+  readonly maxElapsedMs: number;
   readonly maxEventBytes: number;
+  readonly maxEventRate: number;
   readonly maxEvents: number;
 }
 
@@ -127,7 +129,9 @@ export const DEFAULT_AGENT_RENDER_LIMITS: AgentRenderLimits = Object.freeze({
   maxDocumentBytes: 1024 * 1024,
   maxDocumentDepth: 64,
   maxDocumentNodes: 10_000,
+  maxElapsedMs: 60_000,
   maxEventBytes: 1024 * 1024 + 1024,
+  maxEventRate: 1_000,
   maxEvents: 10_000,
 });
 
@@ -138,6 +142,8 @@ export type AgentContractErrorCode =
   | 'document-bytes-exceeded'
   | 'event-count-exceeded'
   | 'event-bytes-exceeded'
+  | 'event-rate-exceeded'
+  | 'elapsed-time-exceeded'
   | 'handoff-required';
 
 export class AgentContractError extends Error {
@@ -415,6 +421,8 @@ export const createAgentRenderEventSequence = (
   limitOverrides: Partial<AgentRenderLimits> = {},
 ): AgentRenderEventSequence => {
   const limits = resolveLimits(limitOverrides);
+  const startedAt = Date.now();
+  const recentTimes: number[] = [];
   let completed = false;
   let nextSequence = 0;
   return Object.freeze({
@@ -426,6 +434,24 @@ export const createAgentRenderEventSequence = (
         throw new AgentContractError(
           'handoff-required',
           'The render is complete; later work requires a new invocation handoff',
+        );
+      }
+      const now = Date.now();
+      if (now - startedAt > limits.maxElapsedMs) {
+        throw new AgentContractError(
+          'elapsed-time-exceeded',
+          `Agent render elapsed time exceeds ${String(limits.maxElapsedMs)}ms`,
+        );
+      }
+      recentTimes.push(now);
+      const windowStart = now - 1000;
+      while (recentTimes[0] !== undefined && recentTimes[0] < windowStart) {
+        recentTimes.shift();
+      }
+      if (recentTimes.length > limits.maxEventRate) {
+        throw new AgentContractError(
+          'event-rate-exceeded',
+          `Agent render event rate exceeds ${String(limits.maxEventRate)} per second`,
         );
       }
       if (nextSequence >= limits.maxEvents) {

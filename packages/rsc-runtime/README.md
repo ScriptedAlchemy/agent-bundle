@@ -4,12 +4,16 @@ Agent Document contracts and React-owned Flight execution for Agent Bundle route
 No npm release is cut yet; install the pkg.pr.new preview of any `main` commit or pull
 request — see [Preview packages](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md).
 
-The runtime now executes route models through React-owned RSC/Flight behind
-the `AgentRenderDispatcher` execution-host seam. This first renderer slice is
-final-only: it buffers one Flight result, decodes only intrinsic `Agent.*`
-protocol elements into one immutable `AgentDocument`, and propagates the
-request `AbortSignal` through the host and decoder. Streaming Suspense shell
-and replacement events arrive in stage 3.
+The runtime executes route models through React-owned RSC/Flight behind the
+`AgentRenderDispatcher` execution-host seam. Incremental Flight decoding
+commits immutable `AgentDocument` snapshots as Suspense boundaries resolve
+and emits the `shell | progress | replace | error | complete` render-event
+stream from `dispatcher.stream()`. `dispatcher.dispatch()` stays the default
+public behavior: it drains that stream and returns only the canonical final
+document. The request `AbortSignal` aborts pending boundaries and closes the
+stream; a post-completion producer is rejected with a typed
+`handoff-required` outcome. Depth, node count, bytes, event rate, and
+elapsed time are bounded on the reconciler.
 
 The existing lowerers remain synchronous compatibility APIs. `lowerMcpResult`
 walks an MCP element tree, calling function components itself, and lowers it
@@ -36,8 +40,9 @@ error. These contracts land beside the existing `Hook`/`Mcp` lowerers; those
 synchronous compatibility APIs remain operative.
 
 The package exports `Hook`, `Mcp`, `Agent`, both lowerers, the request-store
-APIs, the Agent Document contracts, `createAgentRenderDispatcher`, and the
-`@agent-bundle/runtime/flight/server` render entry. The Flight-facing versions
+APIs, the Agent Document contracts, `createAgentRenderDispatcher`,
+`decodeAgentFlightStream`, and the `@agent-bundle/runtime/flight/server`
+render entry. The Flight-facing versions
 are exact compatibility pins: React/React DOM `19.2.8` and
 `react-server-dom-rspack` `0.1.0`; the proof example compiles them with
 `rsbuild-plugin-rsc` `0.1.1`. The package does not own application state,
