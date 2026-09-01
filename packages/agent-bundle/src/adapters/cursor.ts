@@ -262,9 +262,9 @@ export const cursorManifest = (
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.4.0',
+  adapterRevision: '1.5.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'e755dbaa54e36001e8046152cb2a630b2ac6252e2a3fd8ba4bb559e61e6bcf0a',
+  capabilitySha256: 'e963f86e9074a0c942ebc16190c3f534283c62fea1beda7411f170692dca05f7',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
