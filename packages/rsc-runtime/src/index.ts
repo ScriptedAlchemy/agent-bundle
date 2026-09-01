@@ -48,6 +48,36 @@ export type {
   AgentRenderDispatcher,
   AgentRenderDispatcherOptions,
 } from './dispatcher.js';
+export {
+  attachMcpStructuredContent,
+  DEFAULT_MCP_RICH_CONTENT_CAPABILITIES,
+  documentToCallToolResult,
+  MCP_PROGRESS_MESSAGE_MAX,
+  McpProjectionError,
+  projectMcpRenderStream,
+  shortenMcpProgressMessage,
+} from './project-mcp.js';
+export type {
+  McpProjectedToolResult,
+  McpProgressNotificationParams,
+  McpProgressToken,
+  McpProjectionErrorCode,
+  McpRichContentCapabilities,
+  McpRichContentFallback,
+  McpRichContentKind,
+  ProjectMcpRenderOptions,
+} from './project-mcp.js';
+export {
+  AgentRuntimeError,
+  assertArtifactEpoch,
+  createWarmFlightHost,
+} from './warm-runtime.js';
+export type {
+  AgentRuntimeErrorCode,
+  CreateWarmFlightHostOptions,
+  WarmFlightHost,
+  WarmRuntimeIdentity,
+} from './warm-runtime.js';
 export { decodeAgentFlightStream } from './reconciler.js';
 export type { AgentFlightDecodeOptions } from './reconciler.js';
 export { lowerHookResult } from './lower-hook.js';
