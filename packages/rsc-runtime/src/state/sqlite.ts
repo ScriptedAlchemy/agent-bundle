@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  renameSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 // node:sqlite emits an ExperimentalWarning on load (documented in the README):
 // the module is Node's built-in SQLite binding, stable enough for Node >= 22.13
@@ -27,6 +31,7 @@ import type {
   AgentStateDefinition,
   AgentStateDispatchOptions,
   AgentStateDriver,
+  AgentStateEvent,
   AgentStateEventSchemas,
   AgentStateJournalRecord,
   AgentStateReadOptions,
@@ -197,6 +202,7 @@ interface JournalRow {
   readonly kind: string;
   readonly name: string | null;
   readonly payload: string | null;
+  readonly result_state: string | null;
   readonly revision: number;
   readonly state: string | null;
   readonly to_version: number | null;
@@ -229,6 +235,9 @@ const recordFromRow = (definitionId: string, row: JournalRow): AgentStateJournal
 // leading bytes would collide for ids sharing a prefix.
 const sanitizedFileName = (definitionId: string): string =>
   `${definitionId.replace(/[^a-zA-Z0-9._-]+/gu, '-')}-${createHash('sha256').update(definitionId, 'utf8').digest('hex').slice(0, 16)}.sqlite`;
+
+const legacySanitizedFileName = (definitionId: string): string =>
+  `${definitionId.replace(/[^a-zA-Z0-9._-]+/gu, '-')}-${Buffer.from(definitionId, 'utf8').toString('hex').slice(0, 12)}.sqlite`;
 
 class SqliteConnection extends Context.Service<SqliteConnection, DatabaseSync>()(
   '@agent-bundle/runtime/state/SqliteConnection',
@@ -341,11 +350,13 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
   #committedByKey(
     db: DatabaseSync,
     key: string,
-  ): { readonly record: AgentStateJournalRecord; readonly stateText: string | null } | undefined {
+  ): { readonly record: AgentStateJournalRecord; readonly resultStateText: string | null } | undefined {
     const row = db.prepare('SELECT * FROM agent_state_journal WHERE idempotency_key = ?').get(key) as
       | JournalRow
       | undefined;
-    return row === undefined ? undefined : { record: recordFromRow(this.#definition.id, row), stateText: row.state };
+    return row === undefined
+      ? undefined
+      : { record: recordFromRow(this.#definition.id, row), resultStateText: row.result_state ?? row.state };
   }
 
   /**
@@ -356,11 +367,11 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
    */
   #committedState(
     db: DatabaseSync,
-    committed: { readonly record: AgentStateJournalRecord; readonly stateText: string | null },
+    committed: { readonly record: AgentStateJournalRecord; readonly resultStateText: string | null },
   ): TState {
     const raw =
-      committed.stateText !== null
-        ? parseStoredJson(this.#definition.id, 'state', committed.record.revision, committed.stateText)
+      committed.resultStateText !== null
+        ? parseStoredJson(this.#definition.id, 'result state', committed.record.revision, committed.resultStateText)
         : this.#replayTo(db, committed.record.revision);
     const parsed = this.#definition.schema.safeParse(raw);
     if (!parsed.success) {
@@ -387,7 +398,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     const stateText = canonicalJson(state);
     db
       .prepare(
-        'INSERT INTO agent_state_journal (revision, kind, name, payload, state, to_version, idempotency_key, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO agent_state_journal (revision, kind, name, payload, state, result_state, to_version, idempotency_key, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         record.revision,
@@ -396,6 +407,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         record.kind === 'event' ? canonicalJson(record.payload) : null,
         // Event rows store their post-commit state too, so idempotent replay
         // survives migrations without exact-revision replay.
+        stateText,
         stateText,
         record.kind === 'migrate' ? record.toVersion : null,
         record.idempotencyKey,
@@ -417,7 +429,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     const committedByKey = (db: DatabaseSync, key: string) => this.#committedByKey(db, key);
     const committedState = (
       db: DatabaseSync,
-      committed: { readonly record: AgentStateJournalRecord; readonly stateText: string | null },
+      committed: { readonly record: AgentStateJournalRecord; readonly resultStateText: string | null },
     ) => this.#committedState(db, committed);
     const headState = (db: DatabaseSync) => this.#headState(db, 'commit');
     const now = this.#now;
@@ -601,6 +613,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
           name TEXT,
           payload TEXT,
           state TEXT,
+          result_state TEXT,
           to_version INTEGER,
           idempotency_key TEXT NOT NULL UNIQUE,
           committed_at TEXT NOT NULL
@@ -611,6 +624,12 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
           state TEXT NOT NULL
         );
       `);
+      const journalColumns = transactionDb.prepare('PRAGMA table_info(agent_state_journal)').all() as unknown as {
+        readonly name: string;
+      }[];
+      if (!journalColumns.some((column) => column.name === 'result_state')) {
+        transactionDb.exec('ALTER TABLE agent_state_journal ADD COLUMN result_state TEXT');
+      }
       const definition = this.#definition;
       const meta = transactionDb
         .prepare('SELECT definition_id, schema_version, kernel_format FROM agent_state_meta WHERE id = 1')
@@ -678,14 +697,43 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         }
       }
       const migrated = runStateMigrations(definition, meta.schema_version, rawHead);
-      // Stored post-commit states ride the same chain so committed
-      // idempotency keys keep replaying after the migration; every stored
-      // state sits at `meta.schema_version` (maintained inductively here).
-      const updateState = transactionDb.prepare('UPDATE agent_state_journal SET state = ? WHERE revision = ?');
-      for (const row of rows) {
-        if (row.state === null) continue;
-        const rawState = parseStoredJson(definition.id, 'state', row.revision, row.state);
-        updateState.run(canonicalJson(runStateMigrations(definition, meta.schema_version, rawState)), row.revision);
+      // Journal records retain the original commit input for dedupe. Their
+      // committed results migrate separately, matching the memory driver's
+      // `{ record, state }` split. Legacy event rows without a result are
+      // replayed before the new migration baseline makes old revisions
+      // unavailable.
+      const updateResult = transactionDb.prepare(
+        'UPDATE agent_state_journal SET result_state = ? WHERE revision = ?',
+      );
+      let replayState: unknown = definition.initial;
+      for (const [index, row] of rows.entries()) {
+        const record = records[index] as AgentStateJournalRecord;
+        const storedResultText = row.result_state ?? row.state;
+        let migratedResult: TState;
+        if (storedResultText !== null) {
+          replayState = parseStoredJson(definition.id, 'result state', row.revision, storedResultText);
+          migratedResult = runStateMigrations(definition, meta.schema_version, replayState);
+        } else if (record.kind === 'event') {
+          try {
+            replayState = definition.reduce(
+              replayState as TState,
+              { name: record.name, payload: record.payload } as AgentStateEvent<TEvents>,
+            );
+          } catch (error) {
+            throw new AgentStateError(
+              'migration-failure',
+              `State '${definition.id}' could not recover legacy result at revision ${String(record.revision)}`,
+              { cause: error },
+            );
+          }
+          migratedResult = runStateMigrations(definition, meta.schema_version, replayState);
+        } else {
+          throw new AgentStateError(
+            'corrupt',
+            `State '${definition.id}' journal row at revision ${String(record.revision)} has no committed result`,
+          );
+        }
+        updateResult.run(canonicalJson(migratedResult), row.revision);
       }
       const record: AgentStateJournalRecord = {
         committedAt: this.#now().toISOString(),
@@ -763,25 +811,48 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
                   `State '${definition.id}' declares lifetime '${definition.lifetime}' but this driver provides 'workspace-durable'`,
                 );
               }
-              return resolve(
-                options.file !== undefined ? options.file : join(options.root as string, sanitizedFileName(definition.id)),
-              );
-            }),
+              if (options.file !== undefined) return resolve(options.file);
+              const root = options.root as string;
+              const currentFile = resolve(join(root, sanitizedFileName(definition.id)));
+              const legacyFile = resolve(join(root, legacySanitizedFileName(definition.id)));
+              mkdirSync(dirname(currentFile), { recursive: true });
+              if (!existsSync(currentFile) && existsSync(legacyFile)) {
+                for (const suffix of ['-wal', '-shm']) {
+                  const legacySidecar = `${legacyFile}${suffix}`;
+                  if (!existsSync(legacySidecar)) continue;
+                  try {
+                    renameSync(legacySidecar, `${currentFile}${suffix}`);
+                  } catch (error) {
+                    // A concurrent adopter may have moved this sidecar after
+                    // the existence check. Other failures must remain visible.
+                    if ((error as SqliteErrorShape).code !== 'ENOENT') throw error;
+                  }
+                }
+                try {
+                  renameSync(legacyFile, currentFile);
+                } catch (error) {
+                  // Another opener may have atomically adopted the same
+                  // legacy file after both observed it. The winner's current
+                  // path is authoritative; otherwise preserve the failure.
+                  if (!existsSync(currentFile)) throw error;
+                }
+              }
+              return currentFile;
+            }, true),
           );
           const connection = Effect.acquireRelease(
             sqliteEffect(definition.id, 'open database', () => {
               mkdirSync(dirname(file), { recursive: true });
               return new DatabaseSync(file);
             }, true),
-            (db) =>
-              Effect.sync(() => {
-                try {
-                  db.close();
-                } catch {
-                  // Closing an already-broken connection must not mask the
-                  // caller's path (the original failure carries the cause).
-                }
-              }),
+            (db, exit) => {
+              const close = sqliteEffect(definition.id, 'close database', () => {
+                db.close();
+              }, true);
+              return Exit.isFailure(exit)
+                ? close.pipe(Effect.catch(() => Effect.void))
+                : close;
+            },
           );
           const runtime = makeScopedEffectRuntime(
             Layer.effect(SqliteConnection, connection),

@@ -361,6 +361,43 @@ describe('explicit migrations', () => {
     });
   });
 
+  it('leaves the process store unchanged when a historical result migration throws', async () => {
+    const driver = createMemoryStateDriver();
+    const storeV1 = await driver.open(v1());
+    await storeV1.dispatch('incremented', { by: 1 }, { idempotencyKey: 'i1' });
+    await storeV1.dispatch('incremented', { by: 2 }, { idempotencyKey: 'i2' });
+    await storeV1.dispatch('incremented', { by: 3 }, { idempotencyKey: 'i3' });
+
+    await expect(
+      driver.open(
+        v2((persisted) => {
+          const state = persisted as CounterState;
+          if (state.count === 3) throw new Error('cannot migrate historical result');
+          return { ...state, unit: 'edits' };
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'migration-failure' });
+
+    expect(await storeV1.read()).toEqual({ revision: 3, state: { count: 6 } });
+    expect((await storeV1.changes({ afterRevision: 0 })).changes.map((change) => change.kind)).toEqual([
+      'event',
+      'event',
+      'event',
+    ]);
+    await expect(
+      storeV1.dispatch('incremented', { by: 1 }, { idempotencyKey: 'i1' }),
+    ).resolves.toEqual({ replayed: true, revision: 1, state: { count: 1 } });
+
+    const storeV2 = await driver.open(v2());
+    expect(await storeV2.read()).toEqual({ revision: 4, state: { count: 6, unit: 'edits' } });
+    expect((await storeV2.changes({ afterRevision: 0 })).changes.map((change) => change.kind)).toEqual([
+      'event',
+      'event',
+      'event',
+      'migrate',
+    ]);
+  });
+
   it('rejects opening a persisted-newer store with an older definition', async () => {
     const driver = createMemoryStateDriver();
     await driver.open(v2());
