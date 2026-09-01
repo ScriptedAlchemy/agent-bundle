@@ -131,7 +131,7 @@ it('lays both host manifests over one shared bundle root', () => {
   expect(documents['AGENTS.md']).toContain('Symlinks that resolve outside `~/.cursor/plugins/local` are rejected');
   expect(documents['AGENTS.md']).toContain('VS Code / GitHub Copilot');
 
-  const cursorPlugin = JSON.parse(documents['plugin.json']!) as Record<string, unknown>;
+  const cursorPlugin = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
   expect(cursorPlugin).toMatchObject({
     hooks: './hooks/hooks-cursor.json',
     mcpServers: './mcp.json',
@@ -287,7 +287,7 @@ it('builds the unified bundle root on disk with a compiled universal hook wrappe
     expect(manifest.files.map((file) => file.path)).toEqual(expect.arrayContaining([
       'plugin/.claude-plugin/plugin.json',
       'plugin/.codex-plugin/plugin.json',
-      'plugin/plugin.json',
+      'plugin/.cursor-plugin/plugin.json',
       'plugin/AGENTS.md',
       'plugin/hooks/hooks-cursor.json',
       'plugin/hooks/session-start.cursor.mjs',

@@ -1,23 +1,26 @@
 {
   "observedCliVersion": "2026-08-28",
   "retrievedAt": "2026-08-28",
-  "schemaSource": "https://cursor.com/docs/plugins",
-  "notes": "Modeled from the published Cursor plugin reference and hooks documentation; Cursor publishes no machine-readable schema. The plugin schema covers only the fields this compiler emits.",
+  "schemaSource": "TraceDecay checkout vendored schemas; plugin manifest copied from cursor/plugins, MCP and hooks derived from Cursor documentation",
+  "notes": "plugin.schema.json is Cursor's official draft-07 schema from cursor/plugins commit 4a91a6e2665f559f61877f03e36b54886eef359e. mcp.schema.json and hooks.schema.json are strict documentation-derived schemas from TraceDecay commit 30e04b34d4e236d5f00fccf00eea7552dafde5a3, because Cursor publishes no standalone machine-readable schemas for those documents.",
   "schemas": {
     "hooks.schema.json": {
-      "bytes": 969,
-      "sha256": "106d76f79c8fa6600e09cd5bcf25ebf8d06015cde249c48c50fe8060d991e21d",
-      "url": "https://cursor.com/docs/agent/hooks"
+      "bytes": 5355,
+      "sha256": "06154b7afa0861df462130b988912b897e7ccf962b8dd20c09193100bcde5d81",
+      "url": "https://cursor.com/docs/hooks",
+      "vendoredFrom": "/fast/projects/tracedecay/tests/fixtures/cursor-schemas/hooks.schema.json@30e04b34d4e236d5f00fccf00eea7552dafde5a3"
     },
     "mcp.schema.json": {
-      "bytes": 1490,
-      "sha256": "ba5379d4dd3f3d7ff291f2a82a9a04b96b4be7c8dd8c106808a186cad3610764",
-      "url": "https://cursor.com/docs/reference/plugins"
+      "bytes": 3974,
+      "sha256": "f3fa4615afefe004c4fbcc09e635d890df0f1ec0cb39540feab72cbd3a31d844",
+      "url": "https://cursor.com/docs/context/mcp",
+      "vendoredFrom": "/fast/projects/tracedecay/tests/fixtures/cursor-schemas/mcp.schema.json@30e04b34d4e236d5f00fccf00eea7552dafde5a3"
     },
     "plugin.schema.json": {
-      "bytes": 1369,
-      "sha256": "ad5099d50f7f59913a5022b90acaf76e9c50e6d9c5058157a1eed55a842d9d61",
-      "url": "https://cursor.com/docs/reference/plugins"
+      "bytes": 3951,
+      "sha256": "75b402640b1c2654b19199885793ef1985df8185c36694325436f5bb748b7757",
+      "url": "https://github.com/cursor/plugins/blob/4a91a6e2665f559f61877f03e36b54886eef359e/schemas/plugin.schema.json",
+      "vendoredFrom": "/fast/projects/tracedecay/tests/fixtures/cursor-schemas/plugin.schema.json@30e04b34d4e236d5f00fccf00eea7552dafde5a3"
     }
   },
   "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Package builds do not download schemas or invoke host-side validators.",
@@ -25,6 +28,6 @@
     "observedAt": "2026-08-31",
     "cursorServerBuild": "9746bf00534f29fc29f1deb9ddfb5448f7905eb0",
     "source": "Read-only inspection of the installed cursor-agent-exec loader and physical plugins under ~/.cursor/plugins/local.",
-    "notes": "Local installs support root plugin.json and mcp.json; manifests select the Cursor hooks document. CURSOR_PLUGIN_ROOT is substituted for local MCP and hook commands. Symlinks escaping the local plugins root are rejected."
+    "notes": "Known-loading tracedecay uses .cursor-plugin/plugin.json, root mcp.json, and hooks/hooks.json. The installed loader substitutes CURSOR_PLUGIN_ROOT for local MCP and hook commands. Symlinks escaping the local plugins root are rejected."
   }
 }

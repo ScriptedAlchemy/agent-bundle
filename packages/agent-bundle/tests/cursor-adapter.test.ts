@@ -1,7 +1,12 @@
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { cursorAdapter } from '../src/adapters/cursor.ts';
+import {
+  cursorAdapter,
+  cursorHooksValidator,
+  cursorMcpValidator,
+  cursorPluginValidator,
+} from '../src/adapters/cursor.ts';
 import { readTargetMcpServers } from '../src/services/mcp-runtime.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
@@ -77,10 +82,30 @@ it('registers cursor as a first-class target with pinned schema validation', () 
   expect(registry.supports('cursor', 'hooks')).toBe(true);
   expect(registry.hookContract('cursor')?.commandRoot).toBe('${CURSOR_PLUGIN_ROOT}');
   expect(registry.artifactValidation('cursor').documents).toEqual([
+    { path: '.cursor-plugin/plugin.json', required: true, schema: 'plugin' },
     { path: 'hooks/hooks.json', required: false, schema: 'hooks' },
     { path: 'mcp.json', required: false, schema: 'mcp' },
-    { path: 'plugin.json', required: true, schema: 'plugin' },
   ]);
+});
+
+it('validates Cursor documents against the vendored real-host schemas', () => {
+  expect(cursorPluginValidator({ name: 'cursor-review', publisher: 'Cursor', version: '1.2.3' })).toBe(true);
+  expect(cursorPluginValidator({ name: 'Cursor Review' })).toBe(false);
+  expect(cursorPluginValidator({ name: 'cursor-review', unknown: true })).toBe(false);
+
+  expect(cursorMcpValidator({
+    mcpServers: { status: { args: ['serve'], command: 'node', envFile: '.env', type: 'stdio' } },
+  })).toBe(true);
+  expect(cursorMcpValidator({ mcpServers: { status: { args: ['serve'] } } })).toBe(false);
+  expect(cursorMcpValidator({ mcpservers: {} })).toBe(false);
+
+  expect(cursorHooksValidator({
+    hooks: { afterShellExecution: [{ command: 'echo ok', failClosed: true }] },
+    version: 1,
+  })).toBe(true);
+  expect(cursorHooksValidator({ hooks: { afterShellExecutionn: [{ command: 'echo typo' }] }, version: 1 })).toBe(false);
+  expect(cursorHooksValidator({ hooks: { stop: [{ timeout: 5 }] }, version: 1 })).toBe(false);
+  expect(cursorHooksValidator({ hooks: {}, version: 2 })).toBe(false);
 });
 
 it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit manifest pointers', () => {
@@ -90,9 +115,10 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
   expect(plan.hookEntries).toEqual([]);
 
   const documents = writeContents(model);
-  expect(Object.keys(documents).sort()).toEqual(['mcp.json', 'plugin.json']);
+  expect(Object.keys(documents).sort()).toEqual(['.cursor-plugin/plugin.json', 'mcp.json']);
 
-  expect(JSON.parse(documents['plugin.json']!)).toEqual({
+  const manifest = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest).toEqual({
     description: 'Review helpers for Cursor.',
     displayName: 'cursor-review',
     mcpServers: './mcp.json',
@@ -100,6 +126,14 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
     skills: './skills/',
     version: '1.2.3',
   });
+  for (const field of ['mcpServers', 'skills'] as const) {
+    const declaredPath = manifest[field] as string;
+    expect(declaredPath.startsWith('/')).toBe(false);
+    expect(declaredPath.split('/')).not.toContain('..');
+    const artifactPath = declaredPath.replace(/^\.\//u, '').replace(/\/$/u, '');
+    expect(plan.entries.some((entry) =>
+      entry.relativePath === artifactPath || entry.relativePath.startsWith(`${artifactPath}/`))).toBe(true);
+  }
 
   const mcp = JSON.parse(documents['mcp.json']!) as { readonly mcpServers: Record<string, Record<string, unknown>> };
   expect(mcp.mcpServers['status']).toEqual({
@@ -136,9 +170,9 @@ it('rejects the plugin-data token and omits the failed server from the document'
     expect.objectContaining({ code: 'cursor.mcp.token', severity: 'error', target: 'cursor' }),
   ]);
   const documents = plan.entries.filter((entry) => entry.kind === 'write').map((entry) => entry.relativePath);
-  expect(documents).toEqual(['plugin.json']);
+  expect(documents).toEqual(['.cursor-plugin/plugin.json']);
   const manifest = JSON.parse(
-    (plan.entries.find((entry) => entry.relativePath === 'plugin.json') as { readonly content: string }).content,
+    (plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json') as { readonly content: string }).content,
   ) as Record<string, unknown>;
   expect(manifest).not.toHaveProperty('mcpServers');
 });
@@ -185,7 +219,7 @@ it('lowers cursor-targeted hooks into the flat versioned document with dedicated
     },
     version: 1,
   });
-  expect(JSON.parse(documents['plugin.json']!)).toMatchObject({ hooks: './hooks/hooks.json' });
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({ hooks: './hooks/hooks.json' });
 
   const wrappers = plan.hookEntries ?? [];
   expect(wrappers.map((entry) => entry.relativePath).sort()).toEqual([
@@ -221,7 +255,7 @@ it('drops hooks scoped to other targets from the plan', () => {
   expect(paths).not.toContain('hooks/hooks.json');
   expect(paths.some((path) => path.includes('marketplace'))).toBe(false);
   const manifest = JSON.parse(
-    (plan.entries.find((entry) => entry.relativePath === 'plugin.json') as { readonly content: string }).content,
+    (plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json') as { readonly content: string }).content,
   ) as Record<string, unknown>;
   expect(manifest).not.toHaveProperty('hooks');
 });

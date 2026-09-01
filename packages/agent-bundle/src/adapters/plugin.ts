@@ -60,10 +60,10 @@ const pluginName = 'plugin';
  * hook serves both hosts. Per-host `nativeHooks` passthrough stays with the
  * host targets.
  *
- * Cursor consumes the same root through root `plugin.json`: shared `skills/`
- * as-is, the conventional root `mcp.json`, and - because `hooks/hooks.json`
- * has an incompatible Claude/Codex schema - an explicit pointer to the
- * Cursor-format hooks document. Cursor's
+ * Cursor consumes the same root through `.cursor-plugin/plugin.json`: shared
+ * `skills/` as-is, the conventional root `mcp.json`, and - because
+ * `hooks/hooks.json` has an incompatible Claude/Codex schema - an explicit
+ * pointer to the Cursor-format hooks document. Cursor's
  * hook stdin/stdout envelope is not the shared Claude/Codex format, so that
  * document points at dedicated per-hook `hooks/<name>.cursor.mjs` wrappers
  * carrying the Cursor codec; the empty document remains only as a
@@ -79,7 +79,7 @@ const codexBundleMcpPath = '.codex-plugin/mcp.json';
 const cursorPaths = Object.freeze({
   hooks: 'hooks/hooks-cursor.json',
   mcp: 'mcp.json',
-  plugin: 'plugin.json',
+  plugin: '.cursor-plugin/plugin.json',
 });
 
 /**
@@ -217,7 +217,7 @@ const agentsDocument = (model: NormalizedPlugin): string => {
     '',
     '- **Claude Code**: add this directory (or its repository) as a plugin — `claude plugin marketplace add <source>`.',
     '- **Codex**: `codex plugin marketplace add <source>`; the manifest is `.codex-plugin/plugin.json`.',
-    `- **Cursor**: copy this directory into \`~/.cursor/plugins/local/${model.metadata.name}\`; the manifest is root \`plugin.json\`. Symlinks that resolve outside \`~/.cursor/plugins/local\` are rejected by Cursor.`,
+    `- **Cursor**: copy this directory into \`~/.cursor/plugins/local/${model.metadata.name}\`; the manifest is \`.cursor-plugin/plugin.json\`. Symlinks that resolve outside \`~/.cursor/plugins/local\` are rejected by Cursor.`,
     '- **VS Code / GitHub Copilot**: install the repository as an agent plugin, or consume `skills/` directly.',
     '- **skills CLI**: `npx skills add <source> --skill <name>` reads the `skills/` directory.',
     '',
@@ -225,7 +225,7 @@ const agentsDocument = (model: NormalizedPlugin): string => {
     '',
     '- `.claude-plugin/` — Claude Code manifest and host documents.',
     '- `.codex-plugin/` — Codex manifest and host documents.',
-    '- `plugin.json` and `mcp.json` — Cursor local-plugin manifest and MCP document.',
+    '- `.cursor-plugin/plugin.json` and root `mcp.json` — Cursor local-plugin manifest and MCP document.',
     '- `.mcp.json` — Claude Code MCP configuration (plugin-root convention).',
     '- `hooks/` — one `hooks.json` with a host-detecting wrapper per hook (Claude Code and Codex), plus `hooks-cursor.json` with per-hook Cursor wrappers (`<name>.cursor.mjs`).',
     '- `skills/` — agent skills (`SKILL.md` per skill), shared by every host.',

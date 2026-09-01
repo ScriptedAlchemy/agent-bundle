@@ -28,7 +28,7 @@ import hooksSchema from './schemas/cursor/hooks.schema.json' with { type: 'json'
 import mcpSchema from './schemas/cursor/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/cursor/plugin.schema.json' with { type: 'json' };
 import {
-  createAdapterValidator,
+  createDraft7AdapterValidator,
   schemaDescriptorsFrom,
   standardArtifactLayout,
   standardPluginArtifactPlan,
@@ -43,17 +43,17 @@ const cursorName = 'cursor';
 
 /**
  * Cursor's local-plugin document paths, shared with the unified bundle
- * adapter. The real-host loader accepts multiple manifest candidates, but
- * root `plugin.json`, `mcp.json`, and explicit hook pointers match the
- * convention used by physical installs under `~/.cursor/plugins/local`.
+ * adapter. A known-loading physical install uses `.cursor-plugin/plugin.json`
+ * with root `mcp.json` and `hooks/hooks.json`; the manifest keeps explicit
+ * pointers so every declared component resolves from one plugin root.
  */
 export const cursorArtifactPaths = Object.freeze({
   hooks: 'hooks/hooks.json',
   mcp: 'mcp.json',
-  plugin: 'plugin.json',
+  plugin: '.cursor-plugin/plugin.json',
 });
 
-const validator = createAdapterValidator();
+const validator = createDraft7AdapterValidator();
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateHooks = validator.compile(hooksSchema);
@@ -187,7 +187,7 @@ export interface CursorManifestPointers {
   readonly skills?: string;
 }
 
-/** Builds the root `plugin.json` manifest with explicit document pointers. */
+/** Builds the `.cursor-plugin/plugin.json` manifest with explicit document pointers. */
 export const cursorManifest = (
   model: NormalizedPlugin,
   pointers: CursorManifestPointers,
@@ -204,7 +204,7 @@ export const cursorManifest = (
 const metadata = Object.freeze({
   adapterRevision: '1.2.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '9d200322bea9cdb1f22b35c404be043904966ffa310f4a77a1852352c1fe495f',
+  capabilitySha256: 'd9fc515e54e4bf6193d36666e39434dc07f62ef4d2a67e064b96a0037c2286bb',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });

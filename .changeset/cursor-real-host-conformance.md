@@ -2,8 +2,9 @@
 "agent-bundle": patch
 ---
 
-Emit Cursor local-plugin manifests and MCP configuration at the artifact root,
-select the Cursor hook document explicitly in unified bundles, and document a
-physical copy installation because Cursor rejects symlinks whose targets are
-outside `~/.cursor/plugins/local`. Pin the real-host loader evidence for local
-layout and `${CURSOR_PLUGIN_ROOT}` substitution.
+Emit Cursor MCP configuration at the plugin root, keep the confirmed
+`.cursor-plugin/plugin.json` local-plugin manifest with an explicit Cursor hook
+document pointer, and document a physical copy installation because Cursor
+rejects symlinks whose targets are outside `~/.cursor/plugins/local`. Validate
+Cursor artifacts against the vendored official manifest schema and strict
+MCP/hooks schemas, with real-host provenance for `${CURSOR_PLUGIN_ROOT}`.
