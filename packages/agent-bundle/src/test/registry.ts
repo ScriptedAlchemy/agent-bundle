@@ -14,7 +14,7 @@ export const AGENT_TEST_REGISTRY_SYMBOL_KEY = 'agent-bundle/test-route-registry'
 
 const REGISTRY_SYMBOL = Symbol.for(AGENT_TEST_REGISTRY_SYMBOL_KEY);
 
-export const AGENT_TEST_REGISTRY_VERSION = 1;
+export const AGENT_TEST_REGISTRY_VERSION = 2;
 
 export interface AgentTestRouteRegistry {
   /** Lazy loaders keyed by compiled route id, so a test only compiles the routes it renders. */

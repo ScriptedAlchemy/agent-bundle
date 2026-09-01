@@ -5,6 +5,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import { routeTestSetupSource } from '../src/rstest/setup-module.ts';
 import { AgentTestError } from '../src/test/errors.ts';
+import { invokeCli } from '../src/test/cli.ts';
 import { compileTestManifest, testManifestFromRouteGraph } from '../src/test/manifest.ts';
 import {
   AGENT_TEST_REGISTRY_SYMBOL_KEY,
@@ -143,6 +144,28 @@ describe('the generated route registry', () => {
     await withRealmRegistry({ loaders: {}, manifest, version: 99 }, () => {
       expect(() => testManifest()).toThrow('Incompatible Agent Bundle test registry version');
     });
+  });
+
+  it('refuses a version-1 manifest before a helper reads fields that version did not carry', async () => {
+    const versionOneManifest = Object.fromEntries(
+      Object.entries(manifest).filter(([key]) => key !== 'cliCommands' && key !== 'plugin'),
+    );
+    const error = await withRealmRegistry(
+      { loaders: {}, manifest: versionOneManifest, version: 1 },
+      async () => invokeCli(['--help']).catch((thrown: unknown) => thrown),
+    );
+
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect((error as AgentTestError).code).toBe('manifest-unavailable');
+    expect((error as AgentTestError).message).toContain('found 1');
+    expect((error as AgentTestError).message).toContain('Install one agent-bundle version');
+  });
+
+  it('accepts a registry carrying the current manifest version', async () => {
+    await withRealmRegistry(
+      { loaders: {}, manifest, version: AGENT_TEST_REGISTRY_VERSION },
+      () => expect(testManifest()).toBe(manifest),
+    );
   });
 });
 

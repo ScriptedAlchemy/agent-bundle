@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@rstest/core';
 
+import { agent } from '@agent-bundle/runtime';
 import { cliJson, invokeCli } from '../../src/test/cli.ts';
 
 /**
@@ -83,5 +84,28 @@ describe('the CLI dispatch level', () => {
 
     expect(run.exitCode).toBe(0);
     expect(progress.map((update) => update.message)).toEqual(['reading inventory', 'inventory ready']);
+  });
+
+  it('derives the request workspace from the invocation cwd like the generated binary', async () => {
+    const invocationCwd = process.cwd();
+    let observed: { readonly projectRoot: string | null; readonly workspace: string | null } | undefined;
+    const run = await invokeCli(['inventory', 'fiction'], {
+      context: {
+        progress: {
+          report: async () => {
+            const context = await agent();
+            observed = {
+              projectRoot: context.capabilities.projectRoot.state === 'available'
+                ? context.capabilities.projectRoot.value.root
+                : null,
+              workspace: context.workspace.state === 'available' ? context.workspace.value.root : null,
+            };
+          },
+        },
+      },
+    });
+
+    expect(invocationCwd).not.toBe(run.provenance.projectRoot);
+    expect(observed).toEqual({ projectRoot: invocationCwd, workspace: invocationCwd });
   });
 });

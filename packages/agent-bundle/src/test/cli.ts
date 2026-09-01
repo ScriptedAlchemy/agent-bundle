@@ -181,7 +181,7 @@ export const invokeCli = async (
       } catch (error) {
         throw new CliInputError(error instanceof Error ? error.message : String(error));
       }
-      const root = manifest.projectRoot;
+      const root = process.cwd();
       const result = await runtime.runAgentRequest({
         capabilities: {
           command: runtime.unavailable(),

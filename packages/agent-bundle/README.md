@@ -252,7 +252,7 @@ import { cliJson, expectEvents, invokeCli, invokeMcpTool } from 'agent-bundle/te
 
 // mcp-in-memory: the generated server projects the document to protocol content.
 const call = await invokeMcpTool('summarize', { input: { title: 'Dune' } });
-expect(call.result.structuredContent).toEqual({ chapters: 24 });
+expect(call.structuredContent).toEqual({ chapters: 24 });
 
 // cli-dispatch: the routed CLI resolves the command, parses argv, and maps the exit code.
 const run = await invokeCli(['library', 'audit', './books', '--max-files', '8']);
