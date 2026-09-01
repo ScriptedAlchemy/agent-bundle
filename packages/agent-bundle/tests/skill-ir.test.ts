@@ -293,6 +293,62 @@ describe('canonical Skill IR', () => {
     })]);
   });
 
+  it('rejects unknown nested fields for every typed host target without dropping valid fields', async () => {
+    const markdown = [
+      '---',
+      'name: review',
+      'description: Review a change.',
+      'targets:',
+      '  claude:',
+      '    model: sonnet',
+      '    display_nmae: Review change',
+      '  cursor:',
+      '    color: blue',
+      '    display_nmae: Review change',
+      '  codex:',
+      '    display_nmae: Review change',
+      '    interface:',
+      '      display_name: Review change',
+      '      display_nmae: Review change',
+      '    policy:',
+      '      allow_implicit_invocation: true',
+      '      allow_implcit_invocation: true',
+      '    dependencies:',
+      '      dependency_typo: true',
+      '      tools:',
+      '        - type: mcp',
+      '          value: review',
+      '          tool_typo: true',
+      '---',
+      '',
+      '# Review',
+      '',
+    ].join('\n');
+    const root = await projectRoot({ 'skills/review/SKILL.md': markdown });
+    const ir = parseSkillIr(await parseSkill(join(root, 'skills', 'review'), root));
+
+    expect(ir.diagnostics).toEqual([
+      'targets.claude.display_nmae',
+      'targets.cursor.display_nmae',
+      'targets.codex.display_nmae',
+      'targets.codex.interface.display_nmae',
+      'targets.codex.policy.allow_implcit_invocation',
+      'targets.codex.dependencies.dependency_typo',
+      'targets.codex.dependencies.tools[0].tool_typo',
+    ].map((field) => expect.objectContaining({
+      code: 'AB3006',
+      message: expect.stringContaining(field),
+      severity: 'error',
+    })));
+    expect(ir.extensions.claude).toEqual(expect.objectContaining({ model: 'sonnet' }));
+    expect(ir.extensions.cursor).toEqual(expect.objectContaining({ color: 'blue' }));
+    expect(ir.extensions.codex).toEqual(expect.objectContaining({
+      dependencies: { tools: [expect.objectContaining({ type: 'mcp', value: 'review' })] },
+      interface: { displayName: 'Review change' },
+      policy: { allowImplicitInvocation: true },
+    }));
+  });
+
   it('surfaces the shared-vs-per-host skills tree as an inspect-visible evidence decision', async () => {
     const root = await projectRoot({
       'skills/review/SKILL.md': [

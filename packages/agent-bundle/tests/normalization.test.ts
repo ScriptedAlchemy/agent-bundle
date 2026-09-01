@@ -463,6 +463,25 @@ it('maps pinned Agent Skills schema issues to stable source diagnostics without 
   ]);
 });
 
+it('validates raw optional portable Skill fields before sanitizing the Skill IR', () => {
+  const root = '/workspace/project';
+  const document = skill(root, 'review-tools', 'review-tools');
+  document.frontmatter.compatibility = false;
+
+  expect(validateSource(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { skills: [document] },
+    registry,
+  )).toEqual([
+    {
+      code: 'AB4007',
+      message: 'Skill frontmatter compatibility must be string.',
+      severity: 'error',
+      sourcePath: document.source,
+    },
+  ]);
+});
+
 it('diagnoses a missing plugin object instead of throwing', () => {
   const loaded = loadedProject({} as AgentBundleConfig);
 
