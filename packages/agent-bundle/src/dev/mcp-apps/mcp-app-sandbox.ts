@@ -3,7 +3,6 @@ import { createServer, type Server } from 'node:http';
 import { isIP, type Socket } from 'node:net';
 
 import type { McpAppJsonValue } from './mcp-app-binding-service.ts';
-import { createMcpAppConsentActionDigest } from './mcp-app-consent.ts';
 
 const JSON_RPC_VERSION = '2.0';
 const SANDBOX_NOTIFICATION_PREFIX = 'ui/notifications/sandbox-';

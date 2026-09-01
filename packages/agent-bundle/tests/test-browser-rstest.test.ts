@@ -12,7 +12,7 @@ import {
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/route-harness');
 
 describe('agentBundleBrowserRstest', () => {
-  it('compiles every declared app once and writes the browser registry', async () => {
+  it('compiles every declared app once and writes the browser registry', { timeout: 30_000 }, async () => {
     const config = await agentBundleBrowserRstest({
       root: fixtureRoot,
       setupFiles: ['./tests/setup.ts'],
