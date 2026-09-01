@@ -27,6 +27,47 @@ node dist/bin/my-agent-plugin.js World
 - `src/index.ts` — the library export (`dist/index.js` + `dist/index.d.ts`).
 - `tests/` — run with `npm run test`.
 
+## Tests
+
+`npm run test` runs ordinary module tests against `src/cli.ts` and
+`src/index.ts`, and `npm run check` runs them after validate, build, and
+typecheck.
+
+This template deliberately ships **no** framework test pool. The framework's
+consumer harness (`agent-bundle/rstest` + `agent-bundle/test`) addresses
+*compiled routes*, and a CLI declared in `agent-bundle.config.ts` under
+`scripts:` is a bundled entry, not a route: the compiler hands that module to
+the script bundler, so this project compiles zero routes and there would be
+nothing for `renderRoute` to render. A pool asserting that is vacuous, and a
+vacuous pass is worse than no pool.
+
+Adopt the harness when the project grows a routed surface:
+
+- `src/cli/**` command routes make `invokeCli` / `cliJson` (the `cli-dispatch`
+  level) meaningful — argv resolved and run through the routed CLI's own shell.
+- `src/mcp/<server>/**` route modules make `renderRoute` (`route-unit`) and
+  `invokeMcpTool` (`mcp-in-memory`) meaningful.
+
+Then add a pool with the generated configuration and keep it out of the plain
+run:
+
+```ts
+// rstest.route-unit.config.ts
+import { defineConfig } from '@rstest/core';
+import { agentBundleRstest } from 'agent-bundle/rstest';
+
+export default defineConfig(await agentBundleRstest());
+```
+
+```json
+"test": "rstest tests --exclude \"tests/route-unit/**\"",
+"test:routes": "rstest --config rstest.route-unit.config.ts"
+```
+
+Route rendering needs `react` and `@agent-bundle/runtime` (the same packages
+the generated entries import) plus `@rstest/core`; install them alongside the
+first route module. The `mcp-server` template ships this wiring already.
+
 ## The agent-bundle dependency
 
 agent-bundle has no npm release yet; this project pins a

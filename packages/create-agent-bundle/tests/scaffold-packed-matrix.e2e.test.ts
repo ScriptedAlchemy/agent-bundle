@@ -30,8 +30,22 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
     env: installedEnvironment(),
   });
 
-  await npmRun(projectRoot, 'check');
+  const checked = await npmRun(projectRoot, 'check');
   await expectCleanValidate(projectRoot);
+
+  // The template's own harness pools ran inside `check`, and they are asserted
+  // positively — a silent `check` would also pass if the pools were dropped or
+  // matched no files. Each pool names the proof level it carries.
+  expect(checked).toContain('tests/route-unit/report-status.test.ts');
+  expect(checked).toContain('tests/projection/mcp-in-memory.test.ts');
+  // The route-unit pool renders through the framework's own generated setup,
+  // resolved from the packed tarball's `agent-bundle/rstest` export.
+  const routes = await npmRun(projectRoot, 'test:routes');
+  expect(routes).toContain('renders a known service into a final Agent Document');
+  expect(routes).toContain('"failedTests": 0');
+  const projection = await npmRun(projectRoot, 'test:projection');
+  expect(projection).toContain('projects the rendered document into the protocol result the server returns');
+  expect(projection).toContain('"failedTests": 0');
 
   const artifact = join(projectRoot, 'artifact');
   const manifest = JSON.parse(await readFile(join(artifact, 'portable', 'mcp.json'), 'utf8')) as {
@@ -65,7 +79,12 @@ it.concurrent('scaffolds the cli-tool template with a framework-built bin, lib, 
     env: installedEnvironment(),
   });
 
-  await npmRun(projectRoot, 'check');
+  // This template ships no framework test pool on purpose: its CLI is a
+  // config-declared script bundle rather than a compiled route, so there is
+  // nothing for the route-unit or cli-dispatch levels to address (README:
+  // "Tests"). What `check` does run is asserted rather than assumed.
+  const checked = await npmRun(projectRoot, 'check');
+  expect(checked).toContain('tests/cli.test.ts');
   await expectCleanValidate(projectRoot);
 
   // The src/cli.ts convention produced the executable package bin.

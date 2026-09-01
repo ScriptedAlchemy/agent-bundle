@@ -39,13 +39,21 @@ scripted and asks nothing — the remaining values fall back to their defaults.
 | Template | What you get |
 | --- | --- |
 | `minimal` | A skills-only plugin: one Skill directory and nothing else. |
-| `mcp-server` | A stdio MCP server through the `src/mcp/<server-id>.ts` convention (factory export, framework lifecycle shell) plus one artifact script. |
+| `mcp-server` | A stdio MCP server from one `src/mcp/<server>/tools/<name>.tsx` route module plus one artifact script, with the framework test harness wired up. |
 | `cli-tool` | An installable CLI through the `src/cli.ts` bin convention plus a `src/index.ts` library export with declarations. |
 
-Every template ships a `check` script (validate + build + typecheck + test)
+Every template ships a `check` script (validate + build + typecheck + tests)
 and validates with zero diagnostics — including the `AB473x` migration
 nudges, because the templates are written against the entry conventions from
 the start.
+
+The `mcp-server` template also starts with the consumer test harness: a
+route-unit pool (`agentBundleRstest()` from `agent-bundle/rstest`, `renderRoute`
+and `expectDocument` from `agent-bundle/test`) and a separate in-memory MCP
+projection pool, each labeled with the proof level it carries and run by
+`check`. The `minimal` and `cli-tool` templates compile no route modules, so
+neither ships a harness pool that would pass without addressing anything; their
+READMEs document the wiring to add with the first route.
 
 ## The framework dependency
 
