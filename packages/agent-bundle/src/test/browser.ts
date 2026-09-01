@@ -364,6 +364,8 @@ export const mountBrowserApp = async (
   window.addEventListener('message', onMessage);
   if (!bridge.publishToolResult(options.toolResult)) {
     window.removeEventListener('message', onMessage);
+    await bridge.forceClose().catch(() => undefined);
+    iframe.remove();
     throw new BrowserAppTestError('The initial MCP App tool result was rejected.', provenance);
   }
 
