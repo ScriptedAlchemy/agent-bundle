@@ -47,22 +47,52 @@ jobs:
 
           files_file="$(mktemp)"
           trap 'rm -f "$files_file"' EXIT
+          if ! changed_files="$(
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '.changed_files'
+          )"; then
+            echo "Could not read the PR changed-files count; failing open so heavy jobs run."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$changed_files" =~ ^[0-9]+$ ]]; then
+            echo "Invalid PR changed-files count '$changed_files'; failing open so heavy jobs run."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
-            --paginate --jq '.[].filename' > "$files_file"; then
+            --paginate \
+            --jq '.[] | [.filename, (.previous_filename // "")] | @tsv' \
+            > "$files_file"; then
             echo "Could not list changed files; failing open so heavy jobs run."
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          mapfile -t files < "$files_file"
-          if (( ${#files[@]} == 0 )); then
+          mapfile -t entries < "$files_file"
+          if (( ${#entries[@]} == 0 )); then
             echo "No changed files returned; failing open so heavy jobs run."
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if (( ${#entries[@]} != changed_files )); then
+            echo "Listed ${#entries[@]} of $changed_files changed files; failing open so heavy jobs run."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          paths=()
+          for entry in "${entries[@]}"; do
+            IFS=$'\t' read -r filename previous_filename <<< "$entry"
+            paths+=("$filename")
+            if [[ -n "$previous_filename" ]]; then
+              paths+=("$previous_filename")
+            fi
+          done
 
           docs_only=true
-          for f in "${files[@]}"; do
+          for f in "${paths[@]}"; do
             case "$f" in
               docs/*|agent-patterns/*) ;;
               .changeset/*.md) ;;
@@ -81,7 +111,7 @@ jobs:
           done
 
           if [[ "$docs_only" == "true" ]]; then
-            echo "All ${#files[@]} changed files are docs-only; heavy jobs will be skipped."
+            echo "All ${#entries[@]} changed files are docs-only; heavy jobs will be skipped."
           fi
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
