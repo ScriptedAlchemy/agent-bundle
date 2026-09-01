@@ -1,10 +1,44 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import type { JsonValue } from './lower-mcp.js';
+
 export const AGENT_REQUEST_STORE_VERSION = 1;
 
 const STORE_SYMBOL = Symbol.for('@agent-bundle/runtime/request-store');
 
 export type AgentInvocationKind = 'tool' | 'event' | 'cli' | 'script' | 'workbench';
+
+export interface AgentToolInvocationProps {
+  readonly input: JsonValue;
+  readonly operationId: string;
+}
+
+export interface AgentEventInvocationProps {
+  readonly event: string;
+  readonly payload: JsonValue;
+}
+
+export interface AgentCliInvocationProps {
+  readonly args: readonly string[];
+  readonly command: string;
+}
+
+export interface AgentScriptInvocationProps {
+  readonly input?: JsonValue;
+  readonly name: string;
+}
+
+export interface AgentWorkbenchInvocationProps {
+  readonly input?: JsonValue;
+  readonly view: string;
+}
+
+export type AgentRenderInvocation =
+  | { readonly kind: 'tool'; readonly props: AgentToolInvocationProps }
+  | { readonly kind: 'event'; readonly props: AgentEventInvocationProps }
+  | { readonly kind: 'cli'; readonly props: AgentCliInvocationProps }
+  | { readonly kind: 'script'; readonly props: AgentScriptInvocationProps }
+  | { readonly kind: 'workbench'; readonly props: AgentWorkbenchInvocationProps };
 
 export type ObservedSource = 'native' | 'receipt' | 'derived';
 
