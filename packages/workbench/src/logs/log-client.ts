@@ -15,6 +15,8 @@ import {
   ForegroundRouteClientError,
   type ForegroundRequestAuthority,
 } from '../mcp/mcp-route-client.ts';
+import { deepFreeze } from '../freeze.ts';
+
 
 export interface LogClientOptions {
   /** Reuses Workbench's single foreground session and invalidation authority. */
@@ -48,20 +50,20 @@ const maximumSummaryLength = 2_048;
 const safeContextKeys = new Set(['buildId', 'diagnosticCode', 'epochId', 'hookId', 'projectId', 'runId', 'sessionId', 'target']);
 const devLogProducers = Object.freeze(['project', 'build', 'diagnostic', 'mcp', 'hook', 'eval', 'playground'] as const);
 const devLogLevels = Object.freeze(['debug', 'info', 'warning', 'error'] as const);
-const devLogKinds = Object.freeze({
-  build: Object.freeze(['artifact.available', 'build.failed', 'build.started']),
-  diagnostic: Object.freeze([
+const devLogKinds = deepFreeze({
+  build: ['artifact.available', 'build.failed', 'build.started'],
+  diagnostic: [
     'artifact.available.diagnostic', 'artifact.status.diagnostic', 'build.failed.diagnostic', 'build.started.diagnostic',
     'invalidation.diagnostic', 'runtime.event.diagnostic', 'source.changed.diagnostic', 'source.status.diagnostic',
-  ]),
-  eval: Object.freeze(['eval.run.completed', 'eval.run.failed', 'eval.run.started']),
-  hook: Object.freeze(['hook.simulate.completed', 'hook.simulate.failed', 'hook.simulate.started']),
-  mcp: Object.freeze(['mcp.logging', 'mcp.stderr', 'mcp.operation.failed', 'mcp.operation.started', 'mcp.operation.succeeded']),
-  playground: Object.freeze(['playground.event.appended']),
-  project: Object.freeze([
+  ],
+  eval: ['eval.run.completed', 'eval.run.failed', 'eval.run.started'],
+  hook: ['hook.simulate.completed', 'hook.simulate.failed', 'hook.simulate.started'],
+  mcp: ['mcp.logging', 'mcp.stderr', 'mcp.operation.failed', 'mcp.operation.started', 'mcp.operation.succeeded'],
+  playground: ['playground.event.appended'],
+  project: [
     'artifact.status', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation', 'project.events.replay-gap',
     'project.invalid-source', 'project.load', 'project.prepared', 'runtime.event', 'source.changed', 'source.status',
-  ]),
+  ],
 });
 const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const safeInteger = (value: unknown, minimum = 0): value is number =>

@@ -1,3 +1,5 @@
+import { deepFreeze } from '../core/freeze.ts';
+
 /** Browser-safe MCP App profile identity and descriptor registry. */
 export const MCP_APP_PROTOCOL_VERSION = '2026-01-26';
 
@@ -19,26 +21,26 @@ export interface McpAppProfileDescriptor {
 
 const portableProfileVersion = (`agent-bundle:mcp-apps:${MCP_APP_PROTOCOL_VERSION}`) as McpAppProfileDescriptor['version'];
 
-export const MCP_APP_PROFILE_DESCRIPTORS: Readonly<Record<McpAppProfileId, McpAppProfileDescriptor>> = Object.freeze({
-  chatgpt: Object.freeze({
+export const MCP_APP_PROFILE_DESCRIPTORS: Readonly<Record<McpAppProfileId, McpAppProfileDescriptor>> = deepFreeze({
+  chatgpt: {
     claimsRealHostParity: false,
     evidence: 'simulated',
     id: 'chatgpt',
     label: 'ChatGPT Simulation',
     version: 'agent-bundle:chatgpt-sim:1',
-  }),
-  claude: Object.freeze({
+  },
+  claude: {
     claimsRealHostParity: false,
     evidence: 'simulated',
     id: 'claude',
     label: 'Claude Simulation',
     version: 'agent-bundle:claude-sim:1',
-  }),
-  portable: Object.freeze({
+  },
+  portable: {
     claimsRealHostParity: false,
     evidence: 'simulated',
     id: 'portable',
     label: 'Portable MCP Apps',
     version: portableProfileVersion,
-  }),
+  },
 });

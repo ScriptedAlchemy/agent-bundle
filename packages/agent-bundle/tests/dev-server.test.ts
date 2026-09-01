@@ -18,6 +18,8 @@ import {
 import { ArtifactInspectionServiceError } from '../src/dev/artifacts/artifact-inspection-service.ts';
 import type { EvalRouteService } from '../src/dev/eval/eval-routes.ts';
 import type { McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
+
 
 const status = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -833,12 +835,12 @@ it('accepts headerless browser same-origin fetch provenance with the exact token
 });
 
 it('forwards structured artifact validation diagnostics through the foreground error boundary', async () => {
-  const diagnostics = Object.freeze([Object.freeze({
+  const diagnostics = deepFreeze([{
     code: 'AB4300',
     generatedPath: 'claude/hooks/guard.mjs',
     message: 'Emitted hook wrapper is not executable.',
     severity: 'error' as const,
-  })]);
+  }]);
   const server = await startForegroundServer({
     artifacts: {
       diff: () => Promise.reject(new Error('unused')),

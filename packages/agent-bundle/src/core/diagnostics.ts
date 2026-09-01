@@ -1,3 +1,5 @@
+import { deepFreeze } from './freeze.ts';
+
 export type DiagnosticSeverity = 'error' | 'warning' | 'info';
 
 export interface Diagnostic {
@@ -130,7 +132,7 @@ export class DiagnosticBag {
 }
 
 export const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
-  Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
+  deepFreeze(diagnostics.map((diagnostic) => ({ ...diagnostic })));
 
 export const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
   diagnostics.some((diagnostic) => diagnostic.severity === 'error');

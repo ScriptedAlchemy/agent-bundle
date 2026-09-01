@@ -26,13 +26,15 @@ import type {
   TargetSchemaDescriptor,
 } from './types.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
 type NativeHookSource = NonNullable<TargetAdapter['nativeHookSource']>;
 
-const emptyArtifactValidation: TargetArtifactValidationContract = Object.freeze({
-  documents: Object.freeze([]),
-  schemas: Object.freeze([]),
+const emptyArtifactValidation: TargetArtifactValidationContract = deepFreeze({
+  documents: [],
+  schemas: [],
 });
 
 const emptyArtifactLayout: TargetArtifactLayout = Object.freeze({});
@@ -297,9 +299,9 @@ const snapshotArtifactValidation = (
   if ([...schemaNames].some((name) => !referencedSchemas.has(name))) {
     throw new Error(`Target adapter "${adapter.name}" must assign every artifact schema contract to a document.`);
   }
-  return Object.freeze({
-    documents: Object.freeze(documents.sort((left, right) => left.path.localeCompare(right.path))),
-    schemas: Object.freeze(schemas.sort((left, right) => left.name.localeCompare(right.name))),
+  return deepFreeze({
+    documents: documents.sort((left, right) => left.path.localeCompare(right.path)),
+    schemas: schemas.sort((left, right) => left.name.localeCompare(right.name)),
   });
 };
 

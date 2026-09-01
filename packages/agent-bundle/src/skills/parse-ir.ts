@@ -205,7 +205,7 @@ const codexFrom = (value: unknown): CodexSkillExtension | undefined => {
           : { allowImplicitInvocation: pickBoolean(policy, 'allowImplicitInvocation', 'allow_implicit_invocation') }),
       }),
     }),
-    ...(tools === undefined ? {} : { dependencies: Object.freeze({ tools: Object.freeze(tools) }) }),
+    ...(tools === undefined ? {} : { dependencies: deepFreeze({ tools: tools }) }),
   };
   return Object.keys(extension).length === 0 ? undefined : Object.freeze(extension);
 };
@@ -403,7 +403,7 @@ export const parseSkillIr = (document: SkillDocument): SkillIr => {
     passThrough,
     placeholders: Object.freeze(placeholders),
     portable: portableFrom(frontmatter),
-    resources: Object.freeze(document.resources.map((resource) => Object.freeze({
+    resources: deepFreeze(document.resources.map((resource) => ({
       bytes: resource.bytes,
       relativePath: resource.relativePath,
       source: resource.source,

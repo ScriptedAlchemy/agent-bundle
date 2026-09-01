@@ -9,6 +9,8 @@ import type {
   AgentEventRouteProps,
   CanonicalAgentEvent,
 } from '../routes/public.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 const resultValueSchema = z.object({
   outcome: z.enum(['continue', 'deny']).optional(),
@@ -133,11 +135,11 @@ export const projectEventDocument = (
     if (additionalContext === undefined) return undefined;
     return target === 'cursor'
       ? Object.freeze({ additional_context: additionalContext })
-      : Object.freeze({
-          hookSpecificOutput: Object.freeze({
+      : deepFreeze({
+          hookSpecificOutput: {
             additionalContext,
             hookEventName: nativeEvent,
-          }),
+          },
         });
   }
   if (event === 'agent/stop') {
@@ -156,11 +158,11 @@ export const projectEventDocument = (
     }
     return target === 'cursor'
       ? Object.freeze({ additional_context: additionalContext })
-      : Object.freeze({
-          hookSpecificOutput: Object.freeze({
+      : deepFreeze({
+          hookSpecificOutput: {
             additionalContext,
             hookEventName: nativeEvent,
-          }),
+          },
         });
   }
   if (event === 'tool/before') {
@@ -183,17 +185,17 @@ export const projectEventDocument = (
       ...(parsedValue?.reason === undefined ? {} : { permissionDecisionReason: parsedValue.reason }),
       ...(parsedValue?.updatedInput === undefined ? {} : { updatedInput: parsedValue.updatedInput }),
     };
-    return Object.freeze({ hookSpecificOutput: Object.freeze(output) });
+    return deepFreeze({ hookSpecificOutput: output });
   }
   if (event === 'session/start' || event === 'tool/after') {
     if (additionalContext === undefined) return undefined;
     return target === 'cursor'
       ? Object.freeze({ additional_context: additionalContext })
-      : Object.freeze({
-          hookSpecificOutput: Object.freeze({
+      : deepFreeze({
+          hookSpecificOutput: {
             additionalContext,
             hookEventName: nativeEvent,
-          }),
+          },
         });
   }
   return undefined;

@@ -27,6 +27,8 @@ import {
 } from '../playground/native-playground-service.ts';
 import type { PreparedProject } from '../project-service.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch, type DiagnosticSummary } from '../types.ts';
+import { deepFreeze } from '../../core/freeze.ts';
+
 
 export interface SucceededArtifactEpochResult {
   readonly diagnostics: readonly Diagnostic[];
@@ -77,12 +79,12 @@ const failureDiagnostics = (
     const first = diagnostics[0];
     if (first !== undefined) return Object.freeze([first, ...diagnostics.slice(1)]);
   }
-  return Object.freeze([Object.freeze({
+  return deepFreeze([{
     code: 'AB7100',
     message: `Unable to compile the build: ${errorMessage(error)}`,
     severity: 'error' as const,
     sourcePath: configPath,
-  })]);
+  }]);
 };
 
 const targetDigests = async (

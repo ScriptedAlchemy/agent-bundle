@@ -10,6 +10,8 @@ import type {
   PlaygroundTraceEvent,
   PlaygroundTraceSource,
 } from '../../../agent-bundle/src/contracts/playground.ts';
+import { deepFreeze } from '../freeze.ts';
+
 
 export type PlaygroundState = 'finalized' | 'no-epoch' | 'no-session' | 'open';
 
@@ -137,8 +139,8 @@ export const mergePlaygroundEvents = (
 export const playgroundTraceRowsFor = (
   epoch: PlaygroundEpochIdentity,
   events: readonly PlaygroundTraceEvent[],
-): readonly PlaygroundTraceRow[] => Object.freeze(
-  [...events].sort(bySequence).map((event): PlaygroundTraceRow => Object.freeze({
+): readonly PlaygroundTraceRow[] => deepFreeze(
+  [...events].sort(bySequence).map((event): PlaygroundTraceRow => ({
     epochDigest: epoch.digest,
     epochId: epoch.id,
     key: event.rawEventRef,

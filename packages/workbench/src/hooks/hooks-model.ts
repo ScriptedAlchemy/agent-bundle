@@ -9,6 +9,8 @@ import type {
   HookPlaygroundSimulation,
 } from '../../../agent-bundle/src/contracts/hooks.ts';
 import { deeplyFrozenHookValue } from './hook-client.ts';
+import { deepFreeze } from '../freeze.ts';
+
 
 export type HookPlaygroundResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation | undefined;
 
@@ -66,9 +68,9 @@ const readableHookLabel = (value: string): string => {
 
 export const hookOptionKeyFor = (binding: HookPlaygroundBinding): string => `${binding.target}/${binding.hook}`;
 
-export const hookOptionsFor = (hooks: readonly HookPlaygroundHook[]): readonly HookOption[] => Object.freeze(
+export const hookOptionsFor = (hooks: readonly HookPlaygroundHook[]): readonly HookOption[] => deepFreeze(
   hooks
-    .map((entry): HookOption => Object.freeze({
+    .map((entry): HookOption => ({
       binding: Object.freeze({ epochId: entry.binding.epochId, hook: entry.binding.hook, target: entry.binding.target }),
       event: entry.hook.event,
       key: hookOptionKeyFor(entry.binding),

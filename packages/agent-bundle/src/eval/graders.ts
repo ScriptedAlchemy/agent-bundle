@@ -14,6 +14,8 @@ import type {
   EvalScriptOutcome,
 } from './types.ts';
 import { isErrno } from '../core/errors.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 const runCommand = promisify(execFile);
 
@@ -229,7 +231,7 @@ export const runEvalGraders = async (
       results[spec.id] = outcome('inconclusive', evalGraderFailureMessage);
     }
   }
-  return Object.freeze({ failures: Object.freeze(failures), results: Object.freeze(results) });
+  return deepFreeze({ failures: failures, results: results });
 };
 
 export const evalScriptGraderSpec = (script: string, suiteDir: string): EvalScriptGraderSpec =>

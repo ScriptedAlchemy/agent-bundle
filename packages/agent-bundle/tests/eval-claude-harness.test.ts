@@ -28,10 +28,12 @@ import type {
   NativeClaudeProcessResult,
 } from '../src/host-contracts/native-claude-contract.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
+
 
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE === '1' ? it : it.skip;
 
-const hosts = Object.freeze({ claude: Object.freeze({ model: 'claude-sonnet-4-5' }) });
+const hosts = deepFreeze({ claude: { model: 'claude-sonnet-4-5' } });
 
 const hostileEnvironment: Readonly<NodeJS.ProcessEnv> = Object.freeze({
   ANTHROPIC_API_KEY: 'must-not-reach-child',

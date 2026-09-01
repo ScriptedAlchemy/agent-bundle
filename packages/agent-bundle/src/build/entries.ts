@@ -14,6 +14,7 @@ import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
+import { deepFreeze } from '../core/freeze.ts';
 import {
   cliEntryRuntimePath,
   cliEntryRuntimeSpecifier,
@@ -447,7 +448,7 @@ export const compileMcpEntries = async (
 export const planCompiledHooks = (
   entries: readonly TargetHookEntry[],
   options: { readonly outDir: string },
-): readonly CompiledHookEntry[] => Object.freeze(entries.map((entry) => Object.freeze({
+): readonly CompiledHookEntry[] => deepFreeze(entries.map((entry) => ({
   event: entry.event,
   id: entry.hook.id,
   ...(entry.indexed === false ? { indexed: false as const } : {}),

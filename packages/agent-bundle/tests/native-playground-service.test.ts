@@ -15,6 +15,8 @@ import {
 import type { DiscoveredEvalSuite } from '../src/eval/discovery.ts';
 import type { EvalFixturePlan } from '../src/eval/fixtures.ts';
 import { defineEvalSuite, normalizeEvalCase } from '../src/eval/suite.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
+
 
 const epoch = (id: string, root: string, target?: 'claude' | 'codex') => Object.freeze({
   close: async () => undefined,
@@ -126,7 +128,7 @@ it('persists a canonical suite whose authored case order differs from digest ord
   const cases = ['alpha-case', 'beta-case'].map((id) => normalizeEvalCase({
     assertions: Object.freeze([expectExitCode(0)]),
     fixture: Object.freeze({ git: false, include: Object.freeze(['**/*']), path: './fixture' }),
-    hosts: Object.freeze({ claude: Object.freeze({ model: 'pinned-claude-model' }) }),
+    hosts: deepFreeze({ claude: { model: 'pinned-claude-model' } }),
     id,
     invocation: Object.freeze({ mode: 'automatic' as const }),
     prompt: `Review ${id}.`,
@@ -473,7 +475,7 @@ it('requires every persisted fixture sha256 to be exactly 64 lowercase hexadecim
       const fixtureDir = join(suiteDir, 'fixture');
       await mkdir(fixtureDir, { recursive: true });
       await writeFile(join(fixtureDir, 'input.txt'), 'fixture bytes\n');
-      const entries = Object.freeze([Object.freeze({ executable: false, path: 'input.txt', sha256 })]);
+      const entries = deepFreeze([{ executable: false, path: 'input.txt', sha256 }]);
       const service = new NativePlaygroundService({
         catalogDirectory: join(root, 'catalog'),
         discover: async () => nativeSuite('claude', join(suiteDir, 'review.eval.ts')),

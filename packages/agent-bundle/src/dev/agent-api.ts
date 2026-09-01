@@ -21,6 +21,8 @@ import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue } from '../core/
 import type { EvalService } from './eval/eval-service.ts';
 import { runtimeAppFiniteOrdinaryJsonByteLength } from './runtime-app-message-limits.ts';
 import type { ProjectStatus } from './types.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export const agentApiToolNames = Object.freeze([
   'project_status',
@@ -602,7 +604,7 @@ const safeToolResult = (value: unknown) => {
 };
 
 const failedToolResult = (error: unknown) => {
-  const structured = Object.freeze({ error: Object.freeze({ code: safeErrorCode(error), message: 'The requested operation could not be completed.' }) });
+  const structured = deepFreeze({ error: { code: safeErrorCode(error), message: 'The requested operation could not be completed.' } });
   return {
     content: [{ text: stableJson(structured), type: 'text' as const }],
     isError: true,

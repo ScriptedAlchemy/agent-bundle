@@ -15,6 +15,8 @@ import {
 } from '../src/dev/eval/eval-service.ts';
 import type { EvalComparison } from '../src/eval/compare.ts';
 import type { EvalRunEvent, EvalRunRecord, EvalTrialRecord } from '../src/eval/run-store.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
+
 
 interface StartedRoutes {
   readonly close: () => Promise<void>;
@@ -99,9 +101,9 @@ const runResult: EvalRunResult = Object.freeze({
   trials: Object.freeze([trialRecord]),
 });
 
-const suiteListing: EvalSuiteListing = Object.freeze({
-  diagnostics: Object.freeze([]),
-  suites: Object.freeze([Object.freeze({
+const suiteListing: EvalSuiteListing = deepFreeze({
+  diagnostics: [],
+  suites: [Object.freeze({
     cases: Object.freeze([Object.freeze({
       assertions: Object.freeze([Object.freeze({ id: 'outcome:0123456789abcdef', kind: 'outcome' as const })]),
       digest: 'a'.repeat(64),
@@ -114,15 +116,15 @@ const suiteListing: EvalSuiteListing = Object.freeze({
     digest: 'e'.repeat(64),
     name: 'review-change',
     sourcePath: 'evals/review.eval.ts',
-  })]),
+  })],
 });
 
-const comparisonRecord = Object.freeze({
-  baseline: Object.freeze({ runId: 'run-a' }),
-  candidate: Object.freeze({ runId: 'run-b' }),
-  rows: Object.freeze([]),
+const comparisonRecord = deepFreeze({
+  baseline: { runId: 'run-a' },
+  candidate: { runId: 'run-b' },
+  rows: [],
   sampleSize: 3,
-  summary: Object.freeze({ comparable: 0, nonComparable: 0, reliability: 0, smoke: 0 }),
+  summary: { comparable: 0, nonComparable: 0, reliability: 0, smoke: 0 },
 }) as unknown as EvalComparison;
 
 class RecordingService implements EvalRouteService {
@@ -155,13 +157,13 @@ class RecordingService implements EvalRouteService {
   async events(runId: string, afterSequence: number) {
     this.calls.push({ afterSequence, kind: 'events', runId });
     if (this.failure !== undefined) throw this.failure;
-    const events = Object.freeze([
-      Object.freeze({ kind: 'run.started', payload: Object.freeze({}), sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
-      Object.freeze({ kind: 'trial.completed', payload: Object.freeze({}), sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
+    const events = deepFreeze([
+      { kind: 'run.started', payload: Object.freeze({}), sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
+      { kind: 'trial.completed', payload: Object.freeze({}), sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
     ]);
-    return Object.freeze({
-      cursor: Object.freeze({ afterSequence: 2 }),
-      events: Object.freeze(events.filter((event) => event.sequence > afterSequence)),
+    return deepFreeze({
+      cursor: { afterSequence: 2 },
+      events: events.filter((event) => event.sequence > afterSequence),
     });
   }
 

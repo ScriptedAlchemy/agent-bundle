@@ -36,6 +36,8 @@ import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../../eval/typ
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
 import { isInsideOrEqual } from '../../core/paths.ts';
 import { isErrno } from '../../core/errors.ts';
+import { deepFreeze } from '../../core/freeze.ts';
+
 
 export type EvalServiceErrorCode =
   | 'EVAL_ARTIFACT_NOT_FOUND'
@@ -280,11 +282,11 @@ const suiteSummary = (projectRoot: string, discovered: DiscoveredEvalSuite): Eva
 const selectEvalCases = (
   discovered: readonly DiscoveredEvalSuite[],
   selection: EvalRunSelection,
-): readonly SelectedEvalCase[] => Object.freeze(discovered
+): readonly SelectedEvalCase[] => deepFreeze(discovered
   .filter((entry) => selection.suites === undefined || selection.suites.includes(entry.suite.name))
   .flatMap((entry) => entry.suite.cases
     .filter((evalCase) => selection.caseIds === undefined || selection.caseIds.includes(evalCase.id))
-    .map((evalCase): SelectedEvalCase => Object.freeze({
+    .map((evalCase): SelectedEvalCase => ({
       evalCase,
       suite: entry.suite.name,
       suiteDir: dirname(entry.sourcePath),

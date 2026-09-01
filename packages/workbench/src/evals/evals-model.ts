@@ -16,6 +16,8 @@ import type {
 } from '../../../agent-bundle/src/contracts/eval.ts';
 import type { EvalRunStart } from './eval-client.ts';
 import { jsonEquivalent } from '../client-helpers.ts';
+import { deepFreeze } from '../freeze.ts';
+
 
 export type EvalPageState = 'empty' | 'loading' | 'ran' | 'ready';
 
@@ -260,8 +262,8 @@ export const evalOutcomeLabel = (outcome: EvalAssertionOutcome): string => outco
 
 export const evalSuiteOptionsFor = (
   suites: readonly EvalSuiteSummary[],
-): readonly EvalSuiteOption[] => Object.freeze(suites
-  .map((suite): EvalSuiteOption => Object.freeze({
+): readonly EvalSuiteOption[] => deepFreeze(suites
+  .map((suite): EvalSuiteOption => ({
     cases: suite.cases.length,
     key: suite.name,
     label: `${suite.name} · ${suite.cases.length} case(s) · ${suite.sourcePath}`,
@@ -270,8 +272,8 @@ export const evalSuiteOptionsFor = (
   }))
   .sort((left, right) => left.key.localeCompare(right.key)));
 
-export const evalCaseRowsFor = (cases: readonly EvalCaseSummary[]): readonly EvalCaseRow[] => Object.freeze(
-  cases.map((entry): EvalCaseRow => Object.freeze({
+export const evalCaseRowsFor = (cases: readonly EvalCaseSummary[]): readonly EvalCaseRow[] => deepFreeze(
+  cases.map((entry): EvalCaseRow => ({
     assertions: entry.assertions.length,
     hosts: entry.hosts.join(', '),
     id: entry.id,
@@ -327,8 +329,8 @@ const provenanceFor = (provenance: EvalTrialProvenance): EvalTrialProvenance => 
 
 export const evalTrialRowsFor = (
   trials: readonly EvalTrialRecord[],
-): readonly EvalTrialRow[] => Object.freeze(trials.map((trial): EvalTrialRow => Object.freeze({
-  assertions: Object.freeze(trial.assertions.map((assertion): EvalAssertionRow => Object.freeze({
+): readonly EvalTrialRow[] => deepFreeze(trials.map((trial): EvalTrialRow => ({
+  assertions: deepFreeze(trial.assertions.map((assertion): EvalAssertionRow => ({
     detail: assertion.detail,
     evidence: assertion.evidence,
     id: assertion.assertionId,
@@ -403,8 +405,8 @@ const outcomeCountsFor = (trials: readonly EvalTrialRow[]): EvalOutcomeCounts =>
   pass: trials.filter((trial) => trial.outcome === 'pass').length,
 });
 
-const hostModelsFor = (trials: readonly EvalTrialRow[]): readonly EvalHostModelRow[] => Object.freeze(trials
-  .map((trial): EvalHostModelRow => Object.freeze({
+const hostModelsFor = (trials: readonly EvalTrialRow[]): readonly EvalHostModelRow[] => deepFreeze(trials
+  .map((trial): EvalHostModelRow => ({
     host: trial.host,
     model: trial.model,
     outcome: trial.outcome,
@@ -505,7 +507,7 @@ export const evalRunSelectionFor = (view: EvalRunView, trials: string): EvalRunS
   const suite = view.selected;
   if (suite === undefined) return undefined;
   const requested = trials.trim();
-  if (requested.length === 0) return Object.freeze({ suites: Object.freeze([suite.name]) });
+  if (requested.length === 0) return deepFreeze({ suites: [suite.name] });
   if (!/^\d+$/u.test(requested)) return undefined;
   const count = Number(requested);
   if (!Number.isSafeInteger(count) || count < 1 || count > maximumTrials) return undefined;

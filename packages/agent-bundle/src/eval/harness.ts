@@ -21,6 +21,8 @@ import type {
   EvalPluginFailure,
   EvalTrialEvidence,
 } from './types.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface EvalHarness {
   readonly kind: 'deterministic' | 'native-claude' | 'native-codex';
@@ -81,11 +83,11 @@ const unavailableActivation: EvalActivationEvidence = Object.freeze({
 });
 
 /** Every channel unavailable: the shape a harness reports when it observed nothing at all. */
-export const unavailableEvidence: EvalTrialEvidence = Object.freeze({
-  mcp: Object.freeze({ calls: Object.freeze([]), level: 'unavailable' }),
-  process: Object.freeze({ level: 'unavailable', timedOut: false }),
-  scripts: Object.freeze({ level: 'unavailable', results: Object.freeze({}) }),
-  skillActivation: Object.freeze({ activated: Object.freeze([]), level: 'unavailable' }),
+export const unavailableEvidence: EvalTrialEvidence = deepFreeze({
+  mcp: { calls: Object.freeze([]), level: 'unavailable' },
+  process: { level: 'unavailable', timedOut: false },
+  scripts: { level: 'unavailable', results: Object.freeze({}) },
+  skillActivation: { activated: Object.freeze([]), level: 'unavailable' },
 });
 
 const harnessKinds: Readonly<Record<string, EvalHarness['kind']>> = Object.freeze({

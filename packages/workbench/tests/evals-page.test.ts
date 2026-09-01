@@ -22,6 +22,8 @@ import {
   prepareEvalArtifactDisplay,
   startEvalRun,
 } from '../src/evals/evals-page.tsx';
+import { deepFreeze } from '../src/freeze.ts';
+
 
 const targetDigest = 'c'.repeat(64);
 
@@ -235,8 +237,8 @@ it('renders the persisted timeline, server evidence channels, host/model matrix,
 });
 
 it('does not paint held prior-run events while a replacement run waits for replay', () => {
-  const priorRunEvents = Object.freeze([
-    Object.freeze({ kind: 'run.started', payload: Object.freeze({ trials: 3 }), schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
+  const priorRunEvents = deepFreeze([
+    { kind: 'run.started', payload: Object.freeze({ trials: 3 }), schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
   ]);
 
   expect(eventsForActiveEvalRun('run-b', 'run-a', priorRunEvents)).toEqual([]);

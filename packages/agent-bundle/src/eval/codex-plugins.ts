@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { CodexEvalHarnessError } from './codex-errors.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface CodexCandidatePlugin {
   readonly marketplace: string;
@@ -75,16 +77,16 @@ export const readCodexCandidatePlugin = async (
 export const codexPluginInstallPlan = (
   candidate: CodexCandidatePlugin,
   candidateDirectory: string,
-): readonly CodexInstallStep[] => Object.freeze([
-  Object.freeze({
+): readonly CodexInstallStep[] => deepFreeze([
+  {
     args: Object.freeze(['plugin', 'marketplace', 'add', candidateDirectory]),
     id: 'marketplace.add' as const,
-  }),
-  Object.freeze({
+  },
+  {
     args: Object.freeze(['plugin', 'add', `${candidate.plugin}@${candidate.marketplace}`]),
     id: 'plugin.add' as const,
-  }),
-  Object.freeze({ args: Object.freeze(['plugin', 'list', '--json']), id: 'plugin.list' as const }),
+  },
+  { args: Object.freeze(['plugin', 'list', '--json']), id: 'plugin.list' as const },
 ]);
 
 /** Plugin availability is read back from the temporary home's own state, so it is observed. */

@@ -11,6 +11,8 @@ import { isInsideOrEqual } from './core/paths.ts';
 import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
+import { deepFreeze } from './core/freeze.ts';
+
 export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './routes/graph.ts';
 export { canonicalAgentEvents } from './routes/public.ts';
 export type {
@@ -651,43 +653,43 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
 const evalDiagnostics: Readonly<Record<EvalServiceErrorCode, Readonly<{
   readonly code: string;
   readonly recovery: string;
-}>>> = Object.freeze({
-  EVAL_ARTIFACT_NOT_FOUND: Object.freeze({
+}>>> = deepFreeze({
+  EVAL_ARTIFACT_NOT_FOUND: {
     code: 'AB9009',
     recovery: 'Select raw evidence that the recorded eval trial persisted.',
-  }),
-  EVAL_ARTIFACT_UNAVAILABLE: Object.freeze({
+  },
+  EVAL_ARTIFACT_UNAVAILABLE: {
     code: 'AB9010',
     recovery: 'Regenerate the recorded eval run before reading its raw evidence.',
-  }),
-  EVAL_EVENTS_CURSOR_INVALID: Object.freeze({
+  },
+  EVAL_EVENTS_CURSOR_INVALID: {
     code: 'AB9011',
     recovery: 'Reconnect from a non-negative cursor no later than the durable event sequence.',
-  }),
-  EVAL_HARNESS_UNSUPPORTED: Object.freeze({
+  },
+  EVAL_HARNESS_UNSUPPORTED: {
     code: 'AB9001',
     recovery: 'Use deterministic, claude, or codex, or correct an unknown harness name.',
-  }),
-  EVAL_RUN_NOT_FOUND: Object.freeze({
+  },
+  EVAL_RUN_NOT_FOUND: {
     code: 'AB9003',
     recovery: 'Read a run that this project recorded, or start a new one.',
-  }),
-  EVAL_SELECTION_EMPTY: Object.freeze({
+  },
+  EVAL_SELECTION_EMPTY: {
     code: 'AB9002',
     recovery: 'Select a suite or case that "agent-bundle eval --json" reports as discovered.',
-  }),
-  EVAL_SEMANTIC_GRADER_UNSUPPORTED: Object.freeze({
+  },
+  EVAL_SEMANTIC_GRADER_UNSUPPORTED: {
     code: 'AB9008',
     recovery: 'Run the configured semantic grader with "--harness claude" and a Claude-pinned eval case.',
-  }),
-  EVAL_TARGET_MISSING: Object.freeze({
+  },
+  EVAL_TARGET_MISSING: {
     code: 'AB9004',
     recovery: 'Select the targets the pinned eval hosts name, then evaluate again.',
-  }),
-  EVAL_TRIALS_INVALID: Object.freeze({
+  },
+  EVAL_TRIALS_INVALID: {
     code: 'AB9005',
     recovery: 'Request an integer trial count between 1 and 100.',
-  }),
+  },
 });
 
 const evalDiagnostic = (error: EvalServiceError): Diagnostic => {

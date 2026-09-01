@@ -54,6 +54,8 @@ import { ScriptPlaygroundService } from './playground/script-playground-service.
 import { SkillDocumentService } from './skill-document-service.ts';
 import { createWorkbenchAssetSource } from './workbench-assets.ts';
 import type { Invalidation, ProjectStatus } from './types.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface DevServerSession {
   close(): Promise<void>;
@@ -528,10 +530,10 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     : undefined;
   const topologyProviderSessionId = randomUUID();
   let runtimeTopologyChanged = false;
-  let status: () => ProjectStatus = () => Object.freeze({
-    artifact: Object.freeze({ state: 'missing' }),
-    build: Object.freeze({ state: 'idle' }),
-    source: Object.freeze({ diagnostics: Object.freeze([]), state: 'unknown' }),
+  let status: () => ProjectStatus = () => deepFreeze({
+    artifact: { state: 'missing' },
+    build: { state: 'idle' },
+    source: { diagnostics: Object.freeze([]), state: 'unknown' },
   });
   // A provider can start in `compiling`; event delivery retries the no-op
   // placeholder only after the Workbench has installed its App lifecycle.

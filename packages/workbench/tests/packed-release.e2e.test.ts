@@ -32,6 +32,8 @@ import {
 } from './support/packed-release-harness.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
 import { workbenchUrl } from './support/workbench-e2e.ts';
+import { deepFreeze } from '../src/freeze.ts';
+
 
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
 const browserTimeout = 12_000 * timeScale;
@@ -1029,14 +1031,14 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         oldSessionId: oldBrowserMcpSessionId,
         origin,
         outageStartedAt,
-        postRecovery: Object.freeze({
-          freshMcpSession: Object.freeze({
+        postRecovery: deepFreeze({
+          freshMcpSession: {
             closeCompletedAt: browserMcpSessionBCloseCompletedAt,
             closeStartedAt: browserMcpSessionBCloseStartedAt,
             id: browserMcpSessionBId,
             openedAt: browserMcpSessionBOpenedAt,
-          }),
-          navigation: Object.freeze(postRecoveryNavigation),
+          },
+          navigation: postRecoveryNavigation,
         }),
         recoveredAt,
         requests: browserRequests,

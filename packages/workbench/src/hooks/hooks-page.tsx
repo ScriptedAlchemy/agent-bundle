@@ -20,6 +20,8 @@ import {
   type HookPlaygroundView,
 } from './hooks-model.ts';
 import './hooks-page.css';
+import { deepFreeze } from '../freeze.ts';
+
 
 export interface HookSimulationViewProps {
   readonly view: HookPlaygroundView;
@@ -34,8 +36,8 @@ const draftError = 'Canonical hook input must be a JSON object.';
 
 type CanonicalHookEvent = HookPlaygroundHook['hook']['event'];
 
-const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, ImmutableJsonRecord>> = Object.freeze({
-  afterTool: Object.freeze({
+const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, ImmutableJsonRecord>> = deepFreeze({
+  afterTool: {
     cwd: '/workspace',
     sessionId: 'workbench-preview',
     toolInput: Object.freeze({}),
@@ -43,28 +45,28 @@ const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, ImmutableJsonReco
     toolResponse: Object.freeze({}),
     toolUseId: 'workbench-preview-tool',
     transcriptPath: '/workspace/transcript.json',
-  }),
-  beforeTool: Object.freeze({
+  },
+  beforeTool: {
     cwd: '/workspace',
     sessionId: 'workbench-preview',
     toolInput: Object.freeze({}),
     toolName: 'shell',
     toolUseId: 'workbench-preview-tool',
     transcriptPath: '/workspace/transcript.json',
-  }),
-  sessionStart: Object.freeze({
+  },
+  sessionStart: {
     cwd: '/workspace',
     sessionId: 'workbench-preview',
     source: 'workbench',
     transcriptPath: '/workspace/transcript.json',
-  }),
-  stop: Object.freeze({
+  },
+  stop: {
     cwd: '/workspace',
     lastAssistantMessage: 'Workbench preview completed.',
     sessionId: 'workbench-preview',
     stopHookActive: false,
     transcriptPath: '/workspace/transcript.json',
-  }),
+  },
 });
 
 /** Provides one event-shaped document that can run a generated Hook without host-contract guesswork. */

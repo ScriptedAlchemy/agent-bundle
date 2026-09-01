@@ -19,6 +19,8 @@ import type {
   McpSessionReplayOverflow,
 } from './mcp-session-protocol.ts';
 import type { McpSessionTraceSink } from './mcp-session-trace.ts';
+import { deepFreeze } from '../../core/freeze.ts';
+
 
 export interface McpRequestOptions {
   readonly signal?: AbortSignal;
@@ -161,6 +163,6 @@ export class McpSessionServiceCloseError extends Error {
   constructor(failures: readonly McpSessionServiceCloseFailure[]) {
     super('MCP session service could not close every lifecycle resource.');
     this.name = 'McpSessionServiceCloseError';
-    this.failures = Object.freeze(failures.map((failure) => Object.freeze({ ...failure })));
+    this.failures = deepFreeze(failures.map((failure) => ({ ...failure })));
   }
 }

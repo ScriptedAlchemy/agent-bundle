@@ -3,6 +3,8 @@ import { createServer, type Server } from 'node:http';
 import { isIP, type Socket } from 'node:net';
 
 import type { McpAppJsonValue } from './mcp-app-binding-service.ts';
+import { deepFreeze } from '../../core/freeze.ts';
+
 
 const JSON_RPC_VERSION = '2.0';
 const SANDBOX_NOTIFICATION_PREFIX = 'ui/notifications/sandbox-';
@@ -554,7 +556,7 @@ const cspSources = (sources: readonly string[] | undefined): Readonly<{ accepted
       warnings.push(Object.freeze({ code: 'csp-source-rejected', value: source }));
     }
   }
-  return Object.freeze({ accepted: Object.freeze([...accepted].slice(0, 32)), warnings: Object.freeze(warnings) });
+  return deepFreeze({ accepted: [...accepted].slice(0, 32), warnings: warnings });
 };
 
 const sourceList = (sources: readonly string[], fallback: string): string => sources.length > 0 ? sources.join(' ') : fallback;

@@ -13,6 +13,8 @@ import { isRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';
 import { HookService } from '../../services/hook-service.ts';
 import { EpochStore, type EpochReference } from '../epoch-store.ts';
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
+import { deepFreeze } from '../../core/freeze.ts';
+
 
 type CanonicalHookInput = Readonly<Record<string, unknown>>;
 type CanonicalHookResult = Readonly<Record<string, unknown>>;
@@ -117,34 +119,34 @@ const inputFor = (input: HookPlaygroundInput): CanonicalHookInput => {
   return cloneRecord(candidate);
 };
 
-const unsupportedTarget = (target: string, event: string): HookPlaygroundDiagnosticResult => Object.freeze({
-  diagnostics: Object.freeze([Object.freeze({
+const unsupportedTarget = (target: string, event: string): HookPlaygroundDiagnosticResult => deepFreeze({
+  diagnostics: [Object.freeze({
     code: 'hook.playground.target.unsupported',
     event,
     message: `Hook playground cannot map target ${JSON.stringify(target)} for canonical event ${JSON.stringify(event)}.`,
     severity: 'error',
     target,
-  })]),
+  })],
 });
 
-const unsupportedEvent = (target: string, event: string): HookPlaygroundDiagnosticResult => Object.freeze({
-  diagnostics: Object.freeze([Object.freeze({
+const unsupportedEvent = (target: string, event: string): HookPlaygroundDiagnosticResult => deepFreeze({
+  diagnostics: [Object.freeze({
     code: 'hook.playground.event.unsupported',
     event,
     message: `Hook playground target ${JSON.stringify(target)} cannot map canonical event ${JSON.stringify(event)}.`,
     severity: 'error',
     target,
-  })]),
+  })],
 });
 
-const missingManifest = (target: string, event: string, manifestPath: string): HookPlaygroundDiagnosticResult => Object.freeze({
-  diagnostics: Object.freeze([Object.freeze({
+const missingManifest = (target: string, event: string, manifestPath: string): HookPlaygroundDiagnosticResult => deepFreeze({
+  diagnostics: [Object.freeze({
     code: 'hook.playground.manifest.missing',
     event,
     message: `Hook playground target ${JSON.stringify(target)} is missing hook manifest ${JSON.stringify(manifestPath)} for canonical event ${JSON.stringify(event)}.`,
     severity: 'error',
     target,
-  })]),
+  })],
 });
 
 const matcherFor = async (
@@ -257,7 +259,7 @@ export class HookPlaygroundService {
         artifact,
         ...(options.target === undefined ? {} : { target: options.target }),
       });
-      return Object.freeze(hooks.map((hook) => Object.freeze({
+      return deepFreeze(hooks.map((hook) => ({
         binding: Object.freeze({ epochId: options.epochId, hook: hook.id, target: hook.target }),
         hook: cloneRecord(hook),
       })));
