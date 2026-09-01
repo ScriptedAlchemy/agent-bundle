@@ -14,6 +14,7 @@
     "test:unit": "rstest --config rstest.unit.config.ts",
     "test:integration": "pnpm build && pnpm test:integration:run",
     "test:integration:run": "AGENT_BUNDLE_WORKBENCH_PREBUILT=1 AGENT_BUNDLE_PACKAGE_PREBUILT=1 rstest --config rstest.integration.config.ts",
+    "test:evidence": "pnpm build && AGENT_BUNDLE_WORKBENCH_PREBUILT=1 AGENT_BUNDLE_PACKAGE_PREBUILT=1 rstest --config rstest.evidence.config.ts",
     "test:watch": "rstest --config rstest.config.ts --watch",
     "lint": "rslint .",
     "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json && tsc --project packages/create-agent-bundle/tsconfig.json",

@@ -128,6 +128,10 @@ jobs:
             pnpm exec playwright install --with-deps chrome
           fi
       - run: pnpm check:release
+      # Nightly evidence-capture pool: documentation-artifact browser
+      # journeys whose behavioral contracts are already proven per PR by the
+      # integration pool (see nightlyEvidenceTestFiles).
+      - run: pnpm test:evidence
 
   rsc-runtime-micro-eval:
     # Deterministic end-to-end spot-check of the built RSC runtime artifacts
