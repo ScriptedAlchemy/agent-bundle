@@ -149,6 +149,7 @@ export type {
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
 export { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
+export { CapabilityStateError, capabilityStateNames, isCapabilityState } from './core/capabilities.ts';
 export type {
   TargetAdapter,
   TargetAdapterMetadata,

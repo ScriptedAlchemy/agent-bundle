@@ -1,3 +1,4 @@
+import { CapabilityStateError, capabilityStateNames, isCapabilityState } from '../core/capabilities.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
 import { dataArrayValues } from '../core/strict-json.ts';
 import type {
@@ -350,6 +351,26 @@ const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | 
   });
 };
 
+/**
+ * The registry is a runtime boundary for third-party and JavaScript adapters,
+ * whose declarations the compiler never checked. Rejecting a malformed state
+ * here keeps it out of `supports()` and capability intersection entirely.
+ */
+const assertCapabilityContract = (adapter: TargetAdapter): void => {
+  const capabilities = record(adapter.capabilities);
+  if (capabilities === undefined) {
+    throw new CapabilityStateError(`Target adapter "${adapter.name}" must declare capabilities as a record.`);
+  }
+  for (const [capability, state] of Object.entries(capabilities)) {
+    // An absent capability is an honest "not declared"; a present malformed one is not.
+    if (state === undefined || isCapabilityState(state)) continue;
+    throw new CapabilityStateError(
+      `Target adapter "${adapter.name}" capability "${capability}" must declare one of ` +
+        `${capabilityStateNames.join('/')} with that state's required fields.`,
+    );
+  }
+};
+
 export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #adapters = new Map<string, TargetAdapter>();
   readonly #artifactLayouts = new Map<string, TargetArtifactLayout>();
@@ -369,6 +390,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     if (extension !== undefined && this.#extensions.has(extension.key)) {
       throw new Error(`Config extension key "${extension.key}" is already registered.`);
     }
+    assertCapabilityContract(adapter);
     const metadata = snapshotMetadata(adapter.metadata);
     const artifactValidation = snapshotArtifactValidation(adapter, metadata);
     const nativeHookSource = snapshotNativeHookSource(adapter);

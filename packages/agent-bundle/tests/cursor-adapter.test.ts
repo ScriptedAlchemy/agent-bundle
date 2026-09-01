@@ -5,8 +5,11 @@ import {
   cursorAdapter,
   cursorHooksValidator,
   cursorMcpValidator,
+  cursorPluginNameError,
   cursorPluginValidator,
+  isValidCursorPluginName,
 } from '../src/adapters/cursor.ts';
+import { pluginAdapter } from '../src/adapters/plugin.ts';
 import { readTargetMcpServers } from '../src/services/mcp-runtime.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
@@ -86,6 +89,38 @@ it('registers cursor as a first-class target with pinned schema validation', () 
     { path: 'hooks/hooks.json', required: false, schema: 'hooks' },
     { path: 'mcp.json', required: false, schema: 'mcp' },
   ]);
+});
+
+it('holds the 64-character plugin-name bound in both Cursor-producing planners', () => {
+  const boundary = 'c'.repeat(64);
+  const overLong = 'c'.repeat(65);
+
+  // The pinned official schema (cursor/plugins@0701892) constrains the name's
+  // charset but carries no maxLength, so only the planners can hold the bound.
+  expect(cursorPluginValidator({ name: overLong, version: '1.2.3' })).toBe(true);
+  expect(isValidCursorPluginName(boundary)).toBe(true);
+  expect(isValidCursorPluginName(overLong)).toBe(false);
+
+  const model = plugin();
+  const named = (name: string): NormalizedPlugin => ({
+    ...model,
+    metadata: { ...model.metadata, name },
+    targets: [
+      ...model.targets,
+      { id: 'target:plugin', name: 'plugin', provenance: { kind: 'config', sourcePath: configPath } },
+    ],
+  });
+
+  expect(cursorAdapter.plan(named(overLong)).diagnostics.filter((entry) => entry.code === 'cursor.name')).toEqual([
+    { code: 'cursor.name', message: cursorPluginNameError(overLong), severity: 'error', target: 'cursor' },
+  ]);
+  expect(pluginAdapter.plan(named(overLong)).diagnostics.filter((entry) => entry.code === 'plugin.cursor.name')).toEqual([
+    { code: 'plugin.cursor.name', message: cursorPluginNameError(overLong), severity: 'error', target: 'plugin' },
+  ]);
+
+  for (const plan of [cursorAdapter.plan(named(boundary)), pluginAdapter.plan(named(boundary))]) {
+    expect(plan.diagnostics.filter((entry) => entry.code.endsWith('cursor.name'))).toEqual([]);
+  }
 });
 
 it('validates Cursor documents against the vendored real-host schemas', () => {
