@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
-import { installedEnvironment, npmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
+import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -83,7 +83,7 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     expect(listing.stdout).not.toMatch(/package\/dist\/workbench\/.*-[a-f0-9]{8,}/iu);
 
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
-    await execFile('npm', ['install', ...npmInstallArguments, tarball], { cwd: consumer });
+    await execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], { cwd: consumer });
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
@@ -115,7 +115,7 @@ it('runs the Agent API from an omit-dev installed tarball with its runtime MCP d
   const project = join(consumer, 'project');
   try {
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
-    await execFile('npm', ['install', '--omit=dev', ...npmInstallArguments, tarball], { cwd: consumer });
+    await execFile('npm', ['install', '--omit=dev', ...cachedNpmInstallArguments, tarball], { cwd: consumer });
     await mkdir(join(project, 'skills', 'review'), { recursive: true });
     await Promise.all([
       writeFile(join(project, 'package.json'), '{"type":"module"}\n'),

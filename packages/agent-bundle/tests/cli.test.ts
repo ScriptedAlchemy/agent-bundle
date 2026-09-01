@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { runCli as runSourceCli } from '../src/cli.ts';
+import { cachedNpmInstallArguments } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -128,7 +129,7 @@ const createPackedConsumer = async (): Promise<{ readonly cli: string; readonly 
   const [packed] = JSON.parse(stdout) as Array<{ readonly filename: string }>;
   await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
   await execFile(
-    'npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(root, packed.filename)],
+    'npm', ['install', ...cachedNpmInstallArguments, join(root, packed.filename)],
     { cwd: root },
   );
   return { cli: join(root, 'node_modules', '.bin', 'agent-bundle'), root };
