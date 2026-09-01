@@ -101,7 +101,31 @@ it('leads the usage line with positionals in argv order regardless of option ord
 
   const markup = render(routeCatalogFor(reordered));
 
-  expect(markup).toContain('library audit [&lt;sources&gt;…] [--concurrency] --report');
+  expect(markup).toContain('library audit &lt;sources...&gt; [--concurrency &lt;number&gt;] --report &lt;string&gt;');
+});
+
+it('formats optional positionals and enum flags like generated CLI help', () => {
+  const optionalInputs: RouteManifest = {
+    ...manifest,
+    cli: {
+      ...manifest.cli!,
+      commands: [{
+        aliases: [],
+        exitCode: 'zero',
+        options: [
+          { key: 'format', kind: 'enum', option: 'format', choices: ['mp3', 'opus'], repeated: false, required: false },
+          { key: 'destination', kind: 'string', option: 'output-directory', positional: 0, repeated: false, required: false },
+          { key: 'sources', kind: 'string', option: 'extra-source', positional: 1, repeated: true, required: false },
+        ],
+        path: ['publish'],
+        routeId: 'cli:library/audit',
+      }],
+    },
+  };
+
+  const markup = render(routeCatalogFor(optionalInputs));
+
+  expect(markup).toContain('publish [output-directory] [extra-source...] [--format &lt;mp3|opus&gt;]');
 });
 
 it('shows the canonical event beside an event route', () => {
@@ -140,6 +164,28 @@ it('names the empty compiled graph rather than an error', () => {
 
   expect(markup).toContain('This project declares no conventional route modules.');
   expect(markup).not.toContain('role="alert"');
+});
+
+it('renders externally packaged empty servers instead of the no-routes state', () => {
+  const markup = render(routeCatalogFor({
+    diagnostics: [],
+    digest: 'e'.repeat(64),
+    events: [],
+    providers: [],
+    scripts: [],
+    servers: [
+      { id: 'mcp:custom-library', mode: 'custom', name: 'custom-library', routes: [] },
+      { id: 'mcp:remote-catalog', mode: 'remote', name: 'remote-catalog', routes: [] },
+    ],
+    sourceRevision: 'r'.repeat(64),
+  }));
+
+  expect(markup).toContain('>custom-library<');
+  expect(markup).toContain('>remote-catalog<');
+  expect(markup).toContain('custom mode');
+  expect(markup).toContain('remote mode');
+  expect(markup).toContain('packaged externally');
+  expect(markup).not.toContain('This project declares no conventional route modules.');
 });
 
 it('reports an unreadable manifest as an alert', () => {

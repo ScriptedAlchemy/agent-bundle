@@ -15,6 +15,7 @@ import {
   writeExampleReport,
 } from './support/example-acceptance.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
+import { replaceWatchedSource } from '../../agent-bundle/tests/support/watched-files.ts';
 import { buildWorkbench, e2e, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 15_000 * timeScale;
@@ -37,6 +38,20 @@ const waitForExampleValue = async <Value>(
     );
   }
   return value;
+};
+
+const rebuildFromCurrentPage = async (page: Parameters<typeof captureExampleState>[0]): Promise<void> => {
+  const status = await page.evaluate(async () => {
+    const sessionResponse = await fetch('/api/project/session');
+    const session = await sessionResponse.json() as { readonly token: string };
+    const response = await fetch('/api/project/rebuild', {
+      body: JSON.stringify({ paths: [] }),
+      headers: { 'content-type': 'application/json', 'x-agent-bundle-session': session.token },
+      method: 'POST',
+    });
+    return response.status;
+  });
+  expect(status).toBe(200);
 };
 
 e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, async ({ page }) => {
@@ -113,19 +128,6 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     root: project.root,
   });
   const ledger = createExampleErrorLedger(page, server.url);
-  const rebuildFromCurrentPage = async (): Promise<void> => {
-    const status = await page.evaluate(async () => {
-      const sessionResponse = await fetch('/api/project/session');
-      const session = await sessionResponse.json() as { readonly token: string };
-      const response = await fetch('/api/project/rebuild', {
-        body: JSON.stringify({ paths: [] }),
-        headers: { 'content-type': 'application/json', 'x-agent-bundle-session': session.token },
-        method: 'POST',
-      });
-      return response.status;
-    });
-    expect(status).toBe(200);
-  };
   try {
     await page.goto(workbenchUrl(server.url, 'hooks'));
     await waitForSettledWorkbench(page);
@@ -134,7 +136,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await expect(page.getByRole('link', { name: 'Playground', exact: true })).toHaveCount(0, { timeout: browserTimeout });
 
     await writeFile(configPath, hookConfig);
-    await rebuildFromCurrentPage();
+    await rebuildFromCurrentPage(page);
     await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Playground', exact: true })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('link', { name: 'Hooks', exact: true }).click();
@@ -143,7 +145,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await captureExampleState(page, 'skills-starter', 'capability-revealed');
 
     await writeFile(hookSource, 'export default () => ({\n');
-    await rebuildFromCurrentPage();
+    await rebuildFromCurrentPage(page);
     await page.getByRole('link', { name: 'Overview', exact: true }).click();
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: /Diagnostics \([1-9]/u })).toBeVisible({ timeout: browserTimeout });
@@ -153,7 +155,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await captureExampleState(page, 'skills-starter', 'capability-stale');
 
     await writeFile(hookSource, healthyHook);
-    await rebuildFromCurrentPage();
+    await rebuildFromCurrentPage(page);
     await expect(page.getByRole('heading', { name: 'Diagnostics (0)' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
     await captureExampleState(page, 'skills-starter', 'capability-repaired');
@@ -162,7 +164,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await waitForSettledWorkbench(page);
     await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
     await writeFile(configPath, originalConfig);
-    await rebuildFromCurrentPage();
+    await rebuildFromCurrentPage(page);
     await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Playground', exact: true })).toHaveCount(0, { timeout: browserTimeout });
@@ -571,6 +573,8 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
 e2e('renders the flagship compiled route catalog by server and kind in real Chrome', { timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('audiobook-curator');
+  const conversionSource = join(project.root, 'src', 'conversion.ts');
+  const healthyConversion = await readFile(conversionSource, 'utf8');
   const server = await startDevServer({
     assets: createWorkbenchAssetSource({ root: workbenchAssets }),
     open: false,
@@ -610,9 +614,9 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await expect(cli).toContainText('cli:library-audit', { timeout: browserTimeout });
     await expect(cli).toContainText('src/cli/library-audit.tsx', { timeout: browserTimeout });
     await expect(cli.locator('.route-command').filter({ hasText: 'library-audit' }))
-      .toHaveText('library-audit [<sources>…] [--concurrency] --report [--strict]', { timeout: browserTimeout });
+      .toHaveText('library-audit <sources...> [--concurrency <number>] --report <string> [--strict]', { timeout: browserTimeout });
     await expect(cli.locator('.route-command').filter({ hasText: 'inspect' }))
-      .toHaveText('inspect <root> [--max-files]', { timeout: browserTimeout });
+      .toHaveText('inspect <root> [--max-files <number>]', { timeout: browserTimeout });
 
     // 17 MCP routes plus 15 CLI routes, and nothing invented: the curator
     // declares no conventional event routes, scripts, or context providers.
@@ -622,6 +626,30 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await expect(page.getByRole('heading', { name: 'Context providers', exact: true })).toHaveCount(0);
     await expect(page.locator('.route-diagnostics')).toHaveCount(0);
     await captureExampleState(page, 'audiobook-curator', 'routes-catalog-by-server');
+
+    // A prepared source revision can move ahead while a failed rebuild keeps
+    // the published epoch intact. Reloading the same browser page re-reads that
+    // prepared manifest and must identify it as stale until a repair publishes.
+    await replaceWatchedSource(project.root, conversionSource, `${healthyConversion}\nconst = ;\n`);
+    await rebuildFromCurrentPage(page);
+    await page.reload();
+    await waitForSettledWorkbench(page);
+    await expect(page.locator('.route-state')).toHaveText('stale', { timeout: browserTimeout });
+    await expect(page.locator('.routes-page-heading')).toContainText(
+      'The dev server has compiled newer source than the published build. Rebuild to publish these routes.',
+      { timeout: browserTimeout },
+    );
+    await captureExampleState(page, 'audiobook-curator', 'routes-catalog-stale');
+
+    await replaceWatchedSource(project.root, conversionSource, healthyConversion);
+    await rebuildFromCurrentPage(page);
+    await waitForSettledWorkbench(page);
+    await expect(page.locator('.route-state')).toHaveText('current', { timeout: browserTimeout });
+    await expect(page.locator('.routes-page-heading')).toContainText(
+      'This catalog is the compiled route graph the published build was produced from.',
+      { timeout: browserTimeout },
+    );
+    await captureExampleState(page, 'audiobook-curator', 'routes-catalog-repaired');
 
     for (const preserved of ['Overview', 'Skills', 'Artifacts', 'Logs']) {
       await expect(page.getByRole('link', { name: preserved, exact: true })).toBeVisible({ timeout: browserTimeout });
