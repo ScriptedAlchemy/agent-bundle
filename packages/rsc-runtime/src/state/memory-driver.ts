@@ -1,3 +1,9 @@
+import { Effect, Layer } from 'effect';
+
+import {
+  makeScopedEffectRuntime,
+  runPromise,
+} from '../effect/boundary.js';
 import type {
   AgentStateChangeBatch,
   AgentStateChangesOptions,
@@ -23,6 +29,7 @@ import {
   resolveResetState,
   runStateMigrations,
 } from './journal.js';
+import { stateEffect } from './effect.js';
 
 /**
  * In-memory state driver (#98).
@@ -72,6 +79,7 @@ interface MemoryStoreInternals<TState, TEvents extends AgentStateEventSchemas> {
 }
 
 interface MemoryStoreEntry<TState, TEvents extends AgentStateEventSchemas> {
+  readonly activate: () => Promise<void>;
   readonly internals: MemoryStoreInternals<TState, TEvents>;
   readonly store: AgentStateStore<TState, TEvents>;
 }
@@ -104,6 +112,24 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
     journal: [],
     keys: new Map(),
   };
+  const runtime = makeScopedEffectRuntime(
+    Layer.effectDiscard(
+      Effect.acquireRelease(
+        Effect.void,
+        () =>
+          Effect.sync(() => {
+            if (!internals.closed) {
+              internals.closed = true;
+              onClose();
+            }
+          }),
+      ),
+    ),
+  );
+  const runStore = <A>(effect: Effect.Effect<A, AgentStateError>): Promise<A> =>
+    internals.closed
+      ? runPromise(Effect.fail(new AgentStateError('store-closed', `State '${internals.definition.id}' store is closed`)))
+      : runtime.run(effect);
 
   /**
    * Commits share one shape: validate inputs, then honor a committed
@@ -168,86 +194,103 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
     },
     location: `memory:${lifetime}:${definition.id}`,
 
-    async changes(options: AgentStateChangesOptions): Promise<AgentStateChangeBatch> {
-      expectOperable(internals.closed, internals.definition.id, options.signal);
-      if (options.afterRevision === undefined) {
-        throw new AgentStateError('invalid-input', `State '${internals.definition.id}' changes require afterRevision`);
-      }
-      expectRevisionShape(options.afterRevision, `State '${internals.definition.id}' afterRevision`);
-      if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1)) {
-        throw new AgentStateError(
-          'invalid-input',
-          `State '${internals.definition.id}' changes limit must be an integer >= 1`,
-        );
-      }
-      const selected = internals.journal
-        .filter((record) => record.revision > options.afterRevision)
-        .slice(0, options.limit)
-        .map((record) => changeFromJournalRecord(record));
-      return Object.freeze({ changes: Object.freeze(selected), headRevision: internals.head.revision });
-    },
-
-    async close(): Promise<void> {
-      if (!internals.closed) {
-        internals.closed = true;
-        onClose();
-      }
-    },
-
-    async dispatch(name, payload, options: AgentStateDispatchOptions): Promise<AgentStateCommitResult<TState>> {
-      expectOperable(internals.closed, internals.definition.id, options.signal);
-      const key = expectIdempotencyKey(options.idempotencyKey);
-      expectRevisionShape(options.expectedRevision, `State '${internals.definition.id}' expectedRevision`);
-      const applied = applyStateEvent(internals.definition, internals.head.state, name, payload);
-      const canonicalInput = canonicalCommitInput({
-        committedAt: '',
-        idempotencyKey: key,
-        kind: 'event',
-        name,
-        payload: applied.payload,
-        revision: 0,
-      });
-      return commit(
-        { canonicalInput, key, kind: 'event', name, payload: applied.payload, state: applied.state },
-        options.expectedRevision,
+    changes(options: AgentStateChangesOptions): Promise<AgentStateChangeBatch> {
+      return runStore(
+        stateEffect(() => {
+          expectOperable(internals.closed, internals.definition.id, options.signal);
+          if (options.afterRevision === undefined) {
+            throw new AgentStateError('invalid-input', `State '${internals.definition.id}' changes require afterRevision`);
+          }
+          expectRevisionShape(options.afterRevision, `State '${internals.definition.id}' afterRevision`);
+          if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1)) {
+            throw new AgentStateError(
+              'invalid-input',
+              `State '${internals.definition.id}' changes limit must be an integer >= 1`,
+            );
+          }
+          const selected = internals.journal
+            .filter((record) => record.revision > options.afterRevision)
+            .slice(0, options.limit)
+            .map((record) => changeFromJournalRecord(record));
+          return Object.freeze({ changes: Object.freeze(selected), headRevision: internals.head.revision });
+        }),
       );
     },
 
-    async read(options: AgentStateReadOptions = {}): Promise<AgentStateSnapshot<TState>> {
-      expectOperable(internals.closed, internals.definition.id, options.signal);
-      expectRevisionShape(options.revision, `State '${internals.definition.id}' revision`);
-      if (options.revision === undefined || options.revision === internals.head.revision) {
-        return internals.head;
-      }
-      if (options.revision > internals.head.revision) {
-        throw new AgentStateError(
-          'revision-unavailable',
-          `State '${internals.definition.id}' revision ${String(options.revision)} is beyond the head ${String(internals.head.revision)}`,
-        );
-      }
-      return Object.freeze({
-        revision: options.revision,
-        state: replayJournal(internals.definition, internals.journal, options.revision),
-      });
+    close(): Promise<void> {
+      return runtime.close();
     },
 
-    async reset(options: AgentStateResetOptions<TState>): Promise<AgentStateCommitResult<TState>> {
-      expectOperable(internals.closed, internals.definition.id, options.signal);
-      const key = expectIdempotencyKey(options.idempotencyKey);
-      expectRevisionShape(options.expectedRevision, `State '${internals.definition.id}' expectedRevision`);
-      const state = resolveResetState(internals.definition, options.seed);
-      const canonicalInput = canonicalCommitInput({
-        committedAt: '',
-        idempotencyKey: key,
-        kind: 'reset',
-        revision: 0,
-        state,
-      });
-      return commit({ canonicalInput, key, kind: 'reset', state }, options.expectedRevision);
+    dispatch(name, payload, options: AgentStateDispatchOptions): Promise<AgentStateCommitResult<TState>> {
+      return runStore(
+        stateEffect(() => {
+          expectOperable(internals.closed, internals.definition.id, options.signal);
+          const key = expectIdempotencyKey(options.idempotencyKey);
+          expectRevisionShape(options.expectedRevision, `State '${internals.definition.id}' expectedRevision`);
+          const applied = applyStateEvent(internals.definition, internals.head.state, name, payload);
+          const canonicalInput = canonicalCommitInput({
+            committedAt: '',
+            idempotencyKey: key,
+            kind: 'event',
+            name,
+            payload: applied.payload,
+            revision: 0,
+          });
+          return commit(
+            { canonicalInput, key, kind: 'event', name, payload: applied.payload, state: applied.state },
+            options.expectedRevision,
+          );
+        }),
+      );
+    },
+
+    read(options: AgentStateReadOptions = {}): Promise<AgentStateSnapshot<TState>> {
+      return runStore(
+        stateEffect(() => {
+          expectOperable(internals.closed, internals.definition.id, options.signal);
+          expectRevisionShape(options.revision, `State '${internals.definition.id}' revision`);
+          if (options.revision === undefined || options.revision === internals.head.revision) {
+            return internals.head;
+          }
+          if (options.revision > internals.head.revision) {
+            throw new AgentStateError(
+              'revision-unavailable',
+              `State '${internals.definition.id}' revision ${String(options.revision)} is beyond the head ${String(internals.head.revision)}`,
+            );
+          }
+          return Object.freeze({
+            revision: options.revision,
+            state: replayJournal(internals.definition, internals.journal, options.revision),
+          });
+        }),
+      );
+    },
+
+    reset(options: AgentStateResetOptions<TState>): Promise<AgentStateCommitResult<TState>> {
+      return runStore(
+        stateEffect(() => {
+          expectOperable(internals.closed, internals.definition.id, options.signal);
+          const key = expectIdempotencyKey(options.idempotencyKey);
+          expectRevisionShape(options.expectedRevision, `State '${internals.definition.id}' expectedRevision`);
+          const state = resolveResetState(internals.definition, options.seed);
+          const canonicalInput = canonicalCommitInput({
+            committedAt: '',
+            idempotencyKey: key,
+            kind: 'reset',
+            revision: 0,
+            state,
+          });
+          return commit({ canonicalInput, key, kind: 'reset', state }, options.expectedRevision);
+        }),
+      );
     },
   };
 
-  return { internals, store: Object.freeze(store) };
+  return {
+    activate: () => runtime.run(Effect.void),
+    internals,
+    store: Object.freeze(store),
+  };
 };
 
 const migrateOpenStore = <TState, TEvents extends AgentStateEventSchemas>(
@@ -276,53 +319,101 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
   // Heterogeneously typed per definition; entries are cast back at the one
   // retrieval site below, keyed by the definition id they were created for.
   const registry = new Map<string, MemoryStoreEntry<unknown, AgentStateEventSchemas>>();
+  const openStores = new Set<MemoryStoreEntry<unknown, AgentStateEventSchemas>>();
+  const pendingOpens = new Set<Promise<void>>();
   let closed = false;
+  let closing: Promise<void> | undefined;
+
+  const trackPendingOpen = <T>(operation: Promise<T>): Promise<T> => {
+    const settled = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    pendingOpens.add(settled);
+    void settled.then(() => {
+      pendingOpens.delete(settled);
+    });
+    return operation;
+  };
 
   return Object.freeze({
     durable: false,
     kind: 'memory',
     lifetime,
 
-    async close(): Promise<void> {
+    close(): Promise<void> {
+      if (closing !== undefined) return closing;
       closed = true;
-      for (const entry of [...registry.values()]) {
-        await entry.store.close();
-      }
-      registry.clear();
+      closing = (async () => {
+        while (pendingOpens.size > 0) {
+          await Promise.all([...pendingOpens]);
+        }
+        for (const entry of [...openStores]) {
+          await entry.store.close();
+        }
+        openStores.clear();
+        registry.clear();
+      })();
+      return closing;
     },
 
-    async open<TState, TEvents extends AgentStateEventSchemas>(
+    open<TState, TEvents extends AgentStateEventSchemas>(
       definition: AgentStateDefinition<TState, TEvents>,
     ): Promise<AgentStateStore<TState, TEvents>> {
-      if (closed) {
-        throw new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`);
-      }
-      if (definition.lifetime !== lifetime) {
-        throw new AgentStateError(
-          'lifetime-mismatch',
-          `State '${definition.id}' declares lifetime '${definition.lifetime}' but this driver provides '${lifetime}'`,
-        );
-      }
-      switch (lifetime) {
-        case 'request':
-          return createMemoryStore(definition, lifetime, now, () => undefined).store;
-        case 'process': {
-          const existing = registry.get(definition.id) as unknown as MemoryStoreEntry<TState, TEvents> | undefined;
-          if (existing === undefined) {
-            const created = createMemoryStore(definition, lifetime, now, () => registry.delete(definition.id));
-            registry.set(definition.id, created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
-            return created.store;
+      return trackPendingOpen(
+        (async () => {
+          const entry = await runPromise(
+            stateEffect(() => {
+              if (closed) {
+                throw new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`);
+              }
+              if (definition.lifetime !== lifetime) {
+                throw new AgentStateError(
+                  'lifetime-mismatch',
+                  `State '${definition.id}' declares lifetime '${definition.lifetime}' but this driver provides '${lifetime}'`,
+                );
+              }
+              switch (lifetime) {
+                case 'request': {
+                  const created = createMemoryStore(definition, lifetime, now, () => {
+                    openStores.delete(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                  });
+                  openStores.add(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                  return created;
+                }
+                case 'process': {
+                  const existing = registry.get(definition.id) as unknown as MemoryStoreEntry<TState, TEvents> | undefined;
+                  if (existing === undefined) {
+                    const created = createMemoryStore(definition, lifetime, now, () => {
+                      registry.delete(definition.id);
+                      openStores.delete(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                    });
+                    registry.set(definition.id, created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                    openStores.add(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                    return created;
+                  }
+                  if (definition.version !== existing.internals.definition.version) {
+                    migrateOpenStore(existing.internals, definition, now);
+                  }
+                  return existing;
+                }
+                default: {
+                  const unreachable: never = lifetime;
+                  throw new AgentStateError('invalid-definition', `Unknown volatile lifetime ${String(unreachable)}`);
+                }
+              }
+            }),
+          );
+          await entry.activate();
+          if (closed) {
+            await entry.store.close();
+            return runPromise(
+              Effect.fail(new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`)),
+            );
           }
-          if (definition.version !== existing.internals.definition.version) {
-            migrateOpenStore(existing.internals, definition, now);
-          }
-          return existing.store;
-        }
-        default: {
-          const unreachable: never = lifetime;
-          throw new AgentStateError('invalid-definition', `Unknown volatile lifetime ${String(unreachable)}`);
-        }
-      }
+          return entry.store;
+        })(),
+      );
     },
   });
 };
