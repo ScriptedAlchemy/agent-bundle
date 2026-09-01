@@ -1,12 +1,14 @@
+import { Cause, Effect, Exit, Semaphore } from 'effect';
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
-import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInside } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { runPromise, runSync } from '../effect/boundary.ts';
+import { liftPromise, liftTry } from '../effect/lift.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 
 export interface EpochStoreOptions {
@@ -144,7 +146,13 @@ const artifactEpochKeys = [
 const artifactEpochOptionalKeys = ['packageName', 'packageVersion'] as const;
 const epochDiagnosticsKeys = ['errors', 'infos', 'warnings'] as const;
 const epochReferenceCounts = new Map<string, number>();
-const epochLeaseQueues = new Map<string, ReturnType<typeof serialQueue>>();
+/**
+ * Process-wide lease mutexes, one `Semaphore(1)` per resolved `.agent-bundle`
+ * path. Cross-instance sharing is intentional: every EpochStore over the same
+ * project serializes lease transitions through one permit and observes one
+ * set of reference counts, so leases survive across store instances.
+ */
+const epochLeaseMutexes = new Map<string, Semaphore.Semaphore>();
 
 const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
   const actual = Object.keys(value);
@@ -162,11 +170,11 @@ const hasRequiredOwnKeys = (
     Object.keys(value).every((key) => allowed.has(key));
 };
 
-const leaseQueueFor = (agentBundlePath: string): ReturnType<typeof serialQueue> => {
-  const existing = epochLeaseQueues.get(agentBundlePath);
+const leaseMutexFor = (agentBundlePath: string): Semaphore.Semaphore => {
+  const existing = epochLeaseMutexes.get(agentBundlePath);
   if (existing !== undefined) return existing;
-  const created = serialQueue();
-  epochLeaseQueues.set(agentBundlePath, created);
+  const created = runSync(Semaphore.make(1));
+  epochLeaseMutexes.set(agentBundlePath, created);
   return created;
 };
 
@@ -350,9 +358,11 @@ export class EpochStore {
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
   readonly #move: typeof rename;
-  readonly #leaseTransitions: ReturnType<typeof serialQueue>;
+  /** The process-wide lease mutex shared by every store over this project. */
+  readonly #leaseTransitions: Semaphore.Semaphore;
   readonly #staging = new Map<symbol, StagingRecord>();
-  readonly #transitions = serialQueue();
+  /** Serializes this store's state transitions, replacing the pre-Effect serial queue. */
+  readonly #transitions: Semaphore.Semaphore = runSync(Semaphore.make(1));
 
   constructor(options: EpochStoreOptions) {
     const agentBundlePath = join(resolve(options.projectRoot), '.agent-bundle');
@@ -362,86 +372,107 @@ export class EpochStore {
     this.#epochsPath = join(agentBundlePath, 'epochs');
     this.#epochMetadataPath = join(this.#epochsPath, metadataDirectoryName);
     this.#move = options.move ?? rename;
-    this.#leaseTransitions = leaseQueueFor(agentBundlePath);
+    this.#leaseTransitions = leaseMutexFor(agentBundlePath);
   }
 
   async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {
-    return this.#transitions.run(async () => {
-      assertSafeEpochId(options.epoch.id);
-      const epoch = assertEpoch(options.epoch);
-      const targets = this.#assertTargetSet(epoch, options.targets);
-      this.#manifestRelativePath(epoch);
-      await mkdir(this.#epochsPath, { recursive: true });
-      const root = await mkdtemp(join(this.#epochsPath, stagingPrefix));
-      const metadata = await lstat(root);
-      const markerContents = `${stableJson({ token: randomUUID() })}\n`;
-      await writeFile(join(root, stagingMarkerFileName), markerContents, 'utf8');
-      const token = Symbol('epoch-staging');
-      this.#staging.set(token, {
-        epoch,
-        markerContents,
-        root,
-        rootDevice: metadata.dev,
-        rootInode: metadata.ino,
-        targets,
-      });
-      return new EpochStagingHandle(
-        root,
-        async (validate, beforeActivate) => this.#publishStaging(token, validate, beforeActivate),
-        async () => this.#closeStaging(token),
-      );
-    });
+    return runPromise(this.#transitions.withPermit(
+      Effect.gen({ self: this }, function* (this: EpochStore) {
+        const epoch = yield* liftTry(() => {
+          assertSafeEpochId(options.epoch.id);
+          return assertEpoch(options.epoch);
+        });
+        const targets = yield* liftTry(() => this.#assertTargetSet(epoch, options.targets));
+        yield* liftTry(() => this.#manifestRelativePath(epoch));
+        yield* liftPromise(() => mkdir(this.#epochsPath, { recursive: true }));
+        const root = yield* liftPromise(() => mkdtemp(join(this.#epochsPath, stagingPrefix)));
+        const metadata = yield* liftPromise(() => lstat(root));
+        const markerContents = `${stableJson({ token: randomUUID() })}\n`;
+        yield* liftPromise(() => writeFile(join(root, stagingMarkerFileName), markerContents, 'utf8'));
+        const token = Symbol('epoch-staging');
+        this.#staging.set(token, {
+          epoch,
+          markerContents,
+          root,
+          rootDevice: metadata.dev,
+          rootInode: metadata.ino,
+          targets,
+        });
+        return new EpochStagingHandle(
+          root,
+          async (validate, beforeActivate) => this.#publishStaging(token, validate, beforeActivate),
+          async () => this.#closeStaging(token),
+        );
+      }),
+    ));
   }
 
   async acquireEpochReference(epochId: string): Promise<EpochReference> {
-    return this.#transitions.run(async () => this.#leaseTransitions.run(async () => {
-      assertSafeEpochId(epochId);
-      await this.#assertEpochDirectory(epochId);
-      return this.#acquireEpochReference(await this.#readEpochMetadata(epochId).then((metadata) => metadata.epoch));
-    }));
+    return runPromise(this.#transitions.withPermit(this.#leaseTransitions.withPermit(
+      Effect.gen({ self: this }, function* (this: EpochStore) {
+        yield* liftTry(() => assertSafeEpochId(epochId));
+        yield* liftPromise(() => this.#assertEpochDirectory(epochId));
+        const metadata = yield* liftPromise(() => this.#readEpochMetadata(epochId));
+        return yield* liftPromise(() => this.#acquireEpochReference(metadata.epoch));
+      }),
+    )));
   }
 
   /** Resolves and leases the current epoch without allowing a publish between those operations. */
   async acquireActiveEpochReference(): Promise<EpochReference> {
-    return this.#transitions.run(async () => this.#leaseTransitions.run(async () => {
-      const epoch = await this.#readActiveEpoch();
-      if (epoch === undefined) {
-        throw new EpochStoreError('EPOCH_NOT_FOUND', 'No active artifact epoch is available.');
-      }
-      return this.#acquireEpochReference(epoch);
-    }));
+    return runPromise(this.#transitions.withPermit(this.#leaseTransitions.withPermit(
+      Effect.gen({ self: this }, function* (this: EpochStore) {
+        const epoch = yield* liftPromise(() => this.#readActiveEpoch());
+        if (epoch === undefined) {
+          return yield* Effect.fail(new EpochStoreError('EPOCH_NOT_FOUND', 'No active artifact epoch is available.'));
+        }
+        return yield* liftPromise(() => this.#acquireEpochReference(epoch));
+      }),
+    )));
   }
 
   /** Returns detached safe epoch identities, ordered newest first. */
   async listEpochs(): Promise<readonly ArtifactEpoch[]> {
-    return this.#transitions.run(async () => Object.freeze((await this.#readAllEpochMetadata())
-      .map((metadata) => freezeArtifactEpoch(metadata.epoch))
-      .sort(compareNewestFirst)));
+    return runPromise(this.#transitions.withPermit(
+      liftPromise(async () => Object.freeze((await this.#readAllEpochMetadata())
+        .map((metadata) => freezeArtifactEpoch(metadata.epoch))
+        .sort(compareNewestFirst))),
+    ));
   }
 
+  /**
+   * Releases one lease. The final release for an epoch runs the retention
+   * pass while still holding both mutexes, so a concurrent acquire cannot
+   * observe the epoch mid-deletion.
+   */
   async releaseEpochReference(epochId: string): Promise<void> {
-    await this.#transitions.run(async () => this.#leaseTransitions.run(async () => {
-      const referenceKey = join(this.#epochsPath, epochId);
-      const count = epochReferenceCounts.get(referenceKey) ?? 0;
-      if (count === 1) {
-        epochReferenceCounts.delete(referenceKey);
-        await this.#cleanupUnderLease();
-        return;
-      }
-      if (count > 1) epochReferenceCounts.set(referenceKey, count - 1);
-    }));
+    await runPromise(this.#transitions.withPermit(this.#leaseTransitions.withPermit(
+      Effect.suspend(() => {
+        const referenceKey = join(this.#epochsPath, epochId);
+        const count = epochReferenceCounts.get(referenceKey) ?? 0;
+        if (count === 1) {
+          epochReferenceCounts.delete(referenceKey);
+          return this.#cleanupUnderLease();
+        }
+        if (count > 1) epochReferenceCounts.set(referenceKey, count - 1);
+        return Effect.void;
+      }),
+    )));
   }
 
   async readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
-    return this.#transitions.run(async () => this.#readActiveEpoch());
+    return runPromise(this.#transitions.withPermit(liftPromise(() => this.#readActiveEpoch())));
   }
 
   async cleanup(): Promise<void> {
-    await this.#transitions.run(async () => this.#cleanup());
+    await runPromise(this.#transitions.withPermit(
+      this.#leaseTransitions.withPermit(this.#cleanupUnderLease()),
+    ));
   }
 
+  /** Removes leftover staging directories from crashed or interrupted publishes. */
   async recoverStaging(): Promise<void> {
-    await this.#transitions.run(async () => {
+    await runPromise(this.#transitions.withPermit(liftPromise(async () => {
       let entries;
       try {
         entries = await readdir(this.#epochsPath, { withFileTypes: true });
@@ -454,7 +485,7 @@ export class EpochStore {
           .filter((entry) => entry.isDirectory() && entry.name.startsWith(stagingPrefix))
           .map((entry) => rm(join(this.#epochsPath, entry.name), { force: true, recursive: true })),
       );
-    });
+    })));
   }
 
   async #readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
@@ -501,31 +532,32 @@ export class EpochStore {
     return epochPath;
   }
 
-  async #cleanup(): Promise<void> {
-    await this.#leaseTransitions.run(async () => this.#cleanupUnderLease());
-  }
-
-  async #cleanupUnderLease(): Promise<void> {
-    const active = await this.#readActiveEpoch();
-    const metadata = await this.#readAllEpochMetadata();
-    const protectedIds = new Set<string>(active === undefined ? [] : [active.id]);
-    for (const entry of metadata) {
-      if ((epochReferenceCounts.get(join(this.#epochsPath, entry.epoch.id)) ?? 0) > 0) {
-        protectedIds.add(entry.epoch.id);
+  /**
+   * The retention pass, always run while holding the process-wide lease
+   * mutex. Eligible deletions run concurrently; every failure is collected
+   * with its resource label, sorted, and reported as one `EpochCleanupError`.
+   */
+  #cleanupUnderLease(): Effect.Effect<void, unknown> {
+    return Effect.gen({ self: this }, function* (this: EpochStore) {
+      const active = yield* liftPromise(() => this.#readActiveEpoch());
+      const metadata = yield* liftPromise(() => this.#readAllEpochMetadata());
+      const protectedIds = new Set<string>(active === undefined ? [] : [active.id]);
+      for (const entry of metadata) {
+        if ((epochReferenceCounts.get(join(this.#epochsPath, entry.epoch.id)) ?? 0) > 0) {
+          protectedIds.add(entry.epoch.id);
+        }
       }
-    }
 
-    const retainedUnreferenced = metadata
-      .filter((entry) => !protectedIds.has(entry.epoch.id))
-      .sort((left, right) => compareNewestFirst(left.epoch, right.epoch))
-      .slice(0, 5)
-      .map((entry) => entry.epoch.id);
-    for (const epochId of retainedUnreferenced) protectedIds.add(epochId);
-
-    const attempts = await Promise.allSettled(
-      metadata
+      const retainedUnreferenced = metadata
         .filter((entry) => !protectedIds.has(entry.epoch.id))
-        .map(async (entry) => {
+        .sort((left, right) => compareNewestFirst(left.epoch, right.epoch))
+        .slice(0, 5)
+        .map((entry) => entry.epoch.id);
+      for (const epochId of retainedUnreferenced) protectedIds.add(epochId);
+
+      const attempts = yield* Effect.forEach(
+        metadata.filter((entry) => !protectedIds.has(entry.epoch.id)),
+        (entry) => Effect.exit(liftPromise(async () => {
           let resource: EpochCleanupResource = 'native-playground-catalog';
           try {
             // Keep epoch metadata and the immutable epoch itself discoverable
@@ -539,23 +571,27 @@ export class EpochStore {
           } catch (reason) {
             throw cleanupFailure(entry.epoch.id, resource, reason);
           }
-        }),
-    );
-    const failures = attempts
-      .flatMap((attempt): EpochCleanupFailure[] =>
-        attempt.status === 'rejected' ? [attempt.reason as EpochCleanupFailure] : [])
-      .sort((left, right) =>
-        left.epochId.localeCompare(right.epochId) || left.resource.localeCompare(right.resource));
-    if (failures.length > 0) throw new EpochCleanupError(failures);
+        })),
+        { concurrency: 'unbounded' },
+      );
+      const failures = attempts
+        .flatMap((attempt): EpochCleanupFailure[] =>
+          Exit.isFailure(attempt) ? [Cause.squash(attempt.cause) as EpochCleanupFailure] : [])
+        .sort((left, right) =>
+          left.epochId.localeCompare(right.epochId) || left.resource.localeCompare(right.resource));
+      if (failures.length > 0) {
+        return yield* Effect.fail(new EpochCleanupError(failures));
+      }
+    });
   }
 
   async #closeStaging(token: symbol): Promise<void> {
-    await this.#transitions.run(async () => {
+    await runPromise(this.#transitions.withPermit(Effect.suspend(() => {
       const record = this.#staging.get(token);
-      if (record === undefined) return;
+      if (record === undefined) return Effect.void;
       this.#staging.delete(token);
-      await rm(record.root, { force: true, recursive: true });
-    });
+      return liftPromise(() => rm(record.root, { force: true, recursive: true })).pipe(Effect.asVoid);
+    })));
   }
 
   async #publishStaging(
@@ -563,66 +599,100 @@ export class EpochStore {
     validate: StagingValidator,
     beforeActivate: EpochPreActivation | undefined,
   ): Promise<ArtifactEpoch> {
-    return this.#transitions.run(async () => {
+    return runPromise(this.#transitions.withPermit(Effect.suspend(() => {
       const record = this.#staging.get(token);
       if (record === undefined) {
-        throw new EpochStoreError('EPOCH_STAGING_CLOSED', 'Epoch staging is already closed.');
+        return Effect.fail(new EpochStoreError('EPOCH_STAGING_CLOSED', 'Epoch staging is already closed.'));
       }
       this.#staging.delete(token);
-      try {
-        await validate(record.root);
-        await this.#verifyStaging(record);
-        return await this.#publishVerifiedStaging(record, beforeActivate);
-      } finally {
-        await rm(record.root, { force: true, recursive: true });
-      }
-    });
+      const attempt = Effect.gen({ self: this }, function* (this: EpochStore) {
+        yield* liftPromise(() => validate(record.root));
+        yield* liftPromise(() => this.#verifyStaging(record));
+        return yield* this.#publishVerifiedStaging(record, beforeActivate);
+      });
+      // The staging root is removed whether the publish committed or failed;
+      // a removal failure replaces the outcome, exactly as the pre-Effect
+      // `finally` did (so it is deliberately not a scope finalizer, which
+      // would have to swallow it).
+      return Effect.gen({ self: this }, function* (this: EpochStore) {
+        const outcome = yield* Effect.exit(attempt);
+        yield* liftPromise(() => rm(record.root, { force: true, recursive: true }));
+        return yield* outcome;
+      });
+    })));
   }
 
-  async #publishVerifiedStaging(record: StagingRecord, beforeActivate: EpochPreActivation | undefined): Promise<ArtifactEpoch> {
+  /**
+   * The publication saga under the process-wide lease mutex: sync the staged
+   * tree, take the epoch directory, run the publisher's pre-activation, then
+   * commit metadata. Compensations mirror progress — after the active-epoch
+   * rename the publish is committed and later failures are post-commit by
+   * contract; before it, the moved paths and the publisher-owned
+   * receipt roll back concurrently, and rollback failures aggregate with the
+   * original error.
+   */
+  #publishVerifiedStaging(
+    record: StagingRecord,
+    beforeActivate: EpochPreActivation | undefined,
+  ): Effect.Effect<ArtifactEpoch, unknown> {
     const epochRoot = join(this.#epochsPath, record.epoch.id);
-    return this.#leaseTransitions.run(async () => {
+    return this.#leaseTransitions.withPermit(Effect.suspend(() => {
       const activeMetadata: AtomicWriteProgress = { renamed: false };
       let publication: EpochPublicationReceipt | undefined;
       let moved = false;
-      try {
-        if (await pathExists(epochRoot)) {
-          throw new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(record.epoch.id)} already exists.`);
+      const attempt = Effect.gen({ self: this }, function* (this: EpochStore) {
+        if (yield* liftPromise(() => pathExists(epochRoot))) {
+          return yield* Effect.fail(
+            new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(record.epoch.id)} already exists.`),
+          );
         }
-        await this.#syncTree(record.root);
-        await this.#removeStagingMarker(record);
-        await this.#move(record.root, epochRoot);
+        yield* liftPromise(() => this.#syncTree(record.root));
+        yield* liftPromise(() => this.#removeStagingMarker(record));
+        yield* liftPromise(() => this.#move(record.root, epochRoot));
         moved = true;
-        await this.#syncPath(this.#epochsPath, true);
+        yield* liftPromise(() => this.#syncPath(this.#epochsPath, true));
         if (beforeActivate !== undefined) {
-          publication = (await beforeActivate(record.epoch)) ?? undefined;
+          publication = (yield* liftPromise(() => beforeActivate(record.epoch))) ?? undefined;
         }
-        await this.#writeEpochMetadata(record.epoch);
-        await this.#writeActiveMetadata(record.epoch, activeMetadata);
-      } catch (error) {
+        yield* liftPromise(() => this.#writeEpochMetadata(record.epoch));
+        yield* liftPromise(() => this.#writeActiveMetadata(record.epoch, activeMetadata));
+      });
+      const rollback = (error: unknown): Effect.Effect<never, unknown> => Effect.suspend(() => {
         if (activeMetadata.renamed) {
-          throw new EpochPostCommitDurabilityError(record.epoch, error);
+          return Effect.fail(new EpochPostCommitDurabilityError(record.epoch, error));
         }
-        const cleanupResults = await Promise.allSettled([
+        const receipt = publication;
+        const compensations: readonly (() => Promise<void>)[] = [
           ...(moved ? [
-            this.#removePublicationPath(epochRoot, this.#epochsPath, true),
-            this.#removePublicationPath(this.#metadataPathFor(record.epoch.id), this.#epochMetadataPath),
+            () => this.#removePublicationPath(epochRoot, this.#epochsPath, true),
+            () => this.#removePublicationPath(this.#metadataPathFor(record.epoch.id), this.#epochMetadataPath),
           ] : []),
-          ...(publication === undefined ? [] : [publication.rollback()]),
-        ]);
-        const cleanupFailures = cleanupResults.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-        if (cleanupFailures.length > 0) {
-          throw new AggregateError([error, ...cleanupFailures], 'Epoch publication and rollback both failed.', { cause: error });
-        }
-        throw error;
-      }
-      try {
-        await this.#cleanupUnderLease();
-      } catch (error) {
-        throw new EpochPostCommitCleanupError(record.epoch, error);
-      }
-      return record.epoch;
-    });
+          ...(receipt === undefined ? [] : [() => receipt.rollback()]),
+        ];
+        return Effect.forEach(
+          compensations,
+          (compensate) => Effect.exit(liftPromise(compensate)),
+          { concurrency: 'unbounded' },
+        ).pipe(Effect.flatMap((results) => {
+          const cleanupFailures = results.flatMap((result) =>
+            Exit.isFailure(result) ? [Cause.squash(result.cause)] : []);
+          return cleanupFailures.length > 0
+            ? Effect.fail(new AggregateError(
+              [error, ...cleanupFailures],
+              'Epoch publication and rollback both failed.',
+              { cause: error },
+            ))
+            : Effect.fail(error);
+        }));
+      });
+      return Effect.gen({ self: this }, function* (this: EpochStore) {
+        yield* attempt.pipe(Effect.catch(rollback));
+        yield* this.#cleanupUnderLease().pipe(
+          Effect.catch((error) => Effect.fail(new EpochPostCommitCleanupError(record.epoch, error))),
+        );
+        return record.epoch;
+      });
+    }));
   }
 
   async #removeStagingMarker(record: StagingRecord): Promise<void> {
