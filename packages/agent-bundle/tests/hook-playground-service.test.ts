@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -263,7 +264,7 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
     wrapperSource: () => 'export default undefined;\n',
   } satisfies TargetHookContract);
   const adapter: TargetAdapter = {
-    capabilities: { hooks: true },
+    capabilities: supportedCapabilities('hooks'),
     hookContract: contract,
     metadata: {
       adapterRevision: 'test',

@@ -8,6 +8,7 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
+import { intersectCapabilityStates } from './capability-state.ts';
 import claudeCapabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import { claudeAdapter, claudeArtifactPaths, claudeHooksValidator, planClaudeArtifacts } from './claude.ts';
@@ -412,10 +413,10 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout,
   capabilities: Object.freeze({
-    marketplace: claudeAdapter.capabilities.marketplace === true && codexAdapter.capabilities.marketplace === true,
-    hooks: claudeAdapter.capabilities.hooks === true && codexAdapter.capabilities.hooks === true,
-    mcp: claudeAdapter.capabilities.mcp === true && codexAdapter.capabilities.mcp === true,
-    skills: claudeAdapter.capabilities.skills === true && codexAdapter.capabilities.skills === true,
+    marketplace: intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
+    hooks: intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
+    mcp: intersectCapabilityStates(claudeAdapter.capabilities.mcp!, codexAdapter.capabilities.mcp!),
+    skills: intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),
   }),
   hookContract: bundleHookContract,
   metadata,

@@ -1,10 +1,12 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
+import { capabilityIsSupported } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
+import type { CapabilityState } from './core/capabilities.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
@@ -413,11 +415,11 @@ const inspectableComponents = (model: NormalizedPlugin): readonly InspectableCom
 const skippedComponentsFor = (
   components: readonly InspectableComponent[],
   target: string,
-  capabilities: Readonly<Record<string, boolean>>,
+  capabilities: Readonly<Record<string, CapabilityState>>,
 ): readonly InspectionSkippedComponent[] => Object.freeze(components
   .filter((component) =>
     !component.targets.includes(target) ||
-    (component.capability !== undefined && capabilities[component.capability] !== true))
+    (component.capability !== undefined && !capabilityIsSupported(capabilities[component.capability])))
   .map((component) => Object.freeze({
     id: component.id,
     kind: component.kind,

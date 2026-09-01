@@ -26,28 +26,7 @@ export interface RouteProvenance {
   readonly relativePath: string;
 }
 
-/**
- * Evidence backing a `supported`/`degraded` capability judgment: the adapter
- * capability record that asserted it, in the same identity terms the target
- * adapter metadata already publishes.
- */
-export interface CapabilityEvidence {
-  readonly capabilityRevision: string;
-  readonly capabilitySha256: string;
-  readonly observedVersion: string;
-  readonly target: string;
-}
-
-/**
- * The one capability-state contract route validation, projectors, events,
- * and host components share (#93). This release exports the types only;
- * population arrives with the host-component capability work (#100).
- */
-export type CapabilityState =
-  | { readonly state: 'supported'; readonly evidence: CapabilityEvidence }
-  | { readonly state: 'degraded'; readonly reason: string; readonly evidence?: CapabilityEvidence }
-  | { readonly state: 'unavailable'; readonly reason: string }
-  | { readonly state: 'prohibited'; readonly reason: string };
+export type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 
 /**
  * The config of a route module without an extractable `config` export: the

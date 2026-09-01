@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -576,7 +577,7 @@ it('rejects hook entries stamped for a target other than their selected adapter'
     tools: [],
   };
   const adapter: TargetAdapter = {
-    capabilities: { hooks: true },
+    capabilities: supportedCapabilities('hooks'),
     hookContract,
     metadata: testAdapterMetadata,
     name: 'portable',

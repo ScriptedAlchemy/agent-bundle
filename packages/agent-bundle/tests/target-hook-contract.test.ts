@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -180,7 +181,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
   const staleTargetContract = { ...contract, target: 'contract-target' };
   const adapter: TargetAdapter = {
     artifactLayout: { hookWrappers: { allowedSuffixes: ['.mjs'], directory: 'runtime' } },
-    capabilities: { hooks: true },
+    capabilities: supportedCapabilities('hooks'),
     hookContract: contract,
     metadata,
     name: 'synthetic',

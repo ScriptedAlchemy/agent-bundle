@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { spawn } from 'node:child_process';
 import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -637,7 +638,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
     );
 
     const collisionRegistry = new TargetRegistry().register({
-      capabilities: { mcp: true },
+      capabilities: supportedCapabilities('mcp'),
       mcpRuntime: createDefaultRegistry().mcpRuntime('portable'),
       metadata: testAdapterMetadata,
       name: 'portable',
