@@ -902,6 +902,52 @@ it('reports an orphan compiler MCP output after the artifact is rehashed', async
   }
 });
 
+it('does not attribute compiler MCP outputs to an equal-length sibling target', async () => {
+  const siblingTarget = 'neighbor';
+  const siblingMetadata = Object.freeze({
+    adapterRevision: 'neighbor-adapter-v1',
+    capabilityRevision: 'neighbor-capabilities-v1',
+    capabilitySha256: 'e'.repeat(64),
+    observedVersion: 'neighbor-observed-v1',
+    schemas: Object.freeze([]),
+  });
+  const registry = coherenceRegistry().register({
+    artifactLayout: { mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' } },
+    capabilities: { mcp: true },
+    mcpRuntime: createTargetMcpRuntime({
+      manifestPath: 'native/servers.json',
+      remoteTypes: ['streamable-http'],
+      resolveValue: createMcpPathTokenResolver({ target: siblingTarget, tokens: {} }),
+    }),
+    metadata: siblingMetadata,
+    name: siblingTarget,
+    plan: () => ({ diagnostics: [], entries: [] }),
+  } satisfies TargetAdapter);
+  const root = await writeArtifact([
+    {
+      contents: '{"mcpServers":{"server":{"args":["mcp/mcp-server-deadbeef.mjs"],"command":"node","type":"stdio"}}}\n',
+      kind: 'generated',
+      path: 'coherent/native/servers.json',
+    },
+    { contents: 'export const coherent = true;\n', kind: 'bundle', path: 'coherent/mcp/mcp-server-deadbeef.mjs' },
+    {
+      contents: '{"mcpServers":{"server":{"args":["mcp/mcp-server-deadbeef.mjs"],"command":"node","type":"stdio"}}}\n',
+      kind: 'generated',
+      path: 'neighbor/native/servers.json',
+    },
+    { contents: 'export const neighbor = true;\n', kind: 'bundle', path: 'neighbor/mcp/mcp-server-deadbeef.mjs' },
+  ], true, [coherenceManifestTarget, Object.freeze({ ...siblingMetadata, name: siblingTarget })]);
+
+  try {
+    expect(coherenceTarget).toHaveLength(siblingTarget.length);
+    expect(await validateArtifact({ artifactRoot: root, registry })).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6017' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it.each([
   ['backslash local path', 'scripts\\missing.mjs', true],
   ['local option assignment', '--config=./scripts/missing.mjs', true],

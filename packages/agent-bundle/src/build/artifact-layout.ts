@@ -25,4 +25,5 @@ export const pathInTargetOutputLayout = (
   targetPath: string,
   target: string,
   layout: TargetArtifactOutputLayout | undefined,
-): boolean => isDirectOutputLayoutPath(targetPath.slice(target.length + 1), layout);
+): boolean => targetPath.startsWith(`${target}/`) &&
+  isDirectOutputLayoutPath(targetPath.slice(target.length + 1), layout);
