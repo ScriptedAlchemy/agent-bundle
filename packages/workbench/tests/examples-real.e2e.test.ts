@@ -601,6 +601,28 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     // The extracted config is summarized, never inlined as nested JSON.
     await expect(tools).toContainText('annotations: 2 keys', { timeout: browserTimeout });
 
+    const inventoryTool = tools.getByRole('row').filter({ hasText: 'tool:curator/inventory_sources' });
+    await expect(inventoryTool.getByText('Generated input editor', { exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(inventoryTool.getByLabel('Source (required)')).toBeVisible({ timeout: browserTimeout });
+    await expect(inventoryTool.getByLabel('Report')).toBeVisible({ timeout: browserTimeout });
+    await expect(inventoryTool.getByLabel('Strict')).toBeVisible({ timeout: browserTimeout });
+    await inventoryTool.getByRole('button', { name: 'Validate input' }).click();
+    await expect(inventoryTool.getByRole('alert')).toHaveText('Source is required.', { timeout: browserTimeout });
+    await inventoryTool.getByLabel('Source (required)').fill('/tmp/audiobooks');
+    await inventoryTool.getByLabel('Strict').check();
+    await expect(inventoryTool.getByRole('button', { name: 'Open in MCP session' })).toBeEnabled({ timeout: browserTimeout });
+    await inventoryTool.getByRole('button', { name: 'Open in MCP session' }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page).toHaveURL(new URL('#mcp', server.url).href, { timeout: browserTimeout });
+    await expect(page.locator('#mcp-server-name')).toHaveValue('curator', { timeout: browserTimeout });
+    const prefill = page.getByRole('status').filter({ hasText: 'Tool call prefilled from Routes' });
+    await expect(prefill).toContainText('inventory_sources', { timeout: browserTimeout });
+    await expect(prefill).toContainText('"source": "/tmp/audiobooks"', { timeout: browserTimeout });
+    await expect(prefill).toContainText('"strict": true', { timeout: browserTimeout });
+    await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
+    await page.getByRole('link', { name: 'Routes', exact: true }).click();
+    await waitForSettledWorkbench(page);
+
     const resources = page.getByRole('region', { name: 'curator · Resources' });
     await expect(resources).toContainText('resource:curator/catalog', { timeout: browserTimeout });
     await expect(resources).toContainText('uri: audiobook-curator://catalog', { timeout: browserTimeout });
@@ -617,6 +639,15 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
       .toHaveText('library-audit <sources...> [--concurrency <number>] --report <string> [--strict]', { timeout: browserTimeout });
     await expect(cli.locator('.route-command').filter({ hasText: 'inspect' }))
       .toHaveText('inspect <root> [--max-files <number>]', { timeout: browserTimeout });
+
+    const inspectCli = cli.getByRole('row').filter({ hasText: 'cli:inspect' });
+    await inspectCli.getByLabel('Root (required)').fill('/library');
+    await inspectCli.getByLabel('Max files').fill('10');
+    await inspectCli.getByRole('button', { name: 'Validate input' }).click();
+    await expect(inspectCli.getByLabel('Generated argv invocation')).toHaveValue(
+      'inspect /library --max-files 10',
+      { timeout: browserTimeout },
+    );
 
     // 17 MCP routes plus 15 CLI routes, and nothing invented: the curator
     // declares no conventional event routes, scripts, or context providers.

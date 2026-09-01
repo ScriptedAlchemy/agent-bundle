@@ -443,6 +443,28 @@ describe('MCP page', () => {
     expect(markup).toContain('<button disabled="" type="submit">Open MCP session</button>');
   });
 
+  it('accepts a Routes-page tool prefill without executing the call', () => {
+    const pageController = controller();
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: pageController,
+      epochOptions: ['epoch-1'],
+      initialBinding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+      initialToolPrefill: {
+        arguments: { city: 'Berlin' },
+        serverName: 'weather',
+        toolName: 'weather',
+      },
+      serverOptions: [{ name: 'weather', target: 'codex' }],
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('Tool call prefilled from Routes');
+    expect(markup).toContain('weather');
+    expect(markup).toContain('Berlin');
+    expect(markup).toContain('Call weather');
+    expect(pageController.history).toHaveLength(1);
+  });
+
   it('settles a current inspection rejection to ready-empty while ignoring stale or aborted failures', () => {
     const { mcpPageEmptyServerCatalogFor, mcpPageServerCatalogFor } = mcpPage as typeof mcpPage & {
       readonly mcpPageEmptyServerCatalogFor: (epochId: string, signal: Pick<AbortSignal, 'aborted'>) => unknown;

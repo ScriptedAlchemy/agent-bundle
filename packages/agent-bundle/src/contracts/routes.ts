@@ -18,3 +18,14 @@ export type {
   RouteManifestServer,
   RouteManifestServerMode,
 } from '../dev/routes/route-manifest.ts';
+export type {
+  RouteInputArrayItemSchema,
+  RouteInputArraySchema,
+  RouteInputBooleanSchema,
+  RouteInputNumberSchema,
+  RouteInputPropertySchema,
+  RouteInputScalarSchema,
+  RouteInputSchema,
+  RouteInputSchemaLiteral,
+  RouteInputStringSchema,
+} from '../routes/types.ts';

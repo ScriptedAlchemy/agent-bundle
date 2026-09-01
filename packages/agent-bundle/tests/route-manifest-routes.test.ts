@@ -5,6 +5,7 @@ import { expect, it } from '@rstest/core';
 import { compileRouteGraph, emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { routeManifestFor, type RouteManifest } from '../src/dev/routes/route-manifest.ts';
 import { RouteManifestRoutes, type RouteManifestRouteService } from '../src/dev/routes/route-manifest-routes.ts';
+import type { CompiledRouteGraph } from '../src/routes/types.ts';
 import {
   authorize,
   originHeaders as headers,
@@ -169,6 +170,34 @@ it('projects a compiled graph into the browser manifest with project-relative so
     expect(route.provenance).toEqual({ kind: 'conventional' });
   }
   expect(Object.isFrozen(manifest)).toBe(true);
+});
+
+it('passes the bounded input schema through as the optional manifest wire field', () => {
+  const inputSchema = Object.freeze({
+    additionalProperties: false as const,
+    properties: Object.freeze({
+      root: Object.freeze({ description: 'Project root.', type: 'string' as const }),
+    }),
+    required: Object.freeze(['root']),
+    type: 'object' as const,
+  });
+  const graph: CompiledRouteGraph = {
+    ...emptyCompiledRouteGraph,
+    digest: 's'.repeat(64),
+    scripts: [{
+      config: {},
+      id: 'script:inspect',
+      inputSchema,
+      kind: 'script',
+      provenance: { kind: 'conventional', relativePath: 'src/scripts/inspect.ts' },
+      source: '/project/src/scripts/inspect.ts',
+    }],
+  };
+
+  const manifest = routeManifestFor(graph, revision);
+
+  expect(manifest.scripts[0]?.inputSchema).toEqual(inputSchema);
+  expect(Object.isFrozen(manifest.scripts[0]?.inputSchema)).toBe(true);
 });
 
 it('summarizes an extracted route config without leaking non-scalar shapes', async () => {

@@ -36,6 +36,57 @@ export type { CapabilityEvidence, CapabilityState } from '../core/capabilities.t
  */
 export const emptyRouteConfig: Readonly<Record<string, unknown>> = Object.freeze({});
 
+export type RouteInputSchemaLiteral =
+  | boolean
+  | number
+  | string
+  | readonly (boolean | number | string)[];
+
+interface RouteInputScalarSchemaBase {
+  readonly default?: RouteInputSchemaLiteral;
+  readonly description?: string;
+}
+
+export interface RouteInputStringSchema extends RouteInputScalarSchemaBase {
+  readonly enum?: readonly string[];
+  readonly type: 'string';
+}
+
+export interface RouteInputNumberSchema extends RouteInputScalarSchemaBase {
+  readonly type: 'number';
+}
+
+export interface RouteInputBooleanSchema extends RouteInputScalarSchemaBase {
+  readonly type: 'boolean';
+}
+
+export type RouteInputScalarSchema =
+  | RouteInputBooleanSchema
+  | RouteInputNumberSchema
+  | RouteInputStringSchema;
+
+export type RouteInputArrayItemSchema =
+  | Readonly<{ readonly type: 'boolean' }>
+  | Readonly<{ readonly type: 'number' }>
+  | Readonly<{ readonly enum?: readonly string[]; readonly type: 'string' }>;
+
+export interface RouteInputArraySchema {
+  readonly default?: RouteInputSchemaLiteral;
+  readonly description?: string;
+  readonly items: RouteInputArrayItemSchema;
+  readonly type: 'array';
+}
+
+export type RouteInputPropertySchema = RouteInputArraySchema | RouteInputScalarSchema;
+
+/** Deep-frozen JSON Schema draft-2020-12 subset projected from a route module without executing it. */
+export interface RouteInputSchema {
+  readonly additionalProperties: false;
+  readonly properties: Readonly<Record<string, RouteInputPropertySchema>>;
+  readonly required?: readonly string[];
+  readonly type: 'object';
+}
+
 /** One conventional route module compiled into the immutable route graph. */
 export interface CompiledAgentRoute {
   /** Statically extracted from the module's `export const config` declaration; {@link emptyRouteConfig} when absent or rejected. */
@@ -43,6 +94,8 @@ export interface CompiledAgentRoute {
   /** Canonical event identity; present only when {@link kind} is `event-route`. */
   readonly event?: CanonicalAgentEvent;
   readonly id: string;
+  /** Statically projected bounded JSON Schema subset; absent for missing or richer input schemas. */
+  readonly inputSchema?: RouteInputSchema;
   readonly kind: CompiledRouteKind;
   readonly provenance: RouteProvenance;
   /** The owning MCP server id (`mcp:<name>`); MCP route kinds only. */

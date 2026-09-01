@@ -8,6 +8,7 @@ import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../co
 import { compileCliCommands } from './cli-commands.ts';
 import { extractRouteConfig } from './config-extract.ts';
 import { validateEventRouteModuleContract, validateRouteModuleContract } from './contract.ts';
+import { extractInputSchema } from './input-schema.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -24,6 +25,7 @@ import {
   type CompiledRouteKind,
   type CompiledServerMode,
   type CompiledServerSurface,
+  type RouteInputSchema,
 } from './types.ts';
 
 type ProjectIgnoreRules = Awaited<ReturnType<typeof readProjectIgnoreRules>>;
@@ -305,10 +307,12 @@ const declaredMcpServer = (
 const compiledRoute = (
   module: DiscoveredRouteModule,
   config: Readonly<Record<string, unknown>>,
+  inputSchema?: RouteInputSchema,
 ): CompiledAgentRoute => ({
   config,
   ...(module.event === undefined ? {} : { event: module.event }),
   id: module.id,
+  ...(inputSchema === undefined ? {} : { inputSchema }),
   kind: module.kind,
   provenance: { kind: 'conventional', relativePath: module.relativePath },
   ...(module.serverName === undefined ? {} : { serverId: `mcp:${module.serverName}` }),
@@ -320,25 +324,35 @@ const compiledRoute = (
  * a racing deletion removed simply has no config; extraction diagnostics
  * (AB4805/AB4806) accumulate beside the discovery diagnostics.
  */
-const extractedModuleConfig = async (
+interface ExtractedModuleMetadata {
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly inputSchema?: RouteInputSchema;
+}
+
+const extractedModuleMetadata = async (
   module: DiscoveredRouteModule,
   diagnostics: Diagnostic[],
-): Promise<Readonly<Record<string, unknown>>> => {
+): Promise<ExtractedModuleMetadata> => {
   let moduleText: string;
   try {
     moduleText = await readFile(module.source, 'utf8');
   } catch {
-    return emptyRouteConfig;
+    return { config: emptyRouteConfig };
   }
   const extracted = extractRouteConfig(moduleText, module.relativePath, module.source);
   diagnostics.push(...extracted.diagnostics);
-  return extracted.config;
+  const inputSchema = extractInputSchema(moduleText, module.relativePath);
+  return {
+    config: extracted.config,
+    ...(inputSchema === undefined ? {} : { inputSchema }),
+  };
 };
 
 const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unknown>> => ({
   config: route.config,
   ...(route.event === undefined ? {} : { event: route.event }),
   id: route.id,
+  ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
   kind: route.kind,
   relativePath: route.provenance.relativePath,
   ...(route.serverId === undefined ? {} : { serverId: route.serverId }),
@@ -451,7 +465,8 @@ export const compileRouteGraph = async (
       });
       continue;
     }
-    const route = compiledRoute(module, await extractedModuleConfig(module, diagnostics));
+    const metadata = await extractedModuleMetadata(module, diagnostics);
+    const route = compiledRoute(module, metadata.config, metadata.inputSchema);
     if (route.kind === 'event-route') {
       try {
         diagnostics.push(...validateEventRouteModuleContract(

@@ -49,7 +49,12 @@ import {
   playgroundScriptsForEpoch,
 } from './playground/playground-page.tsx';
 import { RouteManifestClient } from './routes/route-manifest-client.ts';
-import type { RouteCatalog } from './routes/routes-model.ts';
+import {
+  mcpToolPrefillFromNavigationState,
+  mcpToolPrefillNavigationState,
+  type McpToolPrefill,
+  type RouteCatalog,
+} from './routes/routes-model.ts';
 import { RoutesPage } from './routes/routes-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { downloadBlob } from './client-helpers.ts';
@@ -629,14 +634,15 @@ const PlaygroundScreen = ({ connectionError, inspection, onNavigate, onRunChange
   </WorkbenchScreen>;
 };
 
-const RoutesScreen = ({ catalog, connectionError, onNavigate, pages, runtimeDiagnostic }: {
+const RoutesScreen = ({ catalog, connectionError, onNavigate, onOpenMcp, pages, runtimeDiagnostic }: {
   readonly catalog: RouteCatalog;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly onOpenMcp: (prefill: McpToolPrefill) => void;
   readonly pages: ReadonlySet<WorkbenchPage>;
   readonly runtimeDiagnostic: string | undefined;
 }) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="routes" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
-  <RoutesPage catalog={catalog} />
+  <RoutesPage catalog={catalog} onOpenMcp={onOpenMcp} />
 </WorkbenchScreen>;
 
 const LogsScreen = ({ connectionError, logClient, onNavigate, pages, runtimeDiagnostic }: {
@@ -660,11 +666,12 @@ const HooksScreen = ({ connectionError, hookClient, onNavigate, pages, runtimeDi
   <HooksPage client={hookClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, pages, registerPreviewClose, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, status }: {
+const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, initialToolPrefill, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, pages, registerPreviewClose, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
+  readonly initialToolPrefill?: McpToolPrefill;
   readonly mcpDepartureDiagnostic?: string;
   readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
@@ -717,7 +724,11 @@ const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controll
             appPreviewClient={appPreviewClient}
             controller={controller}
             epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
-            initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
+            initialBinding={activeEpoch === undefined ? undefined : {
+              epochId: activeEpoch.id,
+              ...(initialToolPrefill === undefined ? {} : { serverName: initialToolPrefill.serverName }),
+            }}
+            initialToolPrefill={initialToolPrefill}
             onDownloadConfig={downloadMcpFile}
             onDownloadTrace={downloadMcpFile}
             onResetSession={onResetSession}
@@ -1336,6 +1347,7 @@ const Workbench = () => {
         artifactClient={artifactClient.current}
         connectionError={connectionError}
         controller={mcpController}
+        initialToolPrefill={mcpToolPrefillFromNavigationState(window.history.state)}
         mcpDepartureDiagnostic={mcpDepartureError}
         model={mcpModel}
         onNavigate={navigate}
@@ -1383,6 +1395,9 @@ const Workbench = () => {
         catalog={capabilities!.routes}
         connectionError={connectionError}
         onNavigate={navigate}
+        onOpenMcp={(prefill) => navigate('mcp', () => {
+          window.history.replaceState(mcpToolPrefillNavigationState(prefill), '', '#mcp');
+        })}
         pages={pages}
         runtimeDiagnostic={runtimeError}
       />);

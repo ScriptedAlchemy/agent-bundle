@@ -28,6 +28,7 @@ import type {
 import type { McpSessionControllerBinding, McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
 import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
 import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
+import type { McpToolPrefill } from '../routes/routes-model.ts';
 import {
   mcpProtocolTraceDownload,
   type McpDownload,
@@ -52,6 +53,8 @@ export interface McpPageController {
 interface McpPageCommonProps {
   readonly controller: McpPageController;
   readonly initialBinding?: Partial<McpSessionBinding>;
+  /** A validated Routes-page handoff; it selects form state but never executes a call. */
+  readonly initialToolPrefill?: McpToolPrefill;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
   readonly onDownloadTrace?: (download: McpDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
@@ -1054,7 +1057,7 @@ const McpPageAppPreview = ({ artifactClient, host, onLifecycleChange, previewPro
 };
 
 export const McpPage = (props: McpPageProps) => {
-  const { controller, initialBinding, initialPreview, onDownloadConfig, onDownloadTrace, onResetSession, registerPreviewClose } = props;
+  const { controller, initialBinding, initialPreview, initialToolPrefill, onDownloadConfig, onDownloadTrace, onResetSession, registerPreviewClose } = props;
   const runtimeProps: McpPageRuntimeProps | undefined = 'runtimePreviewDependencies' in props ? props : undefined;
   const artifactProps: McpPageArtifactProps | undefined = 'runtimePreviewDependencies' in props ? undefined : props;
   const [runtimeAdmission] = useState<RuntimePageAdmission | undefined>(() => runtimeProps === undefined
@@ -1075,7 +1078,7 @@ export const McpPage = (props: McpPageProps) => {
   const [binding, setBinding] = useState<McpPageBinding>(() => {
     const initialTarget = mcpPageTargetFor(initialBinding?.target ?? '', targetOptions);
     const initialTargetServerOptions = mcpPageServerOptionsFor(serverOptions, initialTarget);
-    const initialServerName = initialBinding?.serverName ?? '';
+    const initialServerName = initialBinding?.serverName ?? initialToolPrefill?.serverName ?? '';
     const serverNameOrigin: McpPageServerNameOrigin = initialServerName.length > 0
       && !initialTargetServerOptions.some((option) => option.name === initialServerName)
       ? 'manual'
@@ -1091,8 +1094,8 @@ export const McpPage = (props: McpPageProps) => {
   const [timeoutMs, setTimeoutMs] = useState('');
   const [timeoutError, setTimeoutError] = useState<string>();
   const [activeTimeoutMs, setActiveTimeoutMs] = useState(controller.session?.timeoutMs);
-  const [toolName, setToolName] = useState('');
-  const [toolArguments, setToolArguments] = useState<ImmutableJsonRecord>({});
+  const [toolName, setToolName] = useState(initialToolPrefill?.toolName ?? '');
+  const [toolArguments, setToolArguments] = useState<ImmutableJsonRecord>(initialToolPrefill?.arguments ?? {});
   const [promptName, setPromptName] = useState('');
   const [promptArguments, setPromptArguments] = useState<ImmutableJsonRecord>({});
   const [actionError, setActionError] = useState<string>();
@@ -1421,6 +1424,12 @@ export const McpPage = (props: McpPageProps) => {
 
     <section className="mcp-page-section" aria-labelledby="mcp-catalog-heading">
       <h2 id="mcp-catalog-heading">Catalog</h2>
+      {initialToolPrefill === undefined ? undefined : <aside className="mcp-page-prefill" role="status">
+        <strong>Tool call prefilled from Routes</strong>
+        <p>{initialToolPrefill.serverName} · {initialToolPrefill.toolName}</p>
+        <pre><code>{display(initialToolPrefill.arguments)}</code></pre>
+        <p>Open the session and use the existing call control when you are ready. Nothing runs automatically.</p>
+      </aside>}
       <div className="mcp-page-catalog-grid">
         <section className="mcp-page-catalog" aria-label="Tools">
           <h3>Tools</h3>
