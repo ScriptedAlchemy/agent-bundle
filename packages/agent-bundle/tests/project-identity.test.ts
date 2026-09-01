@@ -162,7 +162,6 @@ it('uses package.json as the only version source for audiobook-curator and label
     ['skills-starter', '@agent-bundle-example/skills-starter'],
     ['hooks-and-scripts', '@agent-bundle-example/hooks-and-scripts'],
     ['mcp-app', '@agent-bundle-example/mcp-app'],
-    ['rsc-agent-runtime', '@agent-bundle/rsc-agent-runtime-demo'],
   ] as const) {
     expect(derivePackageIdentity(join(examplesRoot, example[0]))).toEqual({
       packageName: example[1],
