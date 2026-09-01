@@ -232,6 +232,19 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await expect(page.getByRole('button', { name: 'Run script' })).toBeEnabled({ timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'script-failure');
 
+    await page.getByRole('link', { name: 'Routes', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('This catalog is the compiled route graph the published build was produced from.', { exact: true })).toBeVisible({ timeout: browserTimeout });
+    // verify-release is discovered by convention; detect-risk is configured, so
+    // the compiled catalog must show exactly one script route.
+    await expect(page.getByRole('heading', { name: 'Scripts', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.route-table')).toContainText('script:verify-release', { timeout: browserTimeout });
+    await expect(page.locator('.route-table')).toContainText('src/scripts/verify-release.ts', { timeout: browserTimeout });
+    await expect(page.locator('.route-table')).not.toContainText('script:detect-risk');
+    await expect(page.locator('.route-state')).toHaveText('current', { timeout: browserTimeout });
+    await captureExampleState(page, 'hooks-and-scripts', 'routes-catalog');
+
     await page.getByRole('link', { name: 'Logs' }).click();
     await waitForSettledWorkbench(page);
     await expect(page.locator('.logs-entries > li').first()).toBeVisible({ timeout: browserTimeout });
@@ -343,6 +356,18 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await expect(page.getByRole('heading', { name: 'Comparisons', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.comparisons-content [role="status"]')).toHaveText('At least two recorded runs are needed before a comparison can be aligned.', { timeout: browserTimeout });
     await captureExampleState(page, 'mcp-app', 'comparisons-insufficient-runs');
+
+    await page.getByRole('link', { name: 'Routes', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible({ timeout: browserTimeout });
+    // Every capability here is configured rather than routed: the compiled
+    // catalog reports an empty graph while all nine pages stay navigable.
+    await expect(page.getByText('This project declares no conventional route modules.', { exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.route-table')).toHaveCount(0);
+    for (const preserved of ['Overview', 'Skills', 'Hooks', 'MCP playground', 'Artifacts', 'Playground', 'Logs', 'Evals', 'Comparisons']) {
+      await expect(page.getByRole('link', { name: preserved, exact: true })).toBeVisible({ timeout: browserTimeout });
+    }
+    await captureExampleState(page, 'mcp-app', 'routes-empty-graph');
 
     await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
     await waitForSettledWorkbench(page);

@@ -3,7 +3,8 @@ import type { AddressInfo } from 'node:net';
 
 /** The shape every dev-server route group under test exposes to the harness. */
 export interface RouteHandler {
-  handle(request: IncomingMessage, response: ServerResponse): Promise<boolean>;
+  /** Route groups whose evidence is already in memory answer synchronously. */
+  handle(request: IncomingMessage, response: ServerResponse): boolean | Promise<boolean>;
   close(): void | Promise<void>;
 }
 
@@ -63,7 +64,7 @@ export const startRoutes = async <Routes extends RouteHandler>(
 ): Promise<StartedRoutes<Routes>> => {
   const closeMode = options.closeMode ?? 'started';
   const server = createServer((request, response) => {
-    void routes.handle(request, response).then((handled) => {
+    void (async () => routes.handle(request, response))().then((handled) => {
       if (!handled) response.writeHead(404).end();
     }).catch((error: unknown) => {
       const diagnostic = error as Partial<{ code: string; diagnostics: unknown; message: string; status: number }>;
