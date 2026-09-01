@@ -849,9 +849,13 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
               const close = sqliteEffect(definition.id, 'close database', () => {
                 db.close();
               }, true);
+              // Release finalizers are infallible by contract: a close failure
+              // on the success path surfaces as a defect instead of being
+              // silently swallowed, while a failing path keeps the original
+              // failure as the cause.
               return Exit.isFailure(exit)
                 ? close.pipe(Effect.catch(() => Effect.void))
-                : close;
+                : close.pipe(Effect.orDie);
             },
           );
           const runtime = makeScopedEffectRuntime(
