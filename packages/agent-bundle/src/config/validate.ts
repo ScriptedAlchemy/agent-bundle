@@ -1,10 +1,14 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
+import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 import { scanEntryExportsSource } from '../build/entry-exports.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import {
+  snapshotPackageIdentity,
+  type PackageIdentityIssueKind,
+} from '../core/project-context.ts';
 import {
   defaultGeneratedRuntime,
   parseRuntimeVersion,
@@ -1332,6 +1336,61 @@ export interface ValidateSourceOptions {
   readonly payloadFreshness?: boolean;
 }
 
+/**
+ * AB4008-AB4011: the package-identity axes derived from `package.json`
+ * (issue #94). The package version is authoritative release identity, so a
+ * conflicting `plugin.version` and any invalid derived value surface as
+ * warnings — never errors: a missing package.json (or missing name/version
+ * fields) stays a normal, silent development state with a labeled fallback.
+ */
+const packageIdentityIssueCode = (kind: PackageIdentityIssueKind): string => {
+  switch (kind) {
+    case 'invalid-name':
+      return 'AB4009';
+    case 'invalid-version':
+      return 'AB4010';
+    case 'unparsable':
+      return 'AB4011';
+    default: {
+      const exhaustive: never = kind;
+      throw new TypeError(`Unknown package identity issue kind ${String(exhaustive)}.`);
+    }
+  }
+};
+
+const validatePackageIdentity = (loaded: LoadedConfig): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  const identity = snapshotPackageIdentity(loaded.context.projectRoot);
+  const packageJsonPath = join(loaded.context.projectRoot, 'package.json');
+  for (const issue of identity.issues) {
+    diagnostics.push(warningDiagnostic(
+      packageIdentityIssueCode(issue.kind),
+      issue.message,
+      packageJsonPath,
+      'Correct the package.json field so the derived package identity is valid, then validate again.',
+    ));
+  }
+  const plugin = loaded.config.plugin as unknown;
+  const pluginVersion =
+    typeof plugin === 'object' && plugin !== null && !Array.isArray(plugin)
+      ? (plugin as Record<string, unknown>).version
+      : undefined;
+  if (
+    identity.packageVersion !== undefined &&
+    typeof pluginVersion === 'string' &&
+    pluginVersion.trim().length > 0 &&
+    pluginVersion !== identity.packageVersion
+  ) {
+    diagnostics.push(warningDiagnostic(
+      'AB4008',
+      `Config plugin.version ${JSON.stringify(pluginVersion)} differs from package.json version ${JSON.stringify(identity.packageVersion)}; the package version is authoritative for release identity.`,
+      loaded.configPath,
+      'Align plugin.version with the package.json version, or update package.json.',
+    ));
+  }
+  return diagnostics;
+};
+
 export const validateSource = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1387,6 +1446,7 @@ export const validateSource = (
 
   const payloads = declaredPayloads(loaded, registry);
   diagnostics.push(...validateAssets(loaded));
+  diagnostics.push(...validatePackageIdentity(loaded));
   diagnostics.push(...validateBin(loaded));
   diagnostics.push(...validateHooks(loaded, registry, payloads));
   diagnostics.push(...validateLib(loaded));

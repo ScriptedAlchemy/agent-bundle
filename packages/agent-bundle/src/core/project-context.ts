@@ -1,5 +1,5 @@
-import { realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { digest } from './digest.ts';
 import { deepFreeze } from './freeze.ts';
@@ -25,9 +25,105 @@ export interface ProjectContext {
   readonly configDigest: string;
   readonly configPath: string;
   readonly modelDigest: string;
+  /** The validated npm package name axis; absent for unpackaged development projects. */
+  readonly packageName?: string;
+  /** The validated semantic release-version axis; absent for unpackaged development projects. */
+  readonly packageVersion?: string;
   readonly revision: string;
   readonly sourceInputs: readonly ProjectSourceInput[];
 }
+
+export type PackageIdentityIssueKind = 'invalid-name' | 'invalid-version' | 'unparsable';
+
+/** One problem found while deriving package identity from `package.json`. */
+export interface PackageIdentityIssue {
+  readonly kind: PackageIdentityIssueKind;
+  readonly message: string;
+}
+
+/** The release-identity axes derived from a project's `package.json`. */
+export interface PackageIdentitySnapshot {
+  readonly issues: readonly PackageIdentityIssue[];
+  readonly packageName?: string;
+  readonly packageVersion?: string;
+}
+
+/** npm's naming rules for new packages: lowercase, URL-safe, optional scope. */
+const packageNamePattern = /^(?:@[a-z0-9-*~][a-z0-9-*._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/u;
+
+/** The strict semver 2.0.0 grammar, without any leading `v`. */
+const packageVersionPattern =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/u;
+
+/** True for a name npm would accept for a new package. */
+export const isValidPackageName = (value: string): boolean =>
+  value.length > 0 && value.length <= 214 && packageNamePattern.test(value);
+
+/** True for a strict semver 2.0.0 version. */
+export const isValidPackageVersion = (value: string): boolean => packageVersionPattern.test(value);
+
+/**
+ * Derives the release-identity axes from `<root>/package.json`. A missing
+ * package.json (or missing name/version fields) is a normal development
+ * state: no identity and no issues. An invalid name or version becomes an
+ * issue for the caller to surface as a diagnostic, never a crash, and the
+ * invalid value is withheld from the derived identity.
+ */
+export const snapshotPackageIdentity = (root: string): PackageIdentitySnapshot => {
+  let bytes: string;
+  try {
+    bytes = readFileSync(join(resolve(root), 'package.json'), 'utf8');
+  } catch {
+    return deepFreeze({ issues: [] });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes);
+  } catch {
+    return deepFreeze({ issues: [{ kind: 'unparsable', message: 'package.json is not valid JSON.' }] });
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return deepFreeze({ issues: [{ kind: 'unparsable', message: 'package.json must contain a JSON object.' }] });
+  }
+  const record = parsed as Readonly<Record<string, unknown>>;
+  const issues: PackageIdentityIssue[] = [];
+  let packageName: string | undefined;
+  if (record.name !== undefined) {
+    if (typeof record.name === 'string' && isValidPackageName(record.name)) packageName = record.name;
+    else {
+      issues.push({
+        kind: 'invalid-name',
+        message: `package.json name ${JSON.stringify(record.name)} is not a valid npm package name.`,
+      });
+    }
+  }
+  let packageVersion: string | undefined;
+  if (record.version !== undefined) {
+    if (typeof record.version === 'string' && isValidPackageVersion(record.version)) packageVersion = record.version;
+    else {
+      issues.push({
+        kind: 'invalid-version',
+        message: `package.json version ${JSON.stringify(record.version)} is not a valid semantic version.`,
+      });
+    }
+  }
+  return deepFreeze({
+    issues,
+    ...(packageName === undefined ? {} : { packageName }),
+    ...(packageVersion === undefined ? {} : { packageVersion }),
+  });
+};
+
+/**
+ * The human display label for the release-version axis. Without a package
+ * version there is no release identity, so the label is a clearly marked
+ * development fallback over the source revision — never a semantic version.
+ */
+export const projectVersionLabel = (
+  context: Pick<ProjectContext, 'packageVersion' | 'revision'>,
+): string =>
+  context.packageVersion ??
+  `dev.${context.revision.slice(0, 12)} (development fallback — no package.json version)`;
 
 export interface CreateProjectContextOptions {
   readonly configPath: string;
@@ -293,10 +389,13 @@ export const createProjectContext = (options: CreateProjectContextOptions): Proj
     throw new TypeError(`Configuration source ${JSON.stringify(configPath)} must have a SHA-256 digest.`);
   }
   assertModelPathsResolveInsideProject(canonicalRoot, options.model);
+  const { packageName, packageVersion } = options.model.metadata;
   return deepFreeze({
     configDigest: configInput.sha256,
     configPath,
     modelDigest: digest(canonicalizeNormalizedModel(canonicalRoot, options.model)),
+    ...(packageName === undefined ? {} : { packageName }),
+    ...(packageVersion === undefined ? {} : { packageVersion }),
     revision: digest({ inputs: sourceInputs }),
     sourceInputs,
   });

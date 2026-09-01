@@ -19,6 +19,7 @@ import type {
   ProjectOptions,
 } from './api.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
+import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
 
@@ -215,6 +216,12 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
     return;
   }
   output.write(`Inspected ${result.model.metadata.name}: ${result.plans.map((plan) => plan.target).join(', ')}\n`);
+  // Release identity is derived from package.json (issue #94); a project
+  // without a package version gets a clearly labeled development fallback.
+  if (result.projectContext.packageName !== undefined) {
+    output.write(`Package: ${result.projectContext.packageName}\n`);
+  }
+  output.write(`Version: ${projectVersionLabel(result.projectContext)}\n`);
 };
 
 const emptyEvalSummary = Object.freeze({ cases: 0, fail: 0, inconclusive: 0, pass: 0, trials: 0 });
