@@ -78,6 +78,17 @@ const routeError = (code: string, message: string, recovery: string, sourcePath?
   ...(sourcePath === undefined ? {} : { sourcePath }),
 });
 
+const configValue = (
+  config: Readonly<AgentBundleConfig>,
+  key: keyof AgentBundleConfig | 'routes',
+): unknown => {
+  try {
+    return Reflect.get(config, key);
+  } catch {
+    return undefined;
+  }
+};
+
 interface DiscoveredProviderModule {
   readonly id: string;
   /** The path-derived name segments; each must satisfy the safe-identity rule. */
@@ -182,21 +193,25 @@ export const configClaimedSources = (
     const entry = claimedModuleEntry(value);
     if (entry !== undefined && entry.trim().length > 0) claimed.add(resolve(projectRoot, entry));
   };
-  if (isRecord(config.scripts)) {
-    for (const value of Object.values(config.scripts)) claim(value);
+  const scripts = configValue(config, 'scripts');
+  if (isRecord(scripts)) {
+    for (const value of Object.values(scripts)) claim(value);
   }
-  if (isRecord(config.hooks)) {
-    for (const input of Object.values(config.hooks)) {
+  const hooks = configValue(config, 'hooks');
+  if (isRecord(hooks)) {
+    for (const input of Object.values(hooks)) {
       for (const rawEntry of Array.isArray(input) ? input : [input]) {
         claim(typeof rawEntry === 'string' ? rawEntry : isRecord(rawEntry) ? rawEntry.handler : undefined);
       }
     }
   }
-  if (isRecord(config.bin)) {
-    for (const value of Object.values(config.bin)) claim(value);
+  const bin = configValue(config, 'bin');
+  if (isRecord(bin)) {
+    for (const value of Object.values(bin)) claim(value);
   }
-  claim(config.lib);
-  const servers = isRecord(config.mcp) && isRecord(config.mcp.servers) ? config.mcp.servers : undefined;
+  claim(configValue(config, 'lib'));
+  const mcp = configValue(config, 'mcp');
+  const servers = isRecord(mcp) && isRecord(mcp.servers) ? mcp.servers : undefined;
   for (const server of Object.values(servers ?? {})) {
     if (!isRecord(server)) continue;
     claim(server.entry);
@@ -225,7 +240,7 @@ const parseRouteModeOverrides = (
   diagnostics: Diagnostic[],
 ): RouteModeOverrides => {
   const overrideRecovery = 'Set routes.servers.<id> to generated, custom, command, or remote, and routes.cli to generated or conventional.';
-  const declared = config['routes'];
+  const declared = configValue(config, 'routes');
   const servers = new Map<string, CompiledServerMode>();
   let cli: 'generated' | 'conventional' | undefined;
   if (declared === undefined) return { servers };
@@ -271,7 +286,7 @@ const declaredMcpServer = (
   config: Readonly<AgentBundleConfig>,
   name: string,
 ): Readonly<Record<string, unknown>> | undefined => {
-  const mcp = config.mcp;
+  const mcp = configValue(config, 'mcp');
   if (!isRecord(mcp) || !isRecord(mcp.servers)) return undefined;
   const server = (mcp.servers as Readonly<Record<string, unknown>>)[name];
   return isRecord(server) ? server : undefined;

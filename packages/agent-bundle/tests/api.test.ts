@@ -373,6 +373,43 @@ it('contains hostile source getters as reusable preparation diagnostics', async 
   }
 });
 
+it('fails closed when routes getter throws during inspection', async () => {
+  const root = await createProject();
+  try {
+    await mkdir(join(root, 'src', 'mcp', 'curator', 'tools'), { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), [
+        "const hostile = { toString() { throw new Error('hostile routes getter was stringified'); } };",
+        'hostile.self = hostile;',
+        'const config = { plugin: { name: \'hostile-routes\', version: \'1.0.0\' }, targets: [\'codex\'] };',
+        "Object.defineProperty(config, 'routes', { enumerable: true, get() { throw hostile; } });",
+        'export default config;',
+        '',
+      ].join('\n')),
+      writeFile(join(root, 'src', 'mcp', 'curator', 'tools', 'inspect.ts'), 'export default async () => undefined;\n'),
+    ]);
+
+    const result = await inspect({ root });
+
+    expect(result).toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: 'Unable to validate project source.',
+        recovery: expect.any(String),
+      })],
+      plans: [],
+      state: 'invalid',
+    });
+    expect(JSON.stringify(result)).not.toContain('hostile routes getter was stringified');
+    expect('model' in result).toBe(false);
+    expect('projectContext' in result).toBe(false);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.diagnostics)).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
 const hostileAdapterError = (): object => {
   const error = Object.create(null) as Record<string, unknown>;
   error.self = error;
