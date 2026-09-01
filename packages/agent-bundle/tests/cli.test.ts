@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { runCli as runSourceCli } from '../src/cli.ts';
+import { timeScale } from './support/time-scale.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -162,7 +163,7 @@ it('builds a selected target through the built executable from a path containing
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 it('runs MCP and hook operations from a packed consumer with explicit and temporary artifacts', async () => {
   await buildCliPackage();
@@ -293,7 +294,7 @@ it('runs MCP and hook operations from a packed consumer with explicit and tempor
       rm(consumer.root, { force: true, recursive: true }),
     ]);
   }
-}, 60_000);
+}, 60_000 * timeScale);
 
 it('keeps inspect JSON stable and validates only the supplied artifact', async () => {
   await buildCliPackage();
@@ -351,7 +352,7 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 it('prints a complete invalid inspection on JSON and human output', async () => {
   const project = await createCliProject();
@@ -380,7 +381,7 @@ it('prints a complete invalid inspection on JSON and human output', async () => 
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 it('reports an unselected inspect target on JSON and human output', async () => {
   const project = await createCliProject();
@@ -414,7 +415,7 @@ it('reports an unselected inspect target on JSON and human output', async () => 
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 it('dumps the synthesized bundler configuration with inspect --bundler', async () => {
   const project = await createCliProject();
@@ -475,7 +476,7 @@ it('dumps the synthesized bundler configuration with inspect --bundler', async (
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
 
 it('reports source validation diagnostics on stderr before staging an artifact', async () => {
   await buildCliPackage();
@@ -507,4 +508,4 @@ it('reports source validation diagnostics on stderr before staging an artifact',
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
-}, 30_000);
+}, 30_000 * timeScale);
