@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
 import { stableJson } from '../core/digest.ts';
+import type { NormalizedHook } from '../core/types.ts';
 import type { CompiledAgentRoute, CompiledCliCommand } from '../routes/types.ts';
 
 /**
@@ -157,14 +159,18 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
 };
 
 export interface GeneratedRouteMcpEntryOptions {
+  readonly artifactEpoch?: string;
+  readonly eventRoutes?: readonly NormalizedHook[];
   readonly plugin: { readonly name: string; readonly version: string };
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
+  readonly target?: string;
   readonly workerFile: string;
 }
 
 export interface GeneratedRouteFlightWorkerOptions {
   readonly artifactEpoch: string;
+  readonly eventRoutes?: readonly NormalizedHook[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
 }
@@ -194,15 +200,29 @@ const routeRecords = (routes: readonly CompiledAgentRoute[]): readonly string[] 
   routes.map((route, index) =>
     `  ${JSON.stringify(route.id)}: Object.freeze({ config: ${stableJson(route.config)}, id: ${JSON.stringify(route.id)}, kind: ${JSON.stringify(route.kind)}, module: route${String(index)}, name: ${JSON.stringify(routeProtocolName(route))} }),`);
 
+const eventRouteImports = (
+  routes: readonly NormalizedHook[],
+  offset: number,
+): readonly string[] => routes.map((route, index) =>
+  `import * as route${String(offset + index)} from ${JSON.stringify(route.source)};`);
+
+const eventRouteRecords = (
+  routes: readonly NormalizedHook[],
+  offset: number,
+): readonly string[] => routes.map((route, index) =>
+  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(route.id)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
+
 /** The long-lived react-server worker used by one generated MCP process. */
 export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWorkerOptions): string => {
   const routes = executableMcpRoutes(options.routes);
+  const eventRoutes = options.eventRoutes ?? [];
   return [
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
     "import { runAgentRequest } from '@agent-bundle/runtime';",
     ...routeImports(routes),
+    ...eventRouteImports(eventRoutes, routes.length),
     '',
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
     'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
@@ -212,6 +232,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     'const routes = Object.freeze({',
     ...routeRecords(routes),
+    ...eventRouteRecords(eventRoutes, routes.length),
     '});',
     'const requests = new Map();',
     '',
@@ -220,21 +241,25 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "    parentPort.postMessage({ code: 'artifact-epoch-mismatch', id: message.id, message: `Runtime artifact epoch ${JSON.stringify(ARTIFACT_EPOCH)} does not match request epoch ${JSON.stringify(message.artifactEpoch)}`, receivedEpoch: message.artifactEpoch, type: 'error' });",
     '    return;',
     '  }',
-    '  const route = routes[message.invocation.props.operationId];',
-    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated MCP route must default-export an async Server Component.');",
+    "  const routeId = message.invocation.kind === 'event' ? `hook:event-route:${message.invocation.props.event.replace('/', '-')}` : message.invocation.props.operationId;",
+    '  const route = routes[routeId];',
+    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated route must default-export an async Server Component.');",
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
     '  processLifetime.hits += 1;',
     '  try {',
     '    const bytes = await runAgentRequest({',
     '      ...(message.actor === undefined ? {} : { actor: message.actor }),',
-    '      invocation: { artifactEpoch: ARTIFACT_EPOCH, kind: \'tool\', operationId: route.id, surface: route.name },',
+    '      invocation: { artifactEpoch: ARTIFACT_EPOCH, kind: message.invocation.kind, operationId: route.id, surface: route.name },',
     '      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: \'progress\', update }); } },',
     '      providers: { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } },',
     '      ...(message.session === undefined ? {} : { session: message.session }),',
     '      signal: controller.signal,',
     '    }, async () => {',
-    '      const flight = renderAgentFlight(createElement(route.module.default, { input: message.invocation.props.input, signal: controller.signal }), { signal: controller.signal });',
+    "      const props = message.invocation.kind === 'event'",
+    '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
+    '        : { input: message.invocation.props.input, signal: controller.signal };',
+    '      const flight = renderAgentFlight(createElement(route.module.default, props), { signal: controller.signal });',
     '      return new Uint8Array(await new Response(flight).arrayBuffer());',
     '    });',
     '    parentPort.postMessage({ bytes, id: message.id, type: \'complete\' }, [bytes.buffer]);',
@@ -319,10 +344,18 @@ const routeRegistrations = (routes: readonly CompiledAgentRoute[]): readonly str
 export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOptions): string => {
   const routes = executableMcpRoutes(options.routes);
   const artifactEpoch = generatedRouteArtifactEpoch(options.plugin);
+  const hasEvents = (options.eventRoutes?.length ?? 0) > 0;
   return [
+    ...(hasEvents ? ["import { dirname, resolve } from 'node:path';"] : []),
     "import { Worker } from 'node:worker_threads';",
     "import { McpServer } from '@modelcontextprotocol/server';",
     "import { AgentRuntimeError, agent, attachMcpStructuredContent, available, createAgentRenderDispatcher, createWarmFlightHost, projectMcpRenderStream, runAgentRequest } from '@agent-bundle/runtime';",
+    ...(hasEvents
+      ? [
+          `import { createEventRuntimeServer } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
+          `import { createCanonicalEventProps, projectEventDocument } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
+        ]
+      : []),
     "import mcpApps from 'agent-bundle/mcp-apps';",
     ...routeImports(routes),
     '',
@@ -407,16 +440,43 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     '  return { document: projected.document, result: route.module.resultSchema.parse(projected.document.value), toolResult: projected.result };',
     '});',
     '',
-    'const createGeneratedRouteServer = () => {',
+    'const createGeneratedRouteServer = async () => {',
     `  const server = new McpServer(${stableJson(options.plugin)});`,
     '  const workerHost = createWorkerHost();',
     '  const dispatcher = createAgentRenderDispatcher(workerHost);',
+    ...(hasEvents
+      ? [
+          `  const artifactEpoch = ${JSON.stringify(options.artifactEpoch ?? 'unknown')};`,
+          `  const target = ${JSON.stringify(options.target ?? 'unknown')};`,
+          "  const endpointId = `${artifactEpoch}:${target}:${dirname(dirname(resolve(process.argv[1])))}`;",
+          '  const eventRuntime = await createEventRuntimeServer({',
+          '    artifactEpoch,',
+          '    endpointId,',
+          '    handle: async (request) => {',
+          "      const nativeEvent = typeof request.native.hook_event_name === 'string' ? request.native.hook_event_name : request.event;",
+          '      const controller = new AbortController();',
+          '      const props = createCanonicalEventProps(request.event, request.native, target, nativeEvent, request.hostContractRevision, controller.signal);',
+          '      const sessionId = typeof request.native.session_id === \'string\' ? request.native.session_id : typeof request.native.conversation_id === \'string\' ? request.native.conversation_id : undefined;',
+          '      return runAgentRequest({',
+          "        host: available({ name: target }, 'native'),",
+          "        invocation: { artifactEpoch, hostContractRevision: request.hostContractRevision, kind: 'event', operationId: `event:${request.event}`, surface: request.event },",
+          "        ...(sessionId === undefined ? {} : { session: available({ sessionId }, 'native') }),",
+          '        signal: controller.signal,',
+          "        ...(typeof request.native.cwd === 'string' ? { workspace: available({ root: request.native.cwd }, 'native') } : {}),",
+          '      }, async () => {',
+          "        const document = await dispatcher.dispatch({ invocation: { kind: 'event', props: { event: request.event, payload: { canonical: props.canonical, native: props.native } } }, signal: controller.signal });",
+          '        return projectEventDocument(document, request.event, target, nativeEvent);',
+          '      });',
+          '    },',
+          '  });',
+        ]
+      : []),
     ...routeRegistrations(routes),
     '  for (const app of mcpApps) {',
     '    server.registerResource(app.name, app.resourceUri, { ...(app._meta === undefined ? {} : { _meta: app._meta }), mimeType: app.mimeType }, async (uri) => ({ contents: [{ mimeType: app.mimeType, text: app.html, uri: uri.href }] }));',
     '  }',
     '  const close = server.close.bind(server);',
-    '  server.close = async () => { await workerHost.close(); await close(); };',
+    `  server.close = async () => { ${hasEvents ? 'await eventRuntime.close(); ' : ''}await workerHost.close(); await close(); };`,
     '  return server;',
     '};',
     '',

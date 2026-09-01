@@ -1,6 +1,7 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
+import type { CanonicalAgentEvent } from '../routes/public.ts';
 import type {
   CanonicalHookEvent,
   CanonicalHookTool,
@@ -40,6 +41,7 @@ export interface TargetHookDocumentEntryInput {
 }
 
 export interface TargetHookContract {
+  readonly capabilityRevision?: string;
   readonly commandRoot: string;
   /**
    * Shapes one generated hook command into the host's per-event array entry.
@@ -58,7 +60,8 @@ export interface TargetHookContract {
     canonicalEvent: CanonicalHookEvent,
     nativeEvent: string,
   ) => Readonly<Record<string, unknown>> | undefined;
-  readonly eventNames: Readonly<Record<CanonicalHookEvent, string>>;
+  readonly eventNames: Readonly<Partial<Record<CanonicalHookEvent, string>>>;
+  readonly eventRouteNames?: Readonly<Partial<Record<CanonicalAgentEvent, string>>>;
   /**
    * False when this contract plans host-document wrapper variants of hooks
    * whose canonical wrappers another contract already indexes; the canonical
@@ -189,6 +192,9 @@ const canonicalEventOrder: readonly CanonicalHookEvent[] = [
   'beforeTool',
   'afterTool',
   'stop',
+  'agentStart',
+  'agentStop',
+  'workspaceOpen',
 ];
 
 export const canonicalHookEventFor = (event: string): CanonicalHookEvent | undefined =>
@@ -281,6 +287,118 @@ export const encodeCursorPlaygroundOutput = (
   return result.additionalContext === undefined
     ? undefined
     : { additional_context: result.additionalContext };
+};
+
+export const eventIpcRuntimeSpecifier = 'agent-bundle/event-ipc';
+export const eventProjectRuntimeSpecifier = 'agent-bundle/event-project';
+export const eventArtifactEpochToken = '__AGENT_BUNDLE_EVENT_ARTIFACT_EPOCH__';
+
+const eventRouteHookWrapperSource = (
+  entry: TargetHookWrapper,
+  capabilityRevision: string,
+): string => {
+  const route = entry.hook.eventRoute!;
+  const standalone = route.runtime === 'standalone' || route.fallback === 'standalone';
+  return [
+    "import { dirname, resolve } from 'node:path';",
+    `import { EventRuntimeTransportError, requestEventRuntime } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
+    ...(standalone
+      ? [
+          `import { createCanonicalEventProps, projectEventDocument, renderStandaloneEventRoute } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
+          `import * as routeModule from ${JSON.stringify(entry.hook.source)};`,
+        ]
+      : []),
+    '',
+    `const artifactEpoch = ${JSON.stringify(eventArtifactEpochToken)};`,
+    `const canonicalEvent = ${JSON.stringify(route.event)};`,
+    `const capabilityRevision = ${JSON.stringify(capabilityRevision)};`,
+    `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
+    `const target = ${JSON.stringify(entry.target)};`,
+    `const runtimeMode = ${JSON.stringify(route.runtime)};`,
+    `const fallbackMode = ${JSON.stringify(route.fallback)};`,
+    `const timeoutMs = ${String((entry.hook.timeout ?? 5) * 1_000)};`,
+    "const endpointId = `${artifactEpoch}:${target}:${dirname(dirname(resolve(process.argv[1])))}`;",
+    '',
+    'const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);',
+    'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
+    'const requireString = (input, field) => { if (typeof input[field] !== "string" || input[field].trim() === "") fail(`native ${field} must be a nonempty string`); };',
+    'const validateNative = (input) => {',
+    '  if (!isRecord(input)) fail("stdin JSON value must be an object");',
+    '  if (input.hook_event_name !== nativeEvent) fail(`native hook_event_name must equal ${nativeEvent}`);',
+    '  if (target === "cursor") {',
+    '    if (typeof input.session_id !== "string" && typeof input.conversation_id !== "string") fail("native session_id or conversation_id must be a string");',
+    '    if (canonicalEvent === "tool/before" || canonicalEvent === "tool/after") {',
+    '      requireString(input, "tool_name");',
+    '      if (!isRecord(input.tool_input)) fail("native tool_input must be an object");',
+    '      requireString(input, "tool_use_id");',
+    '      if (canonicalEvent === "tool/after") requireString(input, "tool_output");',
+    '    }',
+    '    if (canonicalEvent === "stop" && typeof input.loop_count !== "number") fail("native loop_count must be a number");',
+    '    return input;',
+    '  }',
+    '  requireString(input, "session_id");',
+    '  requireString(input, "transcript_path");',
+    '  requireString(input, "cwd");',
+    '  if (canonicalEvent === "session/start") requireString(input, "source");',
+    '  if (canonicalEvent === "tool/before" || canonicalEvent === "tool/after") {',
+    '    requireString(input, "tool_name");',
+    '    if (!isRecord(input.tool_input)) fail("native tool_input must be an object");',
+    '    requireString(input, "tool_use_id");',
+    '    if (canonicalEvent === "tool/after" && !isRecord(input.tool_response)) fail("native tool_response must be an object");',
+    '  }',
+    '  if (canonicalEvent === "stop") {',
+    '    if (typeof input.stop_hook_active !== "boolean") fail("native stop_hook_active must be a boolean");',
+    '    requireString(input, "last_assistant_message");',
+    '  }',
+    '  return input;',
+    '};',
+    ...(standalone
+      ? [
+          'const runStandalone = async (native, signal) => {',
+          '  const component = Reflect.get(routeModule, "default");',
+          '  if (typeof component !== "function") fail("default export must be an async Server Component");',
+          '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+          '  return projectEventDocument(await renderStandaloneEventRoute(component, props), canonicalEvent, target, nativeEvent);',
+          '};',
+        ]
+      : []),
+    'const run = async () => {',
+    '  const chunks = [];',
+    '  let bytes = 0;',
+    '  for await (const chunk of process.stdin) {',
+    '    bytes += chunk.length;',
+    '    if (bytes > 1024 * 1024) fail("stdin exceeds the 1 MiB native-payload limit");',
+    '    chunks.push(chunk);',
+    '  }',
+    '  let parsed;',
+    '  try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { fail("stdin must contain exactly one JSON value"); }',
+    '  const native = validateNative(parsed);',
+    '  const controller = new AbortController();',
+    '  let output;',
+    '  if (runtimeMode === "standalone") {',
+    ...(standalone ? ['    output = await runStandalone(native, controller.signal);'] : ['    fail("standalone runtime was not compiled");']),
+    '  } else {',
+    '    try {',
+    '      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs });',
+    '    } catch (error) {',
+    ...(standalone
+      ? [
+          '      if (!(fallbackMode === "standalone" && error instanceof EventRuntimeTransportError && error.code === "runtime-unavailable")) throw error;',
+          '      output = await runStandalone(native, controller.signal);',
+        ]
+      : ['      throw error;']),
+    '    }',
+    '  }',
+    '  if (output !== undefined) process.stdout.write(JSON.stringify(output));',
+    '};',
+    'if (import.meta.main) {',
+    '  await run().catch((error) => {',
+    '    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\\n`);',
+    '    process.exitCode = 1;',
+    '  });',
+    '}',
+    '',
+  ].join('\n');
 };
 
 /** Emits the published Cursor hook wrapper source; see encodeCursorPlaygroundInput for the envelope contract. */
@@ -558,7 +676,9 @@ export const planHooks = (
   const groups: Record<string, unknown[]> = Object.create(null) as Record<string, unknown[]>;
   const hookEntries: TargetHookEntry[] = [];
   for (const hook of selected) {
-    const nativeEvent = contract.eventNames[hook.event];
+    const nativeEvent = hook.eventRoute === undefined
+      ? contract.eventNames[hook.event]
+      : contract.eventRouteNames?.[hook.eventRoute.event];
     if (typeof nativeEvent !== 'string' || nativeEvent.trim().length === 0) {
       diagnostics.push(error(
         target,
@@ -602,7 +722,12 @@ export const planHooks = (
       relativePath,
       target,
     };
-    hookEntries.push({ ...wrapper, virtualSource: contract.wrapperSource(wrapper) });
+    hookEntries.push({
+      ...wrapper,
+      virtualSource: hook.eventRoute === undefined
+        ? contract.wrapperSource(wrapper)
+        : eventRouteHookWrapperSource(wrapper, contract.capabilityRevision ?? target),
+    });
   }
 
   return Object.freeze({

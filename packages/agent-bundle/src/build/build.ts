@@ -357,10 +357,19 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           { cwd: options.projectRoot, outDir: target.root, ...tools },
         )),
       );
-      compiledHooks.push(...(await compileHooks(target.hookEntries, { cwd: options.projectRoot, outDir: target.root, ...tools })));
+      compiledHooks.push(...(await compileHooks(target.hookEntries, {
+        artifactEpoch: options.projectContext.revision,
+        cwd: options.projectRoot,
+        outDir: target.root,
+        ...tools,
+      })));
       compiledMcpEntries.push(...(await compileMcpEntries(options.model.mcpServers, {
         apps: targetMcpApps,
+        artifactEpoch: options.projectContext.revision,
         cwd: options.projectRoot,
+        eventHooks: target.hookEntries
+          .filter((entry) => entry.hook.eventRoute !== undefined)
+          .map((entry) => entry.hook),
         outDir: target.root,
         plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
         target: target.name,

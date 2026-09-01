@@ -8,7 +8,7 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
-import { intersectCapabilityStates } from './capability-state.ts';
+import { intersectCapabilityStates, supportedEventRouteNamesFrom } from './capability-state.ts';
 import claudeCapabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import { claudeAdapter, claudeArtifactPaths, claudeHooksValidator, planClaudeArtifacts } from './claude.ts';
@@ -103,6 +103,7 @@ for (const key of new Set([...Object.keys(claudeMatchers), ...Object.keys(codexM
 }
 
 const bundleHookContract: TargetHookContract = Object.freeze({
+  capabilityRevision: `${claudeCapabilityTable.observedCliVersion}+${codexCapabilityTable.observedCliVersion}`,
   // ${CLAUDE_PLUGIN_ROOT} reaches both hosts: Claude substitutes its own
   // token and Codex exports the variable as a documented compatibility alias
   // into a real shell.
@@ -110,6 +111,7 @@ const bundleHookContract: TargetHookContract = Object.freeze({
   encodePlaygroundInput: encodeNativeHookPlaygroundInput,
   encodePlaygroundOutput: encodeNativeHookPlaygroundOutput,
   eventNames: claudeCapabilityTable.hooks.events,
+  eventRouteNames: supportedEventRouteNamesFrom(claudeCapabilityTable.hooks.eventRoutes),
   manifestPath: claudeArtifactPaths.hooksManifest,
   matchers: Object.freeze({
     ...claudeMatchers,

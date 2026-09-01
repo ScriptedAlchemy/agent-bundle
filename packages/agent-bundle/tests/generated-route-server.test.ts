@@ -1,12 +1,14 @@
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { afterEach, expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
+import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
 
 const roots: string[] = [];
 
@@ -19,6 +21,26 @@ const writeProjectFile = async (root: string, path: string, contents: string): P
   await mkdir(dirname(output), { recursive: true });
   await writeFile(output, contents);
 };
+
+const runHook = async (
+  entry: string,
+  input: Readonly<Record<string, unknown>>,
+): Promise<Readonly<Record<string, unknown>> | undefined> => new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [entry], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+  child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+  child.once('error', reject);
+  child.once('close', (code) => {
+    if (code !== 0) {
+      reject(new Error(stderr));
+      return;
+    }
+    resolve(stdout === '' ? undefined : JSON.parse(stdout) as Readonly<Record<string, unknown>>);
+  });
+  child.stdin.end(JSON.stringify(input));
+});
 
 it('lists and calls a generated filesystem tool through final-only Flight', { retry: 2, timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-routes-'));
@@ -375,4 +397,149 @@ it('fails closed when the generated runtime worker restarts', { retry: 2, timeou
   } finally {
     await session.close();
   }
+});
+
+it('renders one tool/after event route through two native thin clients', { retry: 2, timeout: 90_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-events-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({
+      dependencies: {
+        '@agent-bundle/runtime': 'workspace:*',
+        '@modelcontextprotocol/server': '2.0.0',
+        react: '19.2.8',
+        zod: '4.4.3',
+      },
+      name: 'generated-events-fixture',
+      type: 'module',
+      version: '1.0.0',
+    })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      "export default defineConfig({ plugin: { name: 'generated-events-fixture', version: '1.0.0' }, targets: ['claude', 'cursor'] });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/mcp/runtime/tools/status.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.object({ ready: z.literal(true) }).strict();',
+      'export default async function Status() {',
+      "  return createElement(Agent.Result, { value: { ready: true } }, createElement(Agent.Text, null, 'ready'));",
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/after.tsx', [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { targets: ['claude', 'cursor'], tools: ['file.write'], timeoutMs: 5000 };",
+      'export default async function AfterTool({ canonical, native }) {',
+      '  const context = await agent();',
+      '  const tool = typeof native.tool_name === "string" ? native.tool_name : "unknown";',
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${canonical.provenance.host}:${tool}:${context.invocation.kind}`));',
+      '}',
+      '',
+    ].join('\n')),
+  ]);
+
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['claude', 'cursor'] });
+  expect(compiled.model.hooks.filter((hook) => hook.eventRoute !== undefined)).toHaveLength(1);
+  expect(compiled.build.compiledHooks.filter((hook) => hook.id === 'hook:event-route:tool-after')).toHaveLength(2);
+
+  for (const target of ['claude', 'cursor'] as const) {
+    const mcp = compiled.build.compiledMcpEntries.find((entry) => entry.target === target)!;
+    const hook = compiled.build.compiledHooks.find((entry) => entry.target === target && entry.event === 'afterTool')!;
+    await expect(readFile(mcp.output, 'utf8')).resolves.toContain('agent-bundle-event-');
+    const client = new Client({ name: `generated-event-${target}`, version: '0.0.0' });
+    const transport = new StdioClientTransport({ args: [mcp.output], command: process.execPath, stderr: 'pipe' });
+    await client.connect(transport);
+    try {
+      const endpointId = `${compiled.build.manifest.project.revision}:${target}:${dirname(dirname(resolve(mcp.output)))}`;
+      const expectedEndpoint = eventRuntimeEndpoint(endpointId);
+      await expect(stat(expectedEndpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
+      const native = target === 'cursor'
+        ? {
+            conversation_id: 'conversation-1',
+            cwd: root,
+            hook_event_name: 'postToolUse',
+            session_id: 'session-1',
+            tool_input: { file_path: 'demo.ts' },
+            tool_name: 'Write',
+            tool_output: '{"ok":true}',
+            tool_use_id: 'tool-1',
+          }
+        : {
+            cwd: root,
+            hook_event_name: 'PostToolUse',
+            session_id: 'session-1',
+            tool_input: { file_path: 'demo.ts' },
+            tool_name: 'Write',
+            tool_response: { ok: true },
+            tool_use_id: 'tool-1',
+            transcript_path: join(root, 'transcript.jsonl'),
+          };
+      const response = await runHook(hook.output, native);
+      expect(response).toEqual(target === 'cursor'
+        ? { additional_context: 'cursor:Write:event' }
+        : {
+            hookSpecificOutput: {
+              additionalContext: 'claude:Write:event',
+              hookEventName: 'PostToolUse',
+            },
+          });
+    } finally {
+      await client.close();
+    }
+  }
+});
+
+it('runs an explicitly standalone event route without a shared runtime', { timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-standalone-event-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({
+      dependencies: {
+        '@agent-bundle/runtime': 'workspace:*',
+        react: '19.2.8',
+      },
+      name: 'standalone-event-fixture',
+      type: 'module',
+      version: '1.0.0',
+    })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      "export default defineConfig({ plugin: { name: 'standalone-event-fixture', version: '1.0.0' }, targets: ['cursor'] });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/after.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { runtime: 'standalone', targets: ['cursor'] };",
+      'const Context = async ({ tool }) => createElement(Agent.Context, null, `standalone:${tool}`);',
+      'export default async function AfterTool({ native }) {',
+      '  return createElement(Agent.Result, null, createElement(Context, { tool: native.tool_name }));',
+      '}',
+      '',
+    ].join('\n')),
+  ]);
+
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['cursor'] });
+  expect(compiled.build.compiledMcpEntries).toHaveLength(0);
+  const hook = compiled.build.compiledHooks.find((entry) => entry.event === 'afterTool');
+  expect(hook).toBeDefined();
+  await expect(runHook(hook!.output, {
+    conversation_id: 'conversation-1',
+    cwd: root,
+    hook_event_name: 'postToolUse',
+    session_id: 'session-1',
+    tool_input: { file_path: 'demo.ts' },
+    tool_name: 'Write',
+    tool_output: '{"ok":true}',
+    tool_use_id: 'tool-1',
+  })).resolves.toEqual({ additional_context: 'standalone:Write' });
 });

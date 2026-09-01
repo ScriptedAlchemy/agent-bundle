@@ -14,7 +14,12 @@ import {
 } from '../core/runtime.ts';
 import { snapshotPackageIdentity } from '../core/project-context.ts';
 import { isRecord } from '../core/strict-json.ts';
-import { isPrebuiltEntryInput, parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
+import {
+  canonicalHookEvents,
+  isPrebuiltEntryInput,
+  parseNativeHookToolSelector,
+  pathTokens,
+} from '../core/types.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleConfig,
@@ -47,6 +52,7 @@ import type {
 import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
+import type { CanonicalAgentEvent } from '../routes/public.ts';
 import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
@@ -54,12 +60,17 @@ const unique = (values: readonly string[]): string[] => [...new Set(values)];
 const sortedUnique = (values: readonly string[]): string[] =>
   unique(values).sort((left, right) => left.localeCompare(right));
 
-const hookEvents: readonly CanonicalHookEvent[] = [
-  'sessionStart',
-  'beforeTool',
-  'afterTool',
-  'stop',
-];
+const hookEvents: readonly CanonicalHookEvent[] = canonicalHookEvents;
+
+const hookEventForRoute: Readonly<Record<CanonicalAgentEvent, CanonicalHookEvent>> = Object.freeze({
+  'agent/start': 'agentStart',
+  'agent/stop': 'agentStop',
+  'session/start': 'sessionStart',
+  'stop': 'stop',
+  'tool/after': 'afterTool',
+  'tool/before': 'beforeTool',
+  'workspace/open': 'workspaceOpen',
+});
 
 const knownHookTools = new Set<CanonicalHookTool>([
   'shell',
@@ -396,28 +407,61 @@ const normalizeHook = (
 
 const normalizeHooks = (
   loaded: LoadedConfig,
+  discovered: DiscoveredProject,
   targetNames: readonly string[],
   registry: NormalizationTargetRegistry,
   payloads: readonly NormalizedPayload[],
 ): readonly NormalizedHook[] => {
   const hooks: NormalizedHook[] = [];
   const config = loaded.config.hooks;
-  if (config === undefined) return hooks;
   const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
 
-  for (const event of hookEvents) {
-    const input = config[event];
-    if (input === undefined) continue;
-    for (const entry of asEntries(input)) {
-      const inherited = typeof entry === 'string' || entry.targets === undefined;
-      const hookTargets = inherited
-        ? targetNames.filter((target) => registry.supports(target, 'hooks'))
-        : targetNames;
-      hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, hookTargets, provenance, registry, payloads));
+  if (config !== undefined) {
+    for (const event of hookEvents) {
+      const input = config[event];
+      if (input === undefined) continue;
+      for (const entry of asEntries(input)) {
+        const inherited = typeof entry === 'string' || entry.targets === undefined;
+        const hookTargets = inherited
+          ? targetNames.filter((target) => registry.supports(target, 'hooks'))
+          : targetNames;
+        hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, hookTargets, provenance, registry, payloads));
+      }
     }
   }
 
-  return hooks;
+  for (const route of discovered.routeGraph?.events ?? []) {
+    const event = route.event!;
+    const selected = route.config['targets'];
+    const targets = sortedUnique(
+      (Array.isArray(selected) ? selected.filter((target): target is string => typeof target === 'string') : targetNames)
+        .filter((target) => targetNames.includes(target)),
+    );
+    const tools = (Array.isArray(route.config['tools']) ? route.config['tools'] : [])
+      .filter((tool): tool is CanonicalHookTool =>
+        typeof tool === 'string' && knownHookTools.has(tool as CanonicalHookTool))
+      .sort((left, right) => left.localeCompare(right));
+    const timeoutMs = route.config['timeoutMs'];
+    const timeout = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.ceil(timeoutMs / 1_000)
+      : undefined;
+    const fallback = route.config['fallback'] === 'standalone' ? 'standalone' as const : 'none' as const;
+    const runtime = route.config['runtime'] === 'standalone' ? 'standalone' as const : 'shared' as const;
+    const eventName = event.replace('/', '-');
+    hooks.push({
+      event: hookEventForRoute[event],
+      eventRoute: Object.freeze({ event, fallback, runtime }),
+      id: `hook:event-route:${eventName}`,
+      name: `event-route-${eventName}`,
+      provenance: { kind: 'conventional', sourcePath: route.source },
+      source: route.source,
+      targets,
+      ...(timeout === undefined ? {} : { timeout }),
+      tools,
+    });
+  }
+
+  return hooks.sort((left, right) => left.id.localeCompare(right.id));
 };
 
 const normalizeNativeHooks = async (
@@ -896,7 +940,7 @@ export const normalizeProject = async (
     },
     mcpApps: normalizeMcpApps(loaded, discovered, mcpServers),
     mcpServers,
-    hooks: normalizeHooks(loaded, targetNames, registry, payloads),
+    hooks: normalizeHooks(loaded, discovered, targetNames, registry, payloads),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
     ...(packageBuild === undefined ? {} : { packageBuild }),
     ...(payloads.length === 0 ? {} : { payloads }),

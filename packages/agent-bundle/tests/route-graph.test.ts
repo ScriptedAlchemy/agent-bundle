@@ -604,11 +604,33 @@ it('fails unavailable event routes before packaging unless they are target-restr
     'agent-bundle.config.ts': configSource,
     'package.json': '{"type":"module"}\n',
     'src/events/workspace/open.tsx': [
-      "export const config = { targets: ['cursor'] };",
+      "export const config = { runtime: 'standalone', targets: ['cursor'] };",
       eventSource,
     ].join('\n'),
   });
 
   const restricted = await inspect({ root: restrictedRoot });
   expect(restricted.state).toBe('ready');
+});
+
+it('requires an explicit standalone mode when no generated runtime can host an event route', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  plugin: { name: 'event-runtime-fixture', version: '1.0.0' },",
+      "  targets: ['cursor'],",
+      '};',
+      '',
+    ].join('\n'),
+    'package.json': '{"type":"module"}\n',
+    'src/events/workspace/open.tsx': 'export default async function WorkspaceOpen() { return undefined; }\n',
+  });
+
+  const inspected = await inspect({ root });
+  expect(inspected.state).toBe('invalid');
+  expect(inspected.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'AB4816',
+    target: 'cursor',
+  }));
 });

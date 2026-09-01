@@ -49,7 +49,10 @@ const epochFor = (
 
 interface PublishedHookEpoch {
   readonly epochStore: EpochStore;
-  readonly hooks: Readonly<Record<CanonicalHookEvent, Readonly<{ readonly id: string; readonly name: string }>>>;
+  readonly hooks: Readonly<Record<
+    Extract<CanonicalHookEvent, 'afterTool' | 'beforeTool' | 'sessionStart' | 'stop'>,
+    Readonly<{ readonly id: string; readonly name: string }>
+  >>;
 }
 
 type IsExact<Left, Right> =
