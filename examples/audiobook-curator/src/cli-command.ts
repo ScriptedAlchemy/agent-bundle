@@ -17,7 +17,14 @@ interface CliProjection<Input, Result> {
   readonly usage: string;
 }
 
-interface CliCommandDefinition<
+/**
+ * Exported because the operation factories in `src/operations/` export
+ * objects of `defineCliCommand(...)` results: declaration emit for the
+ * package build must be able to name this type from those modules
+ * (TS4023 otherwise fails `agent-bundle build`'s d.ts generation, even
+ * though `tsc --noEmit` passes).
+ */
+export interface CliCommandDefinition<
   InputSchema extends Schema<unknown>,
   ResultSchema extends Schema<unknown>,
   ParsedInput,
