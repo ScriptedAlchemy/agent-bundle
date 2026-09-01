@@ -253,6 +253,8 @@ export class ArtifactInspectionService {
       configDigest: project.configDigest,
       configPath: project.configPath,
       modelDigest: project.modelDigest,
+      ...(project.packageName === undefined ? {} : { packageName: project.packageName }),
+      ...(project.packageVersion === undefined ? {} : { packageVersion: project.packageVersion }),
       revision: project.revision,
       sourceInputs: Object.freeze(inputs as ArtifactInspectionSourceInput[]),
     });
