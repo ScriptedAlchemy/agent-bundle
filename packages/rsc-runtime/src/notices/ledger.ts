@@ -271,6 +271,7 @@ export const createAgentNoticeLedger = (
       let deliveries: readonly AgentNoticeDelivery[] = Object.freeze([]);
       if (request.invocation.kind === 'event') {
         const before = yield* storeEffect(() => store.read({ signal: request.signal }));
+        let admitted = before.state;
         const admissionTime = Date.parse(request.invocation.startedAt);
         const expiring = before.state.notices.filter((notice) =>
           notice.state === 'pending'
@@ -278,6 +279,7 @@ export const createAgentNoticeLedger = (
           && Date.parse(notice.expiresAt) <= admissionTime);
         const candidates = before.state.notices.filter((notice) =>
           notice.state === 'pending'
+          && Date.parse(notice.createdAt) <= admissionTime
           && (notice.expiresAt === undefined
             || Date.parse(notice.expiresAt) > admissionTime)
           && recipientMatchesPrincipal(notice.recipient, request.principal));
@@ -307,10 +309,12 @@ export const createAgentNoticeLedger = (
               signal: request.signal,
             },
           ));
-          deliveries = Object.freeze(committed.state.notices
-            .map((notice) => deliveryFor(notice, request.invocation.id))
-            .filter((delivery): delivery is AgentNoticeDelivery => delivery !== undefined));
+          admitted = committed.state;
         }
+        deliveries = Object.freeze(admitted.notices
+          .filter((notice) => recipientMatchesPrincipal(notice.recipient, request.principal))
+          .map((notice) => deliveryFor(notice, request.invocation.id))
+          .filter((delivery): delivery is AgentNoticeDelivery => delivery !== undefined));
       }
 
       let closed = false;
@@ -334,7 +338,7 @@ export const createAgentNoticeLedger = (
         },
         handle,
       });
-    }));
+    }), { signal: request.signal });
   },
 
   async read(): Promise<AgentNoticeLedgerSnapshot> {
