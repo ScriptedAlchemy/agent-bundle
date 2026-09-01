@@ -2,6 +2,12 @@ packages:
   - packages/*
   - packages/workbench/src/inspector
   - examples/*
+# The published agent-bundle manifest must never carry a `workspace:` range
+# (npm refuses to install such a tarball, and the release audit forbids it),
+# so its optional @agent-bundle/runtime peer is satisfied from the workspace
+# here instead of through a devDependency in the shipped package.json.
+overrides:
+  '@agent-bundle/runtime': workspace:*
 allowBuilds:
   '@google/genai': false
   msgpackr-extract: false
