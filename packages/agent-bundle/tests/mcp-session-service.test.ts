@@ -864,6 +864,66 @@ it('rejects an already-aborted tool call without invoking the MCP SDK', async ()
   }
 }, 30_000);
 
+it('rejects a tool call aborted while its epoch availability probe is pending', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-probe-abort-'));
+  const pluginData = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-probe-abort-data-'));
+  try {
+    let allowProbe: (() => void) | undefined;
+    const probeBlocked = new Promise<void>((resolvePromise) => {
+      allowProbe = resolvePromise;
+    });
+    let probeStarted: (() => void) | undefined;
+    const probeStartedPromise = new Promise<void>((resolvePromise) => {
+      probeStarted = resolvePromise;
+    });
+    let calls = 0;
+    const session = new McpSession({
+      assertEpochAvailable: async () => {
+        probeStarted?.();
+        await probeBlocked;
+      },
+      binding: { epochId: 'epoch-probe-abort', serverName: 'fixture', target: 'portable' },
+      createClient: () => ({
+        callTool: async () => {
+          calls += 1;
+          return { content: [] };
+        },
+        close: async () => undefined,
+        connect: async () => undefined,
+        ...mcpCatalogStub(),
+      }),
+      createStdioTransport: () => stdioTransportStub() as never,
+      createStreamableHttpTransport: () => ({}) as never,
+      epochReference: { close: async () => undefined, root } as never,
+      id: 'session-probe-abort',
+      onClose: () => undefined,
+      pluginData,
+      resolved: {
+        runtime: runtimeFor('portable'),
+        server: { args: [], command: 'node', kind: 'stdio' },
+        target: 'portable',
+        targetRoot: root,
+      },
+      workspaceRoot: root,
+    });
+    await session.initialize();
+    const aborted = new AbortController();
+    const reason = new Error('cancelled during epoch probe');
+
+    const pending = session.callTool({ arguments: {}, name: 'fixture', signal: aborted.signal });
+    await probeStartedPromise;
+    aborted.abort(reason);
+    allowProbe?.();
+
+    await expect(pending).rejects.toBe(reason);
+    expect(calls).toBe(0);
+    await session.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+    await rm(pluginData, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('bounds frame and event retention with an explicit replay overflow cursor', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-retention-'));
   try {
