@@ -19,7 +19,10 @@ const provenanceOf = (subject: DocumentSubject): RenderedRouteProvenance | undef
 const nodes = (node: AgentDocumentNode): readonly AgentDocumentNode[] =>
   node.kind === 'result' ? [node, ...node.children.flatMap((child) => nodes(child))] : [node];
 
-const textOf = (document: AgentDocument, kind: 'markdown' | 'text'): readonly string[] =>
+const textOf = (
+  document: AgentDocument,
+  kind: 'context' | 'markdown' | 'text',
+): readonly string[] =>
   nodes(document.root).flatMap((node) => (node.kind === kind ? [node.text] : []));
 
 /**
@@ -29,6 +32,8 @@ const textOf = (document: AgentDocument, kind: 'markdown' | 'text'): readonly st
  * that provenance available.
  */
 export interface DocumentAssertions {
+  /** Asserts a context node contains `text` — the additional context an event route returns to its host. */
+  readonly toContainContext: (text: string) => DocumentAssertions;
   /** Asserts a Markdown node contains `text`. */
   readonly toContainMarkdown: (text: string) => DocumentAssertions;
   /** Asserts a text node contains `text`. */
@@ -56,6 +61,16 @@ export const expectDocument = (subject: DocumentSubject): DocumentAssertions => 
     });
   };
   const assertions: DocumentAssertions = {
+    toContainContext(text) {
+      const found = textOf(document, 'context');
+      if (!found.some((value) => value.includes(text))) {
+        fail('The Agent Document contains no context node with the expected text.', [
+          `expected:     context containing ${JSON.stringify(text)}`,
+          `received:     ${found.length === 0 ? 'no context nodes' : captured(found)}`,
+        ]);
+      }
+      return assertions;
+    },
     toContainMarkdown(text) {
       const found = textOf(document, 'markdown');
       if (!found.some((value) => value.includes(text))) {

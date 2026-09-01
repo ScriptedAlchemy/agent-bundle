@@ -1,6 +1,7 @@
 // Rslib re-exports its own Rsbuild/Rspack stack (values and types alike);
 // installing @rspack/core separately risks version conflicts
 // (https://rslib.rs/api/javascript-api/core).
+import { pluginReact } from '@rsbuild/plugin-react';
 import { createRslib, mergeRslibConfig, rspack, type LibConfig, type Rspack } from '@rslib/core';
 import { init, parse } from 'es-module-lexer';
 import { readFile, realpath } from 'node:fs/promises';
@@ -516,6 +517,12 @@ export const composeEntryLibConfig = (
     performance: {
       buildCache: false,
     },
+    // Routes are authored as TSX, and the bare Rslib transform lowers JSX to
+    // the classic `React.createElement` factory, which no generated entry has
+    // in scope. The React plugin selects the automatic runtime, so emitted
+    // modules import `react/jsx-runtime` themselves — under the react-server
+    // condition for worker entries, which is what RSC rendering needs.
+    plugins: [pluginReact({ fastRefresh: false })],
     // Rsbuild 2.x deprecated performance.chunkSplit 'all-in-one'; the
     // documented migration is top-level splitChunks: false, which also
     // guards against the node-target splitting default added in v2.2.

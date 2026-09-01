@@ -100,7 +100,9 @@ describe('renderRoute through the real renderer', () => {
       props: { input: { uri: 'harness://notes' }, operationId: 'resource:harness/notes' },
     });
     expectDocument(rendered).toContainMarkdown('# Notes for harness://notes');
-    expect(rendered.result).toEqual({ uri: 'harness://notes' });
+    expect(rendered.result).toEqual({
+      contents: [{ mimeType: 'text/markdown', text: '# Notes for harness://notes', uri: 'harness://notes' }],
+    });
   });
 
   it("validates the document value with the route's own resultSchema", async () => {
@@ -113,18 +115,30 @@ describe('renderRoute through the real renderer', () => {
     });
   });
 
-  it('renders an event route with the event invocation the runtime contract defines', async () => {
-    const rendered = await renderRoute('event:tool/after', { input: { path: 'src/index.ts' } });
+  it('renders an event route with the canonical props the runtime contract defines', async () => {
+    const rendered = await renderRoute('event:tool/after', {
+      input: {
+        canonical: {
+          event: 'tool/after',
+          idempotencyKey: 'route-unit',
+          observedAt: '2026-09-01T00:00:00.000Z',
+          provenance: {
+            host: 'claude',
+            hostContractRevision: 'route-unit',
+            nativeEvent: 'PostToolUse',
+            source: 'native',
+          },
+          sequence: 1,
+        },
+        native: { tool_name: 'Write' },
+      },
+    });
 
     expect(rendered.invocation.kind).toBe('event');
     expectDocument(rendered)
       .toHaveStatus('success')
-      .toContainMarkdown('Observed event:tool/after.')
-      .toHaveValue({
-        event: 'event:tool/after',
-        invocationKind: 'event',
-        payload: { path: 'src/index.ts' },
-      });
+      .toContainMarkdown('Observed tool/after from claude.')
+      .toHaveValue({ event: 'tool/after', invocationKind: 'event', tool: 'Write' });
   });
 
   it('renders a route module handed in directly, without the compiled manifest', async () => {

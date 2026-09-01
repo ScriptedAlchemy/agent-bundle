@@ -16,23 +16,35 @@ import type { CompiledAgentRoute, CompiledCliCommand } from '../routes/types.ts'
 export const mcpEntryRuntimeSpecifier = 'agent-bundle/mcp-entry';
 
 /**
- * The on-disk location of the `agent-bundle/mcp-entry` runtime module, used
- * as a bundler alias so generated entries inline the lifecycle instead of
- * leaving an `agent-bundle` import in the emitted artifact (artifacts must
- * stay self-contained). From the bundled package this module's URL is
- * `dist/<bundle>.js` with `mcp-entry.js` as a sibling; from checked-out
- * sources it is `src/build/entry-shell.ts` with `../mcp-entry.ts`.
+ * The shared server runtime a generated route entry delegates to: warm Flight
+ * host, route registration, projection. Aliased rather than imported so the
+ * emitted artifact stays self-contained, and shared rather than templated so
+ * `agent-bundle/test`'s in-memory projection level exercises this exact code.
  */
-export const mcpEntryRuntimePath = (): string => {
+export const mcpServerRuntimeSpecifier = 'agent-bundle/mcp-server-runtime';
+
+/**
+ * The on-disk location of one runtime module used as a bundler alias, so
+ * generated entries inline it instead of leaving an `agent-bundle` import in
+ * the emitted artifact (artifacts must stay self-contained). From the bundled
+ * package this module's URL is `dist/<bundle>.js` with `<name>.js` as a
+ * sibling; from checked-out sources it is `src/build/entry-shell.ts` with
+ * `../<name>.ts`.
+ */
+const runtimeModulePath = (name: string): string => {
   for (const candidate of [
-    new URL('./mcp-entry.js', import.meta.url),
-    new URL('../mcp-entry.ts', import.meta.url),
+    new URL(`./${name}.js`, import.meta.url),
+    new URL(`../${name}.ts`, import.meta.url),
   ]) {
     const path = fileURLToPath(candidate);
     if (existsSync(path)) return path;
   }
-  throw new Error('Unable to locate the agent-bundle/mcp-entry runtime module for generated stdio entries.');
+  throw new Error(`Unable to locate the agent-bundle/${name} runtime module for generated entries.`);
 };
+
+export const mcpEntryRuntimePath = (): string => runtimeModulePath('mcp-entry');
+
+export const mcpServerRuntimePath = (): string => runtimeModulePath('mcp-server-runtime');
 
 /**
  * The generated stdio MCP entry body for a factory-exporting server module:
@@ -383,13 +395,6 @@ export const generatedRouteArtifactEpoch = (plugin: {
 const routeProtocolName = (route: CompiledAgentRoute): string =>
   route.id.slice(route.id.lastIndexOf('/') + 1);
 
-const selectedConfig = (
-  config: Readonly<Record<string, unknown>>,
-  keys: readonly string[],
-): Readonly<Record<string, unknown>> => Object.fromEntries(
-  keys.filter((key) => config[key] !== undefined).map((key) => [key, config[key]]),
-);
-
 const executableMcpRoutes = (routes: readonly CompiledAgentRoute[]): readonly CompiledAgentRoute[] =>
   routes.filter((route) => route.kind !== 'app');
 
@@ -478,51 +483,27 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
   ].join('\n');
 };
 
-const routeRegistrations = (routes: readonly CompiledAgentRoute[]): readonly string[] => {
-  const registrations: string[] = [];
+/**
+ * Build-time validation of the MCP route kinds a generated server registers.
+ * Registration itself is data-driven at runtime (`registerGeneratedRoutes` in
+ * `agent-bundle/mcp-server-runtime`), but a resource without a static
+ * `config.uri` and a non-MCP route inside an MCP server are compile-time
+ * defects: they must fail the build, not the first request.
+ */
+const assertRegistrableMcpRoutes = (routes: readonly CompiledAgentRoute[]): void => {
   for (const route of routes) {
-    const access = `routes[${JSON.stringify(route.id)}]`;
     switch (route.kind) {
-      case 'tool': {
-        const config = selectedConfig(route.config, ['_meta', 'annotations', 'description', 'icons', 'title']);
-        registrations.push([
-          `  server.registerTool(${JSON.stringify(routeProtocolName(route))}, {`,
-          `    ...${stableJson(config)},`,
-          `    inputSchema: ${access}.module.inputSchema,`,
-          `    outputSchema: ${access}.module.resultSchema,`,
-          `  }, async (input, context) => {`,
-          `    const rendered = await renderRoute(dispatcher, ${access}, input, context);`,
-          '    return attachMcpStructuredContent(rendered.toolResult, rendered.result);',
-          '  });',
-        ].join('\n'));
+      case 'tool':
+      case 'prompt':
+      case 'app':
         break;
-      }
       case 'resource': {
         const uri = route.config['uri'];
         if (typeof uri !== 'string' || uri.trim() === '') {
           throw new Error(`Generated resource route ${JSON.stringify(route.id)} requires a non-empty static config.uri.`);
         }
-        const config = selectedConfig(route.config, ['_meta', 'description', 'icons', 'mimeType', 'title']);
-        registrations.push([
-          `  server.registerResource(${JSON.stringify(routeProtocolName(route))}, ${JSON.stringify(uri)}, ${stableJson(config)}, async (uri, context) => {`,
-          `    const rendered = await renderRoute(dispatcher, ${access}, { uri: uri.href }, context);`,
-          '    return rendered.result;',
-          '  });',
-        ].join('\n'));
         break;
       }
-      case 'prompt': {
-        const config = selectedConfig(route.config, ['_meta', 'description', 'icons', 'title']);
-        registrations.push([
-          `  server.registerPrompt(${JSON.stringify(routeProtocolName(route))}, {`,
-          `    ...${stableJson(config)},`,
-          `    argsSchema: ${access}.module.inputSchema,`,
-          `  }, async (input, context) => (await renderRoute(dispatcher, ${access}, input, context)).result);`,
-        ].join('\n'));
-        break;
-      }
-      case 'app':
-        break;
       case 'event-route':
       case 'cli':
       case 'script':
@@ -533,23 +514,26 @@ const routeRegistrations = (routes: readonly CompiledAgentRoute[]): readonly str
       }
     }
   }
-  return registrations;
 };
 
 /**
- * The generated MCP entry owns the stream projector and one warm Flight
- * worker. The worker is split only to satisfy React's react-server condition;
- * it is reused for every request until the MCP server closes.
+ * The generated MCP entry: the compiled route table, the compiled App
+ * registry, and one warm Flight worker handed to the shared server runtime.
+ * The worker is split out only to satisfy React's react-server condition; it
+ * is reused for every request until the MCP server closes.
+ *
+ * Everything below the route table lives in `agent-bundle/mcp-server-runtime`,
+ * so the in-memory projection proof level registers, renders, and projects
+ * through the same code this artifact runs.
  */
 export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOptions): string => {
   const routes = executableMcpRoutes(options.routes);
+  assertRegistrableMcpRoutes(routes);
   const artifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const hasEvents = (options.eventRoutes?.length ?? 0) > 0;
   return [
     ...(hasEvents ? ["import { dirname, resolve } from 'node:path';"] : []),
-    "import { Worker } from 'node:worker_threads';",
-    "import { McpServer } from '@modelcontextprotocol/server';",
-    "import { AgentRuntimeError, agent, attachMcpStructuredContent, available, createAgentRenderDispatcher, createWarmFlightHost, projectMcpRenderStream, runAgentRequest } from '@agent-bundle/runtime';",
+    `import { createFlightWorkerHost, createGeneratedRouteMcpServer } from ${JSON.stringify(mcpServerRuntimeSpecifier)};`,
     ...(hasEvents
       ? [
           `import { createEventRuntimeServer } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
@@ -564,123 +548,31 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     ...routeRecords(routes),
     '});',
     '',
-    'const workerError = (message) => {',
-    "  if (message.code === 'artifact-epoch-mismatch') return new AgentRuntimeError('artifact-epoch-mismatch', message.message, { expectedEpoch: ARTIFACT_EPOCH, receivedEpoch: message.receivedEpoch });",
-    "  if (message.code === 'runtime-unavailable') return new AgentRuntimeError('runtime-unavailable', message.message);",
-    "  if (message.code === 'runtime-restarted') return new AgentRuntimeError('runtime-restarted', message.message);",
-    '  return new Error(message.message);',
-    '};',
-    '',
-    'const createWorkerHost = () => {',
-    `  const worker = new Worker(new URL(${JSON.stringify(`./${options.workerFile}`)}, import.meta.url), { stderr: true, stdout: true });`,
-    '  worker.stdout?.on(\'data\', (chunk) => process.stderr.write(chunk));',
-    '  worker.stderr?.on(\'data\', (chunk) => process.stderr.write(chunk));',
-    '  const pending = new Map();',
-    '  let sequence = 0;',
-    '  let exited = false;',
-    '  const failPending = (error) => { for (const request of pending.values()) request.reject(error); pending.clear(); };',
-    '  worker.on(\'error\', (error) => { exited = true; failPending(error); });',
-    '  worker.on(\'exit\', (code) => {',
-    '    exited = true;',
-    "    failPending(new AgentRuntimeError(code === 0 ? 'runtime-unavailable' : 'runtime-restarted', code === 0 ? 'The MCP render runtime is unavailable' : `The MCP render runtime restarted; worker exited with code ${String(code)}.`));",
-    '  });',
-    '  worker.on(\'message\', (message) => {',
-    '    const request = pending.get(message.id);',
-    '    if (request === undefined) return;',
-    "    if (message.type === 'progress') { void request.progress?.report(message.update); return; }",
-    '    pending.delete(message.id);',
-    '    request.signal.removeEventListener(\'abort\', request.abort);',
-    "    if (message.type === 'error') { request.reject(workerError(message)); return; }",
-    '    request.resolve(new ReadableStream({ start(controller) { controller.enqueue(message.bytes); controller.close(); } }));',
-    '  });',
-    '  const host = Object.freeze({',
-    '    close: async () => { await worker.terminate(); },',
-    '    execute: async ({ artifactEpoch, invocation, progress, signal }) => {',
-    "      if (exited) throw new AgentRuntimeError('runtime-unavailable', 'The MCP render runtime is unavailable');",
-    '      const context = await agent();',
-    '      const id = ++sequence;',
-    '      return new Promise((resolve, reject) => {',
-    "        const abort = () => { worker.postMessage({ id, type: 'cancel' }); pending.delete(id); reject(new DOMException('Agent render was aborted', 'AbortError')); };",
-    '        pending.set(id, { abort, progress, reject, resolve, signal });',
-    "        signal.addEventListener('abort', abort, { once: true });",
-    '        if (signal.aborted) { abort(); return; }',
-    '        worker.postMessage({ actor: context.actor, artifactEpoch: artifactEpoch ?? ARTIFACT_EPOCH, id, invocation, session: context.session, type: \'render\' });',
-    '      });',
-    '    },',
-    '  });',
-    '  return createWarmFlightHost({ artifactEpoch: ARTIFACT_EPOCH, close: host.close, host });',
-    '};',
-    '',
-    'const requestIdentity = (context) => ({',
-    '  ...(context.http?.authInfo?.clientId === undefined ? {} : { actor: available({ id: context.http.authInfo.clientId }, \'native\') }),',
-    "  ...(typeof context.sessionId === 'string' && context.sessionId.trim() !== '' ? { session: available({ sessionId: context.sessionId }, 'native') } : {}),",
-    '});',
-    '',
-    'const mcpProjectorOptions = (context) => {',
-    '  const progressToken = context.mcpReq._meta?.progressToken;',
-    '  return {',
-    '    signal: context.mcpReq.signal,',
-    '    ...(progressToken === undefined ? {} : {',
-    '      progressToken,',
-    "      sendProgress: (params) => context.mcpReq.notify({ method: 'notifications/progress', params }),",
-    '    }),',
-    '  };',
-    '};',
-    '',
-    'const renderRoute = async (dispatcher, route, input, context) => runAgentRequest({',
-    '  ...requestIdentity(context),',
-    "  invocation: { artifactEpoch: ARTIFACT_EPOCH, kind: 'tool', operationId: route.id, surface: route.name },",
-    '  signal: context.mcpReq.signal,',
-    '}, async () => {',
-    '  const projected = await projectMcpRenderStream(dispatcher.stream({',
-    '    artifactEpoch: ARTIFACT_EPOCH,',
-    "    invocation: { kind: 'tool', props: { input, operationId: route.id } },",
-    '    signal: context.mcpReq.signal,',
-    '  }), mcpProjectorOptions(context));',
-    '  return { document: projected.document, result: route.module.resultSchema.parse(projected.document.value), toolResult: projected.result };',
-    '});',
-    '',
-    'const createGeneratedRouteServer = async () => {',
-    `  const server = new McpServer(${stableJson(options.plugin)});`,
-    '  const workerHost = createWorkerHost();',
-    '  const dispatcher = createAgentRenderDispatcher(workerHost);',
     ...(hasEvents
       ? [
-          `  const artifactEpoch = ${JSON.stringify(options.artifactEpoch ?? 'unknown')};`,
-          `  const target = ${JSON.stringify(options.target ?? 'unknown')};`,
-          "  const endpointId = `${artifactEpoch}:${target}:${dirname(dirname(resolve(process.argv[1])))}`;",
-          '  const eventRuntime = await createEventRuntimeServer({',
-          '    artifactEpoch,',
-          '    endpointId,',
-          '    handle: async (request) => {',
-          "      const nativeEvent = typeof request.native.hook_event_name === 'string' ? request.native.hook_event_name : request.event;",
-          '      const controller = new AbortController();',
-          '      const props = createCanonicalEventProps(request.event, request.native, target, nativeEvent, request.hostContractRevision, controller.signal);',
-          '      const sessionId = typeof request.native.session_id === \'string\' ? request.native.session_id : typeof request.native.conversation_id === \'string\' ? request.native.conversation_id : undefined;',
-          '      return runAgentRequest({',
-          "        host: available({ name: target }, 'native'),",
-          "        invocation: { artifactEpoch, hostContractRevision: request.hostContractRevision, kind: 'event', operationId: `event:${request.event}`, surface: request.event },",
-          "        ...(sessionId === undefined ? {} : { session: available({ sessionId }, 'native') }),",
-          '        signal: controller.signal,',
-          "        ...(typeof request.native.cwd === 'string' ? { workspace: available({ root: request.native.cwd }, 'native') } : {}),",
-          '      }, async () => {',
-          "        const document = await dispatcher.dispatch({ invocation: { kind: 'event', props: { event: request.event, payload: { canonical: props.canonical, native: props.native } } }, signal: controller.signal });",
-          '        return projectEventDocument(document, request.event, target, nativeEvent);',
-          '      });',
-          '    },',
-          '  });',
+          // The endpoint identity is artifact-location dependent, so it stays
+          // in the artifact rather than the shared runtime.
+          `const EVENT_ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch ?? 'unknown')};`,
+          `const EVENT_TARGET = ${JSON.stringify(options.target ?? 'unknown')};`,
+          'const events = Object.freeze({',
+          '  artifactEpoch: EVENT_ARTIFACT_EPOCH,',
+          '  createCanonicalEventProps,',
+          '  createEventRuntimeServer,',
+          '  endpointId: `${EVENT_ARTIFACT_EPOCH}:${EVENT_TARGET}:${dirname(dirname(resolve(process.argv[1])))}`,',
+          '  projectEventDocument,',
+          '  target: EVENT_TARGET,',
+          '});',
+          '',
         ]
       : []),
-    ...routeRegistrations(routes),
-    '  for (const app of mcpApps) {',
-    '    server.registerResource(app.name, app.resourceUri, { ...(app._meta === undefined ? {} : { _meta: app._meta }), mimeType: app.mimeType }, async (uri) => ({ contents: [{ mimeType: app.mimeType, text: app.html, uri: uri.href }] }));',
-    '  }',
-    '  const close = server.close.bind(server);',
-    `  server.close = async () => { ${hasEvents ? 'await eventRuntime.close(); ' : ''}await workerHost.close(); await close(); };`,
-    '  return server;',
-    '};',
-    '',
-    'export default createGeneratedRouteServer;',
+    'export default async () => createGeneratedRouteMcpServer({',
+    '  apps: mcpApps,',
+    '  artifactEpoch: ARTIFACT_EPOCH,',
+    ...(hasEvents ? ['  events,'] : []),
+    `  host: createFlightWorkerHost(new URL(${JSON.stringify(`./${options.workerFile}`)}, import.meta.url), ARTIFACT_EPOCH),`,
+    `  plugin: ${stableJson(options.plugin)},`,
+    '  routes,',
+    '});',
     '',
   ].join('\n');
 };

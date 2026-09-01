@@ -5,9 +5,10 @@
   "scripts": {
     "build": "rsbuild build --mode production && agent-bundle build --json --output dist/plugins",
     "test": "rstest --config rstest.config.ts",
+    "test:routes": "rstest --config rstest.route-unit.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "validate": "agent-bundle validate",
-    "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test",
+    "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test && pnpm test:routes",
     "eval:hosts": "node scripts/eval-hosts.mjs",
     "capture:widget": "node scripts/capture-widget.mjs"
   },

@@ -9,6 +9,8 @@ import {
   generatedStdioMcpEntrySource,
   mcpEntryRuntimePath,
   mcpEntryRuntimeSpecifier,
+  mcpServerRuntimePath,
+  mcpServerRuntimeSpecifier,
 } from './entry-shell.ts';
 import { planCompiledMcpEntries } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
@@ -175,7 +177,10 @@ const mcpEntryEntries = async (
       entry: {
         ...(wrapped
           ? {
-            aliases: { [mcpEntryRuntimeSpecifier]: mcpEntryRuntimePath() },
+            aliases: {
+              [mcpEntryRuntimeSpecifier]: mcpEntryRuntimePath(),
+              ...(routeSource === undefined ? {} : { [mcpServerRuntimeSpecifier]: mcpServerRuntimePath() }),
+            },
             virtualSource: generatedStdioMcpEntrySource({
               entrySource: routeSource === undefined ? entry.source : 'agent-bundle/generated-route-server',
               serverName,

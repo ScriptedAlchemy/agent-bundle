@@ -7,14 +7,21 @@ import type { AgentBundleTestManifest, AgentTestProofLevel, TestableRouteDescrip
  */
 export type RenderableRouteKind = 'cli' | 'event-route' | 'prompt' | 'resource' | 'script' | 'tool';
 
+/** The structural schema surface the harness needs: parsing, not schema introspection. */
+export interface AgentRouteSchema {
+  readonly parse: (value: unknown) => unknown;
+}
+
 /**
  * One route module the harness renders: the public route contract's async
- * default component, plus the `resultSchema` the generated server validates
- * the document value against.
+ * default component, plus the schemas the generated server and the routed CLI
+ * validate through — `inputSchema` on the way in (the CLI dispatch level's
+ * boundary) and `resultSchema` on the document value coming out.
  */
 export interface AgentRouteModule {
   readonly default: (props: never) => unknown;
-  readonly resultSchema?: { readonly parse: (value: unknown) => unknown };
+  readonly inputSchema?: AgentRouteSchema;
+  readonly resultSchema?: AgentRouteSchema;
 }
 
 export type AgentRouteModuleLoader = () => Promise<AgentRouteModule>;
