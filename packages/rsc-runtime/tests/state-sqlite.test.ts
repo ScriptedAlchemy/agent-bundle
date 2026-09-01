@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -76,6 +77,89 @@ const counterDefinition = (
     schema: z.object({ count: z.number().int() }).strict(),
   });
 
+const migratingCounterDefinition = (
+  id = 'state-sqlite-test/migrating-counter',
+): AgentStateDefinition<CounterState, typeof counterEvents> =>
+  defineState({
+    events: counterEvents,
+    id,
+    initial: { count: 0 },
+    lifetime: 'workspace-durable',
+    migrations: {
+      2: (persisted) => ({ count: (persisted as CounterState).count * 10 }),
+    },
+    reduce: (state, event) => ({ count: state.count + event.payload.by }),
+    schema: z.object({ count: z.number().int() }).strict(),
+    version: 2,
+  });
+
+const legacyFileName = (definitionId: string): string =>
+  `${definitionId.replace(/[^a-zA-Z0-9._-]+/gu, '-')}-${Buffer.from(definitionId, 'utf8').toString('hex').slice(0, 12)}.sqlite`;
+
+const currentFileName = (definitionId: string): string =>
+  `${definitionId.replace(/[^a-zA-Z0-9._-]+/gu, '-')}-${createHash('sha256').update(definitionId, 'utf8').digest('hex').slice(0, 16)}.sqlite`;
+
+const createLegacyMigrationDatabase = (file: string, definitionId: string): void => {
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(`
+      CREATE TABLE agent_state_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        definition_id TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        kernel_format INTEGER NOT NULL
+      );
+      CREATE TABLE agent_state_journal (
+        revision INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('event', 'reset', 'migrate')),
+        name TEXT,
+        payload TEXT,
+        state TEXT,
+        to_version INTEGER,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        committed_at TEXT NOT NULL
+      );
+      CREATE TABLE agent_state_head (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        revision INTEGER NOT NULL,
+        state TEXT NOT NULL
+      );
+    `);
+    db.prepare(
+      'INSERT INTO agent_state_meta (id, definition_id, schema_version, kernel_format) VALUES (1, ?, 1, 1)',
+    ).run(definitionId);
+    const insert = db.prepare(
+      'INSERT INTO agent_state_journal (revision, kind, name, payload, state, to_version, idempotency_key, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    insert.run(1, 'event', 'bumped', '{"by":2}', null, null, 'legacy:event', '2026-01-01T00:00:00.000Z');
+    insert.run(2, 'reset', null, null, '{"count":5}', null, 'legacy:reset', '2026-01-01T00:00:01.000Z');
+    insert.run(3, 'event', 'bumped', '{"by":1}', null, null, 'legacy:event-2', '2026-01-01T00:00:02.000Z');
+    db.prepare('INSERT INTO agent_state_head (id, revision, state) VALUES (1, 3, ?)').run('{"count":6}');
+  } finally {
+    db.close();
+  }
+};
+
+const holdUncheckpointedLegacyEvent = (file: string): DatabaseSync => {
+  const keeper = new DatabaseSync(file);
+  keeper.exec('PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; BEGIN DEFERRED');
+  keeper.prepare('SELECT revision FROM agent_state_head WHERE id = 1').get();
+  const writer = new DatabaseSync(file);
+  try {
+    writer.exec('PRAGMA wal_autocheckpoint = 0; BEGIN IMMEDIATE');
+    writer
+      .prepare(
+        'INSERT INTO agent_state_journal (revision, kind, name, payload, state, to_version, idempotency_key, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(4, 'event', 'bumped', '{"by":1}', null, null, 'legacy:event-3', '2026-01-01T00:00:03.000Z');
+    writer.prepare('UPDATE agent_state_head SET revision = 4, state = ? WHERE id = 1').run('{"count":7}');
+    writer.exec('COMMIT');
+  } finally {
+    writer.close();
+  }
+  return keeper;
+};
+
 const otherDefinition = (): AgentStateDefinition<CounterState, typeof counterEvents> =>
   defineState({
     events: counterEvents,
@@ -126,6 +210,71 @@ describe('sqlite driver storage behavior', () => {
       expect((await second.read()).revision).toBe(0);
       await driver.close();
       await expect(first.read()).rejects.toMatchObject({ code: 'store-closed' });
+    }));
+
+  it('adopts the legacy root database and live WAL sidecars without data loss', () =>
+    withRoot(async (root) => {
+      const definition = migratingCounterDefinition();
+      const legacyFile = join(root, legacyFileName(definition.id));
+      const currentFile = join(root, currentFileName(definition.id));
+      createLegacyMigrationDatabase(legacyFile, definition.id);
+      const keeper = holdUncheckpointedLegacyEvent(legacyFile);
+      try {
+        await access(`${legacyFile}-wal`);
+        await access(`${legacyFile}-shm`);
+
+        const driver = createSqliteStateDriver({ root });
+        const store = await driver.open(definition);
+
+        expect(store.location).toBe(currentFile);
+        expect(await store.read()).toEqual({ revision: 5, state: { count: 70 } });
+        await expect(access(legacyFile)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(access(`${legacyFile}-wal`)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(access(`${legacyFile}-shm`)).rejects.toMatchObject({ code: 'ENOENT' });
+        await access(`${currentFile}-wal`);
+        await access(`${currentFile}-shm`);
+        await driver.close();
+      } finally {
+        keeper.exec('ROLLBACK');
+        keeper.close();
+      }
+    }));
+
+  it('backfills legacy NULL event results before migration for idempotent replay', () =>
+    withRoot(async (root) => {
+      const definition = migratingCounterDefinition();
+      const file = join(root, 'legacy-null-event.sqlite');
+      createLegacyMigrationDatabase(file, definition.id);
+
+      const store = await createSqliteStateDriver({ file }).open(definition);
+      await expect(
+        store.dispatch('bumped', { by: 2 }, { idempotencyKey: 'legacy:event' }),
+      ).resolves.toEqual({ replayed: true, revision: 1, state: { count: 20 } });
+      await expect(
+        store.dispatch('bumped', { by: 1 }, { idempotencyKey: 'legacy:event-2' }),
+      ).resolves.toEqual({ replayed: true, revision: 3, state: { count: 60 } });
+      await store.close();
+    }));
+
+  it('preserves legacy reset input while migrating its idempotent result', () =>
+    withRoot(async (root) => {
+      const definition = migratingCounterDefinition();
+      const file = join(root, 'legacy-reset.sqlite');
+      createLegacyMigrationDatabase(file, definition.id);
+
+      const store = await createSqliteStateDriver({ file }).open(definition);
+      await expect(
+        store.reset({ idempotencyKey: 'legacy:reset', seed: { count: 5 } }),
+      ).resolves.toEqual({ replayed: true, revision: 2, state: { count: 50 } });
+      const db = new DatabaseSync(file);
+      try {
+        expect(db.prepare('SELECT state FROM agent_state_journal WHERE revision = 2').get()).toEqual({
+          state: '{"count":5}',
+        });
+      } finally {
+        db.close();
+      }
+      await store.close();
     }));
 
   it('rejects a pending open when the driver closes before initialization resumes', () =>
@@ -203,6 +352,24 @@ describe('sqlite driver storage behavior', () => {
       ).resolves.toMatchObject({ replayed: false, revision: 1, state: { count: 2 } });
 
       await driver.close();
+    }));
+
+  it('surfaces database close failures when the store scope otherwise succeeds', () =>
+    withRoot(async (root) => {
+      const closeFailure = new Error('database close failed');
+      const originalClose = DatabaseSync.prototype.close;
+      let failClose = false;
+      DatabaseSync.prototype.close = function close(this: DatabaseSync): void {
+        originalClose.call(this);
+        if (failClose) throw closeFailure;
+      };
+      try {
+        const store = await createSqliteStateDriver({ root }).open(counterDefinition());
+        failClose = true;
+        await expect(store.close()).rejects.toBe(closeFailure);
+      } finally {
+        DatabaseSync.prototype.close = originalClose;
+      }
     }));
 
   it('fails closed with a typed corrupt error when the file is not a database', () =>
