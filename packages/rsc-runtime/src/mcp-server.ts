@@ -1,6 +1,7 @@
 import { McpServer as ProtocolMcpServer } from '@modelcontextprotocol/server';
 
 import type { RscApplication } from './application.js';
+import { available, runAgentRequest } from './agent-request.js';
 import { lowerMcpResult } from './lower-mcp.js';
 
 export const createRscMcpServer = (
@@ -18,25 +19,39 @@ export const createRscMcpServer = (
     version: application.version,
   });
   for (const operation of application.operations) {
-    if (operation.mcp?.server !== serverName) continue;
-    server.registerTool(operation.mcp.name, {
-      ...(operation.mcp._meta === undefined ? {} : { _meta: operation.mcp._meta }),
+    const mcp = operation.mcp;
+    if (mcp?.server !== serverName) continue;
+    server.registerTool(mcp.name, {
+      ...(mcp._meta === undefined ? {} : { _meta: mcp._meta }),
       // Emit exactly the hints the author declared: an absent hint carries
       // MCP-spec default semantics on the wire, so synthesizing values here
       // would rewrite the author's contract.
       annotations: {
-        ...(operation.mcp.destructive === undefined ? {} : { destructiveHint: operation.mcp.destructive }),
-        ...(operation.mcp.idempotent === undefined ? {} : { idempotentHint: operation.mcp.idempotent }),
-        ...(operation.mcp.openWorld === undefined ? {} : { openWorldHint: operation.mcp.openWorld }),
-        readOnlyHint: operation.mcp.readOnly,
+        ...(mcp.destructive === undefined ? {} : { destructiveHint: mcp.destructive }),
+        ...(mcp.idempotent === undefined ? {} : { idempotentHint: mcp.idempotent }),
+        ...(mcp.openWorld === undefined ? {} : { openWorldHint: mcp.openWorld }),
+        readOnlyHint: mcp.readOnly,
       },
-      description: operation.mcp.description,
+      description: mcp.description,
       inputSchema: operation.inputSchema,
-      ...(operation.mcp.title === undefined ? {} : { title: operation.mcp.title }),
-    }, async (input, context) => {
+      ...(mcp.title === undefined ? {} : { title: mcp.title }),
+    }, async (input, context) => runAgentRequest({
+      ...(context.http?.authInfo?.clientId === undefined
+        ? {}
+        : { actor: available({ id: context.http.authInfo.clientId }, 'native') }),
+      invocation: {
+        kind: 'tool',
+        operationId: operation.id,
+        surface: mcp.name,
+      },
+      ...(typeof context.sessionId === 'string' && context.sessionId.trim() !== ''
+        ? { session: available({ sessionId: context.sessionId }, 'native') }
+        : {}),
+      signal: context.mcpReq.signal,
+    }, async () => {
       const result = await operation.execute(input, { signal: context.mcpReq.signal });
       return lowerMcpResult(operation.render(result));
-    });
+    }));
   }
   return server;
 };

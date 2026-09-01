@@ -157,7 +157,6 @@ examples/
     src/rsc/routes.tsx
     src/rsc/worker.tsx
     src/runtime/contracts.ts
-    src/runtime/request-context.ts
     src/runtime/state-file-core.ts
     src/runtime/state-file-test-support.ts
     src/runtime/state-file.ts
