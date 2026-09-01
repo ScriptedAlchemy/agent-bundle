@@ -1,5 +1,12 @@
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
+
 import { expect, it } from '@rstest/core';
 
+import {
+  DEFAULT_AGENT_RENDER_LIMITS,
+  decodeAgentFlightStream,
+} from '@agent-bundle/runtime';
 import {
   ProjectEventHub,
   startForegroundServer,
@@ -69,7 +76,12 @@ class MemoryRuntime implements DevRuntimeSession {
   readonly mcpRegistry = {} as DevRuntimeSession['mcpRegistry'];
   readonly invocations: unknown[] = [];
   readonly providerSessionId: string = 'provider-a';
+  readonly #flight: Uint8Array;
   #run: DevRuntimeRun = succeededRun;
+
+  constructor(flight: Uint8Array = Uint8Array.from([70, 76, 73, 71, 72, 84])) {
+    this.#flight = flight;
+  }
 
   clientSurface(): undefined { return undefined; }
   async close(): Promise<void> {}
@@ -87,7 +99,7 @@ class MemoryRuntime implements DevRuntimeSession {
   }
   async readRunFlight(runId: string): Promise<DevRuntimeAsset | undefined> {
     return runId === this.#run.id
-      ? { body: new Uint8Array([70, 76, 73, 71, 72, 84]), contentType: 'application/octet-stream' }
+      ? { body: this.#flight, contentType: 'application/octet-stream' }
       : undefined;
   }
   async reconcilePreparedRuntime(): Promise<void> {}
@@ -139,13 +151,17 @@ const coordinator = Object.freeze({
   status: projectStatus,
 });
 
-const start = async (runtime?: DevRuntimeSession) => {
+const start = async (
+  runtime?: DevRuntimeSession,
+  testing?: Parameters<typeof startForegroundServer>[0]['testing'],
+) => {
   const options = {
     coordinator,
     eventHub: new ProjectEventHub(),
     port: 0,
     runtime,
     sessionToken: 'runtime-session-token',
+    testing,
   } as Parameters<typeof startForegroundServer>[0] & { readonly runtime?: DevRuntimeSession };
   return startForegroundServer(options);
 };
@@ -163,6 +179,41 @@ interface RuntimeRouteMatrixCase {
   readonly invalidMethod: string;
   readonly queryPath: string;
 }
+
+const renderReadyFlight = async (): Promise<Uint8Array> => new Promise((resolve, reject) => {
+  const worker = spawn(
+    process.execPath,
+    ['--conditions=react-server', join(import.meta.dirname, '../../rsc-runtime/tests/flight-render-worker.mjs')],
+    { stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+  const chunks: Buffer[] = [];
+  let error = '';
+  worker.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+  worker.stderr.on('data', (chunk: Buffer) => { error += chunk.toString('utf8'); });
+  worker.once('error', reject);
+  worker.once('close', (code) => {
+    if (code !== 0) {
+      reject(new Error(`Flight render worker exited with ${String(code)}: ${error}`));
+      return;
+    }
+    resolve(new Uint8Array(Buffer.concat(chunks)));
+  });
+  worker.stdin.end(`${JSON.stringify({ fixture: 'ready' })}\n`);
+});
+
+const realAgentDocumentRuntime = async () => ({
+  DEFAULT_AGENT_RENDER_LIMITS,
+  decodeAgentFlightStream,
+});
+
+const emptyAgentDocumentRuntime = async () => ({
+  DEFAULT_AGENT_RENDER_LIMITS,
+  decodeAgentFlightStream: () => new ReadableStream({
+    start(controller) {
+      controller.close();
+    },
+  }),
+});
 
 it('keeps public runtime capability summaries empty when the optional runtime is absent', async () => {
   const server = await start();
@@ -220,8 +271,95 @@ it('requires the foreground session capability for every runtime input, trace, a
     expect(flight.headers.get('cache-control')).toBe('no-store');
     expect(flight.headers.get('content-type')).toBe('application/octet-stream');
     await expect(flight.arrayBuffer()).resolves.toEqual(Uint8Array.from([70, 76, 73, 71, 72, 84]).buffer);
+
+    const document = await fetch(`${server.url}/api/runtime/runs/run-a/document`);
+    expect(document.status).toBe(403);
   } finally {
     await server.close();
+  }
+});
+
+it('decodes stored Flight into bounded Agent Document events in the foreground process', async () => {
+  const server = await start(new MemoryRuntime(await renderReadyFlight()), {
+    loadAgentDocumentRuntime: realAgentDocumentRuntime,
+  });
+  try {
+    const response = await fetch(`${server.url}/api/runtime/runs/run-a/document`, { headers: authenticated(server) });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    await expect(response.json()).resolves.toEqual({
+      events: [
+        {
+          document: {
+            root: {
+              children: [{ kind: 'markdown', text: '# Ready' }],
+              kind: 'result',
+            },
+            status: 'success',
+            value: { ready: true },
+            version: 1,
+          },
+          sequence: 0,
+          type: 'shell',
+        },
+        {
+          document: {
+            root: {
+              children: [{ kind: 'markdown', text: '# Ready' }],
+              kind: 'result',
+            },
+            status: 'success',
+            value: { ready: true },
+            version: 1,
+          },
+          sequence: 1,
+          type: 'complete',
+        },
+      ],
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+it('returns honest diagnostics when the Agent runtime is absent or stored Flight cannot decode', async () => {
+  const absent = await start(new MemoryRuntime(), {
+    loadAgentDocumentRuntime: async () => {
+      throw new Error('Cannot find package @agent-bundle/runtime');
+    },
+  });
+  try {
+    const response = await fetch(`${absent.url}/api/runtime/runs/run-a/document`, { headers: authenticated(absent) });
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8207',
+        message: 'Agent Document decoding requires the optional @agent-bundle/runtime peer.',
+      },
+    });
+  } finally {
+    await absent.close();
+  }
+
+  const invalid = await start(new MemoryRuntime(), {
+    loadAgentDocumentRuntime: async () => ({
+      DEFAULT_AGENT_RENDER_LIMITS,
+      decodeAgentFlightStream: () => {
+        throw new Error('invalid Flight');
+      },
+    }),
+  });
+  try {
+    const response = await fetch(`${invalid.url}/api/runtime/runs/run-a/document`, { headers: authenticated(invalid) });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8208',
+        message: 'Stored Flight could not be decoded as an Agent Document.',
+      },
+    });
+  } finally {
+    await invalid.close();
   }
 });
 
@@ -269,7 +407,7 @@ it('rejects malformed, stale, undeclared, and excessive runtime inputs at the fi
 });
 
 it('accepts only the literal method and query matrix for every runtime route', async () => {
-  const server = await start(new MemoryRuntime());
+  const server = await start(new MemoryRuntime(), { loadAgentDocumentRuntime: emptyAgentDocumentRuntime });
   const privateHeaders = authenticated(server);
   const jsonHeaders = { ...privateHeaders, 'content-type': 'application/json' };
   const root = server.url;
@@ -280,6 +418,7 @@ it('accepts only the literal method and query matrix for every runtime route', a
     { acceptedMethod: 'GET', acceptedPath: '/api/runtime/runs?limit=1', headers: privateHeaders, invalidMethod: 'PATCH', queryPath: '/api/runtime/runs?limit=1&limit=2' },
     { acceptedMethod: 'GET', acceptedPath: '/api/runtime/runs/run-a', headers: privateHeaders, invalidMethod: 'POST', queryPath: '/api/runtime/runs/run-a?extra=1&extra=2' },
     { acceptedMethod: 'GET', acceptedPath: '/api/runtime/runs/run-a/flight', headers: privateHeaders, invalidMethod: 'POST', queryPath: '/api/runtime/runs/run-a/flight?extra=1&extra=2' },
+    { acceptedMethod: 'GET', acceptedPath: '/api/runtime/runs/run-a/document', headers: privateHeaders, invalidMethod: 'POST', queryPath: '/api/runtime/runs/run-a/document?extra=1&extra=2' },
     { acceptedMethod: 'POST', acceptedPath: '/api/runtime/runs/run-a/replay', body: JSON.stringify({ mode: 'exact', runId: 'run-a' }), headers: jsonHeaders, invalidMethod: 'GET', queryPath: '/api/runtime/runs/run-a/replay?extra=1&extra=2' },
     { acceptedMethod: 'POST', acceptedPath: '/api/runtime/state/reset', body: JSON.stringify({ stateStoreId: 'state-a' }), headers: jsonHeaders, invalidMethod: 'GET', queryPath: '/api/runtime/state/reset?extra=1&extra=2' },
     { acceptedMethod: 'GET', acceptedPath: '/api/runtime/assets/hook.after-edit/main.js?generation=g1', headers: privateHeaders, invalidMethod: 'HEAD', queryPath: '/api/runtime/assets/hook.after-edit/main.js?generation=g1&generation=g2' },

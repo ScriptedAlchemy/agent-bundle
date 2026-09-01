@@ -147,6 +147,24 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await page.keyboard.press('Enter');
     await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBeGreaterThan(historyBeforeRun);
 
+    // #105 stage 2: the hook run's stored Flight decodes server-side into a
+    // real Agent Document rendered as elements, while the MCP-element status
+    // run keeps an honest decode diagnostic instead of a fabricated document.
+    const documentTab = page.getByRole('tab', { name: 'Document', exact: true });
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(3);
+    await history.nth(1).getByRole('button').first().click();
+    await documentTab.click();
+    await expect(documentTab).toHaveAttribute('aria-selected', 'true');
+    const stage = page.getByLabel('Agent Document', { exact: true });
+    await expect(stage).toContainText('Version 1 · success', { timeout: browserTimeout });
+    await expect(stage.locator('.agent-document-text'))
+      .toContainText('Recorded runtime-playground.txt from claude.', { timeout: browserTimeout });
+    await expect(page.getByLabel('Agent Document event timeline').getByRole('button', { name: /^Complete/u }))
+      .toBeVisible({ timeout: browserTimeout });
+    await history.nth(0).getByRole('button').first().click();
+    await expect(page.getByRole('tabpanel'))
+      .toContainText('Stored Flight could not be decoded as an Agent Document.', { timeout: browserTimeout });
+
     const reset = page.getByRole('button', { name: 'Reset fixture state' });
     const stateVersionBeforeReset = await identity.getAttribute('data-runtime-state-version');
     await reset.click();
@@ -179,7 +197,7 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(page.locator('.runtime-status')).toBeFocused({ timeout: browserTimeout });
 
     const tabs = page.getByRole('tab');
-    await expect(tabs).toHaveCount(6);
+    await expect(tabs).toHaveCount(7);
     const stateTab = page.getByRole('tab', { name: 'State', exact: true });
     await stateTab.click();
     await expect(stateTab).toHaveAttribute('aria-selected', 'true');

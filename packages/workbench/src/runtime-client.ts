@@ -19,6 +19,11 @@ import type {
   RuntimeVector,
 } from '../../agent-bundle/src/contracts/runtime.ts';
 import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp/mcp-route-client.ts';
+import {
+  AgentDocumentClient,
+  AgentDocumentClientError,
+  type AgentRenderEvent,
+} from './runtime/agent-document-client.ts';
 
 export type RuntimeBootstrap =
   | Readonly<{ readonly kind: 'unavailable' }>
@@ -403,6 +408,9 @@ const invalid = (message: string): RuntimeClientError => new RuntimeClientError(
 
 const runtimeError = (error: unknown): RuntimeClientError => {
   if (error instanceof RuntimeClientError) return error;
+  if (error instanceof AgentDocumentClientError) {
+    return new RuntimeClientError({ code: error.code, message: error.message });
+  }
   if (error instanceof ForegroundRouteClientError) {
     return new RuntimeClientError({
       code: error.code,
@@ -416,10 +424,12 @@ const runtimeError = (error: unknown): RuntimeClientError => {
 
 /** Typed immutable browser client for the provider-owned runtime routes. */
 export class RuntimeClient {
+  readonly #agentDocuments: AgentDocumentClient;
   readonly #foreground: ForegroundRouteClient;
   #providerSessionId: string | undefined;
 
   constructor(foreground: ForegroundRouteClient) {
+    this.#agentDocuments = new AgentDocumentClient({ foreground });
     this.#foreground = foreground;
   }
 
@@ -484,6 +494,15 @@ export class RuntimeClient {
         'Runtime Flight response is not valid.',
         'Runtime Flight payload exceeds the allowed size.',
       );
+    } catch (error) {
+      throw runtimeError(error);
+    }
+  }
+
+  async readRunDocument(runId: string, signal?: AbortSignal): Promise<readonly AgentRenderEvent[]> {
+    this.#requireProvider();
+    try {
+      return await this.#agentDocuments.events(runId, signal);
     } catch (error) {
       throw runtimeError(error);
     }

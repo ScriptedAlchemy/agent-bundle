@@ -118,6 +118,7 @@ const clientFor = (overrides: Partial<RuntimePlaygroundClient> = {}): RuntimePla
     bootstrap: async () => bootstrap(),
     createRun: async (request) => { requests.push(request); return run('created'); },
     readRun: async (id) => { requests.push(id); return run(id); },
+    readRunDocument: async (id) => { requests.push(`document:${id}`); return []; },
     readRunFlight: async (id) => { requests.push(`flight:${id}`); return new Blob(['flight'], { type: 'application/octet-stream' }); },
     replayRun: async (request) => { requests.push(request); return run('replayed'); },
     requests,

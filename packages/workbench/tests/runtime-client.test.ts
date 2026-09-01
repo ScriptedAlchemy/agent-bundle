@@ -92,6 +92,7 @@ const deferred = <Value>(): Deferred<Value> => {
 
 const runtimeFetch = (options: {
   readonly asset?: Response;
+  readonly document?: Response;
   readonly flight?: Response;
   readonly runs?: readonly DevRuntimeRun[];
   readonly status?: DevRuntimeStatus | null;
@@ -111,6 +112,19 @@ const runtimeFetch = (options: {
       if (url === '/api/runtime/state/reset' && init?.method === 'POST') return json({ state: { stateStoreId: 'state-a', stateVersion: 2 } });
       if (url === '/api/runtime/runs/run%20a/flight' && init?.method === undefined) {
         return options.flight ?? new Response(new Uint8Array([70, 76]), { headers: { 'content-type': 'application/octet-stream' } });
+      }
+      if (url === '/api/runtime/runs/run%20a/document' && init?.method === undefined) {
+        return options.document ?? json({
+          events: [{
+            document: {
+              root: { children: [{ kind: 'text', text: 'Ready' }], kind: 'result' },
+              status: 'success',
+              version: 1,
+            },
+            sequence: 0,
+            type: 'complete',
+          }],
+        });
       }
       if (url === '/api/runtime/assets/app-weather/assets/weather%20app.js?generation=generation%20a') {
         return options.asset ?? new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'application/javascript' } });
@@ -461,6 +475,17 @@ it('rejects Flight reads before an authoritative provider bootstrap', async () =
   const fixture = runtimeFetch();
   const client = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));
   await expect(client.readRunFlight('run a')).rejects.toMatchObject({ code: 'AB8201' });
+});
+
+it('reads strict Agent Document events through the protected provider authority', async () => {
+  const fixture = runtimeFetch();
+  const client = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));
+  await client.bootstrap();
+
+  await expect(client.readRunDocument('run a')).resolves.toMatchObject([
+    { sequence: 0, type: 'complete' },
+  ]);
+  expect(fixture.requests.at(-1)?.url).toBe('/api/runtime/runs/run%20a/document');
 });
 
 it('preserves own __proto__ keys as immutable prototype-inert JSON snapshots', async () => {

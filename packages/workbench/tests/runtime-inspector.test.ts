@@ -55,7 +55,19 @@ const fixtureSource = (root: string): string => `
     startedAt: '2026-08-15T12:00:00.000Z', status: 'succeeded', surfaceId: 'tool/customer', target: 'portable',
     vector: { providerSessionId: 'provider', runtimeGenerationId: 'generation', sourceRevision: 'source', stateStoreId: 'state-customer', stateVersion: 2 },
   } as const;
-  createRoot(document.getElementById('root')!).render(<RuntimeInspector run={run} surface={surface} />);
+  const agentDocument = {
+    root: { children: [{ kind: 'markdown', text: '# Customer document' }], kind: 'result' },
+    status: 'success', version: 1,
+  } as const;
+  createRoot(document.getElementById('root')!).render(<RuntimeInspector
+    loadDocumentEvents={async () => [
+      { document: agentDocument, sequence: 0, type: 'shell' },
+      { completed: 1, message: 'Loaded', sequence: 1, total: 1, type: 'progress' },
+      { document: agentDocument, sequence: 2, type: 'complete' },
+    ]}
+    run={run}
+    surface={surface}
+  />);
 `;
 
 describe('Runtime inspector', () => {
@@ -84,7 +96,7 @@ describe('Runtime inspector', () => {
       await page.waitForTimeout(250);
       if (errors.length > 0) throw new Error(errors.join('\n'));
       await page.getByText('Decoded React tree', { exact: true }).waitFor({ timeout: 5_000 });
-      expect(await page.getByRole('tab').allTextContents()).toEqual(['Tree', 'Result', 'Flight', 'Protocol', 'State', 'Diagnostics']);
+      expect(await page.getByRole('tab').allTextContents()).toEqual(['Tree', 'Result', 'Document', 'Flight', 'Protocol', 'State', 'Diagnostics']);
       expect(await page.locator('[role="tree"]').count()).toBe(1);
       expect(await page.locator('[role="treeitem"]').count()).toBe(2);
       expect(await page.locator('[role="treeitem"]').first().getAttribute('aria-level')).toBe('1');
@@ -98,6 +110,11 @@ describe('Runtime inspector', () => {
       expect(await page.locator('[role="treeitem"]').first().getAttribute('aria-expanded')).toBe('false');
       await page.getByRole('button', { name: 'Expand all' }).click();
       expect(await page.locator('[role="treeitem"]').count()).toBe(2);
+
+      await page.getByRole('tab', { name: 'Document' }).click();
+      await page.getByRole('heading', { name: 'Customer document' }).waitFor({ timeout: 5_000 });
+      expect(await page.getByLabel('Agent Document').textContent()).toContain('Version 1 · success');
+      expect(await page.getByLabel('Agent Document').textContent()).toContain('Loaded · 1 / 1');
 
       await page.getByRole('tab', { name: 'Protocol' }).click();
       await page.getByText('Provider MCP protocol', { exact: true }).waitFor({ timeout: 5_000 });

@@ -20,6 +20,7 @@ import {
   type RuntimeModelAction,
   type RuntimeProfileOption,
 } from './runtime-model.ts';
+import type { AgentRenderEvent } from './runtime/agent-document-client.ts';
 import type {
   RuntimeAppPreviewRenderer,
   RuntimeLiveMcpPageAdapter,
@@ -32,6 +33,7 @@ export type RuntimePlaygroundClient = Readonly<{
   bootstrap(): Promise<RuntimeBootstrap>;
   createRun(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun>;
   readRun(runId: string): Promise<DevRuntimeRun>;
+  readRunDocument(runId: string, signal?: AbortSignal): Promise<readonly AgentRenderEvent[]>;
   readRunFlight(runId: string): Promise<Blob>;
   replayRun(request: DevRuntimeReplayRequest): Promise<DevRuntimeRun>;
   resetState(request: DevRuntimeStateResetRequest): Promise<DevRuntimeStateIdentity>;
@@ -41,6 +43,7 @@ export interface RuntimePlaygroundController {
   close(): void;
   dispatch(action: RuntimeModelAction): void;
   downloadRunFlight(runId: string): Promise<Blob>;
+  readRunDocument(runId: string, signal?: AbortSignal): Promise<readonly AgentRenderEvent[]>;
   readonly error: string | undefined;
   receive(event: ProjectEventMessage): Promise<void>;
   readonly model: RuntimeModel;
@@ -138,6 +141,10 @@ class RuntimePlaygroundControllerImpl implements RuntimePlaygroundController {
 
   downloadRunFlight(runId: string): Promise<Blob> {
     return this.#client.readRunFlight(runId);
+  }
+
+  readRunDocument(runId: string, signal?: AbortSignal): Promise<readonly AgentRenderEvent[]> {
+    return this.#client.readRunDocument(runId, signal);
   }
 
   close(): void {
@@ -648,6 +655,7 @@ export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlay
           />
           {flightDownloadError === undefined ? undefined : <p className="runtime-request-error" role="alert">{flightDownloadError}</p>}
           <RuntimeInspector
+            loadDocumentEvents={(runId, signal) => controller.readRunDocument(runId, signal)}
             onDownloadFlight={downloadFlight}
             onTabChange={(tab) => controller.dispatch({ tab, type: 'selection.tab' })}
             run={run}

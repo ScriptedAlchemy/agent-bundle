@@ -13,6 +13,7 @@ import type {
   DevRuntimeSurface,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
 import type { ProjectEventMessage } from '../../agent-bundle/src/dev/types.ts';
+import type { AgentRenderEvent } from '../src/runtime/agent-document-client.ts';
 import { createRuntimePlaygroundController, RuntimePlayground, type RuntimePlaygroundClient } from '../src/runtime-playground.tsx';
 import type { RuntimeProfileOption } from '../src/runtime-model.ts';
 import type { RuntimeBootstrap } from '../src/runtime-client.ts';
@@ -115,6 +116,7 @@ const client = (resetState: () => Promise<DevRuntimeStateIdentity>): RuntimePlay
   bootstrap: async () => bootstrap(),
   createRun: async (_request: DevRuntimeInvocationRequest) => run('created'),
   readRun: async (id) => run(id),
+  readRunDocument: async () => [],
   readRunFlight: async () => new Blob(['flight'], { type: 'application/octet-stream' }),
   replayRun: async (_request: DevRuntimeReplayRequest) => run('replayed'),
   resetState: async (_request: DevRuntimeStateResetRequest) => resetState(),
@@ -182,6 +184,7 @@ test('mounts Runtime controls in a supported browser and fences reset interactio
 });
 
 test('downloads the selected Flight payload through the authenticated client and toggles trace span details', { timeout: 15_000 }, async () => {
+  const documentRequests: string[] = [];
   const flightRequests: string[] = [];
   let rejectDownload = true;
   const controller = createRuntimePlaygroundController({
@@ -194,6 +197,22 @@ test('downloads the selected Flight payload through the authenticated client and
     }),
     client: {
       ...client(async () => Object.freeze({ stateStoreId: 'browser-state', stateVersion: 2 })),
+      readRunDocument: async (id) => {
+        documentRequests.push(id);
+        const document = {
+          root: {
+            children: [{ kind: 'markdown' as const, text: '# Browser document' }],
+            kind: 'result' as const,
+          },
+          status: 'success' as const,
+          version: 1 as const,
+        };
+        return [
+          { document, sequence: 0, type: 'shell' as const },
+          { completed: 1, message: 'Rendered', sequence: 1, total: 1, type: 'progress' as const },
+          { document, sequence: 2, type: 'complete' as const },
+        ] satisfies readonly AgentRenderEvent[];
+      },
       readRunFlight: async (id) => {
         flightRequests.push(id);
         if (rejectDownload) throw new Error('The Flight payload is unavailable.');
@@ -215,6 +234,12 @@ test('downloads the selected Flight payload through the authenticated client and
     await download.click();
     await expect.element(page.locator('.runtime-request-error[role="alert"]')).not.toBeVisible();
     expect(flightRequests).toEqual(['evidence', 'evidence']);
+
+    await page.getByRole('tab', { name: 'Document', exact: true }).click();
+    await expect.element(page.getByRole('heading', { name: 'Browser document' })).toBeVisible();
+    await expect.element(page.getByLabel('Agent Document')).toContainText('Rendered · 1 / 1');
+    await expect.element(page.getByLabel('Agent Document')).toContainText('Version 1 · success');
+    expect(documentRequests).toEqual(['evidence']);
 
     await page.getByRole('tab', { name: 'Diagnostics', exact: true }).click();
     const toggle = page.getByRole('button', { name: 'Show span details' });

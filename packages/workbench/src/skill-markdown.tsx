@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import React, { lazy, Suspense, type ComponentProps, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -16,6 +16,11 @@ export interface SkillMarkdownProps {
   readonly base: SkillDocumentBase;
   readonly body: string;
   readonly resources: readonly string[];
+}
+
+export interface MarkdownProjectorProps {
+  readonly body: string;
+  readonly components?: ComponentProps<typeof ReactMarkdown>['components'];
 }
 
 type MarkdownElementProps<Tag extends keyof React.JSX.IntrinsicElements> =
@@ -90,23 +95,33 @@ const SkillImage = ({
   return <img {...properties} alt={alt ?? ''} src={resolved} />;
 };
 
-/** Renders only the server-provided Markdown body and explicit typed resource base. */
-export const SkillMarkdown = ({ base, body, resources }: SkillMarkdownProps) => (
+/** The audited inert-HTML/GFM projector shared by Skills and Agent Documents. */
+export const MarkdownProjector = ({ body, components }: MarkdownProjectorProps) => (
   <div className="skill-markdown">
     <ReactMarkdown
       components={{
-        a: (properties) => <SkillLink {...properties} base={base} resources={resources} />,
         code: SkillCode,
         h1: ({ node: _node, ...properties }) => <h1 className="skill-heading skill-heading--one" {...properties} />,
         h2: ({ node: _node, ...properties }) => <h2 className="skill-heading skill-heading--two" {...properties} />,
         h3: ({ node: _node, ...properties }) => <h3 className="skill-heading skill-heading--three" {...properties} />,
-        img: (properties) => <SkillImage {...properties} base={base} resources={resources} />,
         pre: ({ children }) => <>{children}</>,
         table: ({ node: _node, ...properties }) => <div className="skill-table-wrap"><table {...properties} /></div>,
+        ...components,
       }}
       remarkPlugins={[remarkGfm, inertHtml]}
     >
       {body}
     </ReactMarkdown>
   </div>
+);
+
+/** Renders only the server-provided Markdown body and explicit typed resource base. */
+export const SkillMarkdown = ({ base, body, resources }: SkillMarkdownProps) => (
+  <MarkdownProjector
+    body={body}
+    components={{
+      a: (properties) => <SkillLink {...properties} base={base} resources={resources} />,
+      img: (properties) => <SkillImage {...properties} base={base} resources={resources} />,
+    }}
+  />
 );
