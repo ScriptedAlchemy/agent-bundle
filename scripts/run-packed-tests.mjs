@@ -21,6 +21,26 @@ const { NODE_PATH: _nodePath, ...environment } = process.env;
 const releasePool = process.argv.includes('--release');
 const rstestArguments = process.argv.slice(2).filter((argument) => argument !== '--release');
 
+const packOutputFromJson = (stdout) => {
+  const parsed = JSON.parse(stdout);
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : parsed !== null && typeof parsed === 'object'
+      ? Object.values(parsed)
+      : undefined;
+  if (entries === undefined) {
+    throw new TypeError('npm pack --json returned neither an array nor a package-keyed object.');
+  }
+  if (entries.length !== 1) {
+    throw new TypeError(`npm pack --json returned ${String(entries.length)} entries; expected exactly one.`);
+  }
+  const [entry] = entries;
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new TypeError('npm pack --json returned an invalid pack entry; expected one object.');
+  }
+  return entry;
+};
+
 const run = (command, args, extraEnvironment = {}) => new Promise((resolvePromise, rejectPromise) => {
   const child = spawn(command, args, {
     cwd: repositoryRoot,
@@ -47,7 +67,7 @@ try {
       cwd: join(repositoryRoot, 'packages', directory),
       env: { ...environment, NODE_ENV: 'production' },
     });
-    const [packOutput] = JSON.parse(stdout);
+    const packOutput = packOutputFromJson(stdout);
     await writeFile(
       join(packDirectory, `${packageName}.json`),
       `${JSON.stringify({ packOutput, tarball: join(packDirectory, packOutput.filename) })}\n`,

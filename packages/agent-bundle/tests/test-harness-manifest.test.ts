@@ -40,6 +40,12 @@ const withRealmRegistry = async <T>(registry: unknown, body: () => T | Promise<T
 };
 
 describe('the compiled test manifest', () => {
+  it('names packed-deleted-source as verified self-contained artifact evidence', () => {
+    expect(proofLevelLabel('packed-deleted-source')).toBe(
+      'packed-deleted-source (packed tarball installed into a clean consumer, artifact built, project source removed and verified absent, generated stdio entry spawned as a real process; self-contained-artifact evidence)',
+    );
+  });
+
   it('names browser-app as compiled browser evidence without overstating host or artifact proof', () => {
     expect(proofLevelLabel('browser-app')).toBe(
       'browser-app (MCP App HTML compiled through the production Rsbuild profile, mounted in a real browser page over the product bridge; NOT host embedding, packed-artifact, or Workbench evidence)',

@@ -13,17 +13,34 @@
  * instead: one artifact, one spawned server, every route asserted inside that
  * single session (#103's cost rule).
  */
+import { lstat, readdir, rm } from 'node:fs/promises';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+
 import type { Client } from '@modelcontextprotocol/client';
 
 import { AgentTestError } from './errors.ts';
-import { PACKED_STDIO_PROOF_LEVEL } from './manifest.ts';
+import {
+  PACKED_DELETED_SOURCE_PROOF_LEVEL,
+  PACKED_STDIO_PROOF_LEVEL,
+  proofLevelLabel,
+} from './manifest.ts';
+
+/** Verified project-relative paths removed before a packed entry is spawned. */
+export interface DeletedSourceReceipt {
+  /** Absolute project root against which every removed path was verified. */
+  readonly projectRoot: string;
+  /** Sorted project-relative POSIX paths that existed, were removed, and were verified absent. */
+  readonly removed: readonly string[];
+}
 
 /** Where a packed session's evidence came from. */
 export interface PackedMcpProvenance {
   /** Absolute path of the generated stdio entry that was spawned. */
   readonly entry: string;
   readonly pid: number | undefined;
-  readonly proofLevel: typeof PACKED_STDIO_PROOF_LEVEL;
+  readonly proofLevel: typeof PACKED_DELETED_SOURCE_PROOF_LEVEL | typeof PACKED_STDIO_PROOF_LEVEL;
+  /** Project-relative paths verified absent immediately before the process spawn. */
+  readonly sourceRemoved?: readonly string[];
 }
 
 export interface PackedMcpSessionOptions {
@@ -31,6 +48,8 @@ export interface PackedMcpSessionOptions {
   readonly args?: readonly string[];
   /** Working directory for the spawned process; defaults to the entry's directory. */
   readonly cwd?: string;
+  /** Receipt whose paths must still be absent before this session may claim deleted-source proof. */
+  readonly deletedSource?: DeletedSourceReceipt;
   /** Absolute path of the generated stdio entry (`<artifact>/<target>/mcp/<server>.mjs`). */
   readonly entry: string;
   /** Environment for the spawned process; defaults to the current one. */
@@ -70,6 +89,147 @@ const loadSdk = async (): Promise<Sdk> => {
   return sdkPromise;
 };
 
+const pathExists = async (path: string): Promise<boolean> => {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+};
+
+const deletedSourceError = (
+  message: string,
+  options: {
+    readonly cause?: unknown;
+    readonly details?: readonly string[];
+    readonly recovery: string;
+  },
+): AgentTestError => new AgentTestError('deleted-source-unverified', message, {
+  ...(options.cause === undefined ? {} : { cause: options.cause }),
+  details: [
+    `proof level:  ${proofLevelLabel(PACKED_DELETED_SOURCE_PROOF_LEVEL)}`,
+    ...(options.details ?? []),
+  ],
+  recovery: options.recovery,
+});
+
+const projectPath = (
+  projectRoot: string,
+  candidate: string,
+): { readonly absolute: string; readonly relative: string } => {
+  const absolute = resolve(projectRoot, candidate);
+  const relativePath = relative(projectRoot, absolute);
+  if (
+    relativePath === ''
+    || relativePath === '..'
+    || relativePath.startsWith(`..${sep}`)
+    || isAbsolute(relativePath)
+  ) {
+    throw deletedSourceError('A deleted-source path did not stay inside the project root.', {
+      details: [`project root: ${projectRoot}`, `path:         ${candidate}`],
+      recovery: 'Pass only non-empty project-relative paths beneath projectRoot.',
+    });
+  }
+  return {
+    absolute,
+    relative: relativePath.split(sep).join('/'),
+  };
+};
+
+const verifyDeletedSourceReceipt = async (receipt: DeletedSourceReceipt): Promise<void> => {
+  if (receipt.removed.length === 0) {
+    throw deletedSourceError('The deleted-source receipt names no removed project paths.', {
+      details: [`project root: ${receipt.projectRoot}`],
+      recovery: 'Call removeProjectSource on a project that still contains source before opening the packed session.',
+    });
+  }
+  const paths = receipt.removed.map((candidate) => projectPath(receipt.projectRoot, candidate));
+  let survived: readonly string[];
+  try {
+    survived = (
+      await Promise.all(paths.map(async (path) => ({ ...path, exists: await pathExists(path.absolute) })))
+    ).filter((path) => path.exists).map((path) => path.relative);
+  } catch (error) {
+    throw deletedSourceError('The deleted-source receipt could not be verified before process spawn.', {
+      cause: error,
+      details: [`project root: ${receipt.projectRoot}`],
+      recovery: 'Make the receipt paths readable, remove them, and open the packed session again.',
+    });
+  }
+  if (survived.length > 0) {
+    throw deletedSourceError('Project source named by the deleted-source receipt still exists.', {
+      details: [`project root: ${receipt.projectRoot}`, `survived:     ${survived.join(', ')}`],
+      recovery: 'Remove every receipt path before opening the packed session.',
+    });
+  }
+};
+
+/**
+ * Removes a consumer project's conventional source inputs and verifies their
+ * absence before minting deleted-source evidence.
+ *
+ * The default set is `src` plus every root `agent-bundle.config.*` entry;
+ * callers may add project-relative paths for non-conventional inputs. A
+ * project with nothing to remove is refused, because absence observed without
+ * a deletion is not evidence that the artifact survived source removal.
+ */
+export const removeProjectSource = async (options: {
+  readonly extraPaths?: readonly string[];
+  readonly projectRoot: string;
+}): Promise<DeletedSourceReceipt> => {
+  const projectRoot = resolve(options.projectRoot);
+  let entries: readonly string[];
+  try {
+    entries = await readdir(projectRoot);
+  } catch (error) {
+    throw deletedSourceError('The project root does not exist or cannot be read.', {
+      cause: error,
+      details: [`project root: ${projectRoot}`],
+      recovery: 'Pass an existing readable consumer project root.',
+    });
+  }
+
+  const candidates = new Map<string, string>();
+  for (const candidate of [
+    ...(entries.includes('src') ? ['src'] : []),
+    ...entries.filter((entry) => entry.startsWith('agent-bundle.config.')),
+    ...(options.extraPaths ?? []),
+  ]) {
+    const path = projectPath(projectRoot, candidate);
+    candidates.set(path.relative, path.absolute);
+  }
+
+  const existing: readonly [string, string][] = (
+    await Promise.all(
+      [...candidates].map(async ([relativePath, absolute]) => (
+        await pathExists(absolute) ? [relativePath, absolute] as const : undefined
+      )),
+    )
+  ).filter((entry): entry is [string, string] => entry !== undefined);
+  if (existing.length === 0) {
+    throw deletedSourceError('No project source existed to remove.', {
+      details: [`project root: ${projectRoot}`],
+      recovery: 'Build the artifact while the project source still exists, then remove that source exactly once.',
+    });
+  }
+
+  try {
+    await Promise.all(existing.map(([, absolute]) => rm(absolute, { force: true, recursive: true })));
+  } catch (error) {
+    throw deletedSourceError('Project source could not be removed.', {
+      cause: error,
+      details: [`project root: ${projectRoot}`],
+      recovery: 'Make every source path writable and retry the deletion.',
+    });
+  }
+
+  const removed = Object.freeze(existing.map(([relativePath]) => relativePath).sort());
+  await verifyDeletedSourceReceipt({ projectRoot, removed });
+  return Object.freeze({ projectRoot, removed });
+};
+
 /**
  * Spawns a built stdio MCP entry and connects a real MCP client to it.
  *
@@ -81,6 +241,10 @@ const loadSdk = async (): Promise<Sdk> => {
 export const openPackedMcpServer = async (
   options: PackedMcpSessionOptions,
 ): Promise<PackedMcpSession> => {
+  if (options.deletedSource !== undefined) await verifyDeletedSourceReceipt(options.deletedSource);
+  const proofLevel = options.deletedSource === undefined
+    ? PACKED_STDIO_PROOF_LEVEL
+    : PACKED_DELETED_SOURCE_PROOF_LEVEL;
   const sdk = await loadSdk();
   const client = new sdk.Client({ name: options.name ?? 'agent-bundle-packed-proof', version: '1.0.0' });
   const transport = new sdk.StdioClientTransport({
@@ -102,7 +266,7 @@ export const openPackedMcpServer = async (
     throw new AgentTestError('packed-unavailable', 'The packed stdio MCP server did not start.', {
       cause: error,
       details: [
-        `proof level:  ${PACKED_STDIO_PROOF_LEVEL}`,
+        `proof level:  ${proofLevelLabel(proofLevel)}`,
         `entry:        ${options.entry}`,
         `cause:        ${error instanceof Error ? error.message : String(error)}`,
         `server stderr:${captured === '' ? ' (empty)' : `\n${captured}`}`,
@@ -113,7 +277,10 @@ export const openPackedMcpServer = async (
   const provenance: PackedMcpProvenance = Object.freeze({
     entry: options.entry,
     pid: transport.pid ?? undefined,
-    proofLevel: PACKED_STDIO_PROOF_LEVEL,
+    proofLevel,
+    ...(options.deletedSource === undefined
+      ? {}
+      : { sourceRemoved: Object.freeze([...options.deletedSource.removed]) }),
   });
   let closed = false;
   const close = async (): Promise<void> => {

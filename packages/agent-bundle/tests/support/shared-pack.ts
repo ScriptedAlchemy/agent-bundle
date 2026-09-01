@@ -23,6 +23,26 @@ export interface SharedPack {
 
 export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle' | 'runtime';
 
+const packOutputFromJson = (stdout: string): SharedPackOutput => {
+  const parsed: unknown = JSON.parse(stdout);
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : parsed !== null && typeof parsed === 'object'
+      ? Object.values(parsed)
+      : undefined;
+  if (entries === undefined) {
+    throw new TypeError('npm pack --json returned neither an array nor a package-keyed object.');
+  }
+  if (entries.length !== 1) {
+    throw new TypeError(`npm pack --json returned ${String(entries.length)} entries; expected exactly one.`);
+  }
+  const [entry] = entries;
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new TypeError('npm pack --json returned an invalid pack entry; expected one object.');
+  }
+  return entry as SharedPackOutput;
+};
+
 /**
  * NODE_PATH-free environment with per-command npm cache and tmp roots under
  * the worker's RSTEST_WORKER_ID directory (see rstest.worker-isolation.ts),
@@ -81,7 +101,7 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
     cwd: join(workspaceRoot, 'packages', packageName === 'runtime' ? 'rsc-runtime' : packageName),
     env: { ...installedEnvironment(), NODE_ENV: 'production' },
   });
-  const [packOutput] = JSON.parse(stdout) as [SharedPackOutput];
+  const packOutput = packOutputFromJson(stdout);
   return { packOutput, tarball: join(destination, packOutput.filename) };
 };
 
