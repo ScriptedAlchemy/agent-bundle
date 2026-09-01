@@ -4,6 +4,7 @@ import {
   type Transport,
 } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { Cause, Effect, Exit } from 'effect';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,8 @@ import { validateArtifact } from '../../build/validate-artifact.ts';
 import { DiagnosticError } from '../../core/diagnostics.ts';
 import { joinArtifact } from '../../core/paths.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
+import { runPromise } from '../../effect/boundary.ts';
+import { liftPromise, liftTry } from '../../effect/lift.ts';
 import {
   readTargetMcpServer,
   type ModernMcpServer,
@@ -258,12 +261,12 @@ export class McpSessionService {
     let cleanupFailed = false;
     let cleanupFailure: unknown;
     try {
-      return await this.#open({ ...options, signal, timeoutMs }, (error) => {
+      return await runPromise(this.#openEffect({ ...options, signal, timeoutMs }, (error) => {
         if (!cleanupFailed) {
           cleanupFailed = true;
           cleanupFailure = error;
         }
-      });
+      }));
     } finally {
       this.#openingSessions.delete(opening);
       opening.finish(cleanupFailed
@@ -272,82 +275,102 @@ export class McpSessionService {
     }
   }
 
-  async #open(
+  /**
+   * The open acquisition chain as scoped resources: the epoch lease and the
+   * plugin-data directory are `acquireRelease`d into the open scope, and
+   * their releases run — newest first, failures collected, never thrown from
+   * a finalizer — only while the session has not been constructed. Once the
+   * `McpSession` exists it owns every resource, the scope finalizers disarm,
+   * and a later open failure is cleaned up by `session.close()` instead.
+   */
+  #openEffect(
     options: OpenMcpSessionOptions,
     reportCleanupFailure: (error: unknown) => void,
-  ): Promise<McpSession> {
-    const target = options.target;
-    const runtime = this.#runtime(target);
-    if (options.serverName.trim().length === 0) throw new Error('MCP server name must be nonempty.');
-    const epochReference = await this.#epochStore.acquireEpochReference(options.epochId);
-    let pluginData: string | undefined;
-    let session: McpSession | undefined;
-    try {
-      const epochRoot = epochReference.root;
-      const diagnostics = await validateArtifact({
-        allowEpochStagingMarker: true,
-        artifactRoot: epochRoot,
-        registry: this.#registry,
-      });
-      const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
-      if (errors.length > 0) throw new DiagnosticError(errors);
-      const targetRoot = joinArtifact(epochRoot, target);
-      const server = await this.#server(targetRoot, target, runtime, options.serverName);
-      pluginData = await mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-'));
-      const sessionId = randomUUID();
-      session = new McpSession({
-        assertEpochAvailable: async () => {
-          const probe = await this.#epochStore.acquireEpochReference(options.epochId);
-          await probe.close();
-        },
-        binding: { epochId: options.epochId, serverName: options.serverName, target },
-        createClient: this.#createClient,
-        createStdioTransport: this.#createStdioTransport,
-        createStreamableHttpTransport: this.#createStreamableHttpTransport,
-        epochReference,
-        id: sessionId,
-        onClose: () => this.#invalidateSession(sessionId, new Error('MCP session closed.')),
-        onClosing: () => this.#invalidateSession(sessionId, new Error('MCP session is closing.')),
-        pluginData,
-        resolved: { runtime, server, target, targetRoot },
-        timeoutMs: options.timeoutMs,
-        ...(this.#traceSink === undefined ? {} : { traceSink: this.#traceSink }),
-        workspaceRoot: resolve(options.workspaceRoot ?? this.#projectRoot),
-      });
-      await session.initialize({ signal: options.signal });
-      if (this.#closed) throw new Error('MCP session service is closed.');
-      this.#sessions.set(sessionId, {
-        appLeaseCount: 0,
-        closeWatchers: new Set(),
-        closed: false,
-        session,
-      });
-      return session;
-    } catch (error) {
-      if (session !== undefined) {
-        try {
-          await session.close();
-        } catch (cleanupError) {
-          reportCleanupFailure(cleanupError);
-          throw cleanupError;
+  ): Effect.Effect<McpSession, unknown> {
+    return Effect.suspend(() => {
+      const cleanupFailures: unknown[] = [];
+      let constructed: McpSession | undefined;
+      const releaseUnlessTransferred = (release: () => Promise<void>): Effect.Effect<void> =>
+        Effect.promise(async () => {
+          if (constructed !== undefined) return;
+          try {
+            await release();
+          } catch (error) {
+            cleanupFailures.push(error);
+          }
+        });
+      const program = Effect.gen({ self: this }, function* (this: McpSessionService) {
+        const target = options.target;
+        const runtime = yield* liftTry(() => this.#runtime(target));
+        if (options.serverName.trim().length === 0) {
+          return yield* Effect.fail(new Error('MCP server name must be nonempty.'));
         }
-      } else {
-        const cleanupFailures: unknown[] = [];
-        try {
-          if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-        } catch (cleanupError) {
-          cleanupFailures.push(cleanupError);
-        }
-        try {
-          await epochReference.close();
-        } catch (cleanupError) {
-          cleanupFailures.push(cleanupError);
-        }
-        for (const failure of cleanupFailures) reportCleanupFailure(failure);
-        if (cleanupFailures.length > 0) throw cleanupFailures[cleanupFailures.length - 1];
-      }
-      throw error;
-    }
+        const epochReference = yield* Effect.acquireRelease(
+          liftPromise(() => this.#epochStore.acquireEpochReference(options.epochId)),
+          (reference) => releaseUnlessTransferred(() => reference.close()),
+        );
+        const epochRoot = epochReference.root;
+        const diagnostics = yield* liftPromise(() => validateArtifact({
+          allowEpochStagingMarker: true,
+          artifactRoot: epochRoot,
+          registry: this.#registry,
+        }));
+        const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+        if (errors.length > 0) return yield* Effect.fail(new DiagnosticError(errors));
+        const targetRoot = yield* liftTry(() => joinArtifact(epochRoot, target));
+        const server = yield* liftPromise(() => this.#server(targetRoot, target, runtime, options.serverName));
+        const pluginData = yield* Effect.acquireRelease(
+          liftPromise(() => mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-'))),
+          (directory) => releaseUnlessTransferred(() => rm(directory, { force: true, recursive: true })),
+        );
+        const sessionId = randomUUID();
+        const session = yield* liftTry(() => new McpSession({
+          assertEpochAvailable: async () => {
+            const probe = await this.#epochStore.acquireEpochReference(options.epochId);
+            await probe.close();
+          },
+          binding: { epochId: options.epochId, serverName: options.serverName, target },
+          createClient: this.#createClient,
+          createStdioTransport: this.#createStdioTransport,
+          createStreamableHttpTransport: this.#createStreamableHttpTransport,
+          epochReference,
+          id: sessionId,
+          onClose: () => this.#invalidateSession(sessionId, new Error('MCP session closed.')),
+          onClosing: () => this.#invalidateSession(sessionId, new Error('MCP session is closing.')),
+          pluginData,
+          resolved: { runtime, server, target, targetRoot },
+          timeoutMs: options.timeoutMs,
+          ...(this.#traceSink === undefined ? {} : { traceSink: this.#traceSink }),
+          workspaceRoot: resolve(options.workspaceRoot ?? this.#projectRoot),
+        }));
+        constructed = session;
+        yield* liftPromise(() => session.initialize({ signal: options.signal }));
+        if (this.#closed) return yield* Effect.fail(new Error('MCP session service is closed.'));
+        this.#sessions.set(sessionId, {
+          appLeaseCount: 0,
+          closeWatchers: new Set(),
+          closed: false,
+          session,
+        });
+        return session;
+      });
+      return Effect.scoped(program).pipe(
+        Effect.catch((error) => Effect.suspend(() => {
+          const session = constructed;
+          if (session !== undefined) {
+            return liftPromise(() => session.close()).pipe(
+              Effect.catch((cleanupError) => Effect.suspend(() => {
+                reportCleanupFailure(cleanupError);
+                return Effect.fail(cleanupError);
+              })),
+              Effect.andThen(Effect.fail(error)),
+            );
+          }
+          for (const failure of cleanupFailures) reportCleanupFailure(failure);
+          return Effect.fail(cleanupFailures.length > 0 ? cleanupFailures[cleanupFailures.length - 1] : error);
+        })),
+      );
+    });
   }
 
   get(id: McpSessionId): McpSession | undefined {
@@ -375,28 +398,49 @@ export class McpSessionService {
       const entry = this.#invalidateSession(id, new Error('MCP session service is closed.'));
       return entry === undefined ? [] : [[id, entry.session] as const];
     });
-    this.#closePromise = this.#close(sessions);
+    const openings = [...this.#openingSessions];
+    for (const opening of openings) opening.abort.abort(new Error('MCP session service is closed.'));
+    this.#closePromise = runPromise(this.#closeEffect(openings, sessions));
     return this.#closePromise;
   }
 
-  async #close(sessions: readonly (readonly [string, McpSession])[]): Promise<void> {
-    const openings = [...this.#openingSessions];
-    for (const opening of openings) opening.abort.abort(new Error('MCP session service is closed.'));
-    const openingResults = await Promise.allSettled(openings.map((opening) => opening.done));
-    const sessionResults = await Promise.allSettled(sessions.map(([, session]) => session.close()));
-    const failures = Object.freeze([
-      ...openingResults.flatMap((result): readonly McpSessionServiceCloseFailure[] =>
-        result.status === 'rejected'
-          ? [Object.freeze({ error: result.reason, resource: 'opening' as const })]
-          : []),
-      ...sessionResults.flatMap((result, index): readonly McpSessionServiceCloseFailure[] => {
-        const sessionId = sessions[index]?.[0];
-        return result.status === 'rejected' && sessionId !== undefined
-          ? [Object.freeze({ error: result.reason, resource: 'session' as const, sessionId })]
-          : [];
-      }),
-    ]);
-    if (failures.length > 0) throw new McpSessionServiceCloseError(failures);
+  /**
+   * Waits for every tracked lifecycle — openings first, then active
+   * sessions, each phase settling concurrently via per-element `Exit` — and
+   * fails with one `McpSessionServiceCloseError` naming every resource that
+   * could not be released.
+   */
+  #closeEffect(
+    openings: readonly OpeningSession[],
+    sessions: readonly (readonly [string, McpSession])[],
+  ): Effect.Effect<void, McpSessionServiceCloseError> {
+    return Effect.gen(function* () {
+      const openingResults = yield* Effect.forEach(
+        openings,
+        (opening) => Effect.exit(liftPromise(() => opening.done)),
+        { concurrency: 'unbounded' },
+      );
+      const sessionResults = yield* Effect.forEach(
+        sessions,
+        ([, session]) => Effect.exit(liftPromise(() => session.close())),
+        { concurrency: 'unbounded' },
+      );
+      const failures = Object.freeze([
+        ...openingResults.flatMap((result): readonly McpSessionServiceCloseFailure[] =>
+          Exit.isFailure(result)
+            ? [Object.freeze({ error: Cause.squash(result.cause), resource: 'opening' as const })]
+            : []),
+        ...sessionResults.flatMap((result, index): readonly McpSessionServiceCloseFailure[] => {
+          const sessionId = sessions[index]?.[0];
+          return Exit.isFailure(result) && sessionId !== undefined
+            ? [Object.freeze({ error: Cause.squash(result.cause), resource: 'session' as const, sessionId })]
+            : [];
+        }),
+      ]);
+      if (failures.length > 0) {
+        return yield* Effect.fail(new McpSessionServiceCloseError(failures));
+      }
+    });
   }
 
   #invalidateSession(id: string, reason: unknown): ActiveSession | undefined {
