@@ -322,6 +322,56 @@ it('decodes stored Flight into bounded Agent Document events in the foreground p
   }
 });
 
+it('aborts decoding when Agent Document events exceed the aggregate response budget', async () => {
+  let aborted = false;
+  const largeText = 'x'.repeat(512 * 1024);
+  const server = await start(new MemoryRuntime(), {
+    loadAgentDocumentRuntime: async () => ({
+      DEFAULT_AGENT_RENDER_LIMITS,
+      decodeAgentFlightStream: (_flight, options) => {
+        let sequence = 0;
+        return new ReadableStream({
+          start(controller) {
+            options?.signal?.addEventListener('abort', () => {
+              aborted = true;
+              controller.error(new DOMException('Agent render was aborted', 'AbortError'));
+            }, { once: true });
+          },
+          pull(controller) {
+            if (sequence === 40) {
+              controller.close();
+              return;
+            }
+            controller.enqueue({
+              document: {
+                root: { children: [{ kind: 'markdown', text: largeText }], kind: 'result' },
+                status: 'success',
+                version: 1,
+              },
+              sequence,
+              type: 'shell',
+            });
+            sequence += 1;
+          },
+        });
+      },
+    }),
+  });
+  try {
+    const response = await fetch(`${server.url}/api/runtime/runs/run-a/document`, { headers: authenticated(server) });
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8209',
+        message: 'Decoded Agent Document exceeds the 16 MiB response limit.',
+      },
+    });
+    expect(aborted).toBe(true);
+  } finally {
+    await server.close();
+  }
+});
+
 it('returns honest diagnostics when the Agent runtime is absent or stored Flight cannot decode', async () => {
   const absent = await start(new MemoryRuntime(), {
     loadAgentDocumentRuntime: async () => {

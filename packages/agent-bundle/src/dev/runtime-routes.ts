@@ -19,6 +19,8 @@ import { freezeJsonValue, type JsonValue } from './types.ts';
 
 const bodyLimit = 64 * 1024;
 const assetLimit = 4 * 1024 * 1024;
+// 16 MiB leaves room for rich timelines while bounding retained replacement snapshots.
+const agentDocumentResponseLimit = 16 * 1024 * 1024;
 
 interface RequestDiagnostic {
   readonly code: string;
@@ -418,6 +420,7 @@ export class RuntimeRoutes {
         ));
       }
       try {
+        const abortController = new AbortController();
         const flight = new ReadableStream<Uint8Array>({
           start(controller) {
             controller.enqueue(asset.body);
@@ -425,11 +428,27 @@ export class RuntimeRoutes {
           },
         });
         const events: AgentRenderEvent[] = [];
-        for await (const event of runtime.decodeAgentFlightStream(flight, { limits: runtime.DEFAULT_AGENT_RENDER_LIMITS })) {
+        let responseBytes = Buffer.byteLength('{"events":[]}');
+        for await (const event of runtime.decodeAgentFlightStream(flight, {
+          limits: runtime.DEFAULT_AGENT_RENDER_LIMITS,
+          signal: abortController.signal,
+        })) {
+          const eventBytes = Buffer.byteLength(JSON.stringify(event));
+          const separatorBytes = events.length === 0 ? 0 : 1;
+          if (responseBytes + separatorBytes + eventBytes > agentDocumentResponseLimit) {
+            abortController.abort();
+            throw requestError(diagnostic(
+              'AB8209',
+              'Decoded Agent Document exceeds the 16 MiB response limit.',
+              413,
+            ));
+          }
+          responseBytes += separatorBytes + eventBytes;
           events.push(event);
         }
         return responseJson(response, { events });
-      } catch {
+      } catch (error) {
+        if (isRequestDiagnostic(error)) throw error;
         throw requestError(diagnostic('AB8208', 'Stored Flight could not be decoded as an Agent Document.', 409));
       }
     }
