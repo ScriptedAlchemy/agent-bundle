@@ -81,3 +81,11 @@ export type {
   RenderableRouteKind,
   RenderedRouteProvenance,
 } from './types.ts';
+export { validateClaudePlugin } from '../host-contracts/claude-plugin-validation.ts';
+export type {
+  ClaudePluginCommandResult,
+  ClaudePluginCommandRunner,
+  ClaudePluginValidationReport,
+  ClaudePluginValidationStatus,
+  ValidateClaudePluginOptions,
+} from '../host-contracts/claude-plugin-validation.ts';

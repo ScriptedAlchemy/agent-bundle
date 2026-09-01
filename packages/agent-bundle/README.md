@@ -78,6 +78,26 @@ manifests at files inside those payloads without compiling them. Payload files c
 
 `validate --artifact`, `mcp`, and `hooks` work against a built artifact with project sources deleted.
 
+### Validate Claude bundles with Claude Code
+
+Artifact validation runs `claude plugin validate <bundle-dir> --strict` for emitted `claude`
+and unified `plugin` targets when Claude Code is on `PATH`. Host errors become Agent Bundle
+errors; host warnings remain warnings unless `agent-bundle validate --strict` is set. A missing
+binary is reported as an explicit informational skip, never as fabricated success. Use
+`--no-host-validation` when a deterministic schema-only check is required.
+
+CI should use strict validation:
+
+```sh
+agent-bundle validate --artifact dist --strict
+```
+
+During development, load a built target without installing it and verify registration:
+
+```sh
+claude --plugin-dir dist/claude plugin list --json
+```
+
 ## Developer workbench
 
 `agent-bundle dev` serves a loopback-only prebuilt workbench. It shows project

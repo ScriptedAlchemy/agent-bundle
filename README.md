@@ -65,6 +65,13 @@ The same config also owns the npm package build — no second bundler config, bi
 - `hooks list` / `hooks simulate` — inspect and simulate generated hooks
 - `eval` — run eval suites against a built artifact
 
+When validating a built `claude` or unified `plugin` target, Agent Bundle uses the installed
+Claude Code developer toolchain in addition to its pinned schemas. Use
+`agent-bundle validate --artifact dist --strict` in CI; Claude's `--strict` findings remain
+warnings locally unless Agent Bundle strict mode is requested. If `claude` is absent, validation
+reports an explicit informational skip. For the install-free development loop, run
+`claude --plugin-dir dist/claude plugin list --json` after building.
+
 The [package README](packages/agent-bundle/README.md) is the full reference: configuration semantics, the workbench, the optional Agent API, evals, and limitations.
 
 ## Examples

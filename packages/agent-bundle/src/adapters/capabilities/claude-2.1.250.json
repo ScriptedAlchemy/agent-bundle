@@ -39,6 +39,14 @@
   },
   "observedCliVersion": "2.1.250",
   "plugin": {
+    "devtools": {
+      "details": true,
+      "listJson": true,
+      "pluginDir": true,
+      "strictValidation": true,
+      "tag": true,
+      "validate": true
+    },
     "lsp": {
       "config": ".lsp.json",
       "manifestField": "lspServers",
@@ -81,7 +89,10 @@
       "First-registered-wins collision rule: when more than one enabled server declares the same extension in extensionToLanguage, from one plugin or from different plugins, the first registered handles the extension and the others never start.",
       "The server binary is never vendored: \"You must install the language server binary separately. LSP plugins configure how Claude Code connects to a language server, but they don't include the server itself.\"",
       "Placeholder substitution for LSP servers is limited to command, args, env, and workspaceFolder.",
-      "Codex and Cursor publish no plugin LSP surface at their pinned revisions, so the unified bundle's .lsp.json reaches Claude Code only."
+      "Codex and Cursor publish no plugin LSP surface at their pinned revisions, so the unified bundle's .lsp.json reaches Claude Code only.",
+      "Plugin developer tools reference: `claude plugin validate <dir>` checks plugin.json, hooks/hooks.json, and default-directory Skill, agent, and command frontmatter; manifest-less component directories require 2.1.233 or later.",
+      "`claude plugin validate <dir> --strict` promotes tolerated warnings such as unrecognized or near-miss fields and non-object experimental/metadata values to exit failure; the reference recommends strict mode in CI.",
+      "Development tools include `claude --plugin-dir <dir> plugin list --json` for registration proof, `claude plugin details <name>` for component inventory and host-owned token estimates, `claude plugin tag`, and `claude --debug` for loading diagnostics."
     ]
   }
 }
