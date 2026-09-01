@@ -1,7 +1,10 @@
 declare module 'react-server-dom-rspack/client.node' {
   export function createFromReadableStream<T>(
     stream: ReadableStream<Uint8Array>,
-    options?: Readonly<{ temporaryReferences?: unknown }>,
+    options?: Readonly<{
+      temporaryReferences?: unknown;
+      unstable_allowPartialStream?: boolean;
+    }>,
   ): Promise<T>;
 }
 

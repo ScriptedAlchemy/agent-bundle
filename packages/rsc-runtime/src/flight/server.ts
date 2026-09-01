@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { renderToReadableStream } from 'react-server-dom-rspack/server.node';
 
+import { ensureAgentFlightManifest } from '../flight-manifest.js';
+
 export interface AgentFlightRenderOptions {
   readonly onError?: (error: unknown) => string | undefined;
   readonly signal?: AbortSignal;
@@ -13,6 +15,7 @@ export const renderAgentFlight = (
   options: AgentFlightRenderOptions = {},
 ): ReadableStream<Uint8Array> => {
   if (options.signal?.aborted) throw abortError();
+  ensureAgentFlightManifest();
   const flight = renderToReadableStream(model, {
     ...(options.onError === undefined ? {} : { onError: options.onError }),
   });

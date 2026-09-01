@@ -169,6 +169,36 @@ describe('Agent render events', () => {
     const byteBounded = createAgentRenderEventSequence({ maxEventBytes: 20 });
     expect(() => byteBounded.emit({ completed: 0, message: 'too large', type: 'progress' })).toThrow('bytes');
   });
+
+  it('bounds event rate within a one-second window', () => {
+    const events = createAgentRenderEventSequence({ maxEventRate: 2 });
+    events.emit({ completed: 0, type: 'progress' });
+    events.emit({ completed: 1, type: 'progress' });
+    expect(() => events.emit({ completed: 2, type: 'progress' })).toThrow(AgentContractError);
+    expect(() => events.emit({ completed: 2, type: 'progress' })).toThrow('rate');
+    try {
+      events.emit({ completed: 2, type: 'progress' });
+      throw new Error('expected event-rate emit to fail');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'event-rate-exceeded' });
+    }
+  });
+
+  it('bounds elapsed render time', { retry: 2 }, async () => {
+    const events = createAgentRenderEventSequence({ maxElapsedMs: 5 });
+    events.emit({ completed: 0, type: 'progress' });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(() => events.emit({ completed: 1, type: 'progress' })).toThrow(AgentContractError);
+    expect(() => events.emit({ completed: 1, type: 'progress' })).toThrow('elapsed');
+    try {
+      events.emit({ completed: 1, type: 'progress' });
+      throw new Error('expected elapsed-time emit to fail');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'elapsed-time-exceeded' });
+    }
+  });
 });
 
 describe('AgentRenderInvocation', () => {
