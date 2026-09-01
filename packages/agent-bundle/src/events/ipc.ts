@@ -236,6 +236,7 @@ export interface EventRuntimeServerTestHooks {
   readonly afterEndpointClaimReclamationSnapshot?: (
     identity: Readonly<{ readonly device: number; readonly inode: number }>,
   ) => Promise<void>;
+  readonly beforeEndpointClaimRemoval?: () => Promise<void>;
 }
 
 interface EndpointClaim {
@@ -496,17 +497,26 @@ const reclaimOrphanedEndpointClaim = Effect.fnUntraced(function*(
       tryAcquireEndpointRecoveryGate(endpoint),
       (gate) => {
         if (gate === undefined) return Effect.succeed(false);
-        return liftPromise(async () => {
-          const freshSnapshot = await readEndpointClaimSnapshot(path);
-          if (
-            freshSnapshot === 'missing'
-            || freshSnapshot === undefined
-            || !await isEndpointClaimOwnerProvablyDead(freshSnapshot.owner)
-          ) {
-            return freshSnapshot === 'missing';
+        return Effect.gen(function*() {
+          const freshSnapshot = yield* liftPromise(async () => {
+            const candidate = await readEndpointClaimSnapshot(path);
+            if (candidate === 'missing') return 'missing' as const;
+            if (candidate === undefined || !await isEndpointClaimOwnerProvablyDead(candidate.owner)) return undefined;
+            return candidate;
+          }).pipe(Effect.catch(() => Effect.succeed(undefined)));
+          if (freshSnapshot === 'missing') return true;
+          if (freshSnapshot === undefined) return false;
+
+          const beforeRemoval = testHooks?.beforeEndpointClaimRemoval;
+          if (beforeRemoval !== undefined) {
+            yield* liftPromise(beforeRemoval).pipe(
+              Effect.mapError((error) => transportError('runtime-failed', 'Event runtime claim removal hook failed.', error)),
+            );
           }
-          return removeFileIfIdentityMatches(path, freshSnapshot.identity);
-        }).pipe(Effect.catch(() => Effect.succeed(false)));
+          return yield* liftPromise(() => removeFileIfIdentityMatches(path, freshSnapshot.identity)).pipe(
+            Effect.catch(() => Effect.succeed(false)),
+          );
+        });
       },
       (gate) => gate === undefined ? Effect.void : releaseEndpointRecoveryGate(gate),
     );
