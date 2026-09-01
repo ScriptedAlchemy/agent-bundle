@@ -1,6 +1,9 @@
+import { Deferred, Effect, Semaphore } from 'effect';
 import { resolve } from 'node:path';
 
 import { freezeDiagnostics, hasErrors } from '../core/diagnostics.ts';
+import { runPromise, runSync } from '../effect/boundary.ts';
+import { liftPromise } from '../effect/lift.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { ArtifactService, type ArtifactEpochResult, type FailedArtifactEpochResult } from './artifacts/artifact-service.ts';
 import { DiagnosticService, type DiagnosticReport } from './diagnostic-service.ts';
@@ -91,9 +94,14 @@ export interface DevCoordinatorOptions {
   readonly root: string;
 }
 
+/**
+ * The coalesced follow-up rebuild: every invalidation that arrives while a
+ * build runs merges into this single slot, and every requester shares one
+ * `Deferred` completed with the follow-up's result.
+ */
 interface QueuedBuild {
+  readonly deferred: Deferred.Deferred<ArtifactEpochResult>;
   readonly invalidation: Invalidation;
-  readonly resolvers: readonly ((result: ArtifactEpochResult) => void)[];
 }
 
 const emptySource = (): SourceStatus => Object.freeze({
@@ -209,6 +217,8 @@ export class DevCoordinator {
   readonly #prepareCommand: 'build' | 'dev';
   readonly #projectService: ProjectPreparer;
   readonly #root: string;
+  /** Serializes build passes; admission below guarantees one holder, the permit makes the invariant structural. */
+  readonly #buildPermit: Semaphore.Semaphore = runSync(Semaphore.make(1));
   readonly #startRebuildToken = Symbol('DevCoordinator initial rebuild');
   readonly #startupCancellation: Promise<void>;
   #activeEpoch: ArtifactEpoch | undefined;
@@ -281,14 +291,13 @@ export class DevCoordinator {
     if (this.#lock === undefined) return failure('DevCoordinator must be started before rebuilding.');
     const normalized = nowInvalidation(this.#now, invalidation.reason, invalidation.paths);
     if (this.#currentBuild === undefined) return this.#startBuild(normalized);
-    return new Promise<ArtifactEpochResult>((resolvePromise) => {
-      this.#queued = this.#queued === undefined
-        ? { invalidation: normalized, resolvers: [resolvePromise] }
-        : {
-          invalidation: mergeInvalidations(this.#queued.invalidation, normalized),
-          resolvers: [...this.#queued.resolvers, resolvePromise],
-        };
-    });
+    // Admission is synchronous on purpose: rebuilds issued in the same turn
+    // must observe the running build and merge into exactly one follow-up.
+    const queued = this.#queued;
+    this.#queued = queued === undefined
+      ? { deferred: runSync(Deferred.make<ArtifactEpochResult>()), invalidation: normalized }
+      : { deferred: queued.deferred, invalidation: mergeInvalidations(queued.invalidation, normalized) };
+    return runPromise(Deferred.await(this.#queued.deferred));
   }
 
   status(): ProjectStatus {
@@ -300,7 +309,9 @@ export class DevCoordinator {
     this.#closing = true;
     const queued = this.#queued;
     this.#queued = undefined;
-    queued?.resolvers.forEach((resolveResult) => resolveResult(failure('DevCoordinator is closing.')));
+    if (queued !== undefined) {
+      runSync(Deferred.succeed(queued.deferred, failure('DevCoordinator is closing.')));
+    }
     this.#closePromise = this.#close();
     return this.#closePromise;
   }
@@ -385,23 +396,34 @@ export class DevCoordinator {
     return this.#watcherClosePromise;
   }
 
+  /**
+   * Runs one build pass as an Effect fiber holding the build permit; the
+   * exit hook drains the coalesced follow-up slot before the caller's
+   * promise settles, exactly where the pre-Effect `finally` chain sat.
+   */
   #startBuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
-    const current = this.#performBuild(invalidation).finally(() => {
-      this.#currentBuild = undefined;
-      const queued = this.#queued;
-      this.#queued = undefined;
-      if (queued === undefined) return;
-      if (this.#closing) {
-        queued.resolvers.forEach((resolveResult) => resolveResult(failure('DevCoordinator is closing.')));
-        return;
-      }
-      this.#startBuild(queued.invalidation).then(
-        (result) => queued.resolvers.forEach((resolveResult) => resolveResult(result)),
-        () => queued.resolvers.forEach((resolveResult) => resolveResult(failure('DevCoordinator rebuild failed.'))),
-      );
-    });
+    const current = runPromise(this.#buildPermit.withPermit(
+      liftPromise(() => this.#performBuild(invalidation)).pipe(
+        Effect.onExit(() => Effect.sync(() => this.#drainQueuedBuild())),
+      ),
+    ));
     this.#currentBuild = current;
     return current;
+  }
+
+  #drainQueuedBuild(): void {
+    this.#currentBuild = undefined;
+    const queued = this.#queued;
+    this.#queued = undefined;
+    if (queued === undefined) return;
+    if (this.#closing) {
+      runSync(Deferred.succeed(queued.deferred, failure('DevCoordinator is closing.')));
+      return;
+    }
+    this.#startBuild(queued.invalidation).then(
+      (result) => runSync(Deferred.succeed(queued.deferred, result)),
+      () => runSync(Deferred.succeed(queued.deferred, failure('DevCoordinator rebuild failed.'))),
+    );
   }
 
   #beginBuild(invalidation: Invalidation, source: SourceStatus): RunningBuildAttempt {
