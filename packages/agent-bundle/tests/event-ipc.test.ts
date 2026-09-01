@@ -1,5 +1,8 @@
-import { stat, writeFile } from 'node:fs/promises';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
+import { dirname } from 'node:path';
 
 import { Effect } from 'effect';
 import { expect, it } from 'effect-rstest';
@@ -7,9 +10,82 @@ import { expect, it } from 'effect-rstest';
 import {
   createEventRuntimeServer,
   createEventRuntimeServerForTest,
+  eventRuntimeEndpoint,
   EventRuntimeTransportError,
   requestEventRuntime,
 } from '../src/events/ipc.ts';
+
+interface EndpointClaimOwner {
+  readonly linuxStartTime?: string;
+  readonly pid: number;
+}
+
+const linuxProcessStartTime = async (pid: number): Promise<string> => {
+  const processStat = await readFile(`/proc/${pid}/stat`, 'utf8');
+  const commEnd = processStat.lastIndexOf(')');
+  if (commEnd === -1) throw new Error(`Unable to parse process stat for pid ${pid}.`);
+  const fieldsAfterComm = processStat.slice(commEnd + 1).trim().split(/\s+/u);
+  const startTime = fieldsAfterComm[19];
+  if (startTime === undefined) throw new Error(`Process stat for pid ${pid} has no start time.`);
+  return startTime;
+};
+
+const currentProcessOwner = async (): Promise<EndpointClaimOwner> => ({
+  ...(process.platform === 'linux' ? { linuxStartTime: await linuxProcessStartTime(process.pid) } : {}),
+  pid: process.pid,
+});
+
+const spawnChildOwner = async (): Promise<Readonly<{
+  child: ChildProcess;
+  owner: EndpointClaimOwner;
+}>> => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+  await once(child, 'spawn');
+  const pid = child.pid;
+  if (pid === undefined) {
+    child.kill('SIGKILL');
+    throw new Error('Spawned child has no pid.');
+  }
+  const owner: EndpointClaimOwner = {
+    ...(process.platform === 'linux' ? { linuxStartTime: await linuxProcessStartTime(pid) } : {}),
+    pid,
+  };
+  return { child, owner };
+};
+
+const killChild = async (child: ChildProcess): Promise<void> => {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill('SIGKILL');
+  await once(child, 'exit');
+};
+
+const deadChildOwner = async (): Promise<EndpointClaimOwner> => {
+  const { child, owner } = await spawnChildOwner();
+  await killChild(child);
+  return owner;
+};
+
+const writeEndpointClaim = async (endpointId: string, contents: string): Promise<string> => {
+  const endpoint = eventRuntimeEndpoint(endpointId);
+  await mkdir(dirname(endpoint), { mode: 0o700, recursive: true });
+  const claimPath = `${endpoint}.lock`;
+  await writeFile(claimPath, contents, { mode: 0o600 });
+  return claimPath;
+};
+
+const expectBoundedClaimFailure = async (endpointId: string): Promise<void> => {
+  await expect(createEventRuntimeServer({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => undefined,
+  })).rejects.toMatchObject({
+    code: 'runtime-failed',
+    message: expect.stringMatching(/claim did not clear after bounded retries/u),
+    name: EventRuntimeTransportError.name,
+  });
+};
 
 it.live('round-trips a bounded event envelope through the epoch-bound runtime socket', () => Effect.gen(function*() {
   const endpointId = `event-ipc-${crypto.randomUUID()}`;
@@ -205,6 +281,67 @@ it.live('does not unlink a concurrent winner after both servers probe a stale en
     timeoutMs: 1_000,
   }));
   expect(response).toEqual({ owner: 'first' });
+}));
+
+it.live('reclaims an endpoint claim whose owner process was killed', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-dead-claim-${crypto.randomUUID()}`;
+  const owner = yield* Effect.promise(deadChildOwner);
+  const claimPath = yield* Effect.promise(() => writeEndpointClaim(endpointId, JSON.stringify(owner)));
+  const server = yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => undefined,
+    })),
+    (server) => Effect.promise(() => server.close()),
+  );
+  expect(server.endpoint).toBe(eventRuntimeEndpoint(endpointId));
+  yield* Effect.promise(() => rm(claimPath, { force: true }));
+}));
+
+it.live('fails closed when an endpoint claim owner is still alive', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-live-claim-${crypto.randomUUID()}`;
+  const owner = yield* Effect.promise(currentProcessOwner);
+  const claimPath = yield* Effect.promise(() => writeEndpointClaim(endpointId, JSON.stringify(owner)));
+  yield* Effect.promise(() => expectBoundedClaimFailure(endpointId)).pipe(
+    Effect.ensuring(Effect.promise(() => rm(claimPath, { force: true }))),
+  );
+}));
+
+it.live('fails closed when an endpoint claim has unparseable contents', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-garbage-claim-${crypto.randomUUID()}`;
+  const claimPath = yield* Effect.promise(() => writeEndpointClaim(endpointId, 'not-json'));
+  yield* Effect.promise(() => expectBoundedClaimFailure(endpointId)).pipe(
+    Effect.ensuring(Effect.promise(() => rm(claimPath, { force: true }))),
+  );
+}));
+
+it.live('reclaims an endpoint claim whose pid has been recycled', () => Effect.gen(function*() {
+  if (process.platform !== 'linux') return;
+  const endpointId = `event-ipc-recycled-claim-${crypto.randomUUID()}`;
+  const { child, owner } = yield* Effect.acquireRelease(
+    Effect.promise(spawnChildOwner),
+    ({ child }) => Effect.promise(() => killChild(child)),
+  );
+  const recycledOwner = {
+    ...owner,
+    linuxStartTime: String(BigInt(owner.linuxStartTime ?? '0') + 1n),
+  };
+  const claimPath = yield* Effect.promise(() => writeEndpointClaim(endpointId, JSON.stringify(recycledOwner)));
+  const server = yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => undefined,
+    })),
+    (server) => Effect.promise(() => server.close()),
+  );
+  expect(server.endpoint).toBe(eventRuntimeEndpoint(endpointId));
+  yield* Effect.promise(() => rm(claimPath, { force: true }));
+  expect(child.exitCode).toBeNull();
 }));
 
 it.live('interrupts an in-flight event handler when the client disconnects', () => Effect.gen(function*() {
