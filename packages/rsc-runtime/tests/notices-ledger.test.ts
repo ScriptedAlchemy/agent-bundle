@@ -258,7 +258,7 @@ describe('next-event delivery', () => {
     await driver.close();
   });
 
-  it('replays the same admitted notice set for the same invocation id', async () => {
+  it('replays the same admitted notice set only for the matching principal', async () => {
     const { driver, ledger } = await openLedger();
     const published = await run(ledger, {
       actorId: 'publisher',
@@ -278,9 +278,14 @@ describe('next-event delivery', () => {
     };
 
     const first = await run(ledger, invocation, async () => (await agent()).notices!.read());
+    const otherPrincipal = await run(ledger, {
+      ...invocation,
+      actorId: 'other',
+    }, async () => (await agent()).notices!.read());
     const replay = await run(ledger, invocation, async () => (await agent()).notices!.read());
 
     expect(first.map(({ notice }) => notice.id)).toEqual([published.notice.id]);
+    expect(otherPrincipal).toEqual([]);
     expect(replay.map(({ notice }) => notice.id)).toEqual(
       first.map(({ notice }) => notice.id),
     );

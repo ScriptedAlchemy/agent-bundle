@@ -312,6 +312,7 @@ export const createAgentNoticeLedger = (
           admitted = committed.state;
         }
         deliveries = Object.freeze(admitted.notices
+          .filter((notice) => recipientMatchesPrincipal(notice.recipient, request.principal))
           .map((notice) => deliveryFor(notice, request.invocation.id))
           .filter((delivery): delivery is AgentNoticeDelivery => delivery !== undefined));
       }
