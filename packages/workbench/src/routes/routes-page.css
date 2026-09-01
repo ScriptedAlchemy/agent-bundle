@@ -23,10 +23,25 @@
 .route-table { border-collapse: collapse; margin-top: 14px; table-layout: fixed; width: 100%; }
 .route-table th, .route-table td { border-bottom: 1px solid #e4e8ef; padding: 11px 12px 11px 0; text-align: left; vertical-align: top; }
 .route-table thead th { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
-.route-table tbody th { font-weight: 600; width: 34%; }
+.route-table tbody th { font-weight: 600; width: 27%; }
 .route-id { display: block; font: 13px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-weight: 700; overflow-wrap: anywhere; }
 .route-event, .route-command { color: #345080; display: block; font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; margin-top: 4px; overflow-wrap: anywhere; }
 .route-description { color: #596372; display: block; font-size: 13px; font-weight: 400; margin-top: 4px; }
-.route-source { font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; width: 30%; }
+.route-source { font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; width: 25%; }
 .route-provenance { color: #7a8492; display: block; font-family: inherit; font-size: 11px; margin-top: 4px; text-transform: uppercase; }
 .route-config { color: #4f5866; font-size: 13px; overflow-wrap: anywhere; }
+.route-config-summary { margin: 0 0 12px; }
+.route-input-editor { border-left: 2px solid #d9dee7; padding-left: 12px; }
+.route-input-editor h3 { color: #243449; font-size: 13px; margin: 0 0 10px; }
+.route-input-editor label, .route-input-field legend { color: #35445a; display: grid; font-size: 12px; font-weight: 700; gap: 5px; }
+.route-input-editor input:not([type="checkbox"]), .route-input-editor select, .route-input-editor textarea { background: #fff; border: 1px solid #b8c1ce; border-radius: 3px; box-sizing: border-box; color: #18212d; font: 12px/1.45 "SFMono-Regular", Consolas, "Liberation Mono", monospace; min-width: 0; padding: 6px 7px; width: 100%; }
+.route-input-editor input[type="checkbox"] { height: 16px; margin: 1px 0; width: 16px; }
+.route-input-field { border: 0; margin: 0 0 10px; min-width: 0; padding: 0; }
+.route-input-field p, .route-input-note, .route-input-honesty { color: #697383; font-size: 11px; line-height: 1.45; margin: 4px 0 0; }
+.route-input-note { border-top: 1px solid #e4e8ef; margin-top: 10px; padding-top: 8px; }
+.route-input-array-row { align-items: center; display: grid; gap: 7px; grid-template-columns: minmax(0, 1fr) auto; margin-bottom: 6px; }
+.route-input-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.route-input-editor button { background: #f5f7fa; border: 1px solid #aeb8c6; border-radius: 3px; color: #26364b; cursor: pointer; font-size: 11px; font-weight: 650; padding: 5px 8px; }
+.route-input-editor button:disabled { cursor: not-allowed; opacity: .5; }
+.route-input-error { color: #aa1f2a; display: block; font-size: 11px; margin-top: 4px; }
+.route-cli-invocation { align-items: end; display: grid; gap: 7px; grid-template-columns: minmax(0, 1fr) auto; margin-top: 10px; }

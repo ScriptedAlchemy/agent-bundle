@@ -1,4 +1,5 @@
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
+import type { JsonObject, JsonValue } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type {
   RouteManifest,
   RouteManifestCliCommand,
@@ -6,6 +7,9 @@ import type {
   RouteManifestKind,
   RouteManifestRoute,
   RouteManifestServerMode,
+  RouteInputArrayItemSchema,
+  RouteInputPropertySchema,
+  RouteInputSchema,
 } from '../../../agent-bundle/src/contracts/routes.ts';
 
 /**
@@ -32,6 +36,7 @@ export interface RouteCatalogEntry {
   readonly description?: string;
   readonly event?: string;
   readonly id: string;
+  readonly inputSchema?: RouteInputSchema;
   readonly kind: RouteManifestKind;
   readonly provenance: 'conventional';
   readonly source: string;
@@ -77,6 +82,30 @@ export interface RouteCatalog {
   readonly state: RouteCatalogState;
 }
 
+export type RouteInputDraftValue = boolean | string | readonly (boolean | string)[];
+export type RouteInputDraft = Readonly<Record<string, RouteInputDraftValue>>;
+export type RouteInputArguments = JsonObject;
+
+export interface RouteInputValidation {
+  readonly arguments?: RouteInputArguments;
+  readonly errors: Readonly<Record<string, string>>;
+}
+
+export interface RawRouteInputValidation {
+  readonly arguments?: RouteInputArguments;
+  readonly error?: string;
+}
+
+export interface McpToolPrefill {
+  readonly arguments: RouteInputArguments;
+  readonly serverName: string;
+  readonly toolName: string;
+}
+
+export interface McpToolPrefillNavigationState {
+  readonly mcpToolPrefill: McpToolPrefill;
+}
+
 const kindLabels: Readonly<Record<RouteManifestKind, string>> = Object.freeze({
   app: 'MCP Apps',
   cli: 'CLI commands',
@@ -97,6 +126,7 @@ const entryFor = (route: RouteManifestRoute, command?: RouteManifestCliCommand):
   ...(route.description === undefined ? {} : { description: route.description }),
   ...(route.event === undefined ? {} : { event: route.event }),
   id: route.id,
+  ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
   kind: route.kind,
   provenance: route.provenance.kind,
   source: route.source,
@@ -182,3 +212,241 @@ export const routeCatalogHasKind = (catalog: RouteCatalog, kind: RouteManifestKi
 
 export const routeCatalogServerCount = (catalog: RouteCatalog): number =>
   catalog.servers.length;
+
+const defaultDraftValue = (schema: RouteInputPropertySchema): RouteInputDraftValue => {
+  if (schema.default !== undefined) {
+    if (Array.isArray(schema.default)) {
+      return Object.freeze(schema.default.map((value) => typeof value === 'boolean' ? value : String(value)));
+    }
+    return typeof schema.default === 'boolean' ? schema.default : String(schema.default);
+  }
+  if (schema.type === 'boolean') return false;
+  if (schema.type === 'array') return Object.freeze([]);
+  return '';
+};
+
+export const createRouteInputDraft = (schema: RouteInputSchema): RouteInputDraft => Object.freeze(
+  Object.fromEntries(Object.keys(schema.properties).sort().map((key) => [
+    key,
+    defaultDraftValue(schema.properties[key]!),
+  ])),
+);
+
+export const routeInputLabel = (key: string): string => {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
+    .replace(/[-_]+/gu, ' ')
+    .trim();
+  return words.length === 0 ? key : `${words[0]!.toUpperCase()}${words.slice(1)}`;
+};
+
+const scalarArgument = (
+  schema: RouteInputArrayItemSchema | Exclude<RouteInputPropertySchema, { readonly type: 'array' }>,
+  value: RouteInputDraftValue | undefined,
+): boolean | number | string | undefined => {
+  switch (schema.type) {
+    case 'boolean':
+      return typeof value === 'boolean' ? value : undefined;
+    case 'number':
+      return typeof value === 'string' && value.trim().length > 0 ? Number(value) : undefined;
+    case 'string':
+      return typeof value === 'string' && value.length > 0 ? value : undefined;
+    default: {
+      const unreachable: never = schema;
+      throw new TypeError(`Unhandled route input scalar ${String(unreachable)}.`);
+    }
+  }
+};
+
+const scalarError = (
+  schema: RouteInputArrayItemSchema | Exclude<RouteInputPropertySchema, { readonly type: 'array' }>,
+  value: RouteInputDraftValue | undefined,
+  label: string,
+): string | undefined => {
+  switch (schema.type) {
+    case 'boolean':
+      return typeof value === 'boolean' ? undefined : `${label} must be true or false.`;
+    case 'number':
+      return typeof value !== 'string' || value.trim().length === 0 || !Number.isFinite(Number(value))
+        ? `${label} must be a number.`
+        : undefined;
+    case 'string': {
+      if (typeof value !== 'string' || value.length === 0) return `${label} is required.`;
+      return schema.enum !== undefined && !schema.enum.includes(value)
+        ? `${label} must be one of: ${schema.enum.join(', ')}.`
+        : undefined;
+    }
+    default: {
+      const unreachable: never = schema;
+      throw new TypeError(`Unhandled route input scalar ${String(unreachable)}.`);
+    }
+  }
+};
+
+export const validateRouteInput = (
+  schema: RouteInputSchema,
+  draft: RouteInputDraft,
+): RouteInputValidation => {
+  const argumentsValue: Record<string, boolean | number | string | readonly (boolean | number | string)[]> = {};
+  const errors: Record<string, string> = {};
+  const required = new Set(schema.required ?? []);
+  for (const key of Object.keys(schema.properties).sort()) {
+    const property = schema.properties[key]!;
+    const value = draft[key];
+    const label = routeInputLabel(key);
+    if (property.type === 'array') {
+      if (!Array.isArray(value)) {
+        if (required.has(key)) errors[key] = `${label} is required.`;
+        continue;
+      }
+      if (value.length === 0) {
+        if (required.has(key)) errors[key] = `${label} is required.`;
+        continue;
+      }
+      const parsed: (boolean | number | string)[] = [];
+      for (const [index, item] of value.entries()) {
+        const error = scalarError(property.items, item, `${label} item ${String(index + 1)}`);
+        if (error !== undefined) {
+          errors[key] = error;
+          break;
+        }
+        parsed.push(scalarArgument(property.items, item)!);
+      }
+      if (errors[key] === undefined) argumentsValue[key] = parsed;
+      continue;
+    }
+    const absent = property.type === 'boolean'
+      ? typeof value !== 'boolean'
+      : typeof value !== 'string' || value.length === 0;
+    if (absent && !required.has(key)) continue;
+    const error = scalarError(property, value, label);
+    if (error !== undefined) {
+      errors[key] = error;
+      continue;
+    }
+    argumentsValue[key] = scalarArgument(property, value)!;
+  }
+  return Object.keys(errors).length > 0
+    ? { errors }
+    : { arguments: Object.freeze(argumentsValue), errors };
+};
+
+export const validateRawRouteInput = (text: string): RawRouteInputValidation => {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { error: 'Enter a valid JSON object.' };
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { error: 'Arguments must be a JSON object.' };
+  }
+  return { arguments: Object.freeze(value as JsonObject) };
+};
+
+const cliOperand = (option: RouteManifestCliCommand['options'][number]): string => {
+  const kind = option.kind === 'enum' ? option.choices?.join('|') ?? 'string' : option.kind;
+  return `<${kind}${option.repeated ? '...' : ''}>`;
+};
+
+export const cliCommandUsage = (command: RouteManifestCliCommand): string => {
+  const positionals = command.options.filter((option) => option.positional !== undefined)
+    .toSorted((left, right) => left.positional! - right.positional!)
+    .map((option) => option.required
+      ? `<${option.key}${option.repeated ? '...' : ''}>`
+      : `[${option.key}${option.repeated ? '...' : ''}]`);
+  const flags = command.options.filter((option) => option.positional === undefined)
+    .map((option) => {
+      const value = option.kind === 'boolean' ? `--${option.option}` : `--${option.option} ${cliOperand(option)}`;
+      return option.required ? value : `[${value}]`;
+    });
+  return [...command.path, ...positionals, ...flags].join(' ');
+};
+
+const shellToken = (value: unknown): string => {
+  const text = String(value);
+  return /^[A-Za-z0-9_./:@%+=,-]+$/u.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
+};
+
+export const cliCommandInvocation = (
+  command: RouteManifestCliCommand,
+  argumentsValue: RouteInputArguments,
+): string | undefined => {
+  const argv = [...command.path];
+  const appendValues = (option: RouteManifestCliCommand['options'][number], positional: boolean): boolean => {
+    const value = argumentsValue[option.key];
+    if (option.kind === 'boolean') {
+      if (value === true && !positional) argv.push(`--${option.option}`);
+      return value !== undefined || !option.required;
+    }
+    const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    if (values.length === 0) return !option.required;
+    for (const item of values) {
+      if (!positional) argv.push(`--${option.option}`);
+      argv.push(shellToken(item));
+    }
+    return true;
+  };
+  const positionals = command.options.filter((option) => option.positional !== undefined)
+    .toSorted((left, right) => left.positional! - right.positional!);
+  if (positionals.some((option) => !appendValues(option, true))) return undefined;
+  for (const option of command.options.filter((candidate) => candidate.positional === undefined)) {
+    if (!appendValues(option, false)) return undefined;
+  }
+  return argv.join(' ');
+};
+
+export const mcpToolPrefillFor = (
+  group: RouteCatalogGroup,
+  entry: RouteCatalogEntry,
+  argumentsValue: RouteInputArguments,
+): McpToolPrefill | undefined => {
+  if (entry.kind !== 'tool' || group.serverId?.startsWith('mcp:') !== true) return undefined;
+  const slash = entry.id.lastIndexOf('/');
+  if (slash < 0 || slash === entry.id.length - 1) return undefined;
+  return Object.freeze({
+    arguments: argumentsValue,
+    serverName: group.serverId.slice('mcp:'.length),
+    toolName: entry.id.slice(slash + 1),
+  });
+};
+
+const navigationJsonValue = (value: unknown, ancestors = new WeakSet<object>()): value is JsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || ancestors.has(value)) return false;
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) return value.every((entry) => navigationJsonValue(entry, ancestors));
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return false;
+    return Object.values(value).every((entry) => navigationJsonValue(entry, ancestors));
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
+const navigationJsonObject = (value: unknown): value is JsonObject =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) && navigationJsonValue(value);
+
+export const mcpToolPrefillNavigationState = (
+  prefill: McpToolPrefill,
+): McpToolPrefillNavigationState => Object.freeze({ mcpToolPrefill: prefill });
+
+export const mcpToolPrefillFromNavigationState = (value: unknown): McpToolPrefill | undefined => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const prefill = Reflect.get(value, 'mcpToolPrefill') as unknown;
+  if (typeof prefill !== 'object' || prefill === null || Array.isArray(prefill)) return undefined;
+  const argumentsValue = Reflect.get(prefill, 'arguments') as unknown;
+  const serverName = Reflect.get(prefill, 'serverName') as unknown;
+  const toolName = Reflect.get(prefill, 'toolName') as unknown;
+  if (
+    typeof serverName !== 'string' || serverName.length === 0 ||
+    typeof toolName !== 'string' || toolName.length === 0 ||
+    !navigationJsonObject(argumentsValue)
+  ) return undefined;
+  return Object.freeze({
+    arguments: argumentsValue,
+    serverName,
+    toolName,
+  });
+};

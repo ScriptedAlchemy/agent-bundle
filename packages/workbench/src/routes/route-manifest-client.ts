@@ -10,6 +10,10 @@ import type {
   RouteManifestProvider,
   RouteManifestRoute,
   RouteManifestServer,
+  RouteInputArrayItemSchema,
+  RouteInputPropertySchema,
+  RouteInputSchema,
+  RouteInputSchemaLiteral,
 } from '../../../agent-bundle/src/contracts/routes.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 
@@ -46,11 +50,56 @@ const configEntrySchema: z.ZodType<RouteManifestConfigEntry> = z.strictObject({
   value: z.string(),
 });
 
+const inputSchemaScalarLiteral = z.union([z.boolean(), z.number().finite(), z.string()]);
+const inputSchemaLiteral: z.ZodType<RouteInputSchemaLiteral> = z.union([
+  inputSchemaScalarLiteral,
+  z.array(inputSchemaScalarLiteral),
+]);
+
+const inputSchemaArrayItem: z.ZodType<RouteInputArrayItemSchema> = z.union([
+  z.strictObject({ type: z.literal('boolean') }),
+  z.strictObject({ type: z.literal('number') }),
+  z.strictObject({ enum: z.array(z.string()).optional(), type: z.literal('string') }),
+]);
+
+const inputSchemaProperty: z.ZodType<RouteInputPropertySchema> = z.union([
+  z.strictObject({
+    default: inputSchemaLiteral.optional(),
+    description: z.string().optional(),
+    enum: z.array(z.string()).optional(),
+    type: z.literal('string'),
+  }),
+  z.strictObject({
+    default: inputSchemaLiteral.optional(),
+    description: z.string().optional(),
+    type: z.literal('number'),
+  }),
+  z.strictObject({
+    default: inputSchemaLiteral.optional(),
+    description: z.string().optional(),
+    type: z.literal('boolean'),
+  }),
+  z.strictObject({
+    default: inputSchemaLiteral.optional(),
+    description: z.string().optional(),
+    items: inputSchemaArrayItem,
+    type: z.literal('array'),
+  }),
+]);
+
+const inputSchema: z.ZodType<RouteInputSchema> = z.strictObject({
+  additionalProperties: z.literal(false),
+  properties: z.record(z.string(), inputSchemaProperty),
+  required: z.array(z.string()).optional(),
+  type: z.literal('object'),
+});
+
 const routeSchema: z.ZodType<RouteManifestRoute> = z.strictObject({
   config: z.array(configEntrySchema),
   description: z.string().optional(),
   event: z.string().optional(),
   id: z.string(),
+  inputSchema: inputSchema.optional(),
   kind: z.enum(['app', 'cli', 'event-route', 'prompt', 'resource', 'script', 'tool']),
   provenance: z.strictObject({ kind: z.literal('conventional') }),
   serverId: z.string().optional(),

@@ -2,11 +2,19 @@ import { expect, it } from '@rstest/core';
 
 import type { RouteManifest } from '../../agent-bundle/src/contracts/routes.ts';
 import {
+  cliCommandInvocation,
+  cliCommandUsage,
+  createRouteInputDraft,
+  mcpToolPrefillFromNavigationState,
+  mcpToolPrefillFor,
+  mcpToolPrefillNavigationState,
   routeCatalogFor,
   routeCatalogHasKind,
   routeCatalogServerCount,
   routeKindLabel,
   unavailableRouteCatalog,
+  validateRawRouteInput,
+  validateRouteInput,
 } from '../src/routes/routes-model.ts';
 
 const manifest: RouteManifest = {
@@ -73,6 +81,17 @@ const manifest: RouteManifest = {
         {
           config: [{ key: 'title', kind: 'string', value: 'Echo' }],
           id: 'tool:alpha/echo',
+          inputSchema: {
+            additionalProperties: false,
+            properties: {
+              count: { default: 2, description: 'Repeat count.', type: 'number' },
+              enabled: { default: true, type: 'boolean' },
+              format: { enum: ['text', 'json'], type: 'string' },
+              tags: { items: { type: 'string' }, type: 'array' },
+            },
+            required: ['format'],
+            type: 'object',
+          },
           kind: 'tool',
           provenance: { kind: 'conventional' },
           serverId: 'mcp:alpha',
@@ -159,6 +178,103 @@ it('attaches the compiled command to its CLI route entry', () => {
 
   expect(entry?.command?.path).toEqual(['library', 'audit']);
   expect(entry?.command?.options.map((option) => option.key)).toEqual(['input', 'verbose']);
+});
+
+it('prefills projected defaults and validates typed route input before invoke', () => {
+  const catalog = routeCatalogFor(manifest);
+  const entry = catalog.groups[0]!.entries.find((candidate) => candidate.id === 'tool:alpha/echo')!;
+  const draft = createRouteInputDraft(entry.inputSchema!);
+
+  expect(draft).toEqual({ count: '2', enabled: true, format: '', tags: [] });
+  expect(validateRouteInput(entry.inputSchema!, draft)).toEqual({
+    errors: { format: 'Format is required.' },
+  });
+
+  const invalid = validateRouteInput(entry.inputSchema!, {
+    ...draft,
+    count: 'many',
+    format: 'yaml',
+    tags: ['one', ''],
+  });
+  expect(invalid.errors).toEqual({
+    count: 'Count must be a number.',
+    format: 'Format must be one of: text, json.',
+    tags: 'Tags item 2 is required.',
+  });
+
+  const valid = validateRouteInput(entry.inputSchema!, {
+    ...draft,
+    count: '4',
+    format: 'json',
+    tags: ['fiction', 'history'],
+  });
+  expect(valid).toEqual({
+    arguments: {
+      count: 4,
+      enabled: true,
+      format: 'json',
+      tags: ['fiction', 'history'],
+    },
+    errors: {},
+  });
+});
+
+it('validates the raw JSON fallback without inventing a schema', () => {
+  expect(validateRawRouteInput('{')).toEqual({ error: 'Enter a valid JSON object.' });
+  expect(validateRawRouteInput('[]')).toEqual({ error: 'Arguments must be a JSON object.' });
+  expect(validateRawRouteInput('{"root":"/library"}')).toEqual({
+    arguments: { root: '/library' },
+  });
+});
+
+it('formats CLI usage and a shell-copyable invocation from validated input', () => {
+  const command = {
+    aliases: [],
+    exitCode: 'zero' as const,
+    options: [
+      { key: 'input', kind: 'string' as const, option: 'input', positional: 0, repeated: false, required: true },
+      { choices: ['text', 'json'], key: 'format', kind: 'enum' as const, option: 'format', repeated: false, required: false },
+      { key: 'tag', kind: 'string' as const, option: 'tag', repeated: true, required: false },
+      { key: 'verbose', kind: 'boolean' as const, option: 'verbose', repeated: false, required: false },
+    ],
+    path: ['library', 'audit'],
+    routeId: 'cli:library/audit',
+  };
+
+  expect(cliCommandUsage(command)).toBe(
+    'library audit <input> [--format <text|json>] [--tag <string...>] [--verbose]',
+  );
+  expect(cliCommandInvocation(command, {
+    format: 'json',
+    input: '/Audio Books',
+    tag: ['fiction', 'history'],
+    verbose: true,
+  })).toBe("library audit '/Audio Books' --format json --tag fiction --tag history --verbose");
+});
+
+it('maps a tool route server id and final route segment into an MCP prefill', () => {
+  const catalog = routeCatalogFor(manifest);
+  const group = catalog.groups[0]!;
+  const entry = group.entries.find((candidate) => candidate.id === 'tool:alpha/echo')!;
+
+  expect(mcpToolPrefillFor(group, entry, { format: 'json' })).toEqual({
+    arguments: { format: 'json' },
+    serverName: 'alpha',
+    toolName: 'echo',
+  });
+});
+
+it('round-trips only well-shaped MCP prefills through hash navigation state', () => {
+  const prefill = {
+    arguments: { format: 'json' },
+    serverName: 'alpha',
+    toolName: 'echo',
+  };
+  const state = mcpToolPrefillNavigationState(prefill);
+
+  expect(mcpToolPrefillFromNavigationState(state)).toEqual(prefill);
+  expect(mcpToolPrefillFromNavigationState({ mcpToolPrefill: { ...prefill, toolName: '' } })).toBeUndefined();
+  expect(mcpToolPrefillFromNavigationState({ mcpToolPrefill: { ...prefill, arguments: [] } })).toBeUndefined();
 });
 
 it('sorts providers by name and keeps route provenance on every entry', () => {

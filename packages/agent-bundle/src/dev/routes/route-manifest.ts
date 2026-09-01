@@ -11,6 +11,7 @@ import type {
   CompiledRouteKind,
   CompiledServerMode,
   CompiledServerSurface,
+  RouteInputSchema,
 } from '../../routes/types.ts';
 
 /** Mirrors {@link CompiledRouteKind}: the catalog groups by the compiler's own kinds. */
@@ -51,6 +52,8 @@ export interface RouteManifestRoute {
   /** Canonical event identity; `event-route` routes only. */
   readonly event?: string;
   readonly id: string;
+  /** Bounded JSON Schema projection; absent when the route schema is richer than the static grammar. */
+  readonly inputSchema?: RouteInputSchema;
   readonly kind: RouteManifestKind;
   readonly provenance: RouteManifestProvenance;
   /** The owning MCP server id (`mcp:<name>`); MCP route kinds only. */
@@ -175,6 +178,7 @@ const manifestRoute = (route: CompiledAgentRoute): RouteManifestRoute => {
     ...(summary === undefined ? {} : { description: summary }),
     ...(route.event === undefined ? {} : { event: route.event }),
     id: route.id,
+    ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
     kind: route.kind,
     provenance: { kind: route.provenance.kind },
     ...(route.serverId === undefined ? {} : { serverId: route.serverId }),

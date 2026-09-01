@@ -48,6 +48,16 @@ const manifest: RouteManifest = {
       config: [{ key: 'title', kind: 'string', value: 'Echo' }],
       description: 'Echo the request back',
       id: 'tool:library/echo',
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          count: { default: 2, description: 'Repeat count.', type: 'number' },
+          format: { enum: ['text', 'json'], type: 'string' },
+          tags: { items: { type: 'string' }, type: 'array' },
+        },
+        required: ['format'],
+        type: 'object',
+      },
       kind: 'tool',
       provenance: { kind: 'conventional' },
       serverId: 'mcp:library',
@@ -78,6 +88,7 @@ it('shows the argv projection of a compiled CLI command', () => {
   const markup = render(routeCatalogFor(manifest));
 
   expect(markup).toContain('library audit &lt;input&gt; [--verbose]');
+  expect(markup).toContain('Schema not statically projectable');
 });
 
 it('leads the usage line with positionals in argv order regardless of option order', () => {
@@ -126,6 +137,28 @@ it('formats optional positionals and enum flags like generated CLI help', () => 
   const markup = render(routeCatalogFor(optionalInputs));
 
   expect(markup).toContain('publish [output-directory] [extra-source...] [--format &lt;mp3|opus&gt;]');
+});
+
+it('renders generated fields, descriptions, defaults, required markers, and a gated MCP handoff', () => {
+  const markup = render(routeCatalogFor(manifest));
+
+  expect(markup).toContain('Generated input editor');
+  expect(markup).toContain('Repeat count.');
+  expect(markup).toContain('value="2"');
+  expect(markup).toContain('Format (required)');
+  expect(markup).toContain('<option value="json">json</option>');
+  expect(markup).toContain('Add Tags item');
+  expect(markup).toContain('Full schema validation runs during execution.');
+  expect(markup).toContain('Open in MCP session');
+  expect(markup).toContain('disabled=""');
+});
+
+it('renders an honest JSON fallback and no invoke control for non-tool routes', () => {
+  const markup = render(routeCatalogFor(manifest));
+
+  expect(markup).toContain('Schema not statically projectable; enter a JSON object.');
+  expect(markup).toContain('Validation only; this route kind is not invokable from Routes.');
+  expect(markup.match(/Open in MCP session/gu)).toHaveLength(1);
 });
 
 it('shows the canonical event beside an event route', () => {

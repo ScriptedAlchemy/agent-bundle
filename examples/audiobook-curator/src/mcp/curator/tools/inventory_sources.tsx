@@ -1,5 +1,6 @@
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
+import { z } from 'zod';
 
 import { CuratorResult, type CuratorReceipt } from '../../../result.js';
 import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
@@ -7,7 +8,10 @@ import { defaultDiscoveryOperations, discoveryOperations } from '../../../operat
 const operation = discoveryOperations(defaultDiscoveryOperations).inventory;
 
 export const config = {"annotations":{"readOnlyHint":false},"description":"Inventory source audio with retained per-file probe evidence."};
-export const inputSchema = operation.inputSchema;
+export const inputSchema = z.object({
+  inventory: z.string().min(1).max(4096).describe('Source audio path to inventory.'),
+  report: z.string().min(1).max(4096).optional().describe('Optional report destination.'),
+}).strict();
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {

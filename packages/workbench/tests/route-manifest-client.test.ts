@@ -67,6 +67,17 @@ const manifest = {
     routes: [{
       config: [{ key: 'title', kind: 'string', value: 'Echo' }],
       id: 'tool:library/echo',
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          count: { description: 'Repeat count.', type: 'number' },
+          enabled: { default: true, type: 'boolean' },
+          format: { enum: ['text', 'json'], type: 'string' },
+          tags: { items: { type: 'string' }, type: 'array' },
+        },
+        required: ['count', 'format'],
+        type: 'object',
+      },
       kind: 'tool',
       provenance: { kind: 'conventional' },
       serverId: 'mcp:library',
@@ -106,6 +117,10 @@ it('reads the compiled manifest over the shared foreground session', async () =>
 
   expect(decoded.digest).toBe('d'.repeat(64));
   expect(decoded.servers[0]?.routes[0]?.id).toBe('tool:library/echo');
+  expect(decoded.servers[0]?.routes[0]?.inputSchema?.properties.format).toEqual({
+    enum: ['text', 'json'],
+    type: 'string',
+  });
   expect(decoded.cli?.commands?.[0]?.path).toEqual(['library', 'audit']);
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/routes/manifest' }]);
 });
@@ -131,6 +146,42 @@ it('rejects an unknown field on a compiled route', async () => {
   }));
 
   await expect(client.manifest()).rejects.toMatchObject({ code: 'AB8123' });
+});
+
+it('rejects unknown fields at every input-schema level', async () => {
+  const route = manifest.servers[0]!.routes[0]!;
+  const inputSchema = route.inputSchema!;
+  const invalidProperty = {
+    ...route,
+    inputSchema: {
+      ...inputSchema,
+      properties: {
+        ...inputSchema.properties,
+        count: { ...inputSchema.properties.count, minimum: 1 },
+      },
+    },
+  };
+  const invalidItems = {
+    ...route,
+    inputSchema: {
+      ...inputSchema,
+      properties: {
+        ...inputSchema.properties,
+        tags: { ...inputSchema.properties.tags, items: { format: 'uri', type: 'string' } },
+      },
+    },
+  };
+  const invalidRoot = { ...route, inputSchema: { ...inputSchema, title: 'Echo input' } };
+
+  for (const candidate of [invalidProperty, invalidItems, invalidRoot]) {
+    const client = clientFor(() => response({
+      manifest: {
+        ...manifest,
+        servers: [{ ...manifest.servers[0], routes: [candidate] }],
+      },
+    }));
+    await expect(client.manifest()).rejects.toMatchObject({ code: 'AB8123' });
+  }
 });
 
 it('rejects a route kind the compiler cannot emit', async () => {

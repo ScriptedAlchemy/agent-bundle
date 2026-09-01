@@ -136,6 +136,61 @@ it('compiles the conventional tree into one frozen graph with a machine-independ
   expect(isEmptyRouteGraph(graph)).toBe(false);
 });
 
+it('populates bounded input schemas for every route kind and includes them in the digest', async () => {
+  const root = await createRoot();
+  const bounded = (config = '') => [
+    config,
+    "export const inputSchema = z.object({ count: z.number().optional(), root: z.string().describe('Project root.') }).strict();",
+    'export const resultSchema = {};',
+    'export default async () => undefined;',
+    '',
+  ].join('\n');
+  const tree = {
+    'src/cli/audit.ts': bounded(),
+    'src/events/stop.ts': bounded(),
+    'src/mcp/curator/apps/dashboard.tsx': bounded("export const config = { resourceUri: 'ui://curator/dashboard.html' };"),
+    'src/mcp/curator/prompts/curate.ts': bounded(),
+    'src/mcp/curator/resources/catalog.ts': bounded(),
+    'src/mcp/curator/tools/inspect.ts': bounded(),
+    'src/mcp/curator/tools/rich.ts': [
+      'const sharedSchema = z.object({ nested: z.object({ value: z.string() }) });',
+      'export const inputSchema = sharedSchema;',
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+    'src/scripts/rebuild.ts': bounded(),
+  };
+  await writeTree(root, tree);
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  const routes = [
+    ...graph.servers.flatMap((server) => server.routes),
+    ...graph.events,
+    ...graph.cli!.routes,
+    ...graph.scripts,
+  ];
+  expect(graph.diagnostics).toEqual([]);
+  expect(routes.filter((route) => route.id !== 'tool:curator/rich').every((route) => route.inputSchema !== undefined)).toBe(true);
+  expect(routes.find((route) => route.id === 'tool:curator/rich')?.inputSchema).toBeUndefined();
+  expect(routes.find((route) => route.id === 'tool:curator/inspect')?.inputSchema).toEqual({
+    additionalProperties: false,
+    properties: {
+      count: { type: 'number' },
+      root: { description: 'Project root.', type: 'string' },
+    },
+    required: ['root'],
+    type: 'object',
+  });
+
+  const changedRoot = await createRoot();
+  await writeTree(changedRoot, tree);
+  const inspectPath = join(changedRoot, 'src/mcp/curator/tools/inspect.ts');
+  await writeFile(inspectPath, (await readFile(inspectPath, 'utf8')).replace('Project root.', 'Workspace root.'));
+  const changed = await compileRouteGraph(changedRoot, fixtureConfig());
+  expect(changed.digest).not.toBe(graph.digest);
+});
+
 it('skips ignored paths, private segments, and declaration files', async () => {
   const root = await createRoot();
   await writeTree(root, {

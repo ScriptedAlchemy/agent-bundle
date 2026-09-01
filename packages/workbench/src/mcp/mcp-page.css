@@ -24,7 +24,8 @@
 .mcp-page-recovery,
 .mcp-page-diagnostics,
 .mcp-page-app-controls,
-.mcp-page-app-preview {
+.mcp-page-app-preview,
+.mcp-page-prefill {
   background: #16202e;
   border: 1px solid #34465d;
   border-radius: 0.75rem;
@@ -82,6 +83,20 @@
 .mcp-page-section {
   display: grid;
   gap: 1rem;
+}
+
+.mcp-page-prefill {
+  background: #142b47;
+  border-left: 3px solid #72aef7;
+}
+
+.mcp-page-prefill p {
+  margin-top: 0.45rem;
+}
+
+.mcp-page-prefill pre {
+  max-height: 11rem;
+  overflow: auto;
 }
 
 .mcp-page-trace details {
