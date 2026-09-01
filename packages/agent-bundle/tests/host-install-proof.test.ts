@@ -90,6 +90,19 @@ codexPluginIt(
     expect(report, proofLabel).toEqual({
       host: 'codex',
       install: { state: 'installed', version: '1.0.0' },
+      manifest: {
+        interfaceCapabilities: ['hooks', 'mcp', 'skills'],
+        interfaceFields: [
+          'capabilities',
+          'category',
+          'defaultPrompt',
+          'developerName',
+          'displayName',
+          'longDescription',
+          'shortDescription',
+        ],
+        path: '.codex-plugin/plugin.json',
+      },
       proofLevel: proofLabel,
       registration: {
         cachePath: 'plugins/cache/host-install-proof-marketplace/host-install-proof/1.0.0',
@@ -97,6 +110,12 @@ codexPluginIt(
         version: '1.0.0',
       },
       skill: 'plugins/cache/host-install-proof-marketplace/host-install-proof/1.0.0/skills/probe/SKILL.md',
+      skillSidecar: {
+        matchesBuiltArtifact: true,
+        path: 'skills/probe/agents/openai.yaml',
+        schema: 'schema-valid',
+        sections: ['dependencies', 'interface', 'policy'],
+      },
       status: 'passed',
     });
     expectHygienicReport(report);
@@ -116,6 +135,16 @@ it('installs into an isolated Cursor home, validates schemas, and is idempotent'
     },
     host: 'cursor',
     install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+    pluginRootVariable: {
+      locations: [
+        'hooks/hooks.json#/hooks/sessionStart/0/command',
+        'mcp.json#/mcpServers/probe/args/0',
+        'mcp.json#/mcpServers/probe/env/AGENT_BUNDLE_PLUGIN_ROOT',
+      ],
+      resolvedAtInstall: false,
+      sessionEvidence: 'unavailable: Cursor exposes no non-interactive plugin-loading session surface',
+      spelling: '${CURSOR_PLUGIN_ROOT}',
+    },
     proofLevel: proofLabel,
     skill: '.cursor/plugins/local/host-install-proof/skills/probe/SKILL.md',
     status: 'passed',

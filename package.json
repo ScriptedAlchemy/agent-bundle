@@ -34,6 +34,8 @@
     "test:packed:native:codex": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CODEX_SMOKE=1 pnpm test:packed:native",
     "test:host-install": "rstest --config rstest.config.ts packages/agent-bundle/tests/host-install-proof.test.ts",
     "test:host-install:build": "pnpm build && pnpm test:host-install",
+    "test:host-install:session": "rstest --config rstest.config.ts packages/agent-bundle/tests/host-install-session.test.ts",
+    "test:host-install:session:claude": "pnpm build && AGENT_BUNDLE_HOST_INSTALL_CLAUDE_SESSION=1 pnpm test:host-install:session",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "pnpm build && changeset publish",
