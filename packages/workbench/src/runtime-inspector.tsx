@@ -1,10 +1,13 @@
-import React, { useRef, useState, type KeyboardEvent } from 'react';
+import React, { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { DevRuntimeDiagnostic, DevRuntimeRun, DevRuntimeStatus, DevRuntimeSurface, DevRuntimeTreeNode } from '../../agent-bundle/src/contracts/runtime.ts';
 import { RuntimeEvidence } from './runtime-evidence.tsx';
 import type { RuntimeInspectorTab } from './runtime-model.ts';
+import type { AgentRenderEvent } from './runtime/agent-document-client.ts';
+import { AgentDocumentStage } from './runtime/agent-document-stage.tsx';
 
 export interface RuntimeInspectorProps {
+  readonly loadDocumentEvents?: (runId: string, signal?: AbortSignal) => Promise<readonly AgentRenderEvent[]>;
   readonly onDownloadFlight?: (run: DevRuntimeRun) => void;
   readonly onTabChange?: (tab: RuntimeInspectorTab) => void;
   /** Presentation-only span disclosure; trace details always render when absent. */
@@ -21,6 +24,7 @@ export interface RuntimeInspectorProps {
 const tabs: readonly Readonly<{ readonly id: RuntimeInspectorTab; readonly label: string }>[] = [
   { id: 'tree', label: 'Tree' },
   { id: 'result', label: 'Result' },
+  { id: 'document', label: 'Document' },
   { id: 'flight', label: 'Flight' },
   { id: 'protocol', label: 'Protocol' },
   { id: 'state', label: 'State' },
@@ -51,7 +55,51 @@ const resultDiagnostics = (run: DevRuntimeRun | undefined, status: DevRuntimeSta
   ...(run?.status === 'failed' ? run.diagnostics : []),
 ];
 
-export const RuntimeInspector = ({ onDownloadFlight, onTabChange, run, status, surface, tab, traceExpansion }: RuntimeInspectorProps): React.ReactNode => {
+type RuntimeDocumentState =
+  | Readonly<{ readonly phase: 'idle' }>
+  | Readonly<{ readonly phase: 'loading'; readonly runId: string }>
+  | Readonly<{ readonly events: readonly AgentRenderEvent[]; readonly phase: 'ready'; readonly runId: string }>
+  | Readonly<{ readonly message: string; readonly phase: 'error'; readonly runId: string }>;
+
+const RuntimeDocumentPanel = ({ loadDocumentEvents, run }: Pick<RuntimeInspectorProps, 'loadDocumentEvents' | 'run'>): React.ReactNode => {
+  const [state, setState] = useState<RuntimeDocumentState>({ phase: 'idle' });
+  const selected = run?.status === 'succeeded' ? run.result : undefined;
+  const canLoad = run?.status === 'succeeded' && selected?.flight !== undefined && loadDocumentEvents !== undefined;
+
+  useEffect(() => {
+    if (!canLoad || run === undefined || loadDocumentEvents === undefined) {
+      setState({ phase: 'idle' });
+      return;
+    }
+    const controller = new AbortController();
+    setState({ phase: 'loading', runId: run.id });
+    void loadDocumentEvents(run.id, controller.signal).then(
+      (events) => {
+        if (!controller.signal.aborted) setState({ events, phase: 'ready', runId: run.id });
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) {
+          setState({
+            message: error instanceof Error ? error.message : 'Agent Document request could not be completed.',
+            phase: 'error',
+            runId: run.id,
+          });
+        }
+      },
+    );
+    return () => controller.abort();
+  }, [canLoad, loadDocumentEvents, run]);
+
+  if (run === undefined) return <p>Select a runtime run to inspect its Agent Document.</p>;
+  if (run.status !== 'succeeded') return <p role="alert">This run did not succeed, so it has no decodable Agent Document.</p>;
+  if (selected?.flight === undefined) return <p role="alert">This run has no stored Flight payload to decode as an Agent Document.</p>;
+  if (loadDocumentEvents === undefined) return <p role="alert">Agent Document loading is not available in this Workbench session.</p>;
+  if (state.phase === 'idle' || state.runId !== run.id || state.phase === 'loading') return <p role="status">Loading Agent Document…</p>;
+  if (state.phase === 'error') return <p role="alert">{state.message}</p>;
+  return <AgentDocumentStage events={state.events} />;
+};
+
+export const RuntimeInspector = ({ loadDocumentEvents, onDownloadFlight, onTabChange, run, status, surface, tab, traceExpansion }: RuntimeInspectorProps): React.ReactNode => {
   const [internalTab, setInternalTab] = useState<RuntimeInspectorTab>('tree');
   const [treeExpanded, setTreeExpanded] = useState(true);
   const [showProps, setShowProps] = useState(false);
@@ -105,6 +153,7 @@ export const RuntimeInspector = ({ onDownloadFlight, onTabChange, run, status, s
         <h2>Result</h2>
         {selected === undefined ? <p>No result is available.</p> : <pre><code>{display({ agentVisible: selected.agentVisible, modelVisible: selected.modelVisible, native: selected.native, protocol: surface?.kind === 'mcp-tool' || surface?.kind === 'mcp-resource' || surface?.kind === 'mcp-app' ? undefined : selected.protocol })}</code></pre>}
       </> : undefined}
+      {selectedTab === 'document' ? <RuntimeDocumentPanel loadDocumentEvents={loadDocumentEvents} run={run} /> : undefined}
       {selectedTab === 'flight' ? <>
         <h2>Flight</h2>
         {selected?.flight === undefined ? <p>No Flight payload is available.</p> : <><p>{selected.flight.bytes} bytes{selected.flight.truncated ? ' (preview truncated)' : ''}</p><pre><code>{selected.flight.preview}</code></pre>{selected.flight.downloadPath === undefined || onDownloadFlight === undefined || run === undefined ? undefined : <button onClick={() => onDownloadFlight(run)} type="button">Download Flight payload</button>}</>}

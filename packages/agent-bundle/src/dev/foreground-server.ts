@@ -17,7 +17,7 @@ import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app
 import { McpSessionRoutes } from './mcp-session/mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session/mcp-session-service.ts';
 import { RuntimeMcpRoutes } from './runtime-mcp-routes.ts';
-import { RuntimeRoutes } from './runtime-routes.ts';
+import { RuntimeRoutes, type AgentDocumentRuntimeModule } from './runtime-routes.ts';
 import type { DevRuntimeSession } from './runtime-provider.ts';
 import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/playground-routes.ts';
 import { RouteManifestRoutes, type RouteManifestRouteService } from './routes/route-manifest-routes.ts';
@@ -94,6 +94,8 @@ export interface ForegroundProjectEventStreamHandle {
 }
 
 export interface ForegroundServerTesting {
+  /** Replaces the optional runtime import for Agent Document route tests. */
+  readonly loadAgentDocumentRuntime?: () => Promise<AgentDocumentRuntimeModule>;
   /** Observes the current stream only after its subscription and close listeners exist. */
   readonly onProjectEventStream?: (stream: ForegroundProjectEventStreamHandle) => void;
 }
@@ -502,6 +504,9 @@ export class ForegroundServer {
     });
     this.#runtimeRoutes = new RuntimeRoutes({
       authorize: (request) => this.#assertMutationSession(request),
+      ...(options.testing?.loadAgentDocumentRuntime === undefined
+        ? {}
+        : { loadAgentDocumentRuntime: options.testing.loadAgentDocumentRuntime }),
       ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     });
     this.#hookPlaygroundRoutes = new HookPlaygroundRoutes({

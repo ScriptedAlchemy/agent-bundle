@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import type { AgentRenderEvent, AgentRenderLimits } from '@agent-bundle/runtime';
+
 import {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
@@ -26,13 +28,41 @@ interface RequestDiagnostic {
 
 type Route =
   | Readonly<{ readonly kind: 'status' | 'surfaces' | 'runs' | 'state-reset' }>
-  | Readonly<{ readonly id: string; readonly kind: 'run' | 'flight' | 'replay' }>
+  | Readonly<{ readonly id: string; readonly kind: 'run' | 'document' | 'flight' | 'replay' }>
   | Readonly<{ readonly generation: string; readonly kind: 'asset'; readonly path: readonly string[]; readonly surfaceId: string }>;
+
+export interface AgentDocumentRuntimeModule {
+  readonly DEFAULT_AGENT_RENDER_LIMITS: AgentRenderLimits;
+  readonly decodeAgentFlightStream: (
+    flight: ReadableStream<Uint8Array>,
+    options?: Readonly<{ readonly limits?: Partial<AgentRenderLimits>; readonly signal?: AbortSignal }>,
+  ) => ReadableStream<AgentRenderEvent>;
+}
 
 export interface RuntimeRoutesOptions {
   readonly authorize: (request: IncomingMessage) => void;
+  readonly loadAgentDocumentRuntime?: () => Promise<AgentDocumentRuntimeModule>;
   readonly runtime?: DevRuntimeSession;
 }
+
+let agentDocumentRuntimePromise: Promise<AgentDocumentRuntimeModule> | undefined;
+
+/**
+ * Agent Document projection is loaded only for its read route. The runtime is
+ * an optional peer, so importing the dev server must remain safe without it.
+ */
+const loadAgentDocumentRuntime = async (): Promise<AgentDocumentRuntimeModule> => {
+  agentDocumentRuntimePromise ??= import('@agent-bundle/runtime')
+    .then((runtime) => Object.freeze({
+      DEFAULT_AGENT_RENDER_LIMITS: runtime.DEFAULT_AGENT_RENDER_LIMITS,
+      decodeAgentFlightStream: runtime.decodeAgentFlightStream,
+    }))
+    .catch((error: unknown) => {
+      agentDocumentRuntimePromise = undefined;
+      throw error;
+    });
+  return agentDocumentRuntimePromise;
+};
 
 const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
 
@@ -151,7 +181,7 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   if (segments.length === 2 && segments[0] === 'state' && segments[1] === 'reset') return Object.freeze({ kind: 'state-reset' });
   if (segments[0] === 'runs' && segments[1] !== undefined) {
     if (segments.length === 2) return Object.freeze({ id: segments[1], kind: 'run' });
-    if (segments.length === 3 && (segments[2] === 'flight' || segments[2] === 'replay')) {
+    if (segments.length === 3 && (segments[2] === 'document' || segments[2] === 'flight' || segments[2] === 'replay')) {
       return Object.freeze({ id: segments[1], kind: segments[2] });
     }
   }
@@ -287,11 +317,13 @@ const responseAsset = (response: ServerResponse, asset: DevRuntimeAsset, cacheCo
 /** Fixed runtime browser contract; it never accepts executable provider routing or endpoints. */
 export class RuntimeRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
+  readonly #loadAgentDocumentRuntime: () => Promise<AgentDocumentRuntimeModule>;
   readonly #runtime: DevRuntimeSession | undefined;
   #closed = false;
 
   constructor(options: RuntimeRoutesOptions) {
     this.#authorize = options.authorize;
+    this.#loadAgentDocumentRuntime = options.loadAgentDocumentRuntime ?? loadAgentDocumentRuntime;
     this.#runtime = options.runtime;
   }
 
@@ -367,6 +399,39 @@ export class RuntimeRoutes {
       const asset = await session.readRunFlight(run.id);
       if (asset === undefined) throw new DevRuntimeUnavailableError('Runtime run is not available.');
       return responseAsset(response, { ...asset, contentType: 'application/octet-stream' }, 'no-store');
+    }
+    if (parsed.kind === 'document') {
+      onlyQuery(request.url, undefined);
+      if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      const run = assertRunOwned(session, session.run(parsed.id));
+      if (run.status !== 'succeeded') throw new DevRuntimeUnavailableError('Runtime run is not available.');
+      const asset = await session.readRunFlight(run.id);
+      if (asset === undefined) throw new DevRuntimeUnavailableError('Runtime run is not available.');
+      let runtime: AgentDocumentRuntimeModule;
+      try {
+        runtime = await this.#loadAgentDocumentRuntime();
+      } catch {
+        throw requestError(diagnostic(
+          'AB8207',
+          'Agent Document decoding requires the optional @agent-bundle/runtime peer.',
+          503,
+        ));
+      }
+      try {
+        const flight = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(asset.body);
+            controller.close();
+          },
+        });
+        const events: AgentRenderEvent[] = [];
+        for await (const event of runtime.decodeAgentFlightStream(flight, { limits: runtime.DEFAULT_AGENT_RENDER_LIMITS })) {
+          events.push(event);
+        }
+        return responseJson(response, { events });
+      } catch {
+        throw requestError(diagnostic('AB8208', 'Stored Flight could not be decoded as an Agent Document.', 409));
+      }
     }
     if (parsed.kind === 'replay') {
       onlyQuery(request.url, undefined);

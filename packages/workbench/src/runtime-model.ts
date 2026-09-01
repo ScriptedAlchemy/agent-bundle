@@ -12,7 +12,7 @@ import type {
 import type { JsonValue, ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/contracts/runtime.ts';
 import type { RuntimeBootstrap } from './runtime-client.ts';
 
-export type RuntimeInspectorTab = 'tree' | 'result' | 'flight' | 'protocol' | 'state' | 'diagnostics';
+export type RuntimeInspectorTab = 'tree' | 'result' | 'document' | 'flight' | 'protocol' | 'state' | 'diagnostics';
 
 export interface RuntimePendingEffect {
   readonly id: string;
@@ -160,7 +160,7 @@ const emptyHistory = Object.freeze([]) as readonly DevRuntimeRun[];
 const emptySurfaces = Object.freeze([]) as readonly DevRuntimeSurface[];
 const emptyProfiles = Object.freeze([]) as readonly RuntimeProfileOption[];
 const emptyCounts = Object.freeze(Object.create(null)) as Readonly<Record<string, number>>;
-const runtimeTabs = new Set<RuntimeInspectorTab>(['tree', 'result', 'flight', 'protocol', 'state', 'diagnostics']);
+const runtimeTabs = new Set<RuntimeInspectorTab>(['tree', 'result', 'document', 'flight', 'protocol', 'state', 'diagnostics']);
 
 const isPlainRecord = (value: object): value is Record<string, unknown> => {
   const prototype = Object.getPrototypeOf(value);
