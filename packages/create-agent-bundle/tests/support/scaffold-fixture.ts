@@ -83,6 +83,27 @@ export const scaffoldProject = async (
   return join(runnerRoot, projectName);
 };
 
+export const scaffoldProjectWithMismatchedRuntime = async (projectName: string): Promise<void> => {
+  const { frameworkTarball, root, runnerRoot, scaffolderBin } = await fixture();
+  const mismatchedDirectory = join(root, 'mismatched-pair');
+  const mismatchedFramework = join(mismatchedDirectory, 'agent-bundle-mismatched.tgz');
+  const mismatchedRuntime = join(mismatchedDirectory, 'agent-bundle-runtime-mismatched.tgz');
+  await mkdir(mismatchedDirectory, { recursive: true });
+  await Promise.all([
+    copyFile(frameworkTarball, mismatchedFramework),
+    copyFile(frameworkTarball, mismatchedRuntime),
+  ]);
+
+  await execFile(scaffolderBin, [
+    projectName,
+    '--template', 'mcp-server',
+    '--targets', 'portable',
+    '--package-manager', 'npm',
+    '--framework-version', `file:${mismatchedFramework}`,
+    '--no-install',
+  ], { cwd: runnerRoot, env: installedEnvironment() });
+};
+
 export const npmRun = async (projectRoot: string, script: string): Promise<void> => {
   await execFile('npm', ['run', script], { cwd: projectRoot, env: installedEnvironment() });
 };

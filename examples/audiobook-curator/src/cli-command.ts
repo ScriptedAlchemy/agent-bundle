@@ -67,8 +67,11 @@ export const runCliCommands = async (
     return 0;
   }
   const signal = options.signal ?? new AbortController().signal;
+  signal.throwIfAborted();
   const input = command.inputSchema.parse(command.cli.parse(argv.slice(1)));
-  const result = command.resultSchema.parse(await command.handler(input, { signal }));
+  const handled = await command.handler(input, { signal });
+  signal.throwIfAborted();
+  const result = command.resultSchema.parse(handled);
   write(`${JSON.stringify(result)}\n`);
   return command.cli.exitCode?.(result) ?? 0;
 };

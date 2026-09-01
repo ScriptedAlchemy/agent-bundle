@@ -1,6 +1,12 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { gunzip } from 'node:zlib';
+
 import { UsageError } from './options.ts';
 
 const previewPattern = /-preview-([0-9a-f]{7,40})$/u;
+const unzip = promisify(gunzip);
 
 export type PreviewPackageName = 'agent-bundle' | '@agent-bundle/runtime' | 'create-agent-bundle';
 
@@ -13,10 +19,62 @@ export const previewFrameworkSpec = (sha: string): string => previewPackageSpec(
 export const runtimeSpecForFramework = (frameworkSpec: string): string => {
   const preview = /^(https:\/\/pkg\.pr\.new\/ScriptedAlchemy\/agent-bundle\/)agent-bundle@([0-9a-f]{7,40})$/u.exec(frameworkSpec);
   if (preview !== null) return `${preview[1]}@agent-bundle/runtime@${preview[2]}`;
-  if (frameworkSpec.startsWith('file:')) {
-    return frameworkSpec.replace(/agent-bundle-([^/]+\.tgz)$/u, 'agent-bundle-runtime-$1');
+  const localTarball = /^(file:(?:.*[/\\])?)agent-bundle(-[^/\\]+)?\.tgz$/u.exec(frameworkSpec);
+  if (localTarball !== null) {
+    return `${localTarball[1]}agent-bundle-runtime${localTarball[2] ?? ''}.tgz`;
   }
-  return frameworkSpec;
+  throw new UsageError(
+    `Cannot derive a paired @agent-bundle/runtime package from agent-bundle spec "${frameworkSpec}". `
+    + 'Use a pkg.pr.new preview URL or a file: tarball named agent-bundle.tgz or agent-bundle-<version>.tgz.',
+  );
+};
+
+const localTarballPackageName = async (packageSpec: string): Promise<string> => {
+  const path = resolve(packageSpec.slice('file:'.length));
+  try {
+    const archive = await unzip(await readFile(path));
+    for (let offset = 0; offset + 512 <= archive.length;) {
+      const header = archive.subarray(offset, offset + 512);
+      const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/u, '');
+      if (name === '') break;
+      const sizeText = header.subarray(124, 136).toString('ascii').replace(/\0.*$/u, '').trim();
+      const size = Number.parseInt(sizeText, 8);
+      if (!Number.isSafeInteger(size) || size < 0) {
+        throw new Error(`Invalid tar entry size "${sizeText}".`);
+      }
+      const contentsOffset = offset + 512;
+      if (name === 'package/package.json') {
+        const manifest = JSON.parse(archive.subarray(contentsOffset, contentsOffset + size).toString('utf8')) as {
+          readonly name?: unknown;
+        };
+        if (typeof manifest.name === 'string') return manifest.name;
+        throw new Error('Packed package manifest has no string name.');
+      }
+      offset = contentsOffset + Math.ceil(size / 512) * 512;
+    }
+    throw new Error('Packed package manifest was not found.');
+  } catch (error) {
+    throw new UsageError(
+      `Cannot inspect local package tarball "${packageSpec}": ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+};
+
+/** Derives and verifies a coherent local framework/runtime tarball pair. */
+export const validatedRuntimeSpecForFramework = async (frameworkSpec: string): Promise<string> => {
+  const runtimeSpec = runtimeSpecForFramework(frameworkSpec);
+  if (!frameworkSpec.startsWith('file:')) return runtimeSpec;
+  const [frameworkName, runtimeName] = await Promise.all([
+    localTarballPackageName(frameworkSpec),
+    localTarballPackageName(runtimeSpec),
+  ]);
+  if (frameworkName !== 'agent-bundle' || runtimeName !== '@agent-bundle/runtime') {
+    throw new UsageError(
+      `Local package tarballs are not a valid agent-bundle/runtime pair: expected agent-bundle and `
+      + `@agent-bundle/runtime, received ${JSON.stringify(frameworkName)} and ${JSON.stringify(runtimeName)}.`,
+    );
+  }
+  return runtimeSpec;
 };
 
 /**

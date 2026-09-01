@@ -39,4 +39,45 @@ describe('audiobook-curator CLI', () => {
     await expect(runCli(['audit', '/library', '--overwrite'], { operations: operations(), write: () => undefined }))
       .rejects.toThrow('Unknown option');
   });
+
+  it('does not invoke a command when cancellation was already requested', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let invoked = false;
+    const output: string[] = [];
+
+    await expect(runCli(['inspect', '/library'], {
+      operations: {
+        ...operations(),
+        inspect: async (input) => {
+          invoked = true;
+          return { files: [], operation: 'inspect', root: input.root, totalBytes: 0 };
+        },
+      },
+      signal: controller.signal,
+      write: (value) => output.push(value),
+    })).rejects.toThrow('aborted');
+
+    expect(invoked).toBe(false);
+    expect(output).toEqual([]);
+  });
+
+  it('does not emit a result when cancellation is requested during a command', async () => {
+    const controller = new AbortController();
+    const output: string[] = [];
+
+    await expect(runCli(['inspect', '/library'], {
+      operations: {
+        ...operations(),
+        inspect: async (input) => {
+          controller.abort();
+          return { files: [], operation: 'inspect', root: input.root, totalBytes: 0 };
+        },
+      },
+      signal: controller.signal,
+      write: (value) => output.push(value),
+    })).rejects.toThrow('aborted');
+
+    expect(output).toEqual([]);
+  });
 });

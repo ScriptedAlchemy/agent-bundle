@@ -10,7 +10,6 @@ const executableRoutes = (graph: CompiledRouteGraph): readonly CompiledAgentRout
   ...graph.servers.flatMap((server) => server.routes.filter((route) => route.kind !== 'app')),
   ...(graph.cli?.routes ?? []),
   ...graph.events,
-  ...graph.scripts,
 ].sort((left, right) => left.id.localeCompare(right.id)));
 
 const declarationImport = (route: CompiledAgentRoute, index: number): string => {
