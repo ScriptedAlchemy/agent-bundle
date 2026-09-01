@@ -1,9 +1,9 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, readFile, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
-import { publishFileByLink, writeJsonFileAtomically } from '../core/durable-fs.ts';
+import { publishFileByLink } from '../core/durable-fs.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
 import { acquireOwnerLockFile, isProcessAlive, ownerLockRaceLost } from '../core/owner-lock.ts';
 
@@ -105,6 +105,47 @@ const parseOwner = (value: string, projectRoot: string): DevLockOwner | undefine
     return owner !== undefined && value === `${stableJson(owner)}\n` ? owner : undefined;
   } catch {
     return undefined;
+  }
+};
+
+interface DevServerUrlRecord {
+  readonly nonce: string;
+  readonly url: string;
+}
+
+const serverUrlPathFor = (path: string, nonce: string): string =>
+  join(dirname(path), `.${basename(path)}.server-${createHash('sha256').update(nonce).digest('hex')}`);
+
+const serverUrlContentsFor = (owner: DevLockOwner, url: string): string =>
+  `${stableJson({ nonce: owner.nonce, url } satisfies DevServerUrlRecord)}\n`;
+
+const parseServerUrl = (contents: string, owner: DevLockOwner): string | undefined => {
+  try {
+    const value: unknown = JSON.parse(contents);
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    const record = value as Partial<DevServerUrlRecord>;
+    if (
+      Object.keys(record).length !== 2 ||
+      record.nonce !== owner.nonce ||
+      !isLoopbackServerUrl(record.url)
+    ) return undefined;
+    const canonical = `${stableJson({ nonce: record.nonce, url: record.url })}\n`;
+    return contents === canonical ? record.url : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const readServerUrl = async (
+  storage: DevLockStorage,
+  path: string,
+  owner: DevLockOwner,
+): Promise<string | undefined> => {
+  try {
+    return parseServerUrl(await storage.readFile(serverUrlPathFor(path, owner.nonce), 'utf8'), owner);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return undefined;
+    throw error;
   }
 };
 
@@ -241,7 +282,7 @@ const acquireRecoveryGate = async (
 };
 
 export class DevLock {
-  #contents: string;
+  readonly #contents: string;
   #owner: DevLockOwner;
   readonly #path: string;
   readonly #probeProcess: (pid: number) => boolean;
@@ -284,27 +325,23 @@ export class DevLock {
     }
 
     const owner = Object.freeze({ ...this.#owner, url });
-    const contents = `${stableJson(owner)}\n`;
+    const serverUrlPath = serverUrlPathFor(this.#path, this.#owner.nonce);
+    const serverUrlContents = serverUrlContentsFor(this.#owner, url);
     const publishPromise = (async () => {
       const currentContents = await this.#storage.readFile(this.#path, 'utf8');
       if (currentContents !== this.#contents) {
         throw new DevLockError('DEV_LOCK_INVALID', 'Development lock ownership changed before its server URL could be published.');
       }
-      const temporaryPath = `${this.#path}.update-${randomUUID()}`;
-      try {
-        const temporary = await this.#storage.open(temporaryPath, 'wx', 0o600);
-        await temporary.close();
-        await writeJsonFileAtomically(this.#path, contents, { temporaryPath });
-      } catch (error) {
-        if (await this.#storage.readFile(this.#path, 'utf8') === contents) {
-          this.#contents = contents;
-          this.#owner = owner;
+      if (!(await writeCompleteExclusive(this.#storage, serverUrlPath, serverUrlContents, this.#owner.nonce))) {
+        const existing = await this.#storage.readFile(serverUrlPath, 'utf8');
+        if (existing !== serverUrlContents) {
+          throw new DevLockError('DEV_LOCK_INVALID', 'The development server URL record belongs to a different owner.');
         }
-        throw error;
-      } finally {
-        await this.#storage.remove(temporaryPath, { force: true });
       }
-      this.#contents = contents;
+      if (await this.#storage.readFile(this.#path, 'utf8') !== this.#contents) {
+        await removeIfOwned(this.#storage, serverUrlPath, serverUrlContents);
+        throw new DevLockError('DEV_LOCK_INVALID', 'Development lock ownership changed while its server URL was published.');
+      }
       this.#owner = owner;
     })();
     this.#publishingUrl = url;
@@ -342,6 +379,7 @@ export class DevLock {
       try {
         await removeIfOwned(this.#storage, this.#path, this.#contents);
         await removeIfOwned(this.#storage, candidatePathFor(this.#path, this.owner.nonce), this.#contents);
+        await this.#storage.remove(serverUrlPathFor(this.#path, this.owner.nonce), { force: true });
       } finally {
         await removeIfOwned(this.#storage, this.#recoveryPath, recoveryContents);
       }
@@ -410,13 +448,17 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
         );
       }
       if (probeProcess(currentOwner.pid)) {
-        const ownerDetails = currentOwner.url === undefined
+        const serverUrl = await readServerUrl(storage, path, currentOwner);
+        const reportedOwner = serverUrl === undefined
+          ? currentOwner
+          : Object.freeze({ ...currentOwner, url: serverUrl });
+        const ownerDetails = serverUrl === undefined
           ? `pid ${currentOwner.pid}`
-          : `pid ${currentOwner.pid}, ${currentOwner.url}`;
+          : `pid ${currentOwner.pid}, ${serverUrl}`;
         throw new DevLockError(
           'DEV_LOCK_HELD',
           `Another agent-bundle dev process owns this project (${ownerDetails}).`,
-          currentOwner,
+          reportedOwner,
         );
       }
 
@@ -439,6 +481,7 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
         }
         if (probeProcess(ownerDuringRecovery.pid)) return undefined;
         await removeIfOwned(storage, path, currentContents);
+        await storage.remove(serverUrlPathFor(path, ownerDuringRecovery.nonce), { force: true });
         await removeIfOwned(
           storage,
           candidatePathFor(path, ownerDuringRecovery.nonce),
