@@ -75,6 +75,7 @@ describe('the compiled test manifest', () => {
         exitCode: 'result',
         options: [expect.objectContaining({ key: 'dryRun', kind: 'boolean', option: 'dry-run' })],
         path: ['db', 'migrate'],
+        rendered: false,
         routeId: 'cli:db/migrate',
       },
       {
@@ -87,6 +88,7 @@ describe('the compiled test manifest', () => {
           expect.objectContaining({ key: 'shelf', positional: 0, required: true }),
         ],
         path: ['inventory'],
+        rendered: false,
         routeId: 'cli:inventory',
       },
     ]);
