@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import {
   snapshotPackageIdentity,
 } from '../src/core/project-context.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
+import { ProjectService } from '../src/dev/project-service.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -59,12 +60,20 @@ it('accepts npm package names and strict semver versions only', () => {
   expect(isValidPackageName('.hidden')).toBe(false);
   expect(isValidPackageName('a'.repeat(215))).toBe(false);
   expect(isValidPackageName('')).toBe(false);
+  // npm-reserved names fail even though the grammar matches.
+  expect(isValidPackageName('node_modules')).toBe(false);
+  expect(isValidPackageName('favicon.ico')).toBe(false);
 
   expect(isValidPackageVersion('1.0.0')).toBe(true);
+  expect(isValidPackageVersion('0.0.0-dev')).toBe(true);
   expect(isValidPackageVersion('1.2.3-rc.1+build.5')).toBe(true);
   expect(isValidPackageVersion('v1.0.0')).toBe(false);
   expect(isValidPackageVersion('1.0')).toBe(false);
   expect(isValidPackageVersion('01.0.0')).toBe(false);
+  // Invalid prerelease identifiers: leading-zero numerics and empty parts.
+  expect(isValidPackageVersion('1.0.0-01')).toBe(false);
+  expect(isValidPackageVersion('1.0.0-alpha..1')).toBe(false);
+  expect(isValidPackageVersion('1.0.0-.')).toBe(false);
 });
 
 it('derives both package identity axes from a packaged project', async () => {
@@ -101,7 +110,7 @@ it('withholds invalid identity values as issues instead of crashing', async () =
 it('labels the development fallback distinctly from a release version', () => {
   expect(projectVersionLabel({ packageVersion: '1.0.0', revision: 'a'.repeat(64) })).toBe('1.0.0');
   const fallback = projectVersionLabel({ revision: 'abc123def4567890'.padEnd(64, '0') });
-  expect(fallback).toBe('dev.abc123def456 (development fallback — no package.json version)');
+  expect(fallback).toBe('0.0.0-dev.abc123def456 (development fallback — no package.json version)');
 });
 
 it('carries the derived axes through the normalized model into the project context', async () => {
@@ -179,5 +188,47 @@ it('warns with AB4009/AB4010/AB4011 for invalid package identity values', async 
     expect(validateSource(loadedProject(root), { skills: [] }, registry)).toMatchObject([
       { code: 'AB4011', severity: 'warning', sourcePath: join(root, 'package.json') },
     ]);
+  });
+});
+
+it('ignores a package.json symlinked outside the project root', async () => {
+  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-outside-identity-'));
+  await writeFile(join(outside, 'package.json'), JSON.stringify({ name: '@scope/outside', version: '9.9.9' }));
+  await withProject(undefined, async (root) => {
+    await symlink(join(outside, 'package.json'), join(root, 'package.json'));
+    const identity = snapshotPackageIdentity(root);
+    expect(identity.packageName).toBeUndefined();
+    expect(identity.packageVersion).toBeUndefined();
+    expect(identity.issues).toMatchObject([{ kind: 'outside-root' }]);
+    expect(validateSource(loadedProject(root), { skills: [] }, registry)).toMatchObject([
+      { code: 'AB4011', severity: 'warning' },
+    ]);
+  });
+  await rm(outside, { force: true, recursive: true });
+});
+
+it('exposes the derived axes on the development source status', async () => {
+  await withProject(JSON.stringify({ name: '@scope/pkg', version: '2.3.4' }), async (root) => {
+    await writeFile(
+      join(root, 'agent-bundle.config.ts'),
+      "export default { plugin: { name: 'identity-fixture', version: '2.3.4' }, targets: ['portable'] };\n",
+    );
+    const prepared = await new ProjectService({ root, targets: ['portable'] }).prepare('inspect');
+    expect(prepared.source).toMatchObject({
+      packageName: '@scope/pkg',
+      packageVersion: '2.3.4',
+      state: 'ready',
+    });
+    expect(prepared.projectContext).toMatchObject({ packageName: '@scope/pkg', packageVersion: '2.3.4' });
+  });
+  await withProject(JSON.stringify({ name: '@scope/pkg' }), async (root) => {
+    await writeFile(
+      join(root, 'agent-bundle.config.ts'),
+      "export default { plugin: { name: 'identity-fixture', version: '1.0.0' }, targets: ['portable'] };\n",
+    );
+    const prepared = await new ProjectService({ root, targets: ['portable'] }).prepare('inspect');
+    expect(prepared.source.packageName).toBe('@scope/pkg');
+    expect(prepared.source.packageVersion).toBeUndefined();
+    expect(prepared.source.state).toBe('ready');
   });
 });

@@ -33,7 +33,7 @@ export interface ProjectContext {
   readonly sourceInputs: readonly ProjectSourceInput[];
 }
 
-export type PackageIdentityIssueKind = 'invalid-name' | 'invalid-version' | 'unparsable';
+export type PackageIdentityIssueKind = 'invalid-name' | 'invalid-version' | 'outside-root' | 'unparsable';
 
 /** One problem found while deriving package identity from `package.json`. */
 export interface PackageIdentityIssue {
@@ -51,13 +51,19 @@ export interface PackageIdentitySnapshot {
 /** npm's naming rules for new packages: lowercase, URL-safe, optional scope. */
 const packageNamePattern = /^(?:@[a-z0-9-*~][a-z0-9-*._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/u;
 
+/** Names npm's validator rejects outright even though the grammar matches. */
+const reservedPackageNames = new Set(['node_modules', 'favicon.ico']);
+
 /** The strict semver 2.0.0 grammar, without any leading `v`. */
 const packageVersionPattern =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/u;
 
 /** True for a name npm would accept for a new package. */
 export const isValidPackageName = (value: string): boolean =>
-  value.length > 0 && value.length <= 214 && packageNamePattern.test(value);
+  value.length > 0 &&
+  value.length <= 214 &&
+  !reservedPackageNames.has(value.toLowerCase()) &&
+  packageNamePattern.test(value);
 
 /** True for a strict semver 2.0.0 version. */
 export const isValidPackageVersion = (value: string): boolean => packageVersionPattern.test(value);
@@ -70,9 +76,25 @@ export const isValidPackageVersion = (value: string): boolean => packageVersionP
  * invalid value is withheld from the derived identity.
  */
 export const snapshotPackageIdentity = (root: string): PackageIdentitySnapshot => {
+  let packageJsonPath: string;
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = realpathSync(resolve(root));
+    packageJsonPath = realpathSync(join(resolve(root), 'package.json'));
+  } catch {
+    return deepFreeze({ issues: [] });
+  }
+  // A package.json symlinked outside the project cannot join the identity:
+  // its bytes are invisible to the source snapshot, so deriving release
+  // identity from it would let identity drift without a revision change.
+  if (!isInsideOrEqual(canonicalRoot, packageJsonPath)) {
+    return deepFreeze({
+      issues: [{ kind: 'outside-root', message: 'package.json resolves outside the project root; package identity is ignored.' }],
+    });
+  }
   let bytes: string;
   try {
-    bytes = readFileSync(join(resolve(root), 'package.json'), 'utf8');
+    bytes = readFileSync(packageJsonPath, 'utf8');
   } catch {
     return deepFreeze({ issues: [] });
   }
@@ -123,7 +145,7 @@ export const projectVersionLabel = (
   context: Pick<ProjectContext, 'packageVersion' | 'revision'>,
 ): string =>
   context.packageVersion ??
-  `dev.${context.revision.slice(0, 12)} (development fallback — no package.json version)`;
+  `0.0.0-dev.${context.revision.slice(0, 12)} (development fallback — no package.json version)`;
 
 export interface CreateProjectContextOptions {
   readonly configPath: string;

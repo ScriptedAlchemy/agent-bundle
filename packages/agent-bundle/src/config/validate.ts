@@ -1349,6 +1349,8 @@ const packageIdentityIssueCode = (kind: PackageIdentityIssueKind): string => {
       return 'AB4009';
     case 'invalid-version':
       return 'AB4010';
+    case 'outside-root':
+      return 'AB4011';
     case 'unparsable':
       return 'AB4011';
     default: {
