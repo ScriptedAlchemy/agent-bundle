@@ -224,6 +224,22 @@ export const stateDriverConformanceCases: readonly StateConformanceCase[] = Obje
     },
   },
   {
+    name: 'a committed key replays without re-running the reducer',
+    run: async (context) => {
+      const store = await context.open(taskDefinition(context.lifetime));
+      await addTask(store, 'a');
+      const removed = await store.dispatch('taskRemoved', { id: 'a' }, { idempotencyKey: 'remove:a' });
+      assert.equal(removed.revision, 2);
+      // Task 'a' is gone, so the reducer would now throw; the key must be
+      // consulted before the reducer runs for the retry to replay.
+      const replayed = await store.dispatch('taskRemoved', { id: 'a' }, { idempotencyKey: 'remove:a' });
+      assert.equal(replayed.replayed, true);
+      assert.equal(replayed.revision, removed.revision);
+      assert.deepEqual(replayed.state, removed.state);
+      assert.equal((await store.read()).revision, 2);
+    },
+  },
+  {
     name: 'reusing an idempotency key with a different payload is an idempotency-conflict',
     run: async (context) => {
       const store = await context.open(taskDefinition(context.lifetime));
@@ -431,6 +447,36 @@ export const stateDriverConformanceCases: readonly StateConformanceCase[] = Obje
       );
       assert.equal(after.revision, 4);
       await assert.rejects(context.reopen(taskDefinition(context.lifetime)), rejectsWith('migration-missing'));
+    },
+  },
+  {
+    name: 'replaying a key committed before a migration returns its committed result',
+    run: async (context) => {
+      const storeV1 = await context.open(taskDefinition(context.lifetime));
+      const original = await addTask(storeV1, 'a');
+      await addTask(storeV1, 'b');
+      const storeV2 = await context.reopen(taskDefinitionV2(context.lifetime));
+      assert.equal((await storeV2.read()).revision, 3);
+      // The migration rebases exact-revision history, but a pre-deployment
+      // retry must still replay: the committed result rides the migration
+      // chain instead of depending on exact-revision replay.
+      const replayed = await storeV2.dispatch('taskAdded', { id: 'a', title: 'Task a' }, { idempotencyKey: 'add:a' });
+      assert.equal(replayed.replayed, true);
+      assert.equal(replayed.revision, original.revision);
+      assert.deepEqual(replayed.state, { labels: [], tasks: [{ id: 'a', title: 'Task a' }], total: 1 });
+      assert.equal((await storeV2.read()).revision, 3);
+    },
+  },
+  {
+    name: 'definition ids sharing a sanitized prefix stay isolated',
+    run: async (context) => {
+      // These two ids sanitize identically and share their leading bytes, so
+      // storage naming must derive from the complete id, never a truncation.
+      const first = await context.open(taskDefinition(context.lifetime, 'abcdef/a'));
+      const second = await context.open(taskDefinition(context.lifetime, 'abcdef-a'));
+      await addTask(first, 'a');
+      assert.equal((await second.read()).revision, 0);
+      assert.deepEqual((await second.read()).state, { tasks: [], total: 0 });
     },
   },
   {

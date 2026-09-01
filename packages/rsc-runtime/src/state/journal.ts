@@ -66,16 +66,16 @@ export const migrationIdempotencyKey = (toVersion: number): string =>
   `${AGENT_STATE_RESERVED_KEY_PREFIX}migrate:${String(toVersion)}`;
 
 /**
- * Validates one event payload, runs the reducer, and validates its output.
- * Throws typed `invalid-event`, `reducer-failure`, or `invalid-state`
- * errors; never exposes payload or state contents in messages.
+ * Validates one event payload against its declared schema without running
+ * the reducer. Idempotency-key replay must be decided from the validated
+ * payload alone: a committed key retried after the state changed replays
+ * the committed result, so the reducer must not run first.
  */
-export const applyStateEvent = <TState, TEvents extends AgentStateEventSchemas>(
+export const parseEventPayload = <TState, TEvents extends AgentStateEventSchemas>(
   definition: AgentStateDefinition<TState, TEvents>,
-  state: TState,
   name: string,
   payload: unknown,
-): { readonly payload: unknown; readonly state: TState } => {
+): unknown => {
   const schema = definition.events[name];
   if (schema === undefined) {
     throw new AgentStateError('invalid-event', `State '${definition.id}' has no event '${name}'`);
@@ -90,9 +90,23 @@ export const applyStateEvent = <TState, TEvents extends AgentStateEventSchemas>(
   if (!isJsonSafe(parsed.data)) {
     throw new AgentStateError('invalid-event', `State '${definition.id}' event '${name}' payload must be JSON-safe`);
   }
+  return deepFreezeJson(parsed.data);
+};
+
+/**
+ * Runs the reducer over an already-validated payload (see
+ * {@link parseEventPayload}) and validates its output. Throws typed
+ * `reducer-failure` or `invalid-state`; never exposes state contents.
+ */
+export const reduceStateEvent = <TState, TEvents extends AgentStateEventSchemas>(
+  definition: AgentStateDefinition<TState, TEvents>,
+  state: TState,
+  name: string,
+  payload: unknown,
+): TState => {
   let next: TState;
   try {
-    next = definition.reduce(state, { name, payload: parsed.data } as AgentStateEvent<TEvents>);
+    next = definition.reduce(state, { name, payload } as AgentStateEvent<TEvents>);
   } catch (error) {
     throw new AgentStateError(
       'reducer-failure',
@@ -110,7 +124,22 @@ export const applyStateEvent = <TState, TEvents extends AgentStateEventSchemas>(
   if (!isJsonSafe(validated.data)) {
     throw new AgentStateError('invalid-state', `State '${definition.id}' reducer output for event '${name}' must be JSON-safe`);
   }
-  return { payload: deepFreezeJson(parsed.data), state: deepFreezeJson(validated.data) };
+  return deepFreezeJson(validated.data);
+};
+
+/**
+ * Validates one event payload, runs the reducer, and validates its output.
+ * Throws typed `invalid-event`, `reducer-failure`, or `invalid-state`
+ * errors; never exposes payload or state contents in messages.
+ */
+export const applyStateEvent = <TState, TEvents extends AgentStateEventSchemas>(
+  definition: AgentStateDefinition<TState, TEvents>,
+  state: TState,
+  name: string,
+  payload: unknown,
+): { readonly payload: unknown; readonly state: TState } => {
+  const parsed = parseEventPayload(definition, name, payload);
+  return { payload: parsed, state: reduceStateEvent(definition, state, name, parsed) };
 };
 
 /** Validates a reset seed (or resolves the initial state) against the schema. */
