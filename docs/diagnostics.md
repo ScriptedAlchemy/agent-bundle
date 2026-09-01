@@ -124,8 +124,10 @@ The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
 `src/providers/*`, `src/cli/**`, `src/scripts/**`) into one immutable IR.
 Discovery is not a packaging choice, so every collision is a hard **error**
-and the compiler never silently picks a side. `agent-bundle inspect --routes`
-dumps the compiled graph.
+and the compiler never silently picks a side. Modules that explicit
+`scripts`, `hooks`, `bin`, `lib`, or `mcp` configuration references are
+claimed by that declaration and never become routes — config always wins.
+`agent-bundle inspect --routes` dumps the compiled graph.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |

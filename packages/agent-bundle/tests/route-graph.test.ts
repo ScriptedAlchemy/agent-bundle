@@ -137,6 +137,48 @@ it('skips ignored paths, private segments, and declaration files', async () => {
   expect(graph.scripts).toEqual([]);
 });
 
+it('never compiles a module explicit configuration claims: config always wins', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    // The examples/hooks-and-scripts shape: explicit scripts entries under src/scripts/.
+    'src/hooks/session-start.ts': moduleSource,
+    'src/scripts/detect-risk.ts': moduleSource,
+    'src/scripts/rebuild-index.ts': moduleSource,
+    'src/scripts/verify-release.ts': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig({
+    hooks: { sessionStart: { handler: './src/hooks/session-start.ts' } },
+    scripts: {
+      'detect-risk': { entry: './src/scripts/detect-risk.ts', targets: ['portable'] },
+      'verify-release': './src/scripts/verify-release.ts',
+    },
+  }));
+
+  expect(graph.diagnostics).toEqual([]);
+  // Only the unclaimed module is a route; the claimed ones belong to their declarations.
+  expect(graph.scripts.map((route) => route.id)).toEqual(['script:rebuild-index']);
+
+  // A fully claimed tree compiles the empty graph, so discovery attaches none.
+  const claimedRoot = await createRoot();
+  await writeTree(claimedRoot, { 'src/scripts/check-service-fixture.ts': moduleSource });
+  const discovered = await discoverProject(claimedRoot, fixtureConfig({
+    scripts: { 'check-service-fixture': './src/scripts/check-service-fixture.ts' },
+  }));
+  expect('routeGraph' in discovered).toBe(false);
+});
+
+it('errors with AB4800 when a declared entry, command, or url claims a routed server', async () => {
+  const root = await createRoot();
+  await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': moduleSource });
+  const graph = await compileRouteGraph(root, fixtureConfig({
+    mcp: { servers: { curator: { url: 'https://example.test/mcp' } } },
+  }));
+
+  expect(codesOf(graph.diagnostics)).toEqual(['AB4800']);
+  expect(graph.servers[0]).toMatchObject({ mode: 'conflict' });
+  expect(graph.servers[0]!.routes.map((route) => route.id)).toEqual(['tool:curator/inspect']);
+});
+
 it('errors with AB4800 when an entry module and route modules claim one MCP server, and inspect turns invalid', async () => {
   const files = {
     'src/mcp/curator.ts': moduleSource,
@@ -248,6 +290,18 @@ it('attaches no routeGraph key to a route-free discovered project', async () => 
 
   expect(discovered.skills).toHaveLength(1);
   expect('routeGraph' in discovered).toBe(false);
+});
+
+it('serves the shared empty graph under the routes focus of a route-free project', async () => {
+  const root = await createInspectProject({
+    'src/index.ts': 'export const library = true;\n',
+  });
+  const result = await inspect({ focus: 'routes', root });
+
+  expect(result.state).toBe('ready');
+  const routes = (result as ReadyInspectResult).selected?.routes;
+  expect(routes).toMatchObject({ diagnostics: [], events: [], providers: [], scripts: [], servers: [] });
+  expect(routes!.digest).toMatch(/^[a-f\d]{64}$/u);
 });
 
 it('selects the compiled graph under the routes inspect focus', async () => {

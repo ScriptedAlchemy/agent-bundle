@@ -5,12 +5,12 @@ import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
-import { loadConfig } from './config/load.ts';
 import { isInsideOrEqual } from './core/paths.ts';
-import { compileRouteGraph } from './routes/graph.ts';
+import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
 export { compileRouteGraph, isEmptyRouteGraph } from './routes/graph.ts';
+export { emptyCompiledRouteGraph } from './routes/graph.ts';
 export { inspectRouteGraph } from './routes/inspect.ts';
 export type { RouteGraphInspection } from './routes/inspect.ts';
 export { emptyRouteConfig } from './routes/types.ts';
@@ -493,31 +493,13 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
       ]));
     }
   }
-  let routes: RouteGraphInspection | undefined;
-  if (options.focus === 'routes') {
-    try {
-      // The route focus recompiles from the loaded config rather than the
-      // normalized model: the graph is source-tree IR, and hard route
-      // diagnostics already invalidated the inspection above.
-      const loaded = await loadConfig({
-        command: 'inspect',
-        ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
-        mode: options.mode ?? 'production',
-        root: options.root,
-        ...(options.targets === undefined ? {} : { targets: options.targets }),
-      });
-      routes = inspectRouteGraph(await compileRouteGraph(loaded.context.projectRoot, loaded.config));
-    } catch {
-      return invalidInspection(freezeDiagnostics([
-        ...prepared.diagnostics,
-        projectDiagnostic(
-          'AB7001',
-          'Unable to compile the route-graph inspection.',
-          { sourcePath: prepared.configPath },
-        ),
-      ]));
-    }
-  }
+  // The route focus serves the graph preparation already compiled during
+  // discovery — never a second configuration evaluation, so the focus can
+  // not diverge from the validated model. Route-free projects attach no
+  // graph and serve the shared empty one.
+  const routes: RouteGraphInspection | undefined = options.focus === 'routes'
+    ? inspectRouteGraph(prepared.routeGraph ?? emptyCompiledRouteGraph)
+    : undefined;
   const selected = options.focus === undefined
     ? undefined
     : Object.freeze({

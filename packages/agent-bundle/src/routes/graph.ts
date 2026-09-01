@@ -158,6 +158,57 @@ const isPrivateRoutePath = (relativePath: string): boolean =>
   relativePath.endsWith('.d.ts') ||
   relativePath.split('/').some((segment) => segment.startsWith('_') || segment.startsWith('.'));
 
+const claimedModuleEntry = (value: unknown): string | undefined => {
+  if (typeof value === 'string') return value;
+  if (isRecord(value) && typeof value.entry === 'string') return value.entry;
+  return undefined;
+};
+
+/**
+ * Absolute module paths explicit configuration already claims. Config always
+ * wins — the rule the entry conventions established — so a module an explicit
+ * `scripts`, `hooks`, `bin`, `lib`, or `mcp` declaration references belongs
+ * to that declaration and never becomes a conventional route. Two shipped
+ * examples declare `scripts` entries under `src/scripts/`; this rule keeps
+ * their layouts route-free without a migration.
+ */
+export const configClaimedSources = (
+  projectRoot: string,
+  config: Readonly<AgentBundleConfig>,
+): ReadonlySet<string> => {
+  const claimed = new Set<string>();
+  const claim = (value: unknown): void => {
+    const entry = claimedModuleEntry(value);
+    if (entry !== undefined && entry.trim().length > 0) claimed.add(resolve(projectRoot, entry));
+  };
+  if (isRecord(config.scripts)) {
+    for (const value of Object.values(config.scripts)) claim(value);
+  }
+  if (isRecord(config.hooks)) {
+    for (const input of Object.values(config.hooks)) {
+      for (const rawEntry of Array.isArray(input) ? input : [input]) {
+        claim(typeof rawEntry === 'string' ? rawEntry : isRecord(rawEntry) ? rawEntry.handler : undefined);
+      }
+    }
+  }
+  if (isRecord(config.bin)) {
+    for (const value of Object.values(config.bin)) claim(value);
+  }
+  claim(config.lib);
+  const servers = isRecord(config.mcp) && isRecord(config.mcp.servers) ? config.mcp.servers : undefined;
+  for (const server of Object.values(servers ?? {})) {
+    if (!isRecord(server)) continue;
+    claim(server.entry);
+    if (!isRecord(server.apps)) continue;
+    for (const app of Object.values(server.apps)) {
+      if (!isRecord(app)) continue;
+      claim(app.entry);
+      claim(app.template);
+    }
+  }
+  return claimed;
+};
+
 interface RouteModeOverrides {
   readonly cli?: 'generated' | 'conventional';
   readonly servers: ReadonlyMap<string, CompiledServerMode>;
@@ -251,6 +302,20 @@ const deepFreeze = <Value>(value: Value): Value => {
   return Object.freeze(value);
 };
 
+/**
+ * The graph of a route-free project: what {@link compileRouteGraph} returns
+ * when no conventional route module exists and no diagnostic fires. The
+ * inspect focus serves this constant when discovery attached no graph.
+ */
+export const emptyCompiledRouteGraph: CompiledRouteGraph = deepFreeze({
+  diagnostics: [],
+  digest: digest({ events: [], providers: [], scripts: [], servers: [] }),
+  events: [],
+  providers: [],
+  scripts: [],
+  servers: [],
+});
+
 /** True when discovery found nothing and produced no diagnostics, so callers can omit the graph. */
 export const isEmptyRouteGraph = (graph: CompiledRouteGraph): boolean =>
   graph.cli === undefined &&
@@ -284,9 +349,11 @@ export const compileRouteGraph = async (
     onlyFiles: true,
   })).sort((left, right) => left.localeCompare(right));
 
+  const claimed = configClaimedSources(projectRoot, config);
   const modules: DiscoveredModule[] = [];
   const modulesById = new Map<string, DiscoveredModule>();
   for (const source of sources) {
+    if (claimed.has(source)) continue;
     const relativePath = toPosixPath(relative(projectRoot, source));
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
     const module = classifyModule(source, relativePath);
