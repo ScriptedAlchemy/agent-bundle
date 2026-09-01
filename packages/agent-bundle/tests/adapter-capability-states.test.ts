@@ -20,14 +20,19 @@ const evidence = (target: string): CapabilityEvidence => Object.freeze({
 });
 const state = (value: CapabilityState): CapabilityState => Object.freeze(value);
 
-it('keeps the plugin Boolean capability view as the Claude and Codex intersection', () => {
+it('keeps the plugin Boolean capability view as the three-host intersection except for LSP', () => {
   const registry = createDefaultRegistry();
 
-  for (const capability of ['commands', 'marketplace', 'hooks', 'lsp', 'mcp', 'rules', 'skills']) {
+  for (const capability of ['commands', 'marketplace', 'hooks', 'mcp', 'rules', 'skills']) {
     expect(registry.supports('plugin', capability)).toBe(
-      registry.supports('claude', capability) && registry.supports('codex', capability),
+      registry.supports('claude', capability) &&
+      registry.supports('codex', capability) &&
+      registry.supports('cursor', capability),
     );
   }
+  expect(registry.supports('plugin', 'lsp')).toBe(
+    registry.supports('claude', 'lsp') && registry.supports('codex', 'lsp'),
+  );
 });
 
 it('records an honest four-state commands row on every adapter', () => {
@@ -47,8 +52,11 @@ it('records an honest four-state commands row on every adapter', () => {
     state: 'unavailable',
   });
   expect(registry.get('plugin').capabilities.commands).toEqual(intersectCapabilityStates(
-    registry.get('claude').capabilities.commands!,
-    registry.get('codex').capabilities.commands!,
+    intersectCapabilityStates(
+      registry.get('claude').capabilities.commands!,
+      registry.get('codex').capabilities.commands!,
+    ),
+    registry.get('cursor').capabilities.commands!,
   ));
 });
 
@@ -71,8 +79,11 @@ it('records an honest four-state rules row on every adapter', () => {
     state: 'unavailable',
   });
   expect(registry.get('plugin').capabilities.rules).toEqual(intersectCapabilityStates(
-    registry.get('claude').capabilities.rules!,
-    registry.get('codex').capabilities.rules!,
+    intersectCapabilityStates(
+      registry.get('claude').capabilities.rules!,
+      registry.get('codex').capabilities.rules!,
+    ),
+    registry.get('cursor').capabilities.rules!,
   ));
 });
 
@@ -227,7 +238,7 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
   if (cursor.capabilities.mcp?.state !== 'supported') throw new Error('Expected Cursor MCP support evidence.');
   expect(cursor.capabilities.mcp.evidence).toEqual({
     capabilityRevision: '2026-08-28',
-    capabilitySha256: 'e963f86e9074a0c942ebc16190c3f534283c62fea1beda7411f170692dca05f7',
+    capabilitySha256: 'fd5a8171963f9b1bd05876cc333ba808bdcffb73b49b133bcf681b3a0fd57941',
     observedVersion: '2026-08-28',
     target: 'cursor',
   });
@@ -244,14 +255,17 @@ it('reports the evidence-backed G10 event family matrix without inferred support
     'event:tool/after',
     'event:tool/before',
   ];
-  const cursorOnly = ['event:workspace/open'];
 
-  for (const capability of [...allNativeHosts, ...cursorOnly]) {
+  for (const capability of allNativeHosts) {
     expect(registry.get('cursor').capabilities[capability]).toMatchObject({
       evidence: { observedVersion: '2026-08-28', target: 'cursor' },
       state: 'supported',
     });
   }
+  expect(registry.get('cursor').capabilities['event:workspace/open']).toMatchObject({
+    reason: expect.stringContaining('pluginPaths'),
+    state: 'unavailable',
+  });
   for (const target of ['claude', 'codex'] as const) {
     for (const capability of allNativeHosts) {
       expect(registry.get(target).capabilities[capability]).toMatchObject({
@@ -259,21 +273,26 @@ it('reports the evidence-backed G10 event family matrix without inferred support
         state: 'supported',
       });
     }
-    for (const capability of cursorOnly) {
-      expect(registry.get(target).capabilities[capability]).toMatchObject({
-        reason: expect.stringContaining('pinned'),
-        state: 'unavailable',
-      });
-    }
+    expect(registry.get(target).capabilities['event:workspace/open']).toMatchObject({
+      reason: expect.stringContaining('pinned'),
+      state: 'unavailable',
+    });
   }
   for (const capability of ['event:agent/start', 'event:agent/stop']) {
     expect(registry.get('plugin').capabilities[capability]).toMatchObject({
-      evidence: { target: 'claude+codex' },
+      evidence: { target: 'claude+codex+cursor' },
       state: 'supported',
     });
   }
   expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
+    reason: expect.stringContaining('pluginPaths'),
     state: 'unavailable',
+  });
+  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
+    reason: expect.stringContaining('Claude Code 2.1.250'),
+  });
+  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
+    reason: expect.stringContaining('Codex 0.147.0'),
   });
 });
 

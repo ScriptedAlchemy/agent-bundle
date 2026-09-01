@@ -1,6 +1,6 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { stableJson } from '../core/digest.ts';
+import { sha256Hex, stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedPlugin } from '../core/types.ts';
 import {
   allMcpPathTokenFields,
@@ -15,6 +15,7 @@ import {
 } from './capability-state.ts';
 import claudeCapabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
+import cursorCapabilityTable from './capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import { claudeAdapter, claudeArtifactPaths, claudeHooksValidator, planClaudeArtifacts } from './claude.ts';
 import { codexAdapter, codexArtifactPaths, codexPluginDocumentValidator, planCodexArtifacts } from './codex.ts';
 import {
@@ -22,12 +23,14 @@ import {
   cursorAdapter,
   cursorHooksValidator,
   cursorManifest,
+  cursorMarketplaceValidator,
   cursorMcpValidator,
   cursorPluginNameError,
   cursorPluginValidator,
   cursorVariables,
   emptyCursorHooksDocument,
   isValidCursorPluginName,
+  planCursorMarketplace,
   planCursorMcpServer,
 } from './cursor.ts';
 import {
@@ -76,6 +79,7 @@ const pluginName = 'plugin';
  * document points at dedicated per-hook `hooks/<name>.cursor.mjs` wrappers
  * carrying the Cursor codec; the empty document remains only as a
  * schema-collision guard when no hook lowers to Cursor.
+ * Composite capability claims intersect all three pinned host tables.
  *
  * An Agent Plugins v1 root `plugin.json` is deliberately not emitted: Codex
  * selects it ahead of `.codex-plugin/plugin.json` and, under that format,
@@ -86,6 +90,7 @@ const pluginName = 'plugin';
 const codexBundleMcpPath = '.codex-plugin/mcp.json';
 const cursorPaths = Object.freeze({
   hooks: 'hooks/hooks-cursor.json',
+  marketplace: '.cursor-plugin/marketplace.json',
   mcp: 'mcp.json',
   plugin: '.cursor-plugin/plugin.json',
 });
@@ -156,6 +161,7 @@ const artifactValidation = Object.freeze({
     Object.freeze({ path: codexBundleMcpPath, required: false, schema: 'codex-mcp' }),
     Object.freeze({ path: codexArtifactPaths.plugin, required: true, schema: 'codex-plugin' }),
     Object.freeze({ path: cursorPaths.hooks, required: false, schema: 'cursor-hooks' }),
+    Object.freeze({ path: cursorPaths.marketplace, required: false, schema: 'cursor-marketplace' }),
     Object.freeze({ path: cursorPaths.mcp, required: false, schema: 'cursor-mcp' }),
     Object.freeze({ path: cursorPaths.plugin, required: false, schema: 'cursor-plugin' }),
   ]),
@@ -166,16 +172,24 @@ const artifactValidation = Object.freeze({
     // validator widens the pinned pointer to that one relocation.
     Object.freeze({ name: 'codex-plugin', validate: (document: unknown) => codexPluginDocumentValidator(codexBundleMcpPath)(document) }),
     Object.freeze({ name: 'cursor-hooks', validate: validateJsonSchemaDocument(cursorHooksValidator) }),
+    Object.freeze({ name: 'cursor-marketplace', validate: validateJsonSchemaDocument(cursorMarketplaceValidator) }),
     Object.freeze({ name: 'cursor-mcp', validate: validateJsonSchemaDocument(cursorMcpValidator) }),
     Object.freeze({ name: 'cursor-plugin', validate: validateJsonSchemaDocument(cursorPluginValidator) }),
   ]),
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.3.0',
-  capabilityRevision: `claude ${claudeAdapter.metadata.observedVersion} + codex ${codexAdapter.metadata.observedVersion}`,
-  capabilitySha256: claudeAdapter.metadata.capabilitySha256,
-  observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}`,
+  adapterRevision: '1.4.0',
+  capabilityRevision: `claude ${claudeAdapter.metadata.observedVersion} + codex ${codexAdapter.metadata.observedVersion} + cursor ${cursorAdapter.metadata.observedVersion}`,
+  // The composite fingerprint covers every host pin the bundle's capability
+  // claims depend on, so a single-host capability-table correction at the
+  // same observed version still changes this manifest identity.
+  capabilitySha256: sha256Hex(stableJson([
+    { capabilitySha256: claudeAdapter.metadata.capabilitySha256, target: 'claude' },
+    { capabilitySha256: codexAdapter.metadata.capabilitySha256, target: 'codex' },
+    { capabilitySha256: cursorAdapter.metadata.capabilitySha256, target: 'cursor' },
+  ])),
+  observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
   // hooks schema differs only in its $id).
@@ -357,6 +371,16 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const targetSourceInputs = model.targets
     .filter((target) => target.name === pluginName)
     .map((target) => target.provenance.sourcePath);
+  const cursorMarketplace = planCursorMarketplace(model);
+  diagnostics.push(...cursorMarketplace.diagnostics);
+  if (cursorMarketplace.document !== undefined && cursorMarketplace.valid) {
+    entries.push({
+      content: `${stableJson(cursorMarketplace.document)}\n`,
+      kind: 'write',
+      relativePath: cursorPaths.marketplace,
+      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
+    });
+  }
   if (hookDocument !== undefined && hookDocumentValid) {
     const hookSourceInputs = model.hooks
       .filter((hook) => hook.targets.includes(pluginName))
@@ -472,16 +496,33 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   });
 };
 
+const eventCapabilityTables = Object.freeze([
+  Object.freeze({ name: 'Claude', routes: claudeCapabilityTable.hooks.eventRoutes }),
+  Object.freeze({ name: 'Codex', routes: codexCapabilityTable.hooks.eventRoutes }),
+  Object.freeze({ name: 'Cursor', routes: cursorCapabilityTable.hooks.eventRoutes }),
+]);
+const compositeEventNames = new Set(eventCapabilityTables.flatMap(({ routes }) => Object.keys(routes)));
+for (const event of compositeEventNames) {
+  for (const table of eventCapabilityTables) {
+    if (!Object.hasOwn(table.routes, event)) {
+      throw new Error(`Agent plugin bundle event capability table for ${table.name} is missing ${JSON.stringify(event)}.`);
+    }
+  }
+}
+
 const compositeEventCapabilities = Object.freeze(Object.fromEntries(
-  Object.keys(claudeCapabilityTable.hooks.eventRoutes)
+  [...compositeEventNames]
     .sort((left, right) => left.localeCompare(right))
     .map((event) => {
       const capability = `event:${event}`;
       return [
         capability,
         intersectCapabilityStates(
-          claudeAdapter.capabilities[capability]!,
-          codexAdapter.capabilities[capability]!,
+          intersectCapabilityStates(
+            claudeAdapter.capabilities[capability]!,
+            codexAdapter.capabilities[capability]!,
+          ),
+          cursorAdapter.capabilities[capability]!,
         ),
       ];
     }),
@@ -492,23 +533,40 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactLayout,
   capabilities: Object.freeze({
     ...compositeEventCapabilities,
-    commands: intersectCapabilityStates(claudeAdapter.capabilities.commands!, codexAdapter.capabilities.commands!),
+    commands: intersectCapabilityStates(
+      intersectCapabilityStates(claudeAdapter.capabilities.commands!, codexAdapter.capabilities.commands!),
+      cursorAdapter.capabilities.commands!,
+    ),
     install: unavailableCapability(
       'Plugin is a multi-host distribution profile, not one host runtime with a single installation transaction.',
     ),
-    marketplace: intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
-    hooks: intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
-    // Claude supports LSP and Codex has no LSP surface, so the intersection
-    // is honestly unavailable for the bundle as a whole. The Claude half
-    // still emits `.lsp.json` at the shared root from the Claude host
-    // config, which is exactly why this stays unavailable instead of
-    // supported: nothing about that document reaches Codex or Cursor.
+    marketplace: intersectCapabilityStates(
+      intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
+      cursorAdapter.capabilities.marketplace!,
+    ),
+    hooks: intersectCapabilityStates(
+      intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
+      cursorAdapter.capabilities.hooks!,
+    ),
+    // Cursor is excluded because it declares no LSP capability surface at all.
+    // Claude supports LSP and Codex has no LSP surface, so this intersection is
+    // honestly unavailable even though the Claude half still emits `.lsp.json`.
     lsp: intersectCapabilityStates(claudeAdapter.capabilities.lsp!, codexAdapter.capabilities.lsp!),
-    mcp: intersectCapabilityStates(claudeAdapter.capabilities.mcp!, codexAdapter.capabilities.mcp!),
-    // The bundle exposes Cursor's real rules directory, but Claude and Codex
-    // cannot consume it, so the composite row remains the honest intersection.
-    rules: intersectCapabilityStates(claudeAdapter.capabilities.rules!, codexAdapter.capabilities.rules!),
-    skills: intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),
+    mcp: intersectCapabilityStates(
+      intersectCapabilityStates(claudeAdapter.capabilities.mcp!, codexAdapter.capabilities.mcp!),
+      cursorAdapter.capabilities.mcp!,
+    ),
+    // The bundle exposes Cursor's real rules directory; the composite row is
+    // the honest three-host intersection, so it stays non-supported while
+    // Claude and Codex cannot consume rules.
+    rules: intersectCapabilityStates(
+      intersectCapabilityStates(claudeAdapter.capabilities.rules!, codexAdapter.capabilities.rules!),
+      cursorAdapter.capabilities.rules!,
+    ),
+    skills: intersectCapabilityStates(
+      intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),
+      cursorAdapter.capabilities.skills!,
+    ),
   }),
   hookContract: bundleHookContract,
   metadata,

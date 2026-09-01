@@ -20,8 +20,7 @@
       "afterTool": "postToolUse",
       "beforeTool": "preToolUse",
       "sessionStart": "sessionStart",
-      "stop": "stop",
-      "workspaceOpen": "workspaceOpen"
+      "stop": "stop"
     },
     "eventRoutes": {
       "agent/start": { "nativeEvent": "subagentStart", "state": "supported" },
@@ -30,7 +29,11 @@
       "stop": { "nativeEvent": "stop", "state": "supported" },
       "tool/after": { "nativeEvent": "postToolUse", "state": "supported" },
       "tool/before": { "nativeEvent": "preToolUse", "state": "supported" },
-      "workspace/open": { "nativeEvent": "workspaceOpen", "state": "supported" }
+      "workspace/open": {
+        "nativeEvent": "workspaceOpen",
+        "reason": "Cursor's workspaceOpen fires outside an agent session with no session or conversation fields, and its response must return pluginPaths; the generated session-scoped wrapper vocabulary cannot express that envelope.",
+        "state": "unavailable"
+      }
     },
     "matchers": {
       "agent": "^Task$",
@@ -90,7 +93,7 @@
       "Local-plugin symlinks are realpath checked and rejected when their targets escape ~/.cursor/plugins/local.",
       "2026-09-01: cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a schemas/plugin.schema.json defines the commands component pointer; https://cursor.com/docs documents agent chat commands as plain Markdown prompt files in commands/ named by filename.",
       "2026-08-31: cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a schemas/plugin.schema.json defines the rules component pointer; https://cursor.com/docs/plugins documents the rules component.",
-      "The pinned Cursor hooks schema admits subagentStart, subagentStop, and workspaceOpen as first-class hook arrays; the public Cursor hooks reference documents workspaceOpen and subagent lifecycle payloads.",
+      "The pinned Cursor hooks schema admits subagentStart, subagentStop, and workspaceOpen as first-class hook arrays; the documented native workspaceOpen contract is sessionless and returns pluginPaths, which the generated wrapper contract does not model (observed 2026-09-01, https://cursor.com/docs/agent/hooks).",
       "2026-09-01: https://cursor.com/docs/plugins and https://prod.cursor.com/docs/reference/plugins document agents as a full Cursor Plugin component alongside rules and commands; #100 stage 2 defers the agents component per the G5 narrowing in #107, so no agents capability row is published until a later stage admits it."
     ]
   }
