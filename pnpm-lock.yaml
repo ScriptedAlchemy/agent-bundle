@@ -266,6 +266,9 @@ importers:
       '@types/ws':
         specifier: 8.18.1
         version: 8.18.1
+      effect-rstest:
+        specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1(@rstest/core@0.11.10)(effect@4.0.0-rc.112)
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -321,6 +324,9 @@ importers:
       '@types/react':
         specifier: 19.2.18
         version: 19.2.18
+      effect-rstest:
+        specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1(@rstest/core@0.11.10)(effect@4.0.0-rc.112)
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -1624,6 +1630,13 @@ packages:
 
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
+
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1:
+    resolution: {integrity: sha512-ua0aIKKp3KTtNa60djZZiXbCuQgW7XP6LtWjG2frvinbB3nUFz2TU/hWNEeFcmnR150VekAFf14sCQUgEG5Ffg==, tarball: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1}
+    version: 0.1.0
+    peerDependencies:
+      '@rstest/core': ^0.11.0
+      effect: ^4.0.0-rc.108
 
   effect@4.0.0-rc.112:
     resolution: {integrity: sha512-wXxwuh1Ywnv4cPRM3Wfa0vDwuOHnZ1TsTgHJkG9XgzND6inhBH9n1vBxhg3iIXOia/OrpmvVmd3lrD4vq6bF3A==}
@@ -3778,6 +3791,11 @@ snapshots:
       gopd: 1.2.0
 
   ee-first@1.1.1: {}
+
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1(@rstest/core@0.11.10)(effect@4.0.0-rc.112):
+    dependencies:
+      '@rstest/core': 0.11.10
+      effect: 4.0.0-rc.112
 
   effect@4.0.0-rc.112:
     dependencies:
