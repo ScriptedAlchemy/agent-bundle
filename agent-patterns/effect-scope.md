@@ -28,6 +28,13 @@ const connection = Effect.acquireRelease(
 
 Finalizers run in reverse acquire order. Interruption still runs them.
 
+Do not `ReadableStream.cancel()` a stream React still holds a reader on —
+that throws `ReadableStream is locked` (sync or as a rejected promise) and
+can defect the finalizer. Interrupt the Effect producer (`AbortSignal` +
+`Stream.interruptWhen`, or `runFork(Fiber.interrupt)`) instead of canceling
+the locked web stream. Never `runPromise` from a finalizer that another
+fiber is already tearing down.
+
 ## Transactions (stage-1 kernel idiom)
 
 `Effect.acquireUseRelease` when begin/commit/rollback are one unit and the

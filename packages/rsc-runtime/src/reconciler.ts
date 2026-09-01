@@ -1,3 +1,4 @@
+import { Effect, Option, Queue, Stream, type Scope } from 'effect';
 import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { createFromReadableStream } from 'react-server-dom-rspack/client.node';
 
@@ -6,10 +7,24 @@ import {
   createAgentRenderEventSequence,
   type AgentRenderError,
   type AgentRenderEvent,
-  type AgentRenderEventSequence,
+  type AgentRenderEventInput,
   type AgentRenderLimits,
 } from './agent-document.js';
+import type { AgentProgressReporter, AgentProgressUpdate } from './agent-request.js';
 import { decodeAgentDocument } from './decode-document.js';
+import {
+  abortToInterrupt,
+  isAbortError,
+  runPromise,
+  scopedAbortSignal,
+  streamToReadableStream,
+  toRuntimeError,
+} from './effect/boundary.js';
+import {
+  createFlightDemand,
+  emitBoundRenderEvent,
+  type FlightDemand,
+} from './effect/render-stream.js';
 import { ensureAgentFlightManifest } from './flight-manifest.js';
 
 const REACT_FRAGMENT = Symbol.for('react.fragment');
@@ -246,257 +261,247 @@ const materializeNode = (node: ReactNode, path: string, ctx: MaterializeContext)
   }
 };
 
-const snapshotTree = (root: ReactNode, ids: Map<string, string>) => {
+interface TreeSnapshot {
+  readonly pending: readonly PendingBoundary[];
+  readonly rejected: MaterializeContext['rejected'];
+  readonly tree: ReactNode;
+}
+
+const snapshotTree = (root: ReactNode, ids: Map<string, string>): TreeSnapshot => {
   const ctx: MaterializeContext = { ids, pending: [], rejected: [] };
   return { pending: ctx.pending, rejected: ctx.rejected, tree: materializeNode(root, '', ctx) };
 };
 
-interface DemandGate {
-  readonly consume: () => void;
-  readonly notify: () => void;
-  readonly wait: () => Promise<void>;
-}
+const hostError = (signal: AbortSignal, error: unknown): Error =>
+  signal.aborted || isAbortError(error) ? abortError() : toRuntimeError(error);
 
-const createDemandGate = (): DemandGate => {
-  let notifyWaiter: (() => void) | undefined;
-  let signaled = false;
-  return {
-    consume() {
-      signaled = false;
-    },
-    notify() {
-      signaled = true;
-      const waiter = notifyWaiter;
-      notifyWaiter = undefined;
-      waiter?.();
-    },
-    wait() {
-      if (signaled) {
-        signaled = false;
-        return Promise.resolve();
-      }
-      return new Promise<void>((resolve) => {
-        notifyWaiter = () => {
-          signaled = false;
-          resolve();
-        };
-      });
-    },
-  };
-};
-
-export interface LiveEventStream {
-  readonly emit: (event: AgentRenderEvent) => Promise<void>;
-  readonly fail: (error: unknown) => void;
-  readonly holdFlight: () => boolean;
-  readonly readable: ReadableStream<AgentRenderEvent>;
-  readonly waitForFlightDemand: () => Promise<void>;
-}
-
-const createLiveEventStream = (signal: AbortSignal): LiveEventStream => {
-  const buffer: AgentRenderEvent[] = [];
-  const space = createDemandGate();
-  const data = createDemandGate();
-  const flight = createDemandGate();
-  let waitingPulls = 0;
-  let shellEmitted = false;
-  let failed: unknown;
-  let closed = false;
-
-  const readable = new ReadableStream<AgentRenderEvent>({
-    cancel() {
-      closed = true;
-      space.notify();
-      data.notify();
-      flight.notify();
-    },
-    pull(controller) {
-      if (failed !== undefined) {
-        controller.error(failed);
-        return;
-      }
-      const deliver = (): void => {
-        if (failed !== undefined) {
-          controller.error(failed);
-          return;
-        }
-        const event = buffer.shift();
-        if (event === undefined) {
-          controller.close();
-          return;
-        }
-        if (event.type === 'shell') shellEmitted = true;
-        controller.enqueue(event);
-        space.notify();
-        if (event.type === 'complete') controller.close();
-      };
-      if (buffer.length > 0) {
-        data.consume();
-        deliver();
-        return;
-      }
-      waitingPulls += 1;
-      flight.notify();
-      return data.wait().then(() => {
-        waitingPulls = Math.max(0, waitingPulls - 1);
-        deliver();
-      });
-    },
-  }, { highWaterMark: 0 });
-
-  return {
-    async emit(event) {
-      if (failed !== undefined) throw failed;
-      if (closed && event.type !== 'complete') {
-        throw new AgentContractError('handoff-required', 'The render is complete; later work requires a new invocation handoff');
-      }
-      while (buffer.length >= 1) {
-        if (signal.aborted) throw abortError();
-        await space.wait();
-      }
-      buffer.push(event);
-      if (event.type === 'shell') shellEmitted = true;
-      if (event.type === 'complete') closed = true;
-      data.notify();
-    },
-    fail(error) {
-      if (failed !== undefined || (closed && buffer.length === 0)) return;
-      failed = error;
-      closed = true;
-      data.notify();
-      space.notify();
-      flight.notify();
-    },
-    holdFlight() {
-      return shellEmitted && waitingPulls === 0;
-    },
-    readable,
-    async waitForFlightDemand() {
-      while (shellEmitted && waitingPulls === 0 && failed === undefined) {
-        await flight.wait();
-      }
-    },
-  };
-};
-
-const gateFlight = (
-  flight: ReadableStream<Uint8Array>,
-  live: LiveEventStream,
-  signal: AbortSignal,
-): ReadableStream<Uint8Array> =>
-  flight.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    async transform(chunk, controller) {
-      await live.waitForFlightDemand();
-      if (signal.aborted) throw abortError();
-      controller.enqueue(chunk);
-    },
-  }, { highWaterMark: 1 }, { highWaterMark: 0 }), { signal });
-
-const nextBoundary = async (
+const waitSettledBoundary = (
   pending: readonly PendingBoundary[],
-  signal: AbortSignal,
-): Promise<{ readonly boundary: PendingBoundary; readonly error?: unknown; readonly ok: boolean }> => {
-  if (signal.aborted) throw abortError();
-  return Promise.race([
-    new Promise<never>((_, reject) => {
-      const onAbort = (): void => reject(abortError());
-      if (signal.aborted) {
-        onAbort();
-        return;
-      }
-      signal.addEventListener('abort', onAbort, { once: true });
-    }),
-    ...pending.map(async (boundary) => {
-      try {
-        await boundary.thenable;
-        return { boundary, ok: true as const };
-      } catch (error) {
-        return { boundary, error, ok: false as const };
-      }
-    }),
-  ]);
-};
+): Effect.Effect<{ readonly boundary: PendingBoundary; readonly error?: unknown; readonly ok: boolean }, Error> =>
+  Effect.raceAll(
+    pending.map((boundary) =>
+      Effect.tryPromise({
+        catch: (error) => error,
+        try: () => Promise.resolve(boundary.thenable),
+      }).pipe(
+        Effect.map(() => ({ boundary, ok: true as const })),
+        Effect.catch((error) => Effect.succeed({ boundary, error, ok: false as const })),
+      ),
+    ),
+  );
 
-const reconcile = async (
-  root: ReactNode,
-  sequence: AgentRenderEventSequence,
-  live: LiveEventStream,
-  signal: AbortSignal,
-): Promise<void> => {
+type ReconcileState =
+  | { readonly kind: 'shell'; readonly snapshot: TreeSnapshot }
+  | { readonly kind: 'loop'; readonly snapshot: TreeSnapshot };
+
+const reconcileInputStream = (root: ReactNode): Stream.Stream<AgentRenderEventInput, Error> => {
   const ids = new Map<string, string>();
-  let snapshot = snapshotTree(root, ids);
-  await live.emit(sequence.emit({ document: decodeAgentDocument(snapshot.tree), type: 'shell' }));
-
-  while (snapshot.pending.length > 0) {
-    if (signal.aborted) throw abortError();
-    const settled = await nextBoundary(snapshot.pending, signal);
-    if (!settled.ok) {
-      const error = renderErrorFrom(settled.error);
-      await live.emit(sequence.emit({
-        boundaryId: settled.boundary.id,
-        error,
-        type: 'error',
-      }));
-    }
-    snapshot = snapshotTree(root, ids);
-    if (settled.ok) {
-      await live.emit(sequence.emit({
-        boundaryId: settled.boundary.id,
-        document: decodeAgentDocument(snapshot.tree),
-        type: 'replace',
-      }));
-    }
-  }
-
-  if (signal.aborted) throw abortError();
-  await live.emit(sequence.emit({ document: decodeAgentDocument(snapshot.tree), type: 'complete' }));
+  const initial = snapshotTree(root, ids);
+  return Stream.paginate(
+    { kind: 'shell', snapshot: initial } satisfies ReconcileState,
+    (state): Effect.Effect<
+      readonly [readonly AgentRenderEventInput[], Option.Option<ReconcileState>],
+      Error
+    > => {
+      switch (state.kind) {
+        case 'shell':
+          return Effect.try({
+            catch: (error) => toRuntimeError(error),
+            try: () =>
+              [
+                [{ document: decodeAgentDocument(state.snapshot.tree), type: 'shell' as const }],
+                Option.some({ kind: 'loop' as const, snapshot: state.snapshot }),
+              ] as const,
+          });
+        case 'loop': {
+          if (state.snapshot.pending.length === 0) {
+            return Effect.try({
+              catch: (error) => toRuntimeError(error),
+              try: () =>
+                [
+                  [{ document: decodeAgentDocument(state.snapshot.tree), type: 'complete' as const }],
+                  Option.none(),
+                ] as const,
+            });
+          }
+          return waitSettledBoundary(state.snapshot.pending).pipe(
+            Effect.flatMap((settled) =>
+              Effect.try({
+                catch: (error) => toRuntimeError(error),
+                try: () => {
+                  const snapshot = snapshotTree(root, ids);
+                  const input: AgentRenderEventInput = settled.ok
+                    ? {
+                      boundaryId: settled.boundary.id,
+                      document: decodeAgentDocument(snapshot.tree),
+                      type: 'replace',
+                    }
+                    : {
+                      boundaryId: settled.boundary.id,
+                      error: renderErrorFrom(settled.error),
+                      type: 'error',
+                    };
+                  return [[input], Option.some({ kind: 'loop' as const, snapshot })] as const;
+                },
+              }),
+            ),
+          );
+        }
+        default: {
+          const exhaustive: never = state;
+          return exhaustive;
+        }
+      }
+    },
+  );
 };
 
-export interface AgentFlightEventSession {
-  readonly live: LiveEventStream;
-  readonly readable: ReadableStream<AgentRenderEvent>;
-  readonly sequence: AgentRenderEventSequence;
+const gatedFlightStream = (
+  flight: ReadableStream<Uint8Array>,
+  demand: FlightDemand,
+): Stream.Stream<Uint8Array, Error> =>
+  Stream.unwrap(
+    Effect.gen(function*() {
+      const reader = yield* Effect.acquireRelease(
+        Effect.sync(() => flight.getReader()),
+        (handle) => Effect.promise(() => handle.cancel().then(() => undefined)),
+      );
+      return Stream.unfold(undefined, () =>
+        demand.wait.pipe(
+          Effect.flatMap(() =>
+            Effect.tryPromise({
+              catch: (error) => toRuntimeError(error),
+              try: () => reader.read(),
+            }),
+          ),
+          Effect.map((next) => (next.done ? undefined : [next.value, undefined] as const)),
+        ),
+      );
+    }),
+  );
+
+const decodeFlightRoot = (
+  flight: ReadableStream<Uint8Array>,
+  demand: FlightDemand,
+  signal: AbortSignal,
+): Effect.Effect<ReactNode, Error, Scope.Scope> =>
+  Effect.gen(function*() {
+    ensureAgentFlightManifest();
+    const flightAbort = yield* scopedAbortSignal;
+    const readable = streamToReadableStream(gatedFlightStream(flight, demand), {
+      signal: flightAbort,
+      strategy: { highWaterMark: 1 },
+    });
+    return yield* Effect.tryPromise({
+      catch: (error) => hostError(signal, error),
+      try: () =>
+        createFromReadableStream<ReactNode>(readable, { unstable_allowPartialStream: true }),
+    });
+  });
+
+const progressInput = (update: AgentProgressUpdate): AgentRenderEventInput => ({
+  completed: update.completed ?? 0,
+  ...(update.message === undefined ? {} : { message: update.message }),
+  ...(update.total === undefined ? {} : { total: update.total }),
+  type: 'progress',
+});
+
+export interface AgentRenderEventStreamOptions {
+  readonly demand: FlightDemand;
+  readonly flight: Promise<ReadableStream<Uint8Array>>;
+  readonly limits?: Partial<AgentRenderLimits>;
+  readonly signal: AbortSignal;
 }
 
-export const createAgentFlightEventSession = (
-  options: AgentFlightDecodeOptions = {},
-): AgentFlightEventSession => {
-  const signal = options.signal ?? new AbortController().signal;
-  const live = createLiveEventStream(signal);
-  return Object.freeze({
-    live,
-    readable: live.readable,
-    sequence: createAgentRenderEventSequence(options.limits),
+export interface AgentRenderEventSession {
+  readonly events: Stream.Stream<AgentRenderEvent, Error>;
+  readonly progress: AgentProgressReporter;
+}
+
+/**
+ * Invocation-local render pipeline: Flight bytes as a pull-gated Stream,
+ * pending boundaries as `Stream.paginate`, contract bounds as the emit
+ * stage. `progress` is created synchronously so the host can execute in the
+ * same turn as `stream()`.
+ */
+export const createAgentRenderEventSession = (
+  options: AgentRenderEventStreamOptions,
+): AgentRenderEventSession => {
+  const sequence = createAgentRenderEventSequence(options.limits);
+  let offerProgress: ((input: AgentRenderEventInput) => Effect.Effect<void, Error>) | undefined;
+  const bufferedProgress: AgentRenderEventInput[] = [];
+  const progress: AgentProgressReporter = Object.freeze({
+    report: async (update: AgentProgressUpdate) => {
+      if (sequence.completed) {
+        throw new AgentContractError(
+          'handoff-required',
+          'The render is complete; later work requires a new invocation handoff',
+        );
+      }
+      const input = progressInput(update);
+      if (offerProgress === undefined) {
+        bufferedProgress.push(input);
+        return;
+      }
+      await runPromise(offerProgress(input));
+    },
   });
+  const events = Stream.unwrap(
+    Effect.gen(function*() {
+      const progressInputs = yield* Queue.unbounded<AgentRenderEventInput>();
+      offerProgress = (input) => Queue.offer(progressInputs, input).pipe(Effect.asVoid);
+      for (const input of bufferedProgress) {
+        yield* Queue.offer(progressInputs, input);
+      }
+      const flight = yield* Effect.tryPromise({
+        catch: (error) => hostError(options.signal, error),
+        try: () => options.flight,
+      });
+      if (options.signal.aborted) return yield* Effect.fail(abortError());
+      const root = yield* decodeFlightRoot(flight, options.demand, options.signal);
+      if (options.signal.aborted) return yield* Effect.fail(abortError());
+      return Stream.merge(
+        reconcileInputStream(root),
+        Stream.fromQueue(progressInputs),
+        { haltStrategy: 'left' },
+      ).pipe(
+        Stream.mapEffect((input) => emitBoundRenderEvent(sequence, input)),
+        Stream.tap((event) => (event.type === 'shell' ? options.demand.markShell : Effect.void)),
+        Stream.takeUntil((event) => event.type === 'complete'),
+        Stream.ensuring(Queue.shutdown(progressInputs)),
+      );
+    }),
+  );
+  return { events, progress };
 };
 
-const decodeIntoSession = (
-  flight: ReadableStream<Uint8Array>,
-  session: AgentFlightEventSession,
+
+export const toPublicEventStream = (
+  events: Stream.Stream<AgentRenderEvent, Error>,
+  demand: FlightDemand,
   signal: AbortSignal,
-): void => {
-  ensureAgentFlightManifest();
-  void (async () => {
-    try {
-      if (signal.aborted) throw abortError();
-      const node = await createFromReadableStream<ReactNode>(
-        gateFlight(flight, session.live, signal),
-        { unstable_allowPartialStream: true },
-      );
-      if (signal.aborted) throw abortError();
-      await reconcile(node, session.sequence, session.live, signal);
-    } catch (error) {
-      session.live.fail(signal.aborted ? abortError() : error);
-    }
-  })();
-};
+): ReadableStream<AgentRenderEvent> =>
+  streamToReadableStream(Stream.interruptWhen(events, abortToInterrupt(signal)), {
+    closeOn: (event) => event.type === 'complete',
+    onPull: demand.notePull,
+    onPullDelivered: demand.notePullEnd,
+    strategy: { highWaterMark: 0 },
+  });
 
 export const decodeAgentFlightStream = (
   flight: ReadableStream<Uint8Array>,
-  options: AgentFlightDecodeOptions & { readonly session?: AgentFlightEventSession } = {},
+  options: AgentFlightDecodeOptions = {},
 ): ReadableStream<AgentRenderEvent> => {
   const signal = options.signal ?? new AbortController().signal;
-  const session = options.session ?? createAgentFlightEventSession({ limits: options.limits, signal });
-  decodeIntoSession(flight, session, signal);
-  return session.readable;
+  const demand = createFlightDemand();
+  return toPublicEventStream(
+    createAgentRenderEventSession({
+      demand,
+      flight: Promise.resolve(flight),
+      limits: options.limits,
+      signal,
+    }).events,
+    demand,
+    signal,
+  );
 };

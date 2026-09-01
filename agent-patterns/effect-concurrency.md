@@ -18,7 +18,9 @@ lifecycle). Build those Effect-native from day one behind Promise edges.
 
 Host `AbortSignal` still exists at the edges (`dispatch()` / `stream()`).
 Do not thread extra internal signals once the program is an Effect; interrupt
-the fiber.
+the fiber (`Stream.interruptWhen` + `abortToInterrupt`). `Latch.makeUnsafe`
+is the legal sync bridge when a web `ReadableStream.pull` must open demand
+for an Effect stream — do not invent a second AbortSignal for that.
 
 ## Bounded work
 

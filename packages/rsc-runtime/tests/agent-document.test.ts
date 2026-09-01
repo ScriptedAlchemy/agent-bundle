@@ -1,3 +1,4 @@
+import { Stream } from 'effect';
 import { describe, expect, it } from '@rstest/core';
 
 import {
@@ -8,6 +9,8 @@ import {
   type AgentDocumentNode,
   type AgentRenderInvocation,
 } from '../src/index.js';
+import { runPromise } from '../src/effect/boundary.js';
+import { boundRenderEventStream } from '../src/effect/render-stream.js';
 
 const root = (): AgentDocumentNode => ({
   children: [
@@ -198,6 +201,28 @@ describe('Agent render events', () => {
     } catch (error) {
       expect(error).toMatchObject({ code: 'elapsed-time-exceeded' });
     }
+  });
+});
+
+describe('boundRenderEventStream', () => {
+  it('assigns sequence numbers and fails closed after complete', async () => {
+    const events = await runPromise(Stream.runCollect(
+      Stream.make(
+        { completed: 0, type: 'progress' as const },
+        { completed: 1, type: 'progress' as const },
+      ).pipe(boundRenderEventStream()),
+    ));
+    expect(events.map((event) => event.sequence)).toEqual([0, 1]);
+
+    await expect(runPromise(Stream.runCollect(
+      Stream.make(
+        {
+          document: { root: root(), status: 'success' as const, version: 1 as const },
+          type: 'complete' as const,
+        },
+        { completed: 2, type: 'progress' as const },
+      ).pipe(boundRenderEventStream()),
+    ))).rejects.toMatchObject({ code: 'handoff-required' });
   });
 });
 
