@@ -131,10 +131,53 @@ const createLegacyMigrationDatabase = (file: string, definitionId: string): void
     const insert = db.prepare(
       'INSERT INTO agent_state_journal (revision, kind, name, payload, state, to_version, idempotency_key, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     );
-    insert.run(1, 'event', 'bumped', '{"by":2}', null, null, 'legacy:event', '2026-01-01T00:00:00.000Z');
+    insert.run(1, 'event', 'bumped', '{"by":2}', '{"count":2}', null, 'legacy:event', '2026-01-01T00:00:00.000Z');
     insert.run(2, 'reset', null, null, '{"count":5}', null, 'legacy:reset', '2026-01-01T00:00:01.000Z');
-    insert.run(3, 'event', 'bumped', '{"by":1}', null, null, 'legacy:event-2', '2026-01-01T00:00:02.000Z');
+    insert.run(3, 'event', 'bumped', '{"by":1}', '{"count":6}', null, 'legacy:event-2', '2026-01-01T00:00:02.000Z');
     db.prepare('INSERT INTO agent_state_head (id, revision, state) VALUES (1, 3, ?)').run('{"count":6}');
+  } finally {
+    db.close();
+  }
+};
+
+const clearLegacyEventResults = (file: string): void => {
+  const db = new DatabaseSync(file);
+  try {
+    db.exec("UPDATE agent_state_journal SET state = NULL WHERE kind = 'event'");
+  } finally {
+    db.close();
+  }
+};
+
+interface ValueState {
+  readonly value: number;
+}
+
+const valueCounterDefinition = (
+  id = 'state-sqlite-test/value-counter',
+): AgentStateDefinition<ValueState, typeof counterEvents> =>
+  defineState({
+    events: counterEvents,
+    id,
+    initial: { value: 0 },
+    lifetime: 'workspace-durable',
+    migrations: {
+      2: (persisted) => ({ value: (persisted as CounterState).count * 10 }),
+    },
+    reduce: (state, event) => ({ value: state.value + event.payload.by }),
+    schema: z.object({ value: z.number().int() }).strict(),
+    version: 2,
+  });
+
+const createLegacyHeadOnlyDatabase = (file: string, definitionId: string): void => {
+  createLegacyMigrationDatabase(file, definitionId);
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(`
+      DELETE FROM agent_state_journal WHERE revision > 1;
+      UPDATE agent_state_journal SET state = NULL WHERE revision = 1;
+      UPDATE agent_state_head SET revision = 1, state = '{"count":2}' WHERE id = 1;
+    `);
   } finally {
     db.close();
   }
@@ -240,19 +283,31 @@ describe('sqlite driver storage behavior', () => {
       }
     }));
 
-  it('backfills legacy NULL event results before migration for idempotent replay', () =>
+  it('fails closed when a non-head legacy event has no recoverable committed result', () =>
     withRoot(async (root) => {
       const definition = migratingCounterDefinition();
       const file = join(root, 'legacy-null-event.sqlite');
       createLegacyMigrationDatabase(file, definition.id);
+      clearLegacyEventResults(file);
+
+      await expect(createSqliteStateDriver({ file }).open(definition)).rejects.toMatchObject({
+        code: 'migration-failure',
+        message: expect.stringContaining('has no recoverable committed result'),
+        name: 'AgentStateError',
+      });
+    }));
+
+  it('migrates a legacy journal-head result from the materialized head without using the current reducer', () =>
+    withRoot(async (root) => {
+      const definition = valueCounterDefinition();
+      const file = join(root, 'legacy-head-event.sqlite');
+      createLegacyHeadOnlyDatabase(file, definition.id);
 
       const store = await createSqliteStateDriver({ file }).open(definition);
       await expect(
         store.dispatch('bumped', { by: 2 }, { idempotencyKey: 'legacy:event' }),
-      ).resolves.toEqual({ replayed: true, revision: 1, state: { count: 20 } });
-      await expect(
-        store.dispatch('bumped', { by: 1 }, { idempotencyKey: 'legacy:event-2' }),
-      ).resolves.toEqual({ replayed: true, revision: 3, state: { count: 60 } });
+      ).resolves.toEqual({ replayed: true, revision: 1, state: { value: 20 } });
+      await expect(store.read()).resolves.toEqual({ revision: 2, state: { value: 20 } });
       await store.close();
     }));
 
@@ -369,6 +424,59 @@ describe('sqlite driver storage behavior', () => {
         await expect(store.close()).rejects.toBe(closeFailure);
       } finally {
         DatabaseSync.prototype.close = originalClose;
+      }
+    }));
+
+  it('preserves the initialization error when database close also fails', () =>
+    withRoot(async (root) => {
+      const file = join(root, 'state.sqlite');
+      const seed = await createSqliteStateDriver({ file }).open(counterDefinition());
+      await seed.close();
+      const db = new DatabaseSync(file);
+      db.exec('UPDATE agent_state_meta SET kernel_format = 99');
+      db.close();
+
+      const closeFailure = new Error('database close failed');
+      const originalClose = DatabaseSync.prototype.close;
+      DatabaseSync.prototype.close = function close(this: DatabaseSync): void {
+        originalClose.call(this);
+        throw closeFailure;
+      };
+      try {
+        await expect(createSqliteStateDriver({ file }).open(counterDefinition())).rejects.toMatchObject({
+          code: 'corrupt',
+          message: expect.stringContaining('kernel format 99'),
+          name: 'AgentStateError',
+        });
+      } finally {
+        DatabaseSync.prototype.close = originalClose;
+      }
+    }));
+
+  it('attempts every store close before propagating the first close failure', () =>
+    withRoot(async (root) => {
+      const driver = createSqliteStateDriver({ root });
+      const first = await driver.open(counterDefinition());
+      const second = await driver.open(otherDefinition());
+      const closeFailure = new Error('first database close failed');
+      const originalClose = DatabaseSync.prototype.close;
+      let closeAttempts = 0;
+      DatabaseSync.prototype.close = function close(this: DatabaseSync): void {
+        originalClose.call(this);
+        closeAttempts += 1;
+        if (closeAttempts === 1) throw closeFailure;
+      };
+      try {
+        await expect(driver.close()).rejects.toBe(closeFailure);
+        expect(closeAttempts).toBe(2);
+        await expect(driver.close()).rejects.toBe(closeFailure);
+        expect(closeAttempts).toBe(2);
+        await expect(first.read()).rejects.toMatchObject({ code: 'store-closed' });
+        await expect(second.read()).rejects.toMatchObject({ code: 'store-closed' });
+      } finally {
+        DatabaseSync.prototype.close = originalClose;
+        await first.close().catch(() => undefined);
+        await second.close().catch(() => undefined);
       }
     }));
 
