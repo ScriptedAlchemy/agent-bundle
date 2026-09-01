@@ -35,6 +35,7 @@ import {
   type TargetHookContract,
 } from './hook-contract.ts';
 import {
+  ruleWriteEntries,
   sortedEntries,
   sourceInputs,
   standardArtifactLayout,
@@ -202,6 +203,7 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
   mcpApps: standardArtifactLayout.mcpApps,
   mcpEntries: standardArtifactLayout.mcpEntries,
   rootDocuments: Object.freeze(['AGENTS.md']),
+  rules: Object.freeze({ allowedSuffixes: Object.freeze(['.mdc']), directory: 'rules' }),
   scripts: standardArtifactLayout.scripts,
   skills: standardArtifactLayout.skills,
 });
@@ -211,6 +213,8 @@ const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(pluginNam
 interface AgentsDocumentOptions {
   /** True when the Claude half of this bundle emitted `.lsp.json`. */
   readonly lsp: boolean;
+  /** True when the Cursor half emitted conventional `.mdc` rules. */
+  readonly rules: boolean;
 }
 
 const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions): string => {
@@ -241,6 +245,11 @@ const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions)
     ...(options.lsp
       ? [
           '- `.lsp.json` — Claude Code language-server configuration (plugin-root convention). Claude Code only; Codex and Cursor have no LSP surface.',
+        ]
+      : []),
+    ...(options.rules
+      ? [
+          '- `rules/` — Cursor rules (`.mdc`), Cursor only; Claude Code and Codex have no rules surface.',
         ]
       : []),
     '- `hooks/` — one `hooks.json` with a host-detecting wrapper per hook (Claude Code and Codex), plus `hooks-cursor.json` with per-hook Cursor wrappers (`<name>.cursor.mjs`).',
@@ -311,6 +320,8 @@ const cursorBundleHookContract = createCursorHookContract({
 
 const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const diagnostics: Diagnostic[] = [];
+  const isSelected = (targets: readonly string[]): boolean => targets.includes(pluginName);
+  const selectedRules = (model.rules ?? []).filter((rule) => isSelected(rule.targets));
   // Host planners stay hook-free: the bundle lowers hooks once below, and
   // per-host nativeHooks passthrough remains with the host targets.
   const hookFreeModel: NormalizedPlugin = { ...model, hooks: [], nativeHooks: undefined };
@@ -386,6 +397,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     const manifest = cursorManifest(model, {
       ...(emitCursorHooks ? { hooks: `./${cursorPaths.hooks}` } : {}),
       ...(cursorMcp !== undefined && cursorMcpValid ? { mcp: `./${cursorPaths.mcp}` } : {}),
+      ...(selectedRules.length === 0 ? {} : { rules: './rules/' }),
       ...(model.skills.some((skill) => skill.targets.includes(pluginName)) ? { skills: './skills/' } : {}),
       ...(cursorManifestVariables === undefined ? {} : { variables: cursorManifestVariables }),
     });
@@ -396,7 +408,11 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
         content: `${stableJson(manifest)}\n`,
         kind: 'write',
         relativePath: cursorPaths.plugin,
-        sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
+        sourceInputs: sourceInputs(
+          model.metadata.provenance.sourcePath,
+          ...targetSourceInputs,
+          ...selectedRules.map((rule) => rule.source),
+        ),
       });
       if (cursorMcp !== undefined && cursorMcpValid) {
         entries.push({
@@ -420,9 +436,11 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
+  entries.push(...ruleWriteEntries(model, isSelected));
   entries.push({
     content: agentsDocument(model, {
       lsp: entries.some((entry) => entry.relativePath === claudeArtifactPaths.lsp),
+      rules: selectedRules.length > 0,
     }),
     kind: 'write',
     relativePath: 'AGENTS.md',
@@ -467,6 +485,9 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
     // supported: nothing about that document reaches Codex or Cursor.
     lsp: intersectCapabilityStates(claudeAdapter.capabilities.lsp!, codexAdapter.capabilities.lsp!),
     mcp: intersectCapabilityStates(claudeAdapter.capabilities.mcp!, codexAdapter.capabilities.mcp!),
+    // The bundle exposes Cursor's real rules directory, but Claude and Codex
+    // cannot consume it, so the composite row remains the honest intersection.
+    rules: intersectCapabilityStates(claudeAdapter.capabilities.rules!, codexAdapter.capabilities.rules!),
     skills: intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),
   }),
   hookContract: bundleHookContract,

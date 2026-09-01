@@ -321,6 +321,19 @@ export interface NormalizedSkill {
   readonly targets: readonly string[];
 }
 
+/** One conventional Cursor `.mdc` rule with peeled target selection. */
+export interface NormalizedRule {
+  readonly body: string;
+  readonly frontmatter: Readonly<Record<string, unknown>>;
+  readonly id: string;
+  /** Exact authored bytes decoded as UTF-8 for byte-faithful emission. */
+  readonly markdown: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  readonly source: string;
+  readonly targets: readonly string[];
+}
+
 export interface NormalizedMcpServer {
   readonly args?: readonly string[];
   /** Filesystem routes compiled into this framework-generated server entry. */
@@ -502,6 +515,11 @@ export interface NormalizedPlugin {
    * models predating prebuilt payloads stay valid.
    */
   readonly payloads?: readonly NormalizedPayload[];
+  /**
+   * Conventional `rules/*.mdc` documents. Present only when rules are
+   * discovered; optional so hand-constructed models predating rules remain valid.
+   */
+  readonly rules?: readonly NormalizedRule[];
   /** The generated-executable runtime floor selected during normalization. */
   readonly runtime: NormalizedRuntime;
   readonly scripts: readonly NormalizedScript[];

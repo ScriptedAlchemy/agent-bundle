@@ -335,6 +335,9 @@ export const portableAdapter: TargetAdapter = Object.freeze({
       evidence,
       'Agent Plugins 1.0.0 does not support both required modern MCP transports.',
     ),
+    rules: unavailableCapability(
+      'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no rules surface.',
+    ),
     skills: capabilityStateFromSupport(
       capabilityTable.plugin.skills,
       evidence,

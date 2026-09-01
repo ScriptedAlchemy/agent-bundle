@@ -20,6 +20,7 @@ import {
   eventRouteCapabilitiesFrom,
   supportedEventRouteNamesFrom,
   supportedCapability,
+  unavailableCapability,
 } from './capability-state.ts';
 import capabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import {
@@ -510,6 +511,9 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,
       'The pinned Claude contract does not support both required modern MCP transports.',
+    ),
+    rules: unavailableCapability(
+      'The pinned Claude Code plugin contract (2.1.250) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
     ),
     skills: capabilityStateFromSupport(
       capabilityTable.plugin.skills,

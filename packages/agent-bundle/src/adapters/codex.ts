@@ -423,6 +423,9 @@ export const codexAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Codex contract does not support both required modern MCP transports.',
     ),
+    rules: unavailableCapability(
+      'The pinned Codex plugin contract (0.147.0) defines no rules component; Codex guidance remains outside the plugin component surface.',
+    ),
     skills: capabilityStateFromSupport(
       capabilityTable.plugin.skills,
       evidence,

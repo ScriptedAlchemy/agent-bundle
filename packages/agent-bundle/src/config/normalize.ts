@@ -45,6 +45,7 @@ import type {
   NormalizedPayload,
   NormalizedPlugin,
   NormalizedRuntime,
+  NormalizedRule,
   NormalizedScript,
   NormalizedSkill,
   SourceProvenance,
@@ -297,6 +298,7 @@ export const reservedPayloadDestinations = Object.freeze(new Set([
   'mcp-apps',
   'mcp.json',
   'plugin.json',
+  'rules',
   'scripts',
   'skills',
 ]));
@@ -902,6 +904,26 @@ const normalizeAssets = (
   targets: [...targetNames],
 }));
 
+const normalizeRules = (
+  discovered: DiscoveredProject,
+  targetNames: readonly string[],
+): readonly NormalizedRule[] => (discovered.rules ?? []).map((rule) => {
+  const name = basename(rule.source, extname(rule.source));
+  const targets = rule.authoredTargets === undefined
+    ? [...targetNames]
+    : sortedUnique(rule.authoredTargets.filter((target) => targetNames.includes(target)));
+  return {
+    body: rule.body,
+    frontmatter: structuredClone(rule.frontmatter),
+    id: `rule:${name}`,
+    markdown: rule.markdown,
+    name,
+    provenance: { kind: 'conventional', sourcePath: rule.source },
+    source: rule.source,
+    targets,
+  };
+});
+
 /** Selects the generated-executable floor; invalid raises fall back to the default the validator rejected. */
 const normalizeRuntime = (loaded: LoadedConfig): NormalizedRuntime => {
   const node = loaded.config.runtime?.node;
@@ -963,6 +985,7 @@ export const normalizeProject = async (
   const mcpServers = normalizeMcpServers(loaded, discovered, targetNames, payloads);
   const scripts = normalizeScripts(loaded, discovered, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
+  const rules = normalizeRules(discovered, targetNames);
   const packageBuild = normalizePackageBuild(
     loaded.config,
     loaded.context.projectRoot,
@@ -988,6 +1011,7 @@ export const normalizeProject = async (
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
     ...(packageBuild === undefined ? {} : { packageBuild }),
     ...(payloads.length === 0 ? {} : { payloads }),
+    ...(rules.length === 0 ? {} : { rules }),
     runtime: normalizeRuntime(loaded),
     scripts,
     skills,

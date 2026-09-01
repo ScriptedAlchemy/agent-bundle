@@ -132,6 +132,19 @@ export const payloadCopyEntries = (
     sourceInputs: sourceInputs(payload.provenance.sourcePath, file.source),
   })));
 
+/** Byte-faithful write entries for rules selected by one target plan. */
+export const ruleWriteEntries = (
+  model: NormalizedPlugin,
+  isSelected: (targets: readonly string[]) => boolean,
+): TargetArtifactWrite[] => (model.rules ?? [])
+  .filter((rule) => isSelected(rule.targets))
+  .map((rule) => ({
+    content: rule.markdown,
+    kind: 'write',
+    relativePath: `rules/${rule.name}.mdc`,
+    sourceInputs: sourceInputs(rule.source),
+  }));
+
 /** One already-validated host-native document beyond the shared plugin set. */
 export interface StandardPluginHostDocument {
   readonly document: Record<string, unknown>;
@@ -140,6 +153,8 @@ export interface StandardPluginHostDocument {
 }
 
 export interface StandardPluginArtifactsInput {
+  /** Additional authored inputs that select fields in the target plugin document. */
+  readonly additionalPluginSourceInputs?: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
   /**
    * Host-native documents a single target owns beyond the shared plugin,
@@ -223,6 +238,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
       ...hookSourceInputs,
       ...nativeHookSourceInputs,
       ...skillSourceInputs,
+      ...(input.additionalPluginSourceInputs ?? []),
     ),
   }];
   if (mcp !== undefined && mcpValid) {
@@ -382,6 +398,7 @@ export interface TargetArtifactLayout {
   readonly mcpEntries?: TargetArtifactOutputLayout;
   /** Adapter-owned plain documents at the artifact root (for example a generated AGENTS.md). */
   readonly rootDocuments?: readonly string[];
+  readonly rules?: TargetArtifactOutputLayout;
   readonly scripts?: TargetArtifactOutputLayout;
   readonly skills?: string;
 }
