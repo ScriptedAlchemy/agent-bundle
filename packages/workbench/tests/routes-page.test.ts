@@ -80,6 +80,30 @@ it('shows the argv projection of a compiled CLI command', () => {
   expect(markup).toContain('library audit &lt;input&gt; [--verbose]');
 });
 
+it('leads the usage line with positionals in argv order regardless of option order', () => {
+  const reordered: RouteManifest = {
+    ...manifest,
+    cli: {
+      ...manifest.cli!,
+      commands: [{
+        aliases: [],
+        exitCode: 'result',
+        options: [
+          { key: 'concurrency', kind: 'number', option: 'concurrency', repeated: false, required: false },
+          { key: 'report', kind: 'string', option: 'report', repeated: false, required: true },
+          { key: 'sources', kind: 'string', option: 'sources', positional: 0, repeated: true, required: true },
+        ],
+        path: ['library', 'audit'],
+        routeId: 'cli:library/audit',
+      }],
+    },
+  };
+
+  const markup = render(routeCatalogFor(reordered));
+
+  expect(markup).toContain('library audit [&lt;sources&gt;…] [--concurrency] --report');
+});
+
 it('shows the canonical event beside an event route', () => {
   const markup = render(routeCatalogFor(manifest));
 

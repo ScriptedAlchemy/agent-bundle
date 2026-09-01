@@ -28,13 +28,19 @@ const configSummary = (entry: RouteCatalogEntry): string => {
     : fields.map((field) => `${field.key}: ${field.value}`).join(' · ');
 };
 
+/**
+ * A usage line, so positionals lead in their argv order and flags follow —
+ * the compiler orders options by key, which is not the order they are typed.
+ */
 const commandSummary = (entry: RouteCatalogEntry): string | undefined => {
   const command = entry.command;
   if (command === undefined) return undefined;
-  const options = command.options.map((option) => option.positional === undefined
-    ? (option.required ? `--${option.option}` : `[--${option.option}]`)
-    : (option.repeated ? `[<${option.key}>…]` : `<${option.key}>`));
-  return [...command.path, ...options].join(' ');
+  const positionals = command.options.filter((option) => option.positional !== undefined)
+    .toSorted((left, right) => left.positional! - right.positional!)
+    .map((option) => option.repeated ? `[<${option.key}>…]` : `<${option.key}>`);
+  const flags = command.options.filter((option) => option.positional === undefined)
+    .map((option) => option.required ? `--${option.option}` : `[--${option.option}]`);
+  return [...command.path, ...positionals, ...flags].join(' ');
 };
 
 const RouteGroup = ({ group }: { readonly group: RouteCatalogGroup }) => <section

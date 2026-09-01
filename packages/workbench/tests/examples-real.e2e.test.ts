@@ -602,12 +602,24 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await expect(resources).toContainText('uri: audiobook-curator://catalog', { timeout: browserTimeout });
     await expect(page.getByRole('region', { name: 'curator · Prompts' })).toContainText('prompt:curator/curate', { timeout: browserTimeout });
     await expect(page.locator('.route-provenance').first()).toHaveText('conventional', { timeout: browserTimeout });
-    await expect(page.locator('.route-identity')).toContainText('17', { timeout: browserTimeout });
 
-    // The curator declares its CLI through config rather than `src/cli/**`, so
-    // the compiled catalog must not invent a conventional route for it.
-    await expect(page.getByRole('heading', { name: 'CLI commands', exact: true })).toHaveCount(0);
+    // The generated CLI is a project surface rather than a server one, and each
+    // command carries the argv projection compiled from its input schema.
+    const cli = page.getByRole('region', { name: 'CLI commands' });
+    await expect(cli.locator('tbody tr')).toHaveCount(15, { timeout: browserTimeout });
+    await expect(cli).toContainText('cli:library-audit', { timeout: browserTimeout });
+    await expect(cli).toContainText('src/cli/library-audit.tsx', { timeout: browserTimeout });
+    await expect(cli.locator('.route-command').filter({ hasText: 'library-audit' }))
+      .toHaveText('library-audit [<sources>…] [--concurrency] --report [--strict]', { timeout: browserTimeout });
+    await expect(cli.locator('.route-command').filter({ hasText: 'inspect' }))
+      .toHaveText('inspect <root> [--max-files]', { timeout: browserTimeout });
+
+    // 17 MCP routes plus 15 CLI routes, and nothing invented: the curator
+    // declares no conventional event routes, scripts, or context providers.
+    await expect(page.locator('.route-identity')).toContainText('32', { timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Event routes', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Scripts', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Context providers', exact: true })).toHaveCount(0);
     await expect(page.locator('.route-diagnostics')).toHaveCount(0);
     await captureExampleState(page, 'audiobook-curator', 'routes-catalog-by-server');
 
