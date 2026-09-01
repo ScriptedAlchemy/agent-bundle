@@ -258,6 +258,110 @@ describe('next-event delivery', () => {
     await driver.close();
   });
 
+  it('replays the same admitted notice set for the same invocation id', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-replay',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('replay'),
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+    }, { idempotencyKey: 'publish:replay' }));
+    const invocation = {
+      actorId: 'recipient',
+      id: 'event-replay',
+      kind: 'event' as const,
+      startedAt: '2026-09-01T19:02:00.000Z',
+    };
+
+    const first = await run(ledger, invocation, async () => (await agent()).notices!.read());
+    const replay = await run(ledger, invocation, async () => (await agent()).notices!.read());
+
+    expect(first.map(({ notice }) => notice.id)).toEqual([published.notice.id]);
+    expect(replay.map(({ notice }) => notice.id)).toEqual(
+      first.map(({ notice }) => notice.id),
+    );
+    await driver.close();
+  });
+
+  it('does not admit notices created after the event started', async () => {
+    const { driver, ledger } = await openLedger();
+    await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-future',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:10:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('future'),
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+    }, { idempotencyKey: 'publish:future' }));
+
+    const observed = await run(ledger, {
+      actorId: 'recipient',
+      id: 'event-before-publish',
+      kind: 'event',
+      startedAt: '2026-09-01T19:05:00.000Z',
+    }, async () => (await agent()).notices!.read());
+
+    expect(observed).toEqual([]);
+    expect((await ledger.read()).notices[0]?.state).toBe('pending');
+    await driver.close();
+  });
+
+  it('interrupts delivery authorization when the request is aborted', { timeout: 5_000 }, async () => {
+    let authorizationStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      authorizationStarted = resolve;
+    });
+    const { driver, ledger } = await openLedger((request) => {
+      if (request.phase === 'publish') return { state: 'authorized' };
+      authorizationStarted();
+      return new Promise(() => undefined);
+    });
+    await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-abort',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('abort'),
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+    }, { idempotencyKey: 'publish:abort' }));
+    const controller = new AbortController();
+    const opening = runAgentRequest({
+      actor: actor('recipient'),
+      host,
+      invocation: {
+        id: 'event-abort',
+        kind: 'event',
+        startedAt: '2026-09-01T19:02:00.000Z',
+      },
+      noticeLedger: ledger,
+      session,
+      signal: controller.signal,
+      workspace,
+    }, async () => (await agent()).notices!.read());
+
+    await started;
+    controller.abort('test abort');
+    const guarded = Promise.race([
+      opening,
+      new Promise<never>((_, reject) => {
+        AbortSignal.timeout(1_000).addEventListener('abort', () => {
+          reject(new Error('Timed out waiting for authorization interruption'));
+        }, { once: true });
+      }),
+    ]);
+
+    await expect(guarded).rejects.toMatchObject({ name: 'AbortError' });
+    await driver.close();
+  });
+
   it('marks a matched notice unavailable when delivery-time authorization is unavailable', async () => {
     const { driver, ledger } = await openLedger((request) => ({
       state: request.phase === 'publish' ? 'authorized' : 'unavailable',
