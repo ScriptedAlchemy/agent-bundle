@@ -45,5 +45,8 @@ export type { NativePostToolUseOutput } from './lower-hook.js';
 export { lowerMcpResult } from './lower-mcp.js';
 export type { JsonObject, JsonValue } from './lower-mcp.js';
 export { createRscRequestContext } from './request-context.js';
+// Type-only: the state kernel itself ships behind the './state' subpath so
+// stateless artifacts include none of it (#98).
+export type { AgentStateHandle, AgentStateLifetime } from './state/contract.js';
 export type { RscRequestContext } from './request-context.js';
 export * from './plugin.js';

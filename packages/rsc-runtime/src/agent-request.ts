@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type { JsonValue } from './lower-mcp.js';
+import type { AgentStateHandle } from './state/contract.js';
 
 export const AGENT_REQUEST_STORE_VERSION = 1;
 
@@ -130,8 +131,11 @@ export interface AgentRequestContext {
   readonly signal: AbortSignal;
   readonly services: AgentServiceRegistry;
   readonly providers: AgentProviderValues;
-  /** Reserved for the durable state kernel (#98). Wave 1 leaves this undefined. */
-  readonly state: undefined;
+  /**
+   * State kernel handle (#98) installed by the host wiring via
+   * `runAgentRequest({ state })`; undefined for stateless projects.
+   */
+  readonly state: AgentStateHandle | undefined;
   /** Reserved for recipient-aware notices (#99). Wave 1 leaves this undefined. */
   readonly notices: undefined;
 }
@@ -146,6 +150,8 @@ export interface AgentRequestInit {
   readonly services?: AgentServiceRegistry;
   readonly session?: Observed<AgentSessionIdentity>;
   readonly signal?: AbortSignal;
+  /** Request-bound state handle from `createAgentStateHandle` (subpath `./state`). */
+  readonly state?: AgentStateHandle;
   readonly workspace?: Observed<AgentWorkspaceIdentity>;
 }
 
@@ -240,7 +246,7 @@ interface FrozenValues {
   readonly services: AgentServiceRegistry;
   readonly session: Observed<AgentSessionIdentity>;
   readonly signal: AbortSignal;
-  readonly state: undefined;
+  readonly state: AgentStateHandle | undefined;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
 
@@ -353,7 +359,7 @@ export const runAgentRequest = async <T>(
     services: Object.freeze({ ...(init.services ?? {}) }),
     session: snapshotObserved(init.session ?? unavailable<AgentSessionIdentity>()),
     signal: init.signal ?? new AbortController().signal,
-    state: undefined,
+    state: init.state,
     workspace: snapshotObserved(init.workspace ?? unavailable<AgentWorkspaceIdentity>()),
   });
   const lease: Lease = {
