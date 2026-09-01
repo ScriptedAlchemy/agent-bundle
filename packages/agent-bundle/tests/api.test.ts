@@ -545,25 +545,47 @@ it('returns an invalid inspection for selected targets outside the normalized pr
 it('reports skipped target/component pairs with intersection-rule reasons', async () => {
   const root = await createProject();
   try {
-    await writeFile(join(root, 'src', 'report.ts'), 'export const report = true;\n');
-    await writeFile(join(root, 'agent-bundle.config.ts'), [
-      'export default {',
-      "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
-      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-      "  scripts: { report: { entry: './src/report.ts', targets: ['codex'] } },",
-      "  targets: ['portable', 'codex'],",
-      '};',
-      '',
-    ].join('\n'));
+    await mkdir(join(root, 'rules'));
+    await Promise.all([
+      writeFile(join(root, 'src', 'report.ts'), 'export const report = true;\n'),
+      writeFile(join(root, 'rules', 'shared.mdc'), '---\ndescription: Shared rule\n---\nShared guidance.\n'),
+      writeFile(
+        join(root, 'rules', 'cursor-only.mdc'),
+        '---\ndescription: Cursor-only rule\ntargets:\n  - cursor\n---\nCursor guidance.\n',
+      ),
+      writeFile(join(root, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
+        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        "  scripts: { report: { entry: './src/report.ts', targets: ['codex'] } },",
+        "  targets: ['portable', 'codex', 'claude', 'cursor'],",
+        '};',
+        '',
+      ].join('\n')),
+    ]);
 
     const result = await readyInspection({ root });
     const planFor = (target: string) => result.plans.find((plan) => plan.target === target);
 
     expect(planFor('portable')?.skipped).toEqual([
       expect.objectContaining({ kind: 'hook', name: 'sessionStart', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
       expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
     ]);
-    expect(planFor('codex')?.skipped).toEqual([]);
+    expect(planFor('codex')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
+    ]);
+    expect(planFor('claude')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
+      expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
+    ]);
+    expect(planFor('cursor')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
+    ]);
+    expect(planFor('cursor')?.skipped.some((component) => component.kind === 'rule')).toBe(false);
     expect(Object.isFrozen(planFor('portable')?.skipped)).toBe(true);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
@@ -776,6 +798,60 @@ it('returns an output-independent project context without absolute project paths
     ]);
   }
 }, 30_000);
+
+it('keeps rule model digests root-independent and sensitive to rule content', async () => {
+  const [leftRoot, rightRoot] = await Promise.all([createProject(), createProject()]);
+  const config = [
+    'export default {',
+    "  plugin: { name: 'rule-digest-fixture', version: '1.0.0' },",
+    "  targets: ['cursor', 'claude'],",
+    '};',
+    '',
+  ].join('\n');
+  const targetedRule = [
+    '---',
+    'description: Cursor-only guidance',
+    'targets:',
+    '  - cursor',
+    '---',
+    'Targeted body.',
+    '',
+  ].join('\n');
+  const sharedRule = '---\ndescription: Shared guidance\n---\nShared body.\n';
+  try {
+    await Promise.all([
+      mkdir(join(leftRoot, 'rules')),
+      mkdir(join(rightRoot, 'rules')),
+    ]);
+    await Promise.all([
+      writeFile(join(leftRoot, 'agent-bundle.config.ts'), config),
+      writeFile(join(rightRoot, 'agent-bundle.config.ts'), config),
+      writeFile(join(leftRoot, 'rules', 'cursor-only.mdc'), targetedRule),
+      writeFile(join(rightRoot, 'rules', 'cursor-only.mdc'), targetedRule),
+      writeFile(join(leftRoot, 'rules', 'shared.mdc'), sharedRule),
+      writeFile(join(rightRoot, 'rules', 'shared.mdc'), sharedRule),
+    ]);
+
+    const [left, right] = await Promise.all([
+      readyInspection({ root: leftRoot }),
+      readyInspection({ root: rightRoot }),
+    ]);
+    expect(left.projectContext.modelDigest).toBe(right.projectContext.modelDigest);
+    expect(left.projectContext.sourceInputs.map((input) => input.path)).toEqual(expect.arrayContaining([
+      'rules/cursor-only.mdc',
+      'rules/shared.mdc',
+    ]));
+
+    await writeFile(join(rightRoot, 'rules', 'shared.mdc'), sharedRule.replace('Shared body.', 'Changed body.'));
+    const changed = await readyInspection({ root: rightRoot });
+    expect(changed.projectContext.modelDigest).not.toBe(left.projectContext.modelDigest);
+  } finally {
+    await Promise.all([
+      rm(join(leftRoot, '..'), { force: true, recursive: true }),
+      rm(join(rightRoot, '..'), { force: true, recursive: true }),
+    ]);
+  }
+});
 
 it('rejects an output beneath an escaping symlink before loading source or writing outside the project', async () => {
   const root = await createProject();

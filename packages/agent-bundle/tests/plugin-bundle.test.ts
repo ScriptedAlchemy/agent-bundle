@@ -219,6 +219,7 @@ it('emits Cursor-only rules once at the shared root and documents the honest hos
     ...bundleModel,
     rules: [{
       body: 'Stay focused.',
+      emittedMarkdown: markdown,
       frontmatter: { description: 'Keep changes focused' },
       id: 'rule:focused',
       markdown,

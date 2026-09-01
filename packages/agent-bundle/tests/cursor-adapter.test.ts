@@ -209,12 +209,23 @@ it('emits selected rules byte-faithfully and omits the entire surface when rule-
     ...model,
     rules: [{
       body: 'Check types.',
+      emittedMarkdown: markdown,
       frontmatter: { description: 'Review TypeScript', globs: '**/*.ts' },
       id: 'rule:typescript',
       markdown,
       name: 'typescript',
       provenance: { kind: 'conventional', sourcePath: '/workspace/rules/typescript.mdc' },
       source: '/workspace/rules/typescript.mdc',
+      targets: ['cursor'],
+    }, {
+      body: 'Keep changes focused.',
+      emittedMarkdown: '---\ndescription: Focus changes\nalwaysApply: true\n---\n\nKeep changes focused.',
+      frontmatter: { alwaysApply: true, description: 'Focus changes' },
+      id: 'rule:focused',
+      markdown: '---\ndescription: Focus changes\nalwaysApply: true\ntargets:\n  - cursor\n---\nKeep changes focused.',
+      name: 'focused',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/rules/focused.mdc' },
+      source: '/workspace/rules/focused.mdc',
       targets: ['cursor'],
     }],
   };
@@ -223,6 +234,10 @@ it('emits selected rules byte-faithfully and omits the entire surface when rule-
   const documents = writeContents(withRule);
   expect(plan.diagnostics).toEqual([]);
   expect(documents['rules/typescript.mdc']).toBe(markdown);
+  expect(documents['rules/focused.mdc']).toBe(
+    '---\ndescription: Focus changes\nalwaysApply: true\n---\n\nKeep changes focused.',
+  );
+  expect(documents['rules/focused.mdc']).not.toContain('targets:');
   expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({
     rules: './rules/',
   });

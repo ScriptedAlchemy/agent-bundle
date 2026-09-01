@@ -914,6 +914,7 @@ const normalizeRules = (
     : sortedUnique(rule.authoredTargets.filter((target) => targetNames.includes(target)));
   return {
     body: rule.body,
+    emittedMarkdown: rule.emittedMarkdown,
     frontmatter: structuredClone(rule.frontmatter),
     id: `rule:${name}`,
     markdown: rule.markdown,

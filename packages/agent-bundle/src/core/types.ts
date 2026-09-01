@@ -324,9 +324,11 @@ export interface NormalizedSkill {
 /** One conventional Cursor `.mdc` rule with peeled target selection. */
 export interface NormalizedRule {
   readonly body: string;
+  /** Host-emitted document with authoring-only frontmatter keys stripped. */
+  readonly emittedMarkdown: string;
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly id: string;
-  /** Exact authored bytes decoded as UTF-8 for byte-faithful emission. */
+  /** Exact authored bytes decoded as UTF-8; retained as an identity input. */
   readonly markdown: string;
   readonly name: string;
   readonly provenance: SourceProvenance;

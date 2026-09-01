@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
+import { stringify as stringifyYaml } from 'yaml';
+
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { parseMarkdownFrontmatter } from './skill-references.ts';
 
@@ -8,8 +10,10 @@ export interface RuleDocument {
   readonly authoredTargets?: readonly string[];
   readonly body: string;
   readonly diagnostics: readonly Diagnostic[];
+  /** Host-emitted document with authoring-only frontmatter keys stripped. */
+  readonly emittedMarkdown: string;
   readonly frontmatter: Readonly<Record<string, unknown>>;
-  /** Exact authored `.mdc` bytes decoded as UTF-8. */
+  /** Exact authored `.mdc` bytes decoded as UTF-8; retained as an identity input. */
   readonly markdown: string;
   readonly source: string;
 }
@@ -92,6 +96,17 @@ const validateFrontmatter = (
   };
 };
 
+const emittedMarkdown = (
+  markdown: string,
+  body: string,
+  declared: Readonly<Record<string, unknown>>,
+  frontmatter: Readonly<Record<string, unknown>>,
+): string => {
+  if (!Object.hasOwn(declared, 'targets')) return markdown;
+  if (Object.keys(frontmatter).length === 0) return body;
+  return `---\n${stringifyYaml(frontmatter)}---\n${body.startsWith('\n') ? body : `\n${body}`}`;
+};
+
 export const parseRule = async (source: string): Promise<RuleDocument> => {
   let markdown: string;
   try {
@@ -104,6 +119,7 @@ export const parseRule = async (source: string): Promise<RuleDocument> => {
         `Unable to read rule file: ${error instanceof Error ? error.message : String(error)}`,
         source,
       )],
+      emittedMarkdown: '',
       frontmatter: {},
       markdown: '',
       source,
@@ -115,6 +131,7 @@ export const parseRule = async (source: string): Promise<RuleDocument> => {
     return {
       body: parsed.body,
       diagnostics: [],
+      emittedMarkdown: markdown,
       frontmatter: {},
       markdown,
       source,
@@ -128,6 +145,7 @@ export const parseRule = async (source: string): Promise<RuleDocument> => {
         `Rule YAML frontmatter is invalid: ${parsed.message}`,
         source,
       )],
+      emittedMarkdown: markdown,
       frontmatter: {},
       markdown,
       source,
@@ -139,6 +157,7 @@ export const parseRule = async (source: string): Promise<RuleDocument> => {
     ...(validated.authoredTargets === undefined ? {} : { authoredTargets: validated.authoredTargets }),
     body: parsed.body,
     diagnostics: validated.diagnostics,
+    emittedMarkdown: emittedMarkdown(markdown, parsed.body, parsed.frontmatter, validated.frontmatter),
     frontmatter: validated.frontmatter,
     markdown,
     source,

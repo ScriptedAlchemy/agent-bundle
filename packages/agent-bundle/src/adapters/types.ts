@@ -132,14 +132,14 @@ export const payloadCopyEntries = (
     sourceInputs: sourceInputs(payload.provenance.sourcePath, file.source),
   })));
 
-/** Byte-faithful write entries for rules selected by one target plan. */
+/** Host-emitted write entries for rules selected by one target plan. */
 export const ruleWriteEntries = (
   model: NormalizedPlugin,
   isSelected: (targets: readonly string[]) => boolean,
 ): TargetArtifactWrite[] => (model.rules ?? [])
   .filter((rule) => isSelected(rule.targets))
   .map((rule) => ({
-    content: rule.markdown,
+    content: rule.emittedMarkdown,
     kind: 'write',
     relativePath: `rules/${rule.name}.mdc`,
     sourceInputs: sourceInputs(rule.source),

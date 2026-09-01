@@ -60,6 +60,7 @@ it('accepts body-only rules and retains exact authored bytes', async () => {
     expect(rule).toMatchObject({
       body: markdown,
       diagnostics: [],
+      emittedMarkdown: markdown,
       frontmatter: {},
       markdown,
       source,
@@ -72,20 +73,21 @@ it('peels targets and rejects unknown frontmatter fields and malformed field sha
   await withProject(async (root) => {
     await mkdir(join(root, 'rules'));
     const validSource = join(root, 'rules', 'cursor-only.mdc');
+    const validMarkdown = [
+      '---',
+      'description: Cursor review guidance',
+      'globs:',
+      '  - "**/*.ts"',
+      'alwaysApply: false',
+      'targets:',
+      '  - cursor',
+      '---',
+      '# Review',
+      '',
+    ].join('\n');
     await writeFile(
       validSource,
-      [
-        '---',
-        'description: Cursor review guidance',
-        'globs:',
-        '  - "**/*.ts"',
-        'alwaysApply: false',
-        'targets:',
-        '  - cursor',
-        '---',
-        '# Review',
-        '',
-      ].join('\n'),
+      validMarkdown,
     );
     const valid = await parseRule(validSource);
     expect(valid.diagnostics).toEqual([]);
@@ -95,6 +97,19 @@ it('peels targets and rejects unknown frontmatter fields and malformed field sha
       globs: ['**/*.ts'],
     });
     expect(valid.authoredTargets).toEqual(['cursor']);
+    expect(valid.markdown).toBe(validMarkdown);
+    expect(valid.emittedMarkdown).toBe([
+      '---',
+      'description: Cursor review guidance',
+      'globs:',
+      '  - "**/*.ts"',
+      'alwaysApply: false',
+      '---',
+      '',
+      '# Review',
+      '',
+    ].join('\n'));
+    expect(valid.emittedMarkdown).not.toContain('targets:');
 
     const invalidSource = join(root, 'rules', 'invalid.mdc');
     await writeFile(
@@ -121,6 +136,29 @@ it('peels targets and rejects unknown frontmatter fields and malformed field sha
     ]);
     expect(invalid.frontmatter).toEqual({});
     expect(invalid).not.toHaveProperty('authoredTargets');
+  });
+});
+
+it('preserves target-free frontmatter bytes and emits target-only rules as body-only', async () => {
+  await withProject(async (root) => {
+    await mkdir(join(root, 'rules'));
+    const targetFreeSource = join(root, 'rules', 'target-free.mdc');
+    const targetFreeMarkdown = '---\r\ndescription: Keep CRLF\r\n---\r\nBody without trailing newline';
+    const targetOnlySource = join(root, 'rules', 'target-only.mdc');
+    await Promise.all([
+      writeFile(targetFreeSource, targetFreeMarkdown),
+      writeFile(targetOnlySource, '---\ntargets:\n  - cursor\n---\nTarget-only body'),
+    ]);
+
+    const [targetFree, targetOnly] = await Promise.all([
+      parseRule(targetFreeSource),
+      parseRule(targetOnlySource),
+    ]);
+
+    expect(targetFree.emittedMarkdown).toBe(targetFreeMarkdown);
+    expect(targetOnly.frontmatter).toEqual({});
+    expect(targetOnly.authoredTargets).toEqual(['cursor']);
+    expect(targetOnly.emittedMarkdown).toBe('Target-only body');
   });
 });
 
@@ -169,6 +207,7 @@ it('normalizes peeled rule targets and reports unknown, unavailable, and duplica
       ...(authoredTargets === undefined ? {} : { authoredTargets }),
       body: '# Rule\n',
       diagnostics: [],
+      emittedMarkdown: '---\ndescription: Rule guidance\n---\n# Rule\n',
       frontmatter: { description: 'Rule guidance' },
       markdown: '---\ndescription: Rule guidance\n---\n# Rule\n',
       source,
@@ -181,6 +220,7 @@ it('normalizes peeled rule targets and reports unknown, unavailable, and duplica
 
     expect(model.rules).toEqual([{
       body: '# Rule\n',
+      emittedMarkdown: '---\ndescription: Rule guidance\n---\n# Rule\n',
       frontmatter: { description: 'Rule guidance' },
       id: 'rule:review',
       markdown: '---\ndescription: Rule guidance\n---\n# Rule\n',
