@@ -77,6 +77,15 @@ describe('agent request store', () => {
     });
   });
 
+  it('uses a typed error for invalid invocation fields', async () => {
+    await expect(runAgentRequest({ invocation: { id: ' ', kind: 'tool' } }, () => undefined)).rejects.toMatchObject({
+      code: 'invalid-invocation',
+    });
+    await expect(runAgentRequest({ invocation: { id: ' ', kind: 'tool' } }, () => undefined)).rejects.toBeInstanceOf(
+      AgentRequestError,
+    );
+  });
+
   it('never fabricates an identity string for a missing principal', async () => {
     await runAgentRequest(init('tool'), async () => {
       const context = await agent();

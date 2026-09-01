@@ -20,7 +20,7 @@ export const createRscMcpServer = (
   });
   for (const operation of application.operations) {
     const mcp = operation.mcp;
-    if (mcp?.server !== serverName || mcp === undefined) continue;
+    if (mcp?.server !== serverName) continue;
     server.registerTool(mcp.name, {
       ...(mcp._meta === undefined ? {} : { _meta: mcp._meta }),
       // Emit exactly the hints the author declared: an absent hint carries

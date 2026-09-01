@@ -115,7 +115,7 @@ export interface AgentRequestInit {
   readonly workspace?: Observed<AgentWorkspaceIdentity>;
 }
 
-export type AgentRequestErrorCode = 'outside-invocation' | 'request-closed' | 'store-version-conflict';
+export type AgentRequestErrorCode = 'invalid-invocation' | 'outside-invocation' | 'request-closed' | 'store-version-conflict';
 
 export class AgentRequestError extends Error {
   readonly code: AgentRequestErrorCode;
@@ -163,7 +163,9 @@ const emptyCapabilities = (): AgentRequestCapabilities => Object.freeze({
 
 const optionalText = (value: string | undefined): string | undefined => {
   if (value === undefined) return undefined;
-  if (value.trim() === '') throw new Error('Agent invocation fields must be non-empty when present');
+  if (value.trim() === '') {
+    throw new AgentRequestError('invalid-invocation', 'Agent invocation fields must be non-empty when present');
+  }
   return value;
 };
 
