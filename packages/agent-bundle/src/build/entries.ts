@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, relative, resolve } from 'node:path';
+import { basename, dirname, extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -54,8 +54,17 @@ const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
  */
 export const runtimeIgnoredRoot = (path: string): string => {
   const normalized = path.replaceAll('\\', '/');
-  const marker = normalized.includes('/dist/') ? '/dist/' : '/src/';
-  return resolve(normalized.slice(0, normalized.lastIndexOf(marker)));
+  let directory = dirname(normalized);
+  while (true) {
+    if (basename(directory) === 'dist' || basename(directory) === 'src') {
+      return resolve(dirname(directory));
+    }
+    const parent = dirname(directory);
+    if (parent === directory) {
+      throw new Error(`Runtime module is not under an owning package src or dist directory: ${JSON.stringify(path)}.`);
+    }
+    directory = parent;
+  }
 };
 
 export interface CompiledEntry {
