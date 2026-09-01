@@ -748,7 +748,23 @@ export class ProjectService {
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source, snapshotSource);
+      return preparedProject(
+        loaded.configPath,
+        snapshot,
+        sourceDiagnostics,
+        outputRoots,
+        undefined,
+        registry,
+        root,
+        source,
+        snapshotSource,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        discovered.routeGraph,
+      );
     }
 
     let model: NormalizedPlugin;

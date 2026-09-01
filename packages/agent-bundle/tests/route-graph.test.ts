@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -8,7 +8,7 @@ import { inspect, type ReadyInspectResult } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
 import { discoverProject } from '../src/config/discover.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
-import { compileRouteGraph, isEmptyRouteGraph } from '../src/routes/graph.ts';
+import { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from '../src/routes/graph.ts';
 import { emptyRouteConfig } from '../src/routes/types.ts';
 
 const roots: string[] = [];
@@ -296,12 +296,17 @@ it('serves the shared empty graph under the routes focus of a route-free project
   const root = await createInspectProject({
     'src/index.ts': 'export const library = true;\n',
   });
+  const compiled = await compileRouteGraph(root, fixtureConfig());
+  expect(isEmptyRouteGraph(compiled)).toBe(true);
+  expect(compiled.digest).toBe(emptyCompiledRouteGraph.digest);
+
   const result = await inspect({ focus: 'routes', root });
 
   expect(result.state).toBe('ready');
   const routes = (result as ReadyInspectResult).selected?.routes;
   expect(routes).toMatchObject({ diagnostics: [], events: [], providers: [], scripts: [], servers: [] });
-  expect(routes!.digest).toMatch(/^[a-f\d]{64}$/u);
+  expect(routes!.digest).toBe(emptyCompiledRouteGraph.digest);
+  expect(isEmptyRouteGraph(routes!)).toBe(true);
 });
 
 it('selects the compiled graph under the routes inspect focus', async () => {
@@ -340,4 +345,41 @@ it('dumps the graph through the CLI --routes focus and rejects ambiguous focuses
   });
   expect(ambiguous).toBe(1);
   expect(stderr.join('')).toContain('Choose at most one inspect focus.');
+});
+
+it('evaluates a stateful config factory once when inspecting the routes focus', async () => {
+  const root = await createRoot();
+  const counterPath = join(root, 'config-load-count.txt');
+  await writeTree(root, {
+    'agent-bundle.config.ts': [
+      "import { readFileSync, writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      '',
+      'export default (ctx: { readonly projectRoot: string }) => {',
+      "  const path = join(ctx.projectRoot, 'config-load-count.txt');",
+      "  writeFileSync(path, `${Number(readFileSync(path, 'utf8')) + 1}\\n`);",
+      '  return {',
+      "    plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "    targets: ['portable'],",
+      '  };',
+      '};',
+      '',
+    ].join('\n'),
+    'config-load-count.txt': '0\n',
+    'package.json': '{"type":"module"}\n',
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  });
+
+  const result = await inspect({ focus: 'routes', root });
+  expect(result.state).toBe('ready');
+  expect(Number(await readFile(counterPath, 'utf8'))).toBe(1);
+
+  const routes = (result as ReadyInspectResult).selected?.routes;
+  const discovered = await discoverProject(root, fixtureConfig());
+  expect(routes).toBeDefined();
+  expect(discovered.routeGraph).toBeDefined();
+  expect(routes!.digest).toBe(discovered.routeGraph!.digest);
+  expect(routes!.servers[0]!.routes.map((route) => route.id)).toEqual(
+    discovered.routeGraph!.servers[0]!.routes.map((route) => route.id),
+  );
 });
