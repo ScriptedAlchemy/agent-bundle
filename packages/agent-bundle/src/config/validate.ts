@@ -1732,7 +1732,7 @@ export const validateModel = (
           server.generatedRoutes !== undefined && server.targets.includes(target));
         if (runtimeHost) continue;
         diagnostics.push({
-          code: 'AB4816',
+          code: 'AB4817',
           message: `Event route ${hook.eventRoute.event} requires the shared runtime on ${target}, but no generated MCP entry hosts it.`,
           recovery: 'Add a generated MCP route server, or explicitly set event config.runtime to standalone or config.fallback to standalone.',
           severity: 'error',

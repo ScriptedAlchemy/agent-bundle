@@ -8,6 +8,19 @@ Status: proposed
 > work is tracked in
 > [#105](https://github.com/ScriptedAlchemy/agent-bundle/issues/105). This
 > spec is not the live execution plan.
+>
+> Supersession note (#105 stage 1): navigation is no longer derived from
+> artifact counts alone. The compiled route graph is now a first-class
+> navigation input, read once from the dev server's own compiler pass through
+> `GET /api/routes/manifest`, and the Workbench is a ten-page shell: a `routes`
+> catalog page joins Overview under **Build**. The count-derived capabilities
+> below still hold for everything configuration can declare without a route
+> module; per-kind availability is now the union of the artifact catalog and the
+> compiled graph, so neither source can hide the other. Schema-driven input
+> editors and the Agent Document stage remain stage 2. The single Workbench
+> shell, navigation, and hash router in `main.tsx`/`workbench-screen.tsx` stay
+> the only ones — the manifest catalog is a page inside them, not a second
+> shell.
 
 ## Context
 
@@ -82,11 +95,20 @@ reuses the strict decoders and services already required by the pages, avoids
 duplicating catalog schemas, and can be replaced later by a server summary
 without changing product semantics.
 
+Since #105 stage 1 the catalog also composes the compiled route graph from one
+dedicated route (`GET /api/routes/manifest`) behind its own strict decoder.
+That route is a projection of the prepared project's existing compiler pass, not
+a second discovery: `hooks`, `mcp`, and `playground` are satisfied by either an
+emitted artifact entry or a compiled route of the matching kind, and the graph's
+own diagnostics render beside the catalog. A refused or absent manifest degrades
+only the Routes page; every artifact-derived page keeps its evidence.
+
 ### Navigation and direct routes
 
 Navigation receives the catalog and renders three concise groups:
 
-- **Build:** Overview
+- **Build:** Overview (and, since #105 stage 1, Routes — the compiled route
+  catalog, always available once the catalog is ready)
 - **Capabilities:** only Skills, Hooks, Playground, and MCP capabilities that
   exist in the catalog
 - **Quality:** Evals and Comparisons only when Eval suites exist

@@ -83,6 +83,14 @@ on the Promise edge. Do not widen public error types to satisfy Effect.
 - Host `AbortSignal` at a Promise edge goes on `runPromise(..., { signal })`.
   Inside Effect, `interruptWhenAborted` or `yield* scopedAbortSignal`.
 
+## Test helpers
+
+Use `effect-rstest` when a test can return an Effect directly: `it.effect`
+provides `TestClock` and `TestConsole`, while `it.live` keeps real services for
+host I/O. Use `layer` for a shared service graph and scoped acquisition for
+test resources. Keep ordinary rstest tests for Promise-only public APIs and
+keep boundary-runner assertions on the package boundary they are testing.
+
 ## Streams and concurrency
 
 Stage 2 uses Effect `Stream` for the #145 dispatcher: Flight bytes via

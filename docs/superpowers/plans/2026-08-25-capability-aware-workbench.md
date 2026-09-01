@@ -10,6 +10,25 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-25-capability-aware-workbench-design.md`
 
+> Supersession note (#105 stage 1, compiler-manifest-driven navigation): this
+> plan is landed and its structure invariants still hold with one amendment.
+> The catalog is no longer composed from artifact, Skill, and Eval clients
+> alone — it also reads the compiled route graph from one dedicated dev-server
+> route (`GET /api/routes/manifest`) behind its own strict decoder, and
+> `WorkbenchCapabilities` carries a `routes: RouteCatalog`. Task 1's page rules
+> below are now the *union* of those counts and the compiled graph, and the
+> page set gained `routes` (a compiled-catalog page under **Build**, beside
+> Overview), so the Task 1 assertions and the `WorkbenchCapabilities` /
+> `WorkbenchCapabilityClients` shapes quoted here are superseded by
+> `packages/workbench/src/workbench-capabilities.ts` and
+> `packages/workbench/tests/workbench-capabilities.test.ts`. Everything else is
+> unchanged and intentionally so: there is still exactly one Workbench shell,
+> one navigation rail, and one hash router in `main.tsx` /
+> `workbench-screen.tsx`. The Routes catalog is a page inside them; it does not
+> add a shell, a navigation component, or a router. Schema-driven input editors
+> and the Agent Document stage remain stage 2 and are deliberately not
+> scaffolded.
+
 ## Global Constraints
 
 - The Workbench is desktop-only; acceptance viewport is exactly 1440×900.
@@ -66,6 +85,9 @@ export const pageForHash = (
 ```
 
 - Page rules: Overview/Artifacts/Logs always; Skills for `skills > 0`; Hooks for `hooks > 0`; MCP for `mcpServers > 0`; Playground for `hooks + scripts > 0`; Evals and Comparisons for `evalSuites > 0`.
+  Amended by #105 stage 1: Routes is also always available once the catalog is
+  ready, and Hooks, MCP, and Playground additionally open when the compiled
+  route graph declares an event route, an MCP server surface, or a script route.
 
 - [ ] **Step 1: Write failing capability derivation tests**
 

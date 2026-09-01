@@ -20,6 +20,7 @@ import { RuntimeMcpRoutes } from './runtime-mcp-routes.ts';
 import { RuntimeRoutes } from './runtime-routes.ts';
 import type { DevRuntimeSession } from './runtime-provider.ts';
 import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/playground-routes.ts';
+import { RouteManifestRoutes, type RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
@@ -136,6 +137,11 @@ export interface ForegroundServerOptions {
   /** Durable playground trace store; the browser never selects its storage root or project identity. */
   readonly playground?: PlaygroundRouteService;
   readonly port?: number;
+  /**
+   * Read-only projection of the compiled route graph. The Workbench derives
+   * navigation from this one compiler pass; it never re-discovers routes.
+   */
+  readonly routeManifest?: RouteManifestRouteService;
   /** Optional runtime session; its lifecycle remains Workbench-owned. */
   readonly runtime?: DevRuntimeSession;
   /** Read-only Skill document/resource service for the workbench. */
@@ -434,6 +440,7 @@ export class ForegroundServer {
   readonly #now: () => Date;
   readonly #playgroundRoutes: PlaygroundRoutes;
   readonly #port: number;
+  readonly #routeManifestRoutes: RouteManifestRoutes;
   readonly #server: Server;
   readonly #skillDocuments: SkillDocumentService | undefined;
   readonly #sockets = new Set<Socket>();
@@ -512,6 +519,10 @@ export class ForegroundServer {
     this.#artifactRoutes = new ArtifactRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.artifacts === undefined ? {} : { service: options.artifacts }),
+    });
+    this.#routeManifestRoutes = new RouteManifestRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.routeManifest === undefined ? {} : { service: options.routeManifest }),
     });
     this.#evalRoutes = new EvalRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -657,6 +668,7 @@ export class ForegroundServer {
     this.#playgroundRoutes.close();
     this.#inspectorRoutes.close();
     this.#artifactRoutes.close();
+    this.#routeManifestRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
     void releaseEvals.catch(() => undefined);
     // Fence both public Eval authorities in this turn. Agent API handlers can
@@ -742,6 +754,7 @@ export class ForegroundServer {
     if (await this.#playgroundRoutes.handle(request, response)) return;
     if (await this.#inspectorRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;
+    if (this.#routeManifestRoutes.handle(request, response)) return;
     if (await this.#evalRoutes.handle(request, response)) return;
     if (await this.#devLogRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);

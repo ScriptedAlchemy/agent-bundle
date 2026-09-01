@@ -8,7 +8,7 @@ import type { Page, Request } from 'playwright-core';
 import { workspaceRoot } from './workbench-e2e.ts';
 import { timeScale } from '../../../agent-bundle/tests/support/time-scale.ts';
 
-export type ExampleName = 'hooks-and-scripts' | 'mcp-app' | 'skills-starter';
+export type ExampleName = 'audiobook-curator' | 'hooks-and-scripts' | 'mcp-app' | 'skills-starter';
 
 export interface ExampleCapture {
   readonly example: ExampleName;

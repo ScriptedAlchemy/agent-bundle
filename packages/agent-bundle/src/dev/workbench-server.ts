@@ -34,6 +34,9 @@ import { NativePlaygroundService } from './playground/native-playground-service.
 import { PlaygroundOrchestrationService } from './playground/playground-orchestration-service.ts';
 import { PlaygroundStore as PlaygroundService } from './playground/playground-store.ts';
 import { ProjectService } from './project-service.ts';
+import { emptyCompiledRouteGraph } from '../routes/graph.ts';
+import { routeManifestFor } from './routes/route-manifest.ts';
+import type { RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { DevRuntimeController } from './runtime-controller.ts';
 import {
   RuntimeClientSurfaceProxy,
@@ -700,6 +703,17 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     trace,
   });
   const inspector = createInspectorLauncher({ projectRoot: root });
+  // The manifest is a projection of the prepared project's own compiler pass;
+  // route discovery never runs a second time for the browser.
+  const routeManifest: RouteManifestRouteService = {
+    manifest: () => {
+      const prepared = latestValidPreparedProject;
+      if (prepared === undefined || prepared.source.revision === undefined) {
+        throw new Error('No valid prepared project is available for the route manifest.');
+      }
+      return routeManifestFor(prepared.routeGraph ?? emptyCompiledRouteGraph, prepared.source.revision);
+    },
+  };
   const agentApi = agentApiEnabled
     ? new AgentApi({
       artifacts,
@@ -744,6 +758,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     mcpSessions,
     playground,
     port: options.port,
+    routeManifest,
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments,
   });
