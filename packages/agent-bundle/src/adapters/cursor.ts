@@ -65,6 +65,25 @@ export const cursorHooksValidator = validateHooks;
 
 const cursorNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
 
+const cursorVariablePattern = /\$\{([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}/gu;
+const cursorBuiltInVariables = new Set(['CLAUDE_PLUGIN_ROOT', 'CURSOR_PLUGIN_ROOT']);
+const portableAgentPluginTokens = ['${PLUGIN_DATA}', '${PLUGIN_ROOT}'] as const;
+
+/** Builds the manifest variable schema required for custom MCP placeholders. */
+export const cursorVariables = (mcp: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
+  if (mcp === undefined) return undefined;
+  const names = new Set<string>();
+  for (const match of JSON.stringify(mcp).matchAll(cursorVariablePattern)) {
+    const name = match[1];
+    if (name !== undefined && !cursorBuiltInVariables.has(name)) names.add(name);
+  }
+  if (names.size === 0) return undefined;
+  return {
+    properties: Object.fromEntries([...names].sort().map((name) => [name, { type: 'string' }])),
+    type: 'object',
+  };
+};
+
 /** True when a plugin name satisfies Cursor's lowercase kebab-case contract. */
 export const isValidCursorPluginName = (name: string): boolean =>
   cursorNamePattern.test(name) && name.length <= 64;
@@ -134,6 +153,16 @@ export const planCursorMcpServer = (
   const transportDiagnostic = unsupportedMcpTransportDiagnostic(server, transport);
   if (transportDiagnostic !== undefined) return { diagnostics: [transportDiagnostic] };
   const values = [server.command, ...(server.args ?? []), server.url, ...Object.values(server.env ?? {}), ...Object.values(server.headers ?? {})];
+  const portableToken = portableAgentPluginTokens.find((token) =>
+    values.some((value) => value !== undefined && value.includes(token)));
+  if (portableToken !== undefined) {
+    return {
+      diagnostics: [errorDiagnostic(
+        `${codePrefix}.mcp.token`,
+        `MCP server ${JSON.stringify(server.name)} uses Portable Agent Plugin token ${portableToken} in a full Cursor Plugin artifact.`,
+      )],
+    };
+  }
   if (values.some((value) => value !== undefined && value.includes(pathTokens.pluginData))) {
     return {
       diagnostics: [errorDiagnostic(
@@ -185,6 +214,7 @@ export interface CursorManifestPointers {
   readonly hooks?: string;
   readonly mcp?: string;
   readonly skills?: string;
+  readonly variables?: Record<string, unknown>;
 }
 
 /** Builds the `.cursor-plugin/plugin.json` manifest with explicit document pointers. */
@@ -198,13 +228,14 @@ export const cursorManifest = (
   ...(pointers.mcp === undefined ? {} : { mcpServers: pointers.mcp }),
   name: model.metadata.name,
   ...(pointers.skills === undefined ? {} : { skills: pointers.skills }),
+  ...(pointers.variables === undefined ? {} : { variables: pointers.variables }),
   version: model.metadata.version,
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.2.0',
+  adapterRevision: '1.3.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'd9fc515e54e4bf6193d36666e39434dc07f62ef4d2a67e064b96a0037c2286bb',
+  capabilitySha256: '234920e63508664ae79db4e1a5422c1022d93ad572fae345a179bfd774f6f6d7',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -280,10 +311,12 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
   if (hookDocument !== undefined) diagnostics.push(...schemaDiagnostics('hooks', hookDocumentValid, validateHooks.errors));
 
+  const variables = cursorVariables(mcp);
   const plugin = cursorManifest(model, {
     ...(hookDocument !== undefined && hookDocumentValid ? { hooks: `./${cursorArtifactPaths.hooks}` } : {}),
     ...(mcp !== undefined && mcpValid ? { mcp: `./${cursorArtifactPaths.mcp}` } : {}),
     ...(model.skills.some((skill) => isSelected(skill.targets)) ? { skills: './skills/' } : {}),
+    ...(variables === undefined ? {} : { variables }),
   });
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
 

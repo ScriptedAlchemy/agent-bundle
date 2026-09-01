@@ -129,6 +129,7 @@ it('lays both host manifests over one shared bundle root', () => {
   expect(documents['AGENTS.md']).toContain('Cursor');
   expect(documents['AGENTS.md']).toContain('copy this directory into `~/.cursor/plugins/local/bundle-example`');
   expect(documents['AGENTS.md']).toContain('Symlinks that resolve outside `~/.cursor/plugins/local` are rejected');
+  expect(documents['AGENTS.md']).toContain('https://forum.cursor.com/t/local-plugins-symlink-on-windows-doesnt-work/159427/6');
   expect(documents['AGENTS.md']).toContain('VS Code / GitHub Copilot');
 
   const cursorPlugin = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;

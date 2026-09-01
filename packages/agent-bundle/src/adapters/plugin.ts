@@ -19,6 +19,7 @@ import {
   cursorManifest,
   cursorMcpValidator,
   cursorPluginValidator,
+  cursorVariables,
   emptyCursorHooksDocument,
   isValidCursorPluginName,
   planCursorMcpServer,
@@ -60,7 +61,7 @@ const pluginName = 'plugin';
  * hook serves both hosts. Per-host `nativeHooks` passthrough stays with the
  * host targets.
  *
- * Cursor consumes the same root through `.cursor-plugin/plugin.json`: shared
+ * The full Cursor Plugin contract consumes the same root through `.cursor-plugin/plugin.json`: shared
  * `skills/` as-is, the conventional root `mcp.json`, and - because
  * `hooks/hooks.json` has an incompatible Claude/Codex schema - an explicit
  * pointer to the Cursor-format hooks document. Cursor's
@@ -217,7 +218,7 @@ const agentsDocument = (model: NormalizedPlugin): string => {
     '',
     '- **Claude Code**: add this directory (or its repository) as a plugin — `claude plugin marketplace add <source>`.',
     '- **Codex**: `codex plugin marketplace add <source>`; the manifest is `.codex-plugin/plugin.json`.',
-    `- **Cursor**: copy this directory into \`~/.cursor/plugins/local/${model.metadata.name}\`; the manifest is \`.cursor-plugin/plugin.json\`. Symlinks that resolve outside \`~/.cursor/plugins/local\` are rejected by Cursor.`,
+    `- **Cursor**: copy this directory into \`~/.cursor/plugins/local/${model.metadata.name}\`; the manifest is \`.cursor-plugin/plugin.json\`. Symlinks that resolve outside \`~/.cursor/plugins/local\` are rejected by Cursor (staff confirmation: https://forum.cursor.com/t/local-plugins-symlink-on-windows-doesnt-work/159427/6).`,
     '- **VS Code / GitHub Copilot**: install the repository as an agent plugin, or consume `skills/` directly.',
     '- **skills CLI**: `npx skills add <source> --skill <name>` reads the `skills/` directory.',
     '',
@@ -353,10 +354,12 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
         }
       }
     }
+    const cursorManifestVariables = cursorVariables(cursorMcp);
     const manifest = cursorManifest(model, {
       ...(emitCursorHooks ? { hooks: `./${cursorPaths.hooks}` } : {}),
       ...(cursorMcp !== undefined && cursorMcpValid ? { mcp: `./${cursorPaths.mcp}` } : {}),
       ...(model.skills.some((skill) => skill.targets.includes(pluginName)) ? { skills: './skills/' } : {}),
+      ...(cursorManifestVariables === undefined ? {} : { variables: cursorManifestVariables }),
     });
     const cursorManifestValid = cursorPluginValidator(manifest);
     diagnostics.push(...schemaDiagnostics('cursor-plugin', cursorManifestValid, cursorPluginValidator.errors));

@@ -26,7 +26,7 @@ const plugin = (): NormalizedPlugin => ({
     {
       args: ['--root', `${pathTokens.pluginRoot}/tools/server.mjs`],
       command: 'node',
-      env: { CACHE_DIR: `${pathTokens.workspaceRoot}/cache` },
+      env: { API_TOKEN: '${API_TOKEN}', CACHE_DIR: `${pathTokens.workspaceRoot}/cache` },
       id: 'mcp:status',
       name: 'status',
       provenance: { kind: 'config', sourcePath: configPath },
@@ -89,7 +89,13 @@ it('registers cursor as a first-class target with pinned schema validation', () 
 });
 
 it('validates Cursor documents against the vendored real-host schemas', () => {
-  expect(cursorPluginValidator({ name: 'cursor-review', publisher: 'Cursor', version: '1.2.3' })).toBe(true);
+  expect(cursorPluginValidator({
+    minClientVersions: { cursor: '3.5.0' },
+    name: 'cursor-review',
+    publisher: 'Cursor',
+    variables: { properties: { API_TOKEN: { type: 'string' } }, type: 'object' },
+    version: '1.2.3',
+  })).toBe(true);
   expect(cursorPluginValidator({ name: 'Cursor Review' })).toBe(false);
   expect(cursorPluginValidator({ name: 'cursor-review', unknown: true })).toBe(false);
 
@@ -124,6 +130,10 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
     mcpServers: './mcp.json',
     name: 'cursor-review',
     skills: './skills/',
+    variables: {
+      properties: { API_TOKEN: { type: 'string' } },
+      type: 'object',
+    },
     version: '1.2.3',
   });
   for (const field of ['mcpServers', 'skills'] as const) {
@@ -139,7 +149,7 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
   expect(mcp.mcpServers['status']).toEqual({
     args: ['--root', '${CURSOR_PLUGIN_ROOT}/tools/server.mjs'],
     command: 'node',
-    env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CURSOR_PLUGIN_ROOT}', CACHE_DIR: '${workspaceFolder}/cache' },
+    env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CURSOR_PLUGIN_ROOT}', API_TOKEN: '${API_TOKEN}', CACHE_DIR: '${workspaceFolder}/cache' },
   });
   expect(mcp.mcpServers['remote']).toEqual({
     headers: { Authorization: 'Bearer literal' },
@@ -150,6 +160,23 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
 
   const skillCopies = plan.entries.filter((entry) => entry.kind === 'copy').map((entry) => entry.relativePath);
   expect(skillCopies).toEqual(['skills/review/SKILL.md', 'skills/review/references/guide.md']);
+});
+
+it('rejects portable Agent Plugin tokens instead of emitting a hybrid Cursor artifact', () => {
+  const model = plugin();
+  const candidate: NormalizedPlugin = {
+    ...model,
+    mcpServers: [{
+      ...model.mcpServers[0]!,
+      env: { PORTABLE_ROOT: '${PLUGIN_ROOT}' },
+    }],
+  };
+  const plan = cursorAdapter.plan(candidate);
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain('cursor.mcp.token');
+  expect(plan.entries.map((entry) => entry.relativePath)).not.toContain('mcp.json');
+  const manifest = JSON.parse(writeContents(candidate)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest).not.toHaveProperty('mcpServers');
+  expect(manifest).not.toHaveProperty('variables');
 });
 
 it('rejects the plugin-data token and omits the failed server from the document', () => {

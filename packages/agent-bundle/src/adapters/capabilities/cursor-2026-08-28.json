@@ -45,7 +45,9 @@
     "localInstall": {
       "method": "copy",
       "root": "~/.cursor/plugins/local/<name>"
-    }
+    },
+    "contract": "cursor-plugin",
+    "schema": "cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a:schemas/plugin.schema.json"
   },
   "tokens": {
     "pluginRoot": "${CURSOR_PLUGIN_ROOT}",
@@ -55,6 +57,7 @@
     "observedAt": "2026-08-31",
     "cursorServerBuild": "9746bf00534f29fc29f1deb9ddfb5448f7905eb0",
     "evidence": [
+      "Adapter target is the full Cursor Plugin contract, not the root-manifest portable Agent Plugin contract.",
       "Known-loading physical ~/.cursor/plugins/local/tracedecay uses .cursor-plugin/plugin.json, root mcp.json, and hooks/hooks.json.",
       "Installed cursor-agent-exec loader candidates: .cursor-plugin/plugin.json, .claude-plugin/plugin.json, plugin.json.",
       "Installed loader substitutes CURSOR_PLUGIN_ROOT in MCP command, args, env, and cwd fields and in hook commands.",

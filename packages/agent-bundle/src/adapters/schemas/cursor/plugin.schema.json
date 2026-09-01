@@ -25,6 +25,10 @@
       "type": "string",
       "description": "Semantic version of the plugin (e.g. \"1.2.3\")."
     },
+    "minClientVersions": {
+      "$ref": "#/$defs/minClientVersions",
+      "description": "Minimum client versions required to install the plugin, keyed by client identifier."
+    },
     "author": {
       "$ref": "#/$defs/author",
       "description": "The plugin author."
@@ -89,6 +93,24 @@
       ],
       "description": "Path to a hooks configuration file, or an inline hooks object."
     },
+    "variables": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "const": "object"
+        },
+        "properties": {
+          "type": "object"
+        },
+        "required": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      },
+      "description": "JSON Schema for user-configured plugin variables."
+    },
     "mcpServers": {
       "$ref": "#/$defs/mcpServers",
       "description": "MCP server configuration — a path, an inline config object, or an array of either."
@@ -111,6 +133,25 @@
           "description": "Author email address."
         }
       }
+    },
+    "minClientVersions": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "cursor": {
+          "$ref": "#/$defs/semver",
+          "description": "Minimum Cursor version required to install the plugin (e.g. \"3.13.0\")."
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/semver",
+        "description": "Minimum version required for another client identifier."
+      }
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$",
+      "description": "Strict semantic version \"X.Y.Z\" with an optional prerelease suffix."
     },
     "stringOrStringArray": {
       "oneOf": [

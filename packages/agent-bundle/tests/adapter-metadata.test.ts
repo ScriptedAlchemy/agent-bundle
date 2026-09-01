@@ -128,9 +128,9 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'cursor')).toEqual({
-    adapterRevision: '1.2.0',
+    adapterRevision: '1.3.0',
     capabilityRevision: '2026-08-28',
-    capabilitySha256: 'd9fc515e54e4bf6193d36666e39434dc07f62ef4d2a67e064b96a0037c2286bb',
+    capabilitySha256: '234920e63508664ae79db4e1a5422c1022d93ad572fae345a179bfd774f6f6d7',
     observedVersion: '2026-08-28',
     schemas: [
       {
@@ -146,7 +146,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'plugin',
         revision: '2026-08-28',
-        sha256: '75b402640b1c2654b19199885793ef1985df8185c36694325436f5bb748b7757',
+        sha256: 'a393b758901803fcf5cfe0d77bda8a83e987d32c3377dfce2d9edf445af884ed',
       },
     ],
   });
