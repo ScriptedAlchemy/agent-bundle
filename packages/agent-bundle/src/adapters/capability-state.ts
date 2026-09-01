@@ -1,4 +1,5 @@
 import { sha256Hex, stableJson } from '../core/digest.ts';
+import { CapabilityStateError, unknownCapabilityStateError } from '../core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 import type { TargetAdapterMetadata } from './types.ts';
 
@@ -23,6 +24,36 @@ export const unavailableCapability = (reason: string): CapabilityState => Object
   state: 'unavailable',
 });
 
+export interface EventRouteCapabilityTableEntry {
+  readonly nativeEvent?: string;
+  readonly reason?: string;
+  /** JSON imports widen literals; unsupported table states fail closed below. */
+  readonly state: string;
+}
+
+/**
+ * Converts a pinned host table's semantic-event rows into the shared
+ * capability-state namespace consumed by route validation and inspect.
+ */
+export const eventRouteCapabilitiesFrom = (
+  routes: Readonly<Record<string, EventRouteCapabilityTableEntry>>,
+  evidence: CapabilityEvidence,
+): Readonly<Record<string, CapabilityState>> => Object.freeze(Object.fromEntries(
+  Object.entries(routes).sort(([left], [right]) => left.localeCompare(right)).map(([event, capability]) => {
+    switch (capability.state) {
+      case 'supported':
+        return [`event:${event}`, supportedCapability(evidence)];
+      case 'unavailable':
+        return [
+          `event:${event}`,
+          unavailableCapability(capability.reason ?? `The pinned ${evidence.target} contract does not support ${event}.`),
+        ];
+      default:
+        throw new TypeError(`Unsupported event-route capability state ${JSON.stringify(capability.state)} for ${event}.`);
+    }
+  }),
+));
+
 export const capabilityStateFromSupport = (
   supported: boolean,
   evidence: CapabilityEvidence,
@@ -41,7 +72,7 @@ export const capabilityIsSupported = (capability: CapabilityState | undefined): 
       return false;
     default: {
       const exhaustive: never = capability;
-      return exhaustive;
+      throw unknownCapabilityStateError(exhaustive);
     }
   }
 };
@@ -64,7 +95,7 @@ const evidenceFor = (capability: CapabilityState): CapabilityEvidence | undefine
       return undefined;
     default: {
       const exhaustive: never = capability;
-      return exhaustive;
+      throw unknownCapabilityStateError(exhaustive);
     }
   }
 };
@@ -81,7 +112,7 @@ const precedenceFor = (capability: CapabilityState): 0 | 1 | 2 | 3 => {
       return 3;
     default: {
       const exhaustive: never = capability;
-      return exhaustive;
+      throw unknownCapabilityStateError(exhaustive);
     }
   }
 };
@@ -98,7 +129,7 @@ const reasonFor = (capability: CapabilityState, precedence: 1 | 2 | 3): string |
       return precedence === 3 ? capability.reason : undefined;
     default: {
       const exhaustive: never = capability;
-      return exhaustive;
+      throw unknownCapabilityStateError(exhaustive);
     }
   }
 };
@@ -164,7 +195,7 @@ export const intersectCapabilityStates = (
       return Object.freeze({ reason: mergedReason(left, right, precedence), state: 'prohibited' });
     default: {
       const exhaustive: never = precedence;
-      return exhaustive;
+      throw new CapabilityStateError(`Capability precedence ${String(exhaustive)} has no intersection rule.`);
     }
   }
 };

@@ -105,8 +105,12 @@ export type AgentStateEvent<TEvents extends AgentStateEventSchemas> = {
  * persisted at definition version `n - 1` to version `n`; a definition of
  * version `v > 1` must supply every step from `2` through `v`. Steps receive
  * the raw persisted value and their final output must satisfy the current
- * schema. Migrating rebases history: exact-revision reads below the recorded
- * migration become `revision-unavailable`.
+ * schema; steps must accept any valid version `n - 1` state, because
+ * committed results stored for idempotent replay migrate through the same
+ * chain. Migrating rebases history: exact-revision reads below the recorded
+ * migration become `revision-unavailable`, but replaying a committed
+ * idempotency key still returns its committed result (migrated to the
+ * current version).
  */
 export type AgentStateMigrations = Readonly<Record<number, (persisted: unknown) => unknown>>;
 

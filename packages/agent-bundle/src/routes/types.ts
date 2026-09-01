@@ -1,4 +1,5 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
+import type { CanonicalAgentEvent } from './public.ts';
 
 /**
  * Every route kind the conventional source tree can declare. Context
@@ -39,6 +40,8 @@ export const emptyRouteConfig: Readonly<Record<string, unknown>> = Object.freeze
 export interface CompiledAgentRoute {
   /** Statically extracted from the module's `export const config` declaration; {@link emptyRouteConfig} when absent or rejected. */
   readonly config: Readonly<Record<string, unknown>>;
+  /** Canonical event identity; present only when {@link kind} is `event-route`. */
+  readonly event?: CanonicalAgentEvent;
   readonly id: string;
   readonly kind: CompiledRouteKind;
   readonly provenance: RouteProvenance;

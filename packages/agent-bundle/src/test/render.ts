@@ -13,7 +13,7 @@ import type * as React from 'react';
 
 import { AgentTestError, captured } from './errors.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
-import { registeredRouteLoader, testManifest } from './registry.ts';
+import { registeredManifestIdentity, registeredRouteLoader, testManifest } from './registry.ts';
 import type {
   AgentRouteModule,
   RenderableRouteKind,
@@ -299,14 +299,32 @@ const resolveTarget = async (
     targets: manifest.targets,
   });
   const kind = renderableKind(descriptor, provenance);
-  const loader = registeredRouteLoader(descriptor.id);
+  const loader = registeredRouteLoader(manifest, descriptor.id);
   if (loader === undefined) {
+    const identity = registeredManifestIdentity();
+    // A registered manifest that is not this one means the loaders in this
+    // worker belong to a different compilation. Loading one of them would run
+    // another project's module under this manifest's provenance, so the miss is
+    // reported as the mismatch it is rather than as missing wiring.
+    const mismatched = identity !== undefined && identity.digest !== manifest.digest;
     throw new AgentTestError(
       'manifest-unavailable',
-      `Route ${descriptor.id} is compiled but no test-time module loader is registered for it.`,
+      mismatched
+        ? `Route ${descriptor.id} belongs to a manifest whose route loaders are not the ones registered in this test process.`
+        : `Route ${descriptor.id} is compiled but no test-time module loader is registered for it.`,
       {
+        ...(mismatched
+          ? {
+              details: [
+                `manifest:     ${manifest.digest} (${manifest.projectRoot})`,
+                `registered:   ${identity.digest} (${identity.projectRoot})`,
+              ],
+            }
+          : {}),
         provenance: { ...provenance, kind },
-        recovery: 'Build the Rstest configuration with agentBundleRstest() so the generated setup registers route loaders, or pass the route module to renderRoute() directly.',
+        recovery: mismatched
+          ? 'Render this route through the manifest the generated setup registered, or pass the route module to renderRoute() directly — route loaders are bound to the manifest that produced them.'
+          : 'Build the Rstest configuration with agentBundleRstest() so the generated setup registers route loaders, or pass the route module to renderRoute() directly.',
       },
     );
   }
@@ -378,9 +396,13 @@ export const renderRoute = async (
   const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, options, resolved.provenance);
   const collected: AgentProgressUpdate[] = [];
   const context = options.context ?? {};
-  const progress: AgentProgressReporter = context.progress ?? {
+  // The result contract exposes the route's request-scoped progress, so the
+  // harness always records it and then delegates to a caller's reporter.
+  const reporter = context.progress;
+  const progress: AgentProgressReporter = {
     report: async (update) => {
       collected.push(update);
+      await reporter?.report(update);
     },
   };
   const signal = options.signal ?? new AbortController().signal;

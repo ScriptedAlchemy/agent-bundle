@@ -45,6 +45,17 @@ describe('effect boundary', () => {
     await expect(runPromise(Effect.fail(stateError))).rejects.toBe(stateError);
   });
 
+  it('rethrows AgentRuntimeError and McpProjectionError by name', async () => {
+    const runtime = new Error('runtime unavailable');
+    runtime.name = 'AgentRuntimeError';
+    const projection = new Error('unsupported image');
+    projection.name = 'McpProjectionError';
+    expect(isTypedRuntimeError(runtime)).toBe(true);
+    expect(isTypedRuntimeError(projection)).toBe(true);
+    await expect(runPromise(Effect.fail(runtime))).rejects.toBe(runtime);
+    await expect(runPromise(Effect.fail(projection))).rejects.toBe(projection);
+  });
+
   it('maps interruption to DOMException AbortError', async () => {
     const mapped = mapCause(Cause.interrupt(1));
     expect(isAbortError(mapped)).toBe(true);
@@ -81,7 +92,11 @@ describe('effect boundary', () => {
     const controller = new AbortController();
     const program = interruptWhenAborted(Effect.never, controller.signal);
     controller.abort();
-    await expect(runPromise(program)).rejects.toSatisfy(isAbortError);
+    const pending = runPromise(program);
+    const hung = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('interruptWhenAborted hung after abort-before-start')), 250);
+    });
+    await expect(Promise.race([pending, hung])).rejects.toSatisfy(isAbortError);
     await expect(runPromise(abortToInterrupt(controller.signal))).rejects.toSatisfy(isAbortError);
   });
 

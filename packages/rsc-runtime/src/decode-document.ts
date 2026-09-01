@@ -3,6 +3,7 @@ import { Children, isValidElement, type ReactNode } from 'react';
 import {
   AgentContractError,
   createAgentDocument,
+  resolveAgentRenderLimits,
   type AgentDocument,
   type AgentDocumentNode,
   type AgentRenderLimits,
@@ -13,6 +14,7 @@ const agentElementTypes = Object.freeze([
   'agent-result',
   'agent-markdown',
   'agent-text',
+  'agent-context',
   'agent-json',
   'agent-progress',
   'agent-image',
@@ -54,16 +56,35 @@ const textChild = (children: unknown, type: AgentElementType): string => {
 };
 
 interface DecodeState {
+  readonly limits: AgentRenderLimits;
+  nodes: number;
   representedError: boolean;
 }
 
-const decodeNode = (node: ReactNode, state: DecodeState): AgentDocumentNode => {
+const enterDecodeNode = (depth: number, state: DecodeState): void => {
+  if (depth > state.limits.maxDocumentDepth) {
+    throw new AgentContractError(
+      'document-depth-exceeded',
+      `Agent Document depth exceeds ${String(state.limits.maxDocumentDepth)}`,
+    );
+  }
+  state.nodes += 1;
+  if (state.nodes > state.limits.maxDocumentNodes) {
+    throw new AgentContractError(
+      'document-node-count-exceeded',
+      `Agent Document node count exceeds ${String(state.limits.maxDocumentNodes)}`,
+    );
+  }
+};
+
+const decodeNode = (node: ReactNode, depth: number, state: DecodeState): AgentDocumentNode => {
+  enterDecodeNode(depth, state);
   const element = protocolElement(node);
   const { props } = element;
   switch (element.type) {
     case 'agent-result':
       return {
-        children: Children.toArray(props.children as ReactNode).map((child) => decodeNode(child, state)),
+        children: Children.toArray(props.children as ReactNode).map((child) => decodeNode(child, depth + 1, state)),
         kind: 'result',
         ...(props.metadata === undefined ? {} : { metadata: props.metadata as JsonValue }),
       };
@@ -71,6 +92,8 @@ const decodeNode = (node: ReactNode, state: DecodeState): AgentDocumentNode => {
       return { kind: 'markdown', text: textChild(props.children, element.type) };
     case 'agent-text':
       return { kind: 'text', text: textChild(props.children, element.type) };
+    case 'agent-context':
+      return { kind: 'context', text: textChild(props.children, element.type) };
     case 'agent-json':
       return { kind: 'json', value: props.value as JsonValue };
     case 'agent-progress':
@@ -109,17 +132,18 @@ export const decodeAgentDocument = (
   node: ReactNode,
   limits: Partial<AgentRenderLimits> = {},
 ): AgentDocument => {
+  const resolved = resolveAgentRenderLimits(limits);
   const root = protocolElement(node);
   if (root.type !== 'agent-result') {
     throw new AgentContractError('invalid-document', 'Flight output must have Agent.Result as its root');
   }
-  const state: DecodeState = { representedError: false };
-  const documentRoot = decodeNode(node, state);
+  const state: DecodeState = { limits: resolved, nodes: 0, representedError: false };
+  const documentRoot = decodeNode(node, 1, state);
   return createAgentDocument({
     root: documentRoot,
     status: state.representedError ? 'represented-error' : 'success',
     ...(root.props.value === undefined ? {} : { value: root.props.value as JsonValue }),
     version: 1,
-  }, limits);
+  }, resolved);
 };
 

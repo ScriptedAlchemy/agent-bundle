@@ -15,10 +15,14 @@ stream; a post-completion producer is rejected with a typed
 `handoff-required` outcome. Depth, node count, bytes, event rate, and
 elapsed time are bounded on the reconciler.
 
-The existing lowerers remain synchronous compatibility APIs. `lowerMcpResult`
-walks an MCP element tree, calling function components itself, and lowers it
-into a plain `CallToolResult`; `lowerHookResult` does the same for `Hook.*`.
-They remain the operative MCP path until the later projector migration.
+Generated MCP tool calls project the live render-event stream through
+`projectMcpRenderStream`: `notifications/progress` is emitted only when the
+caller supplied a progress token, shell/replace stay internal, and the
+request resolves to one final `CallToolResult`. Image, audio, and resource
+blocks are capability-gated — unsupported rich content uses a declared
+fallback or a typed `McpProjectionError`, never a silent drop. The existing
+`lowerMcpResult` / `lowerHookResult` helpers remain synchronous compatibility
+APIs for the operations-model path.
 
 ```tsx
 import { Mcp, lowerMcpResult } from '@agent-bundle/runtime';
@@ -41,8 +45,8 @@ synchronous compatibility APIs remain operative.
 
 The package exports `Hook`, `Mcp`, `Agent`, both lowerers, the request-store
 APIs, the Agent Document contracts, `createAgentRenderDispatcher`,
-`decodeAgentFlightStream`, and the `@agent-bundle/runtime/flight/server`
-render entry. The Flight-facing versions
+`projectMcpRenderStream`, `createWarmFlightHost`, `decodeAgentFlightStream`,
+and the `@agent-bundle/runtime/flight/server` render entry. The Flight-facing versions
 are exact compatibility pins: React/React DOM `19.2.8` and
 `react-server-dom-rspack` `0.1.0`; the proof example compiles them with
 `rsbuild-plugin-rsc` `0.1.1`. The package does not own application state,

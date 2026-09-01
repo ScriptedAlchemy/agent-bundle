@@ -12,7 +12,25 @@ import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
 export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './routes/graph.ts';
-export type { AppRouteConfig, PromptConfig, ResourceConfig, RouteSchema, RouteSchemaOutput, ToolConfig, ToolRouteProps } from './routes/public.ts';
+export { canonicalAgentEvents } from './routes/public.ts';
+export type {
+  AgentEventCanonicalIdentity,
+  AgentEventDelivery,
+  AgentEventFallbackMode,
+  AgentEventNativePayload,
+  AgentEventProvenance,
+  AgentEventRouteConfig,
+  AgentEventRouteProps,
+  AgentEventRuntimeMode,
+  AppRouteConfig,
+  CanonicalAgentEvent,
+  PromptConfig,
+  ResourceConfig,
+  RouteSchema,
+  RouteSchemaOutput,
+  ToolConfig,
+  ToolRouteProps,
+} from './routes/public.ts';
 export { inspectRouteGraph } from './routes/inspect.ts';
 export type { RouteGraphInspection } from './routes/inspect.ts';
 export { emptyRouteConfig } from './routes/types.ts';
@@ -131,6 +149,7 @@ export type {
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
 export { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
+export { CapabilityStateError, capabilityStateNames, isCapabilityState } from './core/capabilities.ts';
 export type {
   TargetAdapter,
   TargetAdapterMetadata,

@@ -3,10 +3,13 @@ import { expect, it } from '@rstest/core';
 import {
   capabilityBooleanView,
   capabilityEvidence,
+  capabilityIsSupported,
   intersectCapabilityStates,
   supportedCapability,
+  unavailableCapability,
 } from '../src/adapters/capability-state.ts';
-import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
+import { CapabilityStateError, isCapabilityState } from '../src/core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../src/core/capabilities.ts';
 
 const evidence = (target: string): CapabilityEvidence => Object.freeze({
@@ -104,6 +107,69 @@ it('keeps the Boolean compatibility view thin and exhaustive', () => {
   });
 });
 
+const malformed = (value: unknown): CapabilityState => value as CapabilityState;
+
+it('recognizes only the four contract states with their required fields', () => {
+  expect(isCapabilityState(supportedCapability(evidence('cursor')))).toBe(true);
+  expect(isCapabilityState({ state: 'degraded', reason: 'partial' })).toBe(true);
+  expect(isCapabilityState({ state: 'degraded', reason: 'partial', evidence: evidence('cursor') })).toBe(true);
+  expect(isCapabilityState(unavailableCapability('missing'))).toBe(true);
+  expect(isCapabilityState({ state: 'prohibited', reason: 'policy' })).toBe(true);
+
+  // A misspelled state, a state missing the fields it owns, and non-records are all rejected.
+  expect(isCapabilityState({ state: 'suported' })).toBe(false);
+  expect(isCapabilityState({ state: 'supported' })).toBe(false);
+  expect(isCapabilityState({ state: 'supported', evidence: { target: 'cursor' } })).toBe(false);
+  expect(isCapabilityState({ state: 'unavailable' })).toBe(false);
+  expect(isCapabilityState({ state: 'degraded', reason: 7 })).toBe(false);
+  expect(isCapabilityState(undefined)).toBe(false);
+  expect(isCapabilityState(null)).toBe(false);
+  expect(isCapabilityState('supported')).toBe(false);
+});
+
+it('raises a typed error for an unknown state instead of fabricating a truthy one', () => {
+  const unknown = malformed({ state: 'suported' });
+  const supported = supportedCapability(evidence('cursor'));
+
+  // The bug this covers: the exhaustive default returned the capability object,
+  // so an untyped adapter's typo read as truthy support.
+  expect(() => capabilityIsSupported(unknown)).toThrow(CapabilityStateError);
+  expect(() => capabilityIsSupported(unknown)).toThrow(/outside the degraded\/prohibited\/supported\/unavailable contract/u);
+  expect(() => capabilityBooleanView({ mcp: unknown })).toThrow(CapabilityStateError);
+  expect(() => intersectCapabilityStates(unknown, supported)).toThrow(CapabilityStateError);
+  expect(() => intersectCapabilityStates(supported, unknown)).toThrow(CapabilityStateError);
+
+  const thrown = (() => {
+    try {
+      capabilityIsSupported(unknown);
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  })();
+  expect(thrown).toBeInstanceOf(CapabilityStateError);
+  if (!(thrown instanceof CapabilityStateError)) throw new Error('Expected a CapabilityStateError.');
+  expect(thrown.code).toBe('ERR_UNKNOWN_CAPABILITY_STATE');
+  expect(thrown.message).toContain('"suported"');
+});
+
+it('rejects a malformed capability declaration when the adapter registers', () => {
+  const source = createDefaultRegistry().get('cursor');
+
+  for (const broken of [{ state: 'suported' }, { state: 'supported' }, { state: 'unavailable' }, 'supported']) {
+    expect(() => new TargetRegistry().register({
+      ...source,
+      capabilities: { ...source.capabilities, mcp: malformed(broken) },
+    })).toThrow(CapabilityStateError);
+  }
+  expect(() => new TargetRegistry().register({
+    ...source,
+    capabilities: { ...source.capabilities, mcp: malformed({ state: 'suported' }) },
+  })).toThrow(/capability "mcp" must declare one of degraded\/prohibited\/supported\/unavailable/u);
+
+  expect(() => new TargetRegistry().register(source)).not.toThrow();
+});
+
 it('surfaces built-in adapter metadata as immutable capability evidence', () => {
   const registry = createDefaultRegistry();
   const cursor = registry.get('cursor');
@@ -115,9 +181,39 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
   if (cursor.capabilities.mcp?.state !== 'supported') throw new Error('Expected Cursor MCP support evidence.');
   expect(cursor.capabilities.mcp.evidence).toEqual({
     capabilityRevision: '2026-08-28',
-    capabilitySha256: '234920e63508664ae79db4e1a5422c1022d93ad572fae345a179bfd774f6f6d7',
+    capabilitySha256: '20fc70ad5ba67d984826c3ac917fca66f28e61a8c74edb65dace53c29cc67279',
     observedVersion: '2026-08-28',
     target: 'cursor',
   });
   expect(Object.isFrozen(cursor.capabilities.mcp.evidence)).toBe(true);
+});
+
+it('reports the evidence-backed G10 event family matrix without inferred support', () => {
+  const registry = createDefaultRegistry();
+  const existing = ['event:session/start', 'event:tool/before', 'event:tool/after', 'event:stop'];
+  const cursorOnly = ['event:agent/start', 'event:agent/stop', 'event:workspace/open'];
+
+  for (const capability of [...existing, ...cursorOnly]) {
+    expect(registry.get('cursor').capabilities[capability]).toMatchObject({
+      evidence: { observedVersion: '2026-08-28', target: 'cursor' },
+      state: 'supported',
+    });
+  }
+  for (const target of ['claude', 'codex'] as const) {
+    for (const capability of existing) {
+      expect(registry.get(target).capabilities[capability]).toMatchObject({
+        evidence: { target },
+        state: 'supported',
+      });
+    }
+    for (const capability of cursorOnly) {
+      expect(registry.get(target).capabilities[capability]).toMatchObject({
+        reason: expect.stringContaining('pinned'),
+        state: 'unavailable',
+      });
+    }
+  }
+  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
+    state: 'unavailable',
+  });
 });

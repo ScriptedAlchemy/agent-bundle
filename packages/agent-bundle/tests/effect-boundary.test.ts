@@ -8,6 +8,7 @@ import { DevLockError } from '../src/dev/dev-lock.ts';
 import { ProjectEventHubError } from '../src/dev/events.ts';
 import {
   abortError,
+  abortToInterrupt,
   interruptWhenAborted,
   isAbortError,
   isTypedDevError,
@@ -75,5 +76,17 @@ describe('effect boundary (agent-bundle dev seam)', () => {
   it('wraps non-Error fail values', () => {
     expect(toDevError('plain')).toEqual(new Error('plain'));
     expect(abortError().name).toBe('AbortError');
+  });
+
+  it('interrupts when the host signal aborts between construction and run', async () => {
+    const controller = new AbortController();
+    const program = interruptWhenAborted(Effect.never, controller.signal);
+    controller.abort();
+    const pending = runPromise(program);
+    const hung = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('interruptWhenAborted hung after abort-before-start')), 250);
+    });
+    await expect(Promise.race([pending, hung])).rejects.toSatisfy(isAbortError);
+    await expect(runPromise(abortToInterrupt(controller.signal))).rejects.toSatisfy(isAbortError);
   });
 });

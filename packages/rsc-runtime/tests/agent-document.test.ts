@@ -50,6 +50,7 @@ describe('Agent vocabulary', () => {
   it('exposes protocol-oriented leaves without DOM elements', () => {
     expect(Object.keys(Agent)).toEqual([
       'Audio',
+      'Context',
       'Error',
       'Image',
       'Json',
@@ -60,6 +61,7 @@ describe('Agent vocabulary', () => {
       'Text',
     ]);
     expect(Object.isFrozen(Agent)).toBe(true);
+    expect(Agent.Context({ children: 'route guidance' }).type).toBe('agent-context');
     expect(Agent.Markdown({ children: '# Ready' }).type).toBe('agent-markdown');
     expect(Agent.Resource({ name: 'Catalog', uri: 'catalog://root' }).type).toBe('agent-resource');
     expect(Agent.Error({ children: 'represented', code: 'E_DEMO' }).type).toBe('agent-error');
@@ -117,6 +119,58 @@ describe('AgentDocument', () => {
       status: 'success',
       version: 1,
     })).toThrow('Unsupported Agent Document node kind: div');
+  });
+
+  it('enforces depth, node-count, and byte bounds while cloning JSON payloads', () => {
+    const nest = (depth: number): { readonly child: unknown } | string =>
+      depth === 0 ? 'leaf' : { child: nest(depth - 1) };
+    try {
+      createAgentDocument({
+        root: { kind: 'json', value: nest(70) },
+        status: 'success',
+        version: 1,
+      });
+      throw new Error('expected nested JSON value to exceed depth');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'document-depth-exceeded' });
+    }
+    try {
+      createAgentDocument({
+        root: { kind: 'text', text: 'ok' },
+        status: 'success',
+        value: nest(70),
+        version: 1,
+      });
+      throw new Error('expected document value to exceed depth');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'document-depth-exceeded' });
+    }
+    try {
+      createAgentDocument(
+        {
+          root: { kind: 'json', value: 'x'.repeat(8_000) },
+          status: 'success',
+          version: 1,
+        },
+        { maxDocumentBytes: 100 },
+      );
+      throw new Error('expected oversized JSON string to exceed bytes');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'document-bytes-exceeded' });
+    }
+    try {
+      createAgentDocument(
+        {
+          root: { kind: 'json', value: Array.from({ length: 20 }, (_, index) => index) },
+          status: 'success',
+          version: 1,
+        },
+        { maxDocumentNodes: 4 },
+      );
+      throw new Error('expected wide JSON array to exceed node count');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'document-node-count-exceeded' });
+    }
   });
 });
 

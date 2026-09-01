@@ -1,6 +1,7 @@
 import type { EnvironmentConfig } from '@rsbuild/core';
 
 import type { CompiledAgentRoute, CompiledCliCommand } from '../routes/types.ts';
+import type { CapabilityState } from './capabilities.ts';
 
 export interface AgentBundlePluginConfig {
   description?: string;
@@ -499,6 +500,7 @@ export type NormalizationNativeHookSource =
   | NormalizationNativeHookSourceError;
 
 export interface NormalizationTargetRegistry {
+  capabilityState?(name: string, capability: string): CapabilityState | undefined;
   configExtensions(): readonly NormalizationConfigExtension[];
   defaultTargetNames(): readonly string[];
   has(name: string): boolean;

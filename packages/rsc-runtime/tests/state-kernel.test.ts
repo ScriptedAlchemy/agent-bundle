@@ -6,9 +6,11 @@ import {
   AGENT_STATE_LIFETIMES,
   AgentStateError,
   agentStateLifetimeIsVolatile,
+  canonicalJson,
   createAgentStateHandle,
   createMemoryStateDriver,
   defineState,
+  isJsonSafe,
   type AgentStateDefinition,
   type AgentStateHandle,
   type AgentStateLifetime,
@@ -34,6 +36,37 @@ const counterDefinition = (
     reduce: (state, event) => ({ count: state.count + event.payload.by }),
     schema: z.object({ count: z.number().int() }).strict(),
   });
+
+describe('JSON boundary', () => {
+  it('rejects sparse arrays as not JSON-safe', () => {
+    expect(isJsonSafe([1, 2, 3])).toBe(true);
+    expect(isJsonSafe([])).toBe(true);
+    // `every` skips holes, so a naive check would declare these safe and
+    // canonicalization would collapse `[<1 hole>]` to the same text as `[]`.
+    expect(isJsonSafe(new Array(1))).toBe(false);
+    expect(isJsonSafe(Object.assign([1, 3], { length: 3 }))).toBe(false);
+    expect(isJsonSafe({ nested: new Array(2) })).toBe(false);
+    expect(canonicalJson([])).toBe('[]');
+  });
+
+  it('a sparse array payload is a typed invalid-event, never silently canonicalized', async () => {
+    const definition = defineState({
+      events: { itemsSet: z.any() },
+      id: 'state-kernel-test/sparse',
+      initial: { items: [] as readonly unknown[] },
+      lifetime: 'process',
+      reduce: (_state, event) => ({ items: [event.payload] }),
+      schema: z.object({ items: z.array(z.unknown()) }).strict(),
+    });
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(definition);
+    await expect(
+      store.dispatch('itemsSet', new Array(1), { idempotencyKey: 'sparse:1' }),
+    ).rejects.toMatchObject({ code: 'invalid-event', name: 'AgentStateError' });
+    expect((await store.read()).revision).toBe(0);
+    await driver.close();
+  });
+});
 
 describe('defineState', () => {
   it('rejects invalid definitions with typed invalid-definition errors', () => {

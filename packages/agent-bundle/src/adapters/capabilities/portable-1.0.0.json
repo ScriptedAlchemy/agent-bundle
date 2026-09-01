@@ -1,4 +1,13 @@
 {
+  "eventRoutes": {
+    "agent/start": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "agent/stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "session/start": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "tool/after": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "tool/before": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "workspace/open": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" }
+  },
   "host": "portable",
   "mcp": {
     "pathTokens": {

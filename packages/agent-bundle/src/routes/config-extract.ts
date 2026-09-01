@@ -30,14 +30,15 @@ export interface ExtractedRouteConfig {
  *   methods, or accessors);
  * - array literals without spreads or holes;
  * - string literals and substitution-free template literals;
- * - numeric literals, optionally wrapped in unary `+`/`-`;
+ * - finite numeric literals, optionally wrapped in unary `+`/`-`;
  * - `true`, `false`, and `null`;
  * - `as`/`satisfies` casts, non-null assertions, and parentheses around any
  *   accepted form (they unwrap to their inner expression).
  *
  * Everything else — identifier references, calls, functions, templates with
- * substitutions, `undefined`, bigints, regular expressions — is dynamic and
- * raises AB4806 naming the offending construct.
+ * substitutions, `undefined`, bigints, regular expressions, non-finite
+ * numbers such as `1e999` — is dynamic and raises AB4806 naming the
+ * offending construct.
  */
 export const routeConfigGrammar = 'object/array/string/number/boolean/null literals, with as-const, satisfies, non-null, and parenthesis wrappers';
 
@@ -111,6 +112,17 @@ const literalPropertyName = (name: ts.PropertyName): string | undefined => {
   return undefined;
 };
 
+/**
+ * Numeric literals must extract to finite numbers: an overflowing literal
+ * such as `1e999` evaluates to `Infinity`, which `JSON.stringify` collapses
+ * to `null` — the digest and inspection output could no longer distinguish
+ * the config from one that declared `null`.
+ */
+const finiteNumber = (value: number, node: ts.Node): Extraction =>
+  Number.isFinite(value)
+    ? { kind: 'value', value }
+    : dynamic(`the non-finite number \`${String(value)}\``, node);
+
 const extractExpression = (expression: ts.Expression): Extraction => {
   const node = unwrapExpression(expression);
   switch (node.kind) {
@@ -126,7 +138,7 @@ const extractExpression = (expression: ts.Expression): Extraction => {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return { kind: 'value', value: node.text };
   }
-  if (ts.isNumericLiteral(node)) return { kind: 'value', value: Number(node.text) };
+  if (ts.isNumericLiteral(node)) return finiteNumber(Number(node.text), node);
   if (ts.isPrefixUnaryExpression(node)) {
     const operand = unwrapExpression(node.operand);
     if (
@@ -134,7 +146,7 @@ const extractExpression = (expression: ts.Expression): Extraction => {
       (node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.PlusToken)
     ) {
       const magnitude = Number(operand.text);
-      return { kind: 'value', value: node.operator === ts.SyntaxKind.MinusToken ? -magnitude : magnitude };
+      return finiteNumber(node.operator === ts.SyntaxKind.MinusToken ? -magnitude : magnitude, node);
     }
     return dynamic(describeExpression(node), node);
   }
@@ -151,7 +163,10 @@ const extractExpression = (expression: ts.Expression): Extraction => {
     return { kind: 'value', value: values };
   }
   if (ts.isObjectLiteralExpression(node)) {
-    const value: Record<string, unknown> = {};
+    // A null-prototype carrier keeps a literal `__proto__` key an ordinary
+    // own property; assigning through a plain `{}` would invoke the legacy
+    // prototype setter and silently drop the declared property.
+    const value: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const property of node.properties) {
       if (!ts.isPropertyAssignment(property)) return dynamic(describeExpression(property), property);
       const name = literalPropertyName(property.name);
@@ -214,8 +229,11 @@ const findConfigExport = (sourceFile: ts.SourceFile): ConfigExportSite | undefin
   return undefined;
 };
 
-const scriptKindOf = (relativePath: string): ts.ScriptKind =>
-  relativePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+const scriptKindOf = (relativePath: string): ts.ScriptKind => {
+  if (relativePath.endsWith('.tsx')) return ts.ScriptKind.TSX;
+  if (relativePath.endsWith('.jsx')) return ts.ScriptKind.JSX;
+  return ts.ScriptKind.TS;
+};
 
 const positionOf = (sourceFile: ts.SourceFile, node: ts.Node): string => {
   const { character, line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));

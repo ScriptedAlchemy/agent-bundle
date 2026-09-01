@@ -36,5 +36,12 @@ describe('runtimeSpecForFramework', () => {
       .toBe('https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@da5df1d');
     expect(runtimeSpecForFramework('file:/tmp/agent-bundle-0.1.0.tgz'))
       .toBe('file:/tmp/agent-bundle-runtime-0.1.0.tgz');
+    expect(runtimeSpecForFramework('file:/tmp/agent-bundle.tgz'))
+      .toBe('file:/tmp/agent-bundle-runtime.tgz');
+  });
+
+  it('fails closed when a paired runtime spec cannot be derived', () => {
+    expect(() => runtimeSpecForFramework('file:/tmp/framework.tgz')).toThrow(UsageError);
+    expect(() => runtimeSpecForFramework('0.1.0')).toThrow(UsageError);
   });
 });

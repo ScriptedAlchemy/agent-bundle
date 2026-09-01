@@ -934,6 +934,82 @@ const validateBin = (loaded: LoadedConfig): Diagnostic[] => {
   return diagnostics;
 };
 
+const validateEventRoutes = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const selectedTargets = loaded.context.selectedTargets.length > 0
+    ? loaded.context.selectedTargets
+    : (loaded.config.targets ?? registry.defaultTargetNames());
+  const diagnostics: Diagnostic[] = [];
+
+  for (const route of discovered.routeGraph?.events ?? []) {
+    const declaredTargets = route.config['targets'];
+    if (
+      declaredTargets !== undefined &&
+      (!Array.isArray(declaredTargets) ||
+        declaredTargets.length === 0 ||
+        declaredTargets.some((target) => typeof target !== 'string' || target.trim().length === 0))
+    ) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4815',
+        `Event route ${route.provenance.relativePath} config.targets must be a nonempty array of target names.`,
+        route.source,
+      ));
+      continue;
+    }
+    const targets = declaredTargets === undefined
+      ? selectedTargets
+      : [...new Set(declaredTargets as readonly string[])];
+    for (const target of targets) {
+      if (!registry.has(target)) {
+        diagnostics.push({
+          code: 'AB4814',
+          message: `Event route ${route.provenance.relativePath} selects unknown target ${JSON.stringify(target)}.`,
+          severity: 'error',
+          sourcePath: route.source,
+          target,
+        });
+        continue;
+      }
+      const capabilityName = `event:${route.event}`;
+      const capability = registry.capabilityState?.(target, capabilityName);
+      if (capability === undefined) {
+        if (registry.supports(target, capabilityName)) continue;
+        diagnostics.push({
+          code: 'AB4814',
+          message: `Event route ${route.provenance.relativePath} requires ${capabilityName}, unavailable on ${target}.`,
+          severity: 'error',
+          sourcePath: route.source,
+          target,
+        });
+        continue;
+      }
+      switch (capability.state) {
+        case 'supported':
+        case 'degraded':
+          break;
+        case 'unavailable':
+        case 'prohibited':
+          diagnostics.push({
+            code: 'AB4814',
+            message: `Event route ${route.provenance.relativePath} requires ${capabilityName}, ${capability.state} on ${target}: ${capability.reason}`,
+            severity: 'error',
+            sourcePath: route.source,
+            target,
+          });
+          break;
+        default: {
+          const exhaustive: never = capability;
+          return exhaustive;
+        }
+      }
+    }
+  }
+  return diagnostics;
+};
+
 const validateLib = (loaded: LoadedConfig): Diagnostic[] => {
   const lib = loaded.config.lib;
   if (lib === undefined || lib === false) return [];
@@ -1563,6 +1639,7 @@ export const validateSource = (
   // Route-graph collisions (AB4800-AB4804) are compiled during discovery;
   // they are project-source errors, so they gate inspect and build here.
   diagnostics.push(...(discovered.routeGraph?.diagnostics ?? []));
+  diagnostics.push(...validateEventRoutes(loaded, discovered, registry));
   // The stage-1 gate for conventional script routes rides beside the graph's
   // own collisions: rendered, nested, and config-conflicting script routes
   // stay hard errors until later #102 stages ship them.

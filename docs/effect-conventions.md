@@ -124,9 +124,12 @@ end-to-end.
 
 Helped:
 
-- `Semaphore.make(1)` + `withPermit` is a drop-in for the hand-rolled serial
-  queues (FIFO waiters), including the process-wide per-project lease mutex
-  map in the epoch store.
+- `Semaphore.make(1)` + `withPermit` replaces hand-rolled mutual exclusion
+  where admission order is not observable, including the process-wide
+  per-project lease mutex map in the epoch store. It bounds access and
+  releases the permit when the guarded effect exits; the public API does not
+  guarantee FIFO waiter admission. Keep an explicit queue and ordering test
+  wherever submission order is part of the contract.
 - `Deferred` gives coalesced rebuild waiters one shared completion;
   `Effect.onExit` sits exactly where a `.finally` drain hook sat.
 - `Effect.forEach(..., { concurrency: 'unbounded' })` with per-element

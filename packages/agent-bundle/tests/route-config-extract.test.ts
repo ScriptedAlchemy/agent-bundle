@@ -46,6 +46,31 @@ it('parses TSX modules whose bodies contain JSX', () => {
   expect(config).toEqual({ title: 'App' });
 });
 
+it('parses JSX modules whose bodies contain JSX', () => {
+  const { config, diagnostics } = extract([
+    "export const config = { title: 'Poster' };",
+    'export default function Poster() { return <section>poster</section>; }',
+  ].join('\n'), 'src/scripts/render-poster.jsx');
+  expect(diagnostics).toEqual([]);
+  expect(config).toEqual({ title: 'Poster' });
+});
+
+it('preserves a literal "__proto__" key as an own config property', () => {
+  const { config, diagnostics } = extract(
+    'export const config = { "__proto__": { injected: true }, title: \'safe\' };',
+  );
+  expect(diagnostics).toEqual([]);
+  // The key is an ordinary own data property: enumerated, serialized, and
+  // frozen like any other — never a prototype swap that inspection and the
+  // digest would silently drop.
+  expect(Object.keys(config)).toEqual(['__proto__', 'title']);
+  const descriptor = Object.getOwnPropertyDescriptor(config, '__proto__');
+  expect(descriptor?.value).toEqual({ injected: true });
+  expect(JSON.parse(JSON.stringify(config))).toMatchObject({ title: 'safe' });
+  expect(JSON.stringify(config)).toContain('"__proto__":{"injected":true}');
+  expect(Object.isFrozen(descriptor?.value)).toBe(true);
+});
+
 it('extracts silently to the empty config when no config export exists', () => {
   const { config, diagnostics } = extract('export default () => null;\nconst config = { hidden: true };');
   expect(diagnostics).toEqual([]);
@@ -62,6 +87,8 @@ it.each([
   ['method', 'export const config = { run() { return 1; } };', 'AB4806', 'a method or accessor'],
   ['array spread', 'export const config = { tags: [...list] };', 'AB4806', 'a spread'],
   ['undefined value', 'export const config = { title: undefined };', 'AB4806', 'the non-JSON value `undefined`'],
+  ['overflowing numeric literal', 'export const config = { limit: 1e999 };', 'AB4806', 'the non-finite number `Infinity`'],
+  ['negated overflowing numeric literal', 'export const config = { limit: -1e999 };', 'AB4806', 'the non-finite number `-Infinity`'],
   ['bigint literal', 'export const config = { big: 1n };', 'AB4806', 'a bigint literal'],
   ['let declaration', 'export let config = {};', 'AB4805', 'a mutable `let`/`var` declaration'],
   ['destructuring', 'export const { config } = source;', 'AB4805', 'a destructuring declaration'],

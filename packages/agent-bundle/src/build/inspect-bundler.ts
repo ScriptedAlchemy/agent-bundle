@@ -3,6 +3,7 @@ import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts'
 import { scanEntryExports } from './entry-exports.ts';
 import {
   generatedExecutableEntrySource,
+  generatedRouteArtifactEpoch,
   generatedRouteFlightWorkerSource,
   generatedRouteMcpEntrySource,
   generatedStdioMcpEntrySource,
@@ -211,7 +212,11 @@ const mcpEntryEntries = async (
           rscManifest: true,
           source: entry.source,
           sourceInputs: [],
-          virtualSource: generatedRouteFlightWorkerSource({ routes: generatedRoutes, serverName }),
+          virtualSource: generatedRouteFlightWorkerSource({
+            artifactEpoch: generatedRouteArtifactEpoch({ name: model.metadata.name, version: model.metadata.version }),
+            routes: generatedRoutes,
+            serverName,
+          }),
         },
         kind: 'mcp-entry',
         name: `${serverName}:flight`,

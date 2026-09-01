@@ -3,10 +3,22 @@
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {
+      "agentStart": "subagentStart",
+      "agentStop": "subagentStop",
       "afterTool": "postToolUse",
       "beforeTool": "preToolUse",
       "sessionStart": "sessionStart",
-      "stop": "stop"
+      "stop": "stop",
+      "workspaceOpen": "workspaceOpen"
+    },
+    "eventRoutes": {
+      "agent/start": { "nativeEvent": "subagentStart", "state": "supported" },
+      "agent/stop": { "nativeEvent": "subagentStop", "state": "supported" },
+      "session/start": { "nativeEvent": "sessionStart", "state": "supported" },
+      "stop": { "nativeEvent": "stop", "state": "supported" },
+      "tool/after": { "nativeEvent": "postToolUse", "state": "supported" },
+      "tool/before": { "nativeEvent": "preToolUse", "state": "supported" },
+      "workspace/open": { "nativeEvent": "workspaceOpen", "state": "supported" }
     },
     "matchers": {
       "agent": "^Task$",
@@ -61,7 +73,8 @@
       "Known-loading physical ~/.cursor/plugins/local/tracedecay uses .cursor-plugin/plugin.json, root mcp.json, and hooks/hooks.json.",
       "Installed cursor-agent-exec loader candidates: .cursor-plugin/plugin.json, .claude-plugin/plugin.json, plugin.json.",
       "Installed loader substitutes CURSOR_PLUGIN_ROOT in MCP command, args, env, and cwd fields and in hook commands.",
-      "Local-plugin symlinks are realpath checked and rejected when their targets escape ~/.cursor/plugins/local."
+      "Local-plugin symlinks are realpath checked and rejected when their targets escape ~/.cursor/plugins/local.",
+      "The pinned Cursor hooks schema admits subagentStart, subagentStop, and workspaceOpen as first-class hook arrays; the public Cursor hooks reference documents workspaceOpen and subagent lifecycle payloads."
     ]
   }
 }

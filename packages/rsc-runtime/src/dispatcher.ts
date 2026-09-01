@@ -11,6 +11,7 @@ import { createAgentRenderEventSession, toPublicEventStream } from './reconciler
 export { decodeAgentDocument } from './decode-document.js';
 
 export interface AgentRenderDispatch {
+  readonly artifactEpoch?: string;
   readonly invocation: AgentRenderInvocation;
   readonly progress?: AgentProgressReporter;
   readonly signal: AbortSignal;
@@ -92,11 +93,20 @@ export const createAgentRenderDispatcher = (
       limits: options.limits,
       signal: request.signal,
     });
-    pendingFlight.current = host.execute({
-      invocation: request.invocation,
-      progress: session.progress,
-      signal: request.signal,
-    });
+    const rememberFlight = (flight: Promise<ReadableStream<Uint8Array>>): Promise<ReadableStream<Uint8Array>> => {
+      void flight.catch(() => undefined);
+      return flight;
+    };
+    try {
+      pendingFlight.current = rememberFlight(host.execute({
+        ...(request.artifactEpoch === undefined ? {} : { artifactEpoch: request.artifactEpoch }),
+        invocation: request.invocation,
+        progress: session.progress,
+        signal: request.signal,
+      }));
+    } catch (error) {
+      pendingFlight.current = rememberFlight(Promise.reject(request.signal.aborted ? abortError() : error));
+    }
     return toPublicEventStream(session.events, demand, request.signal);
   };
 

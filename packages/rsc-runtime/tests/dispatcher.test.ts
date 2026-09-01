@@ -20,6 +20,7 @@ describe('decodeAgentDocument', () => {
     const document = decodeAgentDocument(createElement(
       'agent-result',
       { metadata: { source: 'flight' }, value: { ready: true } },
+      createElement('agent-context', null, 'route guidance'),
       createElement('agent-markdown', null, '# Ready'),
       createElement('agent-error', { code: 'E_REPRESENTED' }, 'Partial result'),
     ));
@@ -27,6 +28,7 @@ describe('decodeAgentDocument', () => {
     expect(document).toEqual({
       root: {
         children: [
+          { kind: 'context', text: 'route guidance' },
           { kind: 'markdown', text: '# Ready' },
           { code: 'E_REPRESENTED', kind: 'error', message: 'Partial result' },
         ],
@@ -51,6 +53,32 @@ describe('decodeAgentDocument', () => {
     expect(invoked).toBe(false);
     expect(() => decodeAgentDocument(createElement('div'))).toThrow('protocol element');
   });
+
+  it('enforces configured document limits during the decode walk', () => {
+    const nest = (depth: number): ReturnType<typeof createElement> =>
+      depth <= 1
+        ? createElement('agent-result', null, createElement('agent-text', null, 'leaf'))
+        : createElement('agent-result', null, nest(depth - 1));
+    try {
+      decodeAgentDocument(nest(5), { maxDocumentDepth: 2 });
+      throw new Error('expected deep Result tree to exceed depth during decode');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'document-depth-exceeded' });
+    }
+    expect(decodeAgentDocument(nest(5), { maxDocumentDepth: 10 }).root).toMatchObject({ kind: 'result' });
+
+    const wide = createElement(
+      'agent-result',
+      null,
+      ...Array.from({ length: 20 }, (_, index) => createElement('agent-text', null, `n${String(index)}`)),
+    );
+    try {
+      decodeAgentDocument(wide, { maxDocumentNodes: 3 });
+      throw new Error('expected broad Result tree to exceed node count during decode');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'document-node-count-exceeded' });
+    }
+  });
 });
 
 describe('AgentRenderDispatcher', () => {
@@ -71,6 +99,26 @@ describe('AgentRenderDispatcher', () => {
       signal: controller.signal,
     })).rejects.toMatchObject({ name: 'AbortError' });
     expect(calls).toBe(0);
+  });
+
+  it('forwards artifactEpoch to the execution host', () => {
+    const seen: Array<string | undefined> = [];
+    const dispatcher = createAgentRenderDispatcher({
+      execute: async (request) => {
+        seen.push(request.artifactEpoch);
+        return new ReadableStream({
+          start(controller) {
+            controller.close();
+          },
+        });
+      },
+    });
+    dispatcher.stream({
+      artifactEpoch: 'epoch-a',
+      invocation: { kind: 'event', props: { event: 'tool/after', payload: {} } },
+      signal: new AbortController().signal,
+    });
+    expect(seen).toEqual(['epoch-a']);
   });
 });
 
@@ -420,5 +468,124 @@ describe('AgentRenderDispatcher streaming', () => {
     host.resolve('a');
     await expect(reader.read()).rejects.toBeInstanceOf(AgentContractError);
     await expect(reader.read()).rejects.toMatchObject({ code: 'event-count-exceeded' });
+  });
+
+  it('holds pre-shell progress until the shell event is emitted', { retry: 2 }, async () => {
+    const inner = createWorkerHost('ready');
+    const host: AgentFlightExecutionHost = {
+      execute: async (request) => {
+        if (request.progress === undefined) throw new Error('expected a progress reporter');
+        await request.progress.report({ completed: 1, message: 'pre-shell' });
+        return inner.execute(request);
+      },
+    };
+    const dispatcher = createAgentRenderDispatcher(host);
+    const events = await collectEvents(dispatcher.stream({ invocation, signal: new AbortController().signal }));
+    expect(eventTypes(events)).toEqual(['shell', 'progress', 'complete']);
+    expect(events[1]).toMatchObject({ completed: 1, message: 'pre-shell', sequence: 1, type: 'progress' });
+  });
+
+  it('emits a replace or error for every boundary that settled before resnapshot', { retry: 2 }, async () => {
+    const host = createWorkerHost('dual');
+    const dispatcher = createAgentRenderDispatcher(host);
+    const reader = dispatcher.stream({ invocation, signal: new AbortController().signal }).getReader();
+    const shell = await reader.read();
+    if (shell.value?.type !== 'shell') throw new Error('expected a shell event');
+    host.resolve('a');
+    host.resolve('b');
+    const rest: AgentRenderEvent[] = [];
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (next.value === undefined) throw new Error('expected a render event');
+      rest.push(next.value);
+    }
+    const replacements = rest.filter((event) => event.type === 'replace');
+    expect(replacements.map((event) => event.boundaryId).sort()).toEqual(['b:1', 'b:2']);
+    expect(rest.at(-1)?.type).toBe('complete');
+  });
+
+  it('fails a permanently pending boundary when the elapsed deadline expires', { retry: 2 }, async () => {
+    const host = createWorkerHost('single');
+    const dispatcher = createAgentRenderDispatcher(host, { limits: { maxElapsedMs: 150 } });
+    const reader = dispatcher.stream({ invocation, signal: new AbortController().signal }).getReader();
+    const shell = await reader.read();
+    if (shell.value?.type !== 'shell') throw new Error('expected a shell event');
+    await expect(reader.read()).rejects.toBeInstanceOf(AgentContractError);
+    await expect(reader.read()).rejects.toMatchObject({ code: 'elapsed-time-exceeded' });
+  });
+
+  it('converts a synchronous host throw into a stream failure', async () => {
+    const host: AgentFlightExecutionHost = {
+      execute: () => {
+        throw new Error('sync host setup');
+      },
+    };
+    const dispatcher = createAgentRenderDispatcher(host);
+    const stream = dispatcher.stream({ invocation, signal: new AbortController().signal });
+    await expect(stream.getReader().read()).rejects.toThrow('sync host setup');
+    await expect(dispatcher.dispatch({ invocation, signal: new AbortController().signal })).rejects.toThrow(
+      'sync host setup',
+    );
+  });
+
+  it('holds later progress reports until the consumer accepts the prior update', { retry: 2 }, async () => {
+    let progress: AgentProgressReporter | undefined;
+    const inner = createWorkerHost('single');
+    const host: AgentFlightExecutionHost = {
+      execute: async (request) => {
+        progress = request.progress;
+        return inner.execute(request);
+      },
+    };
+    const dispatcher = createAgentRenderDispatcher(host);
+    const reader = dispatcher.stream({ invocation, signal: new AbortController().signal }).getReader();
+    const shell = await reader.read();
+    if (shell.value?.type !== 'shell') throw new Error('expected a shell event');
+    if (progress === undefined) throw new Error('expected the dispatcher to install a progress reporter');
+
+    const reports = [1, 2, 3].map((completed) => {
+      let settled = false;
+      const done = progress.report({ completed, message: `n${String(completed)}` }).then(() => {
+        settled = true;
+      });
+      return { done, get settled() { return settled; } };
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 30);
+    });
+    expect(reports[2]?.settled).toBe(false);
+
+    const firstEvent = await reader.read();
+    if (firstEvent.value?.type !== 'progress') throw new Error('expected the first progress event');
+    expect(firstEvent.value).toMatchObject({ completed: 1, message: 'n1' });
+    await reports[0]?.done;
+    const secondEvent = await reader.read();
+    if (secondEvent.value?.type !== 'progress') throw new Error('expected the second progress event');
+    expect(secondEvent.value).toMatchObject({ completed: 2, message: 'n2' });
+    await reports[1]?.done;
+    const thirdEvent = await reader.read();
+    if (thirdEvent.value?.type !== 'progress') throw new Error('expected the third progress event');
+    expect(thirdEvent.value).toMatchObject({ completed: 3, message: 'n3' });
+    await reports[2]?.done;
+
+    inner.resolve('a');
+    expect((await reader.read()).value?.type).toBe('replace');
+    expect((await reader.read()).value?.type).toBe('complete');
+  });
+
+  it('rejects progress after Flight setup fails and shuts down the queue', async () => {
+    let progress: AgentProgressReporter | undefined;
+    const host: AgentFlightExecutionHost = {
+      execute: async (request) => {
+        progress = request.progress;
+        throw new Error('flight setup failed');
+      },
+    };
+    const dispatcher = createAgentRenderDispatcher(host);
+    const reader = dispatcher.stream({ invocation, signal: new AbortController().signal }).getReader();
+    await expect(reader.read()).rejects.toThrow('flight setup failed');
+    if (progress === undefined) throw new Error('expected the dispatcher to install a progress reporter');
+    await expect(progress.report({ completed: 1, message: 'after-fail' })).rejects.toThrow('flight setup failed');
   });
 });

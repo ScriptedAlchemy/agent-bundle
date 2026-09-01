@@ -17,7 +17,14 @@ interface CliProjection<Input, Result> {
   readonly usage: string;
 }
 
-interface CliCommandDefinition<
+/**
+ * Exported because the operation factories in `src/operations/` export
+ * objects of `defineCliCommand(...)` results: declaration emit for the
+ * package build must be able to name this type from those modules
+ * (TS4023 otherwise fails `agent-bundle build`'s d.ts generation, even
+ * though `tsc --noEmit` passes).
+ */
+export interface CliCommandDefinition<
   InputSchema extends Schema<unknown>,
   ResultSchema extends Schema<unknown>,
   ParsedInput,
@@ -67,8 +74,11 @@ export const runCliCommands = async (
     return 0;
   }
   const signal = options.signal ?? new AbortController().signal;
+  signal.throwIfAborted();
   const input = command.inputSchema.parse(command.cli.parse(argv.slice(1)));
-  const result = command.resultSchema.parse(await command.handler(input, { signal }));
+  const handled = await command.handler(input, { signal });
+  signal.throwIfAborted();
+  const result = command.resultSchema.parse(handled);
   write(`${JSON.stringify(result)}\n`);
   return command.cli.exitCode?.(result) ?? 0;
 };

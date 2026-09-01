@@ -5,6 +5,61 @@ export interface RouteSchema<Output = unknown> {
 
 export type RouteSchemaOutput<Schema> = Schema extends RouteSchema<infer Output> ? Output : never;
 
+/** The event-route families admitted by the recorded #97 v1/G10 decision. */
+export const canonicalAgentEvents = Object.freeze([
+  'session/start',
+  'tool/before',
+  'tool/after',
+  'stop',
+  'agent/start',
+  'agent/stop',
+  'workspace/open',
+] as const);
+
+export type CanonicalAgentEvent = (typeof canonicalAgentEvents)[number];
+
+export interface AgentEventProvenance {
+  readonly host: string;
+  readonly hostContractRevision: string;
+  readonly nativeEvent: string;
+  readonly source: 'native';
+}
+
+/** Cross-host identity supplied to an event route without fabricated host fields. */
+export interface AgentEventCanonicalIdentity {
+  readonly event: CanonicalAgentEvent;
+  readonly idempotencyKey: string;
+  readonly observedAt: string;
+  readonly provenance: AgentEventProvenance;
+  readonly sequence: number;
+}
+
+/** Complete host envelope after the adapter's schema and byte-bound validation. */
+export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
+
+/** Props received by an event route's async default Server Component. */
+export interface AgentEventRouteProps {
+  readonly canonical: AgentEventCanonicalIdentity;
+  readonly native: AgentEventNativePayload;
+  readonly signal: AbortSignal;
+}
+
+export type AgentEventDelivery = 'immediate';
+export type AgentEventRuntimeMode = 'shared' | 'standalone';
+export type AgentEventFallbackMode = 'none' | 'standalone';
+
+/** Statically extractable event-route configuration. */
+export interface AgentEventRouteConfig {
+  readonly delivery?: readonly AgentEventDelivery[];
+  readonly fallback?: AgentEventFallbackMode;
+  readonly runtime?: AgentEventRuntimeMode;
+  readonly targets?: readonly string[];
+  /** Route budget within the adapter's stricter native-host deadline. */
+  readonly timeoutMs?: number;
+  /** Canonical tool selectors for tool/before and tool/after routes. */
+  readonly tools?: readonly string[];
+}
+
 /** Props received by every executable MCP route's async default Server Component. */
 export interface ToolRouteProps<InputSchema extends RouteSchema> {
   readonly input: RouteSchemaOutput<InputSchema>;

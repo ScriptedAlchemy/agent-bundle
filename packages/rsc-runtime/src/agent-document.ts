@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 
-import { snapshotJsonValue, type JsonValue } from './lower-mcp.js';
+import { snapshotJsonValue, type JsonSnapshotBudget, type JsonValue } from './lower-mcp.js';
 
 export const AGENT_DOCUMENT_VERSION = 1 as const;
 
@@ -19,6 +19,12 @@ export interface AgentMarkdownNode {
 
 export interface AgentTextNode {
   readonly kind: 'text';
+  readonly text: string;
+}
+
+/** Guidance intended for the host's immediate additional-context channel. */
+export interface AgentContextNode {
+  readonly kind: 'context';
   readonly text: string;
 }
 
@@ -63,6 +69,7 @@ export type AgentDocumentNode =
   | AgentResultNode
   | AgentMarkdownNode
   | AgentTextNode
+  | AgentContextNode
   | AgentJsonNode
   | AgentProgressNode
   | AgentImageNode
@@ -156,7 +163,7 @@ export class AgentContractError extends Error {
   }
 }
 
-const resolveLimits = (overrides: Partial<AgentRenderLimits>): AgentRenderLimits => {
+export const resolveAgentRenderLimits = (overrides: Partial<AgentRenderLimits> = {}): AgentRenderLimits => {
   const limits = { ...DEFAULT_AGENT_RENDER_LIMITS, ...overrides };
   for (const [name, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value <= 0) {
@@ -183,10 +190,51 @@ const text = (value: unknown, field: string): string => {
 const optionalString = (value: unknown, field: string): string | undefined =>
   value === undefined ? undefined : requiredString(value, field);
 
-const snapshotJson = (value: unknown, message: string): JsonValue => {
+export const elapsedTimeExceeded = (maxElapsedMs: number): AgentContractError =>
+  new AgentContractError(
+    'elapsed-time-exceeded',
+    `Agent render elapsed time exceeds ${String(maxElapsedMs)}ms`,
+  );
+
+const jsonBudget = (state: NodeSnapshotState): JsonSnapshotBudget => ({
+  addBytes(n) {
+    state.bytes += n;
+    if (state.bytes > state.limits.maxDocumentBytes) {
+      throw new AgentContractError(
+        'document-bytes-exceeded',
+        `Agent Document bytes exceed ${String(state.limits.maxDocumentBytes)}`,
+      );
+    }
+  },
+  addNode() {
+    state.nodes += 1;
+    if (state.nodes > state.limits.maxDocumentNodes) {
+      throw new AgentContractError(
+        'document-node-count-exceeded',
+        `Agent Document node count exceeds ${String(state.limits.maxDocumentNodes)}`,
+      );
+    }
+  },
+  checkDepth(depth) {
+    if (depth > state.limits.maxDocumentDepth) {
+      throw new AgentContractError(
+        'document-depth-exceeded',
+        `Agent Document depth exceeds ${String(state.limits.maxDocumentDepth)}`,
+      );
+    }
+  },
+});
+
+const snapshotJson = (
+  value: unknown,
+  message: string,
+  depth: number,
+  state: NodeSnapshotState,
+): JsonValue => {
   try {
-    return snapshotJsonValue(value, message);
+    return snapshotJsonValue(value, message, { depth, limits: jsonBudget(state) });
   } catch (error) {
+    if (error instanceof AgentContractError) throw error;
     throw new AgentContractError('invalid-document', error instanceof Error ? error.message : message, { cause: error });
   }
 };
@@ -201,6 +249,7 @@ const progressNumber = (value: unknown, field: string): number => {
 interface NodeSnapshotState {
   readonly ancestors: Set<object>;
   readonly limits: AgentRenderLimits;
+  bytes: number;
   nodes: number;
 }
 
@@ -235,7 +284,7 @@ const snapshotNode = (node: AgentDocumentNode, depth: number, state: NodeSnapsho
         const children = Object.freeze(node.children.map((child) => snapshotNode(child, depth + 1, state)));
         const metadata = node.metadata === undefined
           ? undefined
-          : snapshotJson(node.metadata, 'Agent result metadata must be JSON-serializable');
+          : snapshotJson(node.metadata, 'Agent result metadata must be JSON-serializable', depth, state);
         return Object.freeze({
           children,
           kind: 'result',
@@ -246,10 +295,12 @@ const snapshotNode = (node: AgentDocumentNode, depth: number, state: NodeSnapsho
         return Object.freeze({ kind: 'markdown', text: text(node.text, 'Agent markdown text') });
       case 'text':
         return Object.freeze({ kind: 'text', text: text(node.text, 'Agent text') });
+      case 'context':
+        return Object.freeze({ kind: 'context', text: text(node.text, 'Agent context text') });
       case 'json':
         return Object.freeze({
           kind: 'json',
-          value: snapshotJson(node.value, 'Agent JSON node value must be JSON-serializable'),
+          value: snapshotJson(node.value, 'Agent JSON node value must be JSON-serializable', depth, state),
         });
       case 'progress': {
         const completed = progressNumber(node.completed, 'Agent progress completed');
@@ -328,11 +379,12 @@ export const createAgentDocument = (
       `Unsupported Agent Document version: ${String(input.version)}`,
     );
   }
-  const limits = resolveLimits(limitOverrides);
-  const root = snapshotNode(input.root, 1, { ancestors: new Set(), limits, nodes: 0 });
+  const limits = resolveAgentRenderLimits(limitOverrides);
+  const state: NodeSnapshotState = { ancestors: new Set(), bytes: 0, limits, nodes: 0 };
+  const root = snapshotNode(input.root, 1, state);
   const value = input.value === undefined
     ? undefined
-    : snapshotJson(input.value, 'Agent Document value must be JSON-serializable');
+    : snapshotJson(input.value, 'Agent Document value must be JSON-serializable', 1, state);
   const document: AgentDocument = Object.freeze({
     root,
     status: documentStatus(input.status),
@@ -349,10 +401,15 @@ export const createAgentDocument = (
   return document;
 };
 
-const snapshotRenderError = (error: AgentRenderError): AgentRenderError => {
+const snapshotRenderError = (error: AgentRenderError, limits: AgentRenderLimits): AgentRenderError => {
   const data = error.data === undefined
     ? undefined
-    : snapshotJson(error.data, 'Agent render error data must be JSON-serializable');
+    : snapshotJson(
+      error.data,
+      'Agent render error data must be JSON-serializable',
+      1,
+      { ancestors: new Set(), bytes: 0, limits, nodes: 0 },
+    );
   return Object.freeze({
     code: requiredString(error.code, 'Agent render error code'),
     ...(data === undefined ? {} : { data }),
@@ -394,7 +451,7 @@ const snapshotEvent = (
       const boundaryId = optionalString(input.boundaryId, 'Agent render boundaryId');
       return Object.freeze({
         ...(boundaryId === undefined ? {} : { boundaryId }),
-        error: snapshotRenderError(input.error),
+        error: snapshotRenderError(input.error, limits),
         sequence,
         type: 'error',
       });
@@ -413,14 +470,16 @@ const snapshotEvent = (
 
 export interface AgentRenderEventSequence {
   readonly completed: boolean;
+  readonly maxElapsedMs: number;
   readonly nextSequence: number;
+  readonly remainingMs: number;
   readonly emit: (input: AgentRenderEventInput) => AgentRenderEvent;
 }
 
 export const createAgentRenderEventSequence = (
   limitOverrides: Partial<AgentRenderLimits> = {},
 ): AgentRenderEventSequence => {
-  const limits = resolveLimits(limitOverrides);
+  const limits = resolveAgentRenderLimits(limitOverrides);
   const startedAt = Date.now();
   const recentTimes: number[] = [];
   let completed = false;
@@ -428,6 +487,9 @@ export const createAgentRenderEventSequence = (
   return Object.freeze({
     get completed() {
       return completed;
+    },
+    get maxElapsedMs() {
+      return limits.maxElapsedMs;
     },
     emit(input: AgentRenderEventInput): AgentRenderEvent {
       if (completed) {
@@ -438,10 +500,7 @@ export const createAgentRenderEventSequence = (
       }
       const now = Date.now();
       if (now - startedAt > limits.maxElapsedMs) {
-        throw new AgentContractError(
-          'elapsed-time-exceeded',
-          `Agent render elapsed time exceeds ${String(limits.maxElapsedMs)}ms`,
-        );
+        throw elapsedTimeExceeded(limits.maxElapsedMs);
       }
       recentTimes.push(now);
       const windowStart = now - 1000;
@@ -474,6 +533,9 @@ export const createAgentRenderEventSequence = (
     },
     get nextSequence() {
       return nextSequence;
+    },
+    get remainingMs() {
+      return limits.maxElapsedMs - (Date.now() - startedAt);
     },
   });
 };

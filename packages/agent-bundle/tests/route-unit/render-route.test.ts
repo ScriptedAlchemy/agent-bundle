@@ -66,6 +66,23 @@ describe('renderRoute through the real renderer', () => {
     });
   });
 
+  it('records progress even when the caller supplies its own reporter', async () => {
+    const delegated: unknown[] = [];
+    const rendered = await renderRoute('tool:harness/echo', {
+      context: {
+        progress: {
+          report: async (update) => {
+            delegated.push(update);
+          },
+        },
+      },
+      input: { message: 'hello' },
+    });
+
+    expect(rendered.progress).toEqual([{ completed: 1, message: 'echoing', total: 1 }]);
+    expect(delegated).toEqual([...rendered.progress]);
+  });
+
   it('reports a represented error as the document status the runtime decided', async () => {
     const rendered = await renderRoute('tool:harness/unavailable');
 

@@ -19,6 +19,7 @@ import {
   cursorHooksValidator,
   cursorManifest,
   cursorMcpValidator,
+  cursorPluginNameError,
   cursorPluginValidator,
   cursorVariables,
   emptyCursorHooksDocument,
@@ -359,10 +360,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
   let cursorHookEntries: readonly TargetHookEntry[] = Object.freeze([]);
   if (!isValidCursorPluginName(model.metadata.name)) {
-    diagnostics.push(errorDiagnostic(
-      'plugin.cursor.name',
-      `Plugin name ${JSON.stringify(model.metadata.name)} is not a valid Cursor plugin name (lowercase kebab-case).`,
-    ));
+    diagnostics.push(errorDiagnostic('plugin.cursor.name', cursorPluginNameError(model.metadata.name)));
   } else {
     const emitCursorHooks = hookDocument !== undefined && hookDocumentValid;
     // Cursor's envelope is not the shared Claude/Codex format, so its hooks
@@ -438,10 +436,26 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   });
 };
 
+const compositeEventCapabilities = Object.freeze(Object.fromEntries(
+  Object.keys(claudeCapabilityTable.hooks.eventRoutes)
+    .sort((left, right) => left.localeCompare(right))
+    .map((event) => {
+      const capability = `event:${event}`;
+      return [
+        capability,
+        intersectCapabilityStates(
+          claudeAdapter.capabilities[capability]!,
+          codexAdapter.capabilities[capability]!,
+        ),
+      ];
+    }),
+));
+
 export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout,
   capabilities: Object.freeze({
+    ...compositeEventCapabilities,
     marketplace: intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
     hooks: intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
     // Claude supports LSP and Codex has no LSP surface, so the intersection

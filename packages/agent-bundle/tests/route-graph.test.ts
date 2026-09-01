@@ -50,7 +50,7 @@ const conventionalTree: Readonly<Record<string, string>> = {
     'export default async () => undefined;',
     '',
   ].join('\n'),
-  'src/events/file/saved.tsx': moduleSource,
+  'src/events/workspace/open.tsx': moduleSource,
   'src/mcp/curator/apps/dashboard.tsx': `export const config = { resourceUri: 'ui://curator/dashboard.html' }; ${moduleSource}`,
   'src/mcp/curator/prompts/curate.tsx': moduleSource,
   'src/mcp/curator/resources/catalog.ts': moduleSource,
@@ -95,11 +95,12 @@ it('compiles the conventional tree into one frozen graph with a machine-independ
   ]);
   expect(curator!.routes.map((route) => route.kind)).toEqual(['app', 'prompt', 'resource', 'tool']);
   expect(curator!.routes.every((route) => route.serverId === 'mcp:curator')).toBe(true);
-  expect(graph.events.map((route) => route.id)).toEqual(['event:file/saved']);
+  expect(graph.events.map((route) => route.id)).toEqual(['event:workspace/open']);
   expect(graph.events[0]).toMatchObject({
+    event: 'workspace/open',
     kind: 'event-route',
-    provenance: { kind: 'conventional', relativePath: 'src/events/file/saved.tsx' },
-    source: join(root, 'src/events/file/saved.tsx'),
+    provenance: { kind: 'conventional', relativePath: 'src/events/workspace/open.tsx' },
+    source: join(root, 'src/events/workspace/open.tsx'),
   });
   expect(graph.cli).toMatchObject({ mode: 'generated' });
   expect(graph.cli!.routes.map((route) => route.id)).toEqual(['cli:doctor', 'cli:library/audit']);
@@ -145,6 +146,25 @@ it('skips ignored paths, private segments, and declaration files', async () => {
   expect(graph.servers[0]!.routes.map((route) => route.id)).toEqual(['tool:curator/inspect']);
   expect(graph.events).toEqual([]);
   expect(graph.scripts).toEqual([]);
+});
+
+it('discovers .jsx script routes so the rendered-script gate can judge them', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/scripts/rebuild-index.ts': moduleSource,
+    'src/scripts/render-poster.jsx': 'export default async () => <section>poster</section>;\n',
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  // Discovery is not a packaging choice: the .jsx module compiles into the
+  // graph so source validation can gate it as AB4807 instead of dropping it.
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.scripts.map((route) => route.id)).toEqual(['script:rebuild-index', 'script:render-poster']);
+  expect(graph.scripts.find((route) => route.id === 'script:render-poster')).toMatchObject({
+    kind: 'script',
+    provenance: { kind: 'conventional', relativePath: 'src/scripts/render-poster.jsx' },
+    source: join(root, 'src/scripts/render-poster.jsx'),
+  });
 });
 
 it('never compiles a module explicit configuration claims: config always wins', async () => {
@@ -458,7 +478,13 @@ it('generates deterministic route-specific types from the compiled graph', () =>
     digest: 'typegen-digest',
     events: [],
     providers: [],
-    scripts: [],
+    scripts: [{
+      config: emptyRouteConfig,
+      id: 'script:rebuild-index',
+      kind: 'script',
+      provenance: { kind: 'conventional', relativePath: 'src/scripts/rebuild-index.ts' },
+      source: '/workspace/project/src/scripts/rebuild-index.ts',
+    }],
     servers: [{
       id: 'mcp:curator',
       mode: 'generated',
@@ -479,6 +505,8 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   expect(second).toBe(first);
   expect(first).toContain('import type * as route0 from "../src/mcp/curator/tools/inspect.js";');
   expect(first).toContain('"tool:curator/inspect": RouteContract<typeof route0.inputSchema, typeof route0.resultSchema>;');
+  expect(first).not.toContain('src/scripts/rebuild-index');
+  expect(first).not.toContain('"script:rebuild-index"');
   expect(first).toContain('export type RouteId = keyof AgentBundleRoutes;');
 });
 
@@ -507,4 +535,80 @@ it('validates the single async route-module authoring contract statically', asyn
     'AB4810',
     'AB4811',
   ]);
+});
+
+it('discovers only the seven v1 event families and validates their component contract', async () => {
+  const root = await createRoot();
+  const eventSource = 'export default async function EventRoute() { return undefined; }\n';
+  await writeTree(root, {
+    'src/events/agent/start.tsx': eventSource,
+    'src/events/agent/stop.tsx': eventSource,
+    'src/events/prompt/submit.tsx': eventSource,
+    'src/events/session/start.tsx': eventSource,
+    'src/events/stop.tsx': eventSource,
+    'src/events/tool/after.tsx': eventSource,
+    'src/events/tool/before.tsx': 'export default function BeforeTool() { return undefined; }\n',
+    'src/events/workspace/open.tsx': eventSource,
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.events.map((route) => route.id)).toEqual([
+    'event:agent/start',
+    'event:agent/stop',
+    'event:session/start',
+    'event:stop',
+    'event:tool/after',
+    'event:tool/before',
+    'event:workspace/open',
+  ]);
+  expect(graph.events.map((route) => route.event)).toEqual([
+    'agent/start',
+    'agent/stop',
+    'session/start',
+    'stop',
+    'tool/after',
+    'tool/before',
+    'workspace/open',
+  ]);
+  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4813', 'AB4810']);
+  expect(graph.diagnostics[0]?.sourcePath).toBe(join(root, 'src/events/prompt/submit.tsx'));
+  expect(graph.diagnostics[1]?.sourcePath).toBe(join(root, 'src/events/tool/before.tsx'));
+});
+
+it('fails unavailable event routes before packaging unless they are target-restricted', async () => {
+  const eventSource = 'export default async function WorkspaceOpen() { return undefined; }\n';
+  const configSource = [
+    'export default {',
+    "  plugin: { name: 'event-capability-fixture', version: '1.0.0' },",
+    "  targets: ['claude', 'cursor'],",
+    '};',
+    '',
+  ].join('\n');
+  const unrestrictedRoot = await createRoot();
+  await writeTree(unrestrictedRoot, {
+    'agent-bundle.config.ts': configSource,
+    'package.json': '{"type":"module"}\n',
+    'src/events/workspace/open.tsx': eventSource,
+  });
+
+  const unrestricted = await inspect({ root: unrestrictedRoot });
+  expect(unrestricted.state).toBe('invalid');
+  expect(unrestricted.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'AB4814',
+    target: 'claude',
+  }));
+
+  const restrictedRoot = await createRoot();
+  await writeTree(restrictedRoot, {
+    'agent-bundle.config.ts': configSource,
+    'package.json': '{"type":"module"}\n',
+    'src/events/workspace/open.tsx': [
+      "export const config = { targets: ['cursor'] };",
+      eventSource,
+    ].join('\n'),
+  });
+
+  const restricted = await inspect({ root: restrictedRoot });
+  expect(restricted.state).toBe('ready');
 });

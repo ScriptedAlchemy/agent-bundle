@@ -28,6 +28,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/eval-harness.test.ts',
   'packages/agent-bundle/tests/eval-service.test.ts',
   'packages/agent-bundle/tests/eval-workbench.test.ts',
+  'packages/agent-bundle/tests/examples-check-script.test.ts',
   'packages/agent-bundle/tests/examples-contract.test.ts',
   'packages/agent-bundle/tests/generated-route-server.test.ts',
   'packages/agent-bundle/tests/hook-playground-service.test.ts',
@@ -63,6 +64,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/rsbuild-workbench.test.ts',
   'packages/workbench/tests/runtime-inspector.test.ts',
   'packages/workbench/tests/runtime-consent-dialog.test.ts',
+  'packages/workbench/tests/runtime-playground-capture-cleanup.test.ts',
   'packages/workbench/tests/runtime-playground.e2e.test.ts',
   'packages/workbench/tests/runtime-playground-hmr.e2e.test.ts',
   'packages/workbench/tests/workbench-dev-command.test.ts',
@@ -74,9 +76,10 @@ export const integrationTestFiles: readonly string[] = [
  * behavioral proof. The behavioral contracts they exercise (HMR activation,
  * last-good retention, recovery) are already covered per PR by
  * runtime-playground.e2e.test.ts and runtime-playground-hmr.e2e.test.ts in
- * the integration pool, so these run through the root `test:evidence`
- * script in CI's nightly schedule instead — evidence regenerates when the
- * flow changes, not on every PR (#128).
+ * the integration pool. Fast capture cleanup contracts stay per PR in
+ * runtime-playground-capture-cleanup.test.ts. The evidence journey runs
+ * through the root `test:evidence` script in CI's nightly schedule instead —
+ * evidence regenerates when the flow changes, not on every PR (#128).
  */
 export const nightlyEvidenceTestFiles: readonly string[] = [
   'packages/workbench/tests/runtime-playground-capture.test.ts',

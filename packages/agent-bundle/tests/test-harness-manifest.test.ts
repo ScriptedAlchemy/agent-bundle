@@ -6,7 +6,12 @@ import { describe, expect, it } from '@rstest/core';
 import { routeTestSetupSource } from '../src/rstest/setup-module.ts';
 import { AgentTestError } from '../src/test/errors.ts';
 import { compileTestManifest, testManifestFromRouteGraph } from '../src/test/manifest.ts';
-import { AGENT_TEST_REGISTRY_VERSION, registerTestRoutes } from '../src/test/registry.ts';
+import {
+  AGENT_TEST_REGISTRY_SYMBOL_KEY,
+  AGENT_TEST_REGISTRY_VERSION,
+  registerTestRoutes,
+  testManifest,
+} from '../src/test/registry.ts';
 import { renderRoute } from '../src/test/render.ts';
 import { expectDocument } from '../src/test/matchers.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
@@ -15,6 +20,21 @@ import type { AgentBundleTestManifest } from '../src/test/manifest.ts';
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/route-harness');
 
 const manifest = await compileTestManifest({ root: fixtureRoot });
+
+const registrySymbol = Symbol.for(AGENT_TEST_REGISTRY_SYMBOL_KEY);
+const realm = globalThis as Record<symbol, unknown>;
+
+/** Installs a registry the way the generated setup module does: straight onto the realm global. */
+const withRealmRegistry = async <T>(registry: unknown, body: () => T | Promise<T>): Promise<T> => {
+  const previous = realm[registrySymbol];
+  realm[registrySymbol] = registry;
+  try {
+    return await body();
+  } finally {
+    if (previous === undefined) delete realm[registrySymbol];
+    else realm[registrySymbol] = previous;
+  }
+};
 
 describe('the compiled test manifest', () => {
   it('names every conventional route the compiler discovered, with its extracted config', () => {
@@ -83,6 +103,60 @@ describe('the generated route registry', () => {
   it('refuses a registry written by a different agent-bundle version', () => {
     expect(() => registerTestRoutes({ loaders: {}, manifest, version: 99 }))
       .toThrow('Incompatible Agent Bundle test registry version');
+  });
+
+  // The generated module assigns the realm global directly, so registerTestRoutes
+  // never sees it; the version has to be refused where the helpers read it.
+  it('refuses an incompatible registry the generated setup assigned directly', async () => {
+    await withRealmRegistry({ loaders: {}, manifest, version: 99 }, () => {
+      expect(() => testManifest()).toThrow('Incompatible Agent Bundle test registry version');
+    });
+  });
+});
+
+describe('route loaders and the manifest that produced them', () => {
+  const foreign: AgentBundleTestManifest = {
+    ...manifest,
+    digest: 'f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f',
+    projectRoot: '/tmp/another-project',
+  };
+
+  const registryLoading = (loaded: string[]): unknown => ({
+    loaders: {
+      'tool:harness/echo': (): Promise<unknown> => {
+        loaded.push('tool:harness/echo');
+        return Promise.resolve({ default: () => null });
+      },
+    },
+    manifest,
+    version: AGENT_TEST_REGISTRY_VERSION,
+  });
+
+  it('refuses another manifest\'s route rather than loading the registered module for it', async () => {
+    const loaded: string[] = [];
+    const error = await withRealmRegistry(
+      registryLoading(loaded),
+      async () => renderRoute('tool:harness/echo', { manifest: foreign }).catch((thrown: unknown) => thrown),
+    );
+
+    expect(loaded).toEqual([]);
+    expect((error as AgentTestError).code).toBe('manifest-unavailable');
+    expect((error as AgentTestError).message).toContain('not the ones registered');
+    expect((error as AgentTestError).message).toContain(foreign.digest);
+    expect((error as AgentTestError).message).toContain(manifest.digest);
+    expect((error as AgentTestError).message).toContain('bound to the manifest that produced them');
+  });
+
+  it('still resolves the loader for the manifest the registry was built from', async () => {
+    const loaded: string[] = [];
+    await withRealmRegistry(
+      registryLoading(loaded),
+      // The render itself needs the react-server pool; resolving the loader is
+      // what this asserts, so any later renderer failure is irrelevant here.
+      async () => renderRoute('tool:harness/echo', { manifest }).catch(() => undefined),
+    );
+
+    expect(loaded).toEqual(['tool:harness/echo']);
   });
 });
 
@@ -171,6 +245,21 @@ describe('document matchers', () => {
     expect(error?.message).toContain('targets:      claude');
     expect(error?.message).toContain('{"files":3}');
     expect(error?.message).toContain('{"files":2}');
+  });
+
+  it('separates a document that emitted no value from one whose value is null', () => {
+    const documentWith = (value: unknown): never => Object.freeze({
+      root: Object.freeze({ children: Object.freeze([]), kind: 'result' }),
+      status: 'success',
+      version: 1,
+      ...(value === undefined ? {} : { value }),
+    }) as never;
+
+    expectDocument(documentWith(undefined)).toHaveValue(undefined);
+    expectDocument(documentWith(null)).toHaveValue(null);
+    expect(() => expectDocument(documentWith(undefined)).toHaveValue(null)).toThrow('value differs');
+    expect(() => expectDocument(documentWith(null)).toHaveValue(undefined)).toThrow('value differs');
+    expect(() => expectDocument(documentWith(undefined)).toHaveValue({ files: 2 })).toThrow('value differs');
   });
 
   it('fails an unmet status, Markdown, text, and error assertion', () => {

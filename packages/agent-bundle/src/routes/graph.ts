@@ -7,12 +7,13 @@ import fastGlob from 'fast-glob';
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
 import { compileCliCommands } from './cli-commands.ts';
 import { extractRouteConfig } from './config-extract.ts';
-import { validateRouteModuleContract } from './contract.ts';
+import { validateEventRouteModuleContract, validateRouteModuleContract } from './contract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
+import { canonicalAgentEvents, type CanonicalAgentEvent } from './public.ts';
 import {
   emptyRouteConfig,
   type CompiledAgentRoute,
@@ -36,9 +37,12 @@ type ProjectIgnoreRules = Awaited<ReturnType<typeof readProjectIgnoreRules>>;
 const routeGlobs = [
   'src/mcp/*/{tools,resources,prompts,apps}/*.{ts,tsx}',
   'src/events/*/*.{ts,tsx}',
+  'src/events/stop.{ts,tsx}',
   'src/providers/*.{ts,tsx}',
   'src/cli/**/*.{ts,tsx}',
-  'src/scripts/**/*.{ts,tsx}',
+  // Scripts also discover .jsx: the stage-1 script gate judges rendered
+  // modules (AB4807), so a .jsx script must surface there, never vanish.
+  'src/scripts/**/*.{ts,tsx,jsx}',
 ];
 
 const mcpRouteKinds: Readonly<Record<string, CompiledRouteKind>> = {
@@ -104,6 +108,7 @@ interface DiscoveredProviderModule {
 }
 
 interface DiscoveredRouteModule {
+  readonly event?: CanonicalAgentEvent;
   readonly id: string;
   /** The path-derived name segments; each must satisfy the safe-identity rule. */
   readonly identitySegments: readonly string[];
@@ -137,10 +142,11 @@ const classifyModule = (source: string, relativePath: string): DiscoveredModule 
     };
   }
   if (collection === 'events') {
-    const family = segments[2]!;
+    const event = segments.length === 3 ? stem : `${segments[2]!}/${stem}`;
     return {
-      id: `event:${family}/${stem}`,
-      identitySegments: [family, stem],
+      event: event as CanonicalAgentEvent,
+      id: `event:${event}`,
+      identitySegments: event.split('/'),
       kind: 'event-route',
       relativePath,
       source,
@@ -301,6 +307,7 @@ const compiledRoute = (
   config: Readonly<Record<string, unknown>>,
 ): CompiledAgentRoute => ({
   config,
+  ...(module.event === undefined ? {} : { event: module.event }),
   id: module.id,
   kind: module.kind,
   provenance: { kind: 'conventional', relativePath: module.relativePath },
@@ -330,6 +337,7 @@ const extractedModuleConfig = async (
 
 const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unknown>> => ({
   config: route.config,
+  ...(route.event === undefined ? {} : { event: route.event }),
   id: route.id,
   kind: route.kind,
   relativePath: route.provenance.relativePath,
@@ -391,6 +399,19 @@ export const compileRouteGraph = async (
     const relativePath = toPosixPath(relative(projectRoot, source));
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
     const module = classifyModule(source, relativePath);
+    if (
+      module.surface === 'route' &&
+      module.kind === 'event-route' &&
+      !canonicalAgentEvents.includes(module.event!)
+    ) {
+      diagnostics.push(routeError(
+        'AB4813',
+        `Event route ${relativePath} declares ${JSON.stringify(module.event)}, which is outside the #97 v1 event vocabulary.`,
+        `Use one of: ${canonicalAgentEvents.join(', ')}.`,
+        source,
+      ));
+      continue;
+    }
     const unsafeSegment = module.identitySegments.find((segment) => !safeIdentitySegment.test(segment));
     if (unsafeSegment !== undefined) {
       diagnostics.push(routeError(
@@ -431,6 +452,17 @@ export const compileRouteGraph = async (
       continue;
     }
     const route = compiledRoute(module, await extractedModuleConfig(module, diagnostics));
+    if (route.kind === 'event-route') {
+      try {
+        diagnostics.push(...validateEventRouteModuleContract(
+          await readFile(route.source, 'utf8'),
+          route.provenance.relativePath,
+          route.source,
+        ));
+      } catch {
+        // Racing deletion is handled by the next source snapshot.
+      }
+    }
     switch (route.kind) {
       case 'tool':
       case 'resource':

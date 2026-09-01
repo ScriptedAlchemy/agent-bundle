@@ -29,7 +29,9 @@ export interface RunPromiseOptions {
 const TYPED_ERROR_NAMES = new Set([
   'AgentContractError',
   'AgentRequestError',
+  'AgentRuntimeError',
   'AgentStateError',
+  'McpProjectionError',
 ]);
 
 const interruptAs = <A, E, R>(): Effect.Effect<A, E, R> =>
@@ -132,20 +134,22 @@ export const makeScopedEffectRuntime = <R, E>(
 /**
  * Host AbortSignal → Effect interruption. Re-checks `signal.aborted` when
  * the effect starts (not only when this helper is constructed) so a signal
- * that aborts between construction and run still interrupts.
+ * that aborts between construction and run still interrupts. The listener
+ * is registered first; aborted signals do not replay `abort`, so the
+ * callback rechecks immediately after `addEventListener`.
  */
 export const abortToInterrupt = (signal: AbortSignal): Effect.Effect<never> =>
   Effect.suspend(() => {
     if (signal.aborted) return interruptAs();
     return Effect.callback<never>((resume) => {
-      if (signal.aborted) {
-        resume(Effect.interrupt);
-        return undefined;
-      }
+      let settled = false;
       const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
         resume(Effect.interrupt);
       };
       signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
       return Effect.sync(() => {
         signal.removeEventListener('abort', onAbort);
       });

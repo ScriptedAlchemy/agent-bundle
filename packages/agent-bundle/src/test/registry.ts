@@ -33,7 +33,7 @@ const missingRegistry = (): AgentTestError => new AgentTestError(
   },
 );
 
-export const registerTestRoutes = (registry: AgentTestRouteRegistry): void => {
+const compatible = (registry: AgentTestRouteRegistry): AgentTestRouteRegistry => {
   if (registry.version !== AGENT_TEST_REGISTRY_VERSION) {
     throw new AgentTestError(
       'manifest-unavailable',
@@ -41,10 +41,24 @@ export const registerTestRoutes = (registry: AgentTestRouteRegistry): void => {
       { recovery: 'Install one agent-bundle version for both the Rstest configuration and the test helpers.' },
     );
   }
-  realm[REGISTRY_SYMBOL] = registry;
+  return registry;
 };
 
-const registered = (): AgentTestRouteRegistry | undefined => realm[REGISTRY_SYMBOL];
+export const registerTestRoutes = (registry: AgentTestRouteRegistry): void => {
+  realm[REGISTRY_SYMBOL] = compatible(registry);
+};
+
+/**
+ * The registry this worker may read. The version is checked here rather than
+ * only in `registerTestRoutes`, because the generated setup module assigns the
+ * realm global directly: when the Rstest helper and `agent-bundle/test` resolve
+ * to different package versions, this is the only place that mismatch is seen
+ * before it surfaces as a misleading loader or manifest error.
+ */
+const registered = (): AgentTestRouteRegistry | undefined => {
+  const registry = realm[REGISTRY_SYMBOL];
+  return registry === undefined ? undefined : compatible(registry);
+};
 
 /**
  * The manifest the generated configuration registered for this test process.
@@ -57,7 +71,39 @@ export const testManifest = (): AgentBundleTestManifest => {
   return registry.manifest;
 };
 
-export const registeredRouteLoader = (routeId: string): AgentRouteModuleLoader | undefined =>
-  registered()?.loaders[routeId];
+/**
+ * Whether `manifest` is the compilation whose loaders were registered. Two
+ * projects can name the same route id, so identity is the manifest digest and
+ * project root rather than the route id alone.
+ */
+const producedRegisteredLoaders = (
+  registry: AgentTestRouteRegistry,
+  manifest: AgentBundleTestManifest,
+): boolean =>
+  registry.manifest === manifest
+  || (registry.manifest.digest === manifest.digest && registry.manifest.projectRoot === manifest.projectRoot);
+
+/**
+ * The registered loader for one route of `manifest`. Loaders are bound to the
+ * manifest that produced them: an explicit manifest describing another project
+ * resolves no loader, so a multi-project suite cannot execute the registered
+ * project's module while reporting the other manifest's provenance.
+ */
+export const registeredRouteLoader = (
+  manifest: AgentBundleTestManifest,
+  routeId: string,
+): AgentRouteModuleLoader | undefined => {
+  const registry = registered();
+  if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
+  return registry.loaders[routeId];
+};
+
+/** The registered manifest's identity, so a loader miss can name the mismatch that caused it. */
+export const registeredManifestIdentity = (): { readonly digest: string; readonly projectRoot: string } | undefined => {
+  const registry = registered();
+  return registry === undefined
+    ? undefined
+    : { digest: registry.manifest.digest, projectRoot: registry.manifest.projectRoot };
+};
 
 export const hasRegisteredRoutes = (): boolean => registered() !== undefined;
