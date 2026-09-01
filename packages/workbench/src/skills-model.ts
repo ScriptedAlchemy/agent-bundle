@@ -23,12 +23,14 @@ const splitReference = (reference: string): Readonly<{ readonly fragment: string
     : Object.freeze({ fragment: reference.slice(index), path: reference.slice(0, index) });
 };
 
-const isAllowedExternal = (value: string): boolean => {
+export const allowedExternalResourceUrl = (value: string): string | undefined => {
   try {
     const protocol = new URL(value).protocol;
-    return protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:';
+    return protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:'
+      ? value
+      : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 };
 
@@ -45,7 +47,8 @@ export const resourceUrlFor = (
   resources: readonly string[],
 ): string | undefined => {
   if (reference.startsWith('#')) return reference;
-  if (isAllowedExternal(reference)) return reference;
+  const external = allowedExternalResourceUrl(reference);
+  if (external !== undefined) return external;
   const { fragment, path } = splitReference(reference);
   const segments = localSegments(path);
   if (segments === undefined) return undefined;

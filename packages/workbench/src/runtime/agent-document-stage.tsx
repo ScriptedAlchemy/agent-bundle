@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 
 import { MarkdownProjector } from '../skill-markdown.tsx';
+import { allowedExternalResourceUrl } from '../skills-model.ts';
 import type {
   AgentDocument,
   AgentDocumentNode,
@@ -74,6 +75,12 @@ const progressLabel = (progress: Readonly<{
   return progress.message === undefined ? amount : `${progress.message} · ${amount}`;
 };
 
+const agentDocumentImageUrl = (reference: string): string | undefined =>
+  /^data:/iu.test(reference) ? reference : undefined;
+
+const agentDocumentLinkUrl = (reference: string): string | undefined =>
+  reference.startsWith('#') ? reference : allowedExternalResourceUrl(reference);
+
 const AgentDocumentNodeView = ({ node, path }: Readonly<{
   readonly node: AgentDocumentNode;
   readonly path: string;
@@ -88,7 +95,11 @@ const AgentDocumentNodeView = ({ node, path }: Readonly<{
         </div>
       </section>;
     case 'markdown':
-      return <MarkdownProjector body={node.text} />;
+      return <MarkdownProjector
+        body={node.text}
+        resolveImage={agentDocumentImageUrl}
+        resolveLink={agentDocumentLinkUrl}
+      />;
     case 'text':
       return <p className="agent-document-text">{node.text}</p>;
     case 'context':
