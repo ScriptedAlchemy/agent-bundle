@@ -20,9 +20,16 @@ examples/release/micro-eval gates, so it is a fast signal, not a merge gate.
 ## What it runs
 
 Every leg is an isolated git worktree pinned to the HEAD commit (uncommitted
-changes are not covered — the runner warns), with its own `node_modules`.
-Legs live under `.worktrees/local-ci/` (gitignored), are reused across runs
-for warm caches, and can be recreated with `--fresh`.
+changes are not covered — the runner warns), with its own `node_modules` and
+its own `TMPDIR` (`.worktrees/local-ci/tmp/<leg>`, recreated every run).
+The private temp root keeps concurrent legs from observing each other's
+temp traffic: suites that assert temp-root hygiene (for example
+`cli.test.ts` scans `os.tmpdir()` for leaked `agent-bundle-artifact-*`
+directories) only ever see their own leg's directories, so a sibling leg's
+in-flight work cannot fail them — while a directory the leg itself leaks
+still fails its own scan. Legs live under `.worktrees/local-ci/`
+(gitignored), are reused across runs for warm caches, and can be recreated
+with `--fresh`.
 
 | Local leg | Node | Steps | Mirrors hosted job |
 | --- | --- | --- | --- |

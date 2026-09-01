@@ -24,7 +24,12 @@
  * be shared across Node ABIs. The shared pnpm store is content-addressed
  * (and side-effects caches are keyed by engine), so concurrent per-leg
  * installs stay cheap. Legs live under .worktrees/local-ci/ (gitignored) and
- * are reused across runs for warm caches; `--fresh` recreates them.
+ * are reused across runs for warm caches; `--fresh` recreates them. Each leg
+ * also gets a private TMPDIR (.worktrees/local-ci/tmp/<leg>, recreated every
+ * run): concurrent legs would otherwise share /tmp, and suites that assert
+ * temp-root hygiene (cli.test.ts scans os.tmpdir() for leaked
+ * agent-bundle-artifact-* directories) would see a sibling leg's in-flight
+ * temp traffic and fail on it (#110).
  */
 import { spawn } from 'node:child_process';
 import { execFile as executeFile } from 'node:child_process';
@@ -380,11 +385,20 @@ const main = async () => {
     const directory = join(legsRoot, plan.name);
     await ensureLegWorktree(directory, sha);
     const syntheticBinDirectory = await createSyntheticBinDirectory(plan, pnpmEntrypoint);
+    // Private per-leg temp root (see the isolation model above). Recreating
+    // it keeps every run's hygiene scans free of a crashed prior run's
+    // leftovers, while a leak WITHIN a run still fails its own leg's scan.
+    const temporaryDirectory = join(legsRoot, 'tmp', plan.name);
+    await rm(temporaryDirectory, { recursive: true, force: true });
+    await mkdir(temporaryDirectory, { recursive: true });
     legs.push({
       ...plan,
       directory,
       syntheticBinDirectory,
-      environment: buildLegEnvironment(syntheticBinDirectory, plan.environmentOverrides),
+      environment: buildLegEnvironment(syntheticBinDirectory, {
+        ...plan.environmentOverrides,
+        TMPDIR: temporaryDirectory,
+      }),
     });
   }
 
