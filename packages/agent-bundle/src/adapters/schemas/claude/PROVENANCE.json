@@ -30,7 +30,7 @@
       "url": "https://docs.anthropic.com/en/docs/claude-code/plugins"
     }
   },
-  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Artifact inspection can additionally invoke `claude plugin validate <bundle-dir> --strict`; Agent Bundle preserves host warnings unless its own strict option is enabled, and reports an explicit unavailable diagnostic when the CLI is absent.",
+  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Artifact validation can additionally invoke `claude plugin validate <bundle-dir> --strict`; Agent Bundle preserves host warnings unless its own strict option is enabled, and reports an explicit unavailable diagnostic when the CLI is absent.",
   "developerTools": {
     "retrievedAt": "2026-09-01",
     "source": "https://code.claude.com/docs/en/plugins-reference",
