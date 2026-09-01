@@ -45,6 +45,10 @@
       "types": "./dist/api.d.ts",
       "import": "./dist/api.js"
     },
+    "./cli-entry": {
+      "types": "./dist/cli-entry.d.ts",
+      "import": "./dist/cli-entry.js"
+    },
     "./config": {
       "types": "./dist/config/index.d.ts",
       "import": "./dist/config.js"

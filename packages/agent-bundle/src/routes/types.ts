@@ -85,8 +85,55 @@ export interface CompiledServerSurface {
  */
 export type CompiledCliMode = 'generated' | 'conventional' | 'conflict';
 
+/**
+ * One argv projection of a CLI route's `inputSchema` property, derived
+ * statically from the bounded zod grammar (#102 stage 2). `key` is the
+ * schema property; `option` is its kebab-case `--option` spelling; a
+ * positional entry consumes bare arguments in `positional` order instead.
+ */
+export interface CompiledCliOption {
+  /** Accepted values of a `z.enum([...])` base. */
+  readonly choices?: readonly string[];
+  /** The static `.default(<literal>)` value, surfaced in generated help. */
+  readonly defaultValue?: unknown;
+  /** The static `.describe('<text>')` string, surfaced in generated help. */
+  readonly description?: string;
+  readonly key: string;
+  readonly kind: 'boolean' | 'enum' | 'number' | 'string';
+  readonly option: string;
+  /** Zero-based positional order when `config.positionals` names the key. */
+  readonly positional?: number;
+  /** True for a `z.array(...)` schema: a repeatable option or the trailing variadic positional. */
+  readonly repeated: boolean;
+  /** True when the schema has neither `.optional()` nor `.default(...)`. */
+  readonly required: boolean;
+}
+
+/**
+ * One executable command compiled from a `src/cli/**` route: nesting is the
+ * path-derived identity (`cli:library/audit` -> `library audit`), metadata
+ * comes from the statically extracted route config, and the argv surface
+ * comes from the bounded `inputSchema` grammar.
+ */
+export interface CompiledCliCommand {
+  readonly aliases: readonly string[];
+  readonly description?: string;
+  /** Exit-code policy: `zero` on success, or `result` reading the validated result's `exitCode`. */
+  readonly exitCode: 'result' | 'zero';
+  readonly options: readonly CompiledCliOption[];
+  /** Command path segments below the CLI root (`['library', 'audit']`). */
+  readonly path: readonly string[];
+  readonly routeId: string;
+}
+
 /** The CLI command surface assembled from `src/cli/**` route modules. */
 export interface CompiledCliSurface {
+  /**
+   * The collision-checked command graph compiled from the plain (`.ts`)
+   * routes; present only in `generated` mode. Rendered (`.tsx`) routes stay
+   * in {@link routes} but compile no command until #102 stage 3.
+   */
+  readonly commands?: readonly CompiledCliCommand[];
   readonly mode: CompiledCliMode;
   /** Discovered command routes; empty when `conventional` mode omits them. */
   readonly routes: readonly CompiledAgentRoute[];

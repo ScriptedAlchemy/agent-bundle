@@ -41,7 +41,15 @@ const fixtureConfig = (extra: Readonly<Record<string, unknown>> = {}): AgentBund
 
 const conventionalTree: Readonly<Record<string, string>> = {
   'src/cli/doctor.tsx': moduleSource,
-  'src/cli/library/audit.ts': moduleSource,
+  // Plain CLI routes compile through the stage-2 argv grammar, so the
+  // fixture carries a real (statically parseable) zod object schema.
+  'src/cli/library/audit.ts': [
+    "export const config = { description: 'Audit the library.' };",
+    'export const inputSchema = z.object({ strict: z.boolean().optional() }).strict();',
+    'export const resultSchema = {};',
+    'export default async () => undefined;',
+    '',
+  ].join('\n'),
   'src/events/workspace/open.tsx': moduleSource,
   'src/mcp/curator/apps/dashboard.tsx': `export const config = { resourceUri: 'ui://curator/dashboard.html' }; ${moduleSource}`,
   'src/mcp/curator/prompts/curate.tsx': moduleSource,

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { stableJson } from '../core/digest.ts';
-import type { CompiledAgentRoute } from '../routes/types.ts';
+import type { CompiledAgentRoute, CompiledCliCommand } from '../routes/types.ts';
 
 /**
  * Generated-entry templates: the framework-provided entry files consumers
@@ -72,6 +72,89 @@ export const generatedExecutableEntrySource = (options: {
   '',
 ].join('\n');
 
+
+export const cliEntryRuntimeSpecifier = 'agent-bundle/cli-entry';
+
+/**
+ * The on-disk location of the `agent-bundle/cli-entry` runtime module,
+ * aliased into generated CLI executables exactly like the mcp-entry
+ * lifecycle so emitted bins stay self-contained.
+ */
+export const cliEntryRuntimePath = (): string => {
+  for (const candidate of [
+    new URL('./cli-entry.js', import.meta.url),
+    new URL('../cli-entry.ts', import.meta.url),
+  ]) {
+    const path = fileURLToPath(candidate);
+    if (existsSync(path)) return path;
+  }
+  throw new Error('Unable to locate the agent-bundle/cli-entry runtime module for generated CLI executables.');
+};
+
+export interface GeneratedCliBinEntryOptions {
+  readonly commands: readonly CompiledCliCommand[];
+  readonly plugin: { readonly description?: string; readonly name: string; readonly version: string };
+  readonly routes: readonly CompiledAgentRoute[];
+}
+
+/**
+ * The generated routed-CLI executable (#102 stage 2): the compiled command
+ * graph rides the bundle as data, the cli-entry shell owns argv parsing,
+ * help, exit codes, and signals, and every command executes inside the typed
+ * Agent request context. Input validation failures are usage failures
+ * (`CliInputError`, exit 2); the route module's zod schemas stay the
+ * runtime validation boundary.
+ */
+export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions): string => {
+  const commandRoutes = options.routes.filter((route) =>
+    options.commands.some((command) => command.routeId === route.id));
+  return [
+    `import { CliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...routeImports(commandRoutes),
+    '',
+    'const routes = Object.freeze({',
+    ...commandRoutes.map((route, index) =>
+      `  ${JSON.stringify(route.id)}: Object.freeze({ module: route${String(index)} }),`),
+    '});',
+    '',
+    `const commands = Object.freeze(${stableJson(options.commands)});`,
+    '',
+    'const execute = async (command, input, context) => {',
+    '  const route = routes[command.routeId];',
+    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
+    '  let parsed;',
+    '  try {',
+    '    parsed = route.module.inputSchema.parse(input);',
+    '  } catch (error) {',
+    '    throw new CliInputError(error instanceof Error ? error.message : String(error));',
+    '  }',
+    '  const cwd = process.cwd();',
+    '  const result = await runAgentRequest({',
+    '    capabilities: {',
+    '      command: unavailable(),',
+    '      filesystem: unavailable(),',
+    '      network: unavailable(),',
+    "      projectRoot: available({ root: cwd }, 'derived'),",
+    '    },',
+    "    host: unavailable('unsupported-surface'),",
+    "    invocation: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
+    '    signal: context.signal,',
+    "    workspace: available({ root: cwd }, 'derived'),",
+    '  }, async () => route.module.default({ input: parsed, signal: context.signal }));',
+    '  return route.module.resultSchema.parse(result);',
+    '};',
+    '',
+    'await runGeneratedCliProcess({',
+    '  commands,',
+    ...(options.plugin.description === undefined ? [] : [`  description: ${JSON.stringify(options.plugin.description)},`]),
+    '  execute,',
+    `  name: ${JSON.stringify(options.plugin.name)},`,
+    `  version: ${JSON.stringify(options.plugin.version)},`,
+    '});',
+    '',
+  ].join('\n');
+};
 
 export interface GeneratedRouteMcpEntryOptions {
   readonly plugin: { readonly name: string; readonly version: string };

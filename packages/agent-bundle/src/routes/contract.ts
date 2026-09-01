@@ -28,16 +28,20 @@ const diagnostic = (
   recovery: string,
 ): Diagnostic => ({ code, message, recovery, severity: 'error', sourcePath });
 
-interface RouteModuleShape {
+/** The statically scanned export surface of one route module. */
+export interface RouteModuleExports {
+  /** True when the default export is an async function or arrow function. */
   readonly asyncDefault: boolean;
   readonly named: ReadonlySet<string>;
+  /** True when the module exports `execute` or `render` (the retired split contract). */
   readonly splitExport: boolean;
 }
 
-const inspectRouteModule = (
+/** Scans one route module's top-level export surface without evaluating it. */
+export const scanRouteModuleExports = (
   moduleText: string,
   relativePath: string,
-): RouteModuleShape => {
+): RouteModuleExports => {
   const sourceFile = ts.createSourceFile(relativePath, moduleText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const named = new Set<string>();
   let asyncDefault = false;
@@ -75,7 +79,7 @@ const inspectRouteModule = (
     }
   }
 
-  return { asyncDefault, named, splitExport };
+  return Object.freeze({ asyncDefault, named, splitExport });
 };
 
 /** Validates G8's one executable MCP route contract without evaluating the module. */
@@ -84,7 +88,7 @@ export const validateRouteModuleContract = (
   relativePath: string,
   sourcePath: string,
 ): readonly Diagnostic[] => {
-  const { asyncDefault, named, splitExport } = inspectRouteModule(moduleText, relativePath);
+  const { asyncDefault, named, splitExport } = scanRouteModuleExports(moduleText, relativePath);
   const missing = ['inputSchema', 'resultSchema'].filter((name) => !named.has(name));
   const diagnostics: Diagnostic[] = [];
   if (missing.length > 0 || !asyncDefault) {
@@ -116,7 +120,7 @@ export const validateEventRouteModuleContract = (
   relativePath: string,
   sourcePath: string,
 ): readonly Diagnostic[] => {
-  const { asyncDefault, splitExport } = inspectRouteModule(moduleText, relativePath);
+  const { asyncDefault, splitExport } = scanRouteModuleExports(moduleText, relativePath);
   const diagnostics: Diagnostic[] = [];
   if (!asyncDefault) {
     diagnostics.push(diagnostic(

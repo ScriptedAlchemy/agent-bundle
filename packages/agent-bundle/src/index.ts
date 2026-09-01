@@ -16,6 +16,8 @@ export type {
   AgentEventRuntimeMode,
   AppRouteConfig,
   CanonicalAgentEvent,
+  CliRouteConfig,
+  CliRouteProps,
   PromptConfig,
   ResourceConfig,
   RouteSchema,
