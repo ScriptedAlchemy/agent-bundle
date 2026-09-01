@@ -237,11 +237,13 @@ export const discoverProject = async (
   const shadowedConventionalSkills = [...shadowedByDir.values()];
 
   const payloads = await discoverPayloads(projectRoot, config.payload);
-  const routeGraph = await compileRouteGraph(projectRoot, config, rules);
+  // Config values are untrusted until validated; a hostile getter must not
+  // abort discovery (validation reports AB7001 for it), so degrade to no graph.
+  const routeGraph = await compileRouteGraph(projectRoot, config, rules).catch(() => undefined);
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
     ...(payloads.length === 0 ? {} : { payloads }),
-    ...(isEmptyRouteGraph(routeGraph) ? {} : { routeGraph }),
+    ...(routeGraph === undefined || isEmptyRouteGraph(routeGraph) ? {} : { routeGraph }),
     ...(shadowedConventionalSkills.length === 0 ? {} : { shadowedConventionalSkills }),
     skills: await Promise.all(
       skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules)),
