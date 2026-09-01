@@ -320,6 +320,14 @@ const eventRouteHookWrapperSource = (
 ): string => {
   const route = entry.hook.eventRoute!;
   const standalone = route.runtime === 'standalone' || route.fallback === 'standalone';
+  const targetSource = entry.target === 'plugin'
+    ? [
+        'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
+        'const target = declaredHost === "claude" || declaredHost === "codex"',
+        '  ? declaredHost',
+        '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
+      ]
+    : ['const target = artifactTarget;'];
   return [
     "import { dirname, resolve } from 'node:path';",
     `import { EventRuntimeTransportError, requestEventRuntime } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
@@ -334,11 +342,12 @@ const eventRouteHookWrapperSource = (
     `const canonicalEvent = ${JSON.stringify(route.event)};`,
     `const capabilityRevision = ${JSON.stringify(capabilityRevision)};`,
     `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
-    `const target = ${JSON.stringify(entry.target)};`,
+    `const artifactTarget = ${JSON.stringify(entry.target)};`,
+    ...targetSource,
     `const runtimeMode = ${JSON.stringify(route.runtime)};`,
     `const fallbackMode = ${JSON.stringify(route.fallback)};`,
     `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
-    "const endpointId = `${artifactEpoch}:${target}:${dirname(dirname(resolve(process.argv[1])))}`;",
+    "const endpointId = `${artifactEpoch}:${artifactTarget}:${dirname(dirname(resolve(process.argv[1])))}`;",
     '',
     'const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);',
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',

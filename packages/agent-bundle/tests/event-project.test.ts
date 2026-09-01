@@ -122,4 +122,6 @@ it('projects subagent-stop continuation only through supported host contracts', 
   });
   expect(() => projectEventDocument(feedback, 'agent/stop', 'codex', 'SubagentStop'))
     .toThrow(/not supported by the Codex SubagentStop output schema/u);
+  expect(() => projectEventDocument(feedback, 'agent/stop', 'plugin', 'SubagentStop'))
+    .toThrow(/must resolve the invoking host/u);
 });
