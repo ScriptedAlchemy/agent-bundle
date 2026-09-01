@@ -52,6 +52,7 @@
   },
   "observedCliVersion": "2026-08-28",
   "plugin": {
+    "commands": true,
     "manifest": ".cursor-plugin/plugin.json",
     "rules": true,
     "skills": true,
@@ -75,6 +76,7 @@
       "Installed cursor-agent-exec loader candidates: .cursor-plugin/plugin.json, .claude-plugin/plugin.json, plugin.json.",
       "Installed loader substitutes CURSOR_PLUGIN_ROOT in MCP command, args, env, and cwd fields and in hook commands.",
       "Local-plugin symlinks are realpath checked and rejected when their targets escape ~/.cursor/plugins/local.",
+      "2026-09-01: cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a schemas/plugin.schema.json defines the commands component pointer; https://cursor.com/docs documents agent chat commands as plain Markdown prompt files in commands/ named by filename.",
       "2026-08-31: cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a schemas/plugin.schema.json defines the rules component pointer; https://cursor.com/docs/plugins documents the rules component.",
       "The pinned Cursor hooks schema admits subagentStart, subagentStop, and workspaceOpen as first-class hook arrays; the public Cursor hooks reference documents workspaceOpen and subagent lifecycle payloads."
     ]

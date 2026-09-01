@@ -39,10 +39,13 @@ import lspSchema from './schemas/claude/lsp.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
+import { stringify as stringifyYaml } from 'yaml';
 import {
+  commandWriteEntries,
   createAdapterValidator,
   hasPathToken,
   schemaDescriptorsFrom,
+  sortedEntries,
   sourceInputs,
   standardArtifactLayout,
   standardPluginArtifactPlan,
@@ -50,6 +53,7 @@ import {
   validateModernMcpDocument,
   withPluginRootEnvAnchor,
   type TargetAdapter,
+  type TargetArtifactLayout,
   type TargetArtifactPlan,
 } from './types.ts';
 
@@ -133,9 +137,9 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.3.0',
+  adapterRevision: '1.4.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'a9c8821ee5cbc6aef65816c5025170389fd490b6d1c4e4e893599aa6a36f2265',
+  capabilitySha256: '6b8a3b222b49c0ad22f32ecdf8157bd353ce5be05d56e40ae5cf4ad2b9eb917f',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -174,6 +178,20 @@ const mcpRuntime = createTargetMcpRuntime({
 });
 
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(claudeName, 'Claude');
+
+const claudeCommandMarkdown = (
+  command: NonNullable<NormalizedPlugin['commands']>[number],
+): string => {
+  const fields = [
+    ['allowed-tools', command.frontmatter.allowedTools],
+    ['argument-hint', command.frontmatter.argumentHint],
+    ['description', command.frontmatter.description],
+    ['disable-model-invocation', command.frontmatter.disableModelInvocation],
+    ['model', command.frontmatter.model],
+  ].filter((entry): entry is [string, unknown] => entry[1] !== undefined);
+  if (fields.length === 0) return command.body;
+  return `---\n${stringifyYaml(Object.fromEntries(fields))}---\n${command.body}`;
+};
 
 const expandClaudeToken = (value: string): string => value
   .replaceAll(pathTokens.pluginRoot, '${CLAUDE_PLUGIN_ROOT}')
@@ -469,7 +487,7 @@ export const planClaudeArtifacts = (
     diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
   }
 
-  return standardPluginArtifactPlan({
+  const basePlan = standardPluginArtifactPlan({
     diagnostics,
     ...(lsp.document === undefined ? {} : {
       hostDocuments: [{
@@ -493,13 +511,33 @@ export const planClaudeArtifacts = (
     pluginRelativePath: claudeArtifactPaths.plugin,
     targetName,
   });
+  return Object.freeze({
+    ...basePlan,
+    entries: sortedEntries([
+      ...basePlan.entries,
+      ...commandWriteEntries(model, isSelected, claudeCommandMarkdown),
+    ]),
+  });
 };
+
+const artifactLayout: TargetArtifactLayout = Object.freeze({
+  ...standardArtifactLayout,
+  commands: Object.freeze({
+    allowedSuffixes: Object.freeze(['.md']),
+    directory: 'commands',
+  }),
+});
 
 export const claudeAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
-  artifactLayout: standardArtifactLayout,
+  artifactLayout,
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    commands: capabilityStateFromSupport(
+      capabilityTable.plugin.commands,
+      evidence,
+      'The pinned Claude Code plugin contract does not support commands.',
+    ),
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
     lsp: capabilityStateFromSupport(

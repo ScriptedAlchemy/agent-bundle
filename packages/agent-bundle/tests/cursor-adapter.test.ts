@@ -90,6 +90,10 @@ it('registers cursor as a first-class target with pinned schema validation', () 
     { path: 'hooks/hooks.json', required: false, schema: 'hooks' },
     { path: 'mcp.json', required: false, schema: 'mcp' },
   ]);
+  expect(registry.artifactLayout('cursor').commands).toEqual({
+    allowedSuffixes: ['.md'],
+    directory: 'commands',
+  });
   expect(registry.artifactLayout('cursor').rules).toEqual({
     allowedSuffixes: ['.mdc'],
     directory: 'rules',
@@ -248,6 +252,46 @@ it('emits selected rules byte-faithfully and omits the entire surface when rule-
   const ruleFree = cursorAdapter.plan(model);
   expect(ruleFree.entries.some((entry) => entry.relativePath.startsWith('rules/'))).toBe(false);
   expect(JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!)).not.toHaveProperty('rules');
+});
+
+it('emits Cursor command bodies, strips authored frontmatter, and omits the command-free surface', () => {
+  const model = plugin();
+  const withCommands: NormalizedPlugin = {
+    ...model,
+    commands: [
+      {
+        body: 'Review the staged diff.\r\n',
+        frontmatter: { argumentHint: '[path]', description: 'Review changes' },
+        id: 'command:review',
+        markdown: '---\r\ndescription: Review changes\r\nargumentHint: "[path]"\r\n---\r\nReview the staged diff.\r\n',
+        name: 'review',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/commands/review.md' },
+        source: '/workspace/commands/review.md',
+        targets: ['cursor'],
+      },
+      {
+        body: '# Explain\n\nExplain this code.',
+        frontmatter: {},
+        id: 'command:explain',
+        markdown: '# Explain\n\nExplain this code.',
+        name: 'explain',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/commands/explain.md' },
+        source: '/workspace/commands/explain.md',
+        targets: ['cursor'],
+      },
+    ],
+  };
+
+  const plan = cursorAdapter.plan(withCommands);
+  const documents = writeContents(withCommands);
+  expect(plan.diagnostics).toEqual([]);
+  expect(documents['commands/review.md']).toBe('Review the staged diff.\r\n');
+  expect(documents['commands/explain.md']).toBe('# Explain\n\nExplain this code.');
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({ commands: './commands/' });
+
+  const commandFree = cursorAdapter.plan(model);
+  expect(commandFree.entries.some((entry) => entry.relativePath.startsWith('commands/'))).toBe(false);
+  expect(JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!)).not.toHaveProperty('commands');
 });
 
 it('rejects portable Agent Plugin tokens instead of emitting a hybrid Cursor artifact', () => {

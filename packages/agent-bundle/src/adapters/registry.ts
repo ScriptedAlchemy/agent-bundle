@@ -181,6 +181,7 @@ const snapshotArtifactLayout = (
   const layout = record(declaredLayout);
   if (layout === undefined) throw new Error('Target adapter artifact layout must be a record.');
 
+  const commands = layout.commands === undefined ? undefined : snapshotOutputLayout(layout.commands, 'commands');
   const hookWrappers = layout.hookWrappers === undefined
     ? undefined
     : snapshotOutputLayout(layout.hookWrappers, 'hook wrappers');
@@ -215,6 +216,7 @@ const snapshotArtifactLayout = (
   }
   return Object.freeze({
     ...(assets === undefined ? {} : { assets }),
+    ...(commands === undefined ? {} : { commands }),
     ...(hookWrappers === undefined ? {} : { hookWrappers }),
     ...(mcpApps === undefined ? {} : { mcpApps }),
     ...(mcpEntries === undefined ? {} : { mcpEntries }),

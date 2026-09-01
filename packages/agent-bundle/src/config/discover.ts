@@ -8,6 +8,7 @@ import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
 import { compileRouteGraph, isEmptyRouteGraph } from '../routes/graph.ts';
 import type { CompiledRouteGraph } from '../routes/types.ts';
+import { parseCommand, type CommandDocument } from './command.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from './ignore.ts';
 import { isRenderedSkillSourceName } from './rendered-skill.ts';
 import { parseRule, type RuleDocument } from './rule.ts';
@@ -40,6 +41,8 @@ export interface DiscoveredPayload {
 
 export interface DiscoveredProject {
   assets?: DiscoveredAsset[];
+  /** Conventional flat `commands/*.md` documents; absent when none are discovered. */
+  commands?: readonly CommandDocument[];
   payloads?: DiscoveredPayload[];
   /** Conventional flat `rules/*.mdc` documents; absent when none are discovered. */
   rules?: readonly RuleDocument[];
@@ -241,6 +244,16 @@ export const discoverProject = async (
 
   const payloads = await discoverPayloads(projectRoot, config.payload);
   const routeGraph = await compileRouteGraph(projectRoot, config, rules);
+  const commandSources = (await fastGlob('commands/*.md', {
+    absolute: true,
+    cwd: projectRoot,
+    dot: true,
+    followSymbolicLinks: false,
+    onlyFiles: true,
+  }))
+    .filter((source) => !isProjectPathIgnored(rules, projectRoot, source))
+    .sort((left, right) => left.localeCompare(right));
+  const discoveredCommands = await Promise.all(commandSources.map((source) => parseCommand(source)));
   const ruleSources = (await fastGlob('rules/*.mdc', {
     absolute: true,
     cwd: projectRoot,
@@ -253,6 +266,7 @@ export const discoverProject = async (
   const discoveredRules = await Promise.all(ruleSources.map((source) => parseRule(source)));
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
+    ...(discoveredCommands.length === 0 ? {} : { commands: discoveredCommands }),
     ...(payloads.length === 0 ? {} : { payloads }),
     ...(routeGraph === undefined || isEmptyRouteGraph(routeGraph) ? {} : { routeGraph }),
     ...(discoveredRules.length === 0 ? {} : { rules: discoveredRules }),

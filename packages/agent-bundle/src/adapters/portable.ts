@@ -328,6 +328,9 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   }),
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.eventRoutes, evidence),
+    commands: unavailableCapability(
+      'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no commands surface.',
+    ),
     hooks: unavailableCapability('Agent Plugins 1.0.0 does not define a hooks component.'),
     marketplace: unavailableCapability('Agent Plugins 1.0.0 does not define a marketplace document.'),
     mcp: capabilityStateFromSupport(

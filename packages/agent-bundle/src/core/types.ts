@@ -321,6 +321,19 @@ export interface NormalizedSkill {
   readonly targets: readonly string[];
 }
 
+/** One conventional command prompt with peeled target selection. */
+export interface NormalizedCommand {
+  readonly body: string;
+  readonly frontmatter: Readonly<Record<string, unknown>>;
+  readonly id: string;
+  /** Exact authored bytes decoded as UTF-8 for byte-faithful passthrough. */
+  readonly markdown: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  readonly source: string;
+  readonly targets: readonly string[];
+}
+
 /** One conventional Cursor `.mdc` rule with peeled target selection. */
 export interface NormalizedRule {
   readonly body: string;
@@ -493,6 +506,11 @@ export interface NormalizedPlugin {
    * it remains optional so hand-constructed models stay valid without assets.
    */
   readonly assets?: readonly NormalizedAsset[];
+  /**
+   * Conventional `commands/*.md` documents. Present only when commands are
+   * discovered; optional so hand-constructed models predating commands remain valid.
+   */
+  readonly commands?: readonly NormalizedCommand[];
   readonly extensions: Readonly<Record<string, NormalizedConfigExtension>>;
   readonly hooks: readonly NormalizedHook[];
   readonly marketplace?: true;

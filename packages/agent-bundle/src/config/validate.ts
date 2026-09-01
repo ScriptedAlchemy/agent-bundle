@@ -890,6 +890,76 @@ const validateSkill = (skill: SkillDocument): Diagnostic[] => {
   return diagnostics;
 };
 
+const validateCommands = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  const selectedTargets = selectedTargetNamesFor(loaded, registry);
+  const names = new Map<string, string>();
+
+  for (const command of discovered.commands ?? []) {
+    diagnostics.push(...command.diagnostics);
+    const name = basename(command.source, extname(command.source));
+    const firstSource = names.get(name);
+    if (firstSource === undefined) {
+      names.set(name, command.source);
+    } else {
+      diagnostics.push(sourceDiagnostic(
+        'AB4926',
+        `Command name ${JSON.stringify(name)} duplicates ${firstSource}.`,
+        command.source,
+      ));
+    }
+
+    for (const target of command.authoredTargets ?? []) {
+      if (!registry.has(target) || !selectedTargets.includes(target)) {
+        diagnostics.push({
+          code: 'AB4924',
+          message: `Command ${JSON.stringify(name)} selects target ${JSON.stringify(target)} outside the selected target names.`,
+          severity: 'error',
+          sourcePath: command.source,
+          target,
+        });
+        continue;
+      }
+      const capability = registry.capabilityState?.(target, 'commands');
+      if (capability === undefined) {
+        if (registry.supports(target, 'commands')) continue;
+        diagnostics.push({
+          code: 'AB4925',
+          message: `Command ${JSON.stringify(name)} explicitly targets ${JSON.stringify(target)}, whose commands capability is unavailable: the target declares no supported commands surface.`,
+          severity: 'error',
+          sourcePath: command.source,
+          target,
+        });
+        continue;
+      }
+      switch (capability.state) {
+        case 'supported':
+          break;
+        case 'degraded':
+        case 'prohibited':
+        case 'unavailable':
+          diagnostics.push({
+            code: 'AB4925',
+            message: `Command ${JSON.stringify(name)} explicitly targets ${JSON.stringify(target)}, whose commands capability is ${capability.state}: ${capability.reason}`,
+            severity: 'error',
+            sourcePath: command.source,
+            target,
+          });
+          break;
+        default: {
+          const exhaustive: never = capability;
+          return exhaustive;
+        }
+      }
+    }
+  }
+  return diagnostics;
+};
+
 const validateRules = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1699,6 +1769,7 @@ export const validateSource = (
   diagnostics.push(...validateMcp(loaded, registry, payloads));
   diagnostics.push(...validatePayload(loaded, registry, options?.payloadFreshness !== false));
   diagnostics.push(...validateRuntime(loaded));
+  diagnostics.push(...validateCommands(loaded, discovered, registry));
   diagnostics.push(...validateRules(loaded, discovered, registry));
   diagnostics.push(...validateScripts(loaded, registry));
   diagnostics.push(...validateTools(loaded));
@@ -1746,6 +1817,7 @@ export const validateModel = (
     ...Object.values(model.extensions),
     ...model.targets,
     ...model.skills,
+    ...(model.commands ?? []),
     ...(model.rules ?? []),
     ...model.hooks,
     ...model.mcpServers,
@@ -1973,6 +2045,10 @@ export const validateModel = (
     for (const asset of model.assets ?? []) {
       if (!asset.targets.includes(target.name)) continue;
       recordOutput(posix.join(target.name, 'assets', asset.relativePath), asset.source, target.name);
+    }
+    for (const command of model.commands ?? []) {
+      if (!command.targets.includes(target.name)) continue;
+      recordOutput(posix.join(target.name, 'commands', `${command.name}.md`), command.source, target.name);
     }
     for (const rule of model.rules ?? []) {
       if (!rule.targets.includes(target.name)) continue;

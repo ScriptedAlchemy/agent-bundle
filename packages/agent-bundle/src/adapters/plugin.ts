@@ -199,6 +199,7 @@ const mcpRuntime = createTargetMcpRuntime({
 
 const artifactLayout: TargetArtifactLayout = Object.freeze({
   assets: standardArtifactLayout.assets,
+  commands: Object.freeze({ allowedSuffixes: Object.freeze(['.md']), directory: 'commands' }),
   hookWrappers: standardArtifactLayout.hookWrappers,
   mcpApps: standardArtifactLayout.mcpApps,
   mcpEntries: standardArtifactLayout.mcpEntries,
@@ -211,6 +212,8 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(pluginName, 'Agent plugin bundle');
 
 interface AgentsDocumentOptions {
+  /** True when the Claude half emitted conventional command prompts. */
+  readonly commands: boolean;
   /** True when the Claude half of this bundle emitted `.lsp.json`. */
   readonly lsp: boolean;
   /** True when the Cursor half emitted conventional `.mdc` rules. */
@@ -245,6 +248,11 @@ const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions)
     ...(options.lsp
       ? [
           '- `.lsp.json` — Claude Code language-server configuration (plugin-root convention). Claude Code only; Codex and Cursor have no LSP surface.',
+        ]
+      : []),
+    ...(options.commands
+      ? [
+          '- `commands/` — Claude Code command prompts; Codex has no commands surface; the Cursor manifest deliberately does not point at Claude-format command files.',
         ]
       : []),
     ...(options.rules
@@ -321,6 +329,7 @@ const cursorBundleHookContract = createCursorHookContract({
 const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const diagnostics: Diagnostic[] = [];
   const isSelected = (targets: readonly string[]): boolean => targets.includes(pluginName);
+  const selectedCommands = (model.commands ?? []).filter((command) => isSelected(command.targets));
   const selectedRules = (model.rules ?? []).filter((rule) => isSelected(rule.targets));
   // Host planners stay hook-free: the bundle lowers hooks once below, and
   // per-host nativeHooks passthrough remains with the host targets.
@@ -394,6 +403,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       }
     }
     const cursorManifestVariables = cursorVariables(cursorMcp);
+    // `commands/` contains Claude-generated frontmatter. The pinned Cursor
+    // evidence establishes plain Markdown commands, but not tolerance for
+    // Claude frontmatter, so this composite manifest deliberately omits it.
     const manifest = cursorManifest(model, {
       ...(emitCursorHooks ? { hooks: `./${cursorPaths.hooks}` } : {}),
       ...(cursorMcp !== undefined && cursorMcpValid ? { mcp: `./${cursorPaths.mcp}` } : {}),
@@ -439,6 +451,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   entries.push(...ruleWriteEntries(model, isSelected));
   entries.push({
     content: agentsDocument(model, {
+      commands: selectedCommands.length > 0,
       lsp: entries.some((entry) => entry.relativePath === claudeArtifactPaths.lsp),
       rules: selectedRules.length > 0,
     }),
@@ -476,6 +489,7 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactLayout,
   capabilities: Object.freeze({
     ...compositeEventCapabilities,
+    commands: intersectCapabilityStates(claudeAdapter.capabilities.commands!, codexAdapter.capabilities.commands!),
     marketplace: intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
     hooks: intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
     // Claude supports LSP and Codex has no LSP surface, so the intersection

@@ -11,6 +11,8 @@ export type { DiscoveredProject } from './discover.ts';
 export { loadConfig } from './load.ts';
 export type { LoadedConfig, LoadConfigOptions } from './load.ts';
 export { normalizeProject } from './normalize.ts';
+export { parseCommand } from './command.ts';
+export type { CommandDocument } from './command.ts';
 export { parseRule } from './rule.ts';
 export type { RuleDocument } from './rule.ts';
 export { parseSkill } from './skill.ts';
@@ -37,6 +39,7 @@ export type {
   AgentBundlePrebuiltEntry,
   NormalizationConfigExtension,
   NormalizationTargetRegistry,
+  NormalizedCommand,
   AgentBundleMcpApp,
   AgentBundleMcpConfig,
   AgentBundleMcpServer,
