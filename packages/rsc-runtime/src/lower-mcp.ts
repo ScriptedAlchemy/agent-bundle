@@ -44,7 +44,11 @@ const textChild = (children: unknown, message: string): string => {
   return values[0];
 };
 
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export interface JsonObject {
+  readonly [key: string]: JsonValue;
+}
+
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
 
 const isArrayIndex = (key: string, length: number): boolean => {
   if (key === '0') return length > 0;
@@ -108,7 +112,7 @@ const cloneJsonValue = (value: unknown, ancestors: Set<object>, path: string): J
   }
 };
 
-const jsonRecord = (value: unknown, message: string): Record<string, JsonValue> => {
+const jsonRecord = (value: unknown, message: string): JsonObject => {
   try {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
       throw new Error('not a plain object');
@@ -117,7 +121,7 @@ const jsonRecord = (value: unknown, message: string): Record<string, JsonValue> 
     if (Array.isArray(clone) || clone === null || typeof clone !== 'object') {
       throw new Error('not a plain object');
     }
-    return clone;
+    return clone as JsonObject;
   } catch (error) {
     throw new Error(`${message} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
   }
@@ -129,6 +133,14 @@ const deepFreezeJson = (value: JsonValue): JsonValue => {
     Object.freeze(value);
   }
   return value;
+};
+
+export const snapshotJsonValue = (value: unknown, message: string): JsonValue => {
+  try {
+    return deepFreezeJson(cloneJsonValue(value, new Set(), ''));
+  } catch (error) {
+    throw new Error(`${message} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
+  }
 };
 
 /**

@@ -24,11 +24,19 @@ const result = lowerMcpResult(
 );
 ```
 
-The package exports `Hook`, `Mcp`, `lowerHookResult`, `lowerMcpResult`,
-`createRscRequestContext`, `agent`, `runAgentRequest`, `available`,
-`unavailable`, and `AgentRequestError`. It does not own an
-RSC renderer, application state, transport, persistence, or host packaging.
-React 19 is a peer dependency and Node 22.19 or newer is required.
+The package also exports the protocol-oriented `Agent.*` vocabulary and the
+versioned `AgentDocument`/`AgentRenderEvent` contracts. `createAgentDocument`
+detaches and freezes a v1 document, enforcing finite depth, node-count, and
+byte limits. `createAgentRenderEventSequence` assigns monotonic sequence
+numbers to `shell | progress | replace | error | complete`, applies event
+bounds, and rejects post-completion writes with a typed `handoff-required`
+error. These contracts land beside the existing `Hook`/`Mcp` lowerers; those
+synchronous compatibility APIs remain operative.
+
+The package exports `Hook`, `Mcp`, `Agent`, both lowerers, the request-store
+APIs, and the Agent Document contracts. It does not yet own application state,
+transport, persistence, or host packaging. React 19 is a peer dependency and
+Node 22.19 or newer is required.
 
 Async server utilities and Server Components read the framework request store
 with `const context = await agent()`. The store is a versioned realm singleton

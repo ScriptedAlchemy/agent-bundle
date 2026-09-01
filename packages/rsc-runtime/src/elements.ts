@@ -1,5 +1,77 @@
 import { createElement, type PropsWithChildren, type ReactElement } from 'react';
 
+import type { JsonValue } from './lower-mcp.js';
+
+export interface AgentResultProps extends PropsWithChildren {
+  readonly metadata?: JsonValue;
+}
+
+export interface AgentTextProps {
+  readonly children: string;
+}
+
+export interface AgentJsonProps {
+  readonly value: JsonValue;
+}
+
+export interface AgentProgressProps {
+  readonly completed: number;
+  readonly message?: string;
+  readonly total?: number;
+}
+
+export interface AgentMediaProps {
+  readonly data: string;
+  readonly mimeType: string;
+}
+
+export interface AgentResourceProps {
+  readonly mimeType?: string;
+  readonly name: string;
+  readonly uri: string;
+}
+
+export interface AgentErrorProps extends AgentTextProps {
+  readonly code: string;
+}
+
+const AgentResult = ({ children, metadata }: AgentResultProps): ReactElement =>
+  createElement('agent-result', { metadata }, children);
+
+const AgentMarkdown = ({ children }: AgentTextProps): ReactElement =>
+  createElement('agent-markdown', null, children);
+
+const AgentText = ({ children }: AgentTextProps): ReactElement => createElement('agent-text', null, children);
+
+const AgentJson = ({ value }: AgentJsonProps): ReactElement => createElement('agent-json', { value });
+
+const AgentProgress = ({ completed, message, total }: AgentProgressProps): ReactElement =>
+  createElement('agent-progress', { completed, message, total });
+
+const AgentImage = ({ data, mimeType }: AgentMediaProps): ReactElement =>
+  createElement('agent-image', { data, mimeType });
+
+const AgentAudio = ({ data, mimeType }: AgentMediaProps): ReactElement =>
+  createElement('agent-audio', { data, mimeType });
+
+const AgentResource = ({ mimeType, name, uri }: AgentResourceProps): ReactElement =>
+  createElement('agent-resource', { mimeType, name, uri });
+
+const AgentError = ({ children, code }: AgentErrorProps): ReactElement =>
+  createElement('agent-error', { code }, children);
+
+export const Agent = Object.freeze({
+  Audio: AgentAudio,
+  Error: AgentError,
+  Image: AgentImage,
+  Json: AgentJson,
+  Markdown: AgentMarkdown,
+  Progress: AgentProgress,
+  Resource: AgentResource,
+  Result: AgentResult,
+  Text: AgentText,
+});
+
 const Result = ({ children }: PropsWithChildren): ReactElement =>
   createElement('agent-hook-result', null, children);
 

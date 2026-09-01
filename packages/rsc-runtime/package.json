@@ -1,7 +1,7 @@
 {
   "name": "@agent-bundle/runtime",
   "version": "0.0.0",
-  "description": "React-element result primitives (an MCP result DSL) for Agent Bundle hook and MCP protocol results.",
+  "description": "Versioned Agent Document contracts and React protocol primitives for Agent Bundle runtimes.",
   "license": "MIT",
   "keywords": [
     "agent-bundle",
