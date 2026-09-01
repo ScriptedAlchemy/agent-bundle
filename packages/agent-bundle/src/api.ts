@@ -34,6 +34,8 @@ export {
   serializeArtifactManifest,
 } from './build/manifest.ts';
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
+import { emptyAgentRouteGraph } from './routes/types.ts';
+import type { AgentRouteGraph } from './routes/types.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
 import { validateArtifact } from './build/validate-artifact.ts';
 import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
@@ -199,7 +201,7 @@ export interface InspectionPlan {
 }
 
 export interface InspectOptions extends ProjectOptions {
-  readonly focus?: 'bundler' | 'hooks' | 'skills';
+  readonly focus?: 'bundler' | 'hooks' | 'routes' | 'skills';
   readonly target?: string;
 }
 
@@ -211,6 +213,7 @@ export interface ReadyInspectResult {
   readonly selected?: {
     readonly bundler?: BundlerInspection;
     readonly hooks?: NormalizedPlugin['hooks'];
+    readonly routes?: AgentRouteGraph;
     readonly skills?: NormalizedPlugin['skills'];
   };
   readonly state: 'ready';
@@ -477,6 +480,7 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
     : Object.freeze({
       ...(bundler === undefined ? {} : { bundler }),
       ...(options.focus === 'hooks' ? { hooks: model.hooks } : {}),
+      ...(options.focus === 'routes' ? { routes: prepared.routeGraph ?? emptyAgentRouteGraph } : {}),
       ...(options.focus === 'skills' ? { skills: model.skills } : {}),
     });
   return Object.freeze({

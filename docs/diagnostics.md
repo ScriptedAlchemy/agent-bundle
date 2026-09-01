@@ -23,6 +23,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch. |
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
+| `AB480x` | Filesystem route conventions (#93 substrate): route-directory versus entry-file mode conflicts (`AB4800`: `src/mcp/<server>/` routes with a `src/mcp/<server>.ts` entry, `AB4801`: route-mode server also declared in `mcp.servers`, `AB4802`: `src/cli/` routes with `src/cli.ts`), `AB4803`: duplicate route ids, `AB4804`: unsafe route names. All errors: a server (and the package CLI) is in exactly one mode, and the compiler never silently chooses. |
 | `AB5000` | General CLI and adapter failures. |
 | `AB7xxx` | Project preparation and development rebuilds. |
 | `AB8xxx` | Development server configuration. |

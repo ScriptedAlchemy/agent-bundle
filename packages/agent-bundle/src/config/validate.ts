@@ -1397,6 +1397,9 @@ export const validateSource = (
   diagnostics.push(...validateTools(loaded));
   diagnostics.push(...packageConventionShadowNudges(loaded));
   diagnostics.push(...skillConventionShadowNudges(loaded, discovered));
+  // Route-graph diagnostics (AB4800-AB4804): mode conflicts, duplicate route
+  // ids, and unsafe route names computed once at discovery (#93 substrate).
+  diagnostics.push(...(discovered.routeGraph?.diagnostics ?? []));
 
   return diagnostics;
 };

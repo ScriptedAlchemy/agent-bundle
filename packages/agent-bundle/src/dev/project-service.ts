@@ -27,6 +27,7 @@ import type {
   NormalizedMcpServer,
   NormalizedPlugin,
 } from '../core/types.ts';
+import type { AgentRouteGraph } from '../routes/types.ts';
 import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
 
@@ -59,6 +60,8 @@ export interface PreparedProject {
   readonly projectContext?: ProjectContext;
   readonly registry: TargetRegistry;
   readonly root: string;
+  /** The immutable filesystem route graph (#93 substrate); absent when no conventional route module matches. */
+  readonly routeGraph?: AgentRouteGraph;
   /**
    * Re-snapshots the project with the same output and payload roots the
    * prepared identity hashed; a divergent re-snapshot would make
@@ -534,6 +537,7 @@ const preparedProject = (
   devRuntimeDiagnostic?: Diagnostic,
   devAgentApiEnabled?: boolean,
   tools?: AgentBundleToolsConfig,
+  routeGraph?: AgentRouteGraph,
 ): PreparedProject => Object.freeze({
   configPath,
   ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
@@ -545,6 +549,7 @@ const preparedProject = (
   ...(projectContext === undefined ? {} : { projectContext }),
   registry,
   root,
+  ...(routeGraph === undefined ? {} : { routeGraph }),
   snapshotSource,
   source,
   ...(tools === undefined ? {} : { tools }),
@@ -854,6 +859,7 @@ export class ProjectService {
       devRuntimeDiagnostic,
       devAgentApiEnabled,
       tools,
+      discovered.routeGraph,
     );
   }
 }

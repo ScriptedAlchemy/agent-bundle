@@ -3,6 +3,11 @@
 Date: 2026-08-25
 Status: proposed
 
+Status note (2026-08-31): the capability-aware Workbench described here has
+been implemented in its current form; its evolution onto the compiled route
+manifest continues under
+[issue #105](https://github.com/ScriptedAlchemy/agent-bundle/issues/105).
+
 ## Context
 
 The Workbench currently renders the same navigation and workflow for every
