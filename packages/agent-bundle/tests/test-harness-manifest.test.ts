@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from '@rstest/core';
 
 import { routeTestSetupSource } from '../src/rstest/setup-module.ts';
+import { BROWSER_APP_PROOF_LEVEL_LABEL } from '../src/test/browser-registry.ts';
 import { AgentTestError } from '../src/test/errors.ts';
 import { invokeCli } from '../src/test/cli.ts';
 import { compileTestManifest, proofLevelLabel, testManifestFromRouteGraph } from '../src/test/manifest.ts';
@@ -43,6 +44,9 @@ describe('the compiled test manifest', () => {
     expect(proofLevelLabel('browser-app')).toBe(
       'browser-app (MCP App HTML compiled through the production Rsbuild profile, mounted in a real browser page over the product bridge; NOT host embedding, packed-artifact, or Workbench evidence)',
     );
+    // The browser-safe registry module cannot import this Node-side label, so
+    // it carries its own copy; the copies must never drift apart.
+    expect(BROWSER_APP_PROOF_LEVEL_LABEL).toBe(proofLevelLabel('browser-app'));
   });
 
   it('names every conventional route the compiler discovered, with its extracted config', () => {
