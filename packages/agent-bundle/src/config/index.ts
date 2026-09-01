@@ -5,6 +5,7 @@ import type { AgentBundleConfig as CoreAgentBundleConfig } from '../core/types.t
 
 export { discoverProject } from './discover.ts';
 export { defineConfig } from '../core/types.ts';
+export type { AppRouteConfig, PromptConfig, ResourceConfig, RouteSchema, RouteSchemaOutput, ToolConfig, ToolRouteProps } from '../routes/public.ts';
 export type { AgentBundleRuntimeConfig, ConfigFactory, ConfigFactoryContext } from '../core/types.ts';
 export type { DiscoveredProject } from './discover.ts';
 export { loadConfig } from './load.ts';

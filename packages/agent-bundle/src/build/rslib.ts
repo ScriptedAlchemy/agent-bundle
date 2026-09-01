@@ -31,6 +31,10 @@ export interface RslibEntry {
   readonly dts?: boolean;
   readonly name: string;
   readonly outputRelativePath: string;
+  /** Inject the intrinsic-only RSC manifest consumed by Flight client/server packages. */
+  readonly rscManifest?: true;
+  /** Resolve React through its server condition for a generated Flight worker. */
+  readonly reactServer?: true;
   readonly source: string;
   readonly sourceInputs: readonly string[];
   /** TypeScript project driving declaration generation and compiler options. */
@@ -428,6 +432,15 @@ export const composeEntryLibConfig = (
   ]);
   const enforceInvariants = (config: Rspack.Configuration): Rspack.Configuration => {
     config.output = { ...config.output, asyncChunks: false };
+    if (entry.rscManifest === true) {
+      config.plugins = [
+        ...(config.plugins ?? []),
+        new rspack.DefinePlugin({ __rspack_rsc_manifest__: JSON.stringify({ clientManifest: {}, cssLinkProps: {}, entryCssFiles: {}, entryJsFiles: [], moduleLoading: { prefix: '' }, serverConsumerModuleMap: {}, serverManifest: {} }) }),
+      ];
+    }
+    if (entry.reactServer === true) {
+      config.resolve = { ...config.resolve, conditionNames: ['react-server', '...'] };
+    }
     const aliasViolation = reservedAliasViolation(
       config.resolve?.alias as Readonly<Record<string, unknown>> | undefined,
       reserved,

@@ -12,6 +12,7 @@ import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
 export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './routes/graph.ts';
+export type { AppRouteConfig, PromptConfig, ResourceConfig, RouteSchema, RouteSchemaOutput, ToolConfig, ToolRouteProps } from './routes/public.ts';
 export { inspectRouteGraph } from './routes/inspect.ts';
 export type { RouteGraphInspection } from './routes/inspect.ts';
 export { emptyRouteConfig } from './routes/types.ts';

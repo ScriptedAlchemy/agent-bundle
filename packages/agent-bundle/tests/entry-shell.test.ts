@@ -3,6 +3,7 @@ import { access } from 'node:fs/promises';
 import { describe, expect, it } from '@rstest/core';
 
 import { scanEntryExportsSource, stripCommentsAndStrings } from '../src/build/entry-exports.ts';
+import * as entryShellModule from '../src/build/entry-shell.ts';
 import {
   generatedExecutableEntrySource,
   generatedStdioMcpEntrySource,
@@ -84,4 +85,74 @@ describe('generated entry templates', () => {
     expect(source).toContain("if (typeof code === 'number') process.exitCode = code;");
     expect(generatedExecutableEntrySource({ entrySource: '/e.ts', exportName: 'default' })).toContain('entry["default"]');
   });
+});
+
+
+it('generates one final-only Flight MCP factory from filesystem routes', () => {
+  const generate = (entryShellModule as unknown as {
+    readonly generatedRouteMcpEntrySource?: (options: Readonly<Record<string, unknown>>) => string;
+  }).generatedRouteMcpEntrySource;
+  expect(typeof generate).toBe('function');
+  if (generate === undefined) return;
+
+  const source = generate({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [
+      {
+        config: { annotations: { readOnlyHint: true }, description: 'Inspect sources.' },
+        id: 'tool:curator/inspect',
+        kind: 'tool',
+        source: '/project/src/mcp/curator/tools/inspect.tsx',
+      },
+      {
+        config: { description: 'Catalog.', mimeType: 'application/json', uri: 'catalog://books' },
+        id: 'resource:curator/catalog',
+        kind: 'resource',
+        source: '/project/src/mcp/curator/resources/catalog.tsx',
+      },
+      {
+        config: { description: 'Curate books.' },
+        id: 'prompt:curator/curate',
+        kind: 'prompt',
+        source: '/project/src/mcp/curator/prompts/curate.tsx',
+      },
+    ],
+    serverName: 'curator',
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+
+  expect(source).toContain("from '@agent-bundle/runtime'");
+  expect(source).toContain("from 'node:worker_threads'");
+  expect(source).toContain('mcp-curator-flight.mjs');
+  expect(source).toContain("from '@modelcontextprotocol/server'");
+  expect(source).toContain("from 'agent-bundle/mcp-apps'");
+  expect(source).toContain('createAgentRenderDispatcher');
+  expect(source).toContain('runAgentRequest');
+  expect(source).toContain('server.registerTool("inspect"');
+  expect(source).toContain('server.registerResource("catalog", "catalog://books"');
+  expect(source).toContain('server.registerPrompt("curate"');
+  expect(source).toContain('export default createGeneratedRouteServer');
+  expect(source).not.toContain('lowerMcpResult');
+});
+
+
+it('generates the warm react-server Flight worker separately from the MCP dispatcher', () => {
+  const generate = (entryShellModule as unknown as {
+    readonly generatedRouteFlightWorkerSource?: (options: Readonly<Record<string, unknown>>) => string;
+  }).generatedRouteFlightWorkerSource;
+  expect(typeof generate).toBe('function');
+  if (generate === undefined) return;
+  const source = generate({
+    routes: [{
+      config: {},
+      id: 'tool:curator/inspect',
+      kind: 'tool',
+      source: '/project/src/mcp/curator/tools/inspect.tsx',
+    }],
+    serverName: 'curator',
+  });
+  expect(source).toContain("from '@agent-bundle/runtime/flight/server'");
+  expect(source).toContain("from 'node:worker_threads'");
+  expect(source).toContain('runAgentRequest');
+  expect(source).toContain('/project/src/mcp/curator/tools/inspect.tsx');
 });

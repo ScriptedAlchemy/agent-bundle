@@ -3,6 +3,8 @@ import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts'
 import { scanEntryExports } from './entry-exports.ts';
 import {
   generatedExecutableEntrySource,
+  generatedRouteFlightWorkerSource,
+  generatedRouteMcpEntrySource,
   generatedStdioMcpEntrySource,
   mcpEntryRuntimePath,
   mcpEntryRuntimeSpecifier,
@@ -153,25 +155,44 @@ const mcpEntryEntries = async (
 ): Promise<readonly BundlerInspectionEntry[]> => {
   const outputRoot = artifactOutputToken(target);
   const planned = planCompiledMcpEntries(model.mcpServers, { outDir: outputRoot, target });
-  return Promise.all(planned.map(async (entry) => {
-    const wrapped = (await scanEntryExports(entry.source)).hasDefaultExport;
+  const entries: BundlerInspectionEntry[] = [];
+  for (const entry of planned) {
+    const server = model.mcpServers.find((candidate) => candidate.id === entry.id);
     const serverName = entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name;
-    return rslibInspectionEntry({
+    const generatedRoutes = server?.generatedRoutes;
+    const wrapped = generatedRoutes !== undefined || (await scanEntryExports(entry.source)).hasDefaultExport;
+    const workerFile = `${entry.name}-flight.mjs`;
+    const routeSource = generatedRoutes === undefined
+      ? undefined
+      : generatedRouteMcpEntrySource({
+        plugin: { name: model.metadata.name, version: model.metadata.version },
+        routes: generatedRoutes,
+        serverName,
+        workerFile,
+      });
+    entries.push(rslibInspectionEntry({
       entry: {
         ...(wrapped
           ? {
             aliases: { [mcpEntryRuntimeSpecifier]: mcpEntryRuntimePath() },
-            virtualSource: generatedStdioMcpEntrySource({ entrySource: entry.source, serverName }),
+            virtualSource: generatedStdioMcpEntrySource({
+              entrySource: routeSource === undefined ? entry.source : 'agent-bundle/generated-route-server',
+              serverName,
+            }),
           }
           : {}),
         name: entry.name,
         outputRelativePath: `mcp/${entry.name}.mjs`,
+        ...(routeSource === undefined ? {} : { rscManifest: true as const }),
         source: entry.source,
         sourceInputs: [],
-        virtualModules: [{
-          name: 'agent-bundle/mcp-apps',
-          source: '/* The MCP App registry virtual module is generated from built app HTML at build time. */',
-        }],
+        virtualModules: [
+          {
+            name: 'agent-bundle/mcp-apps',
+            source: '/* The MCP App registry virtual module is generated from built app HTML at build time. */',
+          },
+          ...(routeSource === undefined ? [] : [{ name: 'agent-bundle/generated-route-server', source: routeSource }]),
+        ],
       },
       kind: 'mcp-entry',
       name: serverName,
@@ -180,8 +201,29 @@ const mcpEntryEntries = async (
       source: entry.source,
       target,
       ...(tools === undefined ? {} : { tools }),
-    });
-  }));
+    }));
+    if (generatedRoutes !== undefined) {
+      entries.push(rslibInspectionEntry({
+        entry: {
+          name: `${entry.name}-flight`,
+          outputRelativePath: `mcp/${workerFile}`,
+          reactServer: true,
+          rscManifest: true,
+          source: entry.source,
+          sourceInputs: [],
+          virtualSource: generatedRouteFlightWorkerSource({ routes: generatedRoutes, serverName }),
+        },
+        kind: 'mcp-entry',
+        name: `${serverName}:flight`,
+        outputPath: `${target}/mcp/${workerFile}`,
+        outputRoot,
+        source: entry.source,
+        target,
+        ...(tools === undefined ? {} : { tools }),
+      }));
+    }
+  }
+  return Object.freeze(entries);
 };
 
 const hookEntries = (

@@ -276,6 +276,14 @@ export const validateMcpCoherence = async (options: {
 
     for (const [path, occurrences] of referenceCounts) {
       if (occurrences.length === 1) continue;
+      if (occurrences.length === 0 && path.endsWith('-flight.mjs')) {
+        const mainPath = path.slice(0, -'-flight.mjs'.length) + '.mjs';
+        const mainReferences = referenceCounts.get(mainPath);
+        if (mainReferences?.length === 1) {
+          const mainSource = await readFile(resolve(artifactRoot, mainPath), 'utf8');
+          if (mainSource.includes(`./${posix.basename(path)}`)) continue;
+        }
+      }
       diagnostics.push(diagnostic(
         'AB6017',
         occurrences.length === 0

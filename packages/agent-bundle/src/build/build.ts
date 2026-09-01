@@ -193,7 +193,7 @@ const plannedDestinations = (targets: readonly StagedTarget[]): readonly string[
     ...target.compiledEntries.map((entry) => entry.output),
     ...target.compiledHooks.map((entry) => entry.output),
     ...target.compiledMcpApps.map((entry) => entry.output),
-    ...target.compiledMcpEntries.map((entry) => entry.output),
+    ...target.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
   ]);
 
 const hookIndexSourceInputs = (
@@ -238,11 +238,15 @@ const outputCandidatesFor = (options: {
     path: entry.output,
     sourceInputs: entry.sourceInputs,
   })),
-  ...options.compiledMcpEntries.map((entry) => ({
+  ...options.compiledMcpEntries.flatMap((entry) => [{
     kind: 'bundle' as const,
     path: entry.output,
     sourceInputs: entry.sourceInputs,
-  })),
+  }, ...(entry.workerOutput === undefined ? [] : [{
+    kind: 'bundle' as const,
+    path: entry.workerOutput,
+    sourceInputs: entry.workerSourceInputs ?? entry.sourceInputs,
+  }])]),
   {
     kind: 'generated' as const,
     path: resolveArtifactDestination(options.artifactRoot, artifactHookIndexName),
@@ -358,6 +362,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         apps: targetMcpApps,
         cwd: options.projectRoot,
         outDir: target.root,
+        plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
         target: target.name,
         ...tools,
       })));
@@ -437,6 +442,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       compiledMcpEntries: Object.freeze(compiledMcpEntries.map((entry) => Object.freeze({
         ...entry,
         output: publishedOutput(entry),
+        ...(entry.workerOutput === undefined ? {} : { workerOutput: publishedOutput({ output: entry.workerOutput }) }),
       }))),
       manifest,
       outputProvenance,

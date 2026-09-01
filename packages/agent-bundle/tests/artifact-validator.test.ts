@@ -887,6 +887,7 @@ it('reports an orphan compiler MCP output after the artifact is rehashed', async
     },
     { contents: 'export const server = true;\n', kind: 'bundle' as const, path: 'coherent/mcp/mcp-server-deadbeef.mjs' },
     { contents: 'export const orphan = true;\n', kind: 'bundle' as const, path: 'coherent/mcp/mcp-junk-deadbeef.mjs' },
+    { contents: 'export const orphanWorker = true;\n', kind: 'bundle' as const, path: 'coherent/mcp/mcp-junk-deadbeef-flight.mjs' },
   ];
   const root = await writeArtifact(files, true, [coherenceManifestTarget]);
 
@@ -894,6 +895,7 @@ it('reports an orphan compiler MCP output after the artifact is rehashed', async
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() });
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6017', generatedPath: 'coherent/mcp/mcp-junk-deadbeef.mjs', target: coherenceTarget }),
+      expect.objectContaining({ code: 'AB6017', generatedPath: 'coherent/mcp/mcp-junk-deadbeef-flight.mjs', target: coherenceTarget }),
     ]));
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),

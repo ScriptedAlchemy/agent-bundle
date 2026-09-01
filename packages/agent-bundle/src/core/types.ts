@@ -1,5 +1,7 @@
 import type { EnvironmentConfig } from '@rsbuild/core';
 
+import type { CompiledAgentRoute } from '../routes/types.ts';
+
 export interface AgentBundlePluginConfig {
   description?: string;
   name: string;
@@ -299,6 +301,8 @@ export interface NormalizedSkill {
 
 export interface NormalizedMcpServer {
   readonly args?: readonly string[];
+  /** Filesystem routes compiled into this framework-generated server entry. */
+  readonly generatedRoutes?: readonly CompiledAgentRoute[];
   readonly command?: string;
   readonly cwd?: string;
   readonly env?: Readonly<Record<string, string>>;
