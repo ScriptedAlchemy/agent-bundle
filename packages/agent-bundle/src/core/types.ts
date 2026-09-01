@@ -245,6 +245,10 @@ export interface NormalizedMetadata {
   readonly description?: string;
   readonly id: string;
   readonly name: string;
+  /** The validated npm package name derived from the project's package.json. */
+  readonly packageName?: string;
+  /** The validated semantic version derived from the project's package.json. */
+  readonly packageVersion?: string;
   readonly provenance: SourceProvenance;
   readonly version: string;
 }

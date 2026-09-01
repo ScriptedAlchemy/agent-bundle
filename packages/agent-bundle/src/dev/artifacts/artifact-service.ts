@@ -241,6 +241,8 @@ export class ArtifactService {
         id: epochId,
         manifestPath: join(prepared.root, '.agent-bundle', 'epochs', epochId, 'agent-bundle.manifest.json'),
         modelDigest: projectContext.modelDigest,
+        ...(projectContext.packageName === undefined ? {} : { packageName: projectContext.packageName }),
+        ...(projectContext.packageVersion === undefined ? {} : { packageVersion: projectContext.packageVersion }),
         projectRevision: projectContext.revision,
         targetDigests: await targetDigests(artifactRoot, model),
       });

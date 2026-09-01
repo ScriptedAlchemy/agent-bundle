@@ -118,12 +118,16 @@ const artifactEpochSchema: z.ZodType<ArtifactEpoch> = z.strictObject({
   id: z.string(),
   manifestPath: z.string(),
   modelDigest: z.string(),
+  packageName: z.string().optional(),
+  packageVersion: z.string().optional(),
   projectRevision: z.string(),
   targetDigests: z.record(z.string(), z.string()),
 });
 
 const sourceStatusSchema: z.ZodType<SourceStatus> = z.strictObject({
   diagnostics: z.array(diagnosticSchema),
+  packageName: z.string().optional(),
+  packageVersion: z.string().optional(),
   revision: z.string().optional(),
   state: z.enum(['invalid', 'ready', 'unknown']),
 });
