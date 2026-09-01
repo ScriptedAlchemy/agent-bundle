@@ -128,6 +128,43 @@ describe('sqlite driver storage behavior', () => {
       await expect(first.read()).rejects.toMatchObject({ code: 'store-closed' });
     }));
 
+  it('rejects a pending open when the driver closes before initialization resumes', () =>
+    withRoot(async (root) => {
+      const driver = createSqliteStateDriver({ root });
+      const pendingOpen = driver.open(counterDefinition());
+      let settled = false;
+      const observedOpen = pendingOpen.then(
+        (store) => {
+          settled = true;
+          return { status: 'success' as const, store };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { error, status: 'failure' as const };
+        },
+      );
+
+      const closing = driver.close();
+      const repeatedClose = driver.close();
+      await Promise.all([closing, repeatedClose]);
+      const settledBeforeCloseResolved = settled;
+      const outcome = await observedOpen;
+      if (outcome.status === 'success') await outcome.store.close();
+
+      expect(settledBeforeCloseResolved).toBe(true);
+      expect(outcome).toMatchObject({
+        status: 'failure',
+        error: {
+          code: 'store-closed',
+          name: 'AgentStateError',
+        },
+      });
+      await expect(driver.open(counterDefinition())).rejects.toMatchObject({
+        code: 'store-closed',
+        name: 'AgentStateError',
+      });
+    }));
+
   it('runs WAL journal mode with full synchronous durability', () =>
     withRoot(async (root) => {
       const store = await createSqliteStateDriver({ root }).open(counterDefinition());
@@ -139,6 +176,33 @@ describe('sqlite driver storage behavior', () => {
         db.close();
       }
       await store.close();
+    }));
+
+  it('rolls back failed transactions without collapsing unexpected defects', () =>
+    withRoot(async (root) => {
+      const defect = new Error('clock implementation defect');
+      let shouldFail = true;
+      const driver = createSqliteStateDriver({
+        now: () => {
+          if (shouldFail) {
+            shouldFail = false;
+            throw defect;
+          }
+          return new Date('2026-01-01T00:00:00.000Z');
+        },
+        root,
+      });
+      const store = await driver.open(counterDefinition());
+
+      await expect(
+        store.dispatch('bumped', { by: 1 }, { idempotencyKey: 'defect' }),
+      ).rejects.toBe(defect);
+      await expect(store.read()).resolves.toEqual({ revision: 0, state: { count: 0 } });
+      await expect(
+        store.dispatch('bumped', { by: 2 }, { idempotencyKey: 'recovered' }),
+      ).resolves.toMatchObject({ replayed: false, revision: 1, state: { count: 2 } });
+
+      await driver.close();
     }));
 
   it('fails closed with a typed corrupt error when the file is not a database', () =>

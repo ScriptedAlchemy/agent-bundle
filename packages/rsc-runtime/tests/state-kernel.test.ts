@@ -180,6 +180,47 @@ describe('createMemoryStateDriver', () => {
     await expect(store.read()).rejects.toMatchObject({ code: 'store-closed' });
     await expect(driver.open(counterDefinition())).rejects.toMatchObject({ code: 'store-closed' });
   });
+
+  it('driver close finalizes request-scoped stores exactly once', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'request' });
+    const store = await driver.open(counterDefinition('request'));
+    const closing = driver.close();
+    const repeatedClose = driver.close();
+    await Promise.all([closing, repeatedClose]);
+    await driver.close();
+    await store.close();
+    await expect(store.read()).rejects.toMatchObject({ code: 'store-closed' });
+  });
+
+  it('settles a pending open with store-closed before driver close resolves', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'request' });
+    const pendingOpen = driver.open(counterDefinition('request'));
+    let settled = false;
+    const observedOpen = pendingOpen.then(
+      (store) => {
+        settled = true;
+        return { status: 'success' as const, store };
+      },
+      (error: unknown) => {
+        settled = true;
+        return { error, status: 'failure' as const };
+      },
+    );
+
+    await driver.close();
+    const settledBeforeCloseResolved = settled;
+    const outcome = await observedOpen;
+    if (outcome.status === 'success') await outcome.store.close();
+
+    expect(settledBeforeCloseResolved).toBe(true);
+    expect(outcome).toMatchObject({
+      status: 'failure',
+      error: {
+        code: 'store-closed',
+        name: 'AgentStateError',
+      },
+    });
+  });
 });
 
 describe('request context state slot', () => {

@@ -28,6 +28,24 @@ const connection = Effect.acquireRelease(
 
 Finalizers run in reverse acquire order. Interruption still runs them.
 
+## Transactions (stage-1 kernel idiom)
+
+`Effect.acquireUseRelease` when begin/commit/rollback are one unit and the
+release step branches on the exit:
+
+```ts
+Effect.acquireUseRelease(
+  begin,                       // BEGIN IMMEDIATE
+  () => work,
+  (db, exit) => Exit.isFailure(exit)
+    ? rollback
+    : commit.pipe(Effect.catch((e) => rollback.pipe(Effect.andThen(Effect.fail(e))))),
+);
+```
+
+A failed COMMIT must still roll back before re-raising, or the connection
+holds the transaction open for the next caller.
+
 ## Layers
 
 - `Layer.effect` for a service with no finalizer.

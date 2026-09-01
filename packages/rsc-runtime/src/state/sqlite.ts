@@ -7,6 +7,18 @@ import { dirname, join, resolve } from 'node:path';
 // state users and stateless projects never load it or see the warning.
 import { DatabaseSync } from 'node:sqlite';
 
+import {
+  Context,
+  Effect,
+  Exit,
+  Layer,
+} from 'effect';
+
+import {
+  makeScopedEffectRuntime,
+  runPromise,
+  type ScopedEffectRuntime,
+} from '../effect/boundary.js';
 import type {
   AgentStateChangeBatch,
   AgentStateChangesOptions,
@@ -85,6 +97,7 @@ export interface SqliteStateDriverOptions {
 }
 
 interface SqliteErrorShape {
+  readonly code?: string;
   readonly errcode?: number;
   readonly errstr?: string;
 }
@@ -93,9 +106,20 @@ const SQLITE_CORRUPT = 11;
 const SQLITE_NOTADB = 26;
 const SQLITE_BUSY = 5;
 
-const mapSqliteError = (definitionId: string, action: string, error: unknown): AgentStateError => {
+const mapSqliteError = (
+  definitionId: string,
+  action: string,
+  error: unknown,
+  mapSystemError: boolean,
+): AgentStateError | undefined => {
   if (error instanceof AgentStateError) return error;
   const shape = error as SqliteErrorShape;
+  const sqliteError =
+    typeof shape?.errcode === 'number'
+    || (typeof shape?.code === 'string' && shape.code.startsWith('ERR_SQLITE'));
+  if (!sqliteError && !(mapSystemError && typeof shape?.code === 'string')) {
+    return undefined;
+  }
   const detail = typeof shape.errstr === 'string' ? `: ${shape.errstr}` : '';
   if (shape.errcode === SQLITE_CORRUPT || shape.errcode === SQLITE_NOTADB) {
     return new AgentStateError(
@@ -117,6 +141,24 @@ const mapSqliteError = (definitionId: string, action: string, error: unknown): A
     { cause: error },
   );
 };
+
+const sqliteEffect = <A>(
+  definitionId: string,
+  action: string,
+  evaluate: () => A,
+  mapSystemError = false,
+): Effect.Effect<A, AgentStateError> =>
+  Effect.try({
+    catch: (error) => error,
+    try: evaluate,
+  }).pipe(
+    Effect.catch((error) => {
+      const mapped = mapSqliteError(definitionId, action, error, mapSystemError);
+      return mapped === undefined
+        ? Effect.die(error)
+        : Effect.fail(mapped);
+    }),
+  );
 
 const expectRevisionShape = (revision: number | undefined, label: string): void => {
   if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) {
@@ -181,26 +223,30 @@ const recordFromRow = (definitionId: string, row: JournalRow): AgentStateJournal
 const sanitizedFileName = (definitionId: string): string =>
   `${definitionId.replace(/[^a-zA-Z0-9._-]+/gu, '-')}-${Buffer.from(definitionId, 'utf8').toString('hex').slice(0, 12)}.sqlite`;
 
+class SqliteConnection extends Context.Service<SqliteConnection, DatabaseSync>()(
+  '@agent-bundle/runtime/state/SqliteConnection',
+) {}
+
 class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements AgentStateStore<TState, TEvents> {
   readonly location: string;
   #closed = false;
-  readonly #db: DatabaseSync;
   #definition: AgentStateDefinition<TState, TEvents>;
   readonly #now: () => Date;
   readonly #onClose: () => void;
+  readonly #runtime: ScopedEffectRuntime<SqliteConnection, AgentStateError>;
 
   constructor(
     definition: AgentStateDefinition<TState, TEvents>,
-    db: DatabaseSync,
     file: string,
     now: () => Date,
     onClose: () => void,
+    runtime: ScopedEffectRuntime<SqliteConnection, AgentStateError>,
   ) {
     this.#definition = definition;
-    this.#db = db;
     this.location = file;
     this.#now = now;
     this.#onClose = onClose;
+    this.#runtime = runtime;
   }
 
   get definition(): AgentStateDefinition<TState, TEvents> {
@@ -213,34 +259,41 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
    * database lock); reads take a deferred snapshot transaction, which WAL
    * never blocks on writers.
    */
-  #transaction<T>(mode: 'read' | 'write', action: string, work: () => T): T {
+  #transaction<T>(
+    mode: 'read' | 'write',
+    action: string,
+    work: (db: DatabaseSync) => T,
+  ): Effect.Effect<T, AgentStateError, SqliteConnection> {
     const id = this.#definition.id;
-    try {
-      this.#db.exec(mode === 'write' ? 'BEGIN IMMEDIATE' : 'BEGIN DEFERRED');
-    } catch (error) {
-      throw mapSqliteError(id, `${action}: begin`, error);
-    }
-    let result: T;
-    try {
-      result = work();
-    } catch (error) {
-      try {
-        this.#db.exec('ROLLBACK');
-      } catch {
-        // The connection is unusable; the original error carries the cause.
-      }
-      throw mapSqliteError(id, action, error);
-    }
-    try {
-      this.#db.exec('COMMIT');
-    } catch (error) {
-      throw mapSqliteError(id, `${action}: commit`, error);
-    }
-    return result;
+    return Effect.gen(function*() {
+      const db = yield* SqliteConnection;
+      return yield* Effect.acquireUseRelease(
+        sqliteEffect(id, `${action}: begin`, () => {
+          db.exec(mode === 'write' ? 'BEGIN IMMEDIATE' : 'BEGIN DEFERRED');
+          return db;
+        }),
+        () => sqliteEffect(id, action, () => work(db)),
+        (connection, exit) => {
+          const rollback = sqliteEffect(id, `${action}: rollback`, () => {
+            connection.exec('ROLLBACK');
+          });
+          if (Exit.isFailure(exit)) return rollback;
+          return sqliteEffect(id, `${action}: commit`, () => {
+            connection.exec('COMMIT');
+          }).pipe(
+            Effect.catch((commitError) =>
+              rollback.pipe(
+                Effect.andThen(Effect.fail(commitError)),
+              ),
+            ),
+          );
+        },
+      );
+    });
   }
 
-  #headRow(action: string): { revision: number; state: string } {
-    const row = this.#db.prepare('SELECT revision, state FROM agent_state_head WHERE id = 1').get() as
+  #headRow(db: DatabaseSync, action: string): { revision: number; state: string } {
+    const row = db.prepare('SELECT revision, state FROM agent_state_head WHERE id = 1').get() as
       | { revision: number; state: string }
       | undefined;
     if (row === undefined || !Number.isInteger(row.revision) || row.revision < 0) {
@@ -249,8 +302,8 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     return row;
   }
 
-  #headState(action: string): AgentStateSnapshot<TState> {
-    const row = this.#headRow(action);
+  #headState(db: DatabaseSync, action: string): AgentStateSnapshot<TState> {
+    const row = this.#headRow(db, action);
     const raw = parseStoredJson(this.#definition.id, 'head state', row.revision, row.state);
     const parsed = this.#definition.schema.safeParse(raw);
     if (!parsed.success) {
@@ -262,43 +315,43 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     return Object.freeze({ revision: row.revision, state: deepFreezeJson(parsed.data) });
   }
 
-  #journalRecords(upTo?: number): AgentStateJournalRecord[] {
+  #journalRecords(db: DatabaseSync, upTo?: number): AgentStateJournalRecord[] {
     const rows = (
       upTo === undefined
-        ? this.#db.prepare('SELECT * FROM agent_state_journal ORDER BY revision').all()
-        : this.#db.prepare('SELECT * FROM agent_state_journal WHERE revision <= ? ORDER BY revision').all(upTo)
+        ? db.prepare('SELECT * FROM agent_state_journal ORDER BY revision').all()
+        : db.prepare('SELECT * FROM agent_state_journal WHERE revision <= ? ORDER BY revision').all(upTo)
     ) as unknown as JournalRow[];
     return rows.map((row) => recordFromRow(this.#definition.id, row));
   }
 
-  #latestMigrationRevision(): number {
-    const row = this.#db
+  #latestMigrationRevision(db: DatabaseSync): number {
+    const row = db
       .prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM agent_state_journal WHERE kind = 'migrate'")
       .get() as { revision: number };
     return row.revision;
   }
 
-  #committedByKey(key: string): AgentStateJournalRecord | undefined {
-    const row = this.#db.prepare('SELECT * FROM agent_state_journal WHERE idempotency_key = ?').get(key) as
+  #committedByKey(db: DatabaseSync, key: string): AgentStateJournalRecord | undefined {
+    const row = db.prepare('SELECT * FROM agent_state_journal WHERE idempotency_key = ?').get(key) as
       | JournalRow
       | undefined;
     return row === undefined ? undefined : recordFromRow(this.#definition.id, row);
   }
 
-  #replayTo(revision: number): TState {
-    const latestMigration = this.#latestMigrationRevision();
+  #replayTo(db: DatabaseSync, revision: number): TState {
+    const latestMigration = this.#latestMigrationRevision(db);
     if (latestMigration > revision) {
       throw new AgentStateError(
         'revision-unavailable',
         `State '${this.#definition.id}' revision ${String(revision)} predates the migration at revision ${String(latestMigration)}`,
       );
     }
-    return replayJournal(this.#definition, this.#journalRecords(revision), revision);
+    return replayJournal(this.#definition, this.#journalRecords(db, revision), revision);
   }
 
-  #appendRecord(record: AgentStateJournalRecord, state: TState): AgentStateCommitResult<TState> {
+  #appendRecord(db: DatabaseSync, record: AgentStateJournalRecord, state: TState): AgentStateCommitResult<TState> {
     const stateText = canonicalJson(state);
-    this.#db
+    db
       .prepare(
         'INSERT INTO agent_state_journal (revision, kind, name, payload, state, to_version, idempotency_key, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       )
@@ -312,7 +365,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         record.idempotencyKey,
         record.committedAt,
       );
-    this.#db.prepare('UPDATE agent_state_head SET revision = ?, state = ? WHERE id = 1').run(record.revision, stateText);
+    db.prepare('UPDATE agent_state_head SET revision = ?, state = ? WHERE id = 1').run(record.revision, stateText);
     return Object.freeze({ replayed: false, revision: record.revision, state });
   }
 
@@ -321,119 +374,149 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
       | { readonly kind: 'event'; readonly name: string; readonly rawPayload: unknown }
       | { readonly kind: 'reset'; readonly seed: TState | undefined },
     options: AgentStateDispatchOptions | AgentStateResetOptions<TState>,
-  ): AgentStateCommitResult<TState> {
-    expectOperable(this.#closed, this.#definition.id, options.signal);
-    const key = expectIdempotencyKey(options.idempotencyKey);
-    expectRevisionShape(options.expectedRevision, `State '${this.#definition.id}' expectedRevision`);
-    return this.#transaction('write', input.kind === 'event' ? `dispatch '${input.name}'` : 'reset', () => {
-      const head = this.#headState('commit');
-      const prepared =
-        input.kind === 'event'
-          ? ((): { canonicalInput: string; record: AgentStateJournalRecord; state: TState } => {
-              const applied = applyStateEvent(this.#definition, head.state, input.name, input.rawPayload);
-              const record: AgentStateJournalRecord = {
-                committedAt: this.#now().toISOString(),
-                idempotencyKey: key,
-                kind: 'event',
-                name: input.name,
-                payload: applied.payload,
-                revision: head.revision + 1,
-              };
-              return { canonicalInput: canonicalCommitInput(record), record, state: applied.state };
-            })()
-          : ((): { canonicalInput: string; record: AgentStateJournalRecord; state: TState } => {
-              const state = resolveResetState(this.#definition, input.seed);
-              const record: AgentStateJournalRecord = {
-                committedAt: this.#now().toISOString(),
-                idempotencyKey: key,
-                kind: 'reset',
-                revision: head.revision + 1,
-                state,
-              };
-              return { canonicalInput: canonicalCommitInput(record), record, state };
-            })();
-      const committed = this.#committedByKey(key);
-      if (committed !== undefined) {
-        if (canonicalCommitInput(committed) !== prepared.canonicalInput) {
+  ): Effect.Effect<AgentStateCommitResult<TState>, AgentStateError, SqliteConnection> {
+    const definition = this.#definition;
+    const appendRecord = (db: DatabaseSync, record: AgentStateJournalRecord, state: TState) =>
+      this.#appendRecord(db, record, state);
+    const committedByKey = (db: DatabaseSync, key: string) => this.#committedByKey(db, key);
+    const headState = (db: DatabaseSync) => this.#headState(db, 'commit');
+    const now = this.#now;
+    const replayTo = (db: DatabaseSync, revision: number) => this.#replayTo(db, revision);
+    const transaction = this.#transaction.bind(this);
+    const validate = sqliteEffect(definition.id, 'validate commit', () => {
+      expectOperable(this.#closed, definition.id, options.signal);
+      expectRevisionShape(options.expectedRevision, `State '${definition.id}' expectedRevision`);
+      return expectIdempotencyKey(options.idempotencyKey);
+    });
+    return Effect.gen(function*() {
+      const key = yield* validate;
+      return yield* transaction('write', input.kind === 'event' ? `dispatch '${input.name}'` : 'reset', (db) => {
+        const head = headState(db);
+        const prepared =
+          input.kind === 'event'
+            ? ((): { canonicalInput: string; record: AgentStateJournalRecord; state: TState } => {
+                const applied = applyStateEvent(definition, head.state, input.name, input.rawPayload);
+                const record: AgentStateJournalRecord = {
+                  committedAt: now().toISOString(),
+                  idempotencyKey: key,
+                  kind: 'event',
+                  name: input.name,
+                  payload: applied.payload,
+                  revision: head.revision + 1,
+                };
+                return { canonicalInput: canonicalCommitInput(record), record, state: applied.state };
+              })()
+            : ((): { canonicalInput: string; record: AgentStateJournalRecord; state: TState } => {
+                const state = resolveResetState(definition, input.seed);
+                const record: AgentStateJournalRecord = {
+                  committedAt: now().toISOString(),
+                  idempotencyKey: key,
+                  kind: 'reset',
+                  revision: head.revision + 1,
+                  state,
+                };
+                return { canonicalInput: canonicalCommitInput(record), record, state };
+              })();
+        const committed = committedByKey(db, key);
+        if (committed !== undefined) {
+          if (canonicalCommitInput(committed) !== prepared.canonicalInput) {
+            throw new AgentStateError(
+              'idempotency-conflict',
+              `State '${definition.id}' idempotency key was reused with a conflicting input`,
+            );
+          }
+          return Object.freeze({ replayed: true, revision: committed.revision, state: replayTo(db, committed.revision) });
+        }
+        if (options.expectedRevision !== undefined && options.expectedRevision !== head.revision) {
           throw new AgentStateError(
-            'idempotency-conflict',
-            `State '${this.#definition.id}' idempotency key was reused with a conflicting input`,
+            'revision-conflict',
+            `State '${definition.id}' expected revision ${String(options.expectedRevision)} but the head is ${String(head.revision)}`,
           );
         }
-        return Object.freeze({ replayed: true, revision: committed.revision, state: this.#replayTo(committed.revision) });
-      }
-      if (options.expectedRevision !== undefined && options.expectedRevision !== head.revision) {
-        throw new AgentStateError(
-          'revision-conflict',
-          `State '${this.#definition.id}' expected revision ${String(options.expectedRevision)} but the head is ${String(head.revision)}`,
-        );
-      }
-      return this.#appendRecord(prepared.record, prepared.state);
+        return appendRecord(db, prepared.record, prepared.state);
+      });
     });
   }
 
-  async dispatch<TName extends Extract<keyof TEvents, string>>(
+  #run<A>(effect: Effect.Effect<A, AgentStateError, SqliteConnection>): Promise<A> {
+    return this.#closed
+      ? runPromise(Effect.fail(new AgentStateError('store-closed', `State '${this.#definition.id}' store is closed`)))
+      : this.#runtime.run(effect);
+  }
+
+  dispatch<TName extends Extract<keyof TEvents, string>>(
     name: TName,
     payload: unknown,
     options: AgentStateDispatchOptions,
   ): Promise<AgentStateCommitResult<TState>> {
-    return this.#commit({ kind: 'event', name, rawPayload: payload }, options);
+    return this.#run(this.#commit({ kind: 'event', name, rawPayload: payload }, options));
   }
 
-  async reset(options: AgentStateResetOptions<TState>): Promise<AgentStateCommitResult<TState>> {
-    return this.#commit({ kind: 'reset', seed: options.seed }, options);
+  reset(options: AgentStateResetOptions<TState>): Promise<AgentStateCommitResult<TState>> {
+    return this.#run(this.#commit({ kind: 'reset', seed: options.seed }, options));
   }
 
-  async read(options: AgentStateReadOptions = {}): Promise<AgentStateSnapshot<TState>> {
-    expectOperable(this.#closed, this.#definition.id, options.signal);
-    expectRevisionShape(options.revision, `State '${this.#definition.id}' revision`);
-    return this.#transaction('read', 'read', () => {
-      const head = this.#headState('read');
-      if (options.revision === undefined || options.revision === head.revision) return head;
-      if (options.revision > head.revision) {
-        throw new AgentStateError(
-          'revision-unavailable',
-          `State '${this.#definition.id}' revision ${String(options.revision)} is beyond the head ${String(head.revision)}`,
-        );
-      }
-      return Object.freeze({ revision: options.revision, state: this.#replayTo(options.revision) });
-    });
+  read(options: AgentStateReadOptions = {}): Promise<AgentStateSnapshot<TState>> {
+    return this.#run(
+      sqliteEffect(this.#definition.id, 'validate read', () => {
+        expectOperable(this.#closed, this.#definition.id, options.signal);
+        expectRevisionShape(options.revision, `State '${this.#definition.id}' revision`);
+      }).pipe(
+        Effect.andThen(
+          this.#transaction('read', 'read', (db) => {
+            const head = this.#headState(db, 'read');
+            if (options.revision === undefined || options.revision === head.revision) return head;
+            if (options.revision > head.revision) {
+              throw new AgentStateError(
+                'revision-unavailable',
+                `State '${this.#definition.id}' revision ${String(options.revision)} is beyond the head ${String(head.revision)}`,
+              );
+            }
+            return Object.freeze({ revision: options.revision, state: this.#replayTo(db, options.revision) });
+          }),
+        ),
+      ),
+    );
   }
 
-  async changes(options: AgentStateChangesOptions): Promise<AgentStateChangeBatch> {
-    expectOperable(this.#closed, this.#definition.id, options.signal);
-    if (options.afterRevision === undefined) {
-      throw new AgentStateError('invalid-input', `State '${this.#definition.id}' changes require afterRevision`);
-    }
-    expectRevisionShape(options.afterRevision, `State '${this.#definition.id}' afterRevision`);
-    if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1)) {
-      throw new AgentStateError('invalid-input', `State '${this.#definition.id}' changes limit must be an integer >= 1`);
-    }
-    return this.#transaction('read', 'changes', () => {
-      const head = this.#headRow('changes');
-      const rows = this.#db
-        .prepare('SELECT * FROM agent_state_journal WHERE revision > ? ORDER BY revision LIMIT ?')
-        .all(options.afterRevision, options.limit ?? -1) as unknown as JournalRow[];
-      const changes = rows.map((row) => changeFromJournalRecord(recordFromRow(this.#definition.id, row)));
-      return Object.freeze({ changes: Object.freeze(changes), headRevision: head.revision });
-    });
+  changes(options: AgentStateChangesOptions): Promise<AgentStateChangeBatch> {
+    return this.#run(
+      sqliteEffect(this.#definition.id, 'validate changes', () => {
+        expectOperable(this.#closed, this.#definition.id, options.signal);
+        if (options.afterRevision === undefined) {
+          throw new AgentStateError('invalid-input', `State '${this.#definition.id}' changes require afterRevision`);
+        }
+        expectRevisionShape(options.afterRevision, `State '${this.#definition.id}' afterRevision`);
+        if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1)) {
+          throw new AgentStateError('invalid-input', `State '${this.#definition.id}' changes limit must be an integer >= 1`);
+        }
+      }).pipe(
+        Effect.andThen(
+          this.#transaction('read', 'changes', (db) => {
+            const head = this.#headRow(db, 'changes');
+            const rows = db
+              .prepare('SELECT * FROM agent_state_journal WHERE revision > ? ORDER BY revision LIMIT ?')
+              .all(options.afterRevision, options.limit ?? -1) as unknown as JournalRow[];
+            const changes = rows.map((row) => changeFromJournalRecord(recordFromRow(this.#definition.id, row)));
+            return Object.freeze({ changes: Object.freeze(changes), headRevision: head.revision });
+          }),
+        ),
+      ),
+    );
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  close(): Promise<void> {
+    if (this.#closed) return this.#runtime.close();
     this.#closed = true;
-    try {
-      this.#db.close();
-    } catch {
-      // Closing an already-broken connection must not mask the caller's path.
-    }
     this.#onClose();
+    return this.#runtime.close();
   }
 
   /** Opens the database schema, verifies identity, and runs due migrations. */
-  initialize(): void {
-    this.#transaction('write', 'open', () => {
-      this.#db.exec(`
+  initialize(busyTimeoutMs: number): Promise<void> {
+    const definitionId = this.#definition.id;
+    const initializeStorage = this.#transaction('write', 'open', (transactionDb) => {
+      transactionDb.exec(`
         CREATE TABLE IF NOT EXISTS agent_state_meta (
           id INTEGER PRIMARY KEY CHECK (id = 1),
           definition_id TEXT NOT NULL,
@@ -457,14 +540,14 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         );
       `);
       const definition = this.#definition;
-      const meta = this.#db
+      const meta = transactionDb
         .prepare('SELECT definition_id, schema_version, kernel_format FROM agent_state_meta WHERE id = 1')
         .get() as { definition_id: string; kernel_format: number; schema_version: number } | undefined;
       if (meta === undefined) {
-        this.#db
+        transactionDb
           .prepare('INSERT INTO agent_state_meta (id, definition_id, schema_version, kernel_format) VALUES (1, ?, ?, ?)')
           .run(definition.id, definition.version, KERNEL_FORMAT);
-        this.#db
+        transactionDb
           .prepare('INSERT INTO agent_state_head (id, revision, state) VALUES (1, 0, ?)')
           .run(canonicalJson(definition.initial));
         return;
@@ -481,9 +564,9 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
           `State '${definition.id}' storage uses kernel format ${String(meta.kernel_format)}; this kernel reads format ${String(KERNEL_FORMAT)}`,
         );
       }
-      const head = this.#headRow('open');
+      const head = this.#headRow(transactionDb, 'open');
       const journalHead = (
-        this.#db.prepare('SELECT COALESCE(MAX(revision), 0) AS revision FROM agent_state_journal').get() as {
+        transactionDb.prepare('SELECT COALESCE(MAX(revision), 0) AS revision FROM agent_state_journal').get() as {
           revision: number;
         }
       ).revision;
@@ -504,9 +587,23 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         state: migrated,
         toVersion: definition.version,
       };
-      this.#appendRecord(record, migrated);
-      this.#db.prepare('UPDATE agent_state_meta SET schema_version = ? WHERE id = 1').run(definition.version);
+      this.#appendRecord(transactionDb, record, migrated);
+      transactionDb.prepare('UPDATE agent_state_meta SET schema_version = ? WHERE id = 1').run(definition.version);
     });
+    return this.#runtime.run(
+      Effect.gen(function*() {
+        const db = yield* SqliteConnection;
+        yield* sqliteEffect(definitionId, 'configure storage', () => {
+          // busy_timeout first: switching journal modes takes the database
+          // lock, and two processes racing the very first open would otherwise
+          // fail SQLITE_BUSY with a zero retry budget.
+          db.exec(`PRAGMA busy_timeout = ${String(busyTimeoutMs)}`);
+          db.exec('PRAGMA journal_mode = WAL');
+          db.exec('PRAGMA synchronous = FULL');
+        });
+        yield* initializeStorage;
+      }),
+    );
   }
 }
 
@@ -520,65 +617,97 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
   }
   const now = options.now ?? ((): Date => new Date());
   const openStores = new Set<SqliteStore<unknown, AgentStateEventSchemas>>();
+  const pendingOpens = new Set<Promise<void>>();
   let closed = false;
+  let closing: Promise<void> | undefined;
+
+  const trackPendingOpen = <T>(operation: Promise<T>): Promise<T> => {
+    const settled = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    pendingOpens.add(settled);
+    void settled.then(() => {
+      pendingOpens.delete(settled);
+    });
+    return operation;
+  };
 
   return Object.freeze({
     durable: true,
     kind: 'sqlite',
     lifetime: 'workspace-durable' as const,
 
-    async close(): Promise<void> {
+    close(): Promise<void> {
+      if (closing !== undefined) return closing;
       closed = true;
-      for (const store of [...openStores]) {
-        await store.close();
-      }
-      openStores.clear();
+      closing = (async () => {
+        while (pendingOpens.size > 0) {
+          await Promise.all([...pendingOpens]);
+        }
+        for (const store of [...openStores]) {
+          await store.close();
+        }
+        openStores.clear();
+      })();
+      return closing;
     },
 
-    async open<TState, TEvents extends AgentStateEventSchemas>(
+    open<TState, TEvents extends AgentStateEventSchemas>(
       definition: AgentStateDefinition<TState, TEvents>,
     ): Promise<AgentStateStore<TState, TEvents>> {
-      if (closed) {
-        throw new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`);
-      }
-      if (definition.lifetime !== 'workspace-durable') {
-        throw new AgentStateError(
-          'lifetime-mismatch',
-          `State '${definition.id}' declares lifetime '${definition.lifetime}' but this driver provides 'workspace-durable'`,
-        );
-      }
-      const file = resolve(
-        options.file !== undefined ? options.file : join(options.root as string, sanitizedFileName(definition.id)),
+      return trackPendingOpen(
+        (async () => {
+          const file = await runPromise(
+            sqliteEffect(definition.id, 'resolve storage', () => {
+              if (closed) {
+                throw new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`);
+              }
+              if (definition.lifetime !== 'workspace-durable') {
+                throw new AgentStateError(
+                  'lifetime-mismatch',
+                  `State '${definition.id}' declares lifetime '${definition.lifetime}' but this driver provides 'workspace-durable'`,
+                );
+              }
+              return resolve(
+                options.file !== undefined ? options.file : join(options.root as string, sanitizedFileName(definition.id)),
+              );
+            }),
+          );
+          const connection = Effect.acquireRelease(
+            sqliteEffect(definition.id, 'open database', () => {
+              mkdirSync(dirname(file), { recursive: true });
+              return new DatabaseSync(file);
+            }, true),
+            (db) =>
+              Effect.sync(() => {
+                db.close();
+              }),
+          );
+          const runtime = makeScopedEffectRuntime(
+            Layer.effect(SqliteConnection, connection),
+          );
+          let store: SqliteStore<TState, TEvents>;
+          try {
+            store = new SqliteStore(definition, file, now, () =>
+              openStores.delete(store as unknown as SqliteStore<unknown, AgentStateEventSchemas>),
+              runtime,
+            );
+            await store.initialize(busyTimeoutMs);
+          } catch (error) {
+            await runtime.close();
+            throw error;
+          }
+          if (closed) {
+            await store.close();
+            return runPromise(
+              Effect.fail(new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`)),
+            );
+          }
+          openStores.add(store as unknown as SqliteStore<unknown, AgentStateEventSchemas>);
+          return store;
+        })(),
       );
-      let db: DatabaseSync;
-      try {
-        mkdirSync(dirname(file), { recursive: true });
-        db = new DatabaseSync(file);
-      } catch (error) {
-        throw mapSqliteError(definition.id, 'open database', error);
-      }
-      let store: SqliteStore<TState, TEvents>;
-      try {
-        // busy_timeout first: switching journal modes takes the database
-        // lock, and two processes racing the very first open would otherwise
-        // fail SQLITE_BUSY with a zero retry budget.
-        db.exec(`PRAGMA busy_timeout = ${String(busyTimeoutMs)}`);
-        db.exec('PRAGMA journal_mode = WAL');
-        db.exec('PRAGMA synchronous = FULL');
-        store = new SqliteStore(definition, db, file, now, () =>
-          openStores.delete(store as unknown as SqliteStore<unknown, AgentStateEventSchemas>),
-        );
-        store.initialize();
-      } catch (error) {
-        try {
-          db.close();
-        } catch {
-          // Preserve the initialization failure.
-        }
-        throw mapSqliteError(definition.id, 'initialize storage', error);
-      }
-      openStores.add(store as unknown as SqliteStore<unknown, AgentStateEventSchemas>);
-      return store;
     },
   });
 };

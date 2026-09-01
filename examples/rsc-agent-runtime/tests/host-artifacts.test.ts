@@ -313,18 +313,23 @@ test('runs each packaged native hook from one shell argv path when its plugin ro
 
 test('keeps the published Agent Bundle package free of the supplemental RSC runtime', async () => {
   const packageRoot = join(exampleRoot, '../../packages/agent-bundle');
-  const packageJson = await readJson<{ dependencies?: Record<string, string>; optionalDependencies?: Record<string, string>; peerDependencies?: Record<string, string> }>(
+  const packageJson = await readJson<{ dependencies?: Record<string, string>; optionalDependencies?: Record<string, string>; peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, { optional?: boolean }> }>(
     join(packageRoot, 'package.json'),
   );
-  const allDependencies = {
+  // Install-cost guard: hook-only consumers must never be forced to install
+  // the RSC runtime stack. Optional peers (declared for the #103 test
+  // harness) add no install cost, so they are allowed only when
+  // peerDependenciesMeta marks them optional.
+  const requiredDependencies = {
     ...packageJson.dependencies,
     ...packageJson.optionalDependencies,
-    ...packageJson.peerDependencies,
   };
-
-  expect(allDependencies).not.toHaveProperty('react');
-  expect(allDependencies).not.toHaveProperty('react-server-dom-rspack');
-  expect(allDependencies).not.toHaveProperty('rsbuild-plugin-rsc');
+  for (const name of ['react', 'react-server-dom-rspack', 'rsbuild-plugin-rsc']) {
+    expect(requiredDependencies).not.toHaveProperty(name);
+    if (packageJson.peerDependencies?.[name] !== undefined) {
+      expect(packageJson.peerDependenciesMeta?.[name]?.optional, `${name} peer must be optional`).toBe(true);
+    }
+  }
 
   const sourceRoot = join(packageRoot, 'src');
   const sourceFiles = await readdir(sourceRoot, { recursive: true });
