@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 // node:sqlite emits an ExperimentalWarning on load (documented in the README):
@@ -35,14 +36,16 @@ import type {
 } from './index.js';
 import {
   AgentStateError,
-  applyStateEvent,
   canonicalCommitInput,
   canonicalJson,
   changeFromJournalRecord,
   deepFreezeJson,
   describeSchemaIssues,
+  expectConsistentJournal,
   expectIdempotencyKey,
   migrationIdempotencyKey,
+  parseEventPayload,
+  reduceStateEvent,
   replayJournal,
   resolveResetState,
   runStateMigrations,
@@ -220,8 +223,11 @@ const recordFromRow = (definitionId: string, row: JournalRow): AgentStateJournal
   );
 };
 
+// The readable prefix is lossy (distinct ids can sanitize identically), so a
+// hash of the complete id disambiguates; truncating an encoding of only the
+// leading bytes would collide for ids sharing a prefix.
 const sanitizedFileName = (definitionId: string): string =>
-  `${definitionId.replace(/[^a-zA-Z0-9._-]+/gu, '-')}-${Buffer.from(definitionId, 'utf8').toString('hex').slice(0, 12)}.sqlite`;
+  `${definitionId.replace(/[^a-zA-Z0-9._-]+/gu, '-')}-${createHash('sha256').update(definitionId, 'utf8').digest('hex').slice(0, 16)}.sqlite`;
 
 class SqliteConnection extends Context.Service<SqliteConnection, DatabaseSync>()(
   '@agent-bundle/runtime/state/SqliteConnection',
@@ -331,11 +337,38 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     return row.revision;
   }
 
-  #committedByKey(db: DatabaseSync, key: string): AgentStateJournalRecord | undefined {
+  #committedByKey(
+    db: DatabaseSync,
+    key: string,
+  ): { readonly record: AgentStateJournalRecord; readonly stateText: string | null } | undefined {
     const row = db.prepare('SELECT * FROM agent_state_journal WHERE idempotency_key = ?').get(key) as
       | JournalRow
       | undefined;
-    return row === undefined ? undefined : recordFromRow(this.#definition.id, row);
+    return row === undefined ? undefined : { record: recordFromRow(this.#definition.id, row), stateText: row.state };
+  }
+
+  /**
+   * Recovers the state a committed record produced. Every record stores its
+   * post-commit state (migrated forward on schema migrations), so replay
+   * does not depend on exact-revision history; rows written before post-
+   * commit states were stored fall back to journal replay.
+   */
+  #committedState(
+    db: DatabaseSync,
+    committed: { readonly record: AgentStateJournalRecord; readonly stateText: string | null },
+  ): TState {
+    const raw =
+      committed.stateText !== null
+        ? parseStoredJson(this.#definition.id, 'state', committed.record.revision, committed.stateText)
+        : this.#replayTo(db, committed.record.revision);
+    const parsed = this.#definition.schema.safeParse(raw);
+    if (!parsed.success) {
+      throw new AgentStateError(
+        'corrupt',
+        `State '${this.#definition.id}' committed result at revision ${String(committed.record.revision)} no longer satisfies the schema: ${describeSchemaIssues(parsed.error)}`,
+      );
+    }
+    return deepFreezeJson(parsed.data);
   }
 
   #replayTo(db: DatabaseSync, revision: number): TState {
@@ -360,7 +393,9 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         record.kind,
         record.kind === 'event' ? record.name : null,
         record.kind === 'event' ? canonicalJson(record.payload) : null,
-        record.kind === 'event' ? null : stateText,
+        // Event rows store their post-commit state too, so idempotent replay
+        // survives migrations without exact-revision replay.
+        stateText,
         record.kind === 'migrate' ? record.toVersion : null,
         record.idempotencyKey,
         record.committedAt,
@@ -379,61 +414,97 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     const appendRecord = (db: DatabaseSync, record: AgentStateJournalRecord, state: TState) =>
       this.#appendRecord(db, record, state);
     const committedByKey = (db: DatabaseSync, key: string) => this.#committedByKey(db, key);
+    const committedState = (
+      db: DatabaseSync,
+      committed: { readonly record: AgentStateJournalRecord; readonly stateText: string | null },
+    ) => this.#committedState(db, committed);
     const headState = (db: DatabaseSync) => this.#headState(db, 'commit');
     const now = this.#now;
-    const replayTo = (db: DatabaseSync, revision: number) => this.#replayTo(db, revision);
     const transaction = this.#transaction.bind(this);
-    const validate = sqliteEffect(definition.id, 'validate commit', () => {
+    // Validation and canonicalization happen before the reducer and before
+    // any storage access: a committed key must replay its stored result even
+    // when the reducer would fail against the current head.
+    type PreparedCommit =
+      | { readonly canonicalInput: string; readonly kind: 'event'; readonly name: string; readonly payload: unknown }
+      | { readonly canonicalInput: string; readonly kind: 'reset'; readonly state: TState };
+    const validate = sqliteEffect(definition.id, 'validate commit', (): { key: string; prepared: PreparedCommit } => {
       expectOperable(this.#closed, definition.id, options.signal);
       expectRevisionShape(options.expectedRevision, `State '${definition.id}' expectedRevision`);
-      return expectIdempotencyKey(options.idempotencyKey);
+      const key = expectIdempotencyKey(options.idempotencyKey);
+      if (input.kind === 'event') {
+        const payload = parseEventPayload(definition, input.name, input.rawPayload);
+        const canonicalInput = canonicalCommitInput({
+          committedAt: '',
+          idempotencyKey: key,
+          kind: 'event',
+          name: input.name,
+          payload,
+          revision: 0,
+        });
+        return { key, prepared: { canonicalInput, kind: 'event', name: input.name, payload } };
+      }
+      const state = resolveResetState(definition, input.seed);
+      const canonicalInput = canonicalCommitInput({
+        committedAt: '',
+        idempotencyKey: key,
+        kind: 'reset',
+        revision: 0,
+        state,
+      });
+      return { key, prepared: { canonicalInput, kind: 'reset', state } };
     });
     return Effect.gen(function*() {
-      const key = yield* validate;
+      const { key, prepared } = yield* validate;
       return yield* transaction('write', input.kind === 'event' ? `dispatch '${input.name}'` : 'reset', (db) => {
-        const head = headState(db);
-        const prepared =
-          input.kind === 'event'
-            ? ((): { canonicalInput: string; record: AgentStateJournalRecord; state: TState } => {
-                const applied = applyStateEvent(definition, head.state, input.name, input.rawPayload);
-                const record: AgentStateJournalRecord = {
-                  committedAt: now().toISOString(),
-                  idempotencyKey: key,
-                  kind: 'event',
-                  name: input.name,
-                  payload: applied.payload,
-                  revision: head.revision + 1,
-                };
-                return { canonicalInput: canonicalCommitInput(record), record, state: applied.state };
-              })()
-            : ((): { canonicalInput: string; record: AgentStateJournalRecord; state: TState } => {
-                const state = resolveResetState(definition, input.seed);
-                const record: AgentStateJournalRecord = {
-                  committedAt: now().toISOString(),
-                  idempotencyKey: key,
-                  kind: 'reset',
-                  revision: head.revision + 1,
-                  state,
-                };
-                return { canonicalInput: canonicalCommitInput(record), record, state };
-              })();
         const committed = committedByKey(db, key);
         if (committed !== undefined) {
-          if (canonicalCommitInput(committed) !== prepared.canonicalInput) {
+          if (canonicalCommitInput(committed.record) !== prepared.canonicalInput) {
             throw new AgentStateError(
               'idempotency-conflict',
               `State '${definition.id}' idempotency key was reused with a conflicting input`,
             );
           }
-          return Object.freeze({ replayed: true, revision: committed.revision, state: replayTo(db, committed.revision) });
+          return Object.freeze({
+            replayed: true,
+            revision: committed.record.revision,
+            state: committedState(db, committed),
+          });
         }
+        const head = headState(db);
         if (options.expectedRevision !== undefined && options.expectedRevision !== head.revision) {
           throw new AgentStateError(
             'revision-conflict',
             `State '${definition.id}' expected revision ${String(options.expectedRevision)} but the head is ${String(head.revision)}`,
           );
         }
-        return appendRecord(db, prepared.record, prepared.state);
+        const committedAt = now().toISOString();
+        switch (prepared.kind) {
+          case 'event': {
+            const state = reduceStateEvent(definition, head.state, prepared.name, prepared.payload);
+            return appendRecord(
+              db,
+              {
+                committedAt,
+                idempotencyKey: key,
+                kind: 'event',
+                name: prepared.name,
+                payload: prepared.payload,
+                revision: head.revision + 1,
+              },
+              state,
+            );
+          }
+          case 'reset':
+            return appendRecord(
+              db,
+              { committedAt, idempotencyKey: key, kind: 'reset', revision: head.revision + 1, state: prepared.state },
+              prepared.state,
+            );
+          default: {
+            const unreachable: never = prepared;
+            throw new AgentStateError('invalid-input', `Unknown commit kind ${String(unreachable)}`);
+          }
+        }
       });
     });
   }
@@ -565,20 +636,56 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         );
       }
       const head = this.#headRow(transactionDb, 'open');
-      const journalHead = (
-        transactionDb.prepare('SELECT COALESCE(MAX(revision), 0) AS revision FROM agent_state_journal').get() as {
-          revision: number;
-        }
-      ).revision;
+      const rows = transactionDb
+        .prepare('SELECT * FROM agent_state_journal ORDER BY revision')
+        .all() as unknown as JournalRow[];
+      const records = rows.map((row) => recordFromRow(definition.id, row));
+      // Continuity first: a hand-deleted intermediate row must fail closed
+      // even when the final revision is still present.
+      expectConsistentJournal(definition.id, records);
+      const journalHead = records.length === 0 ? 0 : (records[records.length - 1] as AgentStateJournalRecord).revision;
       if (head.revision !== journalHead) {
         throw new AgentStateError(
           'corrupt',
           `State '${definition.id}' head revision ${String(head.revision)} does not match the journal head ${String(journalHead)}`,
         );
       }
-      if (meta.schema_version === definition.version) return;
       const rawHead = parseStoredJson(definition.id, 'head state', head.revision, head.state);
+      if (meta.schema_version === definition.version) {
+        // The materialized head must agree with journal replay: a corrupt or
+        // hand-edited head that still parses is otherwise served silently.
+        const replayed = replayJournal(definition, records, head.revision);
+        if (canonicalJson(replayed) !== canonicalJson(rawHead)) {
+          throw new AgentStateError(
+            'corrupt',
+            `State '${definition.id}' head state at revision ${String(head.revision)} disagrees with journal replay`,
+          );
+        }
+        return;
+      }
+      // A pending migration cannot replay records written under the older
+      // definition; verify the head against the last stored post-commit
+      // state instead (rows predating stored event states leave it null).
+      const lastStateText = rows.length === 0 ? null : (rows[rows.length - 1] as JournalRow).state;
+      if (lastStateText !== null) {
+        const lastState = parseStoredJson(definition.id, 'state', journalHead, lastStateText);
+        if (canonicalJson(lastState) !== canonicalJson(rawHead)) {
+          throw new AgentStateError(
+            'corrupt',
+            `State '${definition.id}' head state at revision ${String(head.revision)} disagrees with the journal`,
+          );
+        }
+      }
       const migrated = runStateMigrations(definition, meta.schema_version, rawHead);
+      // Stored post-commit states ride the same chain so committed
+      // idempotency keys keep replaying after the migration; every stored
+      // state sits at `meta.schema_version` (maintained inductively here).
+      const updateState = transactionDb.prepare('UPDATE agent_state_journal SET state = ? WHERE revision = ?');
+      for (const row of rows) {
+        if (row.state === null) continue;
+        const rawState = parseStoredJson(definition.id, 'state', row.revision, row.state);
+        updateState.run(canonicalJson(runStateMigrations(definition, meta.schema_version, rawState)), row.revision);
+      }
       const record: AgentStateJournalRecord = {
         committedAt: this.#now().toISOString(),
         idempotencyKey: migrationIdempotencyKey(definition.version),

@@ -229,7 +229,7 @@ describe('sqlite driver storage behavior', () => {
       });
     }));
 
-  it('fails closed when a persisted head no longer satisfies the schema', () =>
+  it('fails closed on open when a persisted head no longer satisfies the schema', () =>
     withRoot(async (root) => {
       const file = join(root, 'state.sqlite');
       const store = await createSqliteStateDriver({ file }).open(counterDefinition());
@@ -238,12 +238,47 @@ describe('sqlite driver storage behavior', () => {
       const db = new DatabaseSync(file);
       db.exec(`UPDATE agent_state_head SET state = '{"wrong":true}'`);
       db.close();
-      const reopened = await createSqliteStateDriver({ file }).open(counterDefinition());
-      await expect(reopened.read()).rejects.toMatchObject({ code: 'corrupt' });
-      await expect(
-        reopened.dispatch('bumped', { by: 1 }, { idempotencyKey: 'k2' }),
-      ).rejects.toMatchObject({ code: 'corrupt' });
-      await reopened.close();
+      await expect(createSqliteStateDriver({ file }).open(counterDefinition())).rejects.toMatchObject({
+        code: 'corrupt',
+        name: 'AgentStateError',
+      });
+    }));
+
+  it('fails closed when a schema-valid head disagrees with journal replay', () =>
+    withRoot(async (root) => {
+      const file = join(root, 'state.sqlite');
+      const store = await createSqliteStateDriver({ file }).open(counterDefinition());
+      await store.dispatch('bumped', { by: 1 }, { idempotencyKey: 'k1' });
+      await store.dispatch('bumped', { by: 2 }, { idempotencyKey: 'k2' });
+      await store.close();
+      const db = new DatabaseSync(file);
+      // Schema-valid and revision-preserving, so only a replay comparison
+      // can tell this hand-edited head from the journal's truth.
+      db.exec(`UPDATE agent_state_head SET state = '{"count":999}'`);
+      db.close();
+      await expect(createSqliteStateDriver({ file }).open(counterDefinition())).rejects.toMatchObject({
+        code: 'corrupt',
+        name: 'AgentStateError',
+      });
+    }));
+
+  it('fails closed when an intermediate journal row is missing', () =>
+    withRoot(async (root) => {
+      const file = join(root, 'state.sqlite');
+      const store = await createSqliteStateDriver({ file }).open(counterDefinition());
+      await store.dispatch('bumped', { by: 1 }, { idempotencyKey: 'k1' });
+      await store.dispatch('bumped', { by: 2 }, { idempotencyKey: 'k2' });
+      await store.dispatch('bumped', { by: 3 }, { idempotencyKey: 'k3' });
+      await store.close();
+      const db = new DatabaseSync(file);
+      // The final revision still matches the head; only journal continuity
+      // catches the deleted row.
+      db.exec('DELETE FROM agent_state_journal WHERE revision = 2');
+      db.close();
+      await expect(createSqliteStateDriver({ file }).open(counterDefinition())).rejects.toMatchObject({
+        code: 'corrupt',
+        name: 'AgentStateError',
+      });
     }));
 
   it('fails closed on a newer kernel storage format', () =>

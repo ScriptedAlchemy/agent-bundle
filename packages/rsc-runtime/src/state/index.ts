@@ -46,6 +46,8 @@ export {
   changeFromJournalRecord,
   expectConsistentJournal,
   migrationIdempotencyKey,
+  parseEventPayload,
+  reduceStateEvent,
   replayJournal,
   resolveResetState,
   runStateMigrations,

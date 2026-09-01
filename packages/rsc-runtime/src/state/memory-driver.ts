@@ -21,10 +21,11 @@ import type {
 import { AgentStateError, expectIdempotencyKey } from './contract.js';
 import type { AgentStateJournalRecord } from './journal.js';
 import {
-  applyStateEvent,
   canonicalCommitInput,
   changeFromJournalRecord,
   migrationIdempotencyKey,
+  parseEventPayload,
+  reduceStateEvent,
   replayJournal,
   resolveResetState,
   runStateMigrations,
@@ -70,12 +71,18 @@ const expectVolatileLifetime = (lifetime: AgentStateLifetime): MemoryLifetime =>
   }
 };
 
+interface CommittedResult<TState> {
+  readonly record: AgentStateJournalRecord;
+  /** Post-commit state, kept per key so replay survives history rebases. */
+  readonly state: TState;
+}
+
 interface MemoryStoreInternals<TState, TEvents extends AgentStateEventSchemas> {
   closed: boolean;
   definition: AgentStateDefinition<TState, TEvents>;
   head: AgentStateSnapshot<TState>;
   readonly journal: AgentStateJournalRecord[];
-  readonly keys: Map<string, AgentStateJournalRecord>;
+  readonly keys: Map<string, CommittedResult<TState>>;
 }
 
 interface MemoryStoreEntry<TState, TEvents extends AgentStateEventSchemas> {
@@ -133,31 +140,31 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
 
   /**
    * Commits share one shape: validate inputs, then honor a committed
-   * idempotency key (replay/conflict), then compare-and-swap, then append.
-   * The interior is fully synchronous, so a commit is atomic per store
-   * within this process.
+   * idempotency key (replay/conflict), then compare-and-swap, then run the
+   * reducer, then append. The key check precedes the reducer because a
+   * committed key must replay its stored result even when the state that
+   * produced it has since changed — and that stored result is kept per key,
+   * so replay never depends on exact-revision history (which migrations
+   * rebase). The interior is fully synchronous, so a commit is atomic per
+   * store within this process.
    */
   const commit = (
-    record: Readonly<{ canonicalInput: string; key: string }> &
+    input: Readonly<{ canonicalInput: string; key: string }> &
       (
-        | { readonly kind: 'event'; readonly name: string; readonly payload: unknown; readonly state: TState }
+        | { readonly kind: 'event'; readonly name: string; readonly payload: unknown }
         | { readonly kind: 'reset'; readonly state: TState }
       ),
     expectedRevision: number | undefined,
   ): AgentStateCommitResult<TState> => {
-    const committed = internals.keys.get(record.key);
+    const committed = internals.keys.get(input.key);
     if (committed !== undefined) {
-      if (canonicalCommitInput(committed) !== record.canonicalInput) {
+      if (canonicalCommitInput(committed.record) !== input.canonicalInput) {
         throw new AgentStateError(
           'idempotency-conflict',
           `State '${internals.definition.id}' idempotency key was reused with a conflicting input`,
         );
       }
-      return Object.freeze({
-        replayed: true,
-        revision: committed.revision,
-        state: replayJournal(internals.definition, internals.journal, committed.revision),
-      });
+      return Object.freeze({ replayed: true, revision: committed.record.revision, state: committed.state });
     }
     if (expectedRevision !== undefined && expectedRevision !== internals.head.revision) {
       throw new AgentStateError(
@@ -165,27 +172,31 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
         `State '${internals.definition.id}' expected revision ${String(expectedRevision)} but the head is ${String(internals.head.revision)}`,
       );
     }
+    const state =
+      input.kind === 'event'
+        ? reduceStateEvent(internals.definition, internals.head.state, input.name, input.payload)
+        : input.state;
     const journalRecord: AgentStateJournalRecord =
-      record.kind === 'event'
+      input.kind === 'event'
         ? {
             committedAt: now().toISOString(),
-            idempotencyKey: record.key,
+            idempotencyKey: input.key,
             kind: 'event',
-            name: record.name,
-            payload: record.payload,
+            name: input.name,
+            payload: input.payload,
             revision: internals.head.revision + 1,
           }
         : {
             committedAt: now().toISOString(),
-            idempotencyKey: record.key,
+            idempotencyKey: input.key,
             kind: 'reset',
             revision: internals.head.revision + 1,
-            state: record.state,
+            state: input.state,
           };
     internals.journal.push(journalRecord);
-    internals.keys.set(journalRecord.idempotencyKey, journalRecord);
-    internals.head = Object.freeze({ revision: journalRecord.revision, state: record.state });
-    return Object.freeze({ replayed: false, revision: journalRecord.revision, state: record.state });
+    internals.keys.set(journalRecord.idempotencyKey, { record: journalRecord, state });
+    internals.head = Object.freeze({ revision: journalRecord.revision, state });
+    return Object.freeze({ replayed: false, revision: journalRecord.revision, state });
   };
 
   const store: AgentStateStore<TState, TEvents> = {
@@ -227,19 +238,18 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
           expectOperable(internals.closed, internals.definition.id, options.signal);
           const key = expectIdempotencyKey(options.idempotencyKey);
           expectRevisionShape(options.expectedRevision, `State '${internals.definition.id}' expectedRevision`);
-          const applied = applyStateEvent(internals.definition, internals.head.state, name, payload);
+          // Payload validation only — the reducer runs inside `commit`, after
+          // the idempotency key has been consulted.
+          const parsed = parseEventPayload(internals.definition, name, payload);
           const canonicalInput = canonicalCommitInput({
             committedAt: '',
             idempotencyKey: key,
             kind: 'event',
             name,
-            payload: applied.payload,
+            payload: parsed,
             revision: 0,
           });
-          return commit(
-            { canonicalInput, key, kind: 'event', name, payload: applied.payload, state: applied.state },
-            options.expectedRevision,
-          );
+          return commit({ canonicalInput, key, kind: 'event', name, payload: parsed }, options.expectedRevision);
         }),
       );
     },
@@ -298,7 +308,8 @@ const migrateOpenStore = <TState, TEvents extends AgentStateEventSchemas>(
   definition: AgentStateDefinition<TState, TEvents>,
   now: () => Date,
 ): void => {
-  const migrated = runStateMigrations(definition, internals.definition.version, internals.head.state);
+  const fromVersion = internals.definition.version;
+  const migrated = runStateMigrations(definition, fromVersion, internals.head.state);
   const record: AgentStateJournalRecord = {
     committedAt: now().toISOString(),
     idempotencyKey: migrationIdempotencyKey(definition.version),
@@ -308,7 +319,16 @@ const migrateOpenStore = <TState, TEvents extends AgentStateEventSchemas>(
     toVersion: definition.version,
   };
   internals.journal.push(record);
-  internals.keys.set(record.idempotencyKey, record);
+  // Committed results replay across migrations: every stored result sits at
+  // `fromVersion` (this loop maintains that inductively), so each one rides
+  // the same migration chain as the head.
+  for (const [key, entry] of internals.keys) {
+    internals.keys.set(key, {
+      record: entry.record,
+      state: runStateMigrations(definition, fromVersion, entry.state),
+    });
+  }
+  internals.keys.set(record.idempotencyKey, { record, state: migrated });
   internals.head = Object.freeze({ revision: record.revision, state: migrated });
   internals.definition = definition;
 };

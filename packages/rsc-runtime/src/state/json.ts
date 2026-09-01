@@ -16,7 +16,15 @@ const isPlainObject = (value: unknown): value is Readonly<Record<string, unknown
 export const isJsonSafe = (value: unknown): boolean => {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
   if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonSafe);
+  if (Array.isArray(value)) {
+    // Index-by-index so holes fail closed: `every` skips holes, which would
+    // let a sparse array canonicalize to the same text as a denser one and
+    // break both round-tripping and idempotency-key comparison.
+    for (let index = 0; index < value.length; index += 1) {
+      if (!(index in value) || !isJsonSafe(value[index])) return false;
+    }
+    return true;
+  }
   return isPlainObject(value) && Object.values(value).every(isJsonSafe);
 };
 
