@@ -50,6 +50,7 @@ import {
   type TargetArtifactLayout,
   type TargetArtifactPlan,
 } from './types.ts';
+import { withInstallSurface } from '../install/surface.ts';
 
 const cursorName = 'cursor';
 
@@ -263,7 +264,7 @@ export const cursorManifest = (
 const metadata = Object.freeze({
   adapterRevision: '1.4.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '9884e0ffdb1c7fd1fe6d1071fa6944729d596e51f0ab87ad5ef2b0dd6fd8a981',
+  capabilitySha256: 'e755dbaa54e36001e8046152cb2a630b2ac6252e2a3fd8ba4bb559e61e6bcf0a',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -389,7 +390,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
     pluginRelativePath: cursorArtifactPaths.plugin,
     targetName: cursorName,
   });
-  return Object.freeze({
+  return withInstallSurface(Object.freeze({
     ...basePlan,
     entries: sortedEntries([
       ...basePlan.entries,
@@ -397,7 +398,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
         command.markdown === command.body ? command.markdown : command.body),
       ...ruleWriteEntries(model, isSelected),
     ]),
-  });
+  }), model, 'cursor');
 };
 
 export const cursorAdapter: TargetAdapter = Object.freeze({
@@ -411,6 +412,7 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
       'The pinned Cursor Plugin contract does not support commands.',
     ),
     hooks: supportedCapability(evidence),
+    install: supportedCapability(evidence),
     marketplace: unavailableCapability('The pinned Cursor Plugin contract does not define a marketplace document.'),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,

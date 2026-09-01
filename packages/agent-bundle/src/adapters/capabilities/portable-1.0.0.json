@@ -1,4 +1,9 @@
 {
+  "install": {
+    "reason": "Portable is a distribution profile, not a host runtime with one universal plugin installation location.",
+    "source": "https://agent-plugins.org/",
+    "state": "unavailable"
+  },
   "eventRoutes": {
     "agent/start": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "agent/stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },

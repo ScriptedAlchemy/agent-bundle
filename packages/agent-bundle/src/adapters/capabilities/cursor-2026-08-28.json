@@ -1,5 +1,17 @@
 {
   "host": "cursor",
+  "install": {
+    "cliInstall": false,
+    "evidence": [
+      "Cursor CLI exposes plugin marketplace management but no non-interactive plugin install verb.",
+      "Cursor documents physical local plugin copies under ~/.cursor/plugins/local/<name>."
+    ],
+    "localRoot": "~/.cursor/plugins/local/<name>",
+    "method": "copy",
+    "scopes": ["user"],
+    "source": "https://cursor.com/docs/plugins",
+    "state": "supported"
+  },
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {

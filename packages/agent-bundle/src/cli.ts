@@ -12,12 +12,14 @@ import { resolve } from 'node:path';
 import type {
   build,
   compareEvals,
+  installBundle,
   inspect,
   runEvals,
   startDevServer,
   validate,
   ProjectOptions,
 } from './api.ts';
+import type { InstallHost, InstallResult, InstallScope } from './install/install.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
@@ -40,6 +42,7 @@ interface CliSignalSource {
 }
 
 export interface CliDependencies {
+  readonly installBundle?: typeof installBundle;
   /** Injectable only to make foreground shutdown behavior deterministic in tests. */
   readonly signals?: CliSignalSource;
   readonly startDevServer?: typeof startDevServer;
@@ -59,6 +62,12 @@ interface SourceCommandOptions {
 
 interface BuildCommandOptions extends SourceCommandOptions {
   readonly output?: string;
+}
+
+interface InstallCommandOptions {
+  readonly from: string;
+  readonly json?: boolean;
+  readonly scope: string;
 }
 
 interface EvalCommandOptions extends SourceCommandOptions {
@@ -116,6 +125,16 @@ const trialCount = (value: string): number => {
   const number = Number(value);
   if (number > 100) throw new TypeError('Trials must be at most 100.');
   return number;
+};
+
+const installHost = (value: string): InstallHost => {
+  if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
+  throw new TypeError('Install host must be claude, codex, or cursor.');
+};
+
+const installScope = (value: string): InstallScope => {
+  if (value === 'user' || value === 'project' || value === 'local') return value;
+  throw new TypeError('Install scope must be user, project, or local.');
 };
 
 const configureSourceOptions = (command: Command): Command => command
@@ -205,6 +224,14 @@ const writeHumanBuild = (output: Output, result: Awaited<ReturnType<typeof build
   if (result.packageBuild !== undefined) {
     output.write(`Package build (${result.packageBuild.files.length} file(s)) at ${result.packageBuild.outputRoot}\n`);
   }
+};
+
+const writeHumanInstall = (output: Output, result: InstallResult): void => {
+  const destination = result.destination ?? result.bundleRoot;
+  output.write(
+    `${result.state === 'already-installed' ? 'Already installed' : 'Installed'} ` +
+    `${result.plugin}@${result.version} for ${result.host} at ${destination}\n`,
+  );
 };
 
 const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof inspect>>): void => {
@@ -365,6 +392,26 @@ export const runCli = async (
     const result = await build({ ...projectOptions(options), output: options.output, packageOutputs: true });
     if (options.json === true) writeMachine(stdout, result);
     else writeHumanBuild(stdout, result);
+  });
+
+  const installCommand = program.command('install')
+    .description('Install a built bundle into a supported host')
+    .argument('<host>', 'Destination host: claude, codex, or cursor', installHost)
+    .option('--from <bundle-dir>', 'Target bundle directory or artifact root', process.cwd())
+    .option('--scope <scope>', 'Host install scope', installScope, 'user')
+    .option('--json', 'Write one machine-readable JSON document');
+  installCommand.action(async (
+    host: InstallHost,
+    options: InstallCommandOptions,
+  ) => {
+    const install = dependencies.installBundle ?? (await import('./api.ts')).installBundle;
+    const result = await install({
+      from: options.from,
+      host,
+      scope: installScope(options.scope),
+    });
+    if (options.json === true) writeMachine(stdout, result);
+    else writeHumanInstall(stdout, result);
   });
 
   const validateCommand = configureSourceOptions(

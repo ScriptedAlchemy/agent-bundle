@@ -429,6 +429,7 @@ export const standardArtifactLayout: TargetArtifactLayout = Object.freeze({
   hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
   mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
   mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
+  rootDocuments: Object.freeze(['INSTALL.md', 'install.mjs']),
   scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.bash', '.mjs', '.py', '.sh']), directory: 'scripts' }),
   skills: 'skills',
 });

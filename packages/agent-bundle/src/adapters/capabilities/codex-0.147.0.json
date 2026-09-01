@@ -1,5 +1,16 @@
 {
   "host": "codex",
+  "install": {
+    "evidence": [
+      "codex plugin marketplace add accepts a local marketplace root.",
+      "codex plugin add installs plugin@marketplace from a configured snapshot."
+    ],
+    "marketplaceAdd": "codex plugin marketplace add .",
+    "pluginInstall": "codex plugin add <plugin>@<marketplace>",
+    "scopes": ["user"],
+    "source": "https://developers.openai.com/codex/cli/reference",
+    "state": "supported"
+  },
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {

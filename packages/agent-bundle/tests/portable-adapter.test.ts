@@ -89,7 +89,9 @@ it('plans a schema-valid skills-only plugin with every discovered resource', () 
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor', 'plugin']);
   expect(plan.diagnostics).toEqual([]);
-  expect(plan.entries).toMatchObject([
+  const pluginEntries = plan.entries.filter((entry) =>
+    entry.relativePath !== 'INSTALL.md' && entry.relativePath !== 'install.mjs');
+  expect(pluginEntries).toMatchObject([
     {
       content:
         '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"A portable test plugin","name":"portable-test","version":"1.2.3"}\n',
@@ -109,7 +111,7 @@ it('plans a schema-valid skills-only plugin with every discovered resource', () 
       source: '/workspace/skills/reporter/references/guide.md',
     },
   ]);
-  expect(plan.entries.map((entry) => entry.sourceInputs)).toEqual([
+  expect(pluginEntries.map((entry) => entry.sourceInputs)).toEqual([
     ['/workspace/agent-bundle.config.ts'],
     ['/workspace/skills/reporter/SKILL.md'],
     ['/workspace/skills/reporter/SKILL.md', '/workspace/skills/reporter/references/guide.md'],

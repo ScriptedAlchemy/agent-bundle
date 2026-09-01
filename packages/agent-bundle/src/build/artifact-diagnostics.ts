@@ -23,7 +23,9 @@ export type ArtifactDiagnosticCode =
   | 'AB6019'
   | 'AB6020'
   | 'AB6021'
-  | 'AB6022';
+  | 'AB6022'
+  | 'AB6023'
+  | 'AB6024';
 
 export const artifactDiagnosticRecoveries: Readonly<Record<ArtifactDiagnosticCode, string>> = Object.freeze({
   AB6000: 'Restore a readable artifact root and canonical manifest, then rebuild the artifact.',
@@ -49,6 +51,8 @@ export const artifactDiagnosticRecoveries: Readonly<Record<ArtifactDiagnosticCod
   AB6020: 'Run `claude plugin validate <bundle-dir> --strict`, repair the warning, and rebuild.',
   AB6021: 'Run `claude plugin validate <bundle-dir> --strict`, repair the error, and rebuild.',
   AB6022: 'Restore a bounded Claude validator process, then rerun artifact validation.',
+  AB6023: 'Rebuild the artifact so every built-in target includes its generated INSTALL.md.',
+  AB6024: 'Rebuild the Cursor-compatible artifact so it includes its generated install.mjs.',
 });
 
 const isArtifactDiagnosticCode = (code: string): code is ArtifactDiagnosticCode =>

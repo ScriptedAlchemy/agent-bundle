@@ -50,6 +50,7 @@ import {
   type TargetArtifactDocumentValidator,
   type TargetArtifactPlan,
 } from './types.ts';
+import { withInstallSurface } from '../install/surface.ts';
 
 export interface CodexConfigExtension {
   codex?: AgentBundleHostConfig;
@@ -121,7 +122,7 @@ const hookContract = Object.freeze({
 const metadata = Object.freeze({
   adapterRevision: '1.2.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '44e697be71a29db9ec029ed7d9eb8807b90e95d6a15f3a71a47148125c902194',
+  capabilitySha256: 'd944e508941a0660272a253601019957ae94e9140501f0624f85d111e66d9f28',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -370,7 +371,7 @@ export const planCodexArtifacts = (
   const pluginValidator = pluginValidatorFor(mcpRelativePath);
   diagnostics.push(...schemaDiagnostics('plugin', pluginValidator(plugin), pluginValidator.errors));
 
-  const marketplace = model.marketplace !== true ? undefined : {
+  const marketplace = {
     interface: { displayName: model.metadata.name },
     name: `${model.metadata.name}-marketplace`,
     plugins: [{
@@ -380,12 +381,10 @@ export const planCodexArtifacts = (
       source: { path: './', source: 'local' },
     }],
   };
-  const marketplaceValid = marketplace !== undefined && validateMarketplace(marketplace);
-  if (marketplace !== undefined) {
-    diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
-  }
+  const marketplaceValid = validateMarketplace(marketplace);
+  diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
 
-  return standardPluginArtifactPlan({
+  return withInstallSurface(standardPluginArtifactPlan({
     diagnostics,
     hookDocument,
     hookDocumentValid,
@@ -403,7 +402,7 @@ export const planCodexArtifacts = (
     ...(options.sharedCopyEntries === undefined ? {} : { sharedCopyEntries: options.sharedCopyEntries }),
     pluginRelativePath: codexArtifactPaths.plugin,
     targetName,
-  });
+  }), model, targetName === 'plugin' ? 'plugin' : 'codex');
 };
 
 export const codexAdapter: TargetAdapter = Object.freeze({
@@ -414,6 +413,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     commands: unavailableCapability(
       'The pinned Codex plugin contract (0.147.0) defines no commands component.',
     ),
+    install: supportedCapability(evidence),
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
     // The pinned Codex plugin contract documents no LSP surface at all, so
