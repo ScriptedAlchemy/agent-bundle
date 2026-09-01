@@ -1,14 +1,20 @@
 {
   "observedCliVersion": "2026-08-28",
-  "retrievedAt": "2026-08-31",
-  "schemaSource": "Pinned Cursor Plugin manifest schema from cursor/plugins; MCP and hooks schemas vendored from the TraceDecay checkout",
-  "notes": "plugin.schema.json is Cursor's official draft-07 Cursor Plugin schema pinned at cursor/plugins commit 070189284e702e8a4d2e3cc8913994b204c5337a (the first pinned revision including variables, plus minClientVersions). mcp.schema.json and hooks.schema.json are strict documentation-derived schemas from TraceDecay commit 30e04b34d4e236d5f00fccf00eea7552dafde5a3, because Cursor publishes no standalone machine-readable schemas for those documents.",
+  "retrievedAt": "2026-09-01",
+  "schemaSource": "Pinned Cursor Plugin manifest and marketplace schemas from cursor/plugins; MCP and hooks schemas vendored from the TraceDecay checkout",
+  "notes": "plugin.schema.json and marketplace.schema.json are Cursor's official draft-07 schemas pinned at cursor/plugins commit 070189284e702e8a4d2e3cc8913994b204c5337a (retrieved 2026-09-01). That plugin schema is the first pinned revision including variables, plus minClientVersions. mcp.schema.json and hooks.schema.json are strict documentation-derived schemas from TraceDecay commit 30e04b34d4e236d5f00fccf00eea7552dafde5a3, because Cursor publishes no standalone machine-readable schemas for those documents.",
   "schemas": {
     "hooks.schema.json": {
       "bytes": 5355,
       "sha256": "06154b7afa0861df462130b988912b897e7ccf962b8dd20c09193100bcde5d81",
       "url": "https://cursor.com/docs/hooks",
       "vendoredFrom": "ScriptedAlchemy/tracedecay@30e04b34d4e236d5f00fccf00eea7552dafde5a3:tests/fixtures/cursor-schemas/hooks.schema.json"
+    },
+    "marketplace.schema.json": {
+      "bytes": 3209,
+      "sha256": "1aae96a24c2796419933bc8bfe3a1255394e7199c35740b36325e0ce6dbc253d",
+      "url": "https://raw.githubusercontent.com/cursor/plugins/070189284e702e8a4d2e3cc8913994b204c5337a/schemas/marketplace.schema.json",
+      "vendoredFrom": "cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a:schemas/marketplace.schema.json"
     },
     "mcp.schema.json": {
       "bytes": 3974,

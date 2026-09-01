@@ -712,7 +712,7 @@ it('discovers only the seven v1 event families and validates their component con
   expect(graph.diagnostics[1]?.sourcePath).toBe(join(root, 'src/events/tool/before.tsx'));
 });
 
-it('fails unavailable event routes before packaging unless they are target-restricted', async () => {
+it('fails unavailable event routes before packaging for every selected target', async () => {
   const eventSource = 'export default async function WorkspaceOpen() { return undefined; }\n';
   const configSource = [
     'export default {',
@@ -734,6 +734,10 @@ it('fails unavailable event routes before packaging unless they are target-restr
     code: 'AB4814',
     target: 'claude',
   }));
+  expect(unrestricted.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'AB4814',
+    target: 'cursor',
+  }));
 
   const restrictedRoot = await createRoot();
   await writeTree(restrictedRoot, {
@@ -746,7 +750,11 @@ it('fails unavailable event routes before packaging unless they are target-restr
   });
 
   const restricted = await inspect({ root: restrictedRoot });
-  expect(restricted.state).toBe('ready');
+  expect(restricted.state).toBe('invalid');
+  expect(restricted.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'AB4814',
+    target: 'cursor',
+  }));
 });
 
 it('preserves sub-second event route timeout precision in the normalized model', async () => {
@@ -760,9 +768,9 @@ it('preserves sub-second event route timeout precision in the normalized model',
       '',
     ].join('\n'),
     'package.json': '{"type":"module"}\n',
-    'src/events/workspace/open.tsx': [
+    'src/events/session/start.tsx': [
       "export const config = { runtime: 'standalone', timeoutMs: 1250 };",
-      'export default async function WorkspaceOpen() { return undefined; }',
+      'export default async function SessionStart() { return undefined; }',
       '',
     ].join('\n'),
   });
@@ -770,7 +778,7 @@ it('preserves sub-second event route timeout precision in the normalized model',
   const result = await validate({ root });
   expect(result.diagnostics).toEqual([]);
   expect(result.model?.hooks).toContainEqual(expect.objectContaining({
-    eventRoute: expect.objectContaining({ event: 'workspace/open' }),
+    eventRoute: expect.objectContaining({ event: 'session/start' }),
     timeoutMs: 1_250,
   }));
 });
@@ -786,7 +794,7 @@ it('requires an explicit standalone mode when no generated runtime can host an e
       '',
     ].join('\n'),
     'package.json': '{"type":"module"}\n',
-    'src/events/workspace/open.tsx': 'export default async function WorkspaceOpen() { return undefined; }\n',
+    'src/events/session/start.tsx': 'export default async function SessionStart() { return undefined; }\n',
   });
 
   const inspected = await inspect({ root });

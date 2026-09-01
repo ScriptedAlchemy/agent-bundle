@@ -136,13 +136,18 @@ it('records exact immutable metadata for every built-in target', () => {
   expect(registryMetadata(registry, 'cursor')).toEqual({
     adapterRevision: '1.5.0',
     capabilityRevision: '2026-08-28',
-    capabilitySha256: 'e963f86e9074a0c942ebc16190c3f534283c62fea1beda7411f170692dca05f7',
+    capabilitySha256: 'fd5a8171963f9b1bd05876cc333ba808bdcffb73b49b133bcf681b3a0fd57941',
     observedVersion: '2026-08-28',
     schemas: [
       {
         name: 'hooks',
         revision: '2026-08-28',
         sha256: '06154b7afa0861df462130b988912b897e7ccf962b8dd20c09193100bcde5d81',
+      },
+      {
+        name: 'marketplace',
+        revision: '2026-08-28',
+        sha256: '1aae96a24c2796419933bc8bfe3a1255394e7199c35740b36325e0ce6dbc253d',
       },
       {
         name: 'mcp',

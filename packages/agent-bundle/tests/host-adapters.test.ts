@@ -6,6 +6,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { expect, it } from '@rstest/core';
 
+import { cursorMarketplaceValidator } from '../src/adapters/cursor.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
 import { pathTokens, pluginRootEnvAnchor, type NormalizedPlugin } from '../src/core/types.ts';
@@ -346,6 +347,59 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
   ]);
   await validateDocuments('codex', writeContents(plugin, 'codex'));
   await validateDocuments('claude', writeContents(plugin, 'claude'));
+});
+
+it('emits a schema-valid Cursor marketplace document', () => {
+  const model: NormalizedPlugin = {
+    ...plugin,
+    mcpServers: [],
+    skills: [],
+    targets: [{
+      id: 'target:cursor',
+      name: 'cursor',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    }],
+  };
+  const plan = createDefaultRegistry().get('cursor').plan(model);
+  const marketplace = plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/marketplace.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(marketplace).toMatchObject({
+    content: '{"name":"review-tools-marketplace","owner":{"name":"review-tools"},"plugins":[{"description":"Review code and explain findings.","name":"review-tools","source":"./"}]}\n',
+    kind: 'write',
+  });
+  if (marketplace?.kind !== 'write') throw new Error('Expected an emitted Cursor marketplace document.');
+  expect(cursorMarketplaceValidator(JSON.parse(marketplace.content))).toBe(true);
+});
+
+it('diagnoses a plain Cursor workspaceOpen hook instead of lowering a session-scoped wrapper', () => {
+  const model: NormalizedPlugin = {
+    ...plugin,
+    hooks: [{
+      event: 'workspaceOpen',
+      id: 'hook:workspace-open',
+      name: 'workspace-open',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      source: '/workspace/src/hooks/workspace-open.ts',
+      targets: ['cursor'],
+      tools: [],
+    }],
+    marketplace: undefined,
+    mcpServers: [],
+    skills: [],
+    targets: [{
+      id: 'target:cursor',
+      name: 'cursor',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    }],
+  };
+  const plan = createDefaultRegistry().get('cursor').plan(model);
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'cursor.hook.event.workspace-open',
+    message: expect.stringContaining('cannot map canonical hook event "workspaceOpen"'),
+  }));
+  expect(plan.entries.some((entry) => entry.relativePath === 'hooks/hooks.json')).toBe(false);
 });
 
 it('anchors compiled Claude MCP entries with absolute arguments, plugin-root cwd, and the env anchor', () => {

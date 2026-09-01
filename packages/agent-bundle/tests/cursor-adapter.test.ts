@@ -84,8 +84,10 @@ it('registers cursor as a first-class target with pinned schema validation', () 
   expect(registry.supports('cursor', 'rules')).toBe(true);
   expect(registry.supports('cursor', 'skills')).toBe(true);
   expect(registry.supports('cursor', 'hooks')).toBe(true);
+  expect(registry.supports('cursor', 'marketplace')).toBe(true);
   expect(registry.hookContract('cursor')?.commandRoot).toBe('${CURSOR_PLUGIN_ROOT}');
   expect(registry.artifactValidation('cursor').documents).toEqual([
+    { path: '.cursor-plugin/marketplace.json', required: false, schema: 'marketplace' },
     { path: '.cursor-plugin/plugin.json', required: true, schema: 'plugin' },
     { path: 'hooks/hooks.json', required: false, schema: 'hooks' },
     { path: 'mcp.json', required: false, schema: 'mcp' },
@@ -418,7 +420,7 @@ it('drops hooks scoped to other targets from the plan', () => {
   expect(plan.hookEntries).toEqual([]);
   const paths = plan.entries.map((entry) => entry.relativePath);
   expect(paths).not.toContain('hooks/hooks.json');
-  expect(paths.some((path) => path.includes('marketplace'))).toBe(false);
+  expect(paths).toContain('.cursor-plugin/marketplace.json');
   const manifest = JSON.parse(
     (plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json') as { readonly content: string }).content,
   ) as Record<string, unknown>;

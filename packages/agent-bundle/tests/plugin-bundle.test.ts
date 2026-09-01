@@ -123,6 +123,15 @@ it('lays both host manifests over one shared bundle root', () => {
 
   expect(documents['.claude-plugin/marketplace.json']).toContain('bundle-example-marketplace');
   expect(documents['.agents/plugins/marketplace.json']).toContain('bundle-example-marketplace');
+  expect(JSON.parse(documents['.cursor-plugin/marketplace.json']!)).toEqual({
+    name: 'bundle-example-marketplace',
+    owner: { name: 'bundle-example' },
+    plugins: [{
+      description: 'One bundle for every supported host.',
+      name: 'bundle-example',
+      source: './',
+    }],
+  });
   expect(documents['AGENTS.md']).toContain('multi-host agent plugin bundle');
   expect(documents['AGENTS.md']).toContain('Claude Code');
   expect(documents['AGENTS.md']).toContain('Codex');
@@ -437,6 +446,7 @@ it('builds the unified bundle root on disk with a compiled universal hook wrappe
     expect(manifest.files.map((file) => file.path)).toEqual(expect.arrayContaining([
       'plugin/.claude-plugin/plugin.json',
       'plugin/.codex-plugin/plugin.json',
+      'plugin/.cursor-plugin/marketplace.json',
       'plugin/.cursor-plugin/plugin.json',
       'plugin/AGENTS.md',
       'plugin/hooks/hooks-cursor.json',

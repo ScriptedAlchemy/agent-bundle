@@ -19,7 +19,6 @@ import {
   eventRouteCapabilitiesFrom,
   supportedEventRouteNamesFrom,
   supportedCapability,
-  unavailableCapability,
 } from './capability-state.ts';
 import capabilityTable from './capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import {
@@ -33,6 +32,7 @@ import {
 } from './hook-contract.ts';
 import schemaProvenance from './schemas/cursor/PROVENANCE.json' with { type: 'json' };
 import hooksSchema from './schemas/cursor/hooks.schema.json' with { type: 'json' };
+import marketplaceSchema from './schemas/cursor/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/cursor/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/cursor/plugin.schema.json' with { type: 'json' };
 import {
@@ -62,6 +62,7 @@ const cursorName = 'cursor';
  */
 export const cursorArtifactPaths = Object.freeze({
   hooks: 'hooks/hooks.json',
+  marketplace: '.cursor-plugin/marketplace.json',
   mcp: 'mcp.json',
   plugin: '.cursor-plugin/plugin.json',
 });
@@ -70,11 +71,13 @@ const validator = createDraft7AdapterValidator();
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateHooks = validator.compile(hooksSchema);
+const validateMarketplace = validator.compile(marketplaceSchema);
 
 /** The pinned Cursor document validators, shared with the unified bundle adapter. */
 export const cursorPluginValidator = validatePlugin;
 export const cursorMcpValidator = validateMcp;
 export const cursorHooksValidator = validateHooks;
+export const cursorMarketplaceValidator = validateMarketplace;
 
 const cursorNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
 const cursorNameMaxLength = 64;
@@ -264,7 +267,7 @@ export const cursorManifest = (
 const metadata = Object.freeze({
   adapterRevision: '1.5.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'e963f86e9074a0c942ebc16190c3f534283c62fea1beda7411f170692dca05f7',
+  capabilitySha256: 'fd5a8171963f9b1bd05876cc333ba808bdcffb73b49b133bcf681b3a0fd57941',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -278,11 +281,13 @@ const hookContract = createCursorHookContract({
 const artifactValidation = Object.freeze({
   documents: Object.freeze([
     Object.freeze({ path: cursorArtifactPaths.hooks, required: false, schema: 'hooks' }),
+    Object.freeze({ path: cursorArtifactPaths.marketplace, required: false, schema: 'marketplace' }),
     Object.freeze({ path: cursorArtifactPaths.mcp, required: false, schema: 'mcp' }),
     Object.freeze({ path: cursorArtifactPaths.plugin, required: true, schema: 'plugin' }),
   ]),
   schemas: Object.freeze([
     Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
+    Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
     Object.freeze({ name: 'mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateMcp)) }),
     Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
   ]),
@@ -333,6 +338,34 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
   }),
 });
 
+export interface CursorMarketplacePlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Record<string, unknown>;
+  readonly valid: boolean;
+}
+
+/** Builds and validates Cursor's official `.cursor-plugin/marketplace.json` document. */
+export const planCursorMarketplace = (model: NormalizedPlugin): CursorMarketplacePlan => {
+  if (model.marketplace !== true) {
+    return Object.freeze({ diagnostics: Object.freeze([]), valid: false });
+  }
+  const document = {
+    name: `${model.metadata.name}-marketplace`,
+    owner: { name: model.metadata.name },
+    plugins: [{
+      description: model.metadata.description ?? model.metadata.name,
+      name: model.metadata.name,
+      source: './',
+    }],
+  };
+  const valid = validateMarketplace(document);
+  return Object.freeze({
+    diagnostics: Object.freeze(schemaDiagnostics('marketplace', valid, validateMarketplace.errors)),
+    document,
+    valid,
+  });
+};
+
 export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan => {
   const isSelected = (targets: readonly string[]): boolean => targets.includes(cursorName);
   const selectedCommands = (model.commands ?? []).filter((command) => isSelected(command.targets));
@@ -359,6 +392,8 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   if (hookDocument !== undefined) diagnostics.push(...schemaDiagnostics('hooks', hookDocumentValid, validateHooks.errors));
 
   const variables = cursorVariables(mcp);
+  const marketplacePlan = planCursorMarketplace(model);
+  diagnostics.push(...marketplacePlan.diagnostics);
   const plugin = cursorManifest(model, {
     ...(selectedCommands.length === 0 ? {} : { commands: './commands/' }),
     ...(hookDocument !== undefined && hookDocumentValid ? { hooks: `./${cursorArtifactPaths.hooks}` } : {}),
@@ -380,8 +415,9 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
     hookEntries: generatedHooks.hookEntries,
     hookManifestPath: cursorArtifactPaths.hooks,
     isSelected,
-    marketplaceRelativePath: '.cursor-plugin/marketplace.json',
-    marketplaceValid: false,
+    marketplace: marketplacePlan.document,
+    marketplaceRelativePath: cursorArtifactPaths.marketplace,
+    marketplaceValid: marketplacePlan.valid,
     mcp,
     mcpRelativePath: cursorArtifactPaths.mcp,
     mcpValid,
@@ -413,7 +449,7 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
     ),
     hooks: supportedCapability(evidence),
     install: supportedCapability(evidence),
-    marketplace: unavailableCapability('The pinned Cursor Plugin contract does not define a marketplace document.'),
+    marketplace: supportedCapability(evidence),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,
