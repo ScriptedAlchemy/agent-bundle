@@ -1632,7 +1632,7 @@ packages:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
   effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1:
-    resolution: {integrity: sha512-ua0aIKKp3KTtNa60djZZiXbCuQgW7XP6LtWjG2frvinbB3nUFz2TU/hWNEeFcmnR150VekAFf14sCQUgEG5Ffg==, tarball: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1}
+    resolution: {integrity: sha512-Tm6QdFCjyGREtr77wz5fQFqkIGqS7jdywjqyCzQu87spmNCNDJJNuxhfkO6oKwW3jYBHaQw8FJfJxWv6Ge7nHw==, tarball: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@1}
     version: 0.1.0
     peerDependencies:
       '@rstest/core': ^0.11.0
