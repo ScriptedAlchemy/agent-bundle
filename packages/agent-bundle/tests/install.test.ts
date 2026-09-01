@@ -282,6 +282,34 @@ it('refuses symlinks in a Cursor source bundle', async () => {
   }
 });
 
+it('refuses a symlinked Cursor install destination even when its content matches', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  const installRoot = join(home, '.cursor', 'plugins', 'local');
+  const destination = join(installRoot, 'install-fixture');
+  await mkdir(installRoot, { recursive: true });
+  await symlink(fixture.bundleRoot, destination);
+  try {
+    const error = await installBundle({
+      from: fixture.from,
+      home,
+      host: 'cursor',
+      scope: 'user',
+    }).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7004', target: 'cursor' }]);
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain(
+      'Refusing unsupported filesystem entry "."',
+    );
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('rejects a Cursor plugin name that could escape the local install root', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));

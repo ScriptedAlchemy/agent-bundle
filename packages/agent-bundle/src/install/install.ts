@@ -248,6 +248,10 @@ const installPublicCli = async (
 };
 
 const treeHash = async (root: string): Promise<string> => {
+  const rootMetadata = await lstat(root);
+  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
+    throw new Error('Refusing unsupported filesystem entry ".".');
+  }
   const hash = createHash('sha256');
   const visit = async (relativePath: string): Promise<void> => {
     const path = join(root, relativePath);
