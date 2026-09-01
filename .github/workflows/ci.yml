@@ -13,9 +13,13 @@ on:
 permissions:
   contents: read
 
+# PR pushes cancel the superseded run of the same PR (only the latest commit
+# matters). Pushes to main, the nightly schedule, and manual dispatches get
+# SHA-keyed groups with no cancellation, so a new main push can never kill an
+# in-flight main or nightly run. Same pattern as package-preview.yml.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Builds and checks every public example through its own toolchain.
@@ -51,7 +55,20 @@ jobs:
           install: false
           runtime: node@${{ matrix.node-version }}
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chrome
+      # Tests launch branded Chrome (`channel: 'chrome'`), which Playwright
+      # installs system-wide via apt — never into ~/.cache/ms-playwright, so
+      # a browser cache cannot help. In CI, `playwright install chrome`
+      # unconditionally removes and re-downloads ~120 MB of Chrome per job,
+      # while ubuntu-latest images already ship Google Chrome stable with its
+      # OS deps. Reuse it; fall back to the full install (browser + deps) if
+      # the runner image ever drops it.
+      - name: Ensure branded Chrome for Playwright
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome --version)"
+          else
+            pnpm exec playwright install --with-deps chrome
+          fi
       # Build first: checked-in suites and API tests import the package's built type
       # declarations, so typecheck requires dist (same order as `pnpm check`).
       - run: pnpm build
@@ -74,7 +91,14 @@ jobs:
           install: false
           runtime: node@22.19.0
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chrome
+      # Reuse the runner image's Chrome; see the Verify job for the rationale.
+      - name: Ensure branded Chrome for Playwright
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome --version)"
+          else
+            pnpm exec playwright install --with-deps chrome
+          fi
       # Per-PR packed pool: single pack+install proofs plus the
       # minimal-template scaffolder smoke. The full template matrix runs in
       # the nightly packed-matrix job and in pre-publish `pnpm check:release`.
@@ -95,7 +119,14 @@ jobs:
           install: false
           runtime: node@22.19.0
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chrome
+      # Reuse the runner image's Chrome; see the Verify job for the rationale.
+      - name: Ensure branded Chrome for Playwright
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome --version)"
+          else
+            pnpm exec playwright install --with-deps chrome
+          fi
       - run: pnpm check:release
 
   rsc-runtime-micro-eval:
