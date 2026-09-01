@@ -42,16 +42,15 @@ import {
 const cursorName = 'cursor';
 
 /**
- * Cursor's conventional artifact document paths, shared with the unified
- * bundle adapter. Cursor auto-discovers `mcp.json` and `hooks/hooks.json` at
- * the plugin root (never the Claude-convention `.mcp.json`); the manifest
- * still carries explicit pointers so relocations stay impossible to
- * configure apart.
+ * Cursor's local-plugin document paths, shared with the unified bundle
+ * adapter. The real-host loader accepts multiple manifest candidates, but
+ * root `plugin.json`, `mcp.json`, and explicit hook pointers match the
+ * convention used by physical installs under `~/.cursor/plugins/local`.
  */
 export const cursorArtifactPaths = Object.freeze({
   hooks: 'hooks/hooks.json',
   mcp: 'mcp.json',
-  plugin: '.cursor-plugin/plugin.json',
+  plugin: 'plugin.json',
 });
 
 const validator = createAdapterValidator();
@@ -188,7 +187,7 @@ export interface CursorManifestPointers {
   readonly skills?: string;
 }
 
-/** Builds the `.cursor-plugin/plugin.json` manifest with explicit document pointers. */
+/** Builds the root `plugin.json` manifest with explicit document pointers. */
 export const cursorManifest = (
   model: NormalizedPlugin,
   pointers: CursorManifestPointers,
@@ -203,9 +202,9 @@ export const cursorManifest = (
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.1.0',
+  adapterRevision: '1.2.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'b8990776721f3e2cf4707364812586a0043b8a1247899a47f256302739c00443',
+  capabilitySha256: '9d200322bea9cdb1f22b35c404be043904966ffa310f4a77a1852352c1fe495f',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });

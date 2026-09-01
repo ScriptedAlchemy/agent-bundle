@@ -20,5 +20,11 @@
       "url": "https://cursor.com/docs/reference/plugins"
     }
   },
-  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Package builds do not download schemas or invoke host-side validators."
+  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Package builds do not download schemas or invoke host-side validators.",
+  "hostLayoutObservation": {
+    "observedAt": "2026-08-31",
+    "cursorServerBuild": "9746bf00534f29fc29f1deb9ddfb5448f7905eb0",
+    "source": "Read-only inspection of the installed cursor-agent-exec loader and physical plugins under ~/.cursor/plugins/local.",
+    "notes": "Local installs support root plugin.json and mcp.json; manifests select the Cursor hooks document. CURSOR_PLUGIN_ROOT is substituted for local MCP and hook commands. Symlinks escaping the local plugins root are rejected."
+  }
 }

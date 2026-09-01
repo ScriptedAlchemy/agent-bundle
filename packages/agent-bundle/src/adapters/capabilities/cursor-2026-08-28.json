@@ -40,7 +40,25 @@
   },
   "observedCliVersion": "2026-08-28",
   "plugin": {
-    "manifest": ".cursor-plugin/plugin.json",
-    "skills": true
+    "manifest": "plugin.json",
+    "skills": true,
+    "localInstall": {
+      "method": "copy",
+      "root": "~/.cursor/plugins/local/<name>"
+    }
+  },
+  "tokens": {
+    "pluginRoot": "${CURSOR_PLUGIN_ROOT}",
+    "workspaceRoot": "${workspaceFolder}"
+  },
+  "provenance": {
+    "observedAt": "2026-08-31",
+    "cursorServerBuild": "9746bf00534f29fc29f1deb9ddfb5448f7905eb0",
+    "evidence": [
+      "Installed cursor-agent-exec loader candidates: .cursor-plugin/plugin.json, .claude-plugin/plugin.json, plugin.json.",
+      "Physical ~/.cursor/plugins/local/cargo-conductor uses root plugin.json, root mcp.json, and a manifest-selected Cursor hooks document.",
+      "Installed loader substitutes CURSOR_PLUGIN_ROOT in MCP command, args, env, and cwd fields and in hook commands.",
+      "Local-plugin symlinks are realpath checked and rejected when their targets escape ~/.cursor/plugins/local."
+    ]
   }
 }

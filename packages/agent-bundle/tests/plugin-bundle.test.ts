@@ -127,17 +127,19 @@ it('lays both host manifests over one shared bundle root', () => {
   expect(documents['AGENTS.md']).toContain('Claude Code');
   expect(documents['AGENTS.md']).toContain('Codex');
   expect(documents['AGENTS.md']).toContain('Cursor');
+  expect(documents['AGENTS.md']).toContain('copy this directory into `~/.cursor/plugins/local/bundle-example`');
+  expect(documents['AGENTS.md']).toContain('Symlinks that resolve outside `~/.cursor/plugins/local` are rejected');
   expect(documents['AGENTS.md']).toContain('VS Code / GitHub Copilot');
 
-  const cursorPlugin = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  const cursorPlugin = JSON.parse(documents['plugin.json']!) as Record<string, unknown>;
   expect(cursorPlugin).toMatchObject({
     hooks: './hooks/hooks-cursor.json',
-    mcpServers: './.cursor-plugin/mcp.json',
+    mcpServers: './mcp.json',
     name: 'bundle-example',
     skills: './skills/',
     version: '2.0.0',
   });
-  const cursorMcp = JSON.parse(documents['.cursor-plugin/mcp.json']!) as {
+  const cursorMcp = JSON.parse(documents['mcp.json']!) as {
     readonly mcpServers: Record<string, { readonly args: readonly string[]; readonly env?: Record<string, string> }>;
   };
   expect(cursorMcp.mcpServers['status']!.args[0]).toBe('${CURSOR_PLUGIN_ROOT}/mcp/server.mjs');
@@ -285,7 +287,7 @@ it('builds the unified bundle root on disk with a compiled universal hook wrappe
     expect(manifest.files.map((file) => file.path)).toEqual(expect.arrayContaining([
       'plugin/.claude-plugin/plugin.json',
       'plugin/.codex-plugin/plugin.json',
-      'plugin/.cursor-plugin/plugin.json',
+      'plugin/plugin.json',
       'plugin/AGENTS.md',
       'plugin/hooks/hooks-cursor.json',
       'plugin/hooks/session-start.cursor.mjs',
