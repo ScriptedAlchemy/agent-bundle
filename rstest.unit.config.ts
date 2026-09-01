@@ -3,6 +3,7 @@ import { defineConfig } from '@rstest/core';
 import {
   integrationTestFiles,
   nightlyEvidenceTestFiles,
+  packedReleaseOnlyTestFiles,
   packedTestFiles,
   projectionTestFiles,
   routeUnitTestFiles,
@@ -19,6 +20,9 @@ export default defineConfig({
   exclude: [
     ...integrationTestFiles,
     ...nightlyEvidenceTestFiles,
+    // Packs and installs like packedTestFiles, and is release-boundary-only:
+    // `test:packed:release` owns it, not the build-free per-PR pool.
+    ...packedReleaseOnlyTestFiles,
     ...packedTestFiles,
     ...projectionTestFiles,
     ...routeUnitTestFiles,
