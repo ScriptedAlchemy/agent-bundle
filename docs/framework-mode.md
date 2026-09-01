@@ -66,3 +66,26 @@ results and never renders JSX. Routed `src/cli/**` commands and
 `src/scripts/**` scripts follow one sentence: `.tsx` renders through the
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
 is plain.
+
+## Distribution
+
+`agent-bundle build` makes each target directory independently distributable.
+Every target includes `INSTALL.md` generated with its real plugin and
+marketplace names. Claude and Codex bundles include local marketplace manifests
+and install through their public plugin CLIs; Cursor bundles use the documented
+`~/.cursor/plugins/local/<name>` location because Cursor exposes marketplace
+management but no non-interactive plugin install verb.
+
+The framework CLI performs those same operations:
+
+```sh
+agent-bundle install claude --from artifact/claude --scope user
+agent-bundle install codex --from artifact/codex
+agent-bundle install cursor --from artifact/cursor
+```
+
+Cursor-compatible `cursor`, `portable`, and multi-host `plugin` targets also
+include a standalone `install.mjs`. Its staged copy is idempotent for identical
+content and refuses version or content collisions. It never invokes sudo or
+changes PATH. Artifact validation rejects a built-in target whose required
+install surface is missing.

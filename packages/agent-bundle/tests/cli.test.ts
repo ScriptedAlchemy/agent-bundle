@@ -579,3 +579,44 @@ it('reports a generated Flight worker collision before compiling scripts', async
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
 }, 30_000 * timeScale);
+
+it('dispatches the install command through the native installer surface', async () => {
+  const stderr: string[] = [];
+  const stdout: string[] = [];
+  const calls: unknown[] = [];
+  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
+
+  const code = await runSourceCli(
+    ['install', 'claude', '--from', '/tmp/example bundle', '--scope', 'project', '--json'],
+    {
+      stderr: { write: (chunk: string) => stderr.push(chunk) },
+      stdout: { write: (chunk: string) => stdout.push(chunk) },
+    },
+    {
+      installBundle: async (options: unknown) => {
+        calls.push(options);
+        return {
+          bundleRoot: '/tmp/example bundle',
+          host: 'claude',
+          marketplace: 'fixture-marketplace',
+          plugin: 'fixture',
+          state: 'installed',
+          version: '1.0.0',
+        };
+      },
+    } as unknown as Parameters<typeof runSourceCli>[2],
+  );
+
+  expect(code).toBe(0);
+  expect(stderr.join('')).toBe('');
+  expect(calls).toEqual([{
+    from: '/tmp/example bundle',
+    host: 'claude',
+    scope: 'project',
+  }]);
+  expect(JSON.parse(stdout.join(''))).toMatchObject({
+    host: 'claude',
+    plugin: 'fixture',
+    state: 'installed',
+  });
+});

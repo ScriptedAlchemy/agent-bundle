@@ -165,7 +165,12 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
   expect(plan.hookEntries).toEqual([]);
 
   const documents = writeContents(model);
-  expect(Object.keys(documents).sort()).toEqual(['.cursor-plugin/plugin.json', 'mcp.json']);
+  expect(Object.keys(documents).sort()).toEqual([
+    '.cursor-plugin/plugin.json',
+    'INSTALL.md',
+    'install.mjs',
+    'mcp.json',
+  ]);
 
   const manifest = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
   expect(manifest).toEqual({
@@ -330,7 +335,7 @@ it('rejects the plugin-data token and omits the failed server from the document'
     expect.objectContaining({ code: 'cursor.mcp.token', severity: 'error', target: 'cursor' }),
   ]);
   const documents = plan.entries.filter((entry) => entry.kind === 'write').map((entry) => entry.relativePath);
-  expect(documents).toEqual(['.cursor-plugin/plugin.json']);
+  expect(documents).toEqual(['.cursor-plugin/plugin.json', 'INSTALL.md', 'install.mjs']);
   const manifest = JSON.parse(
     (plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json') as { readonly content: string }).content,
   ) as Record<string, unknown>;

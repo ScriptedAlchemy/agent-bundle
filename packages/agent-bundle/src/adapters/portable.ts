@@ -36,6 +36,7 @@ import {
   type TargetArtifactEntry,
   type TargetArtifactPlan,
 } from './types.ts';
+import { withInstallSurface } from '../install/surface.ts';
 
 export interface PortableConfigExtension {
   portable?: AgentBundlePortableConfig;
@@ -55,9 +56,9 @@ const schemaValidator = createAdapterValidator();
 const validatePlugin = schemaValidator.compile(pluginSchema);
 const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
-  adapterRevision: '1.1.0',
+  adapterRevision: '1.2.0',
   capabilityRevision: capabilityTable.observedSpecificationVersion,
-  capabilitySha256: '99a27bd327f2afdb0a71fa869e9fad27438f07d843c5e61062d2dc3f978dce9a',
+  capabilitySha256: '60f63a2cf3c6783a178173c5006234a89ae186fe3542fe61339542cac117389e',
   observedVersion: capabilityTable.observedSpecificationVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.version),
 });
@@ -310,11 +311,11 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
-  return Object.freeze({
+  return withInstallSurface(Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     entries: Object.freeze(entries),
     hookEntries: Object.freeze([]),
-  });
+  }), model, 'portable');
 };
 
 export const portableAdapter: TargetAdapter = Object.freeze({
@@ -323,6 +324,7 @@ export const portableAdapter: TargetAdapter = Object.freeze({
     assets: 'assets',
     mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
+    rootDocuments: Object.freeze(['INSTALL.md', 'install.mjs']),
     scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.bash', '.mjs', '.py', '.sh']), directory: 'scripts' }),
     skills: 'skills',
   }),
@@ -332,6 +334,7 @@ export const portableAdapter: TargetAdapter = Object.freeze({
       'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no commands surface.',
     ),
     hooks: unavailableCapability('Agent Plugins 1.0.0 does not define a hooks component.'),
+    install: unavailableCapability(capabilityTable.install.reason),
     marketplace: unavailableCapability('Agent Plugins 1.0.0 does not define a marketplace document.'),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,

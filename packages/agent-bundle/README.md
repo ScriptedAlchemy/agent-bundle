@@ -67,6 +67,7 @@ manifests at files inside those payloads without compiling them. Payload files c
 | Command | Purpose |
 | --- | --- |
 | `agent-bundle build` | Build a validated artifact from source, plus the declared `dist/` package build. |
+| `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, and `--json` supported). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
 | `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
@@ -97,6 +98,35 @@ During development, load a built target without installing it and verify registr
 ```sh
 claude --plugin-dir dist/claude plugin list --json
 ```
+
+## Distribute and install bundles
+
+Every built target directory contains a generated `INSTALL.md` with commands
+that use the bundle's real plugin and marketplace names. Claude and Codex
+targets always include local marketplace manifests, so their public CLIs can
+install the emitted directory directly:
+
+```sh
+agent-bundle install claude --from artifact/claude --scope user
+agent-bundle install codex --from artifact/codex
+```
+
+The installer delegates to `claude plugin marketplace add` /
+`claude plugin install` and `codex plugin marketplace add` /
+`codex plugin add`; it fails with a typed diagnostic when the selected host
+binary is unavailable. Cursor has no non-interactive install verb, so Cursor,
+portable, and composite targets include `install.mjs`, which safely copies the
+bundle into `~/.cursor/plugins/local/<name>` without overwriting collisions:
+
+```sh
+agent-bundle install cursor --from artifact/cursor
+# or, from the emitted target directory:
+node ./install.mjs
+```
+
+Cursor installation is user-scoped. Claude also accepts `--scope project` and
+`--scope local`; Codex is user-scoped. A source-free artifact root is accepted
+by `--from` when it contains the selected host target directory.
 
 ## Developer workbench
 

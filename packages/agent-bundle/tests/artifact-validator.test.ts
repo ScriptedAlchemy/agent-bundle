@@ -14,6 +14,7 @@ import {
   validateModernMcpDocument,
   type TargetAdapter,
   type TargetArtifactDocumentValidator,
+  type TargetArtifactWrite,
 } from '../src/adapters/types.ts';
 import { assembleArtifactManifest, type ArtifactManifest } from '../src/build/manifest.ts';
 import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
@@ -21,6 +22,7 @@ import { digest, sha256Hex } from '../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { createMcpPathTokenResolver } from '../src/services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../src/services/mcp-runtime.ts';
+import type { NormalizedPlugin } from '../src/core/types.ts';
 
 const hash = (value: string): string => sha256Hex(value);
 
@@ -743,6 +745,8 @@ it('rejects forged hook output for a target without a hook contract', async () =
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
   const files = [
+    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'portable/INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated' as const, path: 'portable/install.mjs' },
     {
       contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
       kind: 'generated' as const,
@@ -791,6 +795,8 @@ it('admits nested project assets in the target-owned recursive asset namespace',
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
   const files = [
+    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'portable/INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated' as const, path: 'portable/install.mjs' },
     {
       contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
       kind: 'generated' as const,
@@ -1770,6 +1776,7 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
     }],
   };
   const validFiles = [
+    { contents: '# Install codex-test\n', kind: 'generated' as const, path: 'codex/INSTALL.md' },
     { contents: `${JSON.stringify(plugin)}\n`, kind: 'generated' as const, path: 'codex/.codex-plugin/plugin.json' },
     { contents: `${JSON.stringify(marketplace)}\n`, kind: 'generated' as const, path: 'codex/.agents/plugins/marketplace.json' },
   ];
@@ -1780,6 +1787,7 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
 
     const invalidFiles = [
       validFiles[0]!,
+      validFiles[1]!,
       { contents: '{}\n', kind: 'generated' as const, path: 'codex/.agents/plugins/marketplace.json' },
     ];
     await writeFile(join(root, 'codex', '.agents', 'plugins', 'marketplace.json'), '{}\n');
@@ -1879,7 +1887,7 @@ it('documents recovery for every stable artifact diagnostic code', async () => {
       'AB6000', 'AB6001', 'AB6002', 'AB6003', 'AB6004', 'AB6005', 'AB6006',
       'AB6007', 'AB6008', 'AB6009', 'AB6010', 'AB6011', 'AB6012', 'AB6013',
       'AB6014', 'AB6015', 'AB6016', 'AB6017', 'AB6018', 'AB6019', 'AB6020',
-      'AB6021', 'AB6022',
+      'AB6021', 'AB6022', 'AB6023', 'AB6024',
     ]);
     expect(Object.values(artifactDiagnosticRecoveries).every((recovery) => recovery.trim().length > 0)).toBe(true);
     expect(artifactDiagnosticRecoveries.AB6015).not.toBe(artifactDiagnosticRecoveries.AB6016);
@@ -1894,3 +1902,87 @@ it('documents recovery for every stable artifact diagnostic code', async () => {
     await rm(root, { force: true, recursive: true });
   }
 });
+
+const installSurfaceModel = (target: string): NormalizedPlugin => ({
+  extensions: {},
+  hooks: [],
+  mcpServers: [],
+  metadata: {
+    id: 'plugin:artifact-install',
+    name: 'artifact-install',
+    provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+    version: '1.0.0',
+  },
+  runtime: { node: '22.19.0' },
+  scripts: [],
+  skills: [],
+  targets: [{
+    id: `target:${target}`,
+    name: target,
+    provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+  }],
+});
+
+const installSurfaceArtifact = async (
+  target: 'claude' | 'codex' | 'cursor' | 'plugin' | 'portable',
+  omitted: string,
+): Promise<string> => {
+  const registry = createDefaultRegistry();
+  const files = registry.get(target).plan(installSurfaceModel(target)).entries
+    .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
+    .filter((entry) => entry.relativePath !== omitted)
+    .map((entry) => ({
+      contents: entry.content,
+      kind: 'generated' as const,
+      path: `${target}/${entry.relativePath}`,
+    }));
+  return writeArtifact(files, true, [targetFromRegistry(registry, target)]);
+};
+
+it.each(['claude', 'codex', 'cursor', 'plugin', 'portable'] as const)(
+  'rejects a %s artifact without INSTALL.md',
+  async (target) => {
+    const root = await installSurfaceArtifact(target, 'INSTALL.md');
+    try {
+      await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: 'AB6023',
+          generatedPath: `${target}/INSTALL.md`,
+          target,
+        }),
+      ]));
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  },
+);
+
+it.each(['cursor', 'plugin', 'portable'] as const)(
+  'rejects a %s fallback artifact without install.mjs',
+  async (target) => {
+    const root = await installSurfaceArtifact(target, 'install.mjs');
+    try {
+      await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: 'AB6024',
+          generatedPath: `${target}/install.mjs`,
+          target,
+        }),
+      ]));
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  },
+);
+
+it.each(['claude', 'codex'] as const)(
+  'does not require a fallback script for the %s public CLI target',
+  async (target) => {
+    const root = await installSurfaceArtifact(target, 'install.mjs');
+    try {
+      await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  },
+);

@@ -191,6 +191,10 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
         },
       })}\n`,
     );
+    await Promise.all([
+      writeFile(join(artifact, 'portable', 'INSTALL.md'), '# Install packed-fixture\n'),
+      writeFile(join(artifact, 'portable', 'install.mjs'), '#!/usr/bin/env node\n'),
+    ]);
     await writeFixtureManifest({ artifactRoot: artifact, targets: ['portable'] });
     await expect(readFile(join(artifact, 'agent-bundle.hooks.json'), 'utf8')).resolves.toBe(
       '{"hooks":[]}\n',

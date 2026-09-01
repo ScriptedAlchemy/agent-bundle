@@ -39,6 +39,7 @@ import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 import { validateHookCoherence } from './validate-artifact-hooks.ts';
 import { validateMcpCoherence } from './validate-artifact-mcp.ts';
 import { pathTarget, targetNamespaces, validateEmittedSkills } from './validate-artifact-skills.ts';
+import { installSurfaceRequirements } from '../install/surface.ts';
 
 export { artifactDiagnosticRecoveries, type ArtifactDiagnosticCode } from './artifact-diagnostics.ts';
 export type * from './artifact-validation-types.ts';
@@ -349,6 +350,17 @@ const validateTargetContracts = async (options: {
         target.name,
       ));
       continue;
+    }
+
+    for (const relativePath of installSurfaceRequirements(target.name)) {
+      const generatedPath = `${target.name}/${relativePath}`;
+      if (files.has(generatedPath)) continue;
+      diagnostics.push(diagnostic(
+        relativePath === 'INSTALL.md' ? 'AB6023' : 'AB6024',
+        `Target ${JSON.stringify(target.name)} is missing required install surface ${JSON.stringify(relativePath)}.`,
+        generatedPath,
+        target.name,
+      ));
     }
 
     const validation = options.registry.artifactValidation(target.name);

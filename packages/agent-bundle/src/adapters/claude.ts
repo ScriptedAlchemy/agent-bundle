@@ -56,6 +56,7 @@ import {
   type TargetArtifactLayout,
   type TargetArtifactPlan,
 } from './types.ts';
+import { withInstallSurface } from '../install/surface.ts';
 
 /**
  * One Claude Code plugin LSP server. The binary is never vendored: Claude
@@ -139,7 +140,7 @@ const hookContract = Object.freeze({
 const metadata = Object.freeze({
   adapterRevision: '1.4.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '6b8a3b222b49c0ad22f32ecdf8157bd353ce5be05d56e40ae5cf4ad2b9eb917f',
+  capabilitySha256: '58141a999ac3d39d9b7aa2bc6bb945aae145773ea6f37806eecc93d3b5c7ed38',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -471,7 +472,7 @@ export const planClaudeArtifacts = (
   };
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
 
-  const marketplace = model.marketplace !== true ? undefined : {
+  const marketplace = {
     description: model.metadata.description ?? model.metadata.name,
     name: `${model.metadata.name}-marketplace`,
     owner: { name: model.metadata.name },
@@ -482,10 +483,8 @@ export const planClaudeArtifacts = (
       version: model.metadata.version,
     }],
   };
-  const marketplaceValid = marketplace !== undefined && validateMarketplace(marketplace);
-  if (marketplace !== undefined) {
-    diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
-  }
+  const marketplaceValid = validateMarketplace(marketplace);
+  diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
 
   const basePlan = standardPluginArtifactPlan({
     diagnostics,
@@ -511,13 +510,13 @@ export const planClaudeArtifacts = (
     pluginRelativePath: claudeArtifactPaths.plugin,
     targetName,
   });
-  return Object.freeze({
+  return withInstallSurface(Object.freeze({
     ...basePlan,
     entries: sortedEntries([
       ...basePlan.entries,
       ...commandWriteEntries(model, isSelected, claudeCommandMarkdown),
     ]),
-  });
+  }), model, targetName === 'plugin' ? 'plugin' : 'claude');
 };
 
 const artifactLayout: TargetArtifactLayout = Object.freeze({
@@ -538,6 +537,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude Code plugin contract does not support commands.',
     ),
+    install: supportedCapability(evidence),
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
     lsp: capabilityStateFromSupport(

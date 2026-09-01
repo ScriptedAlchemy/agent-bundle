@@ -227,7 +227,7 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
   if (cursor.capabilities.mcp?.state !== 'supported') throw new Error('Expected Cursor MCP support evidence.');
   expect(cursor.capabilities.mcp.evidence).toEqual({
     capabilityRevision: '2026-08-28',
-    capabilitySha256: '9884e0ffdb1c7fd1fe6d1071fa6944729d596e51f0ab87ad5ef2b0dd6fd8a981',
+    capabilitySha256: 'e755dbaa54e36001e8046152cb2a630b2ac6252e2a3fd8ba4bb559e61e6bcf0a',
     observedVersion: '2026-08-28',
     target: 'cursor',
   });
@@ -275,4 +275,23 @@ it('reports the evidence-backed G10 event family matrix without inferred support
   expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
     state: 'unavailable',
   });
+});
+
+it('reports evidence-backed installation support only for real host targets', () => {
+  const registry = createDefaultRegistry();
+
+  for (const target of ['claude', 'codex', 'cursor'] as const) {
+    expect(registry.get(target).capabilities.install).toMatchObject({
+      evidence: { target },
+      state: 'supported',
+    });
+    expect(registry.supports(target, 'install')).toBe(true);
+  }
+  for (const target of ['portable', 'plugin'] as const) {
+    expect(registry.get(target).capabilities.install).toMatchObject({
+      reason: expect.stringContaining('profile'),
+      state: 'unavailable',
+    });
+    expect(registry.supports(target, 'install')).toBe(false);
+  }
 });

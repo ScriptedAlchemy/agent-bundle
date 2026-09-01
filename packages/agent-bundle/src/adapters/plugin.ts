@@ -8,7 +8,11 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
-import { intersectCapabilityStates, supportedEventRouteNamesFrom } from './capability-state.ts';
+import {
+  intersectCapabilityStates,
+  supportedEventRouteNamesFrom,
+  unavailableCapability,
+} from './capability-state.ts';
 import claudeCapabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import { claudeAdapter, claudeArtifactPaths, claudeHooksValidator, planClaudeArtifacts } from './claude.ts';
@@ -203,7 +207,7 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
   hookWrappers: standardArtifactLayout.hookWrappers,
   mcpApps: standardArtifactLayout.mcpApps,
   mcpEntries: standardArtifactLayout.mcpEntries,
-  rootDocuments: Object.freeze(['AGENTS.md']),
+  rootDocuments: Object.freeze(['AGENTS.md', ...(standardArtifactLayout.rootDocuments ?? [])]),
   rules: Object.freeze({ allowedSuffixes: Object.freeze(['.mdc']), directory: 'rules' }),
   scripts: standardArtifactLayout.scripts,
   skills: standardArtifactLayout.skills,
@@ -233,9 +237,8 @@ const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions)
     '',
     '## Install',
     '',
-    '- **Claude Code**: add this directory (or its repository) as a plugin — `claude plugin marketplace add <source>`.',
-    '- **Codex**: `codex plugin marketplace add <source>`; the manifest is `.codex-plugin/plugin.json`.',
-    `- **Cursor**: copy this directory into \`~/.cursor/plugins/local/${model.metadata.name}\`; the manifest is \`.cursor-plugin/plugin.json\`. Symlinks that resolve outside \`~/.cursor/plugins/local\` are rejected by Cursor (staff confirmation: https://forum.cursor.com/t/local-plugins-symlink-on-windows-doesnt-work/159427/6).`,
+    'See `INSTALL.md` for exact Claude Code, Codex, and Cursor commands using this bundle\'s compiled names.',
+    `Cursor can also be installed with \`node ./install.mjs\` into \`~/.cursor/plugins/local/${model.metadata.name}\`.`,
     '- **VS Code / GitHub Copilot**: install the repository as an agent plugin, or consume `skills/` directly.',
     '- **skills CLI**: `npx skills add <source> --skill <name>` reads the `skills/` directory.',
     '',
@@ -490,6 +493,9 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({
     ...compositeEventCapabilities,
     commands: intersectCapabilityStates(claudeAdapter.capabilities.commands!, codexAdapter.capabilities.commands!),
+    install: unavailableCapability(
+      'Plugin is a multi-host distribution profile, not one host runtime with a single installation transaction.',
+    ),
     marketplace: intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
     hooks: intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
     // Claude supports LSP and Codex has no LSP surface, so the intersection
