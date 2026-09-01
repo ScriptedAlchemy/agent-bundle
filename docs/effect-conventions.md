@@ -22,7 +22,7 @@ Read `repos/effect/LLMS.md` before writing Effect code. Refresh
 Each Effect-consuming package has exactly one `src/effect/boundary.ts`:
 
 - [`packages/rsc-runtime/src/effect/boundary.ts`](../packages/rsc-runtime/src/effect/boundary.ts) — runtime + state kernel internals.
-- `packages/agent-bundle/src/effect/boundary.ts` — added when the dev seam (Stage 3) starts using Effect.
+- [`packages/agent-bundle/src/effect/boundary.ts`](../packages/agent-bundle/src/effect/boundary.ts) — the dev seam (Stage 3). Maps interruption to `AbortError` and rethrows the dev seam's typed contracts (`CodedError` subclasses, `DiagnosticError`) unchanged.
 
 The boundary owns:
 
