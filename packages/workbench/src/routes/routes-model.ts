@@ -5,6 +5,7 @@ import type {
   RouteManifestConfigEntry,
   RouteManifestKind,
   RouteManifestRoute,
+  RouteManifestServerMode,
 } from '../../../agent-bundle/src/contracts/routes.ts';
 
 /**
@@ -55,6 +56,14 @@ export interface RouteCatalogProvider {
   readonly source: string;
 }
 
+/** One declared MCP server, including externally packaged surfaces with no manifest routes. */
+export interface RouteCatalogServer {
+  readonly id: string;
+  readonly mode: RouteManifestServerMode;
+  readonly name: string;
+  readonly routeCount: number;
+}
+
 export interface RouteCatalog {
   readonly diagnostics: readonly Diagnostic[];
   readonly digest: string;
@@ -63,6 +72,7 @@ export interface RouteCatalog {
   readonly message?: string;
   readonly providers: readonly RouteCatalogProvider[];
   readonly routeCount: number;
+  readonly servers: readonly RouteCatalogServer[];
   readonly sourceRevision?: string;
   readonly state: RouteCatalogState;
 }
@@ -147,6 +157,9 @@ export const routeCatalogFor = (
       .map((provider) => Object.freeze({ id: provider.id, name: provider.name, source: provider.source }))
       .sort((left, right) => left.name.localeCompare(right.name))),
     routeCount: groups.reduce((total, group) => total + group.entries.length, 0),
+    servers: Object.freeze([...manifest.servers]
+      .map((server) => Object.freeze({ id: server.id, mode: server.mode, name: server.name, routeCount: server.routes.length }))
+      .sort((left, right) => left.name.localeCompare(right.name))),
     sourceRevision: manifest.sourceRevision,
     state: epochSourceRevision === undefined || epochSourceRevision === manifest.sourceRevision ? 'current' : 'stale',
   });
@@ -159,6 +172,7 @@ export const unavailableRouteCatalog = (message: string): RouteCatalog => Object
   message,
   providers: Object.freeze([]),
   routeCount: 0,
+  servers: Object.freeze([]),
   state: 'unavailable',
 });
 
@@ -167,4 +181,4 @@ export const routeCatalogHasKind = (catalog: RouteCatalog, kind: RouteManifestKi
   catalog.groups.some((group) => group.kind === kind && group.entries.length > 0);
 
 export const routeCatalogServerCount = (catalog: RouteCatalog): number =>
-  new Set(catalog.groups.flatMap((group) => group.serverId === undefined ? [] : [group.serverId])).size;
+  catalog.servers.length;

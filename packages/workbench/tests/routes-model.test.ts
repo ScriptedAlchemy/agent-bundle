@@ -130,6 +130,29 @@ it('carries the server packaging mode and the CLI surface mode as group metadata
   expect(catalog.groups.find((group) => group.kind === 'cli')?.server).toBeUndefined();
 });
 
+it('retains empty externally packaged servers as catalog surfaces', () => {
+  const catalog = routeCatalogFor({
+    diagnostics: [],
+    digest: 'e'.repeat(64),
+    events: [],
+    providers: [],
+    scripts: [],
+    servers: [
+      { id: 'mcp:custom-library', mode: 'custom', name: 'custom-library', routes: [] },
+      { id: 'mcp:command-catalog', mode: 'command', name: 'command-catalog', routes: [] },
+    ],
+    sourceRevision: 'r'.repeat(64),
+  });
+
+  expect(routeCatalogServerCount(catalog)).toBe(2);
+  expect(catalog.servers).toEqual([
+    { id: 'mcp:command-catalog', mode: 'command', name: 'command-catalog', routeCount: 0 },
+    { id: 'mcp:custom-library', mode: 'custom', name: 'custom-library', routeCount: 0 },
+  ]);
+  expect(catalog.groups).toEqual([]);
+  expect(catalog.routeCount).toBe(0);
+});
+
 it('attaches the compiled command to its CLI route entry', () => {
   const catalog = routeCatalogFor(manifest);
   const entry = catalog.groups.find((group) => group.kind === 'cli')?.entries[0];
@@ -170,6 +193,7 @@ it('renders an empty compiled graph without groups', () => {
   });
 
   expect(catalog.groups).toEqual([]);
+  expect(catalog.servers).toEqual([]);
   expect(catalog.routeCount).toBe(0);
   expect(catalog.state).toBe('current');
 });
@@ -179,6 +203,7 @@ it('describes an unreadable manifest without inventing routes', () => {
 
   expect(catalog.state).toBe('unavailable');
   expect(catalog.groups).toEqual([]);
+  expect(catalog.servers).toEqual([]);
   expect(catalog.sourceRevision).toBeUndefined();
   expect(routeCatalogHasKind(catalog, 'tool')).toBe(false);
 });

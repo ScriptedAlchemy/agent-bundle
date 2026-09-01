@@ -1,6 +1,11 @@
 import React from 'react';
 
-import type { RouteCatalog, RouteCatalogEntry, RouteCatalogGroup } from './routes-model.ts';
+import type {
+  RouteCatalog,
+  RouteCatalogEntry,
+  RouteCatalogGroup,
+  RouteCatalogServer,
+} from './routes-model.ts';
 import './routes-page.css';
 
 export interface RoutesPageProps {
@@ -37,11 +42,48 @@ const commandSummary = (entry: RouteCatalogEntry): string | undefined => {
   if (command === undefined) return undefined;
   const positionals = command.options.filter((option) => option.positional !== undefined)
     .toSorted((left, right) => left.positional! - right.positional!)
-    .map((option) => option.repeated ? `[<${option.key}>…]` : `<${option.key}>`);
+    .map((option) => {
+      const name = option.repeated ? `${option.option}...` : option.option;
+      return option.required ? `<${name}>` : `[${name}]`;
+    });
   const flags = command.options.filter((option) => option.positional === undefined)
-    .map((option) => option.required ? `--${option.option}` : `[--${option.option}]`);
+    .map((option) => {
+      const placeholder = option.kind === 'boolean'
+        ? ''
+        : ` <${option.choices === undefined ? option.kind : option.choices.join('|')}>`;
+      const flag = `--${option.option}${placeholder}`;
+      return option.required ? flag : `[${flag}]`;
+    });
   return [...command.path, ...positionals, ...flags].join(' ');
 };
+
+const emptyServerSummary = (server: RouteCatalogServer): string => {
+  switch (server.mode) {
+    case 'command':
+    case 'custom':
+    case 'remote':
+      return `Routes are packaged externally in ${server.mode} mode, so the compiler manifest does not list route modules.`;
+    case 'generated':
+      return 'No conventional route modules were compiler-discovered for this generated server.';
+    case 'conflict':
+      return 'No conventional route modules are listed while this server packaging mode remains in conflict.';
+    default: {
+      const exhaustiveMode: never = server.mode;
+      return exhaustiveMode;
+    }
+  }
+};
+
+const EmptyServerSurface = ({ server }: { readonly server: RouteCatalogServer }) => <section
+  aria-labelledby={`route-server-${server.id}`}
+  className="route-group"
+>
+  <div className="route-group-heading">
+    <h2 id={`route-server-${server.id}`}>{server.name}</h2>
+    <p>{server.mode} mode</p>
+  </div>
+  <p className="route-server-summary">{emptyServerSummary(server)}</p>
+</section>;
 
 const RouteGroup = ({ group }: { readonly group: RouteCatalogGroup }) => <section
   aria-labelledby={`route-group-${group.serverId ?? 'project'}-${group.kind}`}
@@ -108,9 +150,13 @@ export const RoutesPage = ({ catalog }: RoutesPageProps) => <div className="rout
           {diagnostic.message}
         </p>)}
       </section>}
-      {catalog.groups.length === 0
+      {catalog.groups.length === 0 && catalog.servers.length === 0
         ? <p className="empty-row" role="status">This project declares no conventional route modules.</p>
-        : catalog.groups.map((group) => <RouteGroup group={group} key={`${group.serverId ?? 'project'}-${group.kind}`} />)}
+        : <>
+          {catalog.servers.filter((server) => server.routeCount === 0)
+            .map((server) => <EmptyServerSurface key={server.id} server={server} />)}
+          {catalog.groups.map((group) => <RouteGroup group={group} key={`${group.serverId ?? 'project'}-${group.kind}`} />)}
+        </>}
       {catalog.providers.length === 0 ? undefined : <section aria-label="Context providers" className="route-group">
         <div className="route-group-heading">
           <h2>Context providers</h2>
