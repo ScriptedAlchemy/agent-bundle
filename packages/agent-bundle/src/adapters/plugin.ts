@@ -19,6 +19,7 @@ import {
   cursorHooksValidator,
   cursorManifest,
   cursorMcpValidator,
+  cursorPluginNameError,
   cursorPluginValidator,
   cursorVariables,
   emptyCursorHooksDocument,
@@ -359,10 +360,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
   let cursorHookEntries: readonly TargetHookEntry[] = Object.freeze([]);
   if (!isValidCursorPluginName(model.metadata.name)) {
-    diagnostics.push(errorDiagnostic(
-      'plugin.cursor.name',
-      `Plugin name ${JSON.stringify(model.metadata.name)} is not a valid Cursor plugin name (lowercase kebab-case).`,
-    ));
+    diagnostics.push(errorDiagnostic('plugin.cursor.name', cursorPluginNameError(model.metadata.name)));
   } else {
     const emitCursorHooks = hookDocument !== undefined && hookDocumentValid;
     // Cursor's envelope is not the shared Claude/Codex format, so its hooks

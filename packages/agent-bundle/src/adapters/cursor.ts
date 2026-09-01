@@ -65,6 +65,7 @@ export const cursorMcpValidator = validateMcp;
 export const cursorHooksValidator = validateHooks;
 
 const cursorNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
+const cursorNameMaxLength = 64;
 
 const cursorVariablePattern = /\$\{([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}/gu;
 const cursorBuiltInVariables = new Set(['CLAUDE_PLUGIN_ROOT', 'CURSOR_PLUGIN_ROOT']);
@@ -87,7 +88,16 @@ export const cursorVariables = (mcp: Record<string, unknown> | undefined): Recor
 
 /** True when a plugin name satisfies Cursor's lowercase kebab-case contract. */
 export const isValidCursorPluginName = (name: string): boolean =>
-  cursorNamePattern.test(name) && name.length <= 64;
+  cursorNamePattern.test(name) && name.length <= cursorNameMaxLength;
+
+/**
+ * The pinned official schema constrains the name's charset but carries no
+ * `maxLength`, so the 64-character bound only holds if both Cursor-producing
+ * planners state it. They share this message so neither can drift.
+ */
+export const cursorPluginNameError = (name: string): string =>
+  `Plugin name ${JSON.stringify(name)} is not a valid Cursor plugin name ` +
+  `(lowercase kebab-case, at most ${cursorNameMaxLength} characters).`;
 
 /** The schema-collision guard the bundle emits when no hook lowers to Cursor. */
 export const emptyCursorHooksDocument = Object.freeze({ hooks: {}, version: 1 });
@@ -296,6 +306,9 @@ const mcpPlanContext: CursorMcpServerPlanContext = Object.freeze({ codePrefix: c
 export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan => {
   const isSelected = (targets: readonly string[]): boolean => targets.includes(cursorName);
   const diagnostics: Diagnostic[] = [];
+  if (!isValidCursorPluginName(model.metadata.name)) {
+    diagnostics.push(errorDiagnostic('cursor.name', cursorPluginNameError(model.metadata.name)));
+  }
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
   for (const server of model.mcpServers) {
     if (!isSelected(server.targets)) continue;

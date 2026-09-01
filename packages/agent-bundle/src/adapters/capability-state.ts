@@ -1,4 +1,5 @@
 import { sha256Hex, stableJson } from '../core/digest.ts';
+import { CapabilityStateError, unknownCapabilityStateError } from '../core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 import type { TargetAdapterMetadata } from './types.ts';
 
@@ -41,7 +42,7 @@ export const capabilityIsSupported = (capability: CapabilityState | undefined): 
       return false;
     default: {
       const exhaustive: never = capability;
-      return exhaustive;
+      throw unknownCapabilityStateError(exhaustive);
     }
   }
 };
@@ -64,7 +65,7 @@ const evidenceFor = (capability: CapabilityState): CapabilityEvidence | undefine
       return undefined;
     default: {
       const exhaustive: never = capability;
-      return exhaustive;
+      throw unknownCapabilityStateError(exhaustive);
     }
   }
 };
@@ -81,7 +82,7 @@ const precedenceFor = (capability: CapabilityState): 0 | 1 | 2 | 3 => {
       return 3;
     default: {
       const exhaustive: never = capability;
-      return exhaustive;
+      throw unknownCapabilityStateError(exhaustive);
     }
   }
 };
@@ -98,7 +99,7 @@ const reasonFor = (capability: CapabilityState, precedence: 1 | 2 | 3): string |
       return precedence === 3 ? capability.reason : undefined;
     default: {
       const exhaustive: never = capability;
-      return exhaustive;
+      throw unknownCapabilityStateError(exhaustive);
     }
   }
 };
@@ -164,7 +165,7 @@ export const intersectCapabilityStates = (
       return Object.freeze({ reason: mergedReason(left, right, precedence), state: 'prohibited' });
     default: {
       const exhaustive: never = precedence;
-      return exhaustive;
+      throw new CapabilityStateError(`Capability precedence ${String(exhaustive)} has no intersection rule.`);
     }
   }
 };
