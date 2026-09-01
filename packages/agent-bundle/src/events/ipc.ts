@@ -231,6 +231,11 @@ type EndpointProbe = 'live' | 'missing' | 'stale';
 
 export interface EventRuntimeServerTestHooks {
   readonly afterEndpointProbe?: (state: EndpointProbe) => Promise<void>;
+  readonly afterEndpointClaimAcquired?: () => Promise<void>;
+  readonly afterEndpointClaimReclamation?: (removed: boolean) => Promise<void>;
+  readonly afterEndpointClaimReclamationSnapshot?: (
+    identity: Readonly<{ readonly device: number; readonly inode: number }>,
+  ) => Promise<void>;
 }
 
 interface EndpointClaim {
@@ -247,6 +252,11 @@ interface EndpointClaimOwner {
 interface EndpointClaimSnapshot {
   readonly identity: Readonly<{ readonly device: number; readonly inode: number }>;
   readonly owner: EndpointClaimOwner;
+}
+
+interface LinuxProcessStat {
+  readonly startTime: string;
+  readonly state: string;
 }
 
 const endpointClaimOwnerSchema = z.object({
@@ -292,15 +302,19 @@ const probeEndpoint = (endpoint: string): Effect.Effect<EndpointProbe, EventRunt
     });
   });
 
-const linuxProcessStartTime = async (pid: number): Promise<string> => {
+const linuxProcessStat = async (pid: number): Promise<LinuxProcessStat> => {
   const processStat = await readFile(`/proc/${pid}/stat`, 'utf8');
   const commEnd = processStat.lastIndexOf(')');
   if (commEnd === -1) throw new Error(`Unable to parse process stat for pid ${pid}.`);
   const fieldsAfterComm = processStat.slice(commEnd + 1).trim().split(/\s+/u);
+  const state = fieldsAfterComm[0];
   const startTime = fieldsAfterComm[19];
+  if (state === undefined) throw new Error(`Process stat for pid ${pid} has no state.`);
   if (startTime === undefined) throw new Error(`Process stat for pid ${pid} has no start time.`);
-  return startTime;
+  return { startTime, state };
 };
+
+const linuxProcessStartTime = async (pid: number): Promise<string> => (await linuxProcessStat(pid)).startTime;
 
 const currentEndpointClaimOwner = async (): Promise<EndpointClaimOwner> => ({
   ...(process.platform === 'linux' ? { linuxStartTime: await linuxProcessStartTime(process.pid) } : {}),
@@ -385,23 +399,127 @@ const isEndpointClaimOwnerProvablyDead = async (owner: EndpointClaimOwner): Prom
   }
   if (process.platform !== 'linux' || owner.linuxStartTime === undefined) return false;
   try {
-    return await linuxProcessStartTime(owner.pid) !== owner.linuxStartTime;
+    const processStat = await linuxProcessStat(owner.pid);
+    return processStat.state === 'Z'
+      || processStat.state === 'X'
+      || processStat.state === 'x'
+      || processStat.startTime !== owner.linuxStartTime;
   } catch {
     return false;
   }
 };
 
-const reclaimOrphanedEndpointClaim = (path: string): Effect.Effect<boolean> =>
-  liftPromise(async () => {
-    const snapshot = await readEndpointClaimSnapshot(path);
-    if (snapshot === 'missing') return true;
-    if (snapshot === undefined || !await isEndpointClaimOwnerProvablyDead(snapshot.owner)) return false;
-    try {
-      return await removeFileIfIdentityMatches(path, snapshot.identity);
-    } catch {
-      return false;
+const endpointRecoveryGate = (endpoint: string): string => {
+  const hash = createHash('sha256').update(endpoint, 'utf8').digest('hex').slice(0, 32);
+  const user = typeof process.getuid === 'function' ? String(process.getuid()) : 'user';
+  return `\0agent-bundle-${user}-event-recovery-${hash}`;
+};
+
+const tryAcquireEndpointRecoveryGate = (
+  endpoint: string,
+): Effect.Effect<Server | undefined, EventRuntimeTransportError> =>
+  Effect.callback<Server | undefined, EventRuntimeTransportError>((resume) => {
+    const server = createServer();
+    const cleanup = (): void => {
+      server.removeListener('error', onError);
+      server.removeListener('listening', onListening);
+    };
+    const onError = (error: NodeJS.ErrnoException): void => {
+      cleanup();
+      if (error.code === 'EADDRINUSE') {
+        resume(Effect.succeed(undefined));
+        return;
+      }
+      resume(Effect.fail(transportError(
+        'runtime-failed',
+        'Unable to claim the event runtime recovery gate.',
+        error,
+      )));
+    };
+    const onListening = (): void => {
+      cleanup();
+      resume(Effect.succeed(server));
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(endpointRecoveryGate(endpoint));
+    return Effect.sync(() => {
+      cleanup();
+      if (server.listening) server.close();
+    });
+  });
+
+const releaseEndpointRecoveryGate = (server: Server): Effect.Effect<void> =>
+  Effect.callback<void>((resume) => {
+    if (!server.listening) {
+      resume(Effect.void);
+      return undefined;
     }
-  }).pipe(Effect.catch(() => Effect.succeed(false)));
+    server.close(() => resume(Effect.void));
+    return undefined;
+  }).pipe(Effect.ignore);
+
+const reclaimOrphanedEndpointClaim = Effect.fnUntraced(function*(
+  endpoint: string,
+  testHooks?: EventRuntimeServerTestHooks,
+): Effect.fn.Return<boolean, EventRuntimeTransportError> {
+  const path = `${endpoint}.lock`;
+  const snapshot = yield* liftPromise(async () => {
+    const candidate = await readEndpointClaimSnapshot(path);
+    if (candidate === 'missing') return 'missing' as const;
+    if (candidate === undefined || !await isEndpointClaimOwnerProvablyDead(candidate.owner)) return undefined;
+    return candidate;
+  }).pipe(Effect.catch(() => Effect.succeed(undefined)));
+  if (snapshot === 'missing') return true;
+  if (snapshot === undefined) return false;
+
+  const afterSnapshot = testHooks?.afterEndpointClaimReclamationSnapshot;
+  if (afterSnapshot !== undefined) {
+    yield* liftPromise(() => afterSnapshot(snapshot.identity)).pipe(
+      Effect.mapError((error) => transportError('runtime-failed', 'Event runtime claim snapshot hook failed.', error)),
+    );
+  }
+
+  let removed: boolean;
+  if (process.platform !== 'linux') {
+    // Other POSIX platforms retain the existing identity-checked fallback:
+    // Node exposes no auto-released filesystem gate, and a pathname gate can
+    // itself become an unrecoverable orphan.
+    removed = yield* liftPromise(() => removeFileIfIdentityMatches(path, snapshot.identity)).pipe(
+      Effect.catch(() => Effect.succeed(false)),
+    );
+  } else {
+    // Abstract socket binds serialize every Linux reclamation vacancy and are
+    // released by the kernel on process death. A namespace squatter can only
+    // force bounded fail-closed retries, never concurrent claim ownership.
+    removed = yield* Effect.acquireUseRelease(
+      tryAcquireEndpointRecoveryGate(endpoint),
+      (gate) => {
+        if (gate === undefined) return Effect.succeed(false);
+        return liftPromise(async () => {
+          const freshSnapshot = await readEndpointClaimSnapshot(path);
+          if (
+            freshSnapshot === 'missing'
+            || freshSnapshot === undefined
+            || !await isEndpointClaimOwnerProvablyDead(freshSnapshot.owner)
+          ) {
+            return freshSnapshot === 'missing';
+          }
+          return removeFileIfIdentityMatches(path, freshSnapshot.identity);
+        }).pipe(Effect.catch(() => Effect.succeed(false)));
+      },
+      (gate) => gate === undefined ? Effect.void : releaseEndpointRecoveryGate(gate),
+    );
+  }
+
+  const afterReclamation = testHooks?.afterEndpointClaimReclamation;
+  if (afterReclamation !== undefined) {
+    yield* liftPromise(() => afterReclamation(removed)).pipe(
+      Effect.mapError((error) => transportError('runtime-failed', 'Event runtime claim reclamation hook failed.', error)),
+    );
+  }
+  return removed;
+});
 
 const releaseEndpointClaim = (claim: EndpointClaim): Effect.Effect<void> =>
   liftPromise(async () => {
@@ -411,10 +529,19 @@ const releaseEndpointClaim = (claim: EndpointClaim): Effect.Effect<void> =>
 
 const claimEndpoint = Effect.fnUntraced(function*(
   endpoint: string,
+  testHooks?: EventRuntimeServerTestHooks,
 ): Effect.fn.Return<EndpointClaim, EventRuntimeTransportError> {
   for (let attempt = 0; attempt < ENDPOINT_CLAIM_RETRY_COUNT; attempt += 1) {
     const claim = yield* tryClaimEndpoint(endpoint);
-    if (claim !== undefined) return claim;
+    if (claim !== undefined) {
+      const afterClaimAcquired = testHooks?.afterEndpointClaimAcquired;
+      if (afterClaimAcquired !== undefined) {
+        yield* liftPromise(afterClaimAcquired).pipe(
+          Effect.mapError((error) => transportError('runtime-failed', 'Event runtime claim hook failed.', error)),
+        );
+      }
+      return claim;
+    }
 
     const endpointState = yield* probeEndpoint(endpoint);
     if (endpointState === 'live') {
@@ -423,7 +550,7 @@ const claimEndpoint = Effect.fnUntraced(function*(
         'Event runtime endpoint already has a live server.',
       ));
     }
-    if (yield* reclaimOrphanedEndpointClaim(`${endpoint}.lock`)) continue;
+    if (yield* reclaimOrphanedEndpointClaim(endpoint, testHooks)) continue;
     if (attempt + 1 < ENDPOINT_CLAIM_RETRY_COUNT) {
       yield* Effect.sleep(ENDPOINT_CLAIM_RETRY_DELAY);
     }
@@ -517,7 +644,7 @@ const openServer = (
   }
 
   return yield* Effect.acquireUseRelease(
-    claimEndpoint(endpoint),
+    claimEndpoint(endpoint, testHooks),
     () => Effect.gen(function*() {
       const claimedEndpointState = yield* probeEndpoint(endpoint);
       if (claimedEndpointState === 'live') {
