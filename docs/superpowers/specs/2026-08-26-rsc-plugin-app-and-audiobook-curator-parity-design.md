@@ -212,3 +212,4 @@ Real-world acceptance includes:
 - Shipping media, cached Audible payloads, credentials, Whisper models, or Python environments.
 - Adding hooks without a concrete curator lifecycle need.
 - Building a filesystem router or general web framework when a declarative application tree and shared operation registry suffice.
+  - Superseded (2026-08-31) by [#93](https://github.com/ScriptedAlchemy/agent-bundle/issues/93): the filesystem-router non-goal is withdrawn. The route compiler is planned. Public authoring waits for the wave-3 renderer join ([#107](https://github.com/ScriptedAlchemy/agent-bundle/issues/107)). The rest of these non-goals are unchanged.
