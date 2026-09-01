@@ -7,6 +7,7 @@ import {
   intersectCapabilityStates,
   supportedCapability,
   unavailableCapability,
+  unionCapabilityStates,
 } from '../src/adapters/capability-state.ts';
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { CapabilityStateError, isCapabilityState } from '../src/core/capabilities.ts';
@@ -150,6 +151,24 @@ it('applies prohibited, unavailable, degraded, and supported intersection preced
   });
 });
 
+it('unions host capability states according to composite emission dispatch', () => {
+  const supported = supportedCapability(evidence('supported'));
+  const unavailable = unavailableCapability('unavailable host');
+  const prohibited = state({ state: 'prohibited', reason: 'prohibited host' });
+
+  expect(unionCapabilityStates(supported, unavailable)).toEqual(supported);
+  expect(unionCapabilityStates(unavailable, supported)).toEqual(supported);
+  expect(unionCapabilityStates(
+    unavailableCapability('second unavailable host'),
+    unavailable,
+  )).toEqual({
+    reason: 'second unavailable host; unavailable host',
+    state: 'unavailable',
+  });
+  expect(unionCapabilityStates(prohibited, supported)).toEqual(supported);
+  expect(unionCapabilityStates(supported, prohibited)).toEqual(supported);
+});
+
 it('keeps the Boolean compatibility view thin and exhaustive', () => {
   expect(capabilityBooleanView({
     degraded: { state: 'degraded', reason: 'partial' },
@@ -225,6 +244,15 @@ it('rejects a malformed capability declaration when the adapter registers', () =
   })).toThrow(/capability "mcp" must declare one of degraded\/prohibited\/supported\/unavailable/u);
 
   expect(() => new TargetRegistry().register(source)).not.toThrow();
+});
+
+it('rejects a malformed inspection component capability when the adapter registers', () => {
+  const source = createDefaultRegistry().get('cursor');
+
+  expect(() => new TargetRegistry().register({
+    ...source,
+    componentCapabilities: { commands: malformed({ state: 'suported' }) },
+  })).toThrow(/component capability "commands" must declare one of degraded\/prohibited\/supported\/unavailable/u);
 });
 
 it('surfaces built-in adapter metadata as immutable capability evidence', () => {

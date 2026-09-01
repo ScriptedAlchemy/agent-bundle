@@ -492,6 +492,8 @@ export interface TargetAdapter {
   /** Declares compiler-owned artifact layouts beyond target-native documents. */
   readonly artifactLayout?: TargetArtifactLayout;
   readonly capabilities: Readonly<Record<string, CapabilityState>>;
+  /** Per-component-kind emission dispatch used by inspect skip accounting; defaults to `capabilities`. */
+  readonly componentCapabilities?: Readonly<Record<string, CapabilityState>>;
   readonly configExtension?: TargetConfigExtension;
   readonly hookContract?: TargetHookContract;
   readonly metadata: TargetAdapterMetadata;

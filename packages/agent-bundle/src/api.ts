@@ -519,7 +519,11 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
           diagnostics: freezeDiagnostics(plan.diagnostics),
           entries: Object.freeze([...plan.entries]),
           hookEntries: Object.freeze([...(plan.hookEntries ?? [])]),
-          skipped: skippedComponentsFor(components, target.name, adapter.capabilities),
+          skipped: skippedComponentsFor(
+            components,
+            target.name,
+            adapter.componentCapabilities ?? adapter.capabilities,
+          ),
           target: target.name,
         });
       }));
