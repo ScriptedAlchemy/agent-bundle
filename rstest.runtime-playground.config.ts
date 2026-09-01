@@ -16,7 +16,6 @@ export default defineConfig({
     reporters: ['text', 'json'],
     thresholds: { branches: 85, functions: 90, lines: 90, statements: 90 },
   },
-  setupFiles: ['./rstest.setup.ts'],
   projects: [
     defineInlineProject({
       extends: withRslibConfig(),
@@ -27,6 +26,7 @@ export default defineConfig({
         'packages/workbench/tests/runtime-playground.test.ts',
       ],
       name: 'runtime-node',
+      setupFiles: ['./rstest.setup.ts'],
       testEnvironment: 'node',
     }),
     defineInlineProject({
@@ -40,6 +40,7 @@ export default defineConfig({
       extends: withRslibConfig(),
       include: ['packages/workbench/tests/runtime-playground.browser.test.tsx'],
       name: 'runtime-browser',
+      setupFiles: ['./rstest.setup.browser.ts'],
       plugins: [pluginReact()],
       resolve: {
         alias: {
