@@ -18,11 +18,9 @@ export default defineConfig({
     version: '1.0.0',
   },
   runtime: { node: '22.19.0' },
-  // `src/cli.ts` is the package bin by convention; declaring it as a script
-  // also ships it inside every host artifact.
-  scripts: {
-    'audiobook-curator': './src/cli.ts',
-  },
+  // No `scripts` or `bin` fields needed: the routed `src/cli/` commands
+  // compile into the package executable (dist/bin/audiobook-curator.js) by
+  // convention (#102 stages 2-3).
   // No `skills` field needed: `skills/curate-audiobooks/SKILL.md` is
   // discovered by convention.
   targets: ['claude', 'codex'],

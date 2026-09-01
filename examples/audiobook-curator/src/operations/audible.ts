@@ -18,15 +18,6 @@ import {
   type AudibleSelectionReceipt,
 } from '../audible.ts';
 import { readJson, writeReceipt } from '../foundation.ts';
-import {
-  assertOptions,
-  numberOption,
-  optionChoice,
-  optionValue,
-  optionalField,
-  positionalArguments,
-  requiredOption,
-} from './cli-arguments.ts';
 import { audibleRegions, audibleRegionSchema, parityReceiptSchema, pathSchema } from './schemas.ts';
 
 export interface AudibleOperations {
@@ -70,7 +61,8 @@ export const defaultAudibleOperations: Required<AudibleOperations> = {
   },
 };
 
-const audibleRegionList = (value: string): readonly AudibleRegion[] => value.split(',').map((region) => {
+/** Parses the CLI's comma-separated `--regions` list; shared with the routed `audible-search` command. */
+export const audibleRegionList = (value: string): readonly AudibleRegion[] => value.split(',').map((region) => {
   const candidate = region.trim().toLowerCase();
   if (!audibleRegions.includes(candidate as AudibleRegion)) throw new Error(`Unsupported Audible region: ${candidate}.`);
   return candidate as AudibleRegion;
@@ -78,28 +70,6 @@ const audibleRegionList = (value: string): readonly AudibleRegion[] => value.spl
 
 export const audibleOperations = (operations: Required<AudibleOperations>) => ({
   audibleSearch: defineCliCommand({
-    cli: {
-      exitCode: (receipt) => receipt.exitCode,
-      name: 'audible-search',
-      parse: (args) => {
-        const valued = new Set(['--attempts', '--author', '--duration', '--limit', '--narrator', '--regions', '--report', '--title']);
-        assertOptions(args, new Set(), valued);
-        if (positionalArguments(args, valued).length > 0) throw new Error('audible-search accepts only named options.');
-        const regions = optionValue(args, '--regions');
-        return {
-          ...optionalField('attempts', numberOption(args, '--attempts')),
-          ...optionalField('author', optionValue(args, '--author')),
-          ...optionalField('durationSeconds', numberOption(args, '--duration')),
-          ...optionalField('limit', numberOption(args, '--limit')),
-          ...optionalField('narrator', optionValue(args, '--narrator')),
-          ...(regions === undefined ? {} : { regions: audibleRegionList(regions) }),
-          report: requiredOption(args, '--report', 'audible-search'),
-          title: requiredOption(args, '--title', 'audible-search'),
-        };
-      },
-      summary: 'Search and rank Audible identity candidates across reviewed regions.',
-      usage: 'audible-search --title TITLE --report FILE [--author AUTHOR] [--narrator NARRATOR] [--duration SECONDS] [--regions LIST]',
-    },
     handler: operations.audibleSearch,
     id: 'audible-search',
     inputSchema: z.object({
@@ -111,45 +81,12 @@ export const audibleOperations = (operations: Required<AudibleOperations>) => ({
     resultSchema: audibleSearchResultSchema,
   }),
   audibleSelect: defineCliCommand({
-    cli: {
-      name: 'audible-select',
-      parse: (args) => {
-        const valued = new Set(['--candidate', '--candidates', '--note', '--receipt']);
-        assertOptions(args, new Set(), valued);
-        if (positionalArguments(args, valued).length > 0) throw new Error('audible-select accepts only named options.');
-        return {
-          candidate: Number(requiredOption(args, '--candidate', 'audible-select')),
-          candidates: requiredOption(args, '--candidates', 'audible-select'),
-          ...optionalField('note', optionValue(args, '--note')),
-          receipt: requiredOption(args, '--receipt', 'audible-select'),
-        };
-      },
-      summary: 'Record one explicit human-reviewed Audible edition choice.',
-      usage: 'audible-select --candidates FILE --candidate N --receipt FILE [--note NOTE]',
-    },
     handler: operations.audibleSelect,
     id: 'audible-select',
     inputSchema: z.object({ candidate: z.number().int().min(1).max(500), candidates: pathSchema, note: z.string().max(4096).optional(), receipt: pathSchema.optional() }).strict(),
     resultSchema: audibleSelectResultSchema,
   }),
   audibleCache: defineCliCommand({
-    cli: {
-      name: 'audible-cache',
-      parse: (args) => {
-        const valued = new Set(['--asin', '--attempts', '--cache-dir', '--receipt', '--region']);
-        assertOptions(args, new Set(), valued);
-        if (positionalArguments(args, valued).length > 0) throw new Error('audible-cache accepts only named options.');
-        return {
-          asin: requiredOption(args, '--asin', 'audible-cache'),
-          ...optionalField('attempts', numberOption(args, '--attempts')),
-          cacheDirectory: requiredOption(args, '--cache-dir', 'audible-cache'),
-          receipt: requiredOption(args, '--receipt', 'audible-cache'),
-          ...optionalField('region', optionChoice(args, '--region', audibleRegions)),
-        };
-      },
-      summary: 'Cache one reviewed Audible product, chapters, artwork, and source URLs.',
-      usage: 'audible-cache --asin ASIN --region REGION --cache-dir DIR --receipt FILE',
-    },
     handler: operations.audibleCache,
     id: 'audible-cache',
     inputSchema: z.object({

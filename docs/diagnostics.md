@@ -149,28 +149,49 @@ last-good file, while a successful route-free preparation removes it.
 Conventional `src/scripts/` routes ship through the same pipeline as
 explicit `scripts` entries (#102 stage 1): a plain module directly under
 `src/scripts/` compiles to `scripts/<name>.mjs` in every selected target
-artifact with `provenance.kind: 'conventional'`. Script routes that pipeline
-cannot ship yet are hard errors (`AB4807`–`AB4809`), never silent omissions.
+artifact with `provenance.kind: 'conventional'`. A rendered module
+(`src/scripts/<name>.tsx`/`.jsx`, #102 stage 3) compiles to the same
+`scripts/<name>.mjs` plus a sibling `scripts/<name>-flight.mjs` react-server
+worker: its async default component receives `{ argv, signal }` and renders
+through the Agent renderer with the full CLI output contract (`--json`,
+`--ndjson`, interactive TTY progress, piped Markdown); the framework dialect
+reserves exactly `--json` and `--ndjson`, every other argument passes
+through as `argv`, and the exit code derives from the final document status
+(0 on `success`, 1 otherwise). Explicit `scripts` config entries keep
+ordinary Node semantics regardless of extension — config always wins, and
+only the conventional route contract opts into rendering. Script routes
+neither pipeline can ship are hard errors (`AB4808`/`AB4809`), never silent
+omissions.
 
 Conventional `src/cli/**` routes compile into one collision-checked command
-graph (#102 stage 2): the file path below the CLI root is the command
+graph (#102 stages 2-3): the file path below the CLI root is the command
 nesting (`src/cli/library/audit.ts` runs as `<bin> library audit`), the
 static `config` export supplies `description`, `aliases`, `positionals`, and
 the `exitCode` policy, and the graph feeds one framework-generated package
 executable named after the plugin (`dist/bin/<plugin-name>.js`), replacing
-the `src/cli.ts` convention for that project. A plain command route exports
+the `src/cli.ts` convention for that project. Every command route exports
 `inputSchema` and `resultSchema` zod schemas plus one async default function
-receiving `{ input, signal }`; the command runs inside the typed Agent
-request context, writes one canonical JSON line to stdout, and exits 0 (or
-the validated result's integer `exitCode` under `config.exitCode: 'result'`),
-1 on execution failure, 2 on usage or input-validation failure, 130/143
-after SIGINT/SIGTERM. `--help`, `--json`, and `--version` are owned by the
-generated shell.
+receiving `{ input, signal }`, and runs inside the typed Agent request
+context. A plain (`.ts`) command executes directly and writes one canonical
+JSON line to stdout. A rendered (`.tsx`) command's async default Server
+Component renders through the runtime dispatcher against a sibling
+`dist/bin/<plugin-name>-flight.mjs` react-server worker with four output
+modes: interactive TTY updates progress in place before the final document;
+piped output emits exactly one final Markdown document (no partial
+fallbacks); `--json` emits the canonical validated final value; `--ndjson`
+emits the sequence-numbered render-event stream (an Agent Bundle CLI/script
+dialect — never MCP JSON-RPC, never written to an MCP server's stdout).
+Diagnostics go to stderr; machine output owns stdout. Exit codes: 0 on
+success (or the validated result's integer `exitCode` under
+`config.exitCode: 'result'`), 1 on execution/render failure, 2 on usage or
+input-validation failure, 130/143 after SIGINT/SIGTERM. `--help`, `--json`,
+`--ndjson`, and `--version` are owned by the generated shell.
 
 The argv projection of `inputSchema` is extracted statically — the module is
 parsed, never executed — from a bounded zod grammar: the top level is
 `z.object({ ... })` or `z.strictObject({ ... })` (optionally `.strict()`);
 each property chains from `z.string()`, `z.number()`, `z.boolean()`,
+`z.url()` (a string option validated as a URL at run time),
 `z.enum([...string literals])`, or `z.array(<string/number/enum element>)`;
 chains may add `.optional()`, `.default(<static literal>)`, and
 `.describe('<string literal>')`, plus validation-only refinements the
@@ -196,7 +217,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4804` | error | A `routes` mode override is not `generated`/`custom`/`command`/`remote` for a server, or `generated`/`conventional` for the CLI. |
 | `AB4805` | error | A route module exports `config` through a rejected declaration shape (`let`/`var`, destructuring, `export { config }`, a function or class, a missing initializer), or the extracted value is not an object. |
 | `AB4806` | error | A route module's `config` initializer is dynamic — the message names the offending construct and position. |
-| `AB4807` | error | A conventional `src/scripts/` route is a rendered-script module (`.tsx`/`.jsx`); rendered scripts are not supported yet. Rename it to `.ts`, prefix a path segment with `_` to keep it private, or declare it under `scripts` in config to opt into plain bundling. |
+| `AB4807` | retired | The stage-1 rendered-script gate. Rendered script routes ship through the Agent renderer pipeline since #102 stage 3; the code is never reused. |
 | `AB4808` | error | A conventional `src/scripts/` route nests below the scripts root; conventional scripts ship as direct children only. Move it up, prefix a path segment with `_`, or declare it under `scripts` in config with a flat name. |
 | `AB4809` | error | A conventional `src/scripts/` route and a configured `scripts` entry share one script identity through different files. Point the config entry at the module to claim it, or rename one of the two. |
 | `AB4810` | error | A generated MCP route is missing named `inputSchema`/`resultSchema` exports or its default export is not an async function component. |
@@ -205,7 +226,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4813` | error | The command graph collides: a route is both a command module and a command group, an alias collides with a sibling command, group, or alias, an alias is unsafe or duplicated, or an explicit `bin` entry claims the generated CLI executable's name. |
 | `AB4814` | error | A CLI route's `inputSchema` leaves the bounded argv grammar (the message names the offending construct and position), a key projects onto a reserved or duplicate option name, a required boolean has no flag expression, or `config.positionals` violates the positional policy. |
 | `AB4815` | error | A CLI route does not satisfy the routed command contract: missing named `inputSchema`/`resultSchema` exports, a default export that is not an async function, or malformed `config.description`/`aliases`/`exitCode` fields. |
-| `AB4816` | error | A conventional `src/cli/**` route is a rendered-command module (`.tsx`/`.jsx`); rendered commands are not supported yet. Rename it to `.ts`, or prefix a path segment with `_` to keep it private. |
+| `AB4816` | retired | The stage-2 rendered-command gate. Rendered command routes render through the dispatcher since #102 stage 3; the code is never reused. |
 
 ## Development package build (`AB7103`)
 

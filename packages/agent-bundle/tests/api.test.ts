@@ -1044,7 +1044,9 @@ it('refuses unshippable conventional script routes with actionable diagnostics',
     const result = await validate({ root });
     const gate = result.diagnostics.filter(({ code }) => ['AB4807', 'AB4808', 'AB4809'].includes(code));
 
-    expect(gate.map(({ code }) => code).sort()).toEqual(['AB4807', 'AB4808', 'AB4809']);
+    // AB4807 is retired (#102 stage 3): the rendered-notes route ships
+    // through the Agent renderer pipeline instead of failing validation.
+    expect(gate.map(({ code }) => code).sort()).toEqual(['AB4808', 'AB4809']);
     for (const diagnostic of gate) {
       expect(diagnostic.severity).toBe('error');
       expect(diagnostic.recovery).toBeTruthy();

@@ -742,21 +742,26 @@ const normalizeScripts = (
     };
   });
   // Conventional `src/scripts/` routes ship through the same pipeline as
-  // explicit entries (#102 stage 1). The judgment is shared with source
-  // validation: routes the pipeline cannot ship (rendered, nested, or
-  // conflicting with a configured name) are AB4807-AB4809 errors there, so
-  // omitting them here is deterministic hygiene, never a silent choice.
+  // explicit entries (#102 stage 1); rendered (`.tsx`/`.jsx`) routes ship
+  // through the Agent renderer pipeline (#102 stage 3). The judgment is
+  // shared with source validation: routes neither pipeline can ship (nested,
+  // or conflicting with a configured name) are AB4808/AB4809 errors there,
+  // so omitting them here is deterministic hygiene, never a silent choice.
   const configured = configuredScriptNames(loaded.config);
   const conventional = (discovered.routeGraph?.scripts ?? [])
-    .filter((route) => judgeScriptRoute(route, configured) === 'shippable')
-    .map((route): NormalizedScript => ({
-      id: route.id,
-      mode: scriptMode(route.source),
-      name: scriptRouteName(route),
-      provenance: { kind: 'conventional', sourcePath: route.source },
-      source: route.source,
-      targets: sortedUnique(targetNames),
-    }));
+    .flatMap((route): NormalizedScript[] => {
+      const judgment = judgeScriptRoute(route, configured);
+      if (judgment !== 'shippable' && judgment !== 'rendered') return [];
+      return [{
+        id: route.id,
+        mode: scriptMode(route.source),
+        name: scriptRouteName(route),
+        provenance: { kind: 'conventional', sourcePath: route.source },
+        ...(judgment === 'rendered' ? { rendered: true as const } : {}),
+        source: route.source,
+        targets: sortedUnique(targetNames),
+      }];
+    });
   return [...explicit, ...conventional].sort((left, right) => left.name.localeCompare(right.name));
 };
 

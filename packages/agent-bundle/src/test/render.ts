@@ -138,13 +138,13 @@ const cliArguments = (
   options: RenderRouteOptions,
   provenance: RenderedRouteProvenance,
 ): readonly string[] => {
-  const candidate = options.args ?? options.input ?? [];
+  const candidate = options.args ?? [];
   if (Array.isArray(candidate) && candidate.every((value) => typeof value === 'string')) {
     return candidate as readonly string[];
   }
   throw new AgentTestError(
     'invalid-input',
-    'A cli route renders with string arguments.',
+    'A cli route invocation carries string arguments.',
     {
       details: [`received:     ${captured(candidate)}`],
       provenance,
@@ -183,7 +183,7 @@ const invocationFor = (
     case 'script':
       return {
         kind: 'script',
-        props: { name: routeId, ...(options.input === undefined ? {} : { input: options.input as never }) },
+        props: { input: cliArguments(options, provenance) as never, name: routeId },
       };
     default: {
       const exhaustive: never = kind;
@@ -214,12 +214,16 @@ const protocolName = (routeId: string): string => routeId.slice(routeId.lastInde
 /**
  * Props the route component receives. MCP route kinds get exactly the public
  * route contract's `{ input, signal }` — the same props the generated server's
- * Flight worker passes. The kinds whose public surface has not landed yet
- * receive their invocation props beside the signal.
+ * Flight worker passes. Rendered CLI commands get the routed command
+ * contract's `{ input, signal }` (parsed input); rendered scripts get
+ * `{ argv, signal }` — both exactly what the generated executables pass
+ * (#102 stage 3). Event routes receive their invocation props beside the
+ * signal until their public surface hardens.
  */
 const componentProps = (
   invocation: AgentRenderInvocation,
   kind: RenderableRouteKind,
+  options: RenderRouteOptions,
   signal: AbortSignal,
 ): Readonly<Record<string, unknown>> => {
   switch (kind) {
@@ -236,8 +240,9 @@ const componentProps = (
       return { canonical: payload.canonical, native: payload.native, signal };
     }
     case 'cli':
+      return { input: options.input ?? {}, signal };
     case 'script':
-      return { ...invocation.props, signal };
+      return { argv: (invocation.props as { readonly input?: unknown }).input ?? [], signal };
     default: {
       const exhaustive: never = kind;
       throw new AgentTestError('unsupported-route-kind', `Unsupported renderable route kind ${String(exhaustive)}.`);
@@ -445,7 +450,7 @@ const prepareRender = async (
     }, async () => drain(renderer.renderAgentFlight(
       renderer.createElement(
         resolved.component as never,
-        componentProps(request.invocation, resolved.kind, request.signal) as never,
+        componentProps(request.invocation, resolved.kind, options, request.signal) as never,
       ),
       { signal: request.signal },
     )))),

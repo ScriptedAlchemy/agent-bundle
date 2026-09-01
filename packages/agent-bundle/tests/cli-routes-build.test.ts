@@ -84,6 +84,40 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       '}',
       '',
     ].join('\n')),
+    writeProjectFile(root, 'src/cli/report.tsx', [
+      "import React from 'react';",
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { z } from 'zod';",
+      "export const config = { description: 'Render a library report.', positionals: ['root'] };",
+      'export const inputSchema = z.object({ root: z.string().min(1) }).strict();',
+      'export const resultSchema = z.object({ books: z.number(), root: z.string() }).strict();',
+      'export default async function Report({ input, signal }) {',
+      "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
+      '  const context = await agent();',
+      "  await context.progress.report({ completed: 1, message: 'scanning', total: 2 });",
+      '  const result = { books: 2, root: input.root };',
+      '  return (',
+      '    <Agent.Result value={result}>',
+      '      <Agent.Markdown>{`Found **2** books under ${input.root}.`}</Agent.Markdown>',
+      '    </Agent.Result>',
+      '  );',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/scripts/summarize.tsx', [
+      "import React from 'react';",
+      "import { Agent } from '@agent-bundle/runtime';",
+      'export default async function Summarize({ argv, signal }) {',
+      "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
+      '  const result = { arguments: argv.length };',
+      '  return (',
+      '    <Agent.Result value={result}>',
+      '      <Agent.Text>{`Summarized ${String(argv.length)} arguments.`}</Agent.Text>',
+      '    </Agent.Result>',
+      '  );',
+      '}',
+      '',
+    ].join('\n')),
   ]);
 
   const result = await build({ output: 'artifact', packageOutputs: true, root });
@@ -130,4 +164,34 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   const tooMany = execFile(binPath, ['library', 'audit', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
   await expect(tooMany).rejects.toMatchObject({ code: 2, stdout: '' });
   await expect(tooMany).rejects.toMatchObject({ stderr: expect.stringContaining('sources') });
+
+  // The rendered .tsx command (#102 stage 3) renders through the dispatcher
+  // against the sibling react-server worker.
+  const workerPath = join(root, 'dist', 'bin', 'cli-bin-fixture-flight.mjs');
+  await expect(stat(workerPath)).resolves.toMatchObject({});
+  // Piped output is exactly one final Markdown document, no partial fallbacks.
+  const piped = await execFile(binPath, ['report', '/library']);
+  expect(piped.stdout).toBe('Found **2** books under /library.\n');
+  // --json returns the canonical validated final value.
+  const reportJson = await execFile(binPath, ['report', '/library', '--json']);
+  expect(JSON.parse(reportJson.stdout)).toEqual({ books: 2, root: '/library' });
+  // --ndjson exposes the sequence-numbered render-event stream, including
+  // the progress the component reported through the request context.
+  const reportEvents = await execFile(binPath, ['report', '/library', '--ndjson']);
+  const events = reportEvents.stdout.trimEnd().split('\n')
+    .map((line) => JSON.parse(line) as { sequence: number; type: string });
+  expect(events.map((event) => event.sequence)).toEqual(events.map((_, index) => index));
+  expect(events.some((event) => event.type === 'progress')).toBe(true);
+  expect(events[events.length - 1]!.type).toBe('complete');
+  // Rendered input-validation failures stay usage failures.
+  await expect(execFile(binPath, ['report'])).rejects.toMatchObject({ code: 2, stdout: '' });
+
+  // The rendered .tsx script (#102 stage 3) ships beside plain scripts in
+  // the target artifact with the same output contract.
+  const scriptPath = join(root, 'artifact', 'portable', 'scripts', 'summarize.mjs');
+  await expect(stat(join(root, 'artifact', 'portable', 'scripts', 'summarize-flight.mjs'))).resolves.toMatchObject({});
+  const scriptMarkdown = await execFile(process.execPath, [scriptPath, 'alpha', 'beta']);
+  expect(scriptMarkdown.stdout).toBe('Summarized 2 arguments.\n');
+  const scriptJson = await execFile(process.execPath, [scriptPath, 'alpha', '--json']);
+  expect(JSON.parse(scriptJson.stdout)).toEqual({ arguments: 1 });
 });

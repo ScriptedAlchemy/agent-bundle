@@ -16,14 +16,6 @@ import {
   type LibraryAuditReceipt,
   type SelectionReceipt,
 } from '../library.ts';
-import {
-  assertOptions,
-  numberOption,
-  onePath,
-  optionalField,
-  positionalArguments,
-  requiredOption,
-} from './cli-arguments.ts';
 import { parityReceiptSchema, pathSchema, probeShape } from './schemas.ts';
 
 export interface DiscoveryOperations {
@@ -87,64 +79,18 @@ export const defaultDiscoveryOperations: Required<DiscoveryOperations> = {
 
 export const discoveryOperations = (operations: Required<DiscoveryOperations>) => ({
   inspect: defineCliCommand({
-    cli: {
-      name: 'inspect',
-      parse: (args) => {
-        const valued = new Set(['--max-files']);
-        assertOptions(args, new Set(), valued);
-        return {
-          ...optionalField('maxFiles', numberOption(args, '--max-files')),
-          root: onePath(args, valued, 'inspect'),
-        };
-      },
-      summary: 'Inspect a bounded audiobook source tree without changing it.',
-      usage: 'inspect [--max-files N] <root>',
-    },
     handler: operations.inspect,
     id: 'inspect',
     inputSchema: inspectInputSchema,
     resultSchema: inspectResultSchema,
   }),
   inventory: defineCliCommand({
-    cli: {
-      exitCode: (receipt) => receipt.exitCode,
-      name: 'inventory',
-      parse: (args) => {
-        const valued = new Set(['--report']);
-        assertOptions(args, new Set(['--strict']), valued);
-        return {
-          report: requiredOption(args, '--report', 'inventory'),
-          source: onePath(args, valued, 'inventory'),
-          ...(args.includes('--strict') ? { strict: true } : {}),
-        };
-      },
-      summary: 'Probe source audio without changing it.',
-      usage: 'inventory <source> --report FILE [--strict]',
-    },
     handler: operations.inventory,
     id: 'inventory',
     inputSchema: z.object({ report: pathSchema.optional(), source: pathSchema, strict: z.boolean().optional() }).strict(),
     resultSchema: inventoryResultSchema,
   }),
   libraryAudit: defineCliCommand({
-    cli: {
-      exitCode: (receipt) => receipt.exitCode,
-      name: 'library-audit',
-      parse: (args) => {
-        const valued = new Set(['--concurrency', '--report']);
-        assertOptions(args, new Set(['--strict']), valued);
-        const sources = positionalArguments(args, valued);
-        if (sources.length === 0) throw new Error('library-audit requires at least one source path.');
-        return {
-          ...optionalField('concurrency', numberOption(args, '--concurrency')),
-          report: requiredOption(args, '--report', 'library-audit'),
-          sources,
-          ...(args.includes('--strict') ? { strict: true } : {}),
-        };
-      },
-      summary: 'Audit metadata, artwork, chapters, duplicate candidates, and multipart groups.',
-      usage: 'library-audit <sources...> --report FILE [--concurrency N] [--strict]',
-    },
     handler: operations.libraryAudit,
     id: 'library-audit',
     inputSchema: z.object({
@@ -156,20 +102,6 @@ export const discoveryOperations = (operations: Required<DiscoveryOperations>) =
     resultSchema: libraryResultSchema,
   }),
   select: defineCliCommand({
-    cli: {
-      name: 'select',
-      parse: (args) => {
-        const valued = new Set(['--inventory', '--report']);
-        assertOptions(args, new Set(), valued);
-        if (positionalArguments(args, valued).length > 0) throw new Error('select accepts only named options.');
-        return {
-          inventory: requiredOption(args, '--inventory', 'select'),
-          report: requiredOption(args, '--report', 'select'),
-        };
-      },
-      summary: 'Choose the strongest source among normalized collisions.',
-      usage: 'select --inventory FILE --report FILE',
-    },
     handler: operations.select,
     id: 'select',
     inputSchema: z.object({ inventory: pathSchema, report: pathSchema.optional() }).strict(),

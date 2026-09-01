@@ -40,9 +40,14 @@ const fixtureConfig = (extra: Readonly<Record<string, unknown>> = {}): AgentBund
 });
 
 const conventionalTree: Readonly<Record<string, string>> = {
-  'src/cli/doctor.tsx': moduleSource,
-  // Plain CLI routes compile through the stage-2 argv grammar, so the
-  // fixture carries a real (statically parseable) zod object schema.
+  // CLI routes (plain and rendered) compile through the argv grammar, so the
+  // fixtures carry real (statically parseable) zod object schemas.
+  'src/cli/doctor.tsx': [
+    'export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();',
+    'export const resultSchema = {};',
+    'export default async () => undefined;',
+    '',
+  ].join('\n'),
   'src/cli/library/audit.ts': [
     "export const config = { description: 'Audit the library.' };",
     'export const inputSchema = z.object({ strict: z.boolean().optional() }).strict();',
@@ -148,7 +153,7 @@ it('skips ignored paths, private segments, and declaration files', async () => {
   expect(graph.scripts).toEqual([]);
 });
 
-it('discovers .jsx script routes so the rendered-script gate can judge them', async () => {
+it('discovers .jsx script routes so the rendered-script pipeline can ship them', async () => {
   const root = await createRoot();
   await writeTree(root, {
     'src/scripts/rebuild-index.ts': moduleSource,
@@ -157,7 +162,7 @@ it('discovers .jsx script routes so the rendered-script gate can judge them', as
   const graph = await compileRouteGraph(root, fixtureConfig());
 
   // Discovery is not a packaging choice: the .jsx module compiles into the
-  // graph so source validation can gate it as AB4807 instead of dropping it.
+  // graph so normalization ships it through the renderer pipeline (#102 s3).
   expect(graph.diagnostics).toEqual([]);
   expect(graph.scripts.map((route) => route.id)).toEqual(['script:rebuild-index', 'script:render-poster']);
   expect(graph.scripts.find((route) => route.id === 'script:render-poster')).toMatchObject({

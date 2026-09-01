@@ -1,83 +1,133 @@
-import { describe, expect, it } from '@rstest/core';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { runCli, type CuratorOperations } from '../src/cli.js';
+import { afterEach, describe, expect, it } from '@rstest/core';
 
-const operations = (): CuratorOperations => ({
-  audit: async (input) => ({
-    audioSha256: 'b'.repeat(64), bytes: 12, chapterIssues: [], chapters: [], exitCode: 0, file: input.file,
-    fullDecode: input.fullDecode === true ? 'verified' : 'not-requested', generatedAt: '2026-08-26T00:00:00.000Z',
-    mutation: false, operation: 'audit', probe: { bytes: 12, chapters: 0, codec: 'aac', durationSeconds: 12, extension: '.m4b', path: input.file, relativePath: 'book.m4b', sampleRate: 44_100, tags: {} },
-    sha256: 'a'.repeat(64), sourceChapterMapping: { issues: [], status: 'not-requested' }, status: 'verified',
-  }),
-  inspect: async (input) => ({ files: [], operation: 'inspect', root: input.root, totalBytes: 0 }),
-  prepare: async (input) => ({
-    applied: input.apply ?? false,
-    operation: 'prepare',
-    output: `${input.outputRoot}/book.m4b`,
-    probe: { codec: 'mp3', durationSeconds: 12, format: 'mp3', tags: {} },
-    source: input.source,
-  }),
+import maybeFactoryConfig from '../agent-bundle.config.ts';
+import { compileRouteGraph } from 'agent-bundle/api';
+import inspectRoute, { inputSchema as inspectInput, resultSchema as inspectResult } from '../src/cli/inspect.ts';
+
+if (typeof maybeFactoryConfig === 'function') throw new Error('expected a static config object');
+const config = maybeFactoryConfig;
+const root = new URL('..', import.meta.url).pathname;
+
+const directories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
 });
 
-describe('audiobook-curator CLI', () => {
-  it('enables application only through the typed flag', async () => {
-    let applied = false;
-    const fixture = operations();
-    await runCli(['prepare', '/source/book.mp3', '--output', '/curated', '--apply'], {
-      operations: { ...fixture, prepare: async (input, options) => {
-        applied = input.apply === true;
-        return fixture.prepare(input, options);
-      } },
-      write: () => undefined,
-    });
-    expect(applied).toBe(true);
+/**
+ * The routed-CLI migration pins (#102 stages 2-3): the compiled command
+ * graph carries exactly the pre-migration argv surface — the same command
+ * names, option spellings, positionals, and exit-code policies the manual
+ * `runCli` dispatcher served — and plain routes still emit the identical
+ * one-line JSON receipts.
+ */
+describe('audiobook-curator routed CLI', () => {
+  it('compiles the fifteen migrated commands with the pre-migration argv surface', async () => {
+    const graph = await compileRouteGraph(root, config);
+    expect(graph.diagnostics).toEqual([]);
+    expect(graph.cli?.mode).toBe('generated');
+    const commands = graph.cli!.commands!;
+    const byName = new Map(commands.map((command) => [command.path.join(' '), command]));
+
+    expect([...byName.keys()].sort()).toEqual([
+      'acoustic-identify',
+      'acoustic-verify',
+      'apply-chapters',
+      'apply-metadata',
+      'audible-cache',
+      'audible-search',
+      'audible-select',
+      'audit',
+      'convert',
+      'inspect',
+      'inventory',
+      'library-audit',
+      'prepare',
+      'select',
+      'whisper-verify',
+    ]);
+
+    // inspect [--max-files N] <root>
+    const inspect = byName.get('inspect')!;
+    expect(inspect).toMatchObject({ exitCode: 'zero', rendered: false });
+    expect(inspect.options).toEqual([
+      { key: 'maxFiles', kind: 'number', option: 'max-files', repeated: false, required: false },
+      { key: 'root', kind: 'string', option: 'root', positional: 0, repeated: false, required: true },
+    ]);
+
+    // inventory <source> --report FILE [--strict]
+    const inventory = byName.get('inventory')!;
+    expect(inventory).toMatchObject({ exitCode: 'result', rendered: false });
+    expect(inventory.options.map((option) => [option.option, option.required, option.positional ?? null])).toEqual([
+      ['report', true, null],
+      ['source', true, 0],
+      ['strict', false, null],
+    ]);
+
+    // library-audit <sources...> --report FILE [--concurrency N] [--strict] — the rendered command.
+    const libraryAudit = byName.get('library-audit')!;
+    expect(libraryAudit).toMatchObject({ exitCode: 'result', rendered: true });
+    expect(libraryAudit.options.map((option) => [option.option, option.repeated, option.positional ?? null])).toEqual([
+      ['concurrency', false, null],
+      ['report', false, null],
+      ['sources', true, 0],
+      ['strict', false, null],
+    ]);
+
+    // convert keeps its full named-option surface, including kebab-case
+    // projections of camelCase keys (--audio-bitrate, --forge-aac-encoder).
+    const convert = byName.get('convert')!;
+    expect(convert.options.map((option) => option.option).sort()).toEqual([
+      'apply', 'artwork', 'audio-bitrate', 'audio-codec', 'author', 'engine',
+      'forge-aac-encoder', 'forge-cli', 'jobs', 'language', 'narrator',
+      'output', 'overwrite', 'receipt', 'selection', 'title', 'year',
+    ]);
+    expect(convert.options.filter((option) => option.required).map((option) => option.option)).toEqual([
+      'author', 'output', 'receipt', 'selection', 'title',
+    ]);
+
+    // prepare [--apply] [--name FILE] --output DIR <source> — the handler
+    // maps --output/--name onto the operation's outputRoot/outputName.
+    const prepare = byName.get('prepare')!;
+    expect(prepare.options.map((option) => [option.option, option.required, option.positional ?? null])).toEqual([
+      ['apply', false, null],
+      ['name', false, null],
+      ['output', true, null],
+      ['source', true, 0],
+    ]);
+
+    // audible-search keeps --duration and the comma-separated --regions list.
+    const audibleSearch = byName.get('audible-search')!;
+    expect(audibleSearch.options.map((option) => option.option)).toEqual([
+      'attempts', 'author', 'duration', 'limit', 'narrator', 'regions', 'report', 'title',
+    ]);
+    expect(audibleSearch).toMatchObject({ exitCode: 'result' });
+
+    // audible-cache keeps --cache-dir.
+    expect(byName.get('audible-cache')!.options.some((option) => option.option === 'cache-dir')).toBe(true);
+
+    // The result exit-code policy rides exactly the commands that declared it.
+    expect(commands.filter((command) => command.exitCode === 'result').map((command) => command.path.join(' ')).sort()).toEqual([
+      'acoustic-identify', 'acoustic-verify', 'audible-search', 'audit', 'inventory', 'library-audit', 'whisper-verify',
+    ]);
   });
 
-  it('rejects unknown commands and flags', async () => {
-    await expect(runCli(['unknown', '/library'], { operations: operations(), write: () => undefined }))
-      .rejects.toThrow('Unknown command');
-    await expect(runCli(['audit', '/library', '--overwrite'], { operations: operations(), write: () => undefined }))
-      .rejects.toThrow('Unknown option');
-  });
-
-  it('does not invoke a command when cancellation was already requested', async () => {
-    const controller = new AbortController();
-    controller.abort();
-    let invoked = false;
-    const output: string[] = [];
-
-    await expect(runCli(['inspect', '/library'], {
-      operations: {
-        ...operations(),
-        inspect: async (input) => {
-          invoked = true;
-          return { files: [], operation: 'inspect', root: input.root, totalBytes: 0 };
-        },
-      },
-      signal: controller.signal,
-      write: (value) => output.push(value),
-    })).rejects.toThrow('aborted');
-
-    expect(invoked).toBe(false);
-    expect(output).toEqual([]);
-  });
-
-  it('does not emit a result when cancellation is requested during a command', async () => {
-    const controller = new AbortController();
-    const output: string[] = [];
-
-    await expect(runCli(['inspect', '/library'], {
-      operations: {
-        ...operations(),
-        inspect: async (input) => {
-          controller.abort();
-          return { files: [], operation: 'inspect', root: input.root, totalBytes: 0 };
-        },
-      },
-      signal: controller.signal,
-      write: (value) => output.push(value),
-    })).rejects.toThrow('aborted');
-
-    expect(output).toEqual([]);
+  it('keeps the plain inspect receipt byte-identical to the pre-migration CLI output', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'curator-cli-inspect-'));
+    directories.push(directory);
+    const input = inspectInput.parse({ root: directory });
+    const result = inspectResult.parse(await inspectRoute({ input, signal: new AbortController().signal }));
+    // The generated shell prints exactly JSON.stringify(result) + '\n', the
+    // same line `runCliCommands` wrote before the migration.
+    expect(JSON.stringify(result)).toBe(JSON.stringify({
+      files: [],
+      operation: 'inspect',
+      root: directory,
+      totalBytes: 0,
+    }));
   });
 });

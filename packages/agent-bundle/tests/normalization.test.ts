@@ -851,6 +851,16 @@ it('normalizes shippable conventional script routes through the explicit scripts
       source: `${root}/src/tasks/detect-risk.ts`,
       targets: ['claude'],
     },
+    // Rendered routes ship through the renderer pipeline (#102 stage 3).
+    {
+      id: 'script:render-notes',
+      mode: 'bundle',
+      name: 'render-notes',
+      provenance: { kind: 'conventional', sourcePath: `${root}/src/scripts/render-notes.tsx` },
+      rendered: true,
+      source: `${root}/src/scripts/render-notes.tsx`,
+      targets: ['portable'],
+    },
     {
       id: 'script:verify-release',
       mode: 'bundle',
@@ -882,7 +892,7 @@ it('normalizes conventional scripts when config declares none', async () => {
   ]);
 });
 
-it('gates rendered, nested, and conflicting conventional script routes as AB4807-AB4809', () => {
+it('gates nested and conflicting conventional script routes as AB4808/AB4809 and ships rendered ones', () => {
   const root = '/workspace/project';
   const loaded = loadedProject({
     plugin: { name: 'review-tools', version: '1.0.0' },
@@ -902,6 +912,8 @@ it('gates rendered, nested, and conflicting conventional script routes as AB4807
   const gate = validateSource(loaded, discovered, registry)
     .filter(({ code }) => code.startsWith('AB48'));
 
+  // AB4807 is retired: rendered script routes ship through the Agent
+  // renderer pipeline (#102 stage 3) instead of failing validation.
   expect(gate).toEqual([
     {
       code: 'AB4809',
@@ -917,19 +929,26 @@ it('gates rendered, nested, and conflicting conventional script routes as AB4807
       severity: 'error',
       sourcePath: `${root}/src/scripts/release/tag.ts`,
     },
+  ]);
+});
+
+it('normalizes rendered conventional script routes onto the renderer pipeline (#102 stage 3)', async () => {
+  const root = '/workspace/project';
+  const model = await normalizeProject(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { routeGraph: routeGraphWithScripts(root, ['src/scripts/render-notes.tsx']), skills: [] },
+    registry,
+  );
+
+  expect(model.scripts).toEqual([
     {
-      code: 'AB4807',
-      message: 'Conventional script src/scripts/render-notes.tsx is a rendered-script module; rendered scripts are not supported yet.',
-      recovery: 'Rename the module to .ts to ship a plain script, prefix a path segment with "_" to keep it private, or declare it under scripts in config to opt into plain bundling.',
-      severity: 'error',
-      sourcePath: `${root}/src/scripts/render-notes.tsx`,
-    },
-    {
-      code: 'AB4807',
-      message: 'Conventional script src/scripts/render-poster.jsx is a rendered-script module; rendered scripts are not supported yet.',
-      recovery: 'Rename the module to .ts to ship a plain script, prefix a path segment with "_" to keep it private, or declare it under scripts in config to opt into plain bundling.',
-      severity: 'error',
-      sourcePath: `${root}/src/scripts/render-poster.jsx`,
+      id: 'script:render-notes',
+      mode: 'bundle',
+      name: 'render-notes',
+      provenance: { kind: 'conventional', sourcePath: `${root}/src/scripts/render-notes.tsx` },
+      rendered: true,
+      source: `${root}/src/scripts/render-notes.tsx`,
+      targets: ['portable'],
     },
   ]);
 });

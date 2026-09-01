@@ -16,6 +16,57 @@ import type { CompiledCliCommand, CompiledCliOption } from './routes/types.ts';
  * plain-object harnesses.
  */
 
+/**
+ * Structural mirrors of the runtime package's versioned Agent Document and
+ * render-event contracts (`AGENT_DOCUMENT_VERSION` 1). The generated
+ * executable feeds real runtime values through these shapes; keeping them
+ * structural means this shell never imports `@agent-bundle/runtime` — the
+ * generated bundle resolves the runtime from the consumer project instead.
+ */
+export type CliRenderedDocumentNode =
+  | { readonly children: readonly CliRenderedDocumentNode[]; readonly kind: 'result'; readonly metadata?: unknown }
+  | { readonly kind: 'markdown'; readonly text: string }
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'context'; readonly text: string }
+  | { readonly kind: 'json'; readonly value: unknown }
+  | { readonly completed: number; readonly kind: 'progress'; readonly message?: string; readonly total?: number }
+  | { readonly data: string; readonly kind: 'image'; readonly mimeType: string }
+  | { readonly data: string; readonly kind: 'audio'; readonly mimeType: string }
+  | { readonly kind: 'resource'; readonly mimeType?: string; readonly name: string; readonly uri: string }
+  | { readonly code: string; readonly kind: 'error'; readonly message: string };
+
+export interface CliRenderedDocument {
+  readonly root: CliRenderedDocumentNode;
+  readonly status: 'failed' | 'represented-error' | 'success';
+  readonly value?: unknown;
+  readonly version: number;
+}
+
+export type CliRenderedEvent =
+  | { readonly document: CliRenderedDocument; readonly sequence: number; readonly type: 'shell' }
+  | { readonly completed: number; readonly message?: string; readonly sequence: number; readonly total?: number; readonly type: 'progress' }
+  | { readonly boundaryId: string; readonly document: CliRenderedDocument; readonly sequence: number; readonly type: 'replace' }
+  | { readonly boundaryId?: string; readonly error: { readonly code: string; readonly message: string }; readonly sequence: number; readonly type: 'error' }
+  | { readonly document: CliRenderedDocument; readonly sequence: number; readonly type: 'complete' };
+
+/**
+ * The four output modes of one rendered invocation: interactive `tty`
+ * updates progress in place before the final document; piped `markdown`
+ * emits exactly one final document with no partial fallbacks; `json` emits
+ * the canonical validated final value; `ndjson` emits the sequence-numbered
+ * render-event stream (an Agent Bundle CLI/script dialect — never MCP
+ * JSON-RPC, never written to an MCP server's stdout).
+ */
+export type CliOutputMode = 'json' | 'markdown' | 'ndjson' | 'tty';
+
+/** One rendered run: a live render-event stream plus its validation and teardown. */
+export interface GeneratedCliRenderSession {
+  readonly close: () => Promise<void>;
+  readonly events: () => ReadableStream<CliRenderedEvent>;
+  /** Validates the complete document's value (the route's `resultSchema.parse`). */
+  readonly validate: (value: unknown) => unknown;
+}
+
 /** Raised for argv-shape failures: unknown commands or options, missing or malformed values. */
 export class CliUsageError extends Error {
   constructor(message: string) {
@@ -42,17 +93,31 @@ export interface GeneratedCliExecuteContext {
   readonly signal: AbortSignal;
 }
 
+export interface GeneratedCliRenderContext {
+  /** The raw argv the command consumed, for the dispatch invocation's `args`. */
+  readonly args: readonly string[];
+  readonly signal: AbortSignal;
+}
+
 export interface RunGeneratedCliOptions {
   readonly argv: readonly string[];
   readonly commands: readonly CompiledCliCommand[];
   readonly description?: string;
-  /** Runs one resolved command with parsed input; returns the validated result. */
+  /** Runs one resolved plain command with parsed input; returns the validated result. */
   readonly execute: (
     command: CompiledCliCommand,
     input: Readonly<Record<string, unknown>>,
     context: GeneratedCliExecuteContext,
   ) => Promise<unknown>;
+  /** True when stdout is an interactive terminal; rendered commands then update progress in place. */
+  readonly isTty?: () => boolean;
   readonly name: string;
+  /** Opens one rendered run for a resolved `.tsx` command with parsed input. */
+  readonly render?: (
+    command: CompiledCliCommand,
+    input: Readonly<Record<string, unknown>>,
+    context: GeneratedCliRenderContext,
+  ) => GeneratedCliRenderSession;
   readonly signal?: AbortSignal;
   readonly version: string;
   readonly writeErr?: (text: string) => void;
@@ -119,6 +184,13 @@ const globalOptionRows: readonly (readonly [string, string])[] = [
   ['    --version', 'Print the version.'],
 ];
 
+const renderedOptionRows: readonly (readonly [string, string])[] = [
+  ['-h, --help', 'Show help.'],
+  ['    --json', 'Emit the canonical JSON result.'],
+  ['    --ndjson', 'Emit the sequence-numbered render-event stream.'],
+  ['    --version', 'Print the version.'],
+];
+
 const commandUsage = (name: string, command: CompiledCliCommand): string => {
   const positionals = sortedPositionals(command).map(positionalPlaceholder);
   return `Usage: ${name} ${command.path.join(' ')} [options]${positionals.length === 0 ? '' : ` ${positionals.join(' ')}`}`;
@@ -148,7 +220,7 @@ const commandHelp = (name: string, command: CompiledCliCommand): string => {
       ...(option.defaultValue === undefined ? [] : [`[default: ${JSON.stringify(option.defaultValue)}]`]),
     ].filter((part) => part !== '').join(' '),
   ]);
-  lines.push('', 'Options:', helpColumns([...optionRows, ...globalOptionRows]));
+  lines.push('', 'Options:', helpColumns([...optionRows, ...(command.rendered ? renderedOptionRows : globalOptionRows)]));
   return `${lines.join('\n')}\n`;
 };
 
@@ -182,6 +254,7 @@ const treeHelp = (
 interface ParsedArgv {
   readonly input: Readonly<Record<string, unknown>>;
   readonly json: boolean;
+  readonly ndjson: boolean;
 }
 
 const coerceValue = (option: CompiledCliOption, value: string): unknown => {
@@ -242,6 +315,7 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
   const values = new Map<string, unknown>();
   const bare: string[] = [];
   let json = false;
+  let ndjson = false;
   let index = 0;
   const readOption = (raw: string): void => {
     const separator = raw.indexOf('=');
@@ -249,6 +323,10 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
     const inline = separator === -1 ? undefined : raw.slice(separator + 1);
     if (name === 'json' && inline === undefined) {
       json = true;
+      return;
+    }
+    if (name === 'ndjson' && inline === undefined) {
+      ndjson = true;
       return;
     }
     const option = options.get(name);
@@ -317,11 +395,12 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
       throw new CliUsageError(`Missing required option: --${option.option}.`);
     }
   }
-  return { input: Object.fromEntries(values), json };
+  if (json && ndjson) throw new CliUsageError('Use either --json or --ndjson, not both.');
+  return { input: Object.fromEntries(values), json, ndjson };
 };
 
-const resultExitCode = (command: CompiledCliCommand, result: unknown): number => {
-  if (command.exitCode === 'zero') return 0;
+const resultExitCode = (policy: 'result' | 'zero', result: unknown): number => {
+  if (policy === 'zero') return 0;
   const exitCode = typeof result === 'object' && result !== null
     ? (result as Record<string, unknown>)['exitCode']
     : undefined;
@@ -329,6 +408,147 @@ const resultExitCode = (command: CompiledCliCommand, result: unknown): number =>
     throw new Error(`The exitCode result policy requires an integer exitCode property between 0 and 255; got ${JSON.stringify(exitCode)}.`);
   }
   return exitCode;
+};
+
+const markdownBlocks = (node: CliRenderedDocumentNode): readonly string[] => {
+  switch (node.kind) {
+    case 'result':
+      return node.children.flatMap(markdownBlocks);
+    case 'markdown':
+    case 'text':
+      return [node.text];
+    case 'context':
+      return [node.text.split('\n').map((line) => `> ${line}`).join('\n')];
+    case 'json':
+      return [`\`\`\`json\n${JSON.stringify(node.value, null, 2)}\n\`\`\``];
+    case 'progress':
+      // Transient by contract: partial fallbacks never reach final Markdown.
+      return [];
+    case 'image':
+      return [`![image](data:${node.mimeType};base64,${node.data})`];
+    case 'audio':
+      return [`[audio](data:${node.mimeType};base64,${node.data})`];
+    case 'resource':
+      return [`[${node.name}](${node.uri})`];
+    case 'error':
+      return [`**[${node.code}]** ${node.message}`];
+    default: {
+      const unreachable: never = node;
+      throw new TypeError(`Unsupported Agent Document node ${String((unreachable as { kind?: string }).kind)}.`);
+    }
+  }
+};
+
+/** Projects one final Agent Document onto stable Markdown (the piped and TTY final output). */
+export const projectCliDocumentToMarkdown = (document: CliRenderedDocument): string => {
+  const blocks = markdownBlocks(document.root).filter((block) => block.trim() !== '');
+  return blocks.length === 0 ? '' : `${blocks.join('\n\n')}\n`;
+};
+
+const progressLine = (event: { readonly completed: number; readonly message?: string; readonly total?: number }): string => {
+  const counter = event.total === undefined ? String(event.completed) : `${String(event.completed)}/${String(event.total)}`;
+  return event.message === undefined ? counter : `${event.message} (${counter})`;
+};
+
+const clearProgressLine = '\r\u001B[2K';
+
+interface RenderedRunOptions {
+  /** Exit-code policy of the invocation: a routed command's policy, or `zero` for rendered scripts. */
+  readonly exitCode: 'result' | 'zero';
+  readonly mode: CliOutputMode;
+  readonly session: GeneratedCliRenderSession;
+  readonly signal: AbortSignal;
+  readonly writeErr: (text: string) => void;
+  readonly writeOut: (text: string) => void;
+}
+
+/**
+ * Drives one rendered run through its output mode: machine output on stdout,
+ * diagnostics on stderr, deterministic exit codes (0 success or the `result`
+ * policy's `exitCode`, 1 render/contract failure).
+ */
+const runRenderedInvocation = async (options: RenderedRunOptions): Promise<number> => {
+  const { mode, writeErr, writeOut } = options;
+  const reader = options.session.events().getReader();
+  let complete: CliRenderedDocument | undefined;
+  let progressShown = false;
+  const clearProgress = (): void => {
+    if (progressShown) {
+      writeOut(clearProgressLine);
+      progressShown = false;
+    }
+  };
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const event = next.value;
+      if (mode === 'ndjson') {
+        writeOut(`${JSON.stringify(event)}\n`);
+      }
+      switch (event.type) {
+        case 'shell':
+        case 'replace':
+          break;
+        case 'progress':
+          if (mode === 'tty') {
+            writeOut(`${clearProgressLine}${progressLine(event)}`);
+            progressShown = true;
+          }
+          break;
+        case 'error':
+          if (mode !== 'ndjson') {
+            clearProgress();
+            writeErr(`[${event.error.code}] ${event.error.message}\n`);
+          }
+          break;
+        case 'complete':
+          complete = event.document;
+          break;
+        default: {
+          const unreachable: never = event;
+          throw new TypeError(`Unsupported render event ${String((unreachable as { type?: string }).type)}.`);
+        }
+      }
+    }
+  } catch (error) {
+    clearProgress();
+    if (options.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+      writeErr('Aborted.\n');
+      return 1;
+    }
+    writeErr(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  clearProgress();
+  if (complete === undefined) {
+    writeErr('The render ended without a complete document.\n');
+    return 1;
+  }
+  let value: unknown = complete.value;
+  try {
+    value = options.session.validate(value);
+  } catch (error) {
+    writeErr(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  switch (mode) {
+    case 'json':
+      writeOut(`${JSON.stringify(value ?? null)}\n`);
+      break;
+    case 'ndjson':
+      break;
+    case 'tty':
+    case 'markdown':
+      writeOut(projectCliDocumentToMarkdown(complete));
+      break;
+    default: {
+      const unreachable: never = mode;
+      throw new TypeError(`Unsupported output mode ${String(unreachable)}.`);
+    }
+  }
+  if (complete.status !== 'success') return 1;
+  return resultExitCode(options.exitCode, value);
 };
 
 /**
@@ -388,10 +608,36 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
     }
     const parsed = parseCommandArgv(command, rest);
     signal.throwIfAborted();
+    if (command.rendered) {
+      if (options.render === undefined) {
+        throw new Error(`Rendered command ${command.path.join(' ')} has no render host.`);
+      }
+      const mode: CliOutputMode = parsed.ndjson
+        ? 'ndjson'
+        : parsed.json
+          ? 'json'
+          : (options.isTty ?? (() => process.stdout.isTTY === true))()
+            ? 'tty'
+            : 'markdown';
+      const session = options.render(command, parsed.input, { args: rest, signal });
+      try {
+        return await runRenderedInvocation({
+          exitCode: command.exitCode,
+          mode,
+          session,
+          signal,
+          writeErr,
+          writeOut,
+        });
+      } finally {
+        await session.close();
+      }
+    }
+    if (parsed.ndjson) throw new CliUsageError('--ndjson requires a rendered command.');
     const result = await options.execute(command, parsed.input, { json: parsed.json, signal });
     signal.throwIfAborted();
     writeOut(`${JSON.stringify(result)}\n`);
-    return resultExitCode(command, result);
+    return resultExitCode(command.exitCode, result);
   } catch (error) {
     if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       writeErr('Aborted.\n');
@@ -407,6 +653,82 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
   }
 };
 
+export interface RunGeneratedRenderedScriptOptions {
+  readonly argv: readonly string[];
+  /** Opens one rendered run for the script with the mode flags removed from argv. */
+  readonly createSession: (
+    argv: readonly string[],
+    context: { readonly signal: AbortSignal },
+  ) => GeneratedCliRenderSession;
+  readonly isTty?: () => boolean;
+  readonly name: string;
+  readonly signal?: AbortSignal;
+  readonly writeErr?: (text: string) => void;
+  readonly writeOut?: (text: string) => void;
+}
+
+/**
+ * Runs one rendered script (`src/scripts/<name>.tsx`) to completion and
+ * returns the process exit code. The framework dialect reserves exactly
+ * `--json` and `--ndjson` (before a `--` terminator); every other argument
+ * passes through to the script component's `argv` prop untouched. Exit codes
+ * derive from the final document status: 0 on `success`, 1 otherwise.
+ */
+export const runGeneratedRenderedScript = async (
+  options: RunGeneratedRenderedScriptOptions,
+): Promise<number> => {
+  const writeOut = options.writeOut ?? ((text: string) => void process.stdout.write(text));
+  const writeErr = options.writeErr ?? ((text: string) => void process.stderr.write(text));
+  const signal = options.signal ?? new AbortController().signal;
+  const terminator = options.argv.indexOf('--');
+  const visible = terminator === -1 ? options.argv : options.argv.slice(0, terminator);
+  const json = visible.includes('--json');
+  const ndjson = visible.includes('--ndjson');
+  if (json && ndjson) {
+    writeErr('Use either --json or --ndjson, not both.\n');
+    return 2;
+  }
+  const argv = options.argv.filter((argument, index) =>
+    (terminator !== -1 && index > terminator) || (argument !== '--json' && argument !== '--ndjson'));
+  const mode: CliOutputMode = ndjson
+    ? 'ndjson'
+    : json
+      ? 'json'
+      : (options.isTty ?? (() => process.stdout.isTTY === true))()
+        ? 'tty'
+        : 'markdown';
+  const session = options.createSession(argv, { signal });
+  try {
+    return await runRenderedInvocation({
+      exitCode: 'zero',
+      mode,
+      session,
+      signal,
+      writeErr,
+      writeOut,
+    });
+  } finally {
+    await session.close();
+  }
+};
+
+interface ProcessSignalWiring {
+  readonly exitCode: () => number | undefined;
+  readonly signal: AbortSignal;
+}
+
+const wireProcessSignals = (): ProcessSignalWiring => {
+  const controller = new AbortController();
+  let signalExitCode: number | undefined;
+  const onSignal = (exitCode: number): void => {
+    signalExitCode = exitCode;
+    controller.abort(new DOMException('The process received a termination signal', 'AbortError'));
+  };
+  process.once('SIGINT', () => onSignal(130));
+  process.once('SIGTERM', () => onSignal(143));
+  return { exitCode: () => signalExitCode, signal: controller.signal };
+};
+
 /**
  * The generated executable envelope: wires process argv, stdout/stderr,
  * SIGINT/SIGTERM (which reach the framework `AbortSignal` and exit 130/143),
@@ -415,18 +737,24 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
 export const runGeneratedCliProcess = async (
   options: Omit<RunGeneratedCliOptions, 'argv' | 'signal' | 'writeErr' | 'writeOut'>,
 ): Promise<void> => {
-  const controller = new AbortController();
-  let signalExitCode: number | undefined;
-  const onSignal = (exitCode: number): void => {
-    signalExitCode = exitCode;
-    controller.abort(new DOMException('The CLI process received a termination signal', 'AbortError'));
-  };
-  process.once('SIGINT', () => onSignal(130));
-  process.once('SIGTERM', () => onSignal(143));
+  const wiring = wireProcessSignals();
   const code = await runGeneratedCliEntry({
     ...options,
     argv: process.argv.slice(2),
-    signal: controller.signal,
+    signal: wiring.signal,
   });
-  process.exitCode = signalExitCode ?? code;
+  process.exitCode = wiring.exitCode() ?? code;
+};
+
+/** The generated rendered-script envelope, mirroring {@link runGeneratedCliProcess}. */
+export const runGeneratedRenderedScriptProcess = async (
+  options: Omit<RunGeneratedRenderedScriptOptions, 'argv' | 'signal' | 'writeErr' | 'writeOut'>,
+): Promise<void> => {
+  const wiring = wireProcessSignals();
+  const code = await runGeneratedRenderedScript({
+    ...options,
+    argv: process.argv.slice(2),
+    signal: wiring.signal,
+  });
+  process.exitCode = wiring.exitCode() ?? code;
 };

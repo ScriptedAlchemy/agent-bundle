@@ -5,9 +5,18 @@ import { z } from 'zod';
 import { Mcp, defineOperation, defineRscApplication, lowerMcpResult, runRscCli } from '../src/index.js';
 
 /**
- * The `status` operation printed in `docs/framework-mode.md` and this
- * package's README, with a render counter so the "only MCP consumes
- * `render`" claim is observable.
+ * The `status` operation printed in this package's README, with a render
+ * counter so the documented compatibility claim stays observable.
+ *
+ * Pin flip (#102 stage 3): the old pin read "CLI writes one JSON line,
+ * `render` never invoked" for the whole CLI story. Routed `src/cli/**`
+ * commands now DO render — `.tsx` routes render through the dispatcher with
+ * TTY/Markdown/`--json`/`--ndjson` output modes (pinned by
+ * `packages/agent-bundle/tests/cli-routes.test.ts` and
+ * `cli-routes-build.test.ts`). What this file keeps pinning is the narrowed
+ * claim the docs still make: the handwritten `runRscCli` compatibility path
+ * serializes the validated result as one JSON line and never invokes
+ * `render`; only the MCP projection consumes it.
  */
 const documentedStatus = (onRender: () => void) => defineOperation({
   cli: {
@@ -36,8 +45,8 @@ const documentedStatus = (onRender: () => void) => defineOperation({
   resultSchema: z.object({ status: z.literal('ready') }).strict(),
 });
 
-describe('documented operation model', () => {
-  it('serves both projections from one shared core and renders only for MCP', async () => {
+describe('documented operation model (the runRscCli compatibility path)', () => {
+  it('serves both projections from one shared core; only MCP consumes render on this path', async () => {
     let renders = 0;
     const status = documentedStatus(() => {
       renders += 1;
@@ -50,7 +59,8 @@ describe('documented operation model', () => {
     const output: string[] = [];
 
     await expect(runRscCli(application, ['status'], { write: (value) => output.push(value) })).resolves.toBe(0);
-    // The CLI projection prints one line of JSON and never touches `render`.
+    // The compatibility CLI projection prints one line of JSON and never
+    // touches `render`; routed `.tsx` commands are the rendering CLI path.
     expect(output.join('')).toBe('{"status":"ready"}\n');
     expect(renders).toBe(0);
 

@@ -190,7 +190,7 @@ const plannedDestinations = (targets: readonly StagedTarget[]): readonly string[
     ...target.entries.map((entry) =>
       resolveArtifactDestination(target.root, entry.relativePath),
     ),
-    ...target.compiledEntries.map((entry) => entry.output),
+    ...target.compiledEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
     ...target.compiledHooks.map((entry) => entry.output),
     ...target.compiledMcpApps.map((entry) => entry.output),
     ...target.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
@@ -223,11 +223,15 @@ const outputCandidatesFor = (options: {
     path: resolveArtifactDestination(target.root, entry.relativePath),
     sourceInputs: entry.sourceInputs,
   }))),
-  ...options.compiledEntries.map((entry) => ({
+  ...options.compiledEntries.flatMap((entry) => [{
     kind: entry.outputKind,
     path: entry.output,
     sourceInputs: entry.sourceInputs,
-  })),
+  }, ...(entry.workerOutput === undefined ? [] : [{
+    kind: 'bundle' as const,
+    path: entry.workerOutput,
+    sourceInputs: entry.workerSourceInputs ?? entry.sourceInputs,
+  }])]),
   ...options.compiledHooks.map((entry) => ({
     kind: 'bundle' as const,
     path: entry.output,

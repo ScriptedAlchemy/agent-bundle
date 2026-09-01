@@ -365,6 +365,8 @@ export interface NormalizedScript {
   readonly mode: 'bundle' | 'copy';
   readonly name: string;
   readonly provenance: SourceProvenance;
+  /** True for a conventional rendered-script route (`src/scripts/<name>.tsx`) executed through the Agent renderer (#102 stage 3). */
+  readonly rendered?: true;
   readonly source: string;
   readonly targets: readonly string[];
 }

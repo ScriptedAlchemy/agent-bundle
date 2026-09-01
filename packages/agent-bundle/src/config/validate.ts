@@ -15,7 +15,6 @@ import {
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
 import { canonicalHookEvents, isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
-import { isRenderedCliRoute } from '../routes/cli-commands.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleHookEntry,
@@ -1493,15 +1492,9 @@ const validateConventionalScripts = (
     const judgment = judgeScriptRoute(route, configured);
     switch (judgment) {
       case 'shippable':
-        break;
+      // Rendered scripts ship through the Agent renderer pipeline (#102
+      // stage 3); AB4807 is retired and never reused.
       case 'rendered':
-        diagnostics.push({
-          code: 'AB4807',
-          message: `Conventional script ${relativePath} is a rendered-script module; rendered scripts are not supported yet.`,
-          recovery: 'Rename the module to .ts to ship a plain script, prefix a path segment with "_" to keep it private, or declare it under scripts in config to opt into plain bundling.',
-          severity: 'error',
-          sourcePath: route.source,
-        });
         break;
       case 'nested':
         diagnostics.push({
@@ -1531,12 +1524,12 @@ const validateConventionalScripts = (
 };
 
 /**
- * The stage-2 routed-CLI gate (#102): a generated-mode `src/cli/**` surface
- * compiles into one framework-generated bin, so a rendered (`.tsx`) command
- * route the plain pipeline cannot execute yet, and an explicit `bin` entry
- * shadowing the generated executable's name, are hard errors naming their
+ * The routed-CLI packaging gate (#102): a generated-mode `src/cli/**`
+ * surface compiles into one framework-generated bin, so an explicit `bin`
+ * entry shadowing the generated executable's name is a hard error naming its
  * explicit resolution. Discovery is not a packaging choice — a route never
- * disappears silently.
+ * disappears silently. (AB4816, the stage-2 rendered-command gate, is
+ * retired: rendered commands render through the dispatcher since stage 3.)
  */
 const validateConventionalCliRoutes = (
   loaded: LoadedConfig,
@@ -1545,16 +1538,6 @@ const validateConventionalCliRoutes = (
   const diagnostics: Diagnostic[] = [];
   const cli = discovered.routeGraph?.cli;
   if (cli?.mode !== 'generated') return diagnostics;
-  for (const route of cli.routes) {
-    if (!isRenderedCliRoute(route)) continue;
-    diagnostics.push({
-      code: 'AB4816',
-      message: `Conventional CLI route ${route.provenance.relativePath} is a rendered-command module; rendered commands are not supported yet.`,
-      recovery: 'Rename the module to .ts to ship a plain command, or prefix a path segment with "_" to keep it private.',
-      severity: 'error',
-      sourcePath: route.source,
-    });
-  }
   const bin = loaded.config.bin;
   if ((cli.commands ?? []).length > 0 && bin !== false && bin !== undefined && isRecord(bin)) {
     const pluginName = loaded.config.plugin.name;

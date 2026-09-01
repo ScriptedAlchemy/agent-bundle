@@ -5,7 +5,15 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { inspect } from '../src/api.ts';
-import { CliInputError, runGeneratedCliEntry } from '../src/cli-entry.ts';
+import {
+  CliInputError,
+  projectCliDocumentToMarkdown,
+  runGeneratedCliEntry,
+  runGeneratedRenderedScript,
+  type CliRenderedDocument,
+  type CliRenderedEvent,
+  type GeneratedCliRenderSession,
+} from '../src/cli-entry.ts';
 import { normalizePackageBuild } from '../src/config/normalize.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
 import { extractCliArgv } from '../src/routes/cli-argv.ts';
@@ -165,6 +173,7 @@ describe('compiled command graph', () => {
         exitCode: 'zero',
         options: [{ key: 'verbose', kind: 'boolean', option: 'verbose', repeated: false, required: false }],
         path: ['doctor'],
+        rendered: false,
         routeId: 'cli:doctor',
       },
       {
@@ -176,6 +185,7 @@ describe('compiled command graph', () => {
           { key: 'sources', kind: 'string', option: 'sources', positional: 0, repeated: true, required: true },
         ],
         path: ['library', 'audit'],
+        rendered: false,
         routeId: 'cli:library/audit',
       },
     ]);
@@ -259,7 +269,7 @@ describe('compiled command graph', () => {
     expect(messages).toContain('after an optional one');
   });
 
-  it('compiles no command for rendered routes and gates them with AB4816 in source validation', async () => {
+  it('compiles rendered .tsx routes into rendered commands beside plain ones (#102 stage 3)', async () => {
     const root = await createRoot();
     await writeTree(root, {
       'agent-bundle.config.ts': [
@@ -272,11 +282,16 @@ describe('compiled command graph', () => {
     });
     const graph = await compileRouteGraph(root, fixtureConfig());
     expect(graph.diagnostics).toEqual([]);
-    expect(graph.cli?.commands?.map((command) => command.routeId)).toEqual(['cli:inspect']);
+    expect(graph.cli?.commands?.map((command) => [command.routeId, command.rendered])).toEqual([
+      ['cli:doctor', true],
+      ['cli:inspect', false],
+    ]);
 
+    // AB4816 (the stage-2 rendered-command gate) is retired: source
+    // validation accepts the rendered surface.
     const result = await inspect({ root });
-    expect(result.state).toBe('invalid');
-    expect(codesOf(result.diagnostics)).toContain('AB4816');
+    expect(result.state).toBe('ready');
+    expect(codesOf(result.diagnostics)).not.toContain('AB4816');
   });
 
   it('errors with AB4813 when an explicit bin entry claims the generated executable name', async () => {
@@ -306,6 +321,7 @@ describe('generated bin normalization', () => {
     exitCode: 'zero',
     options: [],
     path: ['inspect'],
+    rendered: false,
     routeId: 'cli:inspect',
   };
   const surface = (overrides: Partial<CompiledCliSurface> = {}): CompiledCliSurface => ({
@@ -387,6 +403,7 @@ describe('generated CLI shell', () => {
         { key: 'verbose', kind: 'boolean', option: 'verbose', repeated: false, required: false },
       ],
       path: ['doctor'],
+      rendered: false,
       routeId: 'cli:doctor',
     },
     {
@@ -399,6 +416,7 @@ describe('generated CLI shell', () => {
         { key: 'sources', kind: 'string', option: 'sources', positional: 0, repeated: true, required: true },
       ],
       path: ['library', 'audit'],
+      rendered: false,
       routeId: 'cli:library/audit',
     },
   ];
@@ -551,5 +569,230 @@ describe('generated CLI shell', () => {
     expect(aborted.code).toBe(1);
     expect(aborted.stderr).toBe('Aborted.\n');
     expect(aborted.calls).toEqual([]);
+  });
+
+  it('rejects --ndjson on a plain command as a usage failure', async () => {
+    const result = await run(['doctor', '/library', '--ndjson']);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('--ndjson requires a rendered command.');
+  });
+});
+
+const completeDocument = (
+  status: CliRenderedDocument['status'],
+  value: unknown,
+  children: readonly CliRenderedDocument['root'][] = [],
+): CliRenderedDocument => ({
+  root: { children: [...children], kind: 'result' },
+  status,
+  value,
+  version: 1,
+});
+
+const eventStream = (events: readonly CliRenderedEvent[]): ReadableStream<CliRenderedEvent> =>
+  new ReadableStream({
+    start(controller) {
+      for (const event of events) controller.enqueue(event);
+      controller.close();
+    },
+  });
+
+describe('rendered command projection (#102 stage 3)', () => {
+  const renderedCommand: CompiledCliCommand = {
+    aliases: [],
+    description: 'Render a report.',
+    exitCode: 'zero',
+    options: [{ key: 'root', kind: 'string', option: 'root', positional: 0, repeated: false, required: true }],
+    path: ['report'],
+    rendered: true,
+    routeId: 'cli:report',
+  };
+  const document = completeDocument('success', { books: 2 }, [
+    { kind: 'markdown', text: 'Found **2** books.' },
+    { completed: 2, kind: 'progress', total: 2 },
+  ]);
+  const events: readonly CliRenderedEvent[] = [
+    { document: completeDocument('success', undefined), sequence: 0, type: 'shell' },
+    { completed: 1, message: 'auditing', sequence: 1, total: 2, type: 'progress' },
+    { document, sequence: 2, type: 'complete' },
+  ];
+
+  interface RenderedRun {
+    readonly closed: number;
+    readonly code: number;
+    readonly stderr: string;
+    readonly stdout: string;
+  }
+
+  const runRendered = async (
+    argv: readonly string[],
+    options: {
+      readonly events?: readonly CliRenderedEvent[];
+      readonly isTty?: boolean;
+      readonly validate?: (value: unknown) => unknown;
+    } = {},
+  ): Promise<RenderedRun> => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let closed = 0;
+    const session: GeneratedCliRenderSession = {
+      close: async () => {
+        closed += 1;
+      },
+      events: () => eventStream(options.events ?? events),
+      validate: options.validate ?? ((value) => value),
+    };
+    const code = await runGeneratedCliEntry({
+      argv,
+      commands: [renderedCommand],
+      execute: async () => {
+        throw new Error('plain execute must not run for a rendered command');
+      },
+      isTty: () => options.isTty ?? false,
+      name: 'curator',
+      render: () => session,
+      version: '1.2.3',
+      writeErr: (text) => void stderr.push(text),
+      writeOut: (text) => void stdout.push(text),
+    });
+    return { closed, code, stderr: stderr.join(''), stdout: stdout.join('') };
+  };
+
+  it('emits one final Markdown document when piped, with no partial fallbacks', async () => {
+    const piped = await runRendered(['report', '/library']);
+    expect(piped.code).toBe(0);
+    expect(piped.stdout).toBe('Found **2** books.\n');
+    expect(piped.stderr).toBe('');
+    expect(piped.closed).toBe(1);
+  });
+
+  it('updates progress in place on a TTY before the final document', async () => {
+    const tty = await runRendered(['report', '/library'], { isTty: true });
+    expect(tty.code).toBe(0);
+    expect(tty.stdout).toBe('\r\u001B[2Kauditing (1/2)\r\u001B[2KFound **2** books.\n');
+  });
+
+  it('emits the canonical validated final value under --json', async () => {
+    const json = await runRendered(['report', '/library', '--json'], {
+      validate: (value) => ({ ...(value as Record<string, unknown>), validated: true }),
+    });
+    expect(json.code).toBe(0);
+    expect(json.stdout).toBe('{"books":2,"validated":true}\n');
+  });
+
+  it('emits the sequence-numbered render-event stream under --ndjson', async () => {
+    const ndjson = await runRendered(['report', '/library', '--ndjson']);
+    expect(ndjson.code).toBe(0);
+    const lines = ndjson.stdout.trimEnd().split('\n').map((line) => JSON.parse(line) as { sequence: number; type: string });
+    expect(lines.map((line) => [line.sequence, line.type])).toEqual([
+      [0, 'shell'],
+      [1, 'progress'],
+      [2, 'complete'],
+    ]);
+  });
+
+  it('maps non-success documents, validation failures, and missing completion to exit 1', async () => {
+    const represented = await runRendered(['report', '/library'], {
+      events: [{ document: completeDocument('represented-error', { ok: false }), sequence: 0, type: 'complete' }],
+    });
+    expect(represented.code).toBe(1);
+
+    const invalid = await runRendered(['report', '/library'], {
+      validate: () => {
+        throw new Error('result contract violated');
+      },
+    });
+    expect(invalid.code).toBe(1);
+    expect(invalid.stderr).toContain('result contract violated');
+
+    const incomplete = await runRendered(['report', '/library'], {
+      events: [{ document: completeDocument('success', undefined), sequence: 0, type: 'shell' }],
+    });
+    expect(incomplete.code).toBe(1);
+    expect(incomplete.stderr).toContain('without a complete document');
+  });
+
+  it('rejects --json combined with --ndjson', async () => {
+    const both = await runRendered(['report', '/library', '--json', '--ndjson']);
+    expect(both.code).toBe(2);
+    expect(both.stderr).toContain('Use either --json or --ndjson, not both.');
+  });
+});
+
+describe('rendered script projection (#102 stage 3)', () => {
+  it('reserves --json/--ndjson, passes the rest as argv, and derives exit codes from status', async () => {
+    const stdout: string[] = [];
+    const captured: (readonly string[])[] = [];
+    const document = completeDocument('success', { ok: true }, [{ kind: 'text', text: 'Summarized.' }]);
+    const code = await runGeneratedRenderedScript({
+      argv: ['--json', 'a', '--', '--ndjson'],
+      createSession: (argv) => {
+        captured.push(argv);
+        return {
+          close: async () => undefined,
+          events: () => eventStream([{ document, sequence: 0, type: 'complete' }]),
+          validate: (value) => value,
+        };
+      },
+      isTty: () => false,
+      name: 'summarize',
+      writeErr: () => undefined,
+      writeOut: (text) => void stdout.push(text),
+    });
+    expect(code).toBe(0);
+    // --json is the framework dialect; the -- terminator and everything
+    // after it pass through untouched (the script owns its own argv).
+    expect(captured).toEqual([['a', '--', '--ndjson']]);
+    expect(stdout.join('')).toBe('{"ok":true}\n');
+
+    const failed = await runGeneratedRenderedScript({
+      argv: [],
+      createSession: () => ({
+        close: async () => undefined,
+        events: () => eventStream([{ document: completeDocument('failed', undefined), sequence: 0, type: 'complete' }]),
+        validate: (value) => value,
+      }),
+      isTty: () => false,
+      name: 'summarize',
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+    expect(failed).toBe(1);
+  });
+});
+
+describe('final document Markdown projection', () => {
+  it('projects every node kind onto stable Markdown and omits transient progress', () => {
+    const markdown = projectCliDocumentToMarkdown({
+      root: {
+        children: [
+          { kind: 'markdown', text: '# Report' },
+          { kind: 'text', text: 'Two books found.' },
+          { kind: 'context', text: 'Guidance line.' },
+          { kind: 'json', value: { books: 2 } },
+          { completed: 2, kind: 'progress', total: 2 },
+          { kind: 'resource', name: 'receipt', uri: 'file:///tmp/receipt.json' },
+          { code: 'partial', kind: 'error', message: 'one source skipped' },
+        ],
+        kind: 'result',
+      },
+      status: 'success',
+      value: { books: 2 },
+      version: 1,
+    });
+    expect(markdown).toBe([
+      '# Report',
+      '',
+      'Two books found.',
+      '',
+      '> Guidance line.',
+      '',
+      '```json\n{\n  "books": 2\n}\n```',
+      '',
+      '[receipt](file:///tmp/receipt.json)',
+      '',
+      '**[partial]** one source skipped',
+      '',
+    ].join('\n'));
   });
 });
