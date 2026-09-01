@@ -104,6 +104,15 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       '}',
       '',
     ].join('\n')),
+    writeProjectFile(root, 'src/cli/exit-zero.tsx', [
+      "import { z } from 'zod';",
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.object({ ok: z.boolean() }).strict();',
+      'export default async function ExitZero() {',
+      '  process.exit(0);',
+      '}',
+      '',
+    ].join('\n')),
     writeProjectFile(root, 'src/scripts/summarize.tsx', [
       "import React from 'react';",
       "import { Agent } from '@agent-bundle/runtime';",
@@ -185,6 +194,14 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   expect(events[events.length - 1]!.type).toBe('complete');
   // Rendered input-validation failures stay usage failures.
   await expect(execFile(binPath, ['report'])).rejects.toMatchObject({ code: 2, stdout: '' });
+
+  // A worker that exits cleanly before completing a request must fail that
+  // request explicitly instead of leaving its Flight stream unsettled.
+  await expect(execFile(binPath, ['exit-zero'], { timeout: 5_000 })).rejects.toMatchObject({
+    code: 1,
+    stderr: 'Generated render worker exited with code 0.\n',
+    stdout: '',
+  });
 
   // The rendered .tsx script (#102 stage 3) ships beside plain scripts in
   // the target artifact with the same output contract.

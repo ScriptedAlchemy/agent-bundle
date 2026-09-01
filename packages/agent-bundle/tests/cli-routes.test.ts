@@ -419,6 +419,17 @@ describe('generated CLI shell', () => {
       rendered: false,
       routeId: 'cli:library/audit',
     },
+    {
+      aliases: [],
+      description: 'Apply a signed offset.',
+      exitCode: 'zero',
+      options: [
+        { key: 'offset', kind: 'number', option: 'offset', positional: 0, repeated: false, required: true },
+      ],
+      path: ['offset'],
+      rendered: false,
+      routeId: 'cli:offset',
+    },
   ];
 
   interface RunResult {
@@ -446,7 +457,7 @@ describe('generated CLI shell', () => {
       execute: async (command, input, context) => {
         calls.push({ command, input, json: context.json });
         if (options.throws !== undefined) throw options.throws;
-        return options.result ?? { ok: true };
+        return Object.hasOwn(options, 'result') ? options.result : { ok: true };
       },
       name: 'curator',
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -515,6 +526,30 @@ describe('generated CLI shell', () => {
     expect(variadic.calls[0]!.input).toEqual({ format: 'json', report: 'out.json', sources: ['a', '--b'] });
   });
 
+  it('accepts negative numeric positionals without weakening single-dash option handling', async () => {
+    const negative = await run(['offset', '-5']);
+    expect(negative.code).toBe(0);
+    expect(negative.calls[0]!.input).toEqual({ offset: -5 });
+
+    const unknown = await run(['offset', '-x']);
+    expect(unknown.code).toBe(2);
+    expect(unknown.stderr).toContain('Unknown option: -x.');
+    expect(unknown.calls).toEqual([]);
+
+    const escaped = await run(['offset', '--', '-5']);
+    expect(escaped.code).toBe(0);
+    expect(escaped.calls[0]!.input).toEqual({ offset: -5 });
+  });
+
+  it('writes undefined results as canonical JSON null', async () => {
+    const result = await run(['doctor', '/library'], { result: undefined });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('null\n');
+
+    const ordered = await run(['doctor', '/library'], { result: { z: 1, a: 2 } });
+    expect(ordered.stdout).toBe('{"a":2,"z":1}\n');
+  });
+
   it('maps usage failures to exit 2 with a help hint on stderr', async () => {
     const cases: readonly (readonly [readonly string[], string])[] = [
       [['unknown'], 'Unknown command: unknown.'],
@@ -559,6 +594,7 @@ describe('generated CLI shell', () => {
 
     const missing = await run(['library', 'audit', '--report', 'r', 'a'], { result: { ok: true } });
     expect(missing.code).toBe(1);
+    expect(missing.stdout).toBe('');
     expect(missing.stderr).toContain('exitCode result policy');
   });
 

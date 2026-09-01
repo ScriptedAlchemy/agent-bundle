@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, relative, resolve } from 'node:path';
+import { basename, dirname, extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -52,10 +52,19 @@ const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
  * (`routes/public.ts`, `core/*`) as it is inlined, so the whole owning package
  * is what has to be ignored rather than the single aliased file.
  */
-const runtimeIgnoredRoot = (path: string): string => {
+export const runtimeIgnoredRoot = (path: string): string => {
   const normalized = path.replaceAll('\\', '/');
-  const marker = normalized.includes('/dist/') ? '/dist/' : '/src/';
-  return resolve(normalized.slice(0, normalized.lastIndexOf(marker)));
+  let directory = dirname(normalized);
+  while (true) {
+    if (basename(directory) === 'dist' || basename(directory) === 'src') {
+      return resolve(dirname(directory));
+    }
+    const parent = dirname(directory);
+    if (parent === directory) {
+      throw new Error(`Runtime module is not under an owning package src or dist directory: ${JSON.stringify(path)}.`);
+    }
+    directory = parent;
+  }
 };
 
 export interface CompiledEntry {
@@ -102,14 +111,20 @@ export const planCompiledEntries = (
   entries: readonly NormalizedScript[],
   options: { readonly cwd: string; readonly outDir: string },
 ): readonly PlannedScriptEntry[] => {
-  const names = new Set<string>();
+  const destinations = new Set<string>();
   return Object.freeze(entries.map((script) => {
     const filename = outputName(script);
-    if (script.name.length === 0 || names.has(filename)) {
+    if (script.name.length === 0 || destinations.has(filename)) {
       throw new Error(`Duplicate compiled script destination ${JSON.stringify(`scripts/${filename}`)}.`);
     }
-    names.add(filename);
+    destinations.add(filename);
     const workerFile = `${script.name}-flight.mjs`;
+    if (script.rendered === true) {
+      if (destinations.has(workerFile)) {
+        throw new Error(`Duplicate compiled script destination ${JSON.stringify(`scripts/${workerFile}`)}.`);
+      }
+      destinations.add(workerFile);
+    }
     return {
       mode: script.mode,
       name: script.name,
@@ -196,7 +211,7 @@ export const compileEntries = async (
         };
       })()];
     })),
-    ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [cliRuntimeShell] }),
+    ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(cliRuntimeShell)] }),
     outputRoot: options.outDir,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   });

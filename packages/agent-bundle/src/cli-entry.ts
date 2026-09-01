@@ -1,4 +1,5 @@
 import type { CompiledCliCommand, CompiledCliOption } from './routes/types.ts';
+import { stableJson } from './core/digest.ts';
 
 /**
  * The framework-owned routed-CLI shell (#102 stage 2): command-tree
@@ -312,6 +313,7 @@ const coercePositional = (option: CompiledCliOption, value: string): unknown => 
 /** Parses one resolved command's remaining argv against its compiled option surface. */
 const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]): ParsedArgv => {
   const options = new Map(namedOptions(command).map((option) => [option.option, option]));
+  const positionals = sortedPositionals(command);
   const values = new Map<string, unknown>();
   const bare: string[] = [];
   let json = false;
@@ -363,11 +365,15 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
       readOption(raw);
       continue;
     }
-    if (raw.startsWith('-') && raw.length > 1) throw new CliUsageError(`Unknown option: ${raw}.`);
+    if (raw.startsWith('-') && raw.length > 1) {
+      const positional = positionals[bare.length] ??
+        (positionals[positionals.length - 1]?.repeated === true ? positionals[positionals.length - 1] : undefined);
+      const negativeNumber = positional?.kind === 'number' && /^-\d/u.test(raw) && Number.isFinite(Number(raw));
+      if (!negativeNumber) throw new CliUsageError(`Unknown option: ${raw}.`);
+    }
     bare.push(raw);
   }
 
-  const positionals = sortedPositionals(command);
   let cursor = 0;
   for (const option of positionals) {
     if (option.repeated) {
@@ -636,8 +642,9 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
     if (parsed.ndjson) throw new CliUsageError('--ndjson requires a rendered command.');
     const result = await options.execute(command, parsed.input, { json: parsed.json, signal });
     signal.throwIfAborted();
-    writeOut(`${JSON.stringify(result)}\n`);
-    return resultExitCode(command.exitCode, result);
+    const exitCode = resultExitCode(command.exitCode, result);
+    writeOut(`${stableJson(result === undefined ? null : result)}\n`);
+    return exitCode;
   } catch (error) {
     if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       writeErr('Aborted.\n');
