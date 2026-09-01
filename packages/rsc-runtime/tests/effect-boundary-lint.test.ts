@@ -19,8 +19,21 @@ const apply = (filename: string, visit: (listeners: ReturnType<typeof rule.creat
 describe('effect-boundary lint', () => {
   it('recognizes only src/effect/boundary.ts as the legal runner home', () => {
     expect(isEffectBoundaryFile('/fast/projects/agent-bundle/packages/rsc-runtime/src/effect/boundary.ts')).toBe(true);
+    expect(isEffectBoundaryFile('/fast/projects/agent-bundle/packages/agent-bundle/src/effect/boundary.ts')).toBe(true);
     expect(isEffectBoundaryFile('C:\\repo\\packages\\rsc-runtime\\src\\effect\\boundary.ts')).toBe(true);
     expect(isEffectBoundaryFile('/fast/projects/agent-bundle/packages/rsc-runtime/src/dispatcher.ts')).toBe(false);
+    expect(isEffectBoundaryFile('/fast/projects/agent-bundle/packages/agent-bundle/src/dev/epoch-store.ts')).toBe(false);
+  });
+
+  it('rejects ad-hoc runners in agent-bundle dev seam files', () => {
+    const reports = apply('packages/agent-bundle/src/dev/coordinator.ts', (listeners) => {
+      listeners.MemberExpression?.({
+        computed: false,
+        object: { name: 'Effect', type: 'Identifier' },
+        property: { name: 'runFork', type: 'Identifier' },
+      });
+    });
+    expect(reports).toEqual([{ data: { name: 'Effect.runFork' }, messageId: 'forbiddenCall' }]);
   });
 
   it('rejects Effect.runPromise and Effect.runSync outside the boundary', () => {

@@ -84,6 +84,7 @@
     "ajv-formats": "3.0.1",
     "chokidar": "5.0.0",
     "commander": "15.0.0",
+    "effect": "4.0.0-rc.112",
     "es-module-lexer": "2.3.2",
     "fast-glob": "3.3.3",
     "ignore": "7.0.6",
