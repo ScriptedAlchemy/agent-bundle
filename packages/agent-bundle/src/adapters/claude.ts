@@ -138,9 +138,9 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.4.0',
+  adapterRevision: '1.5.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '58141a999ac3d39d9b7aa2bc6bb945aae145773ea6f37806eecc93d3b5c7ed38',
+  capabilitySha256: '553ebbec4bb16b6e075489fab6c31b11ce84870466710da98e2389659842090e',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });

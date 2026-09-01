@@ -105,7 +105,8 @@
       "https://code.claude.com/docs/en/hooks documents SubagentStart when Agent spawns a subagent and SubagentStop when it finishes; both match agent_type, including anchored plugin-scoped identifiers such as ^my-plugin:reviewer$.",
       "SubagentStart adds agent_id and agent_type to common hook fields. It cannot block subagent creation; hookSpecificOutput.additionalContext injects context before the first subagent prompt, and exit-2 stderr is only a non-blocking notice in the subagent transcript.",
       "SubagentStop adds stop_hook_active, agent_id, agent_type, agent_transcript_path, and last_assistant_message. decision:block plus reason or exit 2 keeps the subagent running; hookSpecificOutput.additionalContext provides non-error feedback that also continues it.",
-      "The hooks reference states prompt_id requires Claude Code 2.1.196 or later; the pinned 2.1.250 release covers that input field without a version bump."
+      "The hooks reference states prompt_id requires Claude Code 2.1.196 or later; the pinned 2.1.250 release covers that input field without a version bump.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents an agents/ component with name, description, model, effort, maxTurns, tools, disallowedTools, skills, memory, background, and isolation: worktree; #100 stage 2 defers the agents component per the G5 narrowing in #107, so no agents capability row is published until a later stage admits it."
     ]
   }
 }
