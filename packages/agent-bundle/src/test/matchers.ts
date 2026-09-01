@@ -9,6 +9,17 @@ export type AgentDocumentNodeKind = AgentDocumentNode['kind'];
 
 export type DocumentSubject = AgentDocument | RenderedRoute;
 
+export interface MediaNodeExpectation {
+  readonly data?: string;
+  readonly mimeType?: string;
+}
+
+export interface ResourceNodeExpectation {
+  readonly mimeType?: string;
+  readonly name?: string;
+  readonly uri?: string;
+}
+
 const documentOf = (subject: DocumentSubject): AgentDocument =>
   'document' in subject ? subject.document : subject;
 
@@ -32,10 +43,16 @@ const textOf = (
  * that provenance available.
  */
 export interface DocumentAssertions {
+  /** Asserts an audio node matches every supplied media field. */
+  readonly toContainAudio: (expected?: MediaNodeExpectation) => DocumentAssertions;
   /** Asserts a context node contains `text` — the additional context an event route returns to its host. */
   readonly toContainContext: (text: string) => DocumentAssertions;
+  /** Asserts an image node matches every supplied media field. */
+  readonly toContainImage: (expected?: MediaNodeExpectation) => DocumentAssertions;
   /** Asserts a Markdown node contains `text`. */
   readonly toContainMarkdown: (text: string) => DocumentAssertions;
+  /** Asserts a resource node matches every supplied link field. */
+  readonly toContainResource: (expected?: ResourceNodeExpectation) => DocumentAssertions;
   /** Asserts a text node contains `text`. */
   readonly toContainText: (text: string) => DocumentAssertions;
   /** Asserts the document represents an error node, optionally with `code`. */
@@ -61,6 +78,18 @@ export const expectDocument = (subject: DocumentSubject): DocumentAssertions => 
     });
   };
   const assertions: DocumentAssertions = {
+    toContainAudio(expected = {}) {
+      const found = nodes(document.root).flatMap((node) => (node.kind === 'audio' ? [node] : []));
+      if (!found.some((node) =>
+        (expected.data === undefined || node.data === expected.data)
+        && (expected.mimeType === undefined || node.mimeType === expected.mimeType))) {
+        fail('The Agent Document contains no audio node matching the expected fields.', [
+          `expected:     ${captured(expected)}`,
+          `received:     ${found.length === 0 ? 'no audio nodes' : captured(found)}`,
+        ]);
+      }
+      return assertions;
+    },
     toContainContext(text) {
       const found = textOf(document, 'context');
       if (!found.some((value) => value.includes(text))) {
@@ -71,12 +100,37 @@ export const expectDocument = (subject: DocumentSubject): DocumentAssertions => 
       }
       return assertions;
     },
+    toContainImage(expected = {}) {
+      const found = nodes(document.root).flatMap((node) => (node.kind === 'image' ? [node] : []));
+      if (!found.some((node) =>
+        (expected.data === undefined || node.data === expected.data)
+        && (expected.mimeType === undefined || node.mimeType === expected.mimeType))) {
+        fail('The Agent Document contains no image node matching the expected fields.', [
+          `expected:     ${captured(expected)}`,
+          `received:     ${found.length === 0 ? 'no image nodes' : captured(found)}`,
+        ]);
+      }
+      return assertions;
+    },
     toContainMarkdown(text) {
       const found = textOf(document, 'markdown');
       if (!found.some((value) => value.includes(text))) {
         fail('The Agent Document contains no Markdown node with the expected text.', [
           `expected:     Markdown containing ${JSON.stringify(text)}`,
           `received:     ${found.length === 0 ? 'no Markdown nodes' : captured(found)}`,
+        ]);
+      }
+      return assertions;
+    },
+    toContainResource(expected = {}) {
+      const found = nodes(document.root).flatMap((node) => (node.kind === 'resource' ? [node] : []));
+      if (!found.some((node) =>
+        (expected.mimeType === undefined || node.mimeType === expected.mimeType)
+        && (expected.name === undefined || node.name === expected.name)
+        && (expected.uri === undefined || node.uri === expected.uri))) {
+        fail('The Agent Document contains no resource node matching the expected fields.', [
+          `expected:     ${captured(expected)}`,
+          `received:     ${found.length === 0 ? 'no resource nodes' : captured(found)}`,
         ]);
       }
       return assertions;

@@ -413,6 +413,30 @@ describe('document matchers', () => {
     expect(() => expectDocument(document).toHaveError()).toThrow('no matching error');
     expect(() => expectDocument(document).toHaveNodeKinds(['result'])).toThrow('node kinds differ');
   });
+
+  it('matches image, audio, and resource fields without widening text assertions', () => {
+    const rich = Object.freeze({
+      root: Object.freeze({
+        children: Object.freeze([
+          Object.freeze({ data: 'image-data', kind: 'image', mimeType: 'image/png' }),
+          Object.freeze({ data: 'audio-data', kind: 'audio', mimeType: 'audio/wav' }),
+          Object.freeze({ kind: 'resource', mimeType: 'application/octet-stream', name: 'data.bin', uri: 'data:application/octet-stream;base64,AAE=' }),
+        ]),
+        kind: 'result',
+      }),
+      status: 'success',
+      version: 1,
+    }) as never;
+
+    expectDocument(rich)
+      .toContainImage({ data: 'image-data', mimeType: 'image/png' })
+      .toContainAudio({ data: 'audio-data', mimeType: 'audio/wav' })
+      .toContainResource({ mimeType: 'application/octet-stream', name: 'data.bin', uri: 'data:application/octet-stream;base64,AAE=' });
+    expect(() => expectDocument(rich).toContainText('image-data')).toThrow('no text node');
+    expect(() => expectDocument(rich).toContainImage({ mimeType: 'image/jpeg' })).toThrow('no image node matching');
+    expect(() => expectDocument(rich).toContainAudio({ data: 'different' })).toThrow('no audio node matching');
+    expect(() => expectDocument(rich).toContainResource({ name: 'different.bin' })).toThrow('no resource node matching');
+  });
 });
 
 describe('render event matchers', () => {
@@ -540,6 +564,7 @@ describe('the harness package boundary', () => {
         'src/test/packed.ts',
         'src/test/registry.ts',
         'src/test/render.ts',
+        'src/test/target-capabilities.ts',
         'src/test/types.ts',
       ]
         .map(async (relativePath) => [relativePath, await readFile(resolve(packageRoot, relativePath), 'utf8')] as const),

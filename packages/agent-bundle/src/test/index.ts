@@ -7,7 +7,7 @@
  *
  * | level | helper | what it proves |
  * | --- | --- | --- |
- * | `route-unit` | `renderRoute`, `renderRouteEvents` | the route component and its document, through the real Agent renderer |
+ * | `route-unit` | `renderRoute`, `renderRouteEvents`, `createTargetCapabilityFixture`, `projectTargetCapabilities` | the route component and its document through the real Agent renderer; explicit target-capability projection through the real MCP projector, without transport or host proof |
  * | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
  * | `cli-dispatch` | `invokeCli`, `cliJson` | a compiled CLI command dispatched through the routed CLI's own shell, in this process |
  * | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
@@ -50,7 +50,19 @@ export type {
   RenderedRouteEvents,
 } from './render.ts';
 export { expectDocument } from './matchers.ts';
-export type { AgentDocumentNodeKind, DocumentAssertions, DocumentSubject } from './matchers.ts';
+export type {
+  AgentDocumentNodeKind,
+  DocumentAssertions,
+  DocumentSubject,
+  MediaNodeExpectation,
+  ResourceNodeExpectation,
+} from './matchers.ts';
+export { createTargetCapabilityFixture, projectTargetCapabilities } from './target-capabilities.ts';
+export type {
+  TargetCapabilityFixture,
+  TargetCapabilityFixtureInput,
+  TargetCapabilityProjection,
+} from './target-capabilities.ts';
 export { expectEvents } from './events.ts';
 export type {
   AgentRenderEventType,
