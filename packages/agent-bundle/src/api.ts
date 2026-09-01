@@ -254,6 +254,10 @@ export interface ReadyInspectResult {
     readonly hooks?: NormalizedPlugin['hooks'];
     readonly routes?: RouteGraphInspection;
     readonly skills?: NormalizedPlugin['skills'];
+    readonly skillTreeLayouts?: readonly {
+      readonly layout?: NormalizedPlugin['skills'][number]['skillTreeLayout'];
+      readonly skillId: string;
+    }[];
   };
   readonly state: 'ready';
 }
@@ -527,7 +531,15 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
       ...(bundler === undefined ? {} : { bundler }),
       ...(options.focus === 'hooks' ? { hooks: model.hooks } : {}),
       ...(routes === undefined ? {} : { routes }),
-      ...(options.focus === 'skills' ? { skills: model.skills } : {}),
+      ...(options.focus === 'skills'
+        ? {
+          skills: model.skills,
+          skillTreeLayouts: Object.freeze(model.skills.map((skill) => Object.freeze({
+            skillId: skill.id,
+            ...(skill.skillTreeLayout === undefined ? {} : { layout: skill.skillTreeLayout }),
+          }))),
+        }
+        : {}),
     });
   return Object.freeze({
     diagnostics: prepared.diagnostics,

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/skill-hosts/codex-openai-yaml.schema.json",
+  "title": "Codex agents/openai.yaml",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "display_name": { "type": "string" },
+        "short_description": { "type": "string" },
+        "icon_small": { "type": "string" },
+        "icon_large": { "type": "string" },
+        "brand_color": { "type": "string" },
+        "default_prompt": { "type": "string" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow_implicit_invocation": { "type": "boolean" }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": { "type": "string" },
+              "value": { "type": "string" },
+              "description": { "type": "string" },
+              "transport": { "type": "string" },
+              "url": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

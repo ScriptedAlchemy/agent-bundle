@@ -39,6 +39,8 @@ export interface SkillDocument {
   rendered?: true;
   resources: SkillResource[];
   source: string;
+  /** Typed `targets` export from a rendered skill, or peeled `targets` frontmatter. */
+  authoredTargets?: unknown;
 }
 
 const findProjectRoot = async (skillDir: string): Promise<string> => {
@@ -137,6 +139,9 @@ const parseRenderedSkill = async (
     };
   }
   return {
+    ...(compiled.document.authoredTargets === undefined
+      ? {}
+      : { authoredTargets: compiled.document.authoredTargets }),
     body: compiled.document.body,
     diagnostics: [],
     dir,
