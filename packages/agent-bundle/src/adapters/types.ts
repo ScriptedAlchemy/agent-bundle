@@ -2,6 +2,7 @@ import { Ajv } from 'ajv/dist/ajv.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 
+import type { CapabilityState } from '../core/capabilities.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { snapshotStrictJsonValue } from '../core/strict-json.ts';
@@ -411,7 +412,7 @@ export interface TargetAdapter {
   readonly artifactValidation?: TargetArtifactValidationContract;
   /** Declares compiler-owned artifact layouts beyond target-native documents. */
   readonly artifactLayout?: TargetArtifactLayout;
-  readonly capabilities: Readonly<Record<string, boolean>>;
+  readonly capabilities: Readonly<Record<string, CapabilityState>>;
   readonly configExtension?: TargetConfigExtension;
   readonly hookContract?: TargetHookContract;
   readonly metadata: TargetAdapterMetadata;

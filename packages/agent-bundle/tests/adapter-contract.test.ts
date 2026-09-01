@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -40,7 +41,7 @@ it('delegates selected native hook sources through registered adapters', async (
   const source = join(root, 'example-hooks.json');
   let calledWithAdapter = false;
   const adapter: TargetAdapter = {
-    capabilities: { hooks: true },
+    capabilities: supportedCapabilities('hooks'),
     configExtension: { key: 'example' },
     hookContract,
     metadata,
@@ -118,7 +119,7 @@ it('rejects contradictory hook capability and contract registrations atomically'
     plan: () => ({ diagnostics: [], entries: [] }),
   });
   const adapter = (name: string): TargetAdapter => ({
-    capabilities: { hooks: true },
+    capabilities: supportedCapabilities('hooks'),
     metadata,
     name,
     plan: () => ({ diagnostics: [], entries: [] }),
@@ -139,7 +140,7 @@ it('normalizes malformed native hook source values into diagnostics without skip
   const source = join(root, 'valid-hooks.json');
   const registry = new TargetRegistry()
     .register({
-      capabilities: { hooks: true },
+      capabilities: supportedCapabilities('hooks'),
       hookContract,
       metadata,
       name: 'invalid',
@@ -147,7 +148,7 @@ it('normalizes malformed native hook source values into diagnostics without skip
       plan: () => ({ diagnostics: [], entries: [] }),
     })
     .register({
-      capabilities: { hooks: true },
+      capabilities: supportedCapabilities('hooks'),
       hookContract,
       metadata,
       name: 'valid',
@@ -188,7 +189,7 @@ it('normalizes malformed native hook source values into diagnostics without skip
 it('normalizes thrown native hook sources into diagnostics', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-source-throws-'));
   const registry = new TargetRegistry().register({
-    capabilities: { hooks: true },
+    capabilities: supportedCapabilities('hooks'),
     hookContract,
     metadata,
     name: 'throws',

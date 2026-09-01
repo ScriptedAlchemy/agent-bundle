@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { execFile as executeFile } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -116,7 +117,7 @@ it('exposes advanced adapter registry and contract types only from the advanced 
     resolveValue: (_field, _roots, value) => ({ diagnostics: [], value }),
   } satisfies TargetMcpRuntimeContract;
   const adapter = {
-    capabilities: { hooks: true, mcp: true },
+    capabilities: supportedCapabilities('hooks', 'mcp'),
     hookContract,
     mcpRuntime,
     metadata: {

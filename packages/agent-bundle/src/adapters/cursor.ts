@@ -13,6 +13,7 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
+import { capabilityEvidence, capabilityStateFromSupport, supportedCapability, unavailableCapability } from './capability-state.ts';
 import capabilityTable from './capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import {
   cursorHookWrapperSource,
@@ -239,6 +240,7 @@ const metadata = Object.freeze({
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
+const evidence = capabilityEvidence(cursorName, metadata);
 
 const hookContract = createCursorHookContract({
   manifestPath: cursorArtifactPaths.hooks,
@@ -343,9 +345,18 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
-    hooks: true,
-    mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
-    skills: capabilityTable.plugin.skills,
+    hooks: supportedCapability(evidence),
+    marketplace: unavailableCapability('The pinned Cursor Plugin contract does not define a marketplace document.'),
+    mcp: capabilityStateFromSupport(
+      capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
+      evidence,
+      'The pinned Cursor Plugin contract does not support both required modern MCP transports.',
+    ),
+    skills: capabilityStateFromSupport(
+      capabilityTable.plugin.skills,
+      evidence,
+      'The pinned Cursor Plugin contract does not support skills.',
+    ),
   }),
   hookContract,
   metadata,

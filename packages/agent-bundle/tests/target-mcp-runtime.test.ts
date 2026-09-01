@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { access, cp, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -294,7 +295,7 @@ it('rejects contradictory MCP capability and runtime registrations atomically', 
     plan: () => ({ diagnostics: [], entries: [] }),
   });
   const adapter = (name: string): TargetAdapter => ({
-    capabilities: { mcp: true },
+    capabilities: supportedCapabilities('mcp'),
     metadata,
     name,
     plan: () => ({ diagnostics: [], entries: [] }),
@@ -319,7 +320,7 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
   const calls: string[] = [];
   const adapter: TargetAdapter = {
     artifactLayout: { scripts: { allowedSuffixes: ['.mjs'], directory: 'scripts' } },
-    capabilities: { mcp: true },
+    capabilities: supportedCapabilities('mcp'),
     mcpRuntime: runtime,
     metadata,
     name: 'synthetic-mcp',

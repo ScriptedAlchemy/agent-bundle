@@ -14,6 +14,7 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
+import { capabilityEvidence, capabilityStateFromSupport, unavailableCapability } from './capability-state.ts';
 import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'json' };
 import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
@@ -55,6 +56,7 @@ const metadata = Object.freeze({
   observedVersion: capabilityTable.observedSpecificationVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.version),
 });
+const evidence = capabilityEvidence(portableName, metadata);
 
 const artifactValidation = Object.freeze({
   documents: Object.freeze([
@@ -320,8 +322,18 @@ export const portableAdapter: TargetAdapter = Object.freeze({
     skills: 'skills',
   }),
   capabilities: Object.freeze({
-    mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
-    skills: capabilityTable.plugin.skills,
+    hooks: unavailableCapability('Agent Plugins 1.0.0 does not define a hooks component.'),
+    marketplace: unavailableCapability('Agent Plugins 1.0.0 does not define a marketplace document.'),
+    mcp: capabilityStateFromSupport(
+      capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
+      evidence,
+      'Agent Plugins 1.0.0 does not support both required modern MCP transports.',
+    ),
+    skills: capabilityStateFromSupport(
+      capabilityTable.plugin.skills,
+      evidence,
+      'Agent Plugins 1.0.0 does not support skills.',
+    ),
   }),
   configExtension: Object.freeze({ key: portableName }),
   metadata,

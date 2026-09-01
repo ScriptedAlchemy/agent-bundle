@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -60,7 +61,7 @@ const runtimeRegistry = (
     mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' },
     scripts: { allowedSuffixes: ['.mjs'], directory: 'scripts' },
   },
-  capabilities: { hooks: true, mcp: true },
+  capabilities: supportedCapabilities('hooks', 'mcp'),
   hookContract: {
     commandRoot: '${HOOK_ROOT}',
     encodePlaygroundInput: (input) => input,

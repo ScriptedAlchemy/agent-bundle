@@ -1,3 +1,4 @@
+import type { CapabilityState } from '../core/capabilities.ts';
 import { dataArrayValues } from '../core/strict-json.ts';
 import type {
   AgentBundleConfig,
@@ -5,6 +6,7 @@ import type {
   NormalizationNativeHookSource,
   NormalizationTargetRegistry,
 } from '../core/types.ts';
+import { capabilityIsSupported } from './capability-state.ts';
 import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
 import { cursorAdapter } from './cursor.ts';
@@ -206,7 +208,7 @@ const snapshotArtifactLayout = (
   if ((mcpApps !== undefined || mcpEntries !== undefined) && mcpRuntime === undefined) {
     throw new Error(`Target adapter "${adapter.name}" declares MCP output layout without an MCP runtime contract.`);
   }
-  if (skills !== undefined && adapter.capabilities.skills !== true) {
+  if (skills !== undefined && !capabilityIsSupported(adapter.capabilities.skills)) {
     throw new Error(`Target adapter "${adapter.name}" declares Skill layout without skills capability.`);
   }
   return Object.freeze({
@@ -306,10 +308,10 @@ const snapshotNativeHookSource = (adapter: TargetAdapter): NativeHookSource | un
 
 const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | undefined => {
   const hookContract = adapter.hookContract;
-  if (adapter.capabilities.hooks === true && hookContract === undefined) {
+  if (capabilityIsSupported(adapter.capabilities.hooks) && hookContract === undefined) {
     throw new Error(`Target adapter "${adapter.name}" declares hooks capability without a hook contract.`);
   }
-  if (adapter.capabilities.hooks !== true && hookContract !== undefined) {
+  if (!capabilityIsSupported(adapter.capabilities.hooks) && hookContract !== undefined) {
     throw new Error(`Target adapter "${adapter.name}" declares a hook contract without hooks capability.`);
   }
   if (hookContract === undefined) return undefined;
@@ -323,10 +325,10 @@ const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | unde
 
 const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | undefined => {
   const mcpRuntime = adapter.mcpRuntime;
-  if (adapter.capabilities.mcp === true && mcpRuntime === undefined) {
+  if (capabilityIsSupported(adapter.capabilities.mcp) && mcpRuntime === undefined) {
     throw new Error(`Target adapter "${adapter.name}" declares mcp capability without an MCP runtime contract.`);
   }
-  if (adapter.capabilities.mcp !== true && mcpRuntime !== undefined) {
+  if (!capabilityIsSupported(adapter.capabilities.mcp) && mcpRuntime !== undefined) {
     throw new Error(`Target adapter "${adapter.name}" declares an MCP runtime contract without mcp capability.`);
   }
   if (mcpRuntime === undefined) return undefined;
@@ -477,8 +479,12 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     return Object.freeze(sources);
   }
 
+  capabilityState(name: string, capability: string): CapabilityState | undefined {
+    return this.#adapters.get(name)?.capabilities[capability];
+  }
+
   supports(name: string, capability: string): boolean {
-    return this.#adapters.get(name)?.capabilities[capability] === true;
+    return capabilityIsSupported(this.capabilityState(name, capability));
   }
 
   names(): readonly string[] {

@@ -14,6 +14,7 @@ import {
 } from '../core/types.ts';
 import { createMcpPathTokenResolver, standardMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime, resolveTargetRelativeStdioArgument } from '../services/mcp-runtime.ts';
+import { capabilityEvidence, capabilityStateFromSupport, supportedCapability } from './capability-state.ts';
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import {
   mergeHookDocuments,
@@ -114,6 +115,7 @@ const metadata = Object.freeze({
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
+const evidence = capabilityEvidence(codexName, metadata);
 
 const artifactValidation = Object.freeze({
   documents: Object.freeze([
@@ -398,10 +400,18 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
-    marketplace: true,
-    hooks: true,
-    mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
-    skills: capabilityTable.plugin.skills,
+    marketplace: supportedCapability(evidence),
+    hooks: supportedCapability(evidence),
+    mcp: capabilityStateFromSupport(
+      capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
+      evidence,
+      'The pinned Codex contract does not support both required modern MCP transports.',
+    ),
+    skills: capabilityStateFromSupport(
+      capabilityTable.plugin.skills,
+      evidence,
+      'The pinned Codex plugin contract does not support skills.',
+    ),
   }),
   configExtension: Object.freeze({ key: codexName }),
   hookContract,

@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { execFile } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -131,7 +132,7 @@ const coherenceManifestTarget = Object.freeze({ ...coherenceMetadata, name: cohe
 
 const coherenceRegistry = (): TargetRegistry => new TargetRegistry().register({
   artifactLayout: { mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' } },
-  capabilities: { mcp: true },
+  capabilities: supportedCapabilities('mcp'),
   mcpRuntime: createTargetMcpRuntime({
     manifestPath: 'native/servers.json',
     remoteTypes: ['streamable-http'],
@@ -167,7 +168,7 @@ const hookCoherenceContract = {
 
 const hookCoherenceRegistry = (): TargetRegistry => new TargetRegistry().register({
   artifactLayout: { hookWrappers: { allowedSuffixes: ['.mjs'], directory: 'hooks' } },
-  capabilities: { hooks: true },
+  capabilities: supportedCapabilities('hooks'),
   hookContract: hookCoherenceContract,
   metadata: hookCoherenceMetadata,
   name: hookCoherenceTarget,
@@ -189,7 +190,7 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
     scripts: { allowedSuffixes: ['.json', '.mjs', '.sh'], directory: 'scripts' },
     skills: 'skills',
   },
-  capabilities: { skills: true },
+  capabilities: supportedCapabilities('skills'),
   metadata: customMetadata,
   name: customTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
@@ -913,7 +914,7 @@ it('does not attribute compiler MCP outputs to an equal-length sibling target', 
   });
   const registry = coherenceRegistry().register({
     artifactLayout: { mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' } },
-    capabilities: { mcp: true },
+    capabilities: supportedCapabilities('mcp'),
     mcpRuntime: createTargetMcpRuntime({
       manifestPath: 'native/servers.json',
       remoteTypes: ['streamable-http'],

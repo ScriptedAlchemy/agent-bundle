@@ -1,3 +1,4 @@
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -121,7 +122,7 @@ const syntheticAdapter: TargetAdapter = Object.freeze({
     hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
   }),
-  capabilities: Object.freeze({ hooks: true, mcp: true }),
+  capabilities: supportedCapabilities('hooks', 'mcp'),
   configExtension: Object.freeze({ key: 'synthetic' }),
   hookContract: syntheticHookContract,
   metadata: syntheticMetadata,

@@ -14,6 +14,7 @@ import {
   standardMcpPathTokens,
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
+import { capabilityEvidence, capabilityStateFromSupport, supportedCapability } from './capability-state.ts';
 import capabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import {
   mergeHookDocuments,
@@ -88,6 +89,7 @@ const metadata = Object.freeze({
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
+const evidence = capabilityEvidence(claudeName, metadata);
 
 const artifactValidation = Object.freeze({
   documents: Object.freeze([
@@ -277,10 +279,18 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
-    marketplace: true,
-    hooks: true,
-    mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
-    skills: capabilityTable.plugin.skills,
+    marketplace: supportedCapability(evidence),
+    hooks: supportedCapability(evidence),
+    mcp: capabilityStateFromSupport(
+      capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
+      evidence,
+      'The pinned Claude contract does not support both required modern MCP transports.',
+    ),
+    skills: capabilityStateFromSupport(
+      capabilityTable.plugin.skills,
+      evidence,
+      'The pinned Claude plugin contract does not support skills.',
+    ),
   }),
   configExtension: Object.freeze({ key: claudeName }),
   hookContract,
