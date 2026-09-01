@@ -99,14 +99,15 @@ const runtimeAppReloadPlugin = (
       });
       api.onAfterEnvironmentCompile(({ environment, isFirstCompile, stats }) => {
         if (devServer === undefined || environment.name !== 'app' || stats === undefined || stats.hasErrors()) return;
-        // Identity is the compilation hash. A missing hash cannot be proven
-        // distinct from the last changed App compile, and treating the stats
-        // object identity as a hash would emit a spurious reload on every
-        // hashless completion (the extra runtime-app-reload frame under load).
+        // Hashed completions dedupe by hash. Hashless success cannot be proven
+        // unchanged, so it still reloads; do not fall back to stats object
+        // identity (every completion looks unique) and do not drop the event
+        // (that leaves the iframe on stale assets).
         const hash = stats.hash;
-        if (typeof hash !== 'string' || hash.length === 0) return;
-        if (lastAppCompilation === hash) return;
-        lastAppCompilation = hash;
+        if (typeof hash === 'string' && hash.length > 0) {
+          if (lastAppCompilation === hash) return;
+          lastAppCompilation = hash;
+        }
         if (isFirstCompile) return;
         onAppReload();
       });

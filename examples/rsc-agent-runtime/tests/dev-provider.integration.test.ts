@@ -328,19 +328,19 @@ test('emits one owned App reload for each later successful changed App compilati
   expect(reloads).toEqual([1, 2]);
   afterEnvironmentCompile?.(repeatedAppBUpdate);
   expect(reloads).toEqual([1, 2, 3]);
-  // Hashless completions are unidentifiable: they must not mint a generation
-  // frame, or the overview e2e records an extra runtime-app-reload under load.
+  // Hashless success is unidentifiable, not unchanged: still reload (at-least-
+  // once). Extra frames are consumed monotonically in the overview e2e.
   afterEnvironmentCompile?.(hashlessAppUpdate);
   afterEnvironmentCompile?.(emptyHashAppUpdate);
-  expect(reloads).toEqual([1, 2, 3]);
+  expect(reloads).toEqual([1, 2, 3, 4, 5]);
 
   await closeDevServer?.();
   afterEnvironmentCompile?.(appAUpdate);
-  expect(reloads).toEqual([1, 2, 3]);
+  expect(reloads).toEqual([1, 2, 3, 4, 5]);
 
   beforeStartDevServer?.({ server: { environments: { app: {}, widget: {} } } });
   afterEnvironmentCompile?.(appBUpdate);
-  expect(reloads).toEqual([1, 2, 3, 4]);
+  expect(reloads).toEqual([1, 2, 3, 4, 5, 6]);
 });
 
 test('keeps compiler-App HMR out of the opaque browser child', () => {
