@@ -1306,34 +1306,36 @@ it('normalizes a mixed hook fixture and reports malformed hook declarations', as
       targets: hook.targets,
       timeout: hook.timeout,
       tools: hook.tools,
+    // Normalization orders hooks by their stable id, not by declaration
+    // order, so mixed configured and conventional hooks emit deterministically.
     }))).toEqual([
-      {
-        event: 'sessionStart',
-        name: 'session-start-session-start-7ab7e8a5',
-        targets: ['claude', 'codex'],
-        timeout: undefined,
-        tools: [],
-      },
-      {
-        event: 'beforeTool',
-        name: 'before-tool-check-command-1f5b5818',
-        targets: ['claude', 'codex'],
-        timeout: 7,
-        tools: ['shell'],
-      },
-      {
-        event: 'beforeTool',
-        name: 'before-tool-check-command-1f5b5818',
-        targets: ['claude', 'codex'],
-        timeout: 7,
-        tools: ['shell'],
-      },
       {
         event: 'afterTool',
         name: 'after-tool-record-87785f02',
         targets: ['claude', 'codex'],
         timeout: undefined,
         tools: ['file.write', 'shell'],
+      },
+      {
+        event: 'beforeTool',
+        name: 'before-tool-check-command-1f5b5818',
+        targets: ['claude', 'codex'],
+        timeout: 7,
+        tools: ['shell'],
+      },
+      {
+        event: 'beforeTool',
+        name: 'before-tool-check-command-1f5b5818',
+        targets: ['claude', 'codex'],
+        timeout: 7,
+        tools: ['shell'],
+      },
+      {
+        event: 'sessionStart',
+        name: 'session-start-session-start-7ab7e8a5',
+        targets: ['claude', 'codex'],
+        timeout: undefined,
+        tools: [],
       },
       {
         event: 'stop',
