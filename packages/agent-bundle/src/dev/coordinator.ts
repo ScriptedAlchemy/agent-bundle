@@ -27,6 +27,7 @@ import {
 
 export interface DevLockHandle {
   close(): Promise<void>;
+  publishServerUrl?(url: string): Promise<void>;
 }
 
 export interface ProjectPreparer {
@@ -263,6 +264,10 @@ export class DevCoordinator {
 
   async rebuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
     return this.#rebuild(invalidation);
+  }
+
+  async publishServerUrl(url: string): Promise<void> {
+    await this.#lock?.publishServerUrl?.(url);
   }
 
   async #rebuild(
