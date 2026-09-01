@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from '@rstest/core';
 import ts from 'typescript-5';
 
-import { inspect, type ReadyInspectResult } from '../src/api.ts';
+import { inspect, type ReadyInspectResult, validate } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
 import { discoverProject } from '../src/config/discover.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
@@ -694,6 +694,32 @@ it('fails unavailable event routes before packaging unless they are target-restr
   expect(restricted.state).toBe('ready');
 });
 
+it('preserves sub-second event route timeout precision in the normalized model', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  plugin: { name: 'event-timeout-fixture', version: '1.0.0' },",
+      "  targets: ['cursor'],",
+      '};',
+      '',
+    ].join('\n'),
+    'package.json': '{"type":"module"}\n',
+    'src/events/workspace/open.tsx': [
+      "export const config = { runtime: 'standalone', timeoutMs: 1250 };",
+      'export default async function WorkspaceOpen() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const result = await validate({ root });
+  expect(result.diagnostics).toEqual([]);
+  expect(result.model?.hooks).toContainEqual(expect.objectContaining({
+    eventRoute: expect.objectContaining({ event: 'workspace/open' }),
+    timeoutMs: 1_250,
+  }));
+});
+
 it('requires an explicit standalone mode when no generated runtime can host an event route', async () => {
   const root = await createRoot();
   await writeTree(root, {
@@ -711,7 +737,7 @@ it('requires an explicit standalone mode when no generated runtime can host an e
   const inspected = await inspect({ root });
   expect(inspected.state).toBe('invalid');
   expect(inspected.diagnostics).toContainEqual(expect.objectContaining({
-    code: 'AB4816',
+    code: 'AB4817',
     target: 'cursor',
   }));
 });

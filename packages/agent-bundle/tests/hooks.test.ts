@@ -697,7 +697,7 @@ it('escalates timed-out and aborted wrapper process trees from TERM to KILL befo
   const base = hookModel(root);
   const model: NormalizedPlugin = {
     ...base,
-    hooks: [{ ...base.hooks[1]!, targets: ['codex'], timeout: 1 }],
+    hooks: [{ ...base.hooks[1]!, targets: ['codex'], timeoutMs: 1_000 }],
     targets: [base.targets[0]!],
   };
   const service = new HookService();
@@ -1177,7 +1177,7 @@ const hookModel = (root: string): NormalizedPlugin => ({
       provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
       source: join(root, 'src', 'hooks', 'check-command.ts'),
       targets: ['claude', 'codex'],
-      timeout: 7,
+      timeoutMs: 7_000,
       tools: ['shell'],
     },
     {
@@ -1304,7 +1304,7 @@ it('normalizes a mixed hook fixture and reports malformed hook declarations', as
       event: hook.event,
       name: hook.name,
       targets: hook.targets,
-      timeout: hook.timeout,
+      timeoutMs: hook.timeoutMs,
       tools: hook.tools,
     // Normalization orders hooks by their stable id, not by declaration
     // order, so mixed configured and conventional hooks emit deterministically.
@@ -1313,35 +1313,35 @@ it('normalizes a mixed hook fixture and reports malformed hook declarations', as
         event: 'afterTool',
         name: 'after-tool-record-87785f02',
         targets: ['claude', 'codex'],
-        timeout: undefined,
+        timeoutMs: undefined,
         tools: ['file.write', 'shell'],
       },
       {
         event: 'beforeTool',
         name: 'before-tool-check-command-1f5b5818',
         targets: ['claude', 'codex'],
-        timeout: 7,
+        timeoutMs: 7_000,
         tools: ['shell'],
       },
       {
         event: 'beforeTool',
         name: 'before-tool-check-command-1f5b5818',
         targets: ['claude', 'codex'],
-        timeout: 7,
+        timeoutMs: 7_000,
         tools: ['shell'],
       },
       {
         event: 'sessionStart',
         name: 'session-start-session-start-7ab7e8a5',
         targets: ['claude', 'codex'],
-        timeout: undefined,
+        timeoutMs: undefined,
         tools: [],
       },
       {
         event: 'stop',
         name: 'stop-stop-bb2d7935',
         targets: ['claude', 'codex'],
-        timeout: undefined,
+        timeoutMs: undefined,
         tools: [],
       },
     ]);

@@ -293,13 +293,23 @@ it('plans a thin epoch-bound event-route client and keeps standalone execution e
   const shared: NormalizedHook = {
     ...planningHook('afterTool', []),
     eventRoute: { event: 'tool/after', fallback: 'none', runtime: 'shared' },
+    timeoutMs: 1_250,
   };
-  const sharedSource = planHooks(planningModel([shared]), 'synthetic', contract).hookEntries[0]!.virtualSource;
+  const sharedPlan = planHooks(planningModel([shared]), 'synthetic', contract);
+  const sharedSource = sharedPlan.hookEntries[0]!.virtualSource;
 
   expect(sharedSource).toContain('requestEventRuntime');
   expect(sharedSource).toContain('__AGENT_BUNDLE_EVENT_ARTIFACT_EPOCH__');
   expect(sharedSource).toContain('hostContractRevision: capabilityRevision');
+  expect(sharedSource).toContain('const timeoutMs = 1250;');
   expect(sharedSource).not.toContain('import * as routeModule');
+  expect(sharedPlan.document).toMatchObject({
+    hooks: {
+      SyntheticAfterTool: [{
+        hooks: [{ timeout: 2 }],
+      }],
+    },
+  });
 
   const degraded: NormalizedHook = {
     ...shared,

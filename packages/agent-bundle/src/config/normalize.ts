@@ -404,6 +404,7 @@ const normalizeHook = (
   const targets = sortedUnique(entry.targets ?? defaultTargets);
   const nativeTools = normalizeNativeHookTools(entry.tools ?? [], registry);
   const timeout = entry.timeout;
+  const timeoutMs = timeout === undefined ? undefined : timeout * 1_000;
   const identity = {
     ...(args === undefined || args.length === 0 ? {} : { args }),
     event,
@@ -429,7 +430,7 @@ const normalizeHook = (
     provenance: prebuilt ? { kind: 'prebuilt', sourcePath: provenance.sourcePath } : { ...provenance },
     source,
     targets,
-    ...(timeout === undefined ? {} : { timeout }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
     tools,
   };
 };
@@ -470,9 +471,9 @@ const normalizeHooks = (
       .filter((tool): tool is CanonicalHookTool =>
         typeof tool === 'string' && knownHookTools.has(tool as CanonicalHookTool))
       .sort((left, right) => left.localeCompare(right));
-    const timeoutMs = route.config['timeoutMs'];
-    const timeout = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? Math.ceil(timeoutMs / 1_000)
+    const configuredTimeoutMs = route.config['timeoutMs'];
+    const timeoutMs = typeof configuredTimeoutMs === 'number' && Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+      ? configuredTimeoutMs
       : undefined;
     const fallback = route.config['fallback'] === 'standalone' ? 'standalone' as const : 'none' as const;
     const runtime = route.config['runtime'] === 'standalone' ? 'standalone' as const : 'shared' as const;
@@ -485,7 +486,7 @@ const normalizeHooks = (
       provenance: { kind: 'conventional', sourcePath: route.source },
       source: route.source,
       targets,
-      ...(timeout === undefined ? {} : { timeout }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
       tools,
     });
   }
