@@ -80,7 +80,7 @@ const runtimeAppReloadPlugin = (
   onAppReload: NonNullable<RscRuntimeRsbuildConfigOptions['onAppReload']>,
 ): RsbuildPlugin => {
   let devServer: RsbuildDevServer | undefined;
-  let lastAppCompilation: object | string | undefined;
+  let lastAppCompilation: string | undefined;
   return {
     name: 'agent-bundle:rsc-runtime-app-reload',
     setup(api) {
@@ -99,9 +99,17 @@ const runtimeAppReloadPlugin = (
       });
       api.onAfterEnvironmentCompile(({ environment, isFirstCompile, stats }) => {
         if (devServer === undefined || environment.name !== 'app' || stats === undefined || stats.hasErrors()) return;
-        const compilation = typeof stats.hash === 'string' && stats.hash.length > 0 ? stats.hash : stats;
-        if (lastAppCompilation === compilation) return;
-        lastAppCompilation = compilation;
+        // Hashed completions dedupe by hash. A hashless success is
+        // unidentifiable, not proven unchanged, so it still reloads
+        // (at-least-once; consumers dedupe by generation ordinal) - but it
+        // must neither dedupe by stats object identity (every completion
+        // looks unique) nor clobber the retained hash, which would mint a
+        // spurious frame for the next unchanged hashed completion.
+        const hash = stats.hash;
+        if (typeof hash === 'string' && hash.length > 0) {
+          if (lastAppCompilation === hash) return;
+          lastAppCompilation = hash;
+        }
         if (isFirstCompile) return;
         onAppReload();
       });

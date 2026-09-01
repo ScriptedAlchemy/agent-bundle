@@ -403,7 +403,28 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
     expect(runtimeAppResponses).toHaveLength(1);
-    const hmrMessagesBeforeConfigReconcile = [...runtimePreviewHmrMessages];
+    // Frame delivery is asynchronous relative to the assertions above: the
+    // two replaced watched sources compile as one coalesced or two split App
+    // generations (multi-compiler watch delivery skews under load), so a
+    // second legitimate reload frame may surface after this point. Consume
+    // the owned channel monotonically over generation ordinals (issue #111)
+    // instead of pinning an exact frame snapshot: the accepted connection
+    // replays generation 0, a frame may repeat the current generation, an
+    // advance is exactly one, and nothing past the edit budget may ever
+    // arrive - a config reconcile that reloads the retained App still fails
+    // here once the edits' generations are spent.
+    const ownedReloadGenerationBudget = 2;
+    const expectMonotonicOwnedReloadFrames = (): void => {
+      const generations = ownedReloadFrames();
+      // Non-reload traffic on the owned channel is a channel defect.
+      expect(generations).toHaveLength(runtimePreviewHmrMessages.length);
+      const violations = generations.filter((generation, index) => (index === 0
+        ? generation !== 0
+        : generation !== generations[index - 1] && generation !== generations[index - 1]! + 1));
+      expect({ generations, violations }).toEqual({ generations, violations: [] });
+      expect(Math.max(...generations)).toBeLessThanOrEqual(ownedReloadGenerationBudget);
+    };
+    expectMonotonicOwnedReloadFrames();
     const runtimeAttribute = async (name: string): Promise<string> => {
       const value = await runtimeIdentity.getAttribute(name);
       if (value === null) throw new Error(`Runtime identity omitted ${name}.`);
@@ -427,7 +448,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       await expect(runtimeIdentity).toHaveAttribute('data-runtime-source-revision', sourceRuntimeIdentity.sourceRevision);
       await expect(runtimeIdentity).toHaveAttribute('data-runtime-state-version', sourceRuntimeIdentity.stateVersion);
       expect(runtimePreviewHmrSockets).toHaveLength(1);
-      expect(runtimePreviewHmrMessages).toEqual(hmrMessagesBeforeConfigReconcile);
+      expectMonotonicOwnedReloadFrames();
       expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
       expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
       expect(runtimeAppResponses).toHaveLength(1);

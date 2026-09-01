@@ -308,6 +308,8 @@ test('emits one owned App reload for each later successful changed App compilati
   const appAUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-a' } });
   const repeatedAppBUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-b' } });
   const failedAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => true } });
+  const hashlessAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false } });
+  const emptyHashAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: '' } });
   const nonAppUpdate = Object.freeze({ environment: { name: 'widget' }, isFirstCompile: false, stats: { hasErrors: () => false } });
 
   afterCompiler?.({ environments: { app: {}, widget: {} } });
@@ -326,14 +328,24 @@ test('emits one owned App reload for each later successful changed App compilati
   expect(reloads).toEqual([1, 2]);
   afterEnvironmentCompile?.(repeatedAppBUpdate);
   expect(reloads).toEqual([1, 2, 3]);
+  // A hashless success is unidentifiable, not unchanged: it still reloads
+  // (at-least-once; consumers dedupe by generation ordinal), but it must not
+  // dedupe by stats object identity or clobber the retained hash - the
+  // unchanged hashed completion after it stays deduped instead of minting a
+  // spurious frame (issue #111 secondary defect).
+  afterEnvironmentCompile?.(hashlessAppUpdate);
+  afterEnvironmentCompile?.(emptyHashAppUpdate);
+  expect(reloads).toEqual([1, 2, 3, 4, 5]);
+  afterEnvironmentCompile?.(repeatedAppBUpdate);
+  expect(reloads).toEqual([1, 2, 3, 4, 5]);
 
   await closeDevServer?.();
   afterEnvironmentCompile?.(appAUpdate);
-  expect(reloads).toEqual([1, 2, 3]);
+  expect(reloads).toEqual([1, 2, 3, 4, 5]);
 
   beforeStartDevServer?.({ server: { environments: { app: {}, widget: {} } } });
   afterEnvironmentCompile?.(appBUpdate);
-  expect(reloads).toEqual([1, 2, 3, 4]);
+  expect(reloads).toEqual([1, 2, 3, 4, 5, 6]);
 });
 
 test('keeps compiler-App HMR out of the opaque browser child', () => {
