@@ -201,6 +201,55 @@ it('inventories all pinned Cursor manifest candidates in loader order', async ()
   }
 });
 
+it('accepts a versionless Cursor inventory manifest as installed', async () => {
+  const fixture = await temporaryDoctor();
+  const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');
+  try {
+    await writeJson(join(installRoot, 'versionless', 'plugin.json'), { name: 'versionless' });
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find(
+      (entry) => entry.entry === 'versionless',
+    );
+    expect(finding).toMatchObject({
+      manifest: 'plugin.json',
+      name: 'versionless',
+      state: 'installed',
+    });
+    expect(finding).not.toHaveProperty('version');
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7304')).toBe(false);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports a Cursor inventory manifest with a non-string version as corrupt', async () => {
+  const fixture = await temporaryDoctor();
+  const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');
+  try {
+    await writeJson(join(installRoot, 'bad-version', '.cursor-plugin/plugin.json'), {
+      name: 'x',
+      version: 7,
+    });
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(hostReport(report, 'cursor').inventory.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entry: 'bad-version', state: 'corrupt' }),
+    ]));
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB7304', severity: 'error' }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('reports corrupt, symlinked, and interrupted Cursor inventory entries', async () => {
   const fixture = await temporaryDoctor();
   const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');
@@ -329,6 +378,27 @@ it('classifies Cursor bundle state as installed, missing, drifted, or conflicted
   }
 });
 
+it('treats a versionless Cursor destination as drifted rather than conflicted', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
+    await mkdir(dirname(destination), { recursive: true });
+    await cp(bundle, destination, { recursive: true });
+    await writeJson(join(destination, '.cursor-plugin/plugin.json'), { name: 'doctor-fixture' });
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(hostReport(report, 'cursor').bundle?.state).toBe('drifted');
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7309')).toBe(false);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('turns a symlink inside a Cursor bundle into a corrupt finding', async () => {
   const fixture = await temporaryDoctor();
   try {
@@ -376,20 +446,37 @@ it.each([
   {
     expectedCode: undefined,
     expectedState: 'registered',
+    label: 'id@inline',
+    registration: commandResult({ stdout: JSON.stringify([{ id: 'doctor-fixture@inline' }]) }),
+  },
+  {
+    expectedCode: 'AB7311',
+    expectedState: 'unregistered',
+    label: 'name-only false positive',
     registration: commandResult({ stdout: JSON.stringify([{ name: 'doctor-fixture' }]) }),
   },
   {
     expectedCode: 'AB7311',
     expectedState: 'unregistered',
-    registration: commandResult({ stdout: JSON.stringify([{ name: 'other' }]) }),
+    label: 'other id',
+    registration: commandResult({ stdout: JSON.stringify([{ id: 'other@inline' }]) }),
   },
   {
     expectedCode: 'AB7312',
     expectedState: 'failed',
+    label: 'wrapped object shape',
+    registration: commandResult({
+      stdout: JSON.stringify({ plugins: [{ id: 'doctor-fixture@inline' }] }),
+    }),
+  },
+  {
+    expectedCode: 'AB7312',
+    expectedState: 'failed',
+    label: 'non-JSON',
     registration: commandResult({ stdout: 'not json' }),
   },
 ] as const)(
-  'reports Claude registration proof as $expectedState',
+  'reports Claude registration proof as $expectedState ($label)',
   async ({ expectedCode, expectedState, registration }) => {
     const fixture = await temporaryDoctor();
     try {

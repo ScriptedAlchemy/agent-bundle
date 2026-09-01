@@ -365,23 +365,19 @@ const cursorManifestCandidates = Object.freeze([
 
 const readInstalledManifest = async (
   root: string,
-): Promise<{ readonly manifest: string; readonly name: string; readonly version: string } | undefined> => {
+): Promise<{ readonly manifest: string; readonly name: string; readonly version?: string } | undefined> => {
   for (const manifest of cursorManifestCandidates) {
     try {
       const value = JSON.parse(await readFile(join(root, manifest), 'utf8')) as unknown;
-      if (
-        value !== null &&
-        typeof value === 'object' &&
-        !Array.isArray(value) &&
-        typeof (value as { readonly name?: unknown }).name === 'string' &&
-        typeof (value as { readonly version?: unknown }).version === 'string'
-      ) {
-        return Object.freeze({
-          manifest,
-          name: (value as { readonly name: string }).name,
-          version: (value as { readonly version: string }).version,
-        });
-      }
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
+      const record = value as { readonly name?: unknown; readonly version?: unknown };
+      if (typeof record.name !== 'string') continue;
+      if (record.version !== undefined && typeof record.version !== 'string') continue;
+      return Object.freeze({
+        manifest,
+        name: record.name,
+        ...(typeof record.version === 'string' ? { version: record.version } : {}),
+      });
     } catch (error) {
       if (!isErrno(error, 'ENOENT') && !(error instanceof SyntaxError)) throw error;
     }
@@ -488,7 +484,7 @@ const cursorInventory = async (
       name: manifest.name,
       path,
       state: 'installed',
-      version: manifest.version,
+      ...(manifest.version === undefined ? {} : { version: manifest.version }),
     });
   }
   return {
@@ -570,7 +566,7 @@ const cursorBundle = async (
         finding: Object.freeze({ ...base, state: 'corrupt' }),
       };
     }
-    if (installed.version !== identity.version) {
+    if (installed.version !== undefined && installed.version !== identity.version) {
       return {
         diagnostics: freezeDiagnostics([diagnostic(
           'AB7309',
@@ -611,14 +607,6 @@ const cursorBundle = async (
       finding: Object.freeze({ ...base, state: 'corrupt' }),
     };
   }
-};
-
-const containsPluginName = (value: unknown, name: string): boolean => {
-  if (Array.isArray(value)) return value.some((entry) => containsPluginName(entry, name));
-  if (value === null || typeof value !== 'object') return false;
-  const record = value as Readonly<Record<string, unknown>>;
-  if (record.name === name) return true;
-  return Object.values(record).some((entry) => containsPluginName(entry, name));
 };
 
 const claudeBundle = async (
@@ -682,7 +670,26 @@ const claudeBundle = async (
       finding: Object.freeze({ ...base, state: 'failed' }),
     };
   }
-  if (!containsPluginName(inventory, identity.name)) {
+  // Pinned registration contract: tests/support/packed-native-smoke.ts
+  if (!Array.isArray(inventory)) {
+    return {
+      diagnostics: freezeDiagnostics([diagnostic(
+        'AB7312',
+        'Claude registration proof returned output that does not match the documented list shape.',
+        `Inspect \`claude --plugin-dir ${identity.bundleRoot} plugin list --json\` and repair the host setup.`,
+        'error',
+        'claude',
+      )]),
+      finding: Object.freeze({ ...base, state: 'failed' }),
+    };
+  }
+  const entries = inventory;
+  if (!entries.some((entry) =>
+    entry !== null &&
+    typeof entry === 'object' &&
+    !Array.isArray(entry) &&
+    (entry as { id?: unknown }).id === `${identity.name}@inline`
+  )) {
     return {
       diagnostics: freezeDiagnostics([diagnostic(
         'AB7311',
