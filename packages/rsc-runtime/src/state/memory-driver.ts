@@ -83,7 +83,7 @@ interface MemoryStoreInternals<TState, TEvents extends AgentStateEventSchemas> {
   definition: AgentStateDefinition<TState, TEvents>;
   head: AgentStateSnapshot<TState>;
   readonly journal: AgentStateJournalRecord[];
-  readonly keys: Map<string, CommittedResult<TState>>;
+  keys: Map<string, CommittedResult<TState>>;
 }
 
 interface MemoryStoreEntry<TState, TEvents extends AgentStateEventSchemas> {
@@ -319,17 +319,19 @@ const migrateOpenStore = <TState, TEvents extends AgentStateEventSchemas>(
     state: migrated,
     toVersion: definition.version,
   };
-  internals.journal.push(record);
+  const keys = new Map<string, CommittedResult<TState>>();
   // Committed results replay across migrations: every stored result sits at
   // `fromVersion` (this loop maintains that inductively), so each one rides
   // the same migration chain as the head.
   for (const [key, entry] of internals.keys) {
-    internals.keys.set(key, {
+    keys.set(key, {
       record: entry.record,
       state: runStateMigrations(definition, fromVersion, entry.state),
     });
   }
-  internals.keys.set(record.idempotencyKey, { record, state: migrated });
+  keys.set(record.idempotencyKey, { record, state: migrated });
+  internals.keys = keys;
+  internals.journal.push(record);
   internals.head = Object.freeze({ revision: record.revision, state: migrated });
   internals.definition = definition;
 };

@@ -421,17 +421,16 @@ const startEventRuntime = async (
 ): Promise<{ readonly close: () => Promise<void> }> => events.createEventRuntimeServer({
   artifactEpoch: events.artifactEpoch,
   endpointId: events.endpointId,
-  handle: async (request) => {
+  handle: async (request, signal) => {
     const event = canonicalEvent(request.event);
     const nativeEvent = nativeString(request.native, 'hook_event_name') ?? event;
-    const controller = new AbortController();
     const props = events.createCanonicalEventProps(
       event,
       request.native,
       events.target,
       nativeEvent,
       request.hostContractRevision,
-      controller.signal,
+      signal,
     );
     const sessionId = nativeString(request.native, 'session_id')
       ?? nativeString(request.native, 'conversation_id');
@@ -446,7 +445,7 @@ const startEventRuntime = async (
         surface: event,
       },
       ...(sessionId === undefined ? {} : { session: available({ sessionId }, 'native') }),
-      signal: controller.signal,
+      signal,
       ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, 'native') }),
     }, async () => events.projectEventDocument(
       await dispatcher.dispatch({
@@ -456,7 +455,7 @@ const startEventRuntime = async (
           // props type is what gives it shape on the other side.
           props: { event, payload: { canonical: props.canonical, native: props.native } as never },
         },
-        signal: controller.signal,
+        signal,
       }),
       event,
       events.target,

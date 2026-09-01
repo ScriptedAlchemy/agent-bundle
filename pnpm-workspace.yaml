@@ -8,6 +8,9 @@ packages:
 # here instead of through a devDependency in the shipped package.json.
 overrides:
   '@agent-bundle/runtime': workspace:*
+peerDependencyRules:
+  allowedVersions:
+    'effect-rstest>@rstest/core': 0.11.10
 allowBuilds:
   '@google/genai': false
   msgpackr-extract: false

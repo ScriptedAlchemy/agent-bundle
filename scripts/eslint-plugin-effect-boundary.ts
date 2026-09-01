@@ -44,6 +44,22 @@ const moduleName = (node: { readonly source?: { readonly value?: unknown } }): s
 const isEffectModule = (source: string | undefined): boolean =>
   source !== undefined && (EFFECT_MODULES.has(source) || source.startsWith('effect/'));
 
+type MemberObject = {
+  readonly computed?: boolean;
+  readonly name?: string;
+  readonly object?: MemberObject;
+  readonly property?: { readonly name?: string };
+  readonly type?: string;
+};
+
+const staticMemberPath = (node: MemberObject | undefined): readonly string[] | undefined => {
+  if (node?.type === 'Identifier') return node.name === undefined ? undefined : [node.name];
+  if (node?.type !== 'MemberExpression' || node.computed === true) return undefined;
+  const objectPath = staticMemberPath(node.object);
+  const propertyName = node.property?.name;
+  return objectPath === undefined || propertyName === undefined ? undefined : [...objectPath, propertyName];
+};
+
 export const effectBoundaryPlugin = {
   meta: {
     name: 'effect-boundary',
@@ -95,15 +111,15 @@ export const effectBoundaryPlugin = {
           },
           MemberExpression(node: {
             readonly computed?: boolean;
-            readonly object?: { readonly name?: string; readonly type?: string };
+            readonly object?: MemberObject;
             readonly property?: { readonly name?: string; readonly type?: string };
           }) {
             if (node.computed === true) return;
             const name = node.property?.name;
             if (name === undefined || !RUN_NAMES.has(name)) return;
-            const objectName = node.object?.name;
-            if (objectName === undefined || !runnerNamespaces.has(objectName)) return;
-            context.report({ data: { name: `${objectName}.${name}` }, messageId: 'forbiddenCall', node });
+            const objectPath = staticMemberPath(node.object);
+            if (objectPath === undefined || !runnerNamespaces.has(objectPath[0]!)) return;
+            context.report({ data: { name: [...objectPath, name].join('.') }, messageId: 'forbiddenCall', node });
           },
         };
       },

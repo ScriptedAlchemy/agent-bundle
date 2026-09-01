@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -11,19 +11,20 @@ import { assertScaffoldTarget, placeholderName, scaffold } from '../src/scaffold
 
 const templatesRoot = join(process.cwd(), 'packages', 'create-agent-bundle', 'templates');
 
+const packageTarball = (name: string): Buffer => {
+  const manifest = Buffer.from(JSON.stringify({ name }));
+  const archive = Buffer.alloc(512 + Math.ceil(manifest.length / 512) * 512 + 1024);
+  archive.write('package/package.json', 0, 'utf8');
+  archive.write(`${manifest.length.toString(8).padStart(11, '0')}\0`, 124, 'ascii');
+  manifest.copy(archive, 512);
+  return gzipSync(archive);
+};
+
 const scaffoldTemplate = async (
   template: string,
   overrides: Partial<{ packageName: string; pluginName: string; targets: readonly TargetName[] }> = {},
 ): Promise<{ readonly files: readonly string[]; readonly frameworkSpec: string; readonly root: string }> => {
   const root = await mkdtemp(join(tmpdir(), `create-agent-bundle-${template}-`));
-  const packageTarball = (name: string): Buffer => {
-    const manifest = Buffer.from(JSON.stringify({ name }));
-    const archive = Buffer.alloc(512 + Math.ceil(manifest.length / 512) * 512 + 1024);
-    archive.write('package/package.json', 0, 'utf8');
-    archive.write(`${manifest.length.toString(8).padStart(11, '0')}\0`, 124, 'ascii');
-    manifest.copy(archive, 512);
-    return gzipSync(archive);
-  };
   const frameworkTarball = join(root, 'agent-bundle-0.0.0.tgz');
   const runtimeTarball = join(root, 'agent-bundle-runtime-0.0.0.tgz');
   await Promise.all([
@@ -135,6 +136,26 @@ describe('scaffold', () => {
       const config = await readFile(join(root, 'agent-bundle.config.ts'), 'utf8');
       expect(config).toContain("targets: ['portable', 'cursor'],");
       expect(config).not.toContain("'codex'");
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('validates local runtime tarballs before writing scaffold files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'create-agent-bundle-validation-'));
+    const frameworkTarball = join(root, 'agent-bundle-0.0.0.tgz');
+    const targetDirectory = join(root, 'project');
+    try {
+      await writeFile(frameworkTarball, packageTarball('agent-bundle'));
+      await expect(scaffold({
+        frameworkSpec: `file:${frameworkTarball}`,
+        packageName: 'status-plugin',
+        pluginName: 'status-plugin',
+        targetDirectory,
+        targets: ['portable', 'codex', 'claude'],
+        templateRoot: join(templatesRoot, 'mcp-server'),
+      })).rejects.toThrow(UsageError);
+      await expect(readdir(targetDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(root, { force: true, recursive: true });
     }

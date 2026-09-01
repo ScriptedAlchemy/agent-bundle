@@ -425,8 +425,8 @@ export interface NormalizedHook {
   readonly provenance: SourceProvenance;
   readonly source: string;
   readonly targets: readonly string[];
-  /** Native hook timeout in seconds. Omit it to use the selected host's default. */
-  readonly timeout?: number;
+  /** Hook execution deadline in milliseconds. Omit it to use the selected host's default. */
+  readonly timeoutMs?: number;
   readonly tools: readonly CanonicalHookTool[];
 }
 

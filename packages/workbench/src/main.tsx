@@ -48,6 +48,9 @@ import {
   createPlaygroundCatalogLifecycle,
   playgroundScriptsForEpoch,
 } from './playground/playground-page.tsx';
+import { RouteManifestClient } from './routes/route-manifest-client.ts';
+import type { RouteCatalog } from './routes/routes-model.ts';
+import { RoutesPage } from './routes/routes-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { downloadBlob } from './client-helpers.ts';
 import { BundleWorkflow } from './overview-page.tsx';
@@ -327,6 +330,7 @@ const staleCapabilities = (state: CapabilityState): WorkbenchCapabilities | unde
 
 const navigationItems: readonly Readonly<{ glyph: string; label: string; page: WorkbenchPage }>[] = [
   { glyph: '⊞', label: 'Overview', page: 'overview' },
+  { glyph: '⌸', label: 'Routes', page: 'routes' },
   { glyph: '⌘', label: 'Skills', page: 'skills' },
   { glyph: '⌥', label: 'Hooks', page: 'hooks' },
   { glyph: '⌁', label: 'MCP playground', page: 'mcp' },
@@ -625,6 +629,16 @@ const PlaygroundScreen = ({ connectionError, inspection, onNavigate, onRunChange
   </WorkbenchScreen>;
 };
 
+const RoutesScreen = ({ catalog, connectionError, onNavigate, pages, runtimeDiagnostic }: {
+  readonly catalog: RouteCatalog;
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly pages: ReadonlySet<WorkbenchPage>;
+  readonly runtimeDiagnostic: string | undefined;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="routes" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
+  <RoutesPage catalog={catalog} />
+</WorkbenchScreen>;
+
 const LogsScreen = ({ connectionError, logClient, onNavigate, pages, runtimeDiagnostic }: {
   readonly connectionError?: string;
   readonly logClient: LogClient;
@@ -776,6 +790,7 @@ const Workbench = () => {
   const hookClient = useRef<HookClient | undefined>(undefined);
   const logClient = useRef<LogClient | undefined>(undefined);
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
+  const routeManifestClient = useRef<RouteManifestClient | undefined>(undefined);
   const [connectionError, setConnectionError] = useState<string>();
   const [connection, setConnection] = useState<ProjectConnectionState>({ state: 'connecting' });
   const [capabilityRetry, setCapabilityRetry] = useState(0);
@@ -852,9 +867,11 @@ const Workbench = () => {
   if (hookClient.current === undefined) hookClient.current = new HookClient({ foreground: foregroundClient });
   if (logClient.current === undefined) logClient.current = new LogClient({ foreground: foregroundClient });
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ foreground: foregroundClient });
+  if (routeManifestClient.current === undefined) routeManifestClient.current = new RouteManifestClient({ foreground: foregroundClient });
 
   const runtimeAvailable = runtimeCapability === 'available';
   const buildId = status === undefined ? undefined : activeEpochId(status);
+  const epochSourceRevision = status === undefined ? undefined : activeEpochFor(status)?.projectRevision;
   // Serve the last loaded catalog while a new epoch's catalog loads. A build
   // flip must not unmount live content: a Runtime App preview keeps its
   // session across artifact-only changes (for example a prebuilt payload
@@ -1244,7 +1261,9 @@ const Workbench = () => {
     void loadWorkbenchCapabilities({
       artifactClient: artifactClient.current!,
       buildId,
+      ...(epochSourceRevision === undefined ? {} : { epochSourceRevision }),
       evalClient: evalClient.current!,
+      routeManifestClient: routeManifestClient.current!,
       signal: request.signal,
       skillClient: skillClient.current!,
     }).then(
@@ -1263,7 +1282,7 @@ const Workbench = () => {
       },
     );
     return () => request.abort();
-  }, [buildId, capabilityRetry]);
+  }, [buildId, capabilityRetry, epochSourceRevision]);
 
   useEffect(() => {
     if (!routesReady) return undefined;
@@ -1357,6 +1376,15 @@ const Workbench = () => {
         runtimeDiagnostic={runtimeError}
         skillTree={capabilities!.skillTree}
         status={status}
+      />);
+    }
+    if (page === 'routes') {
+      return withConnectionGate(<RoutesScreen
+        catalog={capabilities!.routes}
+        connectionError={connectionError}
+        onNavigate={navigate}
+        pages={pages}
+        runtimeDiagnostic={runtimeError}
       />);
     }
     if (page === 'logs') {

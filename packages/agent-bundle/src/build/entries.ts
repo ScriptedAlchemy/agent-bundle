@@ -442,7 +442,7 @@ export const planCompiledHooks = (
   source: entry.hook.source,
   sourceInputs: Object.freeze([entry.hook.provenance.sourcePath, entry.hook.source]),
   target: entry.target,
-  ...(entry.hook.timeout === undefined ? {} : { timeout: entry.hook.timeout }),
+  ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
 })));
 
 export const compileHooks = async (

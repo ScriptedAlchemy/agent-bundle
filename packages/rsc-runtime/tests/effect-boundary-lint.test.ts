@@ -10,10 +10,16 @@ type ImportNode = {
   readonly parent?: { readonly source?: { readonly value?: unknown } };
 };
 
+type IdentifierNode = {
+  readonly name?: string;
+  readonly type?: string;
+};
+
 type MemberNode = {
   readonly computed?: boolean;
-  readonly object?: { readonly name?: string; readonly type?: string };
-  readonly property?: { readonly name?: string; readonly type?: string };
+  readonly object?: IdentifierNode | MemberNode;
+  readonly property?: IdentifierNode;
+  readonly type?: string;
 };
 
 type LintListeners = ReturnType<typeof rule.create> & {
@@ -123,6 +129,27 @@ describe('effect-boundary lint', () => {
     expect(star).toEqual([{ data: { name: 'E.runSync' }, messageId: 'forbiddenCall' }]);
   });
 
+  it('rejects runners reached through a renamed nested effect namespace', () => {
+    const reports = apply('packages/rsc-runtime/src/dispatcher.ts', (listeners) => {
+      listeners.ImportNamespaceSpecifier?.({
+        local: { name: 'E' },
+        parent: { source: { value: 'effect' } },
+      });
+      listeners.MemberExpression?.({
+        computed: false,
+        object: {
+          computed: false,
+          object: { name: 'E', type: 'Identifier' },
+          property: { name: 'Effect', type: 'Identifier' },
+          type: 'MemberExpression',
+        },
+        property: { name: 'runPromise', type: 'Identifier' },
+        type: 'MemberExpression',
+      });
+    });
+    expect(reports).toEqual([{ data: { name: 'E.Effect.runPromise' }, messageId: 'forbiddenCall' }]);
+  });
+
   it('does not flag aliased Effect used for non-runners', () => {
     const reports = apply('packages/rsc-runtime/src/reconciler.ts', (listeners) => {
       listeners.ImportSpecifier?.({
@@ -134,6 +161,17 @@ describe('effect-boundary lint', () => {
         computed: false,
         object: { name: 'E', type: 'Identifier' },
         property: { name: 'succeed', type: 'Identifier' },
+      });
+      listeners.MemberExpression?.({
+        computed: false,
+        object: {
+          computed: false,
+          object: { name: 'Other', type: 'Identifier' },
+          property: { name: 'Effect', type: 'Identifier' },
+          type: 'MemberExpression',
+        },
+        property: { name: 'runPromise', type: 'Identifier' },
+        type: 'MemberExpression',
       });
     });
     expect(reports).toEqual([]);
