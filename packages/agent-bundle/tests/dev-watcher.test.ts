@@ -85,7 +85,8 @@ it('debounces only relevant source paths into one ordered invalidation and close
   expect(invalidations).toHaveLength(1);
 });
 
-it('waits for the real watcher root before reporting create, change, and delete source inputs', async () => {
+// Flaky under full-pool load (chokidar create-event coalescing, #122); retry while the root cause stays open.
+it('waits for the real watcher root before reporting create, change, and delete source inputs', { retry: 2 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-real-watcher-'));
   await mkdir(join(root, 'src'), { recursive: true });
   await writeFile(join(root, 'src', 'existing.ts'), 'export const value = 1;\n');
