@@ -224,6 +224,9 @@ export type AgentBundleHookInput =
   | AgentBundleHookEntry
   | readonly (string | AgentBundleHookEntry)[];
 
+/** False disables the conventional src/state.ts module. */
+export type AgentBundleStateConfig = false;
+
 export interface AgentBundleDevRuntimeConfig {
   readonly provider: string;
 }
@@ -246,6 +249,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   runtime?: AgentBundleRuntimeConfig;
   scripts?: Readonly<Record<string, AgentBundleScriptInput>>;
   skills?: string[];
+  state?: AgentBundleStateConfig;
   targets?: string[];
   tools?: AgentBundleToolsConfig;
   [key: string]: unknown;
@@ -500,6 +504,14 @@ export interface NormalizedRuntime {
   readonly node: string;
 }
 
+/** Statically extracted conventional project state used by generated entry emitters. */
+export interface NormalizedStateDefinition {
+  readonly id: string;
+  readonly lifetime: 'request' | 'process' | 'workspace-durable';
+  readonly provenance: SourceProvenance;
+  readonly source: string;
+}
+
 export interface NormalizedPlugin {
   /**
    * Project-level copied assets. Normalizers always provide this collection;
@@ -544,6 +556,7 @@ export interface NormalizedPlugin {
   readonly runtime: NormalizedRuntime;
   readonly scripts: readonly NormalizedScript[];
   readonly skills: readonly NormalizedSkill[];
+  readonly state?: NormalizedStateDefinition;
   readonly targets: readonly NormalizedTarget[];
 }
 

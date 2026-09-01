@@ -1,4 +1,6 @@
 import { describe, expect, it } from '@rstest/core';
+import { createMemoryStateDriver, defineState, type AgentStateDriver } from '@agent-bundle/runtime/state';
+import { z } from 'zod';
 
 import { AgentTestError } from '../../src/test/errors.ts';
 import {
@@ -102,6 +104,39 @@ describe('the in-memory MCP projection level', () => {
 
     expect(first).toMatchObject({ structuredContent: { message: 'first' } });
     expect(second).toMatchObject({ structuredContent: { message: 'second' } });
+  });
+
+  it('mounts and tears down optional state with the in-memory warm host', async () => {
+    const inner = createMemoryStateDriver({ lifetime: 'process' });
+    let opens = 0;
+    let closes = 0;
+    const driver: AgentStateDriver = {
+      ...inner,
+      close: async () => {
+        closes += 1;
+        await inner.close();
+      },
+      open: async (definition) => {
+        opens += 1;
+        return inner.open(definition);
+      },
+    };
+    const definition = defineState({
+      events: { changed: z.object({ value: z.string() }).strict() },
+      id: 'mcp-in-memory/state',
+      initial: { value: '' },
+      lifetime: 'process',
+      reduce: (_state, event) => ({ value: event.payload.value }),
+      schema: z.object({ value: z.string() }).strict(),
+    });
+    const session = await openInMemoryMcpServer({ state: { definition, driver } });
+    try {
+      await session.client.callTool({ arguments: { message: 'stateful' }, name: 'echo' });
+      expect(opens).toBe(2);
+    } finally {
+      await session.close();
+    }
+    expect(closes).toBe(1);
   });
 
   it('leaves the browser App surface off the in-memory server', async () => {

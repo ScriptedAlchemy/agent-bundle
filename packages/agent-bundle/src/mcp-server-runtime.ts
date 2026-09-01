@@ -147,6 +147,8 @@ export const renderGeneratedRoute = async (
   invocation: { artifactEpoch, kind: 'tool', operationId: route.id, surface: route.name },
   signal: context.mcpReq.signal,
 }, async () => {
+  // State and notice admission live only in the render scope. This host scope
+  // establishes identity and forwards it so one invocation is admitted once.
   const projected = await projectMcpRenderStream(dispatcher.stream({
     artifactEpoch,
     invocation: { kind: 'tool', props: { input: input as never, operationId: route.id } },
@@ -350,10 +352,13 @@ export const createFlightWorkerHost = (
           worker.postMessage({
             actor: context.actor,
             artifactEpoch: requestEpoch ?? artifactEpoch,
+            host: context.host,
             id,
             invocation,
+            requestInvocation: context.invocation,
             session: context.session,
             type: 'render',
+            workspace: context.workspace,
           });
         });
       },
@@ -448,6 +453,8 @@ const startEventRuntime = async (
       signal,
       ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, 'native') }),
     }, async () => events.projectEventDocument(
+      // The host scope remains ledger-free: the Flight worker owns the one
+      // notice admission where route components read the request handle.
       await dispatcher.dispatch({
         invocation: {
           kind: 'event',

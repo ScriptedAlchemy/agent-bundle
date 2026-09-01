@@ -49,6 +49,7 @@ import type {
   NormalizedRule,
   NormalizedScript,
   NormalizedSkill,
+  NormalizedStateDefinition,
   SourceProvenance,
 } from '../core/types.ts';
 import type { CompiledCliSurface } from '../routes/types.ts';
@@ -1010,6 +1011,13 @@ export const normalizeProject = async (
   const assets = normalizeAssets(loaded, discovered, targetNames);
   const commands = normalizeCommands(discovered, targetNames);
   const rules = normalizeRules(discovered, targetNames);
+  const state: NormalizedStateDefinition | undefined = discovered.state?.definition === undefined
+    ? undefined
+    : {
+      ...discovered.state.definition,
+      provenance: { kind: 'conventional', sourcePath: discovered.state.source },
+      source: discovered.state.source,
+    };
   const packageBuild = normalizePackageBuild(
     loaded.config,
     loaded.context.projectRoot,
@@ -1040,6 +1048,7 @@ export const normalizeProject = async (
     runtime: normalizeRuntime(loaded),
     scripts,
     skills,
+    ...(state === undefined ? {} : { state }),
     targets: targetNames.map((name) => ({
       id: `target:${name}`,
       name,

@@ -97,6 +97,38 @@ it('honors an explicit empty skills list instead of conventional discovery', asy
   }
 });
 
+it('discovers src/state.ts by convention and honors state false', async () => {
+  const fixture = await createProjectFixture();
+  const stateSource = join(fixture.root, 'src/state.ts');
+  try {
+    await mkdir(join(fixture.root, 'src'), { recursive: true });
+    await writeFile(stateSource, [
+      "import { defineState } from '@agent-bundle/runtime/state';",
+      'export default defineState({',
+      "  id: 'fixture/state',",
+      "  lifetime: 'process',",
+      '});',
+      '',
+    ].join('\n'));
+    const loaded = await loadConfig({
+      command: 'build',
+      mode: 'production',
+      root: fixture.root,
+    });
+    await expect(discoverProject(fixture.root, loaded.config)).resolves.toMatchObject({
+      state: {
+        definition: { id: 'fixture/state', lifetime: 'process' },
+        diagnostics: [],
+        source: stateSource,
+      },
+    });
+
+    await expect(discoverProject(fixture.root, { ...loaded.config, state: false })).resolves.not.toHaveProperty('state');
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
 it('loads sync config objects from relative and absolute explicit paths', async () => {
   const fixture = await createProjectFixture();
   const relativeConfigPath = 'configs/sync.config.ts';

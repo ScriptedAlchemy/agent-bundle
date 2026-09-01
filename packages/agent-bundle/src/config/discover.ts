@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename, dirname, relative, resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
@@ -13,6 +13,9 @@ import { isProjectPathIgnored, readProjectIgnoreRules } from './ignore.ts';
 import { isRenderedSkillSourceName } from './rendered-skill.ts';
 import { parseRule, type RuleDocument } from './rule.ts';
 import { parseSkill, type SkillDocument } from './skill.ts';
+import { extractStateDefinition } from './state-extract.ts';
+import type { Diagnostic } from '../core/diagnostics.ts';
+import type { NormalizedStateDefinition } from '../core/types.ts';
 
 /** A skill directory is identified by SKILL.md or a rendered-skill source module. */
 const isSkillDocumentName = (name: string): boolean =>
@@ -60,7 +63,34 @@ export interface DiscoveredProject {
    */
   shadowedConventionalSkills?: readonly string[];
   skills: SkillDocument[];
+  /** Conventional src/state.ts declaration and its parse-only diagnostics. */
+  state?: {
+    readonly definition?: Pick<NormalizedStateDefinition, 'id' | 'lifetime'>;
+    readonly diagnostics: readonly Diagnostic[];
+    readonly source: string;
+  };
 }
+
+const discoverState = async (
+  projectRoot: string,
+  config: Readonly<AgentBundleConfig>,
+): Promise<DiscoveredProject['state']> => {
+  if (config.state === false) return undefined;
+  const source = resolve(projectRoot, 'src', 'state.ts');
+  let moduleText: string;
+  try {
+    moduleText = await readFile(source, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  const extracted = extractStateDefinition(moduleText, 'src/state.ts', source);
+  return {
+    ...(extracted.definition === undefined ? {} : { definition: extracted.definition }),
+    diagnostics: extracted.diagnostics,
+    source,
+  };
+};
 
 /** Expands one configured skills entry: literal paths stay literal, globs match skill directories or SKILL.md files. */
 const expandConfiguredSkill = async (projectRoot: string, skill: string): Promise<string[]> => {
@@ -264,6 +294,7 @@ export const discoverProject = async (
     .filter((source) => !isProjectPathIgnored(rules, projectRoot, source))
     .sort((left, right) => left.localeCompare(right));
   const discoveredRules = await Promise.all(ruleSources.map((source) => parseRule(source)));
+  const state = await discoverState(projectRoot, config);
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
     ...(discoveredCommands.length === 0 ? {} : { commands: discoveredCommands }),
@@ -274,5 +305,6 @@ export const discoverProject = async (
     skills: await Promise.all(
       skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules)),
     ),
+    ...(state === undefined ? {} : { state }),
   };
 };

@@ -1773,6 +1773,13 @@ export const validateSource = (
   diagnostics.push(...validateRules(loaded, discovered, registry));
   diagnostics.push(...validateScripts(loaded, registry));
   diagnostics.push(...validateTools(loaded));
+  if (loaded.config.state !== undefined && loaded.config.state !== false) {
+    diagnostics.push(sourceDiagnostic(
+      'AB4818',
+      'State configuration accepts only false; omit it to discover src/state.ts.',
+      loaded.configPath,
+    ));
+  }
   diagnostics.push(...packageConventionShadowNudges(loaded));
   diagnostics.push(...skillConventionShadowNudges(loaded, discovered));
   // Route overrides are validated during discovery; source validation must
@@ -1781,6 +1788,7 @@ export const validateSource = (
   // Route-graph collisions (AB4800-AB4804) are compiled during discovery;
   // they are project-source errors, so they gate inspect and build here.
   diagnostics.push(...(discovered.routeGraph?.diagnostics ?? []));
+  diagnostics.push(...(discovered.state?.diagnostics ?? []));
   diagnostics.push(...validateEventRoutes(loaded, discovered, registry));
   // The stage-1 gate for conventional script routes rides beside the graph's
   // own collisions: rendered, nested, and config-conflicting script routes

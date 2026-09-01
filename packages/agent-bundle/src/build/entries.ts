@@ -9,7 +9,13 @@ import {
   eventProjectRuntimeSpecifier,
   type TargetHookEntry,
 } from '../adapters/hook-contract.ts';
-import type { AgentBundleToolsConfig, NormalizedHook, NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
+import type {
+  AgentBundleToolsConfig,
+  NormalizedHook,
+  NormalizedMcpServer,
+  NormalizedScript,
+  NormalizedStateDefinition,
+} from '../core/types.ts';
 import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
@@ -148,7 +154,12 @@ export const planCompiledEntries = (
 
 export const compileEntries = async (
   entries: readonly NormalizedScript[],
-  options: { readonly cwd: string; readonly outDir: string; readonly tools?: AgentBundleToolsConfig },
+  options: {
+    readonly cwd: string;
+    readonly outDir: string;
+    readonly state?: NormalizedStateDefinition;
+    readonly tools?: AgentBundleToolsConfig;
+  },
 ): Promise<readonly CompiledEntry[]> => {
   const compiled = planCompiledEntries(entries, options);
   const bundled = compiled.filter((entry) => entry.mode === 'bundle');
@@ -174,6 +185,7 @@ export const compileEntries = async (
             virtualSource: generatedRenderedScriptEntrySource({
               name,
               routeId: rendered.routeId,
+              ...(options.state === undefined ? {} : { state: options.state }),
               workerFile: rendered.workerFile,
             }),
           }),
@@ -192,6 +204,7 @@ export const compileEntries = async (
                 provenance: { kind: 'conventional', relativePath: `scripts/${name}` },
                 source,
               }],
+              ...(options.state === undefined ? {} : { state: options.state }),
             }),
           }),
         ];
@@ -296,6 +309,7 @@ export const compileMcpEntries = async (
     readonly eventHooks: readonly NormalizedHook[];
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
+    readonly state?: NormalizedStateDefinition;
     readonly target: string;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -331,6 +345,7 @@ export const compileMcpEntries = async (
         plugin: options.plugin,
         routes: server.generatedRoutes,
         serverName: server.name,
+        ...(options.state === undefined ? {} : { state: options.state }),
         target: options.target,
         workerFile: `${entry.name}-flight.mjs`,
       });
@@ -344,6 +359,7 @@ export const compileMcpEntries = async (
         eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
         routes: server.generatedRoutes,
         serverName: server.name,
+        ...(options.state === undefined ? {} : { state: options.state }),
       });
   });
   // Factory-exporting entries (default export) are wrapped in the framework

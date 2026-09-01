@@ -113,6 +113,7 @@ export const planPackageEntries = async (
       const sourceInputs = Object.freeze([...new Set([
         bin.provenance.sourcePath,
         ...bin.generatedCli.routes.map((route) => route.source),
+        ...(model.state === undefined ? [] : [model.state.source]),
       ])]);
       entries.push({
         aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath() },
@@ -131,6 +132,7 @@ export const planPackageEntries = async (
             version: model.metadata.version,
           },
           routes: bin.generatedCli.routes,
+          ...(model.state === undefined ? {} : { state: model.state }),
           ...(rendered ? { workerFile } : {}),
         }),
       });
@@ -145,7 +147,10 @@ export const planPackageEntries = async (
           rscManifest: true,
           source: bin.source,
           sourceInputs,
-          virtualSource: generatedRenderedRouteWorkerSource({ routes: renderedRoutes }),
+          virtualSource: generatedRenderedRouteWorkerSource({
+            routes: renderedRoutes,
+            ...(model.state === undefined ? {} : { state: model.state }),
+          }),
         });
       }
       continue;

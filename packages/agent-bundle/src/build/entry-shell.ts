@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
 import { stableJson } from '../core/digest.ts';
-import type { NormalizedHook } from '../core/types.ts';
+import type { NormalizedHook, NormalizedStateDefinition } from '../core/types.ts';
 import type { CompiledAgentRoute, CompiledCliCommand } from '../routes/types.ts';
 
 /**
@@ -109,9 +109,51 @@ export interface GeneratedCliBinEntryOptions {
   readonly commands: readonly CompiledCliCommand[];
   readonly plugin: { readonly description?: string; readonly name: string; readonly version: string };
   readonly routes: readonly CompiledAgentRoute[];
+  readonly state?: NormalizedStateDefinition;
   /** The sibling react-server worker bundle; required when any command is rendered. */
   readonly workerFile?: string;
 }
+
+type GeneratedStateFallback = 'artifact' | 'cwd';
+
+const generatedStateImports = (
+  state: NormalizedStateDefinition | undefined,
+  fallback: GeneratedStateFallback,
+): readonly string[] => {
+  if (state === undefined) return [];
+  return [
+    ...(state.lifetime === 'workspace-durable'
+      ? [
+        "import { join } from 'node:path';",
+        ...(fallback === 'artifact' ? ["import { fileURLToPath } from 'node:url';"] : []),
+        "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
+      ]
+      : ["import { createMemoryStateDriver } from '@agent-bundle/runtime/state';"]),
+    "import { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';",
+    `import stateDefinition from ${JSON.stringify(state.source)};`,
+  ];
+};
+
+const generatedStateOwner = (
+  state: NormalizedStateDefinition | undefined,
+  fallback: GeneratedStateFallback,
+): readonly string[] => {
+  if (state === undefined) return [];
+  if (state.lifetime !== 'workspace-durable') {
+    return [
+      `const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createMemoryStateDriver({ lifetime: ${JSON.stringify(state.lifetime)} }) });`,
+      '',
+    ];
+  }
+  const fallbackExpression = fallback === 'artifact'
+    ? "fileURLToPath(new URL('..', import.meta.url))"
+    : "join(process.cwd(), '.agent-bundle')";
+  return [
+    `const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? ${fallbackExpression};`,
+    "const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }) });",
+    '',
+  ];
+};
 
 /**
  * The worker-backed render-session factory shared by generated CLI
@@ -192,8 +234,10 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
       ? "import { available, createAgentRenderDispatcher, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
       : "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
+    ...generatedStateImports(options.state, 'cwd'),
     ...routeImports(commandRoutes),
     '',
+    ...generatedStateOwner(options.state, 'cwd'),
     'const routes = Object.freeze({',
     ...commandRoutes.map((route, index) =>
       `  ${JSON.stringify(route.id)}: Object.freeze({ module: route${String(index)} }),`),
@@ -214,7 +258,10 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
     '  const parsed = parseInput(route, input);',
     '  const cwd = process.cwd();',
-    '  const result = await runAgentRequest({',
+    ...(options.state === undefined
+      ? []
+      : ['  const bindings = await runtimeState.requestBindings({ signal: context.signal });', '  try {']),
+    `${options.state === undefined ? '  ' : '    '}const result = await runAgentRequest({`,
     '    capabilities: {',
     '      command: unavailable(),',
     '      filesystem: unavailable(),',
@@ -223,10 +270,15 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '    },',
     "    host: unavailable('unsupported-surface'),",
     "    invocation: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
+    ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '    signal: context.signal,',
+    ...(options.state === undefined ? [] : ['      state: bindings.state,']),
     "    workspace: available({ root: cwd }, 'derived'),",
-    '  }, async () => route.module.default({ input: parsed, signal: context.signal }));',
-    '  return route.module.resultSchema.parse(result);',
+    `  }, async () => route.module.default({ input: parsed, signal: context.signal }));`,
+    `${options.state === undefined ? '  ' : '    '}return route.module.resultSchema.parse(result);`,
+    ...(options.state === undefined
+      ? []
+      : ['  } finally {', '    await bindings.close();', '  }']),
     '};',
     '',
     ...(rendered
@@ -248,7 +300,8 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         '',
       ]
       : []),
-    'await runGeneratedCliProcess({',
+    ...(options.state === undefined ? [] : ['try {']),
+    `${options.state === undefined ? '' : '  '}await runGeneratedCliProcess({`,
     '  commands,',
     ...(options.plugin.description === undefined ? [] : [`  description: ${JSON.stringify(options.plugin.description)},`]),
     '  execute,',
@@ -256,12 +309,16 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     ...(rendered ? ['  render,'] : []),
     `  version: ${JSON.stringify(options.plugin.version)},`,
     '});',
+    ...(options.state === undefined
+      ? []
+      : ['} finally {', '  await runtimeState.close();', '}']),
     '',
   ].join('\n');
 };
 
 export interface GeneratedRenderedRouteWorkerOptions {
   readonly routes: readonly CompiledAgentRoute[];
+  readonly state?: NormalizedStateDefinition;
 }
 
 /**
@@ -277,8 +334,10 @@ export const generatedRenderedRouteWorkerSource = (
   "import { createElement } from 'react';",
   "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
   "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+  ...generatedStateImports(options.state, 'cwd'),
   ...routeImports(options.routes),
   '',
+  ...generatedStateOwner(options.state, 'cwd'),
   '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
   'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
   "if (parentPort === null) throw new Error('Generated render worker requires a parent port.');",
@@ -297,6 +356,10 @@ export const generatedRenderedRouteWorkerSource = (
   '  requests.set(message.id, controller);',
   '  try {',
   '    const cwd = process.cwd();',
+  ...(options.state === undefined
+    ? []
+    : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });']),
+  ...(options.state === undefined ? [] : ['    try {']),
   '    await runAgentRequest({',
   '      capabilities: {',
   '        command: unavailable(),',
@@ -306,8 +369,10 @@ export const generatedRenderedRouteWorkerSource = (
   '      },',
   "      host: unavailable('unsupported-surface'),",
   '      invocation: message.request,',
+  ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
   "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
   '      signal: controller.signal,',
+  ...(options.state === undefined ? [] : ['      state: bindings.state,']),
   "      workspace: available({ root: cwd }, 'derived'),",
   '    }, async () => {',
   '      const flight = renderAgentFlight(createElement(route.module.default, { ...message.props, signal: controller.signal }), { signal: controller.signal });',
@@ -319,6 +384,9 @@ export const generatedRenderedRouteWorkerSource = (
   "        parentPort.postMessage({ bytes, id: message.id, type: 'chunk' }, [bytes.buffer]);",
   '      }',
   '    });',
+  ...(options.state === undefined
+    ? []
+    : ['    } finally {', '      await bindings.close();', '    }']),
   "    parentPort.postMessage({ id: message.id, type: 'end' });",
   '  } catch (error) {',
   "    parentPort.postMessage({ id: message.id, message: error instanceof Error ? error.message : String(error), type: 'error' });",
@@ -337,6 +405,7 @@ export const generatedRenderedRouteWorkerSource = (
 export interface GeneratedRenderedScriptEntryOptions {
   readonly name: string;
   readonly routeId: string;
+  readonly state?: NormalizedStateDefinition;
   readonly workerFile: string;
 }
 
@@ -376,6 +445,7 @@ export interface GeneratedRouteMcpEntryOptions {
   readonly plugin: { readonly name: string; readonly version: string };
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
+  readonly state?: NormalizedStateDefinition;
   readonly target?: string;
   readonly workerFile: string;
 }
@@ -385,6 +455,7 @@ export interface GeneratedRouteFlightWorkerOptions {
   readonly eventRoutes?: readonly NormalizedHook[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
+  readonly state?: NormalizedStateDefinition;
 }
 
 export const generatedRouteArtifactEpoch = (plugin: {
@@ -426,6 +497,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
     "import { runAgentRequest } from '@agent-bundle/runtime';",
+    ...generatedStateImports(options.state, 'artifact'),
     ...routeImports(routes),
     ...eventRouteImports(eventRoutes, routes.length),
     '',
@@ -435,6 +507,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'process.stdout.write = process.stderr.write.bind(process.stderr);',
     `const ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch)};`,
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
+    ...generatedStateOwner(options.state, 'artifact'),
     'const routes = Object.freeze({',
     ...routeRecords(routes),
     ...eventRouteRecords(eventRoutes, routes.length),
@@ -453,13 +526,20 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     '  requests.set(message.id, controller);',
     '  processLifetime.hits += 1;',
     '  try {',
+    ...(options.state === undefined
+      ? []
+      : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });', '    try {']),
     '    const bytes = await runAgentRequest({',
     '      ...(message.actor === undefined ? {} : { actor: message.actor }),',
-    '      invocation: { artifactEpoch: ARTIFACT_EPOCH, kind: message.invocation.kind, operationId: route.id, surface: route.name },',
+    '      ...(message.host === undefined ? {} : { host: message.host }),',
+    '      invocation: { ...message.requestInvocation, artifactEpoch: ARTIFACT_EPOCH, kind: message.invocation.kind, operationId: route.id, surface: route.name },',
+    ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: \'progress\', update }); } },',
     '      providers: { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } },',
     '      ...(message.session === undefined ? {} : { session: message.session }),',
     '      signal: controller.signal,',
+    ...(options.state === undefined ? [] : ['      state: bindings.state,']),
+    '      ...(message.workspace === undefined ? {} : { workspace: message.workspace }),',
     '    }, async () => {',
     "      const props = message.invocation.kind === 'event'",
     '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
@@ -468,6 +548,9 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     '      return new Uint8Array(await new Response(flight).arrayBuffer());',
     '    });',
     '    parentPort.postMessage({ bytes, id: message.id, type: \'complete\' }, [bytes.buffer]);',
+    ...(options.state === undefined
+      ? []
+      : ['    } finally {', '      await bindings.close();', '    }']),
     '  } catch (error) {',
     "    parentPort.postMessage({ id: message.id, message: error instanceof Error ? error.message : String(error), type: 'error' });",
     '  } finally {',

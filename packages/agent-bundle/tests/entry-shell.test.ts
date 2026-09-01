@@ -3,6 +3,7 @@ import { access, readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
+import ts from 'typescript-5';
 
 import { scanEntryExportsSource, stripCommentsAndStrings } from '../src/build/entry-exports.ts';
 import * as entryShellModule from '../src/build/entry-shell.ts';
@@ -239,6 +240,9 @@ it('keeps the generated server behaviour in the shared runtime module the entry 
   expect(runtime).toContain('server.registerPrompt');
   expect(runtime).toContain('createEventRuntimeServer(');
   expect(runtime).toContain('projectEventDocument(');
+  expect(runtime).toContain('requestInvocation: context.invocation');
+  expect(runtime).toContain('host: context.host');
+  expect(runtime).toContain('workspace: context.workspace');
 });
 
 it('fails the build on an MCP route the generated server cannot register', () => {
@@ -299,4 +303,96 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain('/project/src/mcp/curator/tools/inspect.tsx');
   expect(source).toContain('/project/src/events/tool/after.tsx');
   expect(source).toContain("message.invocation.kind === 'event'");
+});
+
+it('conditionally emits generated state mounting without leaking sqlite into volatile or stateless entries', () => {
+  const route = {
+    config: {},
+    id: 'tool:curator/inspect',
+    kind: 'tool',
+    provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+    source: '/project/src/mcp/curator/tools/inspect.tsx',
+  } as const;
+  const state = (lifetime: 'process' | 'request' | 'workspace-durable') => ({
+    id: 'project/tasks',
+    lifetime,
+    provenance: { kind: 'conventional' as const, sourcePath: '/project/src/state.ts' },
+    source: '/project/src/state.ts',
+  });
+  const base = {
+    artifactEpoch: 'route-fixture@1.2.3',
+    routes: [route],
+    serverName: 'curator',
+  };
+  const stateless = entryShellModule.generatedRouteFlightWorkerSource(base);
+  for (const identifier of [
+    '@agent-bundle/runtime/mount',
+    '@agent-bundle/runtime/state',
+    'noticeLedger',
+    'createGeneratedRuntimeState',
+    'createSqliteStateDriver',
+  ]) {
+    expect(stateless).not.toContain(identifier);
+  }
+
+  const volatile = entryShellModule.generatedRouteFlightWorkerSource({
+    ...base,
+    state: state('process'),
+  });
+  expect(volatile).toContain('import stateDefinition from "/project/src/state.ts"');
+  expect(volatile).toContain("createGeneratedRuntimeState");
+  expect(volatile).toContain('createMemoryStateDriver({ lifetime: "process" })');
+  expect(volatile).toContain('noticeLedger');
+  expect(volatile).not.toContain('@agent-bundle/runtime/state/sqlite');
+  expect(volatile).not.toContain('createSqliteStateDriver');
+
+  const durable = entryShellModule.generatedRouteFlightWorkerSource({
+    ...base,
+    state: state('workspace-durable'),
+  });
+  expect(durable).toContain("from '@agent-bundle/runtime/state/sqlite'");
+  expect(durable).toContain('AGENT_BUNDLE_PLUGIN_ROOT');
+  expect(durable).toContain("join(durableAnchor, 'state')");
+
+  const renderedWorker = entryShellModule.generatedRenderedRouteWorkerSource({
+    routes: [{ ...route, id: 'script:report', kind: 'script' }],
+    state: state('workspace-durable'),
+  });
+  expect(renderedWorker).toContain("from '@agent-bundle/runtime/state/sqlite'");
+  expect(renderedWorker).toContain('noticeLedger: bindings.noticeLedger');
+  expect(renderedWorker).toContain('state: bindings.state');
+
+  const command = {
+    aliases: [],
+    exitCode: 'zero',
+    options: [],
+    path: ['inspect'],
+    rendered: false,
+    routeId: 'cli:inspect',
+  } as const;
+  const cliRoute = { ...route, id: command.routeId, kind: 'cli' as const };
+  const statelessCli = entryShellModule.generatedCliBinEntrySource({
+    commands: [command],
+    plugin: { name: 'fixture', version: '1.0.0' },
+    routes: [cliRoute],
+  });
+  expect(statelessCli).not.toContain('@agent-bundle/runtime/mount');
+  expect(statelessCli).not.toContain('noticeLedger');
+  const volatileCli = entryShellModule.generatedCliBinEntrySource({
+    commands: [command],
+    plugin: { name: 'fixture', version: '1.0.0' },
+    routes: [cliRoute],
+    state: state('request'),
+  });
+  expect(volatileCli).toContain('createMemoryStateDriver({ lifetime: "request" })');
+  expect(volatileCli).not.toContain('@agent-bundle/runtime/state/sqlite');
+  expect(volatileCli).toContain('await bindings.close()');
+
+  for (const generated of [stateless, volatile, durable, renderedWorker, statelessCli, volatileCli]) {
+    const transpiled = ts.transpileModule(generated, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+      reportDiagnostics: true,
+    });
+    expect(transpiled.diagnostics ?? []).toEqual([]);
+  }
 });

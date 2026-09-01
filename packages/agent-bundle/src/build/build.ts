@@ -360,7 +360,12 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       compiledEntries.push(
         ...(await compileEntries(
           options.model.scripts.filter((script) => script.targets.includes(target.name)),
-          { cwd: options.projectRoot, outDir: target.root, ...tools },
+          {
+            cwd: options.projectRoot,
+            outDir: target.root,
+            ...(options.model.state === undefined ? {} : { state: options.model.state }),
+            ...tools,
+          },
         )),
       );
       compiledHooks.push(...(await compileHooks(target.hookEntries, {
@@ -378,6 +383,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           .map((entry) => entry.hook),
         outDir: target.root,
         plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
+        ...(options.model.state === undefined ? {} : { state: options.model.state }),
         target: target.name,
         ...tools,
       })));

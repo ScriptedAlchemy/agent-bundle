@@ -15,6 +15,12 @@
  * `packed-stdio` level) is the helper that carries process evidence.
  */
 import type { Client } from '@modelcontextprotocol/client';
+import type {
+  AgentStateDefinition,
+  AgentStateDriver,
+  AgentStateEventSchemas,
+} from '@agent-bundle/runtime/state';
+import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
 
 import { AgentTestError, captured } from './errors.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
@@ -49,12 +55,20 @@ export interface McpToolInvocation {
   readonly structuredContent?: unknown;
 }
 
-export interface InMemoryMcpSessionOptions {
+export interface InMemoryMcpSessionOptions<
+  TState = unknown,
+  TEvents extends AgentStateEventSchemas = AgentStateEventSchemas,
+> {
   /** Request-scoped overrides applied to every route render in this session. */
   readonly context?: RenderRouteContext;
   readonly manifest?: AgentBundleTestManifest;
   /** MCP server name. Optional when the project compiled exactly one server. */
   readonly server?: string;
+  /** Optional state owner input for parity with a generated Flight worker. */
+  readonly state?: {
+    readonly definition: AgentStateDefinition<TState, TEvents>;
+    readonly driver: AgentStateDriver;
+  };
 }
 
 export interface InMemoryMcpSession extends AsyncDisposable {
@@ -135,6 +149,7 @@ interface ServerRuntime {
 
 interface Renderer {
   readonly createElement: typeof import('react').createElement;
+  readonly createGeneratedRuntimeState: typeof createGeneratedRuntimeState;
   readonly createWarmFlightHost: typeof import('@agent-bundle/runtime').createWarmFlightHost;
   readonly renderAgentFlight: typeof import('@agent-bundle/runtime/flight/server').renderAgentFlight;
   readonly runAgentRequest: typeof import('@agent-bundle/runtime').runAgentRequest;
@@ -157,9 +172,10 @@ let dependenciesPromise: Promise<ServerRuntime & Renderer & Sdk> | undefined;
  */
 const loadDependencies = async (): Promise<ServerRuntime & Renderer & Sdk> => {
   dependenciesPromise ??= (async () => {
-    const [serverRuntime, runtime, flight, react, client] = await Promise.all([
+    const [serverRuntime, runtime, mount, flight, react, client] = await Promise.all([
       import('../mcp-server-runtime.ts'),
       import('@agent-bundle/runtime'),
+      import('@agent-bundle/runtime/mount'),
       import('@agent-bundle/runtime/flight/server'),
       import('react'),
       import('@modelcontextprotocol/client'),
@@ -168,6 +184,7 @@ const loadDependencies = async (): Promise<ServerRuntime & Renderer & Sdk> => {
       Client: client.Client,
       InMemoryTransport: client.InMemoryTransport,
       createElement: react.createElement,
+      createGeneratedRuntimeState: mount.createGeneratedRuntimeState,
       createGeneratedRouteMcpServer: serverRuntime.createGeneratedRouteMcpServer,
       createWarmFlightHost: runtime.createWarmFlightHost,
       renderAgentFlight: flight.renderAgentFlight,
@@ -214,8 +231,11 @@ const streamOf = (chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> =>
  * build output, and claiming an App resource without it would be exactly the
  * fake this level must not become. App surfaces belong to the browser level.
  */
-export const openInMemoryMcpServer = async (
-  options: InMemoryMcpSessionOptions = {},
+export const openInMemoryMcpServer = async <
+  TState = unknown,
+  TEvents extends AgentStateEventSchemas = AgentStateEventSchemas,
+>(
+  options: InMemoryMcpSessionOptions<TState, TEvents> = {},
 ): Promise<InMemoryMcpSession> => {
   const manifest = options.manifest ?? testManifest();
   const serverName = resolveServerName(manifest, options.server);
@@ -272,6 +292,9 @@ export const openInMemoryMcpServer = async (
   // the same warm host wrapper the artifact uses — it simply renders here
   // instead of in a spawned thread.
   const artifactEpoch = `${manifest.plugin.name}@${manifest.plugin.version}`;
+  const runtimeState = options.state === undefined
+    ? undefined
+    : dependencies.createGeneratedRuntimeState(options.state);
   const host = dependencies.createWarmFlightHost({
     artifactEpoch,
     host: {
@@ -285,25 +308,35 @@ export const openInMemoryMcpServer = async (
             details: [`registered:   ${Object.keys(routes).sort().join(', ')}`],
           });
         }
-        return streamOf(await dependencies.runAgentRequest({
-          ...context,
-          invocation: {
-            kind: 'tool' as const,
-            operationId: route.id,
-            surface: route.name,
-            ...context.invocation,
-          },
-          ...(request.progress === undefined ? {} : { progress: request.progress }),
-          signal: request.signal,
-        }, async () => drain(dependencies.renderAgentFlight(
-          dependencies.createElement(route.module.default as never, {
-            input: props.input,
+        const bindings = await runtimeState?.requestBindings({ signal: request.signal });
+        try {
+          return streamOf(await dependencies.runAgentRequest({
+            ...context,
+            invocation: {
+              kind: 'tool' as const,
+              operationId: route.id,
+              surface: route.name,
+              ...context.invocation,
+            },
+            ...(bindings === undefined ? {} : {
+              noticeLedger: bindings.noticeLedger,
+              state: bindings.state,
+            }),
+            ...(request.progress === undefined ? {} : { progress: request.progress }),
             signal: request.signal,
-          } as never),
-          { signal: request.signal },
-        ))));
+          }, async () => drain(dependencies.renderAgentFlight(
+            dependencies.createElement(route.module.default as never, {
+              input: props.input,
+              signal: request.signal,
+            } as never),
+            { signal: request.signal },
+          ))));
+        } finally {
+          await bindings?.close();
+        }
       },
     },
+    ...(runtimeState === undefined ? {} : { runtimeState }),
   });
 
   const server = await dependencies.createGeneratedRouteMcpServer({
