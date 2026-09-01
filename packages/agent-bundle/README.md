@@ -186,7 +186,10 @@ renderer and the real request store, and resolves to the final Agent Document:
 import { expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
 
 const { document } = await renderRoute('tool:library/summarize', {
-  context: { cwd: '/tmp/library', operationId: 'run-1' },
+  context: {
+    invocation: { id: 'run-1' },
+    workspace: { source: 'native', state: 'available', value: { root: '/tmp/library' } },
+  },
   input: { title: 'Dune' },
 });
 
@@ -194,9 +197,11 @@ expectDocument(document).toHaveStatus('success').toContainMarkdown('Dune').toHav
 ```
 
 `renderRoute` accepts `input`, `args` (CLI routes), request-`context`
-overrides, a `progress` reporter, render `limits`, and an `abort` signal; it
-returns the document, the ordered render events, the resolved provenance, and
-the route's own `resultSchema`-parsed value. `testManifest()` exposes the
+overrides — including a `context.progress` reporter — render `limits`, and a
+`signal`; it returns the document, the request-scoped progress the route
+reported, the resolved provenance, and the route's own `resultSchema`-parsed
+value. Progress is recorded whether or not the caller supplies a reporter of
+its own. `testManifest()` exposes the
 compiled route inventory, so a suite can iterate every route in process rather
 than paying for a build per route. Every failure — an unknown route, a refused
 route kind, a rejected input, a render error — names the route id, the target
