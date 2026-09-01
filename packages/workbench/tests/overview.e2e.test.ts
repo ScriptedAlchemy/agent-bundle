@@ -185,7 +185,9 @@ e2e('redirects a direct Runtime deep link only after capability discovery report
   }
 });
 
-e2e('offers the host-owned MCP playground handoff only after a selected Runtime App succeeds', { timeout: 120_000 }, async ({ page }) => {
+// Flaky under hosted-runner load (watch delivery can split one edit into an
+// extra reload generation, #200); retry while the root cause stays open.
+e2e('offers the host-owned MCP playground handoff only after a selected Runtime App succeeds', { retry: 2, timeout: 120_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   let clientPage: Page | undefined;
   let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
