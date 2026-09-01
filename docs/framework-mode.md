@@ -130,8 +130,10 @@ hydrate, or hold server component state. What the MCP projection uses is an **MC
 result DSL**: `render` returns ordinary React elements, and
 `lowerMcpResult` walks that tree synchronously — function components are
 simply called — to produce the `CallToolResult` the MCP SDK sends. The
-package owns no transport, persistence, or application state; those remain
-explicit dependencies of `execute` implementations.
+package owns no transport, and operations receive no implicit storage:
+persistent application state exists only through the opt-in state kernel
+subpath (`@agent-bundle/runtime/state`, issue #98), which stateless projects
+never import.
 
 Operation modules are `.tsx` for exactly one reason: the `render` callback
 returns JSX. Everything else in an operation — schemas, argv parsing, MCP
