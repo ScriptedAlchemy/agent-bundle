@@ -70,6 +70,8 @@ export type AgentApiBuildStatus =
 
 export interface AgentApiSourceStatus {
   readonly diagnostics: readonly AgentApiDiagnostic[];
+  readonly packageName?: string;
+  readonly packageVersion?: string;
   readonly revision?: string;
   readonly state: 'invalid' | 'ready' | 'unknown';
 }
@@ -243,8 +245,16 @@ const sourceWireDto = (value: unknown): AgentApiSourceStatus => {
   const source = snapshotRecord(value);
   const state = source?.state;
   const revision = safeDigest(source?.revision);
+  const packageName = typeof source?.packageName === 'string' && source.packageName.length > 0
+    ? source.packageName
+    : undefined;
+  const packageVersion = typeof source?.packageVersion === 'string' && source.packageVersion.length > 0
+    ? source.packageVersion
+    : undefined;
   return Object.freeze({
     diagnostics: diagnosticWireDtos(source?.diagnostics),
+    ...(packageName === undefined ? {} : { packageName }),
+    ...(packageVersion === undefined ? {} : { packageVersion }),
     ...(revision === undefined ? {} : { revision }),
     state: state === 'invalid' || state === 'ready' || state === 'unknown' ? state : 'unknown',
   });

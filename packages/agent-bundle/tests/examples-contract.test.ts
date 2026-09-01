@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { build, inspect, invokeMcp, listHooks, listMcp, runEvals, simulateHook, validate } from '../src/api.ts';
+import { projectVersionLabel } from '../src/core/project-context.ts';
 
 const execFile = promisify(executeFile);
 const examplesRoot = join(process.cwd(), 'examples');
@@ -17,7 +18,8 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
   await rm(output, { force: true, recursive: true });
 
   try {
-    await expect(inspect({ root })).resolves.toMatchObject({
+    const inspection = await inspect({ root });
+    expect(inspection).toMatchObject({
       model: {
         metadata: { name: 'skills-starter' },
         scripts: [],
@@ -25,6 +27,12 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
       },
       state: 'ready',
     });
+    if (inspection.state !== 'ready') throw new Error('unreachable');
+    // Identity stages 1-2 (#94): no package.json version, so the release
+    // axis is absent and displays fall back to the labeled dev form.
+    expect(inspection.projectContext.packageName).toBe('@agent-bundle-example/skills-starter');
+    expect(inspection.projectContext.packageVersion).toBeUndefined();
+    expect(projectVersionLabel(inspection.projectContext)).toContain('development fallback');
     await build({ output, root });
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
     await expect(readFile(join(output, 'portable', 'skills', 'release-review', 'SKILL.md'), 'utf8'))
@@ -253,4 +261,23 @@ it('simulates the Hooks example and executes release checks', async () => {
       rm(unrelatedCwd, { force: true, recursive: true }),
     ]);
   }
+});
+
+it('derives the Audiobook Curator release identity from package.json as the one version source', async () => {
+  const root = join(examplesRoot, 'audiobook-curator');
+  const inspection = await inspect({ root });
+  expect(inspection.state).toBe('ready');
+  if (inspection.state !== 'ready') throw new Error('unreachable');
+  // package.json declares 1.0.0 once; both derived axes and the config's
+  // still-required plugin.version agree, so no AB4008 mismatch surfaces.
+  expect(inspection.projectContext.packageName).toBe('@agent-bundle-example/audiobook-curator');
+  expect(inspection.projectContext.packageVersion).toBe('1.0.0');
+  expect(inspection.model.metadata).toMatchObject({
+    name: 'audiobook-curator',
+    packageName: '@agent-bundle-example/audiobook-curator',
+    packageVersion: '1.0.0',
+    version: '1.0.0',
+  });
+  expect(projectVersionLabel(inspection.projectContext)).toBe('1.0.0');
+  expect(inspection.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4008')).toEqual([]);
 });

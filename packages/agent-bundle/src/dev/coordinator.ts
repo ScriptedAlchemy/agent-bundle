@@ -151,6 +151,8 @@ const withDiagnostics = (
   build: { state: 'idle' },
   source: {
     diagnostics: freezeDiagnostics([...source.diagnostics, ...diagnostics]),
+    ...(source.packageName === undefined ? {} : { packageName: source.packageName }),
+    ...(source.packageVersion === undefined ? {} : { packageVersion: source.packageVersion }),
     ...(source.revision === undefined ? {} : { revision: source.revision }),
     state: hasErrors([...source.diagnostics, ...diagnostics]) ? 'invalid' : source.state,
   },

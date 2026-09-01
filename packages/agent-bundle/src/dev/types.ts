@@ -20,6 +20,10 @@ export interface ArtifactEpoch {
   readonly id: string;
   readonly manifestPath: string;
   readonly modelDigest: string;
+  /** The npm package name axis of the published project, when packaged. */
+  readonly packageName?: string;
+  /** The semantic release-version axis of the published project, when packaged. */
+  readonly packageVersion?: string;
   readonly projectRevision: string;
   readonly targetDigests: Readonly<Record<string, string>>;
 }
@@ -147,6 +151,10 @@ export type SourceState = 'unknown' | 'ready' | 'invalid';
 
 export interface SourceStatus {
   readonly diagnostics: readonly Diagnostic[];
+  /** The npm package name axis derived from package.json, when valid. */
+  readonly packageName?: string;
+  /** The semantic release-version axis derived from package.json, when valid. */
+  readonly packageVersion?: string;
   readonly revision?: string;
   readonly state: SourceState;
 }
