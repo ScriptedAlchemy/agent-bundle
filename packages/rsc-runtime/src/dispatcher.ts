@@ -92,11 +92,19 @@ export const createAgentRenderDispatcher = (
       limits: options.limits,
       signal: request.signal,
     });
-    pendingFlight.current = host.execute({
-      invocation: request.invocation,
-      progress: session.progress,
-      signal: request.signal,
-    });
+    const rememberFlight = (flight: Promise<ReadableStream<Uint8Array>>): Promise<ReadableStream<Uint8Array>> => {
+      void flight.catch(() => undefined);
+      return flight;
+    };
+    try {
+      pendingFlight.current = rememberFlight(host.execute({
+        invocation: request.invocation,
+        progress: session.progress,
+        signal: request.signal,
+      }));
+    } catch (error) {
+      pendingFlight.current = rememberFlight(Promise.reject(request.signal.aborted ? abortError() : error));
+    }
     return toPublicEventStream(session.events, demand, request.signal);
   };
 
