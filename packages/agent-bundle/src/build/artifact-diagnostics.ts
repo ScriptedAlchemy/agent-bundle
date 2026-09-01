@@ -19,7 +19,11 @@ export type ArtifactDiagnosticCode =
   | 'AB6015'
   | 'AB6016'
   | 'AB6017'
-  | 'AB6018';
+  | 'AB6018'
+  | 'AB6019'
+  | 'AB6020'
+  | 'AB6021'
+  | 'AB6022';
 
 export const artifactDiagnosticRecoveries: Readonly<Record<ArtifactDiagnosticCode, string>> = Object.freeze({
   AB6000: 'Restore a readable artifact root and canonical manifest, then rebuild the artifact.',
@@ -41,6 +45,10 @@ export const artifactDiagnosticRecoveries: Readonly<Record<ArtifactDiagnosticCod
   AB6016: 'Copy every referenced Skill resource inside its Skill root, then rebuild the artifact.',
   AB6017: 'Rebuild the artifact so every target MCP manifest references its exact compiler outputs.',
   AB6018: 'Rebuild the artifact so native hook commands and hook metadata agree.',
+  AB6019: 'Install Claude Code and ensure `claude` is on PATH, then rerun artifact validation.',
+  AB6020: 'Run `claude plugin validate <bundle-dir> --strict`, repair the warning, and rebuild.',
+  AB6021: 'Run `claude plugin validate <bundle-dir> --strict`, repair the error, and rebuild.',
+  AB6022: 'Restore a bounded Claude validator process, then rerun artifact validation.',
 });
 
 const isArtifactDiagnosticCode = (code: string): code is ArtifactDiagnosticCode =>

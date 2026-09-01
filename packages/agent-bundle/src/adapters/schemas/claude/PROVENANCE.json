@@ -30,5 +30,15 @@
       "url": "https://docs.anthropic.com/en/docs/claude-code/plugins"
     }
   },
-  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Package builds do not download schemas or invoke host-side validators."
+  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Artifact inspection can additionally invoke `claude plugin validate <bundle-dir> --strict`; Agent Bundle preserves host warnings unless its own strict option is enabled, and reports an explicit unavailable diagnostic when the CLI is absent.",
+  "developerTools": {
+    "retrievedAt": "2026-09-01",
+    "source": "https://code.claude.com/docs/en/plugins-reference",
+    "evidence": [
+      "`claude plugin validate <dir>` validates plugin.json, hooks/hooks.json, and frontmatter in default skills, agents, and commands directories; manifest-less directories require Claude Code 2.1.233 or later.",
+      "`--strict` treats warnings as errors and is recommended for CI, including unrecognized or near-miss fields and non-object experimental/metadata values.",
+      "`claude --plugin-dir <dir> plugin list` includes session-loaded plugins only when the same flag precedes the subcommand; `--json` provides machine-readable registration evidence.",
+      "`claude plugin details` owns component inventory and token-cost estimation; Agent Bundle does not reimplement its count_tokens or character-fallback costing."
+    ]
+  }
 }

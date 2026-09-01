@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
-import { runCli as runSourceCli } from '../src/cli.ts';
+import { runCli as runSourceCli, type CliDependencies } from '../src/cli.ts';
 import { cachedNpmInstallArguments } from './support/shared-pack.ts';
 import { timeScale } from './support/time-scale.ts';
 
@@ -38,14 +38,17 @@ const runExecutable = async (executable: string, root: string, args: readonly st
 
 const runCli = (root: string, args: readonly string[]) => runExecutable(cliPath, root, args);
 
-const runSourceCliWithOutput = async (args: string[]): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
+const runSourceCliWithOutput = async (
+  args: string[],
+  dependencies: CliDependencies = {},
+): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
   const stderr: string[] = [];
   const stdout: string[] = [];
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const code = await runSourceCli(args, {
     stderr: { write: (chunk: string) => stderr.push(chunk) },
     stdout: { write: (chunk: string) => stdout.push(chunk) },
-  });
+  }, dependencies);
   return { code, stderr: stderr.join(''), stdout: stdout.join('') };
 };
 
@@ -354,6 +357,37 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
 }, 30_000 * timeScale);
+
+it('enables bounded host validation for built artifacts and promotes warnings only under --strict', async () => {
+  const calls: unknown[] = [];
+  const validate = async (options: unknown) => {
+    calls.push(options);
+    return {
+      diagnostics: [{
+        code: 'AB6020',
+        message: 'Claude plugin validation warning.',
+        severity: (options as { strict?: boolean }).strict === true ? 'error' as const : 'warning' as const,
+      }],
+    };
+  };
+
+  const normal = await runSourceCliWithOutput([
+    'validate', '--root', '/project', '--artifact', '/artifact', '--json',
+  ], { validate });
+  expect(normal).toMatchObject({ code: 0, stderr: '' });
+  expect(JSON.parse(normal.stdout)).toMatchObject({
+    diagnostics: [expect.objectContaining({ code: 'AB6020', severity: 'warning' })],
+  });
+
+  const strict = await runSourceCliWithOutput([
+    'validate', '--root', '/project', '--artifact', '/artifact', '--strict', '--json',
+  ], { validate });
+  expect(strict.code).toBe(1);
+  expect(calls).toEqual([
+    expect.objectContaining({ artifact: '/artifact', hostValidation: true, strict: undefined }),
+    expect.objectContaining({ artifact: '/artifact', hostValidation: true, strict: true }),
+  ]);
+});
 
 it('prints a complete invalid inspection on JSON and human output', async () => {
   const project = await createCliProject();

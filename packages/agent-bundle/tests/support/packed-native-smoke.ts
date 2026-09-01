@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 
 // The native smoke installs the production closure a real consumer would get,
 // so it stays on npm's default metadata staleness checks.
-import { npmInstallArguments } from './shared-pack.ts';
+import { npmInstallArguments, sharedPackedTarball } from './shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -48,6 +48,14 @@ export interface PackedNativeSmokeReport {
     readonly productionOnly: true;
     readonly tarballs: 1;
   };
+}
+
+export interface PackedClaudePluginProof {
+  readonly host: 'claude';
+  readonly registration: 'observed';
+  readonly status: 'passed';
+  readonly strictValidation: 'passed';
+  readonly version: string;
 }
 
 const hostOptIns = Object.freeze({
@@ -204,6 +212,85 @@ const summarizeEval = (host: PackedNativeHost, command: CommandResult) => {
     && summary.fail === 0
     && summary.inconclusive === 0;
   return Object.freeze({ host, status: passed ? 'passed' as const : 'failed' as const, trials: summary?.trials ?? 0 });
+};
+
+/**
+ * Packed-artifact proof for Claude's developer tools. It requires only the
+ * installed binary, never authentication, and retains no plugin-list output.
+ */
+export const runPackedClaudePluginProof = async (options: {
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+}): Promise<PackedClaudePluginProof> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-claude-plugin-'));
+  const consumer = join(root, 'consumer');
+  const project = join(consumer, 'project');
+  const artifact = join(project, 'artifact');
+  const environment = packedNativeEnvironment(options.environment);
+
+  try {
+    await mkdir(consumer, { recursive: true });
+    await Promise.all([
+      writeFile(join(consumer, 'package.json'), '{"private":true,"type":"module"}\n'),
+      cp(fixtureRoot, project, { recursive: true }),
+    ]);
+    const packed = await sharedPackedTarball('agent-bundle');
+    const installed = await run('npm', [
+      'install',
+      '--omit=dev',
+      ...npmInstallArguments,
+      packed.tarball,
+    ], { cwd: consumer, environment });
+    if (installed.exitCode !== 0) throw new Error('packed-claude-proof:install');
+
+    const cli = await realpath(join(consumer, 'node_modules', 'agent-bundle', 'dist', 'cli.js'));
+    if (cli.startsWith(workspaceRoot)) throw new Error('Packed Claude plugin proof resolved a workspace-linked binary.');
+    const built = await runNodeEntrypoint(cli, [
+      'build',
+      '--root',
+      project,
+      '--output',
+      artifact,
+    ], { cwd: project, environment });
+    if (built.exitCode !== 0) throw new Error('packed-claude-proof:build');
+
+    const pluginDirectory = join(artifact, 'claude');
+    const version = await run('claude', ['--version'], { cwd: project, environment });
+    const versionNumber = /(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)/u.exec(version.stdout)?.[1];
+    if (version.exitCode !== 0 || versionNumber === undefined) {
+      throw new Error('packed-claude-proof:version');
+    }
+    const validation = await run('claude', ['plugin', 'validate', pluginDirectory, '--strict'], {
+      cwd: project,
+      environment,
+    });
+    if (validation.exitCode !== 0) throw new Error('packed-claude-proof:validate');
+    const plugins = await run('claude', ['--plugin-dir', pluginDirectory, 'plugin', 'list', '--json'], {
+      cwd: project,
+      environment,
+    });
+    let listingDocument: readonly { readonly id?: unknown }[] = [];
+    try {
+      listingDocument = JSON.parse(plugins.stdout) as readonly { readonly id?: unknown }[];
+    } catch {
+      listingDocument = [];
+    }
+    if (
+      plugins.exitCode !== 0 ||
+      !Array.isArray(listingDocument) ||
+      !listingDocument.some((plugin) => plugin.id === 'packed-native-smoke@inline')
+    ) {
+      throw new Error('packed-claude-proof:register');
+    }
+    return Object.freeze({
+      host: 'claude',
+      registration: 'observed',
+      status: 'passed',
+      strictValidation: 'passed',
+      version: versionNumber,
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 };
 
 export const runPackedNativeSmoke = async (options: {

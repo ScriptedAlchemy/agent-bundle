@@ -1818,7 +1818,8 @@ it('documents recovery for every stable artifact diagnostic code', async () => {
     expect(Object.keys(artifactDiagnosticRecoveries).sort()).toEqual([
       'AB6000', 'AB6001', 'AB6002', 'AB6003', 'AB6004', 'AB6005', 'AB6006',
       'AB6007', 'AB6008', 'AB6009', 'AB6010', 'AB6011', 'AB6012', 'AB6013',
-      'AB6014', 'AB6015', 'AB6016', 'AB6017', 'AB6018',
+      'AB6014', 'AB6015', 'AB6016', 'AB6017', 'AB6018', 'AB6019', 'AB6020',
+      'AB6021', 'AB6022',
     ]);
     expect(Object.values(artifactDiagnosticRecoveries).every((recovery) => recovery.trim().length > 0)).toBe(true);
     expect(artifactDiagnosticRecoveries.AB6015).not.toBe(artifactDiagnosticRecoveries.AB6016);

@@ -75,11 +75,15 @@ export {
 } from './build/manifest.ts';
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
-import { validateArtifact } from './build/validate-artifact.ts';
+import { validateArtifact, validateArtifactWithSnapshot } from './build/validate-artifact.ts';
 import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 export type { Diagnostic, DiagnosticSeverity } from './core/diagnostics.ts';
 import type { ProjectContext } from './core/project-context.ts';
 import type { NormalizedPlugin } from './core/types.ts';
+import {
+  validateClaudePlugin,
+  type ClaudePluginValidationReport,
+} from './host-contracts/claude-plugin-validation.ts';
 import type { EvalComparison } from './eval/compare.ts';
 import { EvalRunStoreError } from './eval/errors.ts';
 import {
@@ -214,10 +218,15 @@ export interface ProjectOptions {
 
 export interface ValidateOptions extends ProjectOptions {
   readonly artifact?: string;
+  /** Run installed host developer tools for compatible built targets. */
+  readonly hostValidation?: boolean;
+  /** Promote host-tool warnings to errors. */
+  readonly strict?: boolean;
 }
 
 export interface ValidateResult {
   readonly diagnostics: readonly Diagnostic[];
+  readonly hostValidation?: readonly ClaudePluginValidationReport[];
   readonly model?: NormalizedPlugin;
 }
 
@@ -408,6 +417,29 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
   if (options.artifact !== undefined) {
     const artifact = resolve(options.artifact);
     log(options.logger, 'artifact.validate', { artifact });
+    if (options.hostValidation === true) {
+      const validated = await validateArtifactWithSnapshot({
+        artifactRoot: artifact,
+        registry: registryFor(options),
+      });
+      if (validated.snapshot === undefined) {
+        return Object.freeze({ diagnostics: freezeDiagnostics(validated.diagnostics) });
+      }
+      const reports = await Promise.all(validated.snapshot.manifest.targets
+        .filter((target) => target.name === 'claude' || target.name === 'plugin')
+        .map((target) => validateClaudePlugin({
+          pluginDirectory: join(artifact, target.name),
+          strict: options.strict,
+          target: target.name,
+        })));
+      return Object.freeze({
+        diagnostics: freezeDiagnostics([
+          ...validated.diagnostics,
+          ...reports.flatMap((report) => report.diagnostics),
+        ]),
+        ...(reports.length === 0 ? {} : { hostValidation: Object.freeze(reports) }),
+      });
+    }
     return Object.freeze({
       diagnostics: freezeDiagnostics(await validateArtifact({ artifactRoot: artifact, registry: registryFor(options) })),
     });

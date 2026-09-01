@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +12,11 @@ const enabledHosts = [
   ...(process.env.AGENT_BUNDLE_PACKED_NATIVE_CODEX_SMOKE === '1' ? ['codex' as const] : []),
 ];
 const nativeIt = enabledHosts.length === 0 ? it.skip : it;
+const claudePluginIt = spawnSync('claude', ['--version'], {
+  stdio: 'ignore',
+  timeout: 5_000,
+  windowsHide: true,
+}).status === 0 ? it : it.skip;
 
 it('requires a host-specific opt-in and keeps the canonical Claude model pinned', async () => {
   const harness = await loadPackedNativeSmoke();
@@ -161,6 +167,19 @@ it('opaquely detects default ~/.claude.json mutation without extending custom co
     ]);
   }
 });
+
+claudePluginIt('builds, strictly validates, and smoke-loads a packed Claude artifact', async () => {
+  const harness = await loadPackedNativeSmoke();
+  expect(harness).toBeDefined();
+
+  await expect(harness!.runPackedClaudePluginProof({ environment: process.env })).resolves.toEqual({
+    host: 'claude',
+    registration: 'observed',
+    status: 'passed',
+    strictValidation: 'passed',
+    version: expect.stringMatching(/^\d+\.\d+\.\d+$/u),
+  });
+}, 600_000);
 
 nativeIt('runs opted-in authored Eval hosts through one production-only packed installation', async () => {
   const harness = await loadPackedNativeSmoke();

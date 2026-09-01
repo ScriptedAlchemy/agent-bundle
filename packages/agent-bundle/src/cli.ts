@@ -43,13 +43,17 @@ export interface CliDependencies {
   /** Injectable only to make foreground shutdown behavior deterministic in tests. */
   readonly signals?: CliSignalSource;
   readonly startDevServer?: typeof startDevServer;
+  /** Injectable only to verify host-validation CLI policy without an installed host. */
+  readonly validate?: typeof validate;
 }
 
 interface SourceCommandOptions {
   readonly config?: string;
+  readonly hostValidation?: boolean;
   readonly json?: boolean;
   readonly mode?: string;
   readonly root: string;
+  readonly strict?: boolean;
   readonly target?: readonly string[];
 }
 
@@ -365,10 +369,19 @@ export const runCli = async (
 
   const validateCommand = configureSourceOptions(
     program.command('validate').description('Validate project source or one artifact'),
-  ).option('--artifact <path>', 'Validate exactly this built artifact');
+  )
+    .option('--artifact <path>', 'Validate exactly this built artifact')
+    .option('--host-validation', 'Run installed host developer tools for compatible built targets', true)
+    .option('--no-host-validation', 'Skip installed host developer tools')
+    .option('--strict', 'Promote host-tool warnings to errors');
   validateCommand.action(async (options: SourceCommandOptions & { readonly artifact?: string }) => {
     const { validate } = await import('./api.ts');
-    const result = await validate({ ...projectOptions(options), artifact: options.artifact });
+    const result = await (dependencies.validate ?? validate)({
+      ...projectOptions(options),
+      artifact: options.artifact,
+      hostValidation: options.hostValidation,
+      strict: options.strict,
+    });
     if (result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
       throw new DiagnosticError(result.diagnostics);
     }
