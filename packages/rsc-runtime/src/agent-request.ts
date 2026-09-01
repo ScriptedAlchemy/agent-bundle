@@ -128,8 +128,15 @@ export class AgentRequestError extends Error {
 }
 
 const freezeValue = <T>(value: T): T => {
-  if (value !== null && typeof value === 'object') {
-    return Object.freeze(value) as T;
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((item) => freezeValue(item))) as T;
+  }
+  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const copy: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      copy[key] = freezeValue(nested);
+    }
+    return Object.freeze(copy) as T;
   }
   return value;
 };

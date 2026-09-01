@@ -88,6 +88,40 @@ describe('agent request store', () => {
     });
   });
 
+  it('snapshots nested capability lists so caller mutation cannot leak into the request', async () => {
+    const roots = ['/tmp/project'];
+    const allow = ['example.test'];
+    await runAgentRequest({
+      capabilities: {
+        command: unavailable(),
+        filesystem: available({ roots }, 'native'),
+        network: available({ allow }, 'native'),
+        projectRoot: unavailable(),
+      },
+      invocation: { kind: 'tool' },
+    }, async () => {
+      roots.push('/tmp/other');
+      allow.push('evil.test');
+      const context = await agent();
+      expect(context.capabilities.filesystem).toEqual({
+        source: 'native',
+        state: 'available',
+        value: { roots: ['/tmp/project'] },
+      });
+      expect(context.capabilities.network).toEqual({
+        source: 'native',
+        state: 'available',
+        value: { allow: ['example.test'] },
+      });
+      if (context.capabilities.filesystem.state === 'available') {
+        expect(Object.isFrozen(context.capabilities.filesystem.value.roots)).toBe(true);
+      }
+      if (context.capabilities.network.state === 'available') {
+        expect(Object.isFrozen(context.capabilities.network.value.allow)).toBe(true);
+      }
+    });
+  });
+
   it('isolates concurrent invocations including identities and provider values', async () => {
     const barrier = Promise.withResolvers<void>();
     const first = runAgentRequest({
