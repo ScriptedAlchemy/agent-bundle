@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/skill-hosts/cursor-skill-frontmatter.schema.json",
+  "title": "Cursor Skill frontmatter",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "description"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "description": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\S" },
+    "license": { "type": "string" },
+    "compatibility": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "metadata": { "type": "object", "additionalProperties": { "type": "string" } },
+    "allowed-tools": { "type": "string" },
+    "paths": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "disable-model-invocation": { "type": "boolean" },
+    "icon": { "type": "string" },
+    "color": {
+      "type": "string",
+      "enum": ["default", "green", "cyan", "blue", "purple", "magenta", "orange", "yellow", "red", "brand"]
+    },
+    "globs": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    }
+  }
+}

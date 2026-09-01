@@ -53,7 +53,36 @@ import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
+import type { SkillIr } from '../skills/ir.ts';
+import { decideSkillTreeLayout, lowerSkillIr, lowerSkillIrForHosts } from '../skills/lower.ts';
+import { parseSkillIr } from '../skills/parse-ir.ts';
+import type { SkillHost } from '../skills/tokens.ts';
 import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
+
+const isSkillHost = (name: string): name is SkillHost =>
+  name === 'claude' || name === 'codex' || name === 'cursor' || name === 'portable';
+
+const loweringHosts = (targetNames: readonly string[]): SkillHost[] => {
+  const hosts = new Set<SkillHost>();
+  for (const name of targetNames) {
+    if (name === 'plugin') {
+      hosts.add('claude');
+      hosts.add('codex');
+    } else if (isSkillHost(name)) {
+      hosts.add(name);
+    }
+  }
+  return [...hosts];
+};
+
+const pluginSharedDocument = (skillIr: SkillIr) => {
+  const claude = lowerSkillIr(skillIr, 'claude');
+  const codex = lowerSkillIr(skillIr, 'codex');
+  if (claude.passThrough && codex.passThrough && claude.skillMarkdown === codex.skillMarkdown) {
+    return claude;
+  }
+  return lowerSkillIr(skillIr, 'portable');
+};
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
 
@@ -886,6 +915,7 @@ export const normalizeProject = async (
     kind: 'config',
     sourcePath: loaded.configPath,
   };
+  const skillHosts = loweringHosts(targetNames);
   const skills: NormalizedSkill[] = discovered.skills.map((skill) => {
     const frontmatter = structuredClone(skill.frontmatter);
     const declaredName = frontmatter.name;
@@ -894,17 +924,25 @@ export const normalizeProject = async (
         ? declaredName
         : basename(skill.dir);
     const description = frontmatter.description;
+    const skillIr = parseSkillIr(skill);
+    const hostDocuments = {
+      ...lowerSkillIrForHosts(skillIr, skillHosts),
+      ...(targetNames.includes('plugin') ? { plugin: pluginSharedDocument(skillIr) } : {}),
+    };
 
     return {
       body: skill.body,
       ...(typeof description === 'string' ? { description } : {}),
       dir: skill.dir,
       frontmatter,
+      hostDocuments,
       id: `skill:${name}`,
       ...(skill.rendered === true ? { markdown: skill.markdown } : {}),
       name,
       provenance: skillProvenance(loaded, skill.source),
       resources: skill.resources.map((resource) => ({ ...resource })),
+      skillIr,
+      skillTreeLayout: decideSkillTreeLayout(hostDocuments),
       source: skill.source,
       targets: [...targetNames],
     };

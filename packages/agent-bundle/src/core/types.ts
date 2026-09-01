@@ -6,6 +6,7 @@ import type {
   CanonicalAgentEvent,
 } from '../routes/public.ts';
 import type { CompiledAgentRoute, CompiledCliCommand } from '../routes/types.ts';
+import type { SkillHostDocument, SkillIr, SkillTreeLayoutDecision } from '../skills/ir.ts';
 import type { CapabilityState } from './capabilities.ts';
 
 export interface AgentBundlePluginConfig {
@@ -299,6 +300,11 @@ export interface NormalizedSkill {
   readonly description?: string;
   readonly dir: string;
   readonly frontmatter: Readonly<Record<string, unknown>>;
+  /**
+   * Per-host lowered Skill documents. The artifact planner emits these
+   * instead of the authored bytes when `passThrough` is false.
+   */
+  readonly hostDocuments?: Readonly<Record<string, SkillHostDocument>>;
   readonly id: string;
   /**
    * The compiled SKILL.md document of a rendered skill (`SKILL.tsx`
@@ -309,6 +315,8 @@ export interface NormalizedSkill {
   readonly name: string;
   readonly provenance: SourceProvenance;
   readonly resources: readonly NormalizedSkillResource[];
+  readonly skillIr?: SkillIr;
+  readonly skillTreeLayout?: SkillTreeLayoutDecision;
   readonly source: string;
   readonly targets: readonly string[];
 }

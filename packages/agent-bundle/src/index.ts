@@ -4,6 +4,21 @@ import type { PortableConfigExtension } from './adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts';
 
 export { defineConfig, pathTokens, pluginRootEnvAnchor } from './core/types.ts';
+export { defineSkill, Skill } from './skills/define.ts';
+export {
+  classifySkillToken,
+  skillTokenSpellings,
+} from './skills/tokens.ts';
+export type {
+  ClaudeSkillExtension,
+  CodexSkillExtension,
+  CursorSkillExtension,
+  DefinedSkill,
+  SkillHost,
+  SkillIr,
+  SkillTokenId,
+  SkillTreeLayoutDecision,
+} from './skills/index.ts';
 export { canonicalAgentEvents } from './routes/public.ts';
 export type {
   AgentEventCanonicalIdentity,

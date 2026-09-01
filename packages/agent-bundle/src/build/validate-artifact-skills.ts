@@ -6,6 +6,10 @@ import { parseSkillMarkdown, referencedResources } from '../config/skill-referen
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
 import {
+  validateClaudeSkillFrontmatter,
+  validateCursorSkillFrontmatter,
+} from '../schemas/skill-hosts/contract.ts';
+import {
   artifactDiagnostic as diagnostic,
   artifactDiagnosticRecoveries,
 } from './artifact-diagnostics.ts';
@@ -142,7 +146,12 @@ export const validateEmittedSkills = async (options: {
       continue;
     }
 
-    for (const issue of validateAgentSkillsFrontmatter(parsed.frontmatter)) {
+    const frontmatterIssues = skill.target === 'claude'
+      ? validateClaudeSkillFrontmatter(parsed.frontmatter)
+      : skill.target === 'cursor'
+        ? validateCursorSkillFrontmatter(parsed.frontmatter)
+        : validateAgentSkillsFrontmatter(parsed.frontmatter);
+    for (const issue of frontmatterIssues) {
       const location = issue.field ?? (issue.instancePath === '' ? 'root' : issue.instancePath);
       diagnostics.push(diagnostic(
         'AB6015',

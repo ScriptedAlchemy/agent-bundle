@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/skill-hosts/claude-skill-frontmatter.schema.json",
+  "title": "Claude Code Skill frontmatter",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "description"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "description": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\S" },
+    "license": { "type": "string" },
+    "compatibility": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "metadata": { "type": "object", "additionalProperties": { "type": "string" } },
+    "allowed-tools": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "when_to_use": { "type": "string" },
+    "argument-hint": { "type": "string" },
+    "arguments": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "disable-model-invocation": { "type": "boolean" },
+    "user-invocable": { "type": "boolean" },
+    "disallowed-tools": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "model": { "type": "string", "minLength": 1 },
+    "effort": { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max"] },
+    "context": { "type": "string", "const": "fork" },
+    "agent": { "type": "string" },
+    "background": { "type": "boolean" },
+    "hooks": { "type": "object" },
+    "paths": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "shell": { "type": "string", "enum": ["bash", "powershell"] }
+  }
+}

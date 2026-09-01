@@ -13,6 +13,11 @@ export type { LoadedConfig, LoadConfigOptions } from './load.ts';
 export { normalizeProject } from './normalize.ts';
 export { parseSkill } from './skill.ts';
 export type { SkillDocument, SkillResource } from './skill.ts';
+export { defineSkill, Skill } from '../skills/define.ts';
+export { inspectSkillProjection } from '../skills/inspect.ts';
+export { parseSkillIr } from '../skills/parse-ir.ts';
+export { lowerSkillIr } from '../skills/lower.ts';
+export type { SkillIr, SkillHostDocument, SkillTreeLayoutDecision } from '../skills/ir.ts';
 export { validateModel, validateSource } from './validate.ts';
 export type AgentBundleConfig = CoreAgentBundleConfig
   & ClaudeConfigExtension
