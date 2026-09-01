@@ -1,4 +1,4 @@
-import { Duration, Effect, Option, Queue, Stream, type Scope } from 'effect';
+import { Deferred, Duration, Effect, Exit, Option, Queue, Stream, type Scope } from 'effect';
 import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { createFromReadableStream } from 'react-server-dom-rspack/client.node';
 
@@ -18,6 +18,7 @@ import { decodeAgentDocument } from './decode-document.js';
 import {
   abortToInterrupt,
   isAbortError,
+  mapCause,
   runPromise,
   scopedAbortSignal,
   streamToReadableStream,
@@ -353,6 +354,7 @@ const reconcileLoopStream = (
   ids: Map<string, string>,
   initial: TreeSnapshot,
   limits: Partial<AgentRenderLimits> | undefined,
+  flightDone: Deferred.Deferred<void, Error>,
   progressInputs: Queue.Queue<AgentRenderEventInput>,
   sequence: AgentRenderEventSequence,
 ): Stream.Stream<AgentRenderEventInput, Error> =>
@@ -363,7 +365,8 @@ const reconcileLoopStream = (
       Error
     > => {
       if (snapshot.pending.length === 0) {
-        return Queue.clear(progressInputs).pipe(
+        return Deferred.await(flightDone).pipe(
+          Effect.andThen(Queue.clear(progressInputs)),
           Effect.flatMap((queued) =>
             Effect.try({
               catch: (error) => toRuntimeError(error),
@@ -412,14 +415,28 @@ const reconcileLoopStream = (
 const gatedFlightStream = (
   flight: ReadableStream<Uint8Array>,
   demand: FlightDemand,
+  flightDone: Deferred.Deferred<void, Error>,
 ): Stream.Stream<Uint8Array, Error> =>
   Stream.unwrap(
     Effect.gen(function*() {
       const reader = yield* Effect.acquireRelease(
         Effect.sync(() => flight.getReader()),
-        // cancel() rejects when the source already errored; a defect inside
-        // this closing scope must not replace the stream's own failure.
-        (handle) => Effect.promise(() => handle.cancel().then(() => undefined, () => undefined)),
+        (handle, exit) => Effect.gen(function*() {
+          const cancelExit = yield* Effect.exit(Effect.tryPromise({
+            catch: (error) => toRuntimeError(error),
+            try: () => handle.cancel(),
+          }));
+          if (Exit.isFailure(exit)) {
+            yield* Deferred.fail(flightDone, mapCause(exit.cause));
+            return;
+          }
+          if (Exit.isFailure(cancelExit)) {
+            const error = mapCause(cancelExit.cause);
+            yield* Deferred.fail(flightDone, error);
+            return yield* Effect.die(error);
+          }
+          yield* Deferred.succeed(flightDone, undefined);
+        }),
       );
       return Stream.unfold(undefined, () =>
         demand.wait.pipe(
@@ -439,6 +456,7 @@ const decodeFlightRoot = (
   flight: ReadableStream<Uint8Array>,
   demand: FlightDemand,
   signal: AbortSignal,
+  flightDone: Deferred.Deferred<void, Error>,
 ): Effect.Effect<ReactNode, Error, Scope.Scope> =>
   Effect.gen(function*() {
     ensureAgentFlightManifest();
@@ -449,7 +467,7 @@ const decodeFlightRoot = (
     // (the maxEvents hang). The scoped signal interrupts the source stream
     // without touching the locked ReadableStream.
     const flightAbort = yield* scopedAbortSignal;
-    const readable = streamToReadableStream(gatedFlightStream(flight, demand), {
+    const readable = streamToReadableStream(gatedFlightStream(flight, demand, flightDone), {
       signal: flightAbort,
       strategy: { highWaterMark: 1 },
     });
@@ -521,6 +539,7 @@ export const createAgentRenderEventSession = (
   const events = Stream.unwrap(
     Effect.gen(function*() {
       const progressInputs = yield* Queue.bounded<AgentRenderEventInput>(0);
+      const flightDone = yield* Deferred.make<void, Error>();
       const bindProgress = (): void => {
         offerProgress = (input) =>
           Queue.offer(progressInputs, input).pipe(
@@ -541,7 +560,7 @@ export const createAgentRenderEventSession = (
           try: () => options.flight,
         });
         if (options.signal.aborted) return yield* Effect.fail(abortError());
-        const root = yield* decodeFlightRoot(flight, options.demand, options.signal);
+        const root = yield* decodeFlightRoot(flight, options.demand, options.signal, flightDone);
         if (options.signal.aborted) return yield* Effect.fail(abortError());
         const prepared = yield* Effect.try({
           catch: (error) => toRuntimeError(error),
@@ -566,21 +585,24 @@ export const createAgentRenderEventSession = (
             prepared.ids,
             prepared.initial,
             options.limits,
+            flightDone,
             progressInputs,
             sequence,
           ),
         ).pipe(
           Stream.mapEffect((input) => emitBoundRenderEvent(sequence, input)),
           Stream.tap((event) => (event.type === 'shell' ? options.demand.markShell : Effect.void)),
-          Stream.tapError((error) => Effect.sync(() => {
-            progressFailure = error;
-          })),
           Stream.takeUntil((event) => event.type === 'complete'),
-          Stream.ensuring(Effect.suspend(() => finalizeProgress(progressFailure ?? handoffRequired()))),
+          Stream.onExit((exit) => {
+            if (Exit.isSuccess(exit)) return finalizeProgress(handoffRequired());
+            const error = mapCause(exit.cause);
+            return finalizeProgress(sequence.completed && isAbortError(error) ? handoffRequired() : error);
+          }),
         );
       });
       return yield* setup.pipe(
-        Effect.catch((error) => finalizeProgress(error).pipe(Effect.andThen(Effect.fail(error)))),
+        Effect.onExit((exit) =>
+          Exit.isFailure(exit) ? finalizeProgress(mapCause(exit.cause)) : Effect.void),
       );
     }),
   );
