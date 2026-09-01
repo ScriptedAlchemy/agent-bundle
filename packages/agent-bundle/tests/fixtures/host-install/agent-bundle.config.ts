@@ -1,0 +1,18 @@
+export default {
+  hooks: {
+    sessionStart: { handler: './src/hooks/session-start.ts' },
+  },
+  marketplace: true,
+  mcp: {
+    servers: {
+      probe: {},
+    },
+  },
+  plugin: {
+    description: 'Proves real host installation of Skills, Hooks, and MCP metadata.',
+    name: 'host-install-proof',
+    version: '1.0.0',
+  },
+  skills: ['skills/probe'],
+  targets: ['claude', 'codex', 'cursor'],
+};

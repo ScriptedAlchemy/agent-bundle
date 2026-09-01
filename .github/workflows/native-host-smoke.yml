@@ -51,3 +51,6 @@ jobs:
       - name: ${{ matrix.host }} installed-tarball native smoke
         if: inputs.host == 'both' || inputs.host == matrix.host
         run: ${{ matrix.packed_command }}
+      - name: ${{ matrix.host }} real host install proof
+        if: inputs.host == 'both' || inputs.host == matrix.host
+        run: pnpm test:host-install

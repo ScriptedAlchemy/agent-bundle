@@ -3,9 +3,10 @@
   "install": {
     "evidence": [
       "Local marketplaces accept a directory containing .claude-plugin/marketplace.json.",
-      "claude plugin install accepts plugin@marketplace and user, project, or local scope."
+      "claude plugin install accepts plugin@marketplace and user, project, or local scope.",
+      "2026-09-01: Claude Code 2.1.257 rejects a bare `.` marketplace source but accepts `./` and absolute directory paths."
     ],
-    "marketplaceAdd": "claude plugin marketplace add .",
+    "marketplaceAdd": "claude plugin marketplace add ./",
     "pluginInstall": "claude plugin install <plugin>@<marketplace> --scope <scope>",
     "scopes": ["user", "project", "local"],
     "source": "https://code.claude.com/docs/en/discover-plugins",

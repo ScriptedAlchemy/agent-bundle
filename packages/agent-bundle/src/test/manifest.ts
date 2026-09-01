@@ -28,15 +28,17 @@ import type {
  *   resolution, argv projection, and exit codes, not a spawned binary.
  * - `packed-stdio` installs the packed release tarball into a clean consumer,
  *   spawns the generated stdio entry as a real process, and drives it with a
- *   real MCP client. This is the only level here that is process evidence.
+ *   real MCP client. This is the packed process-and-protocol evidence level.
  * - `packed-deleted-source` carries the `packed-stdio` proof after project
  *   source and configuration have been removed and verified absent. It proves
  *   that the generated entry is self-contained; it does not prove native-host
  *   install or dispatch, or an install mode that copies the artifact elsewhere.
- *
  * - `browser-app` compiles MCP App HTML through the production Rsbuild
  *   profile and mounts it over the product bridge in a real browser page. It
  *   does not prove host embedding, a packed artifact, or Workbench behavior.
+ * - `host-install` installs a built bundle into an isolated real host home
+ *   through the public install path and observes registration through the
+ *   host's own CLI. It does not prove session behavior or packed provenance.
  */
 export type AgentTestProofLevel =
   | 'route-unit'
@@ -44,7 +46,8 @@ export type AgentTestProofLevel =
   | 'cli-dispatch'
   | 'packed-stdio'
   | 'packed-deleted-source'
-  | 'browser-app';
+  | 'browser-app'
+  | 'host-install';
 
 export const ROUTE_UNIT_PROOF_LEVEL = 'route-unit' as const;
 export const MCP_IN_MEMORY_PROOF_LEVEL = 'mcp-in-memory' as const;
@@ -52,6 +55,7 @@ export const CLI_DISPATCH_PROOF_LEVEL = 'cli-dispatch' as const;
 export const PACKED_STDIO_PROOF_LEVEL = 'packed-stdio' as const;
 export const PACKED_DELETED_SOURCE_PROOF_LEVEL = 'packed-deleted-source' as const;
 export const BROWSER_APP_PROOF_LEVEL = 'browser-app' as const;
+export const HOST_INSTALL_PROOF_LEVEL = 'host-install' as const;
 
 /**
  * One line per level, printed in every harness failure. A red test has to
@@ -72,6 +76,8 @@ export const proofLevelLabel = (level: AgentTestProofLevel): string => {
       return 'packed-deleted-source (packed tarball installed into a clean consumer, artifact built, project source removed and verified absent, generated stdio entry spawned as a real process; self-contained-artifact evidence)';
     case 'browser-app':
       return 'browser-app (MCP App HTML compiled through the production Rsbuild profile, mounted in a real browser page over the product bridge; NOT host embedding, packed-artifact, or Workbench evidence)';
+    case 'host-install':
+      return 'host-install (built bundle installed into an isolated real host home through the public install path, registration observed via the host\'s own CLI; NOT session-behavior or packed-artifact evidence)';
     default: {
       const exhaustive: never = level;
       throw new TypeError(`Unknown proof level ${String(exhaustive)}.`);

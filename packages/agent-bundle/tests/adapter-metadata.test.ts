@@ -75,7 +75,7 @@ it('records exact immutable metadata for every built-in target', () => {
   expect(registryMetadata(registry, 'codex')).toEqual({
     adapterRevision: '1.2.0',
     capabilityRevision: '0.147.0',
-    capabilitySha256: 'd944e508941a0660272a253601019957ae94e9140501f0624f85d111e66d9f28',
+    capabilitySha256: 'bb0a685d680ffd95c468acfcf2fc20dc8fec672ea718f3dd1934fccad3b726c5',
     observedVersion: '0.147.0',
     schemas: [
       {
@@ -103,7 +103,7 @@ it('records exact immutable metadata for every built-in target', () => {
   expect(registryMetadata(registry, 'claude')).toEqual({
     adapterRevision: '1.5.0',
     capabilityRevision: '2.1.250',
-    capabilitySha256: '553ebbec4bb16b6e075489fab6c31b11ce84870466710da98e2389659842090e',
+    capabilitySha256: 'd78b76bda7020f7ea64d332c50d73f7ba3213ef69731835d474383ea6ef46612',
     observedVersion: '2.1.250',
     schemas: [
       {

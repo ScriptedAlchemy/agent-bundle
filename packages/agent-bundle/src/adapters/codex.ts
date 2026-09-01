@@ -122,7 +122,7 @@ const hookContract = Object.freeze({
 const metadata = Object.freeze({
   adapterRevision: '1.2.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'd944e508941a0660272a253601019957ae94e9140501f0624f85d111e66d9f28',
+  capabilitySha256: 'bb0a685d680ffd95c468acfcf2fc20dc8fec672ea718f3dd1934fccad3b726c5',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });

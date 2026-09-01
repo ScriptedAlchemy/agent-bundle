@@ -277,6 +277,7 @@ is never a receipt for another.
 | `cli-dispatch` | `invokeCli`, `cliJson` | an argv vector resolved and run through the routed CLI's own shell, in-process |
 | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })` | the packed stdio process still runs after project source and configuration are removed and verified absent |
+| `host-install` | repository real-host install proof | a built bundle installed into an isolated real host home through the public install path, with registration observed through the host's own CLI |
 
 ```ts
 import { cliJson, expectEvents, invokeCli, invokeMcpTool } from 'agent-bundle/test';
@@ -303,7 +304,9 @@ once, build once, remove and verify source once, spawn once, and iterate every
 per-route assertion inside that one session. The deleted-source journey also
 reads the embedded MCP App resource from the generated server; it does not
 prove native-host install or dispatch, or an install mode that copies the
-artifact elsewhere.
+artifact elsewhere. `host-install` is separate real-host process evidence for
+built-bundle acceptance and registration, not packed provenance or session
+behavior.
 
 ## Evaluation
 

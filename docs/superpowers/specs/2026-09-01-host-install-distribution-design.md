@@ -17,9 +17,9 @@ which real hosts can consume them.
 Pinned capability tables record an `install` section beside each host's plugin
 contract:
 
-- Claude: `claude plugin marketplace add .`, then
+- Claude: `claude plugin marketplace add ./`, then
   `claude plugin install <plugin>@<marketplace> --scope <scope>`.
-- Codex: `codex plugin marketplace add .`, then
+- Codex: `codex plugin marketplace add ./`, then
   `codex plugin add <plugin>@<marketplace>`.
 - Cursor: no shell install verb; copy a complete plugin to
   `~/.cursor/plugins/local/<plugin>`, then reload Cursor.
@@ -34,7 +34,7 @@ against a built directory.
 
 ## Emitted surface
 
-Every target root contains `INSTALL.md`. Commands use `.` and the real compiled
+Every target root contains `INSTALL.md`. Commands use `./` and the real compiled
 plugin and marketplace names, so a user runs them from that target root without
 editing placeholders.
 
