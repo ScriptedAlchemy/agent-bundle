@@ -132,6 +132,31 @@ export const makeScopedEffectRuntime = <R, E>(
 };
 
 /**
+ * Host AbortSignal → Effect interruption. Re-checks `signal.aborted` when
+ * the effect starts (not only when this helper is constructed) so a signal
+ * that aborts between construction and run still interrupts. The listener
+ * is registered first; aborted signals do not replay `abort`, so the
+ * callback rechecks immediately after `addEventListener`.
+ */
+export const abortToInterrupt = (signal: AbortSignal): Effect.Effect<never> =>
+  Effect.suspend(() => {
+    if (signal.aborted) return interruptAs();
+    return Effect.callback<never>((resume) => {
+      let settled = false;
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        resume(Effect.interrupt);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      return Effect.sync(() => {
+        signal.removeEventListener('abort', onAbort);
+      });
+    });
+  });
+
+/**
  * AbortSignal → Effect interruption, for programs that still run inside
  * Effect and receive a host signal. The Promise edge also accepts `signal`
  * directly via {@link runPromise}.
@@ -139,21 +164,7 @@ export const makeScopedEffectRuntime = <R, E>(
 export const interruptWhenAborted = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   signal: AbortSignal,
-): Effect.Effect<A, E, R> => {
-  if (signal.aborted) return interruptAs();
-  return Effect.raceFirst(
-    effect,
-    Effect.callback<never>((resume) => {
-      const onAbort = () => {
-        resume(Effect.interrupt);
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-      return Effect.sync(() => {
-        signal.removeEventListener('abort', onAbort);
-      });
-    }),
-  );
-};
+): Effect.Effect<A, E, R> => Effect.raceFirst(effect, abortToInterrupt(signal));
 
 /**
  * Effect interruption → AbortSignal, for Promise/fetch APIs that take a

@@ -19,6 +19,8 @@ const RUN_NAMES = new Set([
 ]);
 
 const EFFECT_MODULES = new Set(['effect']);
+const EFFECT_NAMESPACES = new Set(['Effect', 'Runtime']);
+const EFFECT_NAMESPACE_MODULES = new Set(['effect', 'effect/Effect', 'effect/Runtime']);
 
 const posixPath = (filename: string): string => filename.replaceAll('\\', '/');
 
@@ -33,8 +35,14 @@ const importedName = (node: {
   return imported.name;
 };
 
+const localName = (node: { readonly local?: { readonly name?: string } }): string | undefined =>
+  node.local?.name;
+
 const moduleName = (node: { readonly source?: { readonly value?: unknown } }): string | undefined =>
   typeof node.source?.value === 'string' ? node.source.value : undefined;
+
+const isEffectModule = (source: string | undefined): boolean =>
+  source !== undefined && (EFFECT_MODULES.has(source) || source.startsWith('effect/'));
 
 export const effectBoundaryPlugin = {
   meta: {
@@ -60,7 +68,31 @@ export const effectBoundaryPlugin = {
         report(descriptor: { readonly node: unknown; readonly messageId: string; readonly data: { readonly name: string } }): void;
       }) {
         if (isEffectBoundaryFile(context.filename)) return {};
+        const runnerNamespaces = new Set<string>(EFFECT_NAMESPACES);
+        const rememberNamespace = (name: string | undefined): void => {
+          if (name !== undefined) runnerNamespaces.add(name);
+        };
         return {
+          ImportSpecifier(node: {
+            readonly imported?: { readonly name?: string };
+            readonly local?: { readonly name?: string };
+            readonly parent?: { readonly source?: { readonly value?: unknown } };
+          }) {
+            const name = importedName(node);
+            const source = moduleName(node.parent ?? {});
+            if (!isEffectModule(source) || name === undefined) return;
+            if (EFFECT_NAMESPACES.has(name)) rememberNamespace(localName(node) ?? name);
+            if (!RUN_NAMES.has(name)) return;
+            context.report({ data: { name }, messageId: 'forbiddenImport', node });
+          },
+          ImportNamespaceSpecifier(node: {
+            readonly local?: { readonly name?: string };
+            readonly parent?: { readonly source?: { readonly value?: unknown } };
+          }) {
+            const source = moduleName(node.parent ?? {});
+            if (source === undefined || !EFFECT_NAMESPACE_MODULES.has(source)) return;
+            rememberNamespace(localName(node));
+          },
           MemberExpression(node: {
             readonly computed?: boolean;
             readonly object?: { readonly name?: string; readonly type?: string };
@@ -70,18 +102,8 @@ export const effectBoundaryPlugin = {
             const name = node.property?.name;
             if (name === undefined || !RUN_NAMES.has(name)) return;
             const objectName = node.object?.name;
-            if (objectName !== 'Effect' && objectName !== 'Runtime') return;
+            if (objectName === undefined || !runnerNamespaces.has(objectName)) return;
             context.report({ data: { name: `${objectName}.${name}` }, messageId: 'forbiddenCall', node });
-          },
-          ImportSpecifier(node: {
-            readonly imported?: { readonly name?: string };
-            readonly parent?: { readonly source?: { readonly value?: unknown } };
-          }) {
-            const name = importedName(node);
-            if (name === undefined || !RUN_NAMES.has(name)) return;
-            const source = moduleName(node.parent ?? {});
-            if (source === undefined || (!EFFECT_MODULES.has(source) && !source.startsWith('effect/'))) return;
-            context.report({ data: { name }, messageId: 'forbiddenImport', node });
           },
         };
       },
