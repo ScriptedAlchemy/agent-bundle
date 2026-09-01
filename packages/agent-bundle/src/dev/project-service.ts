@@ -15,6 +15,7 @@ import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from 
 import { digest } from '../core/digest.ts';
 import {
   createProjectContext,
+  snapshotPackageIdentity,
   type ProjectContext,
   type ProjectSourceSnapshotInput,
 } from '../core/project-context.ts';
@@ -308,11 +309,24 @@ const snapshotForLoadFailure = async (
   }
 };
 
+/** The derived identity axes a source status carries, when present. */
+const sourceIdentity = (
+  root: string,
+): Readonly<{ readonly packageName?: string; readonly packageVersion?: string }> => {
+  const identity = snapshotPackageIdentity(root);
+  return Object.freeze({
+    ...(identity.packageName === undefined ? {} : { packageName: identity.packageName }),
+    ...(identity.packageVersion === undefined ? {} : { packageVersion: identity.packageVersion }),
+  });
+};
+
 const sourceStatus = (
   diagnostics: readonly Diagnostic[],
   revision: string,
+  root: string,
 ): SourceStatus => Object.freeze({
   diagnostics,
+  ...sourceIdentity(root),
   revision,
   state: hasErrors(diagnostics) ? 'invalid' : 'ready',
 });
@@ -591,7 +605,7 @@ const invalidPreparedProject = (options: {
     undefined,
     options.registry,
     options.root,
-    sourceStatus(options.diagnostics, snapshot.revision),
+    sourceStatus(options.diagnostics, snapshot.revision, options.root),
     // A failed preparation never resolved its payload roots; the re-snapshot
     // observes the same source tree the failure snapshot did.
     () => snapshotProjectSource(options.root, options.configPath, options.outputRoots),
@@ -737,7 +751,7 @@ export class ProjectService {
     const snapshotSource = (): Promise<ProjectSourceSnapshot> =>
       snapshotProjectSource(root, loaded.configPath, outputRoots, payloadRoots);
     if (hasErrors(sourceDiagnostics)) {
-      const source = sourceStatus(sourceDiagnostics, snapshot.revision);
+      const source = sourceStatus(sourceDiagnostics, snapshot.revision, root);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
       return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source, snapshotSource);
     }
@@ -817,7 +831,7 @@ export class ProjectService {
         snapshot,
       );
     }
-    const source = sourceStatus(frozenDiagnostics, snapshot.revision);
+    const source = sourceStatus(frozenDiagnostics, snapshot.revision, root);
     log(this.#options.logger, 'project.prepared', {
       diagnostics: frozenDiagnostics.length,
       root,

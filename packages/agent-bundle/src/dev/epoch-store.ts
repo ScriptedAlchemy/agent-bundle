@@ -141,6 +141,7 @@ const artifactEpochKeys = [
   'projectRevision',
   'targetDigests',
 ] as const;
+const artifactEpochOptionalKeys = ['packageName', 'packageVersion'] as const;
 const epochDiagnosticsKeys = ['errors', 'infos', 'warnings'] as const;
 const epochReferenceCounts = new Map<string, number>();
 const epochLeaseQueues = new Map<string, ReturnType<typeof serialQueue>>();
@@ -148,6 +149,17 @@ const epochLeaseQueues = new Map<string, ReturnType<typeof serialQueue>>();
 const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
   const actual = Object.keys(value);
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+};
+
+/** Every required key present, every present key either required or optional. */
+const hasRequiredOwnKeys = (
+  value: object,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean => {
+  const allowed = new Set<string>([...required, ...optional]);
+  return required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => allowed.has(key));
 };
 
 const leaseQueueFor = (agentBundlePath: string): ReturnType<typeof serialQueue> => {
@@ -194,7 +206,7 @@ const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
     typeof value !== 'object' ||
     value === null ||
     Array.isArray(value) ||
-    !hasExactOwnKeys(value, artifactEpochKeys)
+    !hasRequiredOwnKeys(value, artifactEpochKeys, artifactEpochOptionalKeys)
   ) return undefined;
   const epoch = value as Partial<ArtifactEpoch>;
   const diagnostics = epoch.diagnostics;
@@ -205,6 +217,8 @@ const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
     typeof epoch.id !== 'string' ||
     typeof epoch.manifestPath !== 'string' ||
     typeof epoch.modelDigest !== 'string' ||
+    (epoch.packageName !== undefined && typeof epoch.packageName !== 'string') ||
+    (epoch.packageVersion !== undefined && typeof epoch.packageVersion !== 'string') ||
     typeof epoch.projectRevision !== 'string' ||
     typeof diagnostics !== 'object' ||
     diagnostics === null ||
@@ -241,6 +255,8 @@ const normalizeEpoch = (value: unknown): ArtifactEpoch | undefined => {
     id: epoch.id,
     manifestPath: epoch.manifestPath,
     modelDigest: epoch.modelDigest,
+    ...(epoch.packageName === undefined ? {} : { packageName: epoch.packageName }),
+    ...(epoch.packageVersion === undefined ? {} : { packageVersion: epoch.packageVersion }),
     projectRevision: epoch.projectRevision,
     targetDigests: Object.fromEntries(
       targetEntries.sort(([left], [right]) => left.localeCompare(right)),

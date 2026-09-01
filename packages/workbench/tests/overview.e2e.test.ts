@@ -311,7 +311,8 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       return (await response.json() as { readonly status: RuntimeStatus }).status;
     }, fixture.url);
     const initialProjectSource = await readProjectSource();
-    expect(initialProjectSource).toEqual({ diagnostics: [], revision: sourceRevision, state: 'ready' });
+    // Pin flip (#94 stages 1-2): source status now carries the package identity derived from package.json.
+    expect(initialProjectSource).toEqual({ diagnostics: [], packageName: '@agent-bundle/rsc-agent-runtime-demo', revision: sourceRevision, state: 'ready' });
     const expectRuntimeProfileInspection = async (preview: Locator, expectedSourceRevision: string): Promise<void> => {
       await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Portable MCP Apps');
       await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('agent-bundle:mcp-apps:2026-01-26');

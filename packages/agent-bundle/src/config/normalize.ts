@@ -11,6 +11,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
+import { snapshotPackageIdentity } from '../core/project-context.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { isPrebuiltEntryInput, parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
 import type {
@@ -773,6 +774,10 @@ export const normalizeProject = async (
     };
   });
   const description = loaded.config.plugin.description;
+  // The npm package axes are derived, never authored in config: package.json
+  // is authoritative for release identity (issue #94), while plugin.version
+  // remains the host-facing declared version during the migration.
+  const packageIdentity = snapshotPackageIdentity(loaded.context.projectRoot);
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
   const payloads = normalizePayloads(loaded, discovered, targetNames);
   const mcpServers = normalizeMcpServers(loaded, targetNames, payloads);
@@ -787,6 +792,8 @@ export const normalizeProject = async (
       ...(typeof description === 'string' ? { description } : {}),
       id: `plugin:${loaded.config.plugin.name}`,
       name: loaded.config.plugin.name,
+      ...(packageIdentity.packageName === undefined ? {} : { packageName: packageIdentity.packageName }),
+      ...(packageIdentity.packageVersion === undefined ? {} : { packageVersion: packageIdentity.packageVersion }),
       provenance: configProvenance,
       version: loaded.config.plugin.version,
     },
