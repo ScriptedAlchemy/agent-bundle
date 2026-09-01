@@ -17,3 +17,6 @@ export type {
   CompiledServerSurface,
   RouteProvenance,
 } from './types.ts';
+export { generateRouteTypes, routeTypesRelativePath, writeRouteTypes } from './typegen.ts';
+export { validateRouteModuleContract } from './contract.ts';
+export type { AppRouteConfig, PromptConfig, ResourceConfig, RouteSchema, RouteSchemaOutput, ToolConfig, ToolRouteProps } from './public.ts';

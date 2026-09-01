@@ -28,6 +28,8 @@ import type {
   NormalizedMcpServer,
   NormalizedPlugin,
 } from '../core/types.ts';
+import { emptyCompiledRouteGraph } from '../routes/graph.ts';
+import { writeRouteTypes } from '../routes/typegen.ts';
 import type { CompiledRouteGraph } from '../routes/types.ts';
 import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
@@ -814,6 +816,7 @@ export class ProjectService {
         discovered,
         registry,
       );
+      await writeRouteTypes(root, discovered.routeGraph ?? emptyCompiledRouteGraph);
     } catch (error) {
       if (isConfigExtensionFiniteJsonError(error)) {
         return failedPreparation(

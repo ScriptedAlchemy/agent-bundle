@@ -6,6 +6,7 @@ import fastGlob from 'fast-glob';
 
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
 import { extractRouteConfig } from './config-extract.ts';
+import { validateRouteModuleContract } from './contract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -478,6 +479,31 @@ export const compileRouteGraph = async (
         `Set routes.servers.${name} to generated to compile the routes, or to custom, command, or remote to keep the existing entry.`,
         conventionalEntry ?? routes[0]!.source,
       ));
+    }
+    if (mode === 'generated') {
+      for (const route of routes) {
+        if (route.kind === 'app') {
+          const resourceUri = route.config['resourceUri'];
+          if (typeof resourceUri !== 'string' || resourceUri.trim() === '') {
+            diagnostics.push(routeError(
+              'AB4812',
+              `MCP App route ${route.provenance.relativePath} requires a non-empty static config.resourceUri.`,
+              'Export const config with the App resourceUri, then inspect again.',
+              route.source,
+            ));
+          }
+          continue;
+        }
+        try {
+          diagnostics.push(...validateRouteModuleContract(
+            await readFile(route.source, 'utf8'),
+            route.provenance.relativePath,
+            route.source,
+          ));
+        } catch {
+          // Racing deletion is handled by the next source snapshot.
+        }
+      }
     }
     servers.push({
       id: `mcp:${name}`,

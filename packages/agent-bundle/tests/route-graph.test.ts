@@ -9,7 +9,8 @@ import { runCli } from '../src/cli.ts';
 import { discoverProject } from '../src/config/discover.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
 import { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from '../src/routes/graph.ts';
-import { emptyRouteConfig } from '../src/routes/types.ts';
+import * as routesModule from '../src/routes/index.ts';
+import { emptyRouteConfig, type CompiledRouteGraph } from '../src/routes/types.ts';
 
 const roots: string[] = [];
 
@@ -23,7 +24,7 @@ const createRoot = async (): Promise<string> => {
   return root;
 };
 
-const moduleSource = 'export default async () => undefined;\n';
+const moduleSource = 'export const inputSchema = {}; export const resultSchema = {}; export default async () => undefined;\n';
 
 const writeTree = async (root: string, files: Readonly<Record<string, string>>): Promise<void> => {
   for (const [path, contents] of Object.entries(files)) {
@@ -42,7 +43,7 @@ const conventionalTree: Readonly<Record<string, string>> = {
   'src/cli/doctor.tsx': moduleSource,
   'src/cli/library/audit.ts': moduleSource,
   'src/events/file/saved.tsx': moduleSource,
-  'src/mcp/curator/apps/dashboard.tsx': moduleSource,
+  'src/mcp/curator/apps/dashboard.tsx': `export const config = { resourceUri: 'ui://curator/dashboard.html' }; ${moduleSource}`,
   'src/mcp/curator/prompts/curate.tsx': moduleSource,
   'src/mcp/curator/resources/catalog.ts': moduleSource,
   'src/mcp/curator/tools/inspect.tsx': moduleSource,
@@ -107,7 +108,8 @@ it('compiles the conventional tree into one frozen graph with a machine-independ
   expect(Object.isFrozen(graph.servers)).toBe(true);
   expect(Object.isFrozen(curator!.routes[0])).toBe(true);
   expect(Object.isFrozen(graph.cli!.routes)).toBe(true);
-  expect(curator!.routes.every((route) => route.config === emptyRouteConfig)).toBe(true);
+  expect(curator!.routes.filter((route) => route.kind !== 'app').every((route) => route.config === emptyRouteConfig)).toBe(true);
+  expect(curator!.routes.find((route) => route.kind === 'app')?.config).toEqual({ resourceUri: 'ui://curator/dashboard.html' });
   expect(graph.events[0]!.config).toEqual({});
 
   // The digest covers relative identity only: the same tree in a different
@@ -433,4 +435,68 @@ it('covers the route config in the graph digest', async () => {
   const [left, sameAsLeft, right] = await Promise.all([withTitle('a'), withTitle('a'), withTitle('b')]);
   expect(left).toBe(sameAsLeft);
   expect(left).not.toBe(right);
+});
+
+
+it('generates deterministic route-specific types from the compiled graph', () => {
+  const generate = (routesModule as unknown as {
+    readonly generateRouteTypes?: (graph: CompiledRouteGraph) => string;
+  }).generateRouteTypes;
+  expect(typeof generate).toBe('function');
+  if (generate === undefined) return;
+
+  const graph: CompiledRouteGraph = {
+    diagnostics: [],
+    digest: 'typegen-digest',
+    events: [],
+    providers: [],
+    scripts: [],
+    servers: [{
+      id: 'mcp:curator',
+      mode: 'generated',
+      name: 'curator',
+      routes: [{
+        config: emptyRouteConfig,
+        id: 'tool:curator/inspect',
+        kind: 'tool',
+        provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+        serverId: 'mcp:curator',
+        source: '/workspace/project/src/mcp/curator/tools/inspect.tsx',
+      }],
+    }],
+  };
+  const first = generate(graph);
+  const second = generate(structuredClone(graph));
+
+  expect(second).toBe(first);
+  expect(first).toContain('import type * as route0 from "../src/mcp/curator/tools/inspect.js";');
+  expect(first).toContain('"tool:curator/inspect": RouteContract<typeof route0.inputSchema, typeof route0.resultSchema>;');
+  expect(first).toContain('export type RouteId = keyof AgentBundleRoutes;');
+});
+
+
+it('validates the single async route-module authoring contract statically', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/mcp/curator/tools/valid.tsx': [
+      'export const inputSchema = {};',
+      'export const resultSchema = {};',
+      'export default async function Valid() { return undefined; }',
+      '',
+    ].join('\n'),
+    'src/mcp/curator/tools/split.tsx': [
+      'export const resultSchema = {};',
+      'export const execute = async () => ({});',
+      'export const render = () => undefined;',
+      'export default function Split() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  expect(graph.diagnostics.filter((diagnostic) => diagnostic.sourcePath?.endsWith('valid.tsx'))).toEqual([]);
+  expect(graph.diagnostics.filter((diagnostic) => diagnostic.sourcePath?.endsWith('split.tsx')).map(({ code }) => code)).toEqual([
+    'AB4810',
+    'AB4811',
+  ]);
 });

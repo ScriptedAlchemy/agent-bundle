@@ -9,6 +9,8 @@ import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
 import {
   generatedExecutableEntrySource,
+  generatedRouteFlightWorkerSource,
+  generatedRouteMcpEntrySource,
   generatedStdioMcpEntrySource,
   mcpEntryRuntimePath,
   mcpEntryRuntimeSpecifier,
@@ -41,6 +43,8 @@ export interface CompiledHookEntry extends CompiledEntry {
 
 export interface CompiledMcpEntry extends CompiledEntry {
   readonly id: string;
+  readonly workerOutput?: string;
+  readonly workerSourceInputs?: readonly string[];
   readonly target: string;
 }
 
@@ -145,14 +149,23 @@ export const planCompiledMcpEntries = (
         throw new Error(`Duplicate compiled MCP destination ${JSON.stringify(`mcp/${outputName}`)}.`);
       }
       names.add(name);
+      const sourceInputs = Object.freeze([...new Set([
+        server.provenance.sourcePath,
+        server.source!,
+        ...(server.generatedRoutes ?? []).map((route) => route.source),
+      ])]);
       return Object.freeze({
         id: server.id,
         name,
         output: resolveArtifactDestination(resolve(options.outDir, 'mcp'), outputName),
         outputKind: 'bundle',
         source: server.source!,
-        sourceInputs: Object.freeze([server.provenance.sourcePath, server.source!]),
+        sourceInputs,
         target: options.target,
+        ...(server.generatedRoutes === undefined ? {} : {
+          workerOutput: resolveArtifactDestination(resolve(options.outDir, 'mcp'), `${name}-flight.mjs`),
+          workerSourceInputs: sourceInputs,
+        }),
       });
     }));
 };
@@ -163,6 +176,7 @@ export const compileMcpEntries = async (
     readonly apps?: readonly CompiledMcpApp[];
     readonly cwd: string;
     readonly outDir: string;
+    readonly plugin: { readonly name: string; readonly version: string };
     readonly target: string;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -185,42 +199,86 @@ export const compileMcpEntries = async (
       '',
     ].join('\n');
   }));
+  const routeModuleSpecifier = 'agent-bundle/generated-route-server';
+  const generatedRouteSources = compiled.map((entry) => {
+    const server = servers.find((candidate) => candidate.id === entry.id);
+    return server?.generatedRoutes === undefined
+      ? undefined
+      : generatedRouteMcpEntrySource({
+        plugin: options.plugin,
+        routes: server.generatedRoutes,
+        serverName: server.name,
+        workerFile: `${entry.name}-flight.mjs`,
+      });
+  });
+  const generatedWorkerSources = compiled.map((entry) => {
+    const server = servers.find((candidate) => candidate.id === entry.id);
+    return server?.generatedRoutes === undefined
+      ? undefined
+      : generatedRouteFlightWorkerSource({ routes: server.generatedRoutes, serverName: server.name });
+  });
   // Factory-exporting entries (default export) are wrapped in the framework
   // stdio lifecycle shell; self-connecting entries keep today's behavior byte
   // for byte. The shell is aliased onto the local runtime module so emitted
   // bundles stay self-contained (no residual `agent-bundle` import).
-  const entryShells = await Promise.all(compiled.map(async (entry) =>
-    (await scanEntryExports(entry.source)).hasDefaultExport
+  const entryShells = await Promise.all(compiled.map(async (entry, index) => {
+    if (generatedRouteSources[index] !== undefined) {
+      return generatedStdioMcpEntrySource({
+        entrySource: routeModuleSpecifier,
+        serverName: entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name,
+      });
+    }
+    return (await scanEntryExports(entry.source)).hasDefaultExport
       ? generatedStdioMcpEntrySource({
         entrySource: entry.source,
         serverName: entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name,
       })
-      : undefined));
+      : undefined;
+  }));
   const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
+  const mainEntries = compiled.map(({ id, name, source, sourceInputs }, index) => ({
+    ...(entryShells[index] === undefined || runtimeShell === undefined
+      ? {}
+      : {
+        aliases: { [mcpEntryRuntimeSpecifier]: runtimeShell },
+        virtualSource: entryShells[index],
+      }),
+    name,
+    outputRelativePath: `mcp/${name}.mjs`,
+    ...(generatedRouteSources[index] === undefined ? {} : { rscManifest: true as const }),
+    source,
+    sourceInputs: Object.freeze([
+      ...sourceInputs,
+      ...(options.apps ?? [])
+        .filter((app) => app.serverIds.includes(id))
+        .flatMap((app) => app.sourceInputs),
+    ]),
+    virtualModules: [
+      { name: 'agent-bundle/mcp-apps', source: virtualSources[index]! },
+      ...(generatedRouteSources[index] === undefined ? [] : [{
+        name: routeModuleSpecifier,
+        source: generatedRouteSources[index],
+      }]),
+    ],
+  }));
+  const workerEntries = compiled.flatMap((entry, index) => {
+    const workerSource = generatedWorkerSources[index];
+    if (workerSource === undefined) return [];
+    return [{
+      name: `${entry.name}-flight`,
+      outputRelativePath: `mcp/${entry.name}-flight.mjs`,
+      reactServer: true as const,
+      rscManifest: true as const,
+      source: entry.source,
+      sourceInputs: entry.sourceInputs,
+      virtualSource: workerSource,
+    }];
+  });
   const evidence = await buildWithRslib({
     cwd: options.cwd,
-    entries: compiled.map(({ id, name, source, sourceInputs }, index) => ({
-      ...(entryShells[index] === undefined || runtimeShell === undefined
-        ? {}
-        : {
-          aliases: { [mcpEntryRuntimeSpecifier]: runtimeShell },
-          virtualSource: entryShells[index],
-        }),
-      name,
-      outputRelativePath: `mcp/${name}.mjs`,
-      source,
-      sourceInputs: Object.freeze([
-        ...sourceInputs,
-        ...(options.apps ?? [])
-          .filter((app) => app.serverIds.includes(id))
-          .flatMap((app) => app.sourceInputs),
-      ]),
-      virtualModules: [{
-        name: 'agent-bundle/mcp-apps',
-        source: virtualSources[index]!,
-      }],
-    })),
+    entries: [...mainEntries, ...workerEntries],
     ...(runtimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeShell] }),
+    logLevel: 'error',
     outputRoot: options.outDir,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   });
@@ -228,6 +286,9 @@ export const compileMcpEntries = async (
   return Object.freeze(compiled.map((entry) => Object.freeze({
     ...entry,
     sourceInputs: evidenceByPath.get(`mcp/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled MCP evidence for ${JSON.stringify(entry.name)}.`); })(),
+    ...(entry.workerOutput === undefined ? {} : {
+      workerSourceInputs: evidenceByPath.get(`mcp/${entry.name}-flight.mjs`) ?? (() => { throw new Error(`Missing bundled MCP Flight worker evidence for ${JSON.stringify(entry.name)}.`); })(),
+    }),
   })));
 };
 

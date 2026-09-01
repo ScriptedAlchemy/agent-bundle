@@ -496,25 +496,46 @@ const normalizeMcpServer = (
 
 const normalizeMcpServers = (
   loaded: LoadedConfig,
+  discovered: DiscoveredProject,
   targetNames: readonly string[],
   payloads: readonly NormalizedPayload[],
 ): readonly NormalizedMcpServer[] => {
-  const servers = loaded.config.mcp?.servers;
-  if (servers === undefined) return [];
-
+  const configured = loaded.config.mcp?.servers ?? {};
+  const generated = new Map((discovered.routeGraph?.servers ?? [])
+    .filter((server) => server.mode === 'generated' && server.routes.length > 0)
+    .map((server) => [server.name, server]));
+  const names = sortedUnique([...Object.keys(configured), ...generated.keys()]);
   const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
-  return Object.entries(servers)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, server]) =>
-      normalizeMcpServer(name, server, loaded.context.projectRoot, targetNames, provenance, payloads));
+
+  return names.map((name) => {
+    const routeServer = generated.get(name);
+    if (routeServer === undefined) {
+      return normalizeMcpServer(name, configured[name]!, loaded.context.projectRoot, targetNames, provenance, payloads);
+    }
+    const declaration = configured[name] ?? {};
+    const source = routeServer.routes[0]!.source;
+    return {
+      ...(declaration.env === undefined ? {} : { env: { ...declaration.env } }),
+      args: [`mcp/${mcpEntryName(name)}`, ...(declaration.args ?? [])],
+      command: 'node',
+      cwd: pathTokens.pluginRoot,
+      generatedRoutes: routeServer.routes,
+      id: routeServer.id,
+      name,
+      provenance: { kind: 'conventional', sourcePath: source },
+      source,
+      targets: sortedUnique(declaration.targets ?? targetNames),
+      transport: 'stdio',
+    };
+  });
 };
 
 const normalizeMcpApps = (
   loaded: LoadedConfig,
+  discovered: DiscoveredProject,
   servers: readonly NormalizedMcpServer[],
 ): readonly NormalizedMcpApp[] => {
-  const configured = loaded.config.mcp?.servers;
-  if (configured === undefined) return [];
+  const configured = loaded.config.mcp?.servers ?? {};
   const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
   const serverByName = new Map(servers.map((server) => [server.name, server]));
   const apps: NormalizedMcpApp[] = [];
@@ -543,7 +564,37 @@ const normalizeMcpApps = (
     }
   }
 
-  return apps;
+  for (const surface of discovered.routeGraph?.servers ?? []) {
+    if (surface.mode !== 'generated') continue;
+    const server = serverByName.get(surface.name);
+    if (server === undefined) continue;
+    for (const route of surface.routes) {
+      if (route.kind !== 'app') continue;
+      const resourceUri = route.config['resourceUri'];
+      if (typeof resourceUri !== 'string' || resourceUri.trim() === '') continue;
+      const name = route.id.slice(route.id.lastIndexOf('/') + 1);
+      const declaredTargets = route.config['targets'];
+      const targets = Array.isArray(declaredTargets) && declaredTargets.every((target) => typeof target === 'string')
+        ? declaredTargets
+        : server.targets;
+      const metadata = route.config['_meta'];
+      const template = route.config['template'];
+      apps.push({
+        ...(isRecord(metadata) ? { _meta: structuredClone(metadata) } : {}),
+        id: `mcp-app:${surface.name}:${name}`,
+        name,
+        provenance: { kind: 'conventional', sourcePath: route.source },
+        resourceUri,
+        serverId: surface.id,
+        serverName: surface.name,
+        source: route.source,
+        targets: sortedUnique(targets),
+        ...(typeof template === 'string' ? { template: resolve(loaded.context.projectRoot, template) } : {}),
+      });
+    }
+  }
+
+  return apps.sort((left, right) => left.id.localeCompare(right.id));
 };
 
 const bundleExtensions = new Set([
@@ -783,7 +834,7 @@ export const normalizeProject = async (
   const packageIdentity = snapshotPackageIdentity(loaded.context.projectRoot);
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
   const payloads = normalizePayloads(loaded, discovered, targetNames);
-  const mcpServers = normalizeMcpServers(loaded, targetNames, payloads);
+  const mcpServers = normalizeMcpServers(loaded, discovered, targetNames, payloads);
   const scripts = normalizeScripts(loaded, discovered, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
   const packageBuild = normalizePackageBuild(loaded.config, loaded.context.projectRoot, loaded.configPath);
@@ -800,7 +851,7 @@ export const normalizeProject = async (
       provenance: configProvenance,
       version: loaded.config.plugin.version,
     },
-    mcpApps: normalizeMcpApps(loaded, mcpServers),
+    mcpApps: normalizeMcpApps(loaded, discovered, mcpServers),
     mcpServers,
     hooks: normalizeHooks(loaded, targetNames, registry, payloads),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),

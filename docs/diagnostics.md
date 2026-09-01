@@ -118,7 +118,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
-## Route graph (`AB4800`–`AB4809`)
+## Route graph (`AB4800`–`AB4812`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -141,6 +141,10 @@ optionally wrapped in unary `+`/`-`; `true`, `false`, and `null`; and
 accepted form. Anything else is dynamic: the route compiles with an empty
 config beside a named `AB4806` error. A module without a `config` export
 compiles silently with an empty config.
+Generated route declarations are published at `.agent-bundle/routes.d.ts` from
+the same graph. Development writes a sibling temporary file and renames it over
+the prior complete declaration atomically; invalid source retains the prior
+last-good file, while a successful route-free preparation removes it.
 
 Conventional `src/scripts/` routes ship through the same pipeline as
 explicit `scripts` entries (#102 stage 1): a plain module directly under
@@ -160,6 +164,9 @@ cannot ship yet are hard errors (`AB4807`–`AB4809`), never silent omissions.
 | `AB4807` | error | A conventional `src/scripts/` route is a rendered-script module (`.tsx`/`.jsx`); rendered scripts are not supported yet. Rename it to `.ts`, prefix a path segment with `_` to keep it private, or declare it under `scripts` in config to opt into plain bundling. |
 | `AB4808` | error | A conventional `src/scripts/` route nests below the scripts root; conventional scripts ship as direct children only. Move it up, prefix a path segment with `_`, or declare it under `scripts` in config with a flat name. |
 | `AB4809` | error | A conventional `src/scripts/` route and a configured `scripts` entry share one script identity through different files. Point the config entry at the module to claim it, or rename one of the two. |
+| `AB4810` | error | A generated MCP route is missing named `inputSchema`/`resultSchema` exports or its default export is not an async function component. |
+| `AB4811` | error | A generated MCP route exports `execute` or `render`; route mode accepts only the async default Server Component contract. |
+| `AB4812` | error | A generated MCP App route has no non-empty static `config.resourceUri`. |
 
 ## Development package build (`AB7103`)
 

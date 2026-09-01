@@ -898,3 +898,46 @@ it('keeps shippable conventional script routes free of stage-1 gate diagnostics'
 
   expect(diagnostics.filter(({ code }) => code.startsWith('AB48'))).toEqual([]);
 });
+
+
+const routeGraphWithGeneratedServer = (root: string): CompiledRouteGraph => {
+  const route: CompiledAgentRoute = {
+    config: { annotations: { readOnlyHint: true }, description: 'Inspect sources.' },
+    id: 'tool:curator/inspect',
+    kind: 'tool',
+    provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+    serverId: 'mcp:curator',
+    source: `${root}/src/mcp/curator/tools/inspect.tsx`,
+  };
+  return {
+    diagnostics: [],
+    digest: 'generated-server-digest',
+    events: [],
+    providers: [],
+    scripts: [],
+    servers: [{ id: 'mcp:curator', mode: 'generated', name: 'curator', routes: [route] }],
+  };
+};
+
+it('normalizes generated MCP route servers without a handwritten server declaration', async () => {
+  const root = '/workspace/project';
+  const graph = routeGraphWithGeneratedServer(root);
+  const model = await normalizeProject(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { routeGraph: graph, skills: [] },
+    registry,
+  );
+
+  expect(model.mcpServers).toHaveLength(1);
+  expect(model.mcpServers[0]).toMatchObject({
+    command: 'node',
+    generatedRoutes: graph.servers[0]!.routes,
+    id: 'mcp:curator',
+    name: 'curator',
+    provenance: { kind: 'conventional', sourcePath: `${root}/src/mcp/curator/tools/inspect.tsx` },
+    source: `${root}/src/mcp/curator/tools/inspect.tsx`,
+    targets: ['portable'],
+    transport: 'stdio',
+  });
+  expect(model.mcpServers[0]!.args?.[0]).toMatch(/^mcp\/mcp-curator-[a-f\d]{8}\.mjs$/u);
+});
