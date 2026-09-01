@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, type ComponentProps, type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import React, { lazy, Suspense, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -20,7 +20,8 @@ export interface SkillMarkdownProps {
 
 export interface MarkdownProjectorProps {
   readonly body: string;
-  readonly components?: ComponentProps<typeof ReactMarkdown>['components'];
+  readonly resolveImage: (reference: string) => string | undefined;
+  readonly resolveLink: (reference: string) => string | undefined;
 }
 
 type MarkdownElementProps<Tag extends keyof React.JSX.IntrinsicElements> =
@@ -68,47 +69,61 @@ const SkillCode = ({ children, className }: ComponentPropsWithoutRef<'code'>) =>
   </Suspense>;
 };
 
-const SkillLink = ({
-  base,
+const MarkdownLink = ({
   children,
   href,
   node: _node,
-  resources,
+  resolve,
   ...properties
-}: MarkdownElementProps<'a'> & Pick<SkillMarkdownProps, 'base' | 'resources'>) => {
-  const resolved = typeof href === 'string' ? resourceUrlFor(base, href, resources) : undefined;
+}: MarkdownElementProps<'a'> & Readonly<{
+  readonly resolve: MarkdownProjectorProps['resolveLink'];
+}>) => {
+  const resolved = typeof href === 'string' ? resolve(href) : undefined;
   if (resolved === undefined) return <span className="skill-broken-link">{children}</span>;
   const external = /^https?:|^mailto:/u.test(resolved);
   return <a {...properties} href={resolved} {...(external ? { rel: 'noreferrer', target: '_blank' } : {})}>{children}</a>;
 };
 
-const SkillImage = ({
+const MarkdownImage = ({
   alt,
-  base,
   node: _node,
-  resources,
+  resolve,
   src,
   ...properties
-}: MarkdownElementProps<'img'> & Pick<SkillMarkdownProps, 'base' | 'resources'>) => {
-  const resolved = typeof src === 'string' ? resourceUrlFor(base, src, resources) : undefined;
-  if (resolved === undefined) return <span className="skill-broken-image" role="img">{alt ?? 'Image unavailable'}</span>;
+}: MarkdownElementProps<'img'> & Readonly<{
+  readonly resolve: MarkdownProjectorProps['resolveImage'];
+}>) => {
+  const source = typeof src === 'string' ? src : undefined;
+  const resolved = source === undefined ? undefined : resolve(source);
+  if (resolved === undefined) {
+    return <span className="skill-broken-image" role="img">
+      {alt ?? 'Image unavailable'}
+      {source === undefined ? undefined : <> · <code>{source}</code></>}
+    </span>;
+  }
   return <img {...properties} alt={alt ?? ''} src={resolved} />;
 };
 
 /** The audited inert-HTML/GFM projector shared by Skills and Agent Documents. */
-export const MarkdownProjector = ({ body, components }: MarkdownProjectorProps) => (
+export const MarkdownProjector = ({
+  body,
+  resolveImage,
+  resolveLink,
+}: MarkdownProjectorProps) => (
   <div className="skill-markdown">
     <ReactMarkdown
       components={{
+        a: (properties) => <MarkdownLink {...properties} resolve={resolveLink} />,
         code: SkillCode,
         h1: ({ node: _node, ...properties }) => <h1 className="skill-heading skill-heading--one" {...properties} />,
         h2: ({ node: _node, ...properties }) => <h2 className="skill-heading skill-heading--two" {...properties} />,
         h3: ({ node: _node, ...properties }) => <h3 className="skill-heading skill-heading--three" {...properties} />,
+        img: (properties) => <MarkdownImage {...properties} resolve={resolveImage} />,
         pre: ({ children }) => <>{children}</>,
         table: ({ node: _node, ...properties }) => <div className="skill-table-wrap"><table {...properties} /></div>,
-        ...components,
       }}
       remarkPlugins={[remarkGfm, inertHtml]}
+      urlTransform={(url) => url}
     >
       {body}
     </ReactMarkdown>
@@ -119,9 +134,7 @@ export const MarkdownProjector = ({ body, components }: MarkdownProjectorProps) 
 export const SkillMarkdown = ({ base, body, resources }: SkillMarkdownProps) => (
   <MarkdownProjector
     body={body}
-    components={{
-      a: (properties) => <SkillLink {...properties} base={base} resources={resources} />,
-      img: (properties) => <SkillImage {...properties} base={base} resources={resources} />,
-    }}
+    resolveImage={(reference) => resourceUrlFor(base, reference, resources)}
+    resolveLink={(reference) => resourceUrlFor(base, reference, resources)}
   />
 );

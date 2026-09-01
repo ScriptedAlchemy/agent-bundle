@@ -110,4 +110,40 @@ describe('Agent Document stage', () => {
     expect(markup).toContain('Shell · #0');
     expect(markup).toContain('Complete · #3');
   });
+
+  it('keeps remote Markdown images inert while rendering data URI images', () => {
+    const projected: AgentDocument = {
+      root: {
+        children: [{
+          kind: 'markdown',
+          text: [
+            '![Remote tracker](https://example.invalid/track)',
+            '![Protocol-relative tracker](//example.invalid/track)',
+            '![Inline image](data:image/png;base64,iVBORw0KGgo=)',
+            '[External guide](https://example.com/guide)',
+          ].join('\n\n'),
+        }],
+        kind: 'result',
+      },
+      status: 'success',
+      version: 1,
+    };
+
+    const markup = renderToStaticMarkup(createElement(AgentDocumentStage, {
+      events: [{ document: projected, sequence: 0, type: 'complete' }],
+    }));
+
+    expect(markup).toContain('class="skill-broken-image"');
+    expect(markup).toContain('Remote tracker');
+    expect(markup).toContain('https://example.invalid/track');
+    expect(markup).not.toContain('src="https://example.invalid/track"');
+    expect(markup).toContain('Protocol-relative tracker');
+    expect(markup).toContain('//example.invalid/track');
+    expect(markup).not.toContain('src="//example.invalid/track"');
+    expect(markup.match(/<img/gu)).toHaveLength(1);
+    expect(markup).toContain('src="data:image/png;base64,iVBORw0KGgo="');
+    expect(markup).toContain('href="https://example.com/guide"');
+    expect(markup).toContain('rel="noreferrer"');
+    expect(markup).toContain('target="_blank"');
+  });
 });
