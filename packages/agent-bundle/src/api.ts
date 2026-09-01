@@ -197,15 +197,6 @@ export type {
   AgentBundleDevConfig,
   AgentBundleDevRuntimeConfig,
 } from './core/types.ts';
-export { installBundle } from './install/install.ts';
-export type {
-  InstallBundleOptions,
-  InstallCommandResult,
-  InstallCommandRunner,
-  InstallHost,
-  InstallResult,
-  InstallScope,
-} from './install/install.ts';
 export type {
   CreateDevRuntimeProvider,
   DevRuntimeProvider,

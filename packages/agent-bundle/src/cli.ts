@@ -12,14 +12,18 @@ import { resolve } from 'node:path';
 import type {
   build,
   compareEvals,
-  installBundle,
   inspect,
   runEvals,
   startDevServer,
   validate,
   ProjectOptions,
 } from './api.ts';
-import type { InstallHost, InstallResult, InstallScope } from './install/install.ts';
+import type {
+  installBundle,
+  InstallHost,
+  InstallResult,
+  InstallScope,
+} from './install/install.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
@@ -404,7 +408,7 @@ export const runCli = async (
     host: InstallHost,
     options: InstallCommandOptions,
   ) => {
-    const install = dependencies.installBundle ?? (await import('./api.ts')).installBundle;
+    const install = dependencies.installBundle ?? (await import('./install/install.ts')).installBundle;
     const result = await install({
       from: options.from,
       host,
