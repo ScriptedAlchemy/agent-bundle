@@ -24,10 +24,18 @@ const result = lowerMcpResult(
 );
 ```
 
-The package exports `Hook`, `Mcp`, `lowerHookResult`, `lowerMcpResult`, and
-`createRscRequestContext`. It does not own an RSC renderer, application state,
-transport, persistence, or host packaging. React 19 is a peer dependency and Node
-22.19 or newer is required.
+The package exports `Hook`, `Mcp`, `lowerHookResult`, `lowerMcpResult`,
+`createRscRequestContext`, `agent`, `runAgentRequest`, and `AgentRequestError`. It does not own an
+RSC renderer, application state, transport, persistence, or host packaging.
+React 19 is a peer dependency and Node 22.19 or newer is required.
+
+Async server utilities and Server Components read the framework request store
+with `const context = await agent()`. The store is a versioned realm singleton
+installed at MCP and CLI entrypoints (and at any other real invocation via
+`runAgentRequest`). Identities are `Observed<T>` — unavailable host, session,
+actor, or workspace is a typed reason, never a fabricated string. The context
+handle throws after the request completes. `state`, `notices`, and `providers`
+are reserved extension slots; provider discovery and `useAgent()` arrive later.
 
 Structured MCP metadata and content are copied through a strict finite-JSON
 boundary before being returned, so later caller mutations do not alter a result.

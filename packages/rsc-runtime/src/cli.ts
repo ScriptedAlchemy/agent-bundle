@@ -1,4 +1,5 @@
 import type { RscApplication } from './application.js';
+import { available, runAgentRequest, unavailable } from './agent-request.js';
 
 export interface RscCliOptions {
   readonly signal?: AbortSignal;
@@ -25,14 +26,31 @@ export const runRscCli = async (
   }
   const operation = application.operations.find((candidate) => candidate.cli?.name === commandName);
   if (operation?.cli === undefined) throw new Error(`Unknown command: ${commandName}`);
+  const cli = operation.cli;
   if (commandArguments.length === 1 && (commandArguments[0] === '--help' || commandArguments[0] === '-h')) {
-    write(`${operation.cli.usage}\n\n${operation.cli.summary}\n`);
+    write(`${cli.usage}\n\n${cli.summary}\n`);
     return 0;
   }
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
-  const result = await operation.execute(operation.cli.parse(commandArguments), { signal });
+  const cwd = process.cwd();
+  const result = await runAgentRequest({
+    capabilities: Object.freeze({
+      command: unavailable(),
+      filesystem: unavailable(),
+      network: unavailable(),
+      projectRoot: available({ root: cwd }, 'derived'),
+    }),
+    host: unavailable('unsupported-surface'),
+    invocation: {
+      kind: 'cli',
+      operationId: operation.id,
+      surface: cli.name,
+    },
+    signal,
+    workspace: available({ root: cwd }, 'derived'),
+  }, async () => operation.execute(cli.parse(commandArguments), { signal }));
   signal.throwIfAborted();
   write(`${JSON.stringify(result)}\n`);
-  return operation.cli.exitCode(result);
+  return cli.exitCode(result);
 };

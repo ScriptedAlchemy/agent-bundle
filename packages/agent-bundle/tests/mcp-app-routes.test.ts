@@ -147,8 +147,15 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   }
 }
 
-const startRoutes = async (service = new RecordingPreviewService()): Promise<StartedRoutes> => {
-  const routes = new McpAppRoutes({ authorize, service });
+const startRoutes = async (
+  service = new RecordingPreviewService(),
+  gracefulCloseReceiptTimeoutMs?: number,
+): Promise<StartedRoutes> => {
+  const routes = new McpAppRoutes({
+    authorize,
+    ...(gracefulCloseReceiptTimeoutMs === undefined ? {} : { gracefulCloseReceiptTimeoutMs }),
+    service,
+  });
   const server = createServer((request, response) => {
     void routes.handle(request, response).then((handled) => {
       if (!handled) response.writeHead(404).end();
@@ -911,7 +918,10 @@ it('serializes a fallback DELETE behind an accepted graceful close', async () =>
 });
 
 it('expires a graceful-close receipt before a later fallback DELETE', async () => {
-  const started = await startRoutes();
+  // The production window is 35s (it must dominate the relay's 30s force-close
+  // cap); expiry semantics are what matters here, so the window is shortened
+  // through the injectable seam instead of sleeping for real.
+  const started = await startRoutes(undefined, 1_000);
   try {
     const closing = await fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
       body: JSON.stringify({ id: 'close-a' }),
@@ -921,7 +931,7 @@ it('expires a graceful-close receipt before a later fallback DELETE', async () =
     expect(closing.status).toBe(200);
 
     started.service.forceCloseResult = false;
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5_100));
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 1_100));
     const fallback = await fetch(`${started.url}/api/mcp/apps/binding-a`, {
       headers: headers(),
       method: 'DELETE',

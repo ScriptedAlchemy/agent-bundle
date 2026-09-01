@@ -28,6 +28,7 @@ import type {
   NormalizedMcpServer,
   NormalizedPlugin,
 } from '../core/types.ts';
+import type { CompiledRouteGraph } from '../routes/types.ts';
 import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
 
@@ -60,6 +61,12 @@ export interface PreparedProject {
   readonly projectContext?: ProjectContext;
   readonly registry: TargetRegistry;
   readonly root: string;
+  /**
+   * The compiled route graph discovery attached (#93); absent when no
+   * conventional route module exists. Carried through preparation so inspect
+   * never re-evaluates the configuration for the routes focus.
+   */
+  readonly routeGraph?: CompiledRouteGraph;
   /**
    * Re-snapshots the project with the same output and payload roots the
    * prepared identity hashed; a divergent re-snapshot would make
@@ -548,6 +555,7 @@ const preparedProject = (
   devRuntimeDiagnostic?: Diagnostic,
   devAgentApiEnabled?: boolean,
   tools?: AgentBundleToolsConfig,
+  routeGraph?: CompiledRouteGraph,
 ): PreparedProject => Object.freeze({
   configPath,
   ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
@@ -559,6 +567,7 @@ const preparedProject = (
   ...(projectContext === undefined ? {} : { projectContext }),
   registry,
   root,
+  ...(routeGraph === undefined ? {} : { routeGraph }),
   snapshotSource,
   source,
   ...(tools === undefined ? {} : { tools }),
@@ -643,7 +652,7 @@ export class ProjectService {
     }
   }
 
-  async #prepare(command: ProjectCommand): Promise<PreparedProject> {
+  async #prepare(command: ProjectCommand, tornRetries = 0): Promise<PreparedProject> {
     const requestedRoot = resolve(this.#options.root);
     const registry = this.#registry;
     const requestedConfigPath = resolve(requestedRoot, this.#options.configPath ?? 'agent-bundle.config.ts');
@@ -678,6 +687,14 @@ export class ProjectService {
       return failedPreparation('AB7002', 'Unable to prepare project paths.', requestedConfigPath, 'project.invalid-source');
     }
     const configPath = resolve(root, this.#options.configPath ?? 'agent-bundle.config.ts');
+    const configIdentity = async (): Promise<string | undefined> => {
+      try {
+        return createHash('sha256').update(await readFile(configPath)).digest('hex');
+      } catch {
+        return undefined;
+      }
+    };
+    const configIdentityBeforeLoad = await configIdentity();
     log(this.#options.logger, 'project.load', { command, root });
 
     let loaded;
@@ -724,6 +741,24 @@ export class ProjectService {
     } catch {
       return failedPreparation('AB7003', 'Unable to snapshot project source.', loaded.configPath, 'project.invalid-source');
     }
+    // loadConfig evaluated the config from one read while the snapshot hashed
+    // it in another; a config replacement landing between the two reads would
+    // otherwise produce a torn preparation whose model belongs to the old
+    // bytes while its revision hashes the new tree. Consumers dedupe prepared
+    // deliveries by revision, so a torn preparation reconciles a stale model
+    // under a fresh revision. When the config changed mid-prepare, restart the
+    // preparation so both reads agree; the retry cap only yields once writes
+    // outpace prepares for several consecutive rounds, which no real editor
+    // or test harness sustains.
+    if (tornRetries < 3) {
+      const configIdentityAfterSnapshot = await configIdentity();
+      if (
+        configIdentityBeforeLoad !== undefined && configIdentityAfterSnapshot !== undefined &&
+        configIdentityBeforeLoad !== configIdentityAfterSnapshot
+      ) {
+        return this.#prepare(command, tornRetries + 1);
+      }
+    }
     const runtime = runtimeDeclaration(this.#options.includeDevRuntime === true, loaded.config, loaded.configPath);
     const runtimeMetadata = runtime.declaration === undefined
       ? Object.freeze({ changed: false, config: loaded.config })
@@ -753,7 +788,23 @@ export class ProjectService {
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision, root);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source, snapshotSource);
+      return preparedProject(
+        loaded.configPath,
+        snapshot,
+        sourceDiagnostics,
+        outputRoots,
+        undefined,
+        registry,
+        root,
+        source,
+        snapshotSource,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        discovered.routeGraph,
+      );
     }
 
     let model: NormalizedPlugin;
@@ -868,6 +919,7 @@ export class ProjectService {
       devRuntimeDiagnostic,
       devAgentApiEnabled,
       tools,
+      discovered.routeGraph,
     );
   }
 }

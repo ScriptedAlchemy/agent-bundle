@@ -1459,6 +1459,12 @@ export const validateSource = (
   diagnostics.push(...validateTools(loaded));
   diagnostics.push(...packageConventionShadowNudges(loaded));
   diagnostics.push(...skillConventionShadowNudges(loaded, discovered));
+  // Route overrides are validated during discovery; source validation must
+  // still observe the config getter so hostile accessors fail closed as AB7001.
+  void loaded.config['routes'];
+  // Route-graph collisions (AB4800-AB4804) are compiled during discovery;
+  // they are project-source errors, so they gate inspect and build here.
+  diagnostics.push(...(discovered.routeGraph?.diagnostics ?? []));
 
   return diagnostics;
 };

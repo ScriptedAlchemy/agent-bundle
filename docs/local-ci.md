@@ -100,14 +100,15 @@ never lets it drop below what its own pool shape requires.
   publish-side effects, not checks; nothing about them gates a merge.
 - **native-host-smoke** needs signed-in Claude/Codex CLIs and is opt-in even
   on hosted CI.
-- **Environment skew**: hosted runners are `ubuntu-latest` with the exact
-  glibc/OS package set `--with-deps` installs, and hosted Verify installs
-  branded Chrome fresh. A green local run on a different distro, glibc, or
-  Chrome build is strong but not identical evidence — this is the main
-  reason hosted CI remains the post-merge safety net. The local `browsers`
-  step only validates/installs the browser itself (`playwright install
-  chrome`); the OS dependencies (`--with-deps`) are one-time machine setup
-  and may need root.
+- **Environment skew**: hosted runners are `ubuntu-latest`, and hosted jobs
+  use the Google Chrome stable that ships preinstalled (with its OS
+  dependencies) on the runner image, falling back to
+  `playwright install --with-deps chrome` only if the image ever drops it. A
+  green local run on a different distro, glibc, or Chrome build is strong but
+  not identical evidence — this is the main reason hosted CI remains the
+  post-merge safety net. The local `browsers` step only validates/installs
+  the browser itself (`playwright install chrome`); the OS dependencies
+  (`--with-deps`) are one-time machine setup and may need root.
 - **Job isolation**: hosted gives every job a fresh VM; local legs reuse
   worktrees for speed. `--fresh` restores cold-start fidelity when staleness
   is suspected.

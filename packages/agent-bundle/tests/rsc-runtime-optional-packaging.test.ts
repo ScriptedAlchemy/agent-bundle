@@ -1,12 +1,12 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
-import { cachedNpmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
+import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -42,11 +42,12 @@ describe.sequential('optional RSC runtime package boundary', () => {
     const project = join(consumer, 'project');
     const artifact = join(project, '.agent-bundle', 'artifact');
     try {
+      await writeFile(join(consumer, 'package.json'), '{"name":"rsc-optional-consumer","type":"module"}\n');
       const tarListing = (await execFile('tar', ['-tf', tarball])).stdout;
       expect(tarListing).not.toMatch(/examples\/rsc-agent-runtime|react-server-dom-rspack|rsbuild-plugin-rsc/u);
 
-      await execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], { cwd: consumer });
-      const dependencyTree = JSON.parse((await execFile('npm', ['ls', '--all', '--json'], { cwd: consumer })).stdout) as InstalledDependencyTree;
+      await execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], { cwd: consumer, env: installedEnvironment() });
+      const dependencyTree = JSON.parse((await execFile('npm', ['ls', '--all', '--json'], { cwd: consumer, env: installedEnvironment() })).stdout) as InstalledDependencyTree;
       const installedNames = installedDependencyNames(dependencyTree);
       for (const name of ['react', 'react-dom', 'react-server-dom-rspack', 'rsbuild-plugin-rsc']) {
         expect(installedNames).not.toContain(name);
@@ -69,7 +70,7 @@ describe.sequential('optional RSC runtime package boundary', () => {
         "  process.stdout.write(JSON.stringify({ diagnostics: validated.diagnostics, runtimeBody: await runtimeResponse.json(), runtimeStatus: runtimeResponse.status, status: session.status(), surfacesBody: await surfacesResponse.json(), surfacesStatus: surfacesResponse.status, targets: inspected.model.targets.map(({ name }) => name) }));",
         '} finally { await session.close(); }',
       ].join('\n');
-      const result = JSON.parse((await execFile(process.execPath, ['--input-type=module', '--eval', script], { cwd: consumer })).stdout) as Readonly<{
+      const result = JSON.parse((await execFile(process.execPath, ['--input-type=module', '--eval', script], { cwd: consumer, env: installedEnvironment() })).stdout) as Readonly<{
         readonly diagnostics: unknown;
         readonly runtimeBody: unknown;
         readonly runtimeStatus: number;

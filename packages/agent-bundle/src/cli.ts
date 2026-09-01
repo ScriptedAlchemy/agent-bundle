@@ -72,6 +72,7 @@ interface InspectCommandOptions {
   readonly json?: boolean;
   readonly mode?: string;
   readonly root: string;
+  readonly routes?: boolean;
   readonly skills?: boolean;
   readonly target?: string;
 }
@@ -213,6 +214,12 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
     // The bundler focus is a debugging dump: the full synthesized
     // configuration is the human output, not a one-line summary.
     output.write(`${JSON.stringify(result.selected.bundler, null, 2)}\n`);
+    return;
+  }
+  if (result.selected?.routes !== undefined) {
+    // The route focus follows the bundler contract: the compiled graph is
+    // the human output, not a one-line summary.
+    output.write(`${JSON.stringify(result.selected.routes, null, 2)}\n`);
     return;
   }
   output.write(`Inspected ${result.model.metadata.name}: ${result.plans.map((plan) => plan.target).join(', ')}\n`);
@@ -416,9 +423,10 @@ export const runCli = async (
   )
     .option('--bundler', 'Include the synthesized bundler configuration focus')
     .option('--hooks', 'Include the hook focus')
+    .option('--routes', 'Include the compiled route-graph focus')
     .option('--skills', 'Include the skill focus');
   inspectCommand.action(async (options: InspectCommandOptions) => {
-    const focuses = [options.bundler, options.hooks, options.skills].filter((focus) => focus === true);
+    const focuses = [options.bundler, options.hooks, options.routes, options.skills].filter((focus) => focus === true);
     if (focuses.length > 1) {
       throw new TypeError('Choose at most one inspect focus.');
     }
@@ -427,6 +435,7 @@ export const runCli = async (
       ...inspectProjectOptions(options),
       ...(options.bundler === true ? { focus: 'bundler' as const } : {}),
       ...(options.hooks === true ? { focus: 'hooks' as const } : {}),
+      ...(options.routes === true ? { focus: 'routes' as const } : {}),
       ...(options.skills === true ? { focus: 'skills' as const } : {}),
       ...(options.target === undefined ? {} : { target: options.target }),
     });

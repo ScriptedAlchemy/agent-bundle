@@ -357,10 +357,6 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     );
     const editedStyles = `${styles}\n.timeline__header [data-testid="runtime-hmr-marker"] { color: rgb(1, 2, 3); }\n`;
     expect(editedSource).not.toBe(source);
-    await Promise.all([
-      replaceWatchedSource(fixture.root, fixture.widgetAppSource, editedSource),
-      replaceWatchedSource(fixture.root, fixture.appStyles, editedStyles),
-    ]);
     // The owned reload channel carries provider-authored frames only; a
     // changed App compile advances the generation past the connect replay.
     const ownedReloadFrames = (): readonly number[] => runtimePreviewHmrMessages.flatMap((message) => {
@@ -371,8 +367,23 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
         return [];
       }
     });
-    await expect.poll(() => ownedReloadFrames().some((generation) => generation > 0), { timeout: browserTimeout })
-      .toBe(true);
+    const maxOwnedReloadGeneration = (): number =>
+      ownedReloadFrames().reduce((max, generation) => Math.max(max, generation), 0);
+    // The two edits are sequenced through the reload channel rather than
+    // written together: a simultaneous write leaves the compile count to the
+    // watcher's aggregation window (one coalesced compile or two split ones),
+    // and a split's second announcement can land after the DOM waits below —
+    // the dev middleware holds asset requests during a compile, so the
+    // refreshed frame can already show both edits while the second frame is
+    // still in flight, poisoning the baseline captured for the reconcile
+    // assertions. Frames arrive in order on one socket, so barriering each
+    // write on its own announced generation pins the edit to exactly one
+    // announcement per write with none outstanding afterwards.
+    await replaceWatchedSource(fixture.root, fixture.appStyles, editedStyles);
+    await expect.poll(maxOwnedReloadGeneration, { timeout: browserTimeout }).toBeGreaterThan(0);
+    const stylesReloadGeneration = maxOwnedReloadGeneration();
+    await replaceWatchedSource(fixture.root, fixture.widgetAppSource, editedSource);
+    await expect.poll(maxOwnedReloadGeneration, { timeout: browserTimeout }).toBeGreaterThan(stylesReloadGeneration);
     const refreshedWidget = async () => {
       for (const frame of page.frames()) {
         if (await frame.getByTestId('runtime-hmr-marker').count() === 1) return frame;

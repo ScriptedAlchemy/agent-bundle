@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+
+import { rstestWorkerRoot } from '../../../../rstest.worker-isolation.ts';
 
 export interface ProjectFixture {
   configPath: string;
@@ -33,7 +34,7 @@ const sourceEntryPoint = resolve(
 export const createProjectFixture = async (
   options: ProjectFixtureOptions = {},
 ): Promise<ProjectFixture> => {
-  const root = await mkdtemp(join(tmpdir(), options.prefix ?? 'agent-bundle-config-'));
+  const root = await mkdtemp(join(rstestWorkerRoot(), options.prefix ?? 'agent-bundle-config-'));
   const skillDir = join(root, 'skills/review');
   const skillSource = join(skillDir, 'SKILL.md');
   const imagePath = join(skillDir, 'assets/diagram.png');

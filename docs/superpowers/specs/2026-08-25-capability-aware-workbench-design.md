@@ -3,6 +3,12 @@
 Date: 2026-08-25
 Status: proposed
 
+> Status note (2026-08-31): the nine-page Workbench is in tree. The remaining
+> manifest navigation, Agent Document stage, replay, and read-only discovery
+> work is tracked in
+> [#105](https://github.com/ScriptedAlchemy/agent-bundle/issues/105). This
+> spec is not the live execution plan.
+
 ## Context
 
 The Workbench currently renders the same navigation and workflow for every

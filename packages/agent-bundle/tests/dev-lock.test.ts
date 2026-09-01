@@ -9,7 +9,7 @@ import { acquireDevLock } from '../src/dev/dev-lock.ts';
 const lockPathFor = (root: string): string => join(root, '.agent-bundle', 'dev.lock');
 const recoveryPathFor = (root: string): string => `${lockPathFor(root)}.recovery`;
 
-it('rejects a second writer with stable metadata for the live owning process', async () => {
+it('rejects a second writer with the live owning process URL', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle dev lock with spaces '));
 
   try {
@@ -17,13 +17,16 @@ it('rejects a second writer with stable metadata for the live owning process', a
       now: () => new Date('2026-08-14T12:00:00.000Z'),
       projectRoot: root,
     });
+    await first.publishServerUrl('http://127.0.0.1:48721');
 
     await expect(acquireDevLock({ projectRoot: root })).rejects.toMatchObject({
       code: 'DEV_LOCK_HELD',
+      message: `Another agent-bundle dev process owns this project (pid ${process.pid}, http://127.0.0.1:48721).`,
       owner: {
         createdAt: '2026-08-14T12:00:00.000Z',
         pid: process.pid,
         projectRoot: root,
+        url: 'http://127.0.0.1:48721',
       },
     });
     expect(first.owner).not.toHaveProperty('version');
@@ -38,7 +41,10 @@ it('rejects a second writer with stable metadata for the live owning process', a
       pid: process.pid,
       projectRoot: root,
     });
+    expect(published).not.toHaveProperty('url');
     expect(published).not.toHaveProperty('version');
+    expect(first.owner).toMatchObject({ url: 'http://127.0.0.1:48721' });
+    expect((await lstat(lockPathFor(root))).mode & 0o777).toBe(0o600);
     expect(typeof published.nonce).toBe('string');
     expect(published.nonce).not.toBe('');
 
@@ -46,6 +52,42 @@ it('rejects a second writer with stable metadata for the live owning process', a
     await first.close();
     await expect(readFile(lockPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('does not overwrite a replacement lock while publishing the server URL', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle dev lock publication race '));
+  let replaceOnRead = false;
+  let replacement: Awaited<ReturnType<typeof acquireDevLock>> | undefined;
+  const storage = {
+    link,
+    lstat,
+    mkdir,
+    open,
+    readFile: async (...args: Parameters<typeof readFile>) => {
+      const contents = await readFile(...args);
+      if (replaceOnRead && args[0] === lockPathFor(root)) {
+        replaceOnRead = false;
+        await rm(lockPathFor(root), { force: true });
+        replacement = await acquireDevLock({ projectRoot: root });
+      }
+      return contents;
+    },
+    remove: rm,
+  };
+
+  const first = await acquireDevLock({ projectRoot: root, storage });
+  try {
+    replaceOnRead = true;
+    await expect(first.publishServerUrl('http://127.0.0.1:48721')).rejects.toMatchObject({
+      code: 'DEV_LOCK_INVALID',
+    });
+
+    const published = JSON.parse(await readFile(lockPathFor(root), 'utf8')) as { readonly nonce: string };
+    expect(published.nonce).toBe(replacement?.owner.nonce);
+  } finally {
+    await Promise.allSettled([first.close(), replacement?.close()]);
     await rm(root, { force: true, recursive: true });
   }
 });
