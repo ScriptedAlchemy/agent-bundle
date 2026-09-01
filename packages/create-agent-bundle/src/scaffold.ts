@@ -55,7 +55,7 @@ interface TemplateManifest {
   name?: string;
 }
 
-const rewriteManifest = (contents: string, request: ScaffoldRequest, runtimeSpec: string): string => {
+const rewriteManifest = (contents: string, request: ScaffoldRequest, runtimeSpec: string | undefined): string => {
   const manifest = JSON.parse(contents) as TemplateManifest;
   manifest.name = request.packageName;
   for (const section of [manifest.dependencies, manifest.devDependencies]) {
@@ -63,6 +63,9 @@ const rewriteManifest = (contents: string, request: ScaffoldRequest, runtimeSpec
     for (const [dependency, range] of Object.entries(section)) {
       if (range !== 'workspace:*') continue;
       if (dependency === '@agent-bundle/runtime') {
+        if (runtimeSpec === undefined) {
+          throw new Error('Template drift: @agent-bundle/runtime was not declared in the root template manifest.');
+        }
         section[dependency] = runtimeSpec;
       } else {
         section[dependency] = request.frameworkSpec;
@@ -86,7 +89,14 @@ const rewriteConfigTargets = (contents: string, targets: readonly TargetName[]):
  * config's target list. Returns the emitted project-relative paths, sorted.
  */
 export const scaffold = async (request: ScaffoldRequest): Promise<readonly string[]> => {
-  const runtimeSpec = await validatedRuntimeSpecForFramework(request.frameworkSpec);
+  const templateManifest = JSON.parse(
+    await readFile(join(request.templateRoot, 'package_json'), 'utf8'),
+  ) as TemplateManifest;
+  const usesWorkspaceRuntime = [templateManifest.dependencies, templateManifest.devDependencies]
+    .some((section) => section?.['@agent-bundle/runtime'] === 'workspace:*');
+  const runtimeSpec = usesWorkspaceRuntime
+    ? await validatedRuntimeSpecForFramework(request.frameworkSpec)
+    : undefined;
   const emitted: string[] = [];
   const copyDirectory = async (from: string, to: string, relative: string): Promise<void> => {
     await mkdir(to, { recursive: true });

@@ -22,15 +22,20 @@ const packageTarball = (name: string): Buffer => {
 
 const scaffoldTemplate = async (
   template: string,
-  overrides: Partial<{ packageName: string; pluginName: string; targets: readonly TargetName[] }> = {},
+  overrides: Partial<{
+    packageName: string;
+    pluginName: string;
+    targets: readonly TargetName[];
+    withRuntimeTarball: boolean;
+  }> = {},
 ): Promise<{ readonly files: readonly string[]; readonly frameworkSpec: string; readonly root: string }> => {
   const root = await mkdtemp(join(tmpdir(), `create-agent-bundle-${template}-`));
   const frameworkTarball = join(root, 'agent-bundle-0.0.0.tgz');
   const runtimeTarball = join(root, 'agent-bundle-runtime-0.0.0.tgz');
-  await Promise.all([
-    writeFile(frameworkTarball, packageTarball('agent-bundle')),
-    writeFile(runtimeTarball, packageTarball('@agent-bundle/runtime')),
-  ]);
+  await writeFile(frameworkTarball, packageTarball('agent-bundle'));
+  if (overrides.withRuntimeTarball !== false) {
+    await writeFile(runtimeTarball, packageTarball('@agent-bundle/runtime'));
+  }
   const frameworkSpec = `file:${frameworkTarball}`;
   const files = await scaffold({
     frameworkSpec,
@@ -40,7 +45,7 @@ const scaffoldTemplate = async (
     targets: overrides.targets ?? ['portable', 'codex', 'claude'],
     templateRoot: join(templatesRoot, template),
   });
-  await Promise.all([rm(frameworkTarball), rm(runtimeTarball)]);
+  await Promise.all([rm(frameworkTarball), rm(runtimeTarball, { force: true })]);
   return { files, frameworkSpec, root: join(root, 'project') };
 };
 
@@ -98,6 +103,20 @@ describe('scaffold', () => {
       await rm(root, { force: true, recursive: true });
     }
   });
+
+  for (const template of ['minimal', 'cli-tool'] as const) {
+    it(`scaffolds the ${template} template without a runtime tarball`, async () => {
+      const { root } = await scaffoldTemplate(template, { withRuntimeTarball: false });
+      try {
+        const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+          readonly devDependencies: Record<string, string>;
+        };
+        expect(manifest.devDependencies['agent-bundle']).toMatch(/^file:/u);
+      } finally {
+        await rm(root, { force: true, recursive: true });
+      }
+    });
+  }
 
   it('replaces every placeholder and pins the framework spec', async () => {
     const { files, frameworkSpec, root } = await scaffoldTemplate('cli-tool', {
