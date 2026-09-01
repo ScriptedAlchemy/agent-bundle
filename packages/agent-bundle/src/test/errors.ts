@@ -14,6 +14,7 @@ export type AgentTestErrorCode =
   | 'result-rejected'
   | 'route-not-found'
   | 'server-not-found'
+  | 'unsupported-rich-content'
   | 'unsupported-route-kind';
 
 /** How many characters of a captured value one diagnostic may print. */
