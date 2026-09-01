@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 import { expect } from '@rstest/core';
 
-import { installedEnvironment, npmInstallArguments, sharedPackedTarball } from '../../../agent-bundle/tests/support/shared-pack.ts';
+import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from '../../../agent-bundle/tests/support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 
@@ -36,7 +36,7 @@ const packFixture = async (): Promise<PackedFixture> => {
   const runnerRoot = join(root, 'runner');
   await mkdir(runnerRoot, { recursive: true });
   await writeFile(join(runnerRoot, 'package.json'), '{"name":"scaffold-runner","type":"module","private":true}\n');
-  await execFile('npm', ['install', ...npmInstallArguments, scaffolderTarball], {
+  await execFile('npm', ['install', ...cachedNpmInstallArguments, scaffolderTarball], {
     cwd: runnerRoot,
     env: installedEnvironment(),
   });

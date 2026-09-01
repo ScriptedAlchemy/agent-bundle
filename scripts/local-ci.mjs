@@ -24,13 +24,23 @@
  * be shared across Node ABIs. The shared pnpm store is content-addressed
  * (and side-effects caches are keyed by engine), so concurrent per-leg
  * installs stay cheap. Legs live under .worktrees/local-ci/ (gitignored) and
- * are reused across runs for warm caches; `--fresh` recreates them.
+ * are reused across runs for warm caches; `--fresh` recreates them. Each leg
+ * also gets a private TMPDIR (os.tmpdir()/abci-<hash8>-<leg>, where <hash8>
+ * is derived from the repo root path; recreated every run): concurrent legs
+ * would otherwise share /tmp, and suites that assert temp-root hygiene
+ * (cli.test.ts scans os.tmpdir() for leaked agent-bundle-artifact-*
+ * directories) would see a sibling leg's in-flight temp traffic and fail on
+ * it (#110). The temp roots deliberately live under the SYSTEM temp
+ * directory, not the repo worktree: Chrome creates AF_UNIX sockets inside
+ * TMPDIR, and the kernel caps socket paths at 108 bytes — a repo-nested
+ * TMPDIR overflows that and crashes every browser test at launch.
  */
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { execFile as executeFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { availableParallelism, homedir } from 'node:os';
+import { availableParallelism, homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -380,11 +390,26 @@ const main = async () => {
     const directory = join(legsRoot, plan.name);
     await ensureLegWorktree(directory, sha);
     const syntheticBinDirectory = await createSyntheticBinDirectory(plan, pnpmEntrypoint);
+    // Private per-leg temp root (see the isolation model above). Recreating
+    // it keeps every run's hygiene scans free of a crashed prior run's
+    // leftovers, while a leak WITHIN a run still fails its own leg's scan.
+    // It must be a SHORT path under the system temp root (never under the
+    // repo worktree): Chrome creates AF_UNIX sockets in TMPDIR and the
+    // kernel's sun_path limit is 108 bytes. The hash keys the directory to
+    // this repo root, so concurrent runs from different checkouts cannot
+    // collide while reruns from the same checkout reuse (and reset) it.
+    const repositoryHash = createHash('sha256').update(repositoryRoot).digest('hex').slice(0, 8);
+    const temporaryDirectory = join(tmpdir(), `abci-${repositoryHash}-${plan.name}`);
+    await rm(temporaryDirectory, { recursive: true, force: true });
+    await mkdir(temporaryDirectory, { recursive: true });
     legs.push({
       ...plan,
       directory,
       syntheticBinDirectory,
-      environment: buildLegEnvironment(syntheticBinDirectory, plan.environmentOverrides),
+      environment: buildLegEnvironment(syntheticBinDirectory, {
+        ...plan.environmentOverrides,
+        TMPDIR: temporaryDirectory,
+      }),
     });
   }
 

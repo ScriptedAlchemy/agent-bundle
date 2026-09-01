@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
-import { installedEnvironment, npmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
+import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -46,7 +46,7 @@ describe.sequential('optional RSC runtime package boundary', () => {
       const tarListing = (await execFile('tar', ['-tf', tarball])).stdout;
       expect(tarListing).not.toMatch(/examples\/rsc-agent-runtime|react-server-dom-rspack|rsbuild-plugin-rsc/u);
 
-      await execFile('npm', ['install', ...npmInstallArguments, tarball], { cwd: consumer, env: installedEnvironment() });
+      await execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], { cwd: consumer, env: installedEnvironment() });
       const dependencyTree = JSON.parse((await execFile('npm', ['ls', '--all', '--json'], { cwd: consumer, env: installedEnvironment() })).stdout) as InstalledDependencyTree;
       const installedNames = installedDependencyNames(dependencyTree);
       for (const name of ['react', 'react-dom', 'react-server-dom-rspack', 'rsbuild-plugin-rsc']) {
