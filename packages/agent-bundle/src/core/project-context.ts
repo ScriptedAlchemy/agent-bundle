@@ -1,13 +1,13 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
+import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
+import type { Diagnostic } from './diagnostics.ts';
 import { digest } from './digest.ts';
 import { deepFreeze } from './freeze.ts';
 import { isInsideOrEqual } from './paths.ts';
 import { snapshotStrictJsonValue } from './strict-json.ts';
-import type { Diagnostic } from './diagnostics.ts';
 import type { NormalizedPlugin, SourceProvenance } from './types.ts';
-import type { SkillHostDocument, SkillIr, SkillSidecarRef } from '../skills/ir.ts';
 
 /** One deterministic, byte-addressed authored input in a project identity. */
 export interface ProjectSourceInput {
@@ -211,45 +211,45 @@ const canonicalProvenance = (root: string, provenance: SourceProvenance): Source
   sourcePath: canonicalCompilerPath(root, provenance.sourcePath, 'Model provenance path'),
 });
 
-const canonicalSkillDiagnostics = (root: string, diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
-  diagnostics.map((diagnostic) => ({
-    ...diagnostic,
-    ...(diagnostic.sourcePath === undefined
-      ? {}
-      : { sourcePath: canonicalCompilerPath(root, diagnostic.sourcePath, 'Skill diagnostic source path') }),
-  }));
-
-const canonicalSkillSidecars = (root: string, sidecars: readonly SkillSidecarRef[]): readonly SkillSidecarRef[] =>
-  sidecars.map((sidecar) => ({
-    ...sidecar,
-    ...(sidecar.source === undefined
-      ? {}
-      : { source: canonicalCompilerPath(root, sidecar.source, 'Skill sidecar source path') }),
-  }));
-
-const canonicalSkillIr = (root: string, ir: SkillIr): SkillIr => ({
-  ...ir,
-  diagnostics: canonicalSkillDiagnostics(root, ir.diagnostics),
-  resources: ir.resources.map((resource) => ({
-    ...resource,
-    source: canonicalCompilerPath(root, resource.source, 'Skill resource path'),
-  })),
-  sidecars: canonicalSkillSidecars(root, ir.sidecars),
-  source: canonicalCompilerPath(root, ir.source, 'Skill source path'),
+const canonicalDiagnostic = (root: string, diagnostic: Diagnostic): Diagnostic => ({
+  ...diagnostic,
+  ...(diagnostic.generatedPath === undefined
+    ? {}
+    : { generatedPath: canonicalCompilerPath(root, diagnostic.generatedPath, 'Diagnostic generated path') }),
+  ...(diagnostic.sourcePath === undefined
+    ? {}
+    : { sourcePath: canonicalCompilerPath(root, diagnostic.sourcePath, 'Diagnostic source path') }),
 });
 
-const canonicalSkillHostDocuments = (
+const canonicalSkillSidecar = (root: string, sidecar: SkillSidecarRef): SkillSidecarRef => ({
+  ...sidecar,
+  ...(sidecar.source === undefined
+    ? {}
+    : { source: canonicalCompilerPath(root, sidecar.source, 'Skill sidecar source path') }),
+});
+
+const canonicalSkillIr = (root: string, skillIr: SkillIr): SkillIr => ({
+  ...skillIr,
+  diagnostics: skillIr.diagnostics.map((diagnostic) => canonicalDiagnostic(root, diagnostic)),
+  resources: skillIr.resources.map((resource) => ({
+    ...resource,
+    source: canonicalCompilerPath(root, resource.source, 'Skill IR resource path'),
+  })),
+  sidecars: skillIr.sidecars.map((sidecar) => canonicalSkillSidecar(root, sidecar)),
+  source: canonicalCompilerPath(root, skillIr.source, 'Skill IR source path'),
+});
+
+const canonicalHostDocuments = (
   root: string,
-  documents: Readonly<Record<string, SkillHostDocument>>,
-): Readonly<Record<string, SkillHostDocument>> => Object.fromEntries(
-  Object.entries(documents)
+  hostDocuments: Readonly<Record<string, SkillHostDocument>>,
+): Readonly<Record<string, SkillHostDocument>> =>
+  Object.fromEntries(Object.entries(hostDocuments)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([host, document]) => [host, {
       ...document,
-      diagnostics: canonicalSkillDiagnostics(root, document.diagnostics),
-      sidecars: canonicalSkillSidecars(root, document.sidecars),
-    }]),
-);
+      diagnostics: document.diagnostics.map((diagnostic) => canonicalDiagnostic(root, diagnostic)),
+      sidecars: document.sidecars.map((sidecar) => canonicalSkillSidecar(root, sidecar)),
+    }]));
 
 const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   model.metadata.provenance.sourcePath,
@@ -268,6 +268,22 @@ const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
     skill.provenance.sourcePath,
     skill.source,
     ...skill.resources.map((resource) => resource.source),
+    ...(skill.skillIr === undefined
+      ? []
+      : [
+        skill.skillIr.source,
+        ...skill.skillIr.resources.map((resource) => resource.source),
+        ...skill.skillIr.sidecars.flatMap((sidecar) => sidecar.source === undefined ? [] : [sidecar.source]),
+        ...skill.skillIr.diagnostics.flatMap((diagnostic) =>
+          diagnostic.sourcePath === undefined ? [] : [diagnostic.sourcePath]),
+      ]),
+    ...(skill.hostDocuments === undefined
+      ? []
+      : Object.values(skill.hostDocuments).flatMap((document) => [
+        ...document.diagnostics.flatMap((diagnostic) =>
+          diagnostic.sourcePath === undefined ? [] : [diagnostic.sourcePath]),
+        ...document.sidecars.flatMap((sidecar) => sidecar.source === undefined ? [] : [sidecar.source]),
+      ])),
   ]),
   ...model.scripts.flatMap((script) => [script.provenance.sourcePath, script.source]),
   ...model.mcpServers.flatMap((server) => [
@@ -411,7 +427,7 @@ export const canonicalizeNormalizedModel = (
       dir: canonicalCompilerPath(root, skill.dir, 'Skill directory path'),
       ...(skill.hostDocuments === undefined
         ? {}
-        : { hostDocuments: canonicalSkillHostDocuments(root, skill.hostDocuments) }),
+        : { hostDocuments: canonicalHostDocuments(root, skill.hostDocuments) }),
       provenance: canonicalProvenance(root, skill.provenance),
       resources: skill.resources.map((resource) => ({
         ...resource,
