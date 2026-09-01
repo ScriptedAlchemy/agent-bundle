@@ -1,9 +1,11 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { expect, it } from '@rstest/core';
 
 import { build, inspect, invokeMcp, listHooks, listMcp, runEvals, simulateHook, validate } from '../src/api.ts';
@@ -280,4 +282,51 @@ it('derives the Audiobook Curator release identity from package.json as the one 
   });
   expect(projectVersionLabel(inspection.projectContext)).toBe('1.0.0');
   expect(inspection.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4008')).toEqual([]);
+});
+
+
+it('serves the routed Audiobook Curator artifact through a real MCP client', { retry: 2, timeout: 60_000 }, async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'audiobook-routed-artifact-'));
+  const root = join(fixtureRoot, 'project');
+  await cp(join(examplesRoot, 'audiobook-curator'), root, {
+    filter: (source) => !['.agent-bundle', 'artifact', 'dist', 'node_modules'].includes(source.slice(source.lastIndexOf('/') + 1)),
+    recursive: true,
+  });
+  const fixtureTsconfig = await readFile(join(root, 'tsconfig.json'), 'utf8');
+  await writeFile(join(root, 'tsconfig.json'), fixtureTsconfig.replace('../../tsconfig.json', join(process.cwd(), 'tsconfig.json')));
+  await symlink(join(examplesRoot, 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  const output = join(root, 'artifact');
+  let client: Client | undefined;
+  try {
+    const compiled = await build({ output, root, targets: ['claude'] });
+    await rm(join(root, 'src'), { force: true, recursive: true });
+    const server = compiled.model.mcpServers.find((candidate) => candidate.name === 'curator');
+    expect(server?.generatedRoutes).toHaveLength(17);
+    const entry = join(output, 'claude', server!.args![0]!);
+    client = new Client({ name: 'audiobook-route-contract', version: '1.0.0' });
+    await client.connect(new StdioClientTransport({ args: [entry], command: process.execPath, stderr: 'pipe' }));
+
+    const tools = await client.listTools();
+    expect(tools.tools.map((tool) => tool.name)).toContain('inspect_sources');
+    const inspectResult = await client.callTool({ arguments: { root }, name: 'inspect_sources' });
+    expect(inspectResult).toMatchObject({
+      content: [{ type: 'text' }],
+      structuredContent: { operation: 'inspect', root },
+    });
+    await expect(client.listResources()).resolves.toMatchObject({
+      resources: [expect.objectContaining({ uri: 'audiobook-curator://catalog' })],
+    });
+    await expect(client.readResource({ uri: 'audiobook-curator://catalog' })).resolves.toMatchObject({
+      contents: [expect.objectContaining({ mimeType: 'application/json', uri: 'audiobook-curator://catalog' })],
+    });
+    await expect(client.listPrompts()).resolves.toMatchObject({
+      prompts: [expect.objectContaining({ name: 'curate' })],
+    });
+    await expect(client.getPrompt({ arguments: { root }, name: 'curate' })).resolves.toMatchObject({
+      messages: [{ content: { type: 'text' }, role: 'user' }],
+    });
+  } finally {
+    await client?.close();
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
 });

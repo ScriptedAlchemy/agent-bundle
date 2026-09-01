@@ -1,7 +1,7 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect } from '@rstest/core';
@@ -28,10 +28,16 @@ interface PackedFixture {
  */
 const packFixture = async (): Promise<PackedFixture> => {
   const root = await mkdtemp(join(tmpdir(), 'create-agent-bundle-e2e-'));
-  const [{ tarball: frameworkTarball }, { tarball: scaffolderTarball }] = await Promise.all([
+  const [{ tarball: frameworkTarball }, { tarball: scaffolderTarball }, { tarball: runtimeTarball }] = await Promise.all([
     sharedPackedTarball('agent-bundle'),
     sharedPackedTarball('create-agent-bundle'),
+    sharedPackedTarball('runtime'),
   ]);
+  const pairedRuntimeTarball = join(
+    dirname(frameworkTarball),
+    basename(frameworkTarball).replace(/^agent-bundle-/u, 'agent-bundle-runtime-'),
+  );
+  await copyFile(runtimeTarball, pairedRuntimeTarball);
 
   const runnerRoot = join(root, 'runner');
   await mkdir(runnerRoot, { recursive: true });

@@ -4,8 +4,7 @@
  * `../integrity-audit.ts`. Conversion and preparation plan by default and
  * mutate only a derived destination; the audit never mutates.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
-import React from 'react';
+import { defineCliCommand, type CliCommandContext } from '../cli-command.js';
 import { z } from 'zod';
 
 import { convertAudiobook, type ConvertInput, type ConvertReceipt } from '../conversion.ts';
@@ -15,7 +14,6 @@ import {
   type IntegrityAuditInput,
   type IntegrityAuditReceipt,
 } from '../integrity-audit.ts';
-import { CuratorResult } from '../result.tsx';
 import {
   assertOptions,
   numberOption,
@@ -29,9 +27,9 @@ import {
 import { parityReceiptSchema, pathSchema, probeSchema } from './schemas.ts';
 
 export interface OutputOperations {
-  readonly audit: (input: IntegrityAuditInput, options: RscOperationContext) => Promise<IntegrityAuditReceipt>;
-  readonly convert?: (input: ConvertInput, options: RscOperationContext) => Promise<ConvertReceipt>;
-  readonly prepare: (input: PrepareInput, options: RscOperationContext) => Promise<PrepareReceipt>;
+  readonly audit: (input: IntegrityAuditInput, options: CliCommandContext) => Promise<IntegrityAuditReceipt>;
+  readonly convert?: (input: ConvertInput, options: CliCommandContext) => Promise<ConvertReceipt>;
+  readonly prepare: (input: PrepareInput, options: CliCommandContext) => Promise<PrepareReceipt>;
 }
 
 export const defaultOutputOperations: Required<OutputOperations> = {
@@ -56,8 +54,8 @@ const prepareResultSchema = z.object({
   source: pathSchema,
 }).strict();
 
-export const outputOperations = (operations: Required<OutputOperations>) => [
-  defineOperation({
+export const outputOperations = (operations: Required<OutputOperations>) => ({
+  convert: defineCliCommand({
     cli: {
       name: 'convert',
       parse: (args) => {
@@ -90,7 +88,7 @@ export const outputOperations = (operations: Required<OutputOperations>) => [
       summary: 'Plan or apply a verified conversion to one chaptered M4B.',
       usage: 'convert --selection FILE --output PATH --receipt FILE --title TITLE --author AUTHOR [--apply] [--overwrite]',
     },
-    execute: operations.convert,
+    handler: operations.convert,
     id: 'convert',
     inputSchema: z.object({
       apply: z.boolean().optional(), artwork: pathSchema.optional(), audioBitrate: z.string().min(2).max(32).optional(),
@@ -100,17 +98,9 @@ export const outputOperations = (operations: Required<OutputOperations>) => [
       narrator: z.string().min(1).max(512).optional(), output: pathSchema, overwrite: z.boolean().optional(), receipt: pathSchema.optional(),
       selection: pathSchema, title: z.string().min(1).max(1024), year: z.string().min(1).max(64).optional(),
     }).strict(),
-    mcp: {
-      description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
-      destructive: true,
-      name: 'convert_audiobook',
-      readOnly: false,
-      server: 'curator',
-    },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: convertResultSchema,
   }),
-  defineOperation({
+  prepare: defineCliCommand({
     cli: {
       name: 'prepare',
       parse: (args) => {
@@ -128,20 +118,12 @@ export const outputOperations = (operations: Required<OutputOperations>) => [
       summary: 'Plan an M4B output or apply the plan when explicitly requested.',
       usage: 'prepare [--apply] [--name FILE] --output DIR <source>',
     },
-    execute: operations.prepare,
+    handler: operations.prepare,
     id: 'prepare',
     inputSchema: prepareInputSchema,
-    mcp: {
-      description: 'Plan an M4B output, or apply the plan only when apply is explicitly true.',
-      destructive: true,
-      name: 'prepare_audiobook',
-      readOnly: false,
-      server: 'curator',
-    },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: prepareResultSchema,
   }),
-  defineOperation({
+  audit: defineCliCommand({
     cli: {
       exitCode: (receipt) => receipt.exitCode,
       name: 'audit',
@@ -159,16 +141,9 @@ export const outputOperations = (operations: Required<OutputOperations>) => [
       summary: 'Validate metadata, chapters, source mapping, hashes, and optional complete decode.',
       usage: 'audit --file FILE --receipt FILE [--conversion-receipt FILE] [--full-decode]',
     },
-    execute: operations.audit,
+    handler: operations.audit,
     id: 'audit',
     inputSchema: z.object({ conversionReceipt: pathSchema.optional(), file: pathSchema, fullDecode: z.boolean().optional(), receipt: pathSchema.optional() }).strict(),
-    mcp: {
-      description: 'Validate chapter structure, optional conversion mapping, file/audio hashes, probe facts, and optional full decode.',
-      name: 'audit_audiobook',
-      readOnly: false,
-      server: 'curator',
-    },
-    render: (receipt) => <CuratorResult receipt={receipt} />,
     resultSchema: auditResultSchema,
   }),
-];
+});

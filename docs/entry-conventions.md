@@ -57,6 +57,8 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/cli.ts` | Package bin named after `plugin.name` (skipped when the name is not a safe output name). | `bin: false` |
 | `src/index.ts` | Library output with declarations. | `lib: false` |
 | `src/mcp/<server-id>.ts` | Stdio entry for the declared MCP server `<server-id>` that names no `entry`, `command`, or `url`. | Declare `entry` explicitly |
+| `src/mcp/<server>/{tools,resources,prompts}/*.{ts,tsx}` | Generated MCP server routes; path supplies identity and each executable module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote` |
+| `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required. | Use a custom server or prefix the file with `_` |
 | `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use. A `scripts` entry that references the file claims it. Rendered (`.tsx`) and nested modules are hard errors until later #102 stages (`AB4807`/`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 
 Conventions match `.ts` and `.tsx` files exactly.
@@ -73,7 +75,14 @@ See `docs/diagnostics.md` for each trigger and how to adopt or silence it.
 
 ## Generated entry shells
 
-The framework provides the entry files consumers used to write by hand
+A route-mode MCP surface emits a public lifecycle entry plus one warm internal
+Flight worker. The entry owns `runAgentRequest`, session/actor binding, the
+final Agent Document dispatcher, legal MCP projection, resource/prompt
+registration, and compiled App resources. The worker exists solely to isolate
+React's `react-server` condition and is reused until that MCP process closes;
+raw Flight bytes never cross the public MCP wire.
+
+The framework also provides the entry files consumers used to write by hand
 (react-router's provided-entry trick). Every generated shell imports the
 consumer module by absolute path and is bundled through the same Rslib
 synthesis and invariant assertions as all generated executables.

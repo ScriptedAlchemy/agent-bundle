@@ -17,7 +17,7 @@ adapter coverage.
 | Sources are immutable; mutation is plan-only without explicit `apply` | mutation foundation | real/synthetic before-and-after hashes |
 | No shell execution; bounded output; caller cancellation; no local media deadline | capability/process foundation | child-process tests |
 | Natural ordering, Unicode-safe identity, safe filenames without apostrophes | domain text foundation | ported pure tests |
-| Claude and Codex derive Skill, script, and MCP from one config plus conventions | `agent-bundle.config.ts`, `src/application.ts` | artifact and installed-host tests |
+| Claude and Codex derive Skill, script, and MCP from one config plus conventions | `agent-bundle.config.ts`, `src/mcp/curator/` route tree | artifact and installed-host tests |
 
 ## Operations
 

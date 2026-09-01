@@ -43,8 +43,6 @@ export type {
   MetadataInput,
   MetadataReceipt,
 } from './media-mutation.js';
-export { audiobookCuratorApplication, createAudiobookCuratorApplication } from './application.js';
-export type { AudiobookCuratorOperations } from './application.js';
 export {
   alacChunkCounts,
   chapterMappingIssues,

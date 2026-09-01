@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { UsageError, type TargetName } from './options.ts';
+import { runtimeSpecForFramework } from './framework.ts';
 
 /**
  * The literal project name every template is written under. Templates stay
@@ -60,7 +61,10 @@ const rewriteManifest = (contents: string, request: ScaffoldRequest): string => 
   for (const section of [manifest.dependencies, manifest.devDependencies]) {
     if (section === undefined) continue;
     for (const [dependency, range] of Object.entries(section)) {
-      if (range === 'workspace:*') section[dependency] = request.frameworkSpec;
+      if (range !== 'workspace:*') continue;
+      section[dependency] = dependency === '@agent-bundle/runtime'
+        ? runtimeSpecForFramework(request.frameworkSpec)
+        : request.frameworkSpec;
     }
   }
   return `${JSON.stringify(manifest, null, 2)}\n`;

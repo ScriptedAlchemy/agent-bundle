@@ -51,7 +51,7 @@ describe('scaffold', () => {
         'README.md',
         'agent-bundle.config.ts',
         'package.json',
-        'src/mcp/status.ts',
+        'src/mcp/status/tools/report-status.tsx',
         'src/scripts/check-status.ts',
         'src/status.ts',
         'tests/status.test.ts',
@@ -93,11 +93,15 @@ describe('scaffold', () => {
       }
       const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
         readonly bin: Record<string, string>;
+        readonly dependencies?: Record<string, string>;
         readonly devDependencies: Record<string, string>;
         readonly name: string;
       };
       expect(manifest.name).toBe('@scope/status-plugin');
       expect(manifest.devDependencies['agent-bundle']).toBe('file:/tmp/agent-bundle-0.0.0.tgz');
+      if (files.includes('src/mcp/status/tools/report-status.tsx')) {
+        expect(manifest.dependencies?.['@agent-bundle/runtime']).toBe('file:/tmp/agent-bundle-runtime-0.0.0.tgz');
+      }
       expect(manifest.bin).toEqual({ 'status-plugin': './dist/bin/status-plugin.js' });
       const config = await readFile(join(root, 'agent-bundle.config.ts'), 'utf8');
       expect(config).toContain("name: 'status-plugin'");
