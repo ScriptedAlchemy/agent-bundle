@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { acquireDevLock } from '../src/dev/dev-lock.ts';
+import { acquireDevLock, type DevLockStorage } from '../src/dev/dev-lock.ts';
 
 const lockPathFor = (root: string): string => join(root, '.agent-bundle', 'dev.lock');
 const recoveryPathFor = (root: string): string => `${lockPathFor(root)}.recovery`;
@@ -58,28 +58,27 @@ it('rejects a second writer with the live owning process URL', async () => {
 
 it('does not overwrite a replacement lock while publishing the server URL', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle dev lock publication race '));
-  let replaceOnRead = false;
+  let replaceOnLink = false;
   let replacement: Awaited<ReturnType<typeof acquireDevLock>> | undefined;
-  const storage = {
-    link,
-    lstat,
-    mkdir,
-    open,
-    readFile: async (...args: Parameters<typeof readFile>) => {
-      const contents = await readFile(...args);
-      if (replaceOnRead && args[0] === lockPathFor(root)) {
-        replaceOnRead = false;
+  const storage: DevLockStorage = {
+    link: async (existingPath, newPath) => {
+      await link(existingPath, newPath);
+      if (replaceOnLink && newPath !== lockPathFor(root)) {
+        replaceOnLink = false;
         await rm(lockPathFor(root), { force: true });
         replacement = await acquireDevLock({ projectRoot: root });
       }
-      return contents;
     },
+    lstat,
+    mkdir,
+    open,
+    readFile,
     remove: rm,
   };
 
   const first = await acquireDevLock({ projectRoot: root, storage });
   try {
-    replaceOnRead = true;
+    replaceOnLink = true;
     await expect(first.publishServerUrl('http://127.0.0.1:48721')).rejects.toMatchObject({
       code: 'DEV_LOCK_INVALID',
     });
