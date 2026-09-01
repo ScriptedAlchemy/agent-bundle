@@ -17,6 +17,7 @@
  * for them.
  */
 export {
+  BROWSER_APP_PROOF_LEVEL,
   CLI_DISPATCH_PROOF_LEVEL,
   MCP_IN_MEMORY_PROOF_LEVEL,
   PACKED_STDIO_PROOF_LEVEL,
@@ -30,6 +31,7 @@ export type {
   AgentTestProofLevel,
   CompileTestManifestOptions,
   TestManifestPluginIdentity,
+  TestableAppDescriptor,
   TestableRouteDescriptor,
 } from './manifest.ts';
 export { AGENT_TEST_REGISTRY_VERSION, registerTestRoutes, testManifest } from './registry.ts';

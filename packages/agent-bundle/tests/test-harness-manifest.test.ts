@@ -6,7 +6,7 @@ import { describe, expect, it } from '@rstest/core';
 import { routeTestSetupSource } from '../src/rstest/setup-module.ts';
 import { AgentTestError } from '../src/test/errors.ts';
 import { invokeCli } from '../src/test/cli.ts';
-import { compileTestManifest, testManifestFromRouteGraph } from '../src/test/manifest.ts';
+import { compileTestManifest, proofLevelLabel, testManifestFromRouteGraph } from '../src/test/manifest.ts';
 import {
   AGENT_TEST_REGISTRY_SYMBOL_KEY,
   AGENT_TEST_REGISTRY_VERSION,
@@ -39,6 +39,12 @@ const withRealmRegistry = async <T>(registry: unknown, body: () => T | Promise<T
 };
 
 describe('the compiled test manifest', () => {
+  it('names browser-app as compiled browser evidence without overstating host or artifact proof', () => {
+    expect(proofLevelLabel('browser-app')).toBe(
+      'browser-app (MCP App HTML compiled through the production Rsbuild profile, mounted in a real browser page over the product bridge; NOT host embedding, packed-artifact, or Workbench evidence)',
+    );
+  });
+
   it('names every conventional route the compiler discovered, with its extracted config', () => {
     expect(Object.keys(manifest.routes).sort()).toEqual([
       'app:harness/panel',
@@ -66,6 +72,17 @@ describe('the compiled test manifest', () => {
     expect(manifest.proofLevel).toBe('route-unit');
     expect(manifest.projectRoot).toBe(fixtureRoot);
     expect(manifest.targets).toEqual(['claude']);
+    expect(manifest.apps).toEqual({
+      panel: {
+        id: 'mcp-app:harness:panel',
+        name: 'panel',
+        relativePath: 'src/mcp/harness/apps/panel.tsx',
+        resourceUri: 'ui://harness/panel',
+        serverIds: ['mcp:harness'],
+        source: resolve(fixtureRoot, 'src/mcp/harness/apps/panel.tsx'),
+        targets: ['claude'],
+      },
+    });
   });
 
   it('carries the compiled command graph the CLI dispatch level dispatches over', () => {
@@ -103,11 +120,40 @@ describe('the compiled test manifest', () => {
 
   it('projects an already-compiled graph without touching the filesystem again', async () => {
     const graph = await compileRouteGraph(fixtureRoot, { targets: ['claude'] } as never);
-    const projected = testManifestFromRouteGraph({ graph, projectRoot: fixtureRoot, targets: ['claude'] });
+    const projected = testManifestFromRouteGraph({
+      apps: [{
+        id: 'mcp-app:harness:panel',
+        name: 'panel',
+        provenance: { kind: 'config', sourcePath: resolve(fixtureRoot, 'agent-bundle.config.ts') },
+        resourceUri: 'ui://harness/panel.html',
+        serverId: 'mcp:harness',
+        serverName: 'harness',
+        source: resolve(fixtureRoot, 'views/panel.ts'),
+        targets: ['claude'],
+        template: resolve(fixtureRoot, 'views/panel.html'),
+      }],
+      graph,
+      projectRoot: fixtureRoot,
+      targets: ['claude'],
+    });
 
     expect(projected.routes).toEqual(manifest.routes);
+    expect(projected.apps).toEqual({
+      panel: {
+        id: 'mcp-app:harness:panel',
+        name: 'panel',
+        relativePath: 'views/panel.ts',
+        resourceUri: 'ui://harness/panel.html',
+        serverIds: ['mcp:harness'],
+        source: resolve(fixtureRoot, 'views/panel.ts'),
+        targets: ['claude'],
+        template: resolve(fixtureRoot, 'views/panel.html'),
+      },
+    });
+    expect(Object.isFrozen(projected.apps.panel)).toBe(true);
     expect(Object.isFrozen(projected.routes)).toBe(true);
   });
+
 });
 
 describe('the generated route registry', () => {
@@ -401,6 +447,7 @@ describe('the manifest a route-free project compiles', () => {
     });
 
     expect(empty.routes).toEqual({});
+    expect(empty.apps).toEqual({});
     expect(empty.proofLevel).toBe('route-unit');
     expect(empty.targets).toEqual(['portable']);
   });
