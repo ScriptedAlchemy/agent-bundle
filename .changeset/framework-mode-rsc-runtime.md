@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/rsc-runtime": minor
+"@agent-bundle/runtime": minor
 ---
 
 Framework mode (RFC #63), runtime side — **breaking removals**. The

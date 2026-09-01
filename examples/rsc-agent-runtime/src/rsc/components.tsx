@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 
-import { Hook, Mcp, agent } from '@agent-bundle/rsc-runtime';
+import { Hook, Mcp, agent } from '@agent-bundle/runtime';
 import type { CanonicalPostToolUse, RuntimeSnapshot } from '../runtime/contracts.js';
 
 const hookServices = async (): Promise<{ edit: CanonicalPostToolUse; snapshot: RuntimeSnapshot }> => {

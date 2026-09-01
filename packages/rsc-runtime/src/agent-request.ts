@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 export const AGENT_REQUEST_STORE_VERSION = 1;
 
-const STORE_SYMBOL = Symbol.for('@agent-bundle/rsc-runtime/request-store');
+const STORE_SYMBOL = Symbol.for('@agent-bundle/runtime/request-store');
 
 export type AgentInvocationKind = 'tool' | 'event' | 'cli' | 'script' | 'workbench';
 
@@ -231,7 +231,7 @@ const getStore = (): RealmStore => {
     if (existing.version !== AGENT_REQUEST_STORE_VERSION) {
       throw new AgentRequestError(
         'store-version-conflict',
-        `Incompatible @agent-bundle/rsc-runtime request store version: found ${String(existing.version)}, expected ${String(AGENT_REQUEST_STORE_VERSION)}`,
+        `Incompatible @agent-bundle/runtime request store version: found ${String(existing.version)}, expected ${String(AGENT_REQUEST_STORE_VERSION)}`,
       );
     }
     return existing;

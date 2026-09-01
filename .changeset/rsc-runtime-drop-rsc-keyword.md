@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/rsc-runtime": patch
+"@agent-bundle/runtime": patch
 ---
 
 Published-metadata fix: the `react-server-components` keyword is removed from

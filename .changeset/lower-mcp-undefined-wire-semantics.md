@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/rsc-runtime": patch
+"@agent-bundle/runtime": patch
 ---
 
 `lowerMcpResult` now follows MCP SDK wire semantics for `undefined` inside

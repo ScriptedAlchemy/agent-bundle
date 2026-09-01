@@ -6,7 +6,7 @@
  * transport is involved, and the CLI projection never calls it (it prints
  * the validated receipt as JSON instead).
  */
-import { Mcp } from '@agent-bundle/rsc-runtime';
+import { Mcp } from '@agent-bundle/runtime';
 import React from 'react';
 
 import type { AudibleCacheReceipt, AudibleSearchReceipt, AudibleSelectionReceipt } from './audible.ts';

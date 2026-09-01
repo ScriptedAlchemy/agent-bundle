@@ -2,7 +2,7 @@
  * Plan-first derived-media repair operations: `apply-metadata` and
  * `apply-chapters`, backed by `../media-mutation.ts`.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/rsc-runtime/plugin';
+import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
 import React from 'react';
 import { z } from 'zod';
 

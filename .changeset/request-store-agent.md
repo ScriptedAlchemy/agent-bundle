@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/rsc-runtime": minor
+"@agent-bundle/runtime": minor
 ---
 
 Add the versioned realm-singleton request store, `await agent()`, and

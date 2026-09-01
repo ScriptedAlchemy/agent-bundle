@@ -1,6 +1,6 @@
 import { requestFlightRenderWithFlight } from '../flight/request-render.js';
 import { writeSync } from 'node:fs';
-import { lowerHookResult, lowerMcpResult } from '@agent-bundle/rsc-runtime';
+import { lowerHookResult, lowerMcpResult } from '@agent-bundle/runtime';
 import type {
   DevRuntimeInspectionRequest,
   DevRuntimeInspectionResponse,

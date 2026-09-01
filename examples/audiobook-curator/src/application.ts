@@ -7,7 +7,7 @@
  * runtime JSX is each operation's `render`, which delegates to
  * `<CuratorResult>` in `./result.tsx` for the MCP projection.
  */
-import { defineRscApplication } from '@agent-bundle/rsc-runtime/plugin';
+import { defineRscApplication } from '@agent-bundle/runtime/plugin';
 
 import {
   audibleOperations,

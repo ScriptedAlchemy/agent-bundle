@@ -1,12 +1,12 @@
-# `@agent-bundle/rsc-runtime`
+# `@agent-bundle/runtime`
 
 Small React primitives for producing Agent Bundle hook and MCP protocol results with JSX.
 No npm release is cut yet; install the pkg.pr.new preview of any `main` commit or pull
 request — see [Preview packages](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md).
 
-Despite the name, this package is **not a React Server Components renderer
-or runtime, and no Flight transport is involved**. It is a synchronous
-React-element protocol DSL — an *MCP result DSL*: `lowerMcpResult` walks an
+The runtime package does **not yet execute React Server Components or
+Flight**. Its current lowerers form a synchronous React-element protocol DSL —
+an *MCP result DSL*: `lowerMcpResult` walks an
 element tree, calling your function components as it goes, and lowers it
 into a plain MCP `CallToolResult`. `lowerHookResult` lowers a `Hook.Result`
 tree into a native `PostToolUse` output the same way, except that it
@@ -15,7 +15,7 @@ your own component is rejected. Nothing streams components, hydrates, or
 holds server component state.
 
 ```tsx
-import { Mcp, lowerMcpResult } from '@agent-bundle/rsc-runtime';
+import { Mcp, lowerMcpResult } from '@agent-bundle/runtime';
 
 const result = lowerMcpResult(
   <Mcp.Result structuredContent={{ status: 'ready' }}>
@@ -52,13 +52,13 @@ Structure — targets, skills, scripts, MCP servers, MCP apps — lives in
 `agent-bundle.config.ts` and file conventions; JSX renders. That split is the
 whole authoring model, described on one screen in
 [Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md).
-The `@agent-bundle/rsc-runtime/plugin` entry defines the application's runtime
+The `@agent-bundle/runtime/plugin` entry defines the application's runtime
 identity and typed operation catalog once and derives its CLI commands and
 MCP tool registrations from that one registry:
 
 ```tsx
-import { defineOperation, defineRscApplication } from '@agent-bundle/rsc-runtime/plugin';
-import { Mcp } from '@agent-bundle/rsc-runtime';
+import { defineOperation, defineRscApplication } from '@agent-bundle/runtime/plugin';
+import { Mcp } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 const inputSchema = z.object({}).strict();

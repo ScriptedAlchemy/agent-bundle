@@ -2,7 +2,7 @@
  * Acoustic and transcript identity-evidence operations: `acoustic-verify`,
  * `acoustic-identify`, and `whisper-verify`, backed by `../evidence.ts`.
  */
-import { defineOperation, type RscOperationContext } from '@agent-bundle/rsc-runtime/plugin';
+import { defineOperation, type RscOperationContext } from '@agent-bundle/runtime/plugin';
 import React from 'react';
 import { z } from 'zod';
 

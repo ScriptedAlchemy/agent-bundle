@@ -2,8 +2,12 @@ import { UsageError } from './options.ts';
 
 const previewPattern = /-preview-([0-9a-f]{7,40})$/u;
 
-export const previewFrameworkSpec = (sha: string): string =>
-  `https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@${sha}`;
+export type PreviewPackageName = 'agent-bundle' | '@agent-bundle/runtime' | 'create-agent-bundle';
+
+export const previewPackageSpec = (packageName: PreviewPackageName, sha: string): string =>
+  `https://pkg.pr.new/ScriptedAlchemy/agent-bundle/${packageName}@${sha}`;
+
+export const previewFrameworkSpec = (sha: string): string => previewPackageSpec('agent-bundle', sha);
 
 /**
  * Resolve the dependency spec the scaffolded project pins `agent-bundle` to.

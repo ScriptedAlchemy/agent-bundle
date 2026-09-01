@@ -3,7 +3,7 @@ import { finished } from 'node:stream/promises';
 import { resolve } from 'node:path';
 import { writeSync } from 'node:fs';
 
-import { available, runAgentRequest } from '@agent-bundle/rsc-runtime';
+import { available, runAgentRequest } from '@agent-bundle/runtime';
 import { renderToReadableStream } from 'react-server-dom-rspack/server.node';
 
 import type { CanonicalPostToolUse, RenderRequest, RuntimeSnapshot } from '../runtime/contracts.js';

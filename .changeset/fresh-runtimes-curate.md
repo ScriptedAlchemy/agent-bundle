@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/rsc-runtime": minor
+"@agent-bundle/runtime": minor
 "agent-bundle": patch
 ---
 

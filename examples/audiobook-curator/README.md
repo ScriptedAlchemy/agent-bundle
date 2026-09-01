@@ -45,7 +45,7 @@ outputs beneath `artifact/` (each host's plugin metadata, Skill, bundled CLI
 script, and lifecycle-wrapped MCP server) plus the npm package build beneath
 `dist/` (`dist/bin/audiobook-curator.js` for `package.json` `bin`,
 `dist/index.js` and declarations for `exports`). The example uses only public
-`agent-bundle` and `@agent-bundle/rsc-runtime` exports with `workspace:*`
+`agent-bundle` and `@agent-bundle/runtime` exports with `workspace:*`
 dependencies.
 
 ## Operation model

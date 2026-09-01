@@ -9,7 +9,7 @@ export interface CopiedExample {
 
 /**
  * Copies the example into a temporary workspace shaped like the repository.
- * The example's direct dependencies (zod, @agent-bundle/rsc-runtime) live in
+ * The example's direct dependencies (zod, @agent-bundle/runtime) live in
  * its own node_modules, not the workspace root's hoisted set, so the copy
  * links both.
  */
