@@ -6,6 +6,7 @@ import { expect, it } from 'effect-rstest';
 
 import {
   createEventRuntimeServer,
+  createEventRuntimeServerForTest,
   EventRuntimeTransportError,
   requestEventRuntime,
 } from '../src/events/ipc.ts';
@@ -117,6 +118,93 @@ it.live('replaces a stale event runtime socket file', () => Effect.gen(function*
     timeoutMs: 1_000,
   }));
   expect(response).toEqual({ replaced: true });
+}));
+
+it.live('does not unlink a concurrent winner after both servers probe a stale endpoint', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-stale-race-${crypto.randomUUID()}`;
+  const endpoint = yield* Effect.acquireUseRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => undefined,
+    })),
+    (server) => Effect.succeed(server.endpoint),
+    (server) => Effect.promise(() => server.close()),
+  );
+  yield* Effect.promise(() => writeFile(endpoint, 'stale socket'));
+
+  let markFirstProbed!: () => void;
+  let releaseFirst!: () => void;
+  const firstProbed = new Promise<void>((resolve) => { markFirstProbed = resolve; });
+  const firstCanContinue = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstServer = createEventRuntimeServerForTest({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }, {
+    afterEndpointProbe: async (state) => {
+      expect(state).toBe('stale');
+      markFirstProbed();
+      await firstCanContinue;
+    },
+  });
+  yield* Effect.promise(() => firstProbed);
+
+  let markSecondProbed!: () => void;
+  let releaseSecond!: () => void;
+  const secondProbed = new Promise<void>((resolve) => { markSecondProbed = resolve; });
+  const secondCanContinue = new Promise<void>((resolve) => { releaseSecond = resolve; });
+  const secondServer = createEventRuntimeServerForTest({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'second' }),
+  }, {
+    afterEndpointProbe: async (state) => {
+      expect(state).toBe('stale');
+      markSecondProbed();
+      await secondCanContinue;
+    },
+  });
+  yield* Effect.promise(() => secondProbed);
+
+  releaseFirst();
+  const winner = yield* Effect.acquireRelease(
+    Effect.promise(() => firstServer),
+    (server) => Effect.promise(() => server.close()),
+  );
+  expect(winner.endpoint).toBe(endpoint);
+
+  releaseSecond();
+  const loser = yield* Effect.promise(async () => {
+    try {
+      return { server: await secondServer, status: 'opened' as const };
+    } catch (error) {
+      return { error, status: 'failed' as const };
+    }
+  });
+  if (loser.status === 'opened') {
+    yield* Effect.promise(() => loser.server.close());
+    expect(loser.status).toBe('failed');
+    return;
+  }
+  expect(loser.error).toMatchObject({
+    code: 'runtime-failed',
+    message: expect.stringMatching(/already has a live server/u),
+    name: EventRuntimeTransportError.name,
+  });
+
+  const response = yield* Effect.promise(() => requestEventRuntime({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    event: 'session/start',
+    hostContractRevision: '2.1.250',
+    native: { hook_event_name: 'SessionStart' },
+    signal: new AbortController().signal,
+    target: 'claude',
+    timeoutMs: 1_000,
+  }));
+  expect(response).toEqual({ owner: 'first' });
 }));
 
 it.live('interrupts an in-flight event handler when the client disconnects', () => Effect.gen(function*() {
