@@ -4,14 +4,32 @@ import { effectBoundaryPlugin, isEffectBoundaryFile } from '../../../scripts/esl
 
 const rule = effectBoundaryPlugin.rules['no-ad-hoc-run'];
 
-const apply = (filename: string, visit: (listeners: ReturnType<typeof rule.create>) => void) => {
+type ImportNode = {
+  readonly imported?: { readonly name?: string };
+  readonly local?: { readonly name?: string };
+  readonly parent?: { readonly source?: { readonly value?: unknown } };
+};
+
+type MemberNode = {
+  readonly computed?: boolean;
+  readonly object?: { readonly name?: string; readonly type?: string };
+  readonly property?: { readonly name?: string; readonly type?: string };
+};
+
+type LintListeners = ReturnType<typeof rule.create> & {
+  ImportNamespaceSpecifier?(node: ImportNode): void;
+  ImportSpecifier?(node: ImportNode): void;
+  MemberExpression?(node: MemberNode): void;
+};
+
+const apply = (filename: string, visit: (listeners: LintListeners) => void) => {
   const reports: Array<{ readonly messageId: string; readonly data: { readonly name: string } }> = [];
   const listeners = rule.create({
     filename,
     report(descriptor) {
       reports.push({ data: descriptor.data, messageId: descriptor.messageId });
     },
-  });
+  }) as LintListeners;
   visit(listeners);
   return reports;
 };
@@ -71,6 +89,51 @@ describe('effect-boundary lint', () => {
         computed: false,
         object: { name: 'Effect', type: 'Identifier' },
         property: { name: 'runPromise', type: 'Identifier' },
+      });
+    });
+    expect(reports).toEqual([]);
+  });
+
+  it('rejects aliased Effect namespaces (named and star imports)', () => {
+    const named = apply('packages/rsc-runtime/src/dispatcher.ts', (listeners) => {
+      listeners.ImportSpecifier?.({
+        imported: { name: 'Effect' },
+        local: { name: 'Fx' },
+        parent: { source: { value: 'effect' } },
+      });
+      listeners.MemberExpression?.({
+        computed: false,
+        object: { name: 'Fx', type: 'Identifier' },
+        property: { name: 'runPromise', type: 'Identifier' },
+      });
+    });
+    expect(named).toEqual([{ data: { name: 'Fx.runPromise' }, messageId: 'forbiddenCall' }]);
+
+    const star = apply('packages/agent-bundle/src/dev/coordinator.ts', (listeners) => {
+      listeners.ImportNamespaceSpecifier?.({
+        local: { name: 'E' },
+        parent: { source: { value: 'effect' } },
+      });
+      listeners.MemberExpression?.({
+        computed: false,
+        object: { name: 'E', type: 'Identifier' },
+        property: { name: 'runSync', type: 'Identifier' },
+      });
+    });
+    expect(star).toEqual([{ data: { name: 'E.runSync' }, messageId: 'forbiddenCall' }]);
+  });
+
+  it('does not flag aliased Effect used for non-runners', () => {
+    const reports = apply('packages/rsc-runtime/src/reconciler.ts', (listeners) => {
+      listeners.ImportSpecifier?.({
+        imported: { name: 'Effect' },
+        local: { name: 'E' },
+        parent: { source: { value: 'effect' } },
+      });
+      listeners.MemberExpression?.({
+        computed: false,
+        object: { name: 'E', type: 'Identifier' },
+        property: { name: 'succeed', type: 'Identifier' },
       });
     });
     expect(reports).toEqual([]);
