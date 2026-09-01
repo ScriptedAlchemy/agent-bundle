@@ -3,7 +3,7 @@ import { link, lstat, mkdir, open, readFile, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
-import { publishFileByLink } from '../core/durable-fs.ts';
+import { publishFileByLink, writeJsonFileAtomically } from '../core/durable-fs.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
 import { acquireOwnerLockFile, isProcessAlive, ownerLockRaceLost } from '../core/owner-lock.ts';
 
@@ -12,6 +12,7 @@ export interface DevLockOwner {
   readonly nonce: string;
   readonly pid: number;
   readonly projectRoot: string;
+  readonly url?: string;
 }
 
 export interface DevLockOptions {
@@ -49,13 +50,27 @@ interface RecoveryRecord {
   readonly owner: DevLockOwner;
 }
 
+const isLoopbackServerUrl = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' &&
+      (parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]') &&
+      parsed.origin === value;
+  } catch {
+    return false;
+  }
+};
+
 const parseOwnerValue = (value: unknown, projectRoot: string): DevLockOwner | undefined => {
   try {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
     const parsed = value as Partial<DevLockOwner>;
     const pid = parsed.pid;
+    const hasUrl = Object.hasOwn(parsed, 'url');
+    const url = hasUrl && isLoopbackServerUrl(parsed.url) ? parsed.url : undefined;
     if (
-      Object.keys(parsed).length !== 4 ||
+      Object.keys(parsed).length !== (hasUrl ? 5 : 4) ||
       !Object.hasOwn(parsed, 'createdAt') ||
       !Object.hasOwn(parsed, 'nonce') ||
       !Object.hasOwn(parsed, 'pid') ||
@@ -66,7 +81,8 @@ const parseOwnerValue = (value: unknown, projectRoot: string): DevLockOwner | un
       typeof pid !== 'number' ||
       !Number.isSafeInteger(pid) ||
       pid <= 0 ||
-      parsed.projectRoot !== projectRoot
+      parsed.projectRoot !== projectRoot ||
+      (hasUrl && url === undefined)
     ) {
       return undefined;
     }
@@ -76,6 +92,7 @@ const parseOwnerValue = (value: unknown, projectRoot: string): DevLockOwner | un
       nonce: parsed.nonce,
       pid,
       projectRoot: parsed.projectRoot,
+      ...(url === undefined ? {} : { url }),
     });
   } catch {
     return undefined;
@@ -224,13 +241,16 @@ const acquireRecoveryGate = async (
 };
 
 export class DevLock {
-  readonly #contents: string;
+  #contents: string;
+  #owner: DevLockOwner;
   readonly #path: string;
   readonly #probeProcess: (pid: number) => boolean;
   readonly #recoveryPath: string;
   readonly #storage: DevLockStorage;
   #closed = false;
   #closePromise: Promise<void> | undefined;
+  #publishPromise: Promise<void> | undefined;
+  #publishingUrl: string | undefined;
 
   constructor(
     path: string,
@@ -245,16 +265,74 @@ export class DevLock {
     this.#recoveryPath = recoveryPath;
     this.#storage = storage;
     this.#contents = contents;
-    this.owner = owner;
+    this.#owner = owner;
   }
 
-  readonly owner: DevLockOwner;
+  get owner(): DevLockOwner {
+    return this.#owner;
+  }
+
+  publishServerUrl(url: string): Promise<void> {
+    if (!isLoopbackServerUrl(url)) return Promise.reject(new TypeError('Development server URL must be a loopback HTTP origin.'));
+    if (this.#closed || this.#closePromise !== undefined) return Promise.reject(new Error('Development lock is closing.'));
+    if (this.#owner.url === url) return Promise.resolve();
+    if (this.#owner.url !== undefined) return Promise.reject(new Error('Development lock already published a different server URL.'));
+    if (this.#publishPromise !== undefined) {
+      return this.#publishingUrl === url
+        ? this.#publishPromise
+        : Promise.reject(new Error('Development lock is publishing a different server URL.'));
+    }
+
+    const owner = Object.freeze({ ...this.#owner, url });
+    const contents = `${stableJson(owner)}\n`;
+    const publishPromise = (async () => {
+      const currentContents = await this.#storage.readFile(this.#path, 'utf8');
+      if (currentContents !== this.#contents) {
+        throw new DevLockError('DEV_LOCK_INVALID', 'Development lock ownership changed before its server URL could be published.');
+      }
+      const temporaryPath = `${this.#path}.update-${randomUUID()}`;
+      try {
+        const temporary = await this.#storage.open(temporaryPath, 'wx', 0o600);
+        await temporary.close();
+        await writeJsonFileAtomically(this.#path, contents, { temporaryPath });
+      } catch (error) {
+        if (await this.#storage.readFile(this.#path, 'utf8') === contents) {
+          this.#contents = contents;
+          this.#owner = owner;
+        }
+        throw error;
+      } finally {
+        await this.#storage.remove(temporaryPath, { force: true });
+      }
+      this.#contents = contents;
+      this.#owner = owner;
+    })();
+    this.#publishingUrl = url;
+    this.#publishPromise = publishPromise;
+    void publishPromise.then(
+      () => {
+        if (this.#publishPromise === publishPromise) {
+          this.#publishPromise = undefined;
+          this.#publishingUrl = undefined;
+        }
+      },
+      () => {
+        if (this.#publishPromise === publishPromise) {
+          this.#publishPromise = undefined;
+          this.#publishingUrl = undefined;
+        }
+      },
+    );
+    return publishPromise;
+  }
 
   close(): Promise<void> {
     if (this.#closed) return Promise.resolve();
     if (this.#closePromise !== undefined) return this.#closePromise;
 
+    const pendingPublication = this.#publishPromise;
     const closePromise = (async () => {
+      await pendingPublication?.catch(() => undefined);
       const recoveryContents = await acquireRecoveryGate(
         this.#storage,
         this.#recoveryPath,
@@ -332,9 +410,12 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
         );
       }
       if (probeProcess(currentOwner.pid)) {
+        const ownerDetails = currentOwner.url === undefined
+          ? `pid ${currentOwner.pid}`
+          : `pid ${currentOwner.pid}, ${currentOwner.url}`;
         throw new DevLockError(
           'DEV_LOCK_HELD',
-          `Another agent-bundle dev process owns this project (pid ${currentOwner.pid}).`,
+          `Another agent-bundle dev process owns this project (${ownerDetails}).`,
           currentOwner,
         );
       }

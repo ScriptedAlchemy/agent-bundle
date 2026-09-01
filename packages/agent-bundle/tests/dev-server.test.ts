@@ -27,6 +27,7 @@ const status = (): ProjectStatus => ({
 
 class RecordingCoordinator {
   readonly invalidations: Invalidation[] = [];
+  readonly publishedUrls: string[] = [];
   closeCalls = 0;
   failClose = false;
   startCalls = 0;
@@ -34,6 +35,10 @@ class RecordingCoordinator {
   async close(): Promise<void> {
     this.closeCalls += 1;
     if (this.failClose) throw new Error('coordinator close failure');
+  }
+
+  async publishServerUrl(url: string): Promise<void> {
+    this.publishedUrls.push(url);
   }
 
   async rebuild(invalidation: Invalidation): Promise<{ readonly diagnostics: readonly []; readonly outcome: 'failed' }> {
@@ -242,6 +247,7 @@ it('serves typed project status and supplied prebuilt assets after starting the 
 
   try {
     expect(coordinator.startCalls).toBe(1);
+    expect(coordinator.publishedUrls).toEqual([server.url]);
 
     const [statusResponse, assetResponse] = await Promise.all([
       fetch(`${server.url}/api/project/status`),

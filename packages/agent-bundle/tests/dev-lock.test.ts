@@ -9,7 +9,7 @@ import { acquireDevLock } from '../src/dev/dev-lock.ts';
 const lockPathFor = (root: string): string => join(root, '.agent-bundle', 'dev.lock');
 const recoveryPathFor = (root: string): string => `${lockPathFor(root)}.recovery`;
 
-it('rejects a second writer with stable metadata for the live owning process', async () => {
+it('rejects a second writer with the live owning process URL', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle dev lock with spaces '));
 
   try {
@@ -17,13 +17,16 @@ it('rejects a second writer with stable metadata for the live owning process', a
       now: () => new Date('2026-08-14T12:00:00.000Z'),
       projectRoot: root,
     });
+    await first.publishServerUrl('http://127.0.0.1:48721');
 
     await expect(acquireDevLock({ projectRoot: root })).rejects.toMatchObject({
       code: 'DEV_LOCK_HELD',
+      message: `Another agent-bundle dev process owns this project (pid ${process.pid}, http://127.0.0.1:48721).`,
       owner: {
         createdAt: '2026-08-14T12:00:00.000Z',
         pid: process.pid,
         projectRoot: root,
+        url: 'http://127.0.0.1:48721',
       },
     });
     expect(first.owner).not.toHaveProperty('version');
@@ -32,13 +35,16 @@ it('rejects a second writer with stable metadata for the live owning process', a
       readonly nonce: unknown;
       readonly pid: number;
       readonly projectRoot: string;
+      readonly url: string;
     };
     expect(published).toMatchObject({
       createdAt: '2026-08-14T12:00:00.000Z',
       pid: process.pid,
       projectRoot: root,
+      url: 'http://127.0.0.1:48721',
     });
     expect(published).not.toHaveProperty('version');
+    expect((await lstat(lockPathFor(root))).mode & 0o777).toBe(0o600);
     expect(typeof published.nonce).toBe('string');
     expect(published.nonce).not.toBe('');
 
