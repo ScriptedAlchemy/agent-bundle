@@ -50,14 +50,15 @@ export type CapabilityState =
   | { readonly state: 'prohibited'; readonly reason: string };
 
 /**
- * The route `config` export is extracted by a later release; until then every
- * compiled route carries this shared frozen empty object.
+ * The config of a route module without an extractable `config` export: the
+ * module exports none, the declaration is not the accepted form (AB4805), or
+ * the initializer leaves the static grammar (AB4806).
  */
 export const emptyRouteConfig: Readonly<Record<string, unknown>> = Object.freeze({});
 
 /** One conventional route module compiled into the immutable route graph. */
 export interface CompiledAgentRoute {
-  /** Static route metadata. Always {@link emptyRouteConfig} in this release. */
+  /** Statically extracted from the module's `export const config` declaration; {@link emptyRouteConfig} when absent or rejected. */
   readonly config: Readonly<Record<string, unknown>>;
   readonly id: string;
   readonly kind: CompiledRouteKind;

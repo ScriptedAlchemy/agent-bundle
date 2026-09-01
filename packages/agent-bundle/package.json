@@ -81,6 +81,7 @@
     "ignore": "7.0.6",
     "jiti": "2.7.0",
     "open": "11.0.1",
+    "typescript-5": "npm:typescript@5.6.1-rc",
     "ws": "8.21.3",
     "yaml": "2.9.0"
   },
