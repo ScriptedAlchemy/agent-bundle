@@ -35,6 +35,16 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     '  component: Component;',
     '  event: Event;',
     '}>;',
+    'type ComponentInput<Component> = Component extends (props: infer Props) => unknown ? Props : never;',
+    'type ComponentResult<Component> = Component extends (...args: never[]) => infer Result ? Awaited<Result> : never;',
+    'type ContractInput<Contract> =',
+    '  Contract extends { readonly input: infer Input } ? Input',
+    '    : Contract extends { readonly component: infer Component } ? ComponentInput<Component>',
+    '      : never;',
+    'type ContractResult<Contract> =',
+    '  Contract extends { readonly result: infer Result } ? Result',
+    '    : Contract extends { readonly component: infer Component } ? ComponentResult<Component>',
+    '      : never;',
     '',
     'export interface AgentBundleRoutes {',
     ...routes.map((route, index) =>
@@ -44,8 +54,8 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     '}',
     '',
     'export type RouteId = keyof AgentBundleRoutes;',
-    'export type RouteInput<Id extends RouteId> = AgentBundleRoutes[Id][\'input\'];',
-    'export type RouteResult<Id extends RouteId> = AgentBundleRoutes[Id][\'result\'];',
+    'export type RouteInput<Id extends RouteId> = ContractInput<AgentBundleRoutes[Id]>;',
+    'export type RouteResult<Id extends RouteId> = ContractResult<AgentBundleRoutes[Id]>;',
     '',
   ].join('\n');
 };

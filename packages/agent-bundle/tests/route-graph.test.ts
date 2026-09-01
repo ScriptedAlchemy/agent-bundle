@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, expect, it } from '@rstest/core';
+import ts from 'typescript-5';
 
 import { inspect, type ReadyInspectResult } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
@@ -481,7 +482,14 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   const graph: CompiledRouteGraph = {
     diagnostics: [],
     digest: 'typegen-digest',
-    events: [],
+    events: [{
+      config: emptyRouteConfig,
+      event: 'workspace/open',
+      id: 'event:workspace/open',
+      kind: 'event-route',
+      provenance: { kind: 'conventional', relativePath: 'src/events/workspace/open.tsx' },
+      source: '/workspace/project/src/events/workspace/open.tsx',
+    }],
     providers: [],
     scripts: [{
       config: emptyRouteConfig,
@@ -508,13 +516,81 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   const second = generate(structuredClone(graph));
 
   expect(second).toBe(first);
-  expect(first).toContain('import type * as route0 from "../src/mcp/curator/tools/inspect.js";');
-  expect(first).toContain('"tool:curator/inspect": RouteContract<typeof route0.inputSchema, typeof route0.resultSchema>;');
+  expect(first).toContain('import type * as route0 from "../src/events/workspace/open.js";');
+  expect(first).toContain('import type * as route1 from "../src/mcp/curator/tools/inspect.js";');
+  expect(first).toContain('"event:workspace/open": EventRouteContract<typeof route0.default, "workspace/open">;');
+  expect(first).toContain('"tool:curator/inspect": RouteContract<typeof route1.inputSchema, typeof route1.resultSchema>;');
   expect(first).not.toContain('src/scripts/rebuild-index');
   expect(first).not.toContain('"script:rebuild-index"');
   expect(first).toContain('export type RouteId = keyof AgentBundleRoutes;');
+  expect(first).toContain('type ContractInput<Contract> =');
+  expect(first).toContain('type ContractResult<Contract> =');
+  expect(first).toContain('export type RouteInput<Id extends RouteId> = ContractInput<AgentBundleRoutes[Id]>;');
+  expect(first).toContain('export type RouteResult<Id extends RouteId> = ContractResult<AgentBundleRoutes[Id]>;');
 });
 
+it('resolves generated helper types for schema and event route contracts', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'package.json': '{"type":"module"}\n',
+    'src/events/workspace/open.ts': [
+      'export interface WorkspaceOpenInput {',
+      "  readonly canonical: { readonly event: 'workspace/open' };",
+      '  readonly native: Readonly<Record<string, unknown>>;',
+      '  readonly signal: AbortSignal;',
+      '}',
+      'export interface WorkspaceOpenResult { readonly rendered: true; }',
+      'export default async function WorkspaceOpen(_props: WorkspaceOpenInput): Promise<WorkspaceOpenResult> {',
+      '  return { rendered: true };',
+      '}',
+      '',
+    ].join('\n'),
+    'src/mcp/curator/tools/inspect.ts': [
+      'export interface InspectInput { readonly source: string; }',
+      'export interface InspectResult { readonly accepted: boolean; }',
+      'export const inputSchema = {} as { readonly _output: InspectInput };',
+      'export const resultSchema = {} as { readonly _output: InspectResult };',
+      'export default async function Inspect() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  expect(graph.diagnostics).toEqual([]);
+  await writeTree(root, {
+    '.agent-bundle/routes.d.ts': routesModule.generateRouteTypes(graph),
+    'assertions.ts': [
+      "import type { RouteId, RouteInput, RouteResult } from './.agent-bundle/routes.js';",
+      "import type { WorkspaceOpenInput, WorkspaceOpenResult } from './src/events/workspace/open.js';",
+      "import type { InspectInput, InspectResult } from './src/mcp/curator/tools/inspect.js';",
+      '',
+      'type Equal<Left, Right> =',
+      '  (<Value>() => Value extends Left ? 1 : 2) extends',
+      '  (<Value>() => Value extends Right ? 1 : 2) ? true : false;',
+      'type Assert<Value extends true> = Value;',
+      '',
+      "export type SchemaInput = Assert<Equal<RouteInput<'tool:curator/inspect'>, InspectInput>>;",
+      "export type SchemaResult = Assert<Equal<RouteResult<'tool:curator/inspect'>, InspectResult>>;",
+      "export type EventInput = Assert<Equal<RouteInput<'event:workspace/open'>, WorkspaceOpenInput>>;",
+      "export type EventResult = Assert<Equal<RouteResult<'event:workspace/open'>, WorkspaceOpenResult>>;",
+      'export type AllInputs = Assert<Equal<RouteInput<RouteId>, InspectInput | WorkspaceOpenInput>>;',
+      'export type AllResults = Assert<Equal<RouteResult<RouteId>, InspectResult | WorkspaceOpenResult>>;',
+      '',
+    ].join('\n'),
+  });
+
+  const program = ts.createProgram([join(root, 'assertions.ts')], {
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    noEmit: true,
+    skipLibCheck: false,
+    strict: true,
+    target: ts.ScriptTarget.ES2022,
+  });
+  const diagnostics = ts.getPreEmitDiagnostics(program)
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+  expect(diagnostics).toEqual([]);
+});
 
 it('validates the single async route-module authoring contract statically', async () => {
   const root = await createRoot();
