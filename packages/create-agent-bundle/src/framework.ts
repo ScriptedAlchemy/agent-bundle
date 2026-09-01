@@ -76,6 +76,24 @@ const localTarballPackageName = async (packageSpec: string): Promise<string> => 
   }
 };
 
+/**
+ * Verifies a local framework tarball for templates that pin no runtime
+ * dependency, so a missing, corrupt, or misnamed archive fails the scaffold
+ * instead of surfacing as an install failure — or, under `--no-install`, as a
+ * project reported ready with an unusable dependency. Non-`file:` specs stay
+ * npm's business: no filesystem read, no registry lookup.
+ */
+export const assertLocalFrameworkTarball = async (frameworkSpec: string): Promise<void> => {
+  if (!frameworkSpec.startsWith('file:')) return;
+  const frameworkName = await localTarballPackageName(frameworkSpec);
+  if (frameworkName !== 'agent-bundle') {
+    throw new UsageError(
+      `Local package tarball "${frameworkSpec}" is not the agent-bundle package: expected agent-bundle, `
+      + `received ${JSON.stringify(frameworkName)}.`,
+    );
+  }
+};
+
 /** Derives and verifies a coherent local framework/runtime tarball pair. */
 export const validatedRuntimeSpecForFramework = async (frameworkSpec: string): Promise<string> => {
   const runtimeSpec = runtimeSpecForFramework(frameworkSpec);

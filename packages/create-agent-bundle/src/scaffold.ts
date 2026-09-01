@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { UsageError, type TargetName } from './options.ts';
-import { validatedRuntimeSpecForFramework } from './framework.ts';
+import { assertLocalFrameworkTarball, validatedRuntimeSpecForFramework } from './framework.ts';
 
 /**
  * The literal project name every template is written under. Templates stay
@@ -94,9 +94,12 @@ export const scaffold = async (request: ScaffoldRequest): Promise<readonly strin
   ) as TemplateManifest;
   const usesWorkspaceRuntime = [templateManifest.dependencies, templateManifest.devDependencies]
     .some((section) => section?.['@agent-bundle/runtime'] === 'workspace:*');
-  const runtimeSpec = usesWorkspaceRuntime
-    ? await validatedRuntimeSpecForFramework(request.frameworkSpec)
-    : undefined;
+  let runtimeSpec: string | undefined;
+  if (usesWorkspaceRuntime) {
+    runtimeSpec = await validatedRuntimeSpecForFramework(request.frameworkSpec);
+  } else {
+    await assertLocalFrameworkTarball(request.frameworkSpec);
+  }
   const emitted: string[] = [];
   const copyDirectory = async (from: string, to: string, relative: string): Promise<void> => {
     await mkdir(to, { recursive: true });

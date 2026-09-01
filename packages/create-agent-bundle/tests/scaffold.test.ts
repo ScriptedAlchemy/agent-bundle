@@ -179,6 +179,65 @@ describe('scaffold', () => {
       await rm(root, { force: true, recursive: true });
     }
   });
+
+  const scaffoldFrameworkOnly = async (
+    tarball: Buffer | undefined,
+    check: (
+      scaffolded: Promise<readonly string[]>,
+      targetDirectory: string,
+      frameworkSpec: string,
+    ) => Promise<void>,
+  ): Promise<void> => {
+    const root = await mkdtemp(join(tmpdir(), 'create-agent-bundle-framework-only-'));
+    const frameworkTarball = join(root, 'agent-bundle-0.0.0.tgz');
+    const targetDirectory = join(root, 'project');
+    const frameworkSpec = `file:${frameworkTarball}`;
+    try {
+      if (tarball !== undefined) await writeFile(frameworkTarball, tarball);
+      await check(scaffold({
+        frameworkSpec,
+        packageName: 'status-plugin',
+        pluginName: 'status-plugin',
+        targetDirectory,
+        targets: ['portable', 'codex', 'claude'],
+        templateRoot: join(templatesRoot, 'minimal'),
+      }), targetDirectory, frameworkSpec);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  };
+
+  it('rejects a missing local framework tarball for a template with no runtime dependency', async () => {
+    await scaffoldFrameworkOnly(undefined, async (scaffolded, targetDirectory) => {
+      await expect(scaffolded).rejects.toThrow(UsageError);
+      await expect(readdir(targetDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('rejects a corrupt local framework tarball for a template with no runtime dependency', async () => {
+    await scaffoldFrameworkOnly(Buffer.from('not a gzip archive'), async (scaffolded, targetDirectory) => {
+      await expect(scaffolded).rejects.toThrow(UsageError);
+      await expect(readdir(targetDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('rejects a misnamed local framework tarball for a template with no runtime dependency', async () => {
+    await scaffoldFrameworkOnly(packageTarball('@scope/not-agent-bundle'), async (scaffolded, targetDirectory) => {
+      await expect(scaffolded).rejects.toThrow(UsageError);
+      await expect(scaffolded).rejects.toThrow('expected agent-bundle');
+      await expect(readdir(targetDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('scaffolds a template with no runtime dependency from a valid local framework tarball', async () => {
+    await scaffoldFrameworkOnly(packageTarball('agent-bundle'), async (scaffolded, targetDirectory, frameworkSpec) => {
+      await expect(scaffolded).resolves.toContain('package.json');
+      const manifest = JSON.parse(await readFile(join(targetDirectory, 'package.json'), 'utf8')) as {
+        readonly devDependencies: Record<string, string>;
+      };
+      expect(manifest.devDependencies['agent-bundle']).toBe(frameworkSpec);
+    });
+  });
 });
 
 describe('assertScaffoldTarget', () => {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from '@rstest/core';
 
-import { previewPackageSpec, resolveFrameworkSpec, runtimeSpecForFramework } from '../src/framework.ts';
+import {
+  assertLocalFrameworkTarball,
+  previewPackageSpec,
+  resolveFrameworkSpec,
+  runtimeSpecForFramework,
+} from '../src/framework.ts';
 import { UsageError } from '../src/options.ts';
 
 describe('previewPackageSpec', () => {
@@ -68,5 +73,18 @@ describe('runtimeSpecForFramework', () => {
   it('fails closed when a paired runtime spec cannot be derived', () => {
     expect(() => runtimeSpecForFramework('file:/tmp/framework.tgz')).toThrow(UsageError);
     expect(() => runtimeSpecForFramework('file:/tmp/framework.tgz')).toThrow('npm registry version, range, or tag');
+  });
+});
+
+describe('assertLocalFrameworkTarball', () => {
+  it('leaves registry and preview specs to npm', async () => {
+    await expect(assertLocalFrameworkTarball('0.1.0')).resolves.toBeUndefined();
+    await expect(assertLocalFrameworkTarball('next')).resolves.toBeUndefined();
+    await expect(assertLocalFrameworkTarball('https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@da5df1d'))
+      .resolves.toBeUndefined();
+  });
+
+  it('rejects a local tarball that cannot be read', async () => {
+    await expect(assertLocalFrameworkTarball('file:/tmp/absent-agent-bundle.tgz')).rejects.toThrow(UsageError);
   });
 });
