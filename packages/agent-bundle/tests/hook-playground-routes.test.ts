@@ -20,6 +20,8 @@ import {
   startRoutes as startRouteServer,
   type StartedRoutes,
 } from './support/route-harness.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
+
 
 const startRoutes = async (
   service?: HookPlaygroundRouteService,
@@ -32,49 +34,49 @@ const startRoutes = async (
   ...(service === undefined ? {} : { service }),
 }), { closeMode: 'awaited' });
 
-const hookFixture: HookPlaygroundHook = Object.freeze({
-  binding: Object.freeze({ epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }),
-  hook: Object.freeze({
+const hookFixture: HookPlaygroundHook = deepFreeze({
+  binding: { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' },
+  hook: {
     event: 'sessionStart',
     id: 'hook-a',
     name: 'guard',
     path: 'hooks/guard.mjs',
     target: 'claude',
-  }),
+  },
 });
 
-const simulationFixture: HookPlaygroundSimulation = Object.freeze({
-  binding: Object.freeze({ epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }),
-  canonicalIntent: Object.freeze({
+const simulationFixture: HookPlaygroundSimulation = deepFreeze({
+  binding: { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' },
+  canonicalIntent: {
     event: 'sessionStart',
     hook: 'hook-a',
     input: Object.freeze({ prompt: 'hello' }),
-  }),
-  canonicalResult: Object.freeze({ decision: 'allow' }),
-  hostMapping: Object.freeze({
+  },
+  canonicalResult: { decision: 'allow' },
+  hostMapping: {
     canonicalEvent: 'sessionStart',
     nativeEvent: 'SessionStart',
     nativeProjection: 'deterministic',
     nativeSelector: 'hooks.SessionStart[0]',
     target: 'claude',
     wrapperPath: 'hooks/guard.mjs',
-  }),
-  nativeInput: Object.freeze({ prompt: 'hello' }),
-  nativeOutput: Object.freeze({ decision: 'approve' }),
-  replay: Object.freeze({
+  },
+  nativeInput: { prompt: 'hello' },
+  nativeOutput: { decision: 'approve' },
+  replay: {
     binding: Object.freeze({ epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }),
     input: Object.freeze({ prompt: 'hello' }),
-  }),
+  },
 });
 
-const diagnosticFixture: HookPlaygroundDiagnosticResult = Object.freeze({
-  diagnostics: Object.freeze([Object.freeze({
+const diagnosticFixture: HookPlaygroundDiagnosticResult = deepFreeze({
+  diagnostics: [Object.freeze({
     code: 'hook.playground.target.unsupported' as const,
     event: 'sessionStart',
     message: 'Target "codex" does not support this hook event.',
     severity: 'error' as const,
     target: 'codex',
-  })]),
+  })],
 });
 
 class RecordingService implements HookPlaygroundRouteService {
@@ -511,9 +513,9 @@ const simulationBody = Object.freeze({
   target: 'claude',
 });
 
-const replayBody = Object.freeze({
-  binding: Object.freeze({ epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }),
-  input: Object.freeze({ prompt: 'hello' }),
+const replayBody = deepFreeze({
+  binding: { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' },
+  input: { prompt: 'hello' },
 });
 
 /** Sends a hook simulation whose body is completed only when the test releases it. */

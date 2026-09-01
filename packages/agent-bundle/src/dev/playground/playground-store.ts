@@ -8,6 +8,8 @@ import { isErrno } from '../../core/errors.ts';
 import { isInsideOrEqual } from '../../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import type { DevLogSink } from '../logs/dev-log-service.ts';
+import { deepFreeze } from '../../core/freeze.ts';
+
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
 export type PlaygroundJsonArray = readonly PlaygroundJsonValue[];
@@ -563,27 +565,27 @@ const assertNoProviderCredentials = (value: PlaygroundJsonValue): void => {
 };
 
 const normalizeIdentity = (value: PlaygroundSessionIdentity): PlaygroundSessionIdentity => {
-  const identity = Object.freeze({
-    epoch: Object.freeze({
+  const identity = deepFreeze({
+    epoch: {
       digest: nonempty(value?.epoch?.digest, 'Playground epoch digest'),
       id: nonempty(value?.epoch?.id, 'Playground epoch id'),
-    }),
-    fixture: Object.freeze({
+    },
+    fixture: {
       digest: nonempty(value?.fixture?.digest, 'Playground fixture digest'),
       id: nonempty(value?.fixture?.id, 'Playground fixture id'),
-    }),
-    invocation: Object.freeze({
+    },
+    invocation: {
       intent: jsonObject(value?.invocation?.intent, 'Playground invocation intent'),
       kind: nonempty(value?.invocation?.kind, 'Playground invocation kind'),
-    }),
-    target: Object.freeze({
+    },
+    target: {
       ...(value?.target?.digest === undefined ? {} : { digest: nonempty(value.target.digest, 'Playground target digest') }),
       name: nonempty(value?.target?.name, 'Playground target name'),
-    }),
-    task: Object.freeze({
+    },
+    task: {
       id: nonempty(value?.task?.id, 'Playground task id'),
       text: nonempty(value?.task?.text, 'Playground task text'),
-    }),
+    },
   });
   assertNoProviderCredentials(json(identity, 'Playground identity'));
   return identity;
@@ -626,7 +628,7 @@ const snapshotEvent = (value: PlaygroundTraceEvent): PlaygroundTraceEvent => Obj
 });
 
 const snapshotCleanupFailures = (value: readonly PlaygroundCleanupFailure[]): readonly PlaygroundCleanupFailure[] =>
-  Object.freeze(value.map((failure) => Object.freeze({ message: failure.message, operation: failure.operation })));
+  deepFreeze(value.map((failure) => ({ message: failure.message, operation: failure.operation })));
 
 const snapshotSession = (record: SessionRecord): PlaygroundSession => Object.freeze({
   cleanupFailures: snapshotCleanupFailures(record.cleanupFailures),

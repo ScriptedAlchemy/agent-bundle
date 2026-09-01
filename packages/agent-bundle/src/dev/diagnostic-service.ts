@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { Rslint } from '@rslint/core';
 
 import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface RslintMessage {
   readonly column?: number;
@@ -43,9 +45,9 @@ const defaultRslint = ({ cwd }: Readonly<{ readonly cwd: string }>): RslintEngin
 const freezeReport = (
   diagnostics: readonly Diagnostic[],
   paths: readonly string[],
-): DiagnosticReport => Object.freeze({
-  diagnostics: Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic }))),
-  paths: Object.freeze([...paths]),
+): DiagnosticReport => deepFreeze({
+  diagnostics: diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })),
+  paths: [...paths],
 });
 
 const diagnosticSeverity = (severity: number): DiagnosticSeverity =>

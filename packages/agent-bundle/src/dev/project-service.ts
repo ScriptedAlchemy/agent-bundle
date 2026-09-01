@@ -33,6 +33,8 @@ import { writeRouteTypes } from '../routes/typegen.ts';
 import type { CompiledRouteGraph } from '../routes/types.ts';
 import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export type ProjectCommand = 'build' | 'dev' | 'inspect' | 'validate';
 
@@ -88,9 +90,9 @@ export interface ProjectSourceSnapshot {
   readonly revision: string;
 }
 
-const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] => Object.freeze(
+const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] => deepFreeze(
   deduplicateDiagnostics(diagnostics.map(withDiagnosticRecovery))
-    .map((diagnostic) => Object.freeze({ ...diagnostic })),
+    .map((diagnostic) => ({ ...diagnostic })),
 );
 
 const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
@@ -375,7 +377,7 @@ const runtimeDeclaration = (
   if (provider === undefined || !('value' in provider) || typeof provider.value !== 'string' || provider.value.trim().length === 0) {
     return Object.freeze({ diagnostic: sourceDiagnostic('Development runtime provider must be a nonempty project-relative module path.', configPath) });
   }
-  return Object.freeze({ declaration: Object.freeze({ provider: provider.value }) });
+  return deepFreeze({ declaration: { provider: provider.value } });
 };
 
 const agentApiEnabled = (config: AgentBundleConfig): boolean => {

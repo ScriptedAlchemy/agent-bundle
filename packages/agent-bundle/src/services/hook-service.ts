@@ -12,6 +12,8 @@ import {
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { parseArtifactHookIndex } from '../build/hook-index.ts';
 import { taskkill, terminateProcessTree, type ProcessTreeTaskkill } from './process-tree.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 const defaultTimeoutMs = 5_000;
 const maxStreamBytes = 1_000_000;
@@ -263,7 +265,7 @@ export class HookService {
     const hooks = index.hooks.filter((hook) => {
       return options.target === undefined || hook.target === options.target;
     });
-    return Object.freeze(hooks.map((hook) => Object.freeze({ ...hook })));
+    return deepFreeze(hooks.map((hook) => ({ ...hook })));
   }
 
   async simulate(options: HookSimulationOptions): Promise<unknown> {

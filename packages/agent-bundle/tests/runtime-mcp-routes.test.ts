@@ -7,6 +7,8 @@ import { RuntimeMcpRoutes } from '../src/dev/runtime-mcp-routes.ts';
 import type { DevRuntimeSession } from '../src/dev/runtime-provider.ts';
 import { ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
+
 
 const authorize = (request: IncomingMessage): void => {
   if (request.headers.origin !== 'http://127.0.0.1:4567' || request.headers['x-agent-bundle-session'] !== 'runtime-token') {
@@ -140,7 +142,7 @@ it('claims manual runtime MCP routes before the generic runtime browser API', as
       },
     },
   } as unknown as DevRuntimeSession;
-  const status: ProjectStatus = Object.freeze({ artifact: Object.freeze({ state: 'missing' }), build: Object.freeze({ state: 'idle' }), source: Object.freeze({ diagnostics: Object.freeze([]), state: 'unknown' }) });
+  const status: ProjectStatus = deepFreeze({ artifact: { state: 'missing' }, build: { state: 'idle' }, source: { diagnostics: Object.freeze([]), state: 'unknown' } });
   const server = await startForegroundServer({
     coordinator: Object.freeze({ close: async () => undefined, rebuild: async () => undefined, start: async () => undefined, status: () => status }),
     eventHub: new ProjectEventHub(),

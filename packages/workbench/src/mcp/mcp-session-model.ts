@@ -6,6 +6,8 @@ import type {
   McpSessionTraceReplayGap,
 } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type { DevRuntimeMcpAppRunBinding, RuntimeVector } from '../../../agent-bundle/src/contracts/runtime.ts';
+import { deepFreeze } from '../freeze.ts';
+
 
 export type McpBrowserSessionBinding =
   | McpSessionBinding
@@ -118,11 +120,11 @@ export type McpBrowserSessionEvent =
 
 type McpBrowserSessionEventType = McpBrowserSessionEvent['type'];
 
-const emptyCatalogs = Object.freeze({
-  prompts: Object.freeze([]),
-  resourceTemplates: Object.freeze([]),
-  resources: Object.freeze([]),
-  tools: Object.freeze([]),
+const emptyCatalogs = deepFreeze({
+  prompts: [],
+  resourceTemplates: [],
+  resources: [],
+  tools: [],
 });
 
 const emptyActiveRequests: Readonly<Record<string, McpBrowserSessionActiveRequest>> = Object.freeze(Object.create(null));
@@ -201,9 +203,9 @@ const viewsFor = (
 ): Pick<McpBrowserSessionModel, 'logs' | 'progress'> => {
   const cached = derivedViews.get(entries);
   if (cached !== undefined) return cached;
-  const views = Object.freeze({
-    logs: Object.freeze(entries.filter(isLoggingEntry)),
-    progress: Object.freeze(entries.filter(isProgressEntry)),
+  const views = deepFreeze({
+    logs: entries.filter(isLoggingEntry),
+    progress: entries.filter(isProgressEntry),
   });
   derivedViews.set(entries, views);
   return views;
@@ -320,7 +322,7 @@ export const createMcpBrowserSessionModel = (sessionId: string): McpBrowserSessi
   diagnostics: Object.freeze([]),
   phase: 'idle',
   sessionId,
-  timeline: Object.freeze({ droppedThroughSequence: 0, entries: Object.freeze([]), lastSequence: 0 }),
+  timeline: deepFreeze({ droppedThroughSequence: 0, entries: [], lastSequence: 0 }),
 });
 
 export const reduceMcpBrowserSession = (

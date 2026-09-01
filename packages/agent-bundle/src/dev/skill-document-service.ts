@@ -9,6 +9,8 @@ import type { NormalizedSkill, SourceProvenance } from '../core/types.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectService } from './project-service.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export type SkillDocumentErrorCode =
   | 'SKILL_DOCUMENT_UNAVAILABLE'
@@ -274,7 +276,7 @@ export class SkillDocumentService {
         .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && safeSegment(entry.name))
         .sort((left, right) => left.name.localeCompare(right.name))
         .map(async (entry) => this.#generatedDocument(epochId, target, `skill:${entry.name}`, targetRoot)));
-      return Object.freeze({ diagnostics: Object.freeze([]), skills: Object.freeze(documents) });
+      return deepFreeze({ diagnostics: [], skills: documents });
     });
   }
 

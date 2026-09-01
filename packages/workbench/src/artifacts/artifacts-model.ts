@@ -11,6 +11,8 @@ import type {
   ArtifactInspectionTarget,
   ArtifactInspectionTreeNode,
 } from '../../../agent-bundle/src/contracts/artifacts.ts';
+import { deepFreeze } from '../freeze.ts';
+
 
 export type ArtifactDiffChange = 'added' | 'changed' | 'removed' | 'unchanged';
 
@@ -192,9 +194,9 @@ export const artifactTreeRowsFor = (target: ArtifactInspectionTarget): readonly 
 
 export const artifactTargetOptionsFor = (
   targets: readonly ArtifactInspectionTarget[],
-): readonly ArtifactTargetOption[] => Object.freeze(
+): readonly ArtifactTargetOption[] => deepFreeze(
   targets
-    .map((target): ArtifactTargetOption => Object.freeze({ key: target.name, label: target.name, name: target.name }))
+    .map((target): ArtifactTargetOption => ({ key: target.name, label: target.name, name: target.name }))
     .sort((left, right) => left.key.localeCompare(right.key)),
 );
 
@@ -208,9 +210,8 @@ export const artifactEpochIdentityRowsFor = (inspection: ArtifactInspection): re
     row('Emitted files', String(inspection.files.length)),
   ]);
 
-export const artifactRuntimeViewFor = (runtime: ArtifactInspectionRuntime): ArtifactRuntimeView => Object.freeze({
-  executables: Object.freeze(
-    runtime.executables
+export const artifactRuntimeViewFor = (runtime: ArtifactInspectionRuntime): ArtifactRuntimeView => deepFreeze({
+  executables: runtime.executables
       .map((file): ArtifactExecutableRow => Object.freeze({
         bytes: file.bytes,
         key: file.path,
@@ -220,9 +221,7 @@ export const artifactRuntimeViewFor = (runtime: ArtifactInspectionRuntime): Arti
         sha256: file.sha256,
       }))
       .sort((left, right) => left.key.localeCompare(right.key)),
-  ),
-  hooks: Object.freeze(
-    runtime.hooks
+  hooks: runtime.hooks
       .map((hook): ArtifactHookRow => Object.freeze({
         bytes: hook.file.bytes,
         event: hook.event,
@@ -234,9 +233,7 @@ export const artifactRuntimeViewFor = (runtime: ArtifactInspectionRuntime): Arti
         ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
       }))
       .sort((left, right) => left.key.localeCompare(right.key)),
-  ),
-  mcpServers: Object.freeze(
-    runtime.mcpServers
+  mcpServers: runtime.mcpServers
       .map((server): ArtifactMcpServerRow => Object.freeze({
         entryPaths: Object.freeze([...server.entryPaths].sort((left, right) => left.localeCompare(right))),
         key: `${server.target}/${server.name}`,
@@ -246,14 +243,13 @@ export const artifactRuntimeViewFor = (runtime: ArtifactInspectionRuntime): Arti
         target: server.target,
       }))
       .sort((left, right) => left.key.localeCompare(right.key)),
-  ),
 });
 
 export const artifactProvenanceRowsFor = (
   provenance: readonly ArtifactInspectionProvenance[],
-): readonly ArtifactProvenanceRow[] => Object.freeze(
+): readonly ArtifactProvenanceRow[] => deepFreeze(
   provenance
-    .map((entry): ArtifactProvenanceRow => Object.freeze({
+    .map((entry): ArtifactProvenanceRow => ({
       key: entry.outputPath,
       outputPath: entry.outputPath,
       sourceInputs: Object.freeze(
@@ -272,9 +268,9 @@ const diffGroup = (
     readonly path: string;
   }>[],
 ): ArtifactDiffGroup => {
-  const rows = Object.freeze(
+  const rows = deepFreeze(
     entries
-      .map((entry): ArtifactDiffRow => Object.freeze({
+      .map((entry): ArtifactDiffRow => ({
         ...(entry.after === undefined ? {} : { afterBytes: entry.after.bytes, afterSha256: entry.after.sha256 }),
         ...(entry.before === undefined ? {} : { beforeBytes: entry.before.bytes, beforeSha256: entry.before.sha256 }),
         change,

@@ -10,6 +10,8 @@ import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runPromise, runSync } from '../effect/boundary.ts';
 import { liftPromise, liftTry } from '../effect/lift.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface EpochStoreOptions {
   /** @internal Deterministic cleanup-failure seam. */
@@ -72,7 +74,7 @@ export class EpochCleanupError extends Error {
   constructor(failures: readonly EpochCleanupFailure[]) {
     super('One or more epoch cleanup operations failed.');
     this.name = 'EpochCleanupError';
-    this.failures = Object.freeze(failures.map((failure) => Object.freeze({ ...failure })));
+    this.failures = deepFreeze(failures.map((failure) => ({ ...failure })));
     Object.freeze(this);
   }
 }

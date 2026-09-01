@@ -40,6 +40,8 @@ import {
   type ArtifactOutputProvenance,
 } from './provenance.ts';
 import { validateArtifact, validateArtifactFiles } from './validate-artifact.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface BuildResult {
   readonly compiledEntries: readonly CompiledEntry[];
@@ -380,8 +382,8 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         ...tools,
       })));
     }
-    const publishedCompiledEntries = Object.freeze(compiledEntries.map((entry) =>
-      Object.freeze({
+    const publishedCompiledEntries = deepFreeze(compiledEntries.map((entry) =>
+      ({
         ...entry,
         output: publishedOutput(entry),
       }),

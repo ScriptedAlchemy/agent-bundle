@@ -13,6 +13,8 @@ import {
   startRoutes as startRouteServer,
   type StartedRoutes,
 } from './support/route-harness.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
+
 
 const startRoutes = async (service?: ArtifactRouteService): Promise<StartedRoutes<ArtifactRoutes>> =>
   startRouteServer(new ArtifactRoutes({ authorize, ...(service === undefined ? {} : { service }) }));
@@ -93,12 +95,12 @@ it('rejects diff queries that omit, duplicate, or smuggle a parameter', async ()
 
 it('surfaces artifact validation diagnostics instead of one opaque failure', async () => {
   const service = new RecordingService();
-  const diagnostics = Object.freeze([Object.freeze({
+  const diagnostics = deepFreeze([{
     code: 'AB4300',
     generatedPath: 'claude/hooks/guard.mjs',
     message: 'Emitted hook wrapper is not executable.',
     severity: 'error' as const,
-  })]);
+  }]);
   service.failure = new ArtifactInspectionServiceError(
     'ARTIFACT_INSPECTION_INVALID',
     '/private/epochs/epoch-a failed validation',

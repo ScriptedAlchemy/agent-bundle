@@ -12,6 +12,8 @@ import {
   type PlaygroundTraceEvent,
   type PlaygroundTraceSource,
 } from './playground-protocol.ts';
+import { deepFreeze } from '../../core/freeze.ts';
+
 
 const pathSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const traceSources: ReadonlySet<string> = new Set<PlaygroundTraceSource>([
@@ -105,27 +107,27 @@ export const assertNoProviderCredentials = (value: PlaygroundJsonValue): void =>
 };
 
 export const normalizeIdentity = (value: PlaygroundSessionIdentity): PlaygroundSessionIdentity => {
-  const identity = Object.freeze({
-    epoch: Object.freeze({
+  const identity = deepFreeze({
+    epoch: {
       digest: nonempty(value?.epoch?.digest, 'Playground epoch digest'),
       id: nonempty(value?.epoch?.id, 'Playground epoch id'),
-    }),
-    fixture: Object.freeze({
+    },
+    fixture: {
       digest: nonempty(value?.fixture?.digest, 'Playground fixture digest'),
       id: nonempty(value?.fixture?.id, 'Playground fixture id'),
-    }),
-    invocation: Object.freeze({
+    },
+    invocation: {
       intent: jsonObject(value?.invocation?.intent, 'Playground invocation intent'),
       kind: nonempty(value?.invocation?.kind, 'Playground invocation kind'),
-    }),
-    target: Object.freeze({
+    },
+    target: {
       ...(value?.target?.digest === undefined ? {} : { digest: nonempty(value.target.digest, 'Playground target digest') }),
       name: nonempty(value?.target?.name, 'Playground target name'),
-    }),
-    task: Object.freeze({
+    },
+    task: {
       id: nonempty(value?.task?.id, 'Playground task id'),
       text: nonempty(value?.task?.text, 'Playground task text'),
-    }),
+    },
   });
   assertNoProviderCredentials(identity as PlaygroundJsonValue);
   return identity;

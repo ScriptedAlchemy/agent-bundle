@@ -57,6 +57,8 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 import { withInstallSurface } from '../install/surface.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 /**
  * One Claude Code plugin LSP server. The binary is never vendored: Claude
@@ -146,21 +148,21 @@ const metadata = Object.freeze({
 });
 const evidence = capabilityEvidence(claudeName, metadata);
 
-const artifactValidation = Object.freeze({
-  documents: Object.freeze([
+const artifactValidation = deepFreeze({
+  documents: [
     Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
     Object.freeze({ path: claudeArtifactPaths.lsp, required: false, schema: 'lsp' }),
     Object.freeze({ path: '.claude-plugin/marketplace.json', required: false, schema: 'marketplace' }),
     Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
     Object.freeze({ path: '.claude-plugin/plugin.json', required: true, schema: 'plugin' }),
-  ]),
-  schemas: Object.freeze([
+  ],
+  schemas: [
     Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
     Object.freeze({ name: 'lsp', validate: validateJsonSchemaDocument(validateLsp) }),
     Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
     Object.freeze({ name: 'mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateMcp)) }),
     Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
-  ]),
+  ],
 });
 
 const mcpRuntime = createTargetMcpRuntime({
@@ -364,9 +366,9 @@ interface ClaudeLspPlan {
   readonly sourceInputs: readonly string[];
 }
 
-const noLspPlan: ClaudeLspPlan = Object.freeze({
-  diagnostics: Object.freeze([]),
-  sourceInputs: Object.freeze([]),
+const noLspPlan: ClaudeLspPlan = deepFreeze({
+  diagnostics: [],
+  sourceInputs: [],
 });
 
 /**

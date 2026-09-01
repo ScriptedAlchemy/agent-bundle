@@ -51,6 +51,8 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 import { withInstallSurface } from '../install/surface.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface CodexConfigExtension {
   codex?: AgentBundleHostConfig;
@@ -128,19 +130,19 @@ const metadata = Object.freeze({
 });
 const evidence = capabilityEvidence(codexName, metadata);
 
-const artifactValidation = Object.freeze({
-  documents: Object.freeze([
+const artifactValidation = deepFreeze({
+  documents: [
     Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
     Object.freeze({ path: '.agents/plugins/marketplace.json', required: false, schema: 'marketplace' }),
     Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
     Object.freeze({ path: '.codex-plugin/plugin.json', required: true, schema: 'plugin' }),
-  ]),
-  schemas: Object.freeze([
+  ],
+  schemas: [
     Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
     Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
     Object.freeze({ name: 'mcp', validate: validateJsonSchemaDocument(validateMcp) }),
     Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
-  ]),
+  ],
 });
 
 const mcpRuntime = createTargetMcpRuntime({

@@ -8,6 +8,8 @@ import type {
   EvalNonComparableReason,
   EvalRunRecord,
 } from '../../../agent-bundle/src/contracts/eval.ts';
+import { deepFreeze } from '../freeze.ts';
+
 
 export type ComparisonsState = 'compared' | 'empty' | 'insufficient-runs' | 'ready';
 
@@ -139,7 +141,7 @@ const usageDelta = (
 };
 
 export const comparisonRunOptionsFor = (runs: readonly EvalRunRecord[]): readonly ComparisonRunOption[] =>
-  Object.freeze(runs.map((run) => Object.freeze({
+  deepFreeze(runs.map((run) => ({
     key: run.id,
     label: `${run.id} · ${run.harness} · ${run.createdAt}`,
   })));

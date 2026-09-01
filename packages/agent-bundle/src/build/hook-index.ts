@@ -2,6 +2,8 @@ import { posix } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface ArtifactHook {
   readonly event: string;
@@ -92,6 +94,6 @@ export const parseArtifactHookIndex = (bytes: string): ArtifactHookIndex | undef
     previous = hook;
     hooks.push(hook);
   }
-  const index: ArtifactHookIndex = Object.freeze({ hooks: Object.freeze(hooks) });
+  const index: ArtifactHookIndex = deepFreeze({ hooks: hooks });
   return bytes === `${stableJson(index)}\n` ? index : undefined;
 };

@@ -12,6 +12,8 @@ import { runtimeAppMessageLimits } from '../src/dev/runtime-app-message-limits.t
 import { McpAppRuntimePreviewError } from '../src/dev/mcp-app-runtime-preview-service.ts';
 import type { McpAppRuntimeRoutePreviewService } from '../src/dev/mcp-app-runtime-preview-service.ts';
 import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-apps/mcp-app-bridge.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
+
 
 interface StartedRoutes {
   readonly close: () => Promise<void>;
@@ -374,7 +376,7 @@ it('forwards one request-owned abort signal to each admitted runtime App operati
       : undefined,
     operate: async (_bindingId, _operation, options?: Readonly<{ readonly signal?: AbortSignal }>) => {
       signals.push(options?.signal);
-      return Object.freeze({ result: Object.freeze({ content: Object.freeze([]) }) }) as never;
+      return deepFreeze({ result: { content: Object.freeze([]) } }) as never;
     },
   };
   const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));

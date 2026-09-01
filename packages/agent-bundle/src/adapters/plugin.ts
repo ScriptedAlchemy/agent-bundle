@@ -54,6 +54,8 @@ import {
   type TargetArtifactPlan,
   type TargetHookEntry,
 } from './types.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 const pluginName = 'plugin';
 
@@ -149,8 +151,8 @@ const hostValidation = (adapter: TargetAdapter, name: string) => {
 const claudeValidation = hostValidation(claudeAdapter, 'Claude');
 const codexValidation = hostValidation(codexAdapter, 'Codex');
 
-const artifactValidation = Object.freeze({
-  documents: Object.freeze([
+const artifactValidation = deepFreeze({
+  documents: [
     // One shared Claude-format hook document serves both hosts; the pinned
     // Codex hooks schema is byte-identical apart from its $id.
     Object.freeze({ path: bundleHookContract.manifestPath, required: false, schema: 'claude-hooks' }),
@@ -165,8 +167,8 @@ const artifactValidation = Object.freeze({
     Object.freeze({ path: cursorPaths.marketplace, required: false, schema: 'cursor-marketplace' }),
     Object.freeze({ path: cursorPaths.mcp, required: false, schema: 'cursor-mcp' }),
     Object.freeze({ path: cursorPaths.plugin, required: false, schema: 'cursor-plugin' }),
-  ]),
-  schemas: Object.freeze([
+  ],
+  schemas: [
     ...prefixedSchemas('claude', claudeValidation.schemas),
     ...prefixedSchemas('codex', codexValidation.schemas, 'plugin').filter((schema) => schema.name !== 'codex-hooks'),
     // The bundle's Codex manifest points at the relocated MCP document, so its
@@ -176,7 +178,7 @@ const artifactValidation = Object.freeze({
     Object.freeze({ name: 'cursor-marketplace', validate: validateJsonSchemaDocument(cursorMarketplaceValidator) }),
     Object.freeze({ name: 'cursor-mcp', validate: validateJsonSchemaDocument(cursorMcpValidator) }),
     Object.freeze({ name: 'cursor-plugin', validate: validateJsonSchemaDocument(cursorPluginValidator) }),
-  ]),
+  ],
 });
 
 const metadata = Object.freeze({
@@ -497,10 +499,10 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   });
 };
 
-const eventCapabilityTables = Object.freeze([
-  Object.freeze({ name: 'Claude', routes: claudeCapabilityTable.hooks.eventRoutes }),
-  Object.freeze({ name: 'Codex', routes: codexCapabilityTable.hooks.eventRoutes }),
-  Object.freeze({ name: 'Cursor', routes: cursorCapabilityTable.hooks.eventRoutes }),
+const eventCapabilityTables = deepFreeze([
+  { name: 'Claude', routes: claudeCapabilityTable.hooks.eventRoutes },
+  { name: 'Codex', routes: codexCapabilityTable.hooks.eventRoutes },
+  { name: 'Cursor', routes: cursorCapabilityTable.hooks.eventRoutes },
 ]);
 const compositeEventNames = new Set(eventCapabilityTables.flatMap(({ routes }) => Object.keys(routes)));
 for (const event of compositeEventNames) {

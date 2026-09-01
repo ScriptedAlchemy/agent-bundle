@@ -28,6 +28,8 @@ import {
   type ArtifactManifest,
 } from './manifest.ts';
 import type { ArtifactOutputProvenance } from './provenance.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export type ManifestFile = ArtifactManifestFile;
 
@@ -132,10 +134,10 @@ const inspectArtifactDirectory = async (
   const directoryMetadata = await lstat(directoryPath);
   if (!directoryMetadata.isDirectory()) {
     return {
-      entries: Object.freeze([Object.freeze({
+      entries: deepFreeze([{
         kind: filesystemEntryKind(directoryMetadata),
         path: prefix === '' ? '.' : normalizeRelativePath(prefix),
-      })]),
+      }]),
       files: Object.freeze([]),
     };
   }

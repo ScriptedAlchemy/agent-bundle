@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
+import { deepFreeze } from '../src/core/freeze.ts';
 
 import {
   RuntimeGenerationStore,
@@ -270,9 +271,9 @@ const createRegistry = (input: Readonly<{
     return () => `session-${++next}`;
   })(),
   emit: (event) => { input.events?.push(event); },
-  executor: input.executor ?? (async (context) => Object.freeze({
+  executor: input.executor ?? (async (context) => deepFreeze({
     stateVersion: 7,
-    value: Object.freeze({ kind: context.request.kind, generation: context.generation.id }),
+    value: { kind: context.request.kind, generation: context.generation.id },
   })),
   generationStore: input.store,
   initialRegistry: input.initialRegistry ?? registryInput(),
@@ -344,7 +345,7 @@ it('leases a generation per blocked operation while implementation updates prese
         entered.resolve();
         await release.promise;
       }
-      return Object.freeze({ stateVersion: 3, value: Object.freeze({ generation: context.generation.id }) });
+      return deepFreeze({ stateVersion: 3, value: { generation: context.generation.id } });
     },
     store: fixture.store,
   });
@@ -382,7 +383,7 @@ it('returns static lists and complete leased vectors for every MCP operation', a
   const registry = createRegistry({
     executor: async (context) => {
       observed.push(context);
-      return Object.freeze({ stateVersion: 42, value: Object.freeze({ result: context.request.kind }) });
+      return deepFreeze({ stateVersion: 42, value: { result: context.request.kind } });
     },
     store: fixture.store,
   });
@@ -1151,7 +1152,7 @@ it('does not execute an already cancelled Runtime MCP operation after leasing it
   const registry = createRegistry({
     executor: async () => {
       executions += 1;
-      return Object.freeze({ stateVersion: 1, value: Object.freeze({ unexpected: true }) });
+      return deepFreeze({ stateVersion: 1, value: { unexpected: true } });
     },
     store: fixture.store,
   });
@@ -1187,7 +1188,7 @@ it('prepares private activation without public visibility, commits synchronously
         entered.resolve();
         await release.promise;
       }
-      return Object.freeze({ stateVersion: 9, value: Object.freeze({ generation: context.generation.id }) });
+      return deepFreeze({ stateVersion: 9, value: { generation: context.generation.id } });
     },
     store: fixture.store,
   });

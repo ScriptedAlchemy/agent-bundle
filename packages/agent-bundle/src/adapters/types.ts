@@ -15,6 +15,8 @@ import {
 } from '../core/types.ts';
 import type { TargetHookContract, TargetHookEntry } from './hook-contract.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export type { TargetHookEntry, TargetHookWrapper } from './hook-contract.ts';
 
@@ -397,10 +399,10 @@ export interface TargetArtifactOutputLayout {
 }
 
 const noArtifactDocumentIssues: readonly TargetArtifactDocumentIssue[] = Object.freeze([]);
-const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = Object.freeze([Object.freeze({
+const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = deepFreeze([{
   instancePath: '',
   message: 'MCP document must be a detached finite JSON value.',
-})]);
+}]);
 
 /**
  * Target-owned compiler namespaces, separate from target-native schema documents.

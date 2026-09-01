@@ -37,6 +37,8 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 import { withInstallSurface } from '../install/surface.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface PortableConfigExtension {
   portable?: AgentBundlePortableConfig;
@@ -64,15 +66,15 @@ const metadata = Object.freeze({
 });
 const evidence = capabilityEvidence(portableName, metadata);
 
-const artifactValidation = Object.freeze({
-  documents: Object.freeze([
+const artifactValidation = deepFreeze({
+  documents: [
     Object.freeze({ path: 'mcp.json', required: false, schema: 'mcp' }),
     Object.freeze({ path: 'plugin.json', required: true, schema: 'plugin' }),
-  ]),
-  schemas: Object.freeze([
+  ],
+  schemas: [
     Object.freeze({ name: 'mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateMcp)) }),
     Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
-  ]),
+  ],
 });
 
 const mcpRuntime = createTargetMcpRuntime({
@@ -311,10 +313,10 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
-  return withInstallSurface(Object.freeze({
-    diagnostics: Object.freeze(diagnostics),
-    entries: Object.freeze(entries),
-    hookEntries: Object.freeze([]),
+  return withInstallSurface(deepFreeze({
+    diagnostics: diagnostics,
+    entries: entries,
+    hookEntries: [],
   }), model, 'portable');
 };
 

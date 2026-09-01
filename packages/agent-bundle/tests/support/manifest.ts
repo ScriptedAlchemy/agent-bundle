@@ -3,12 +3,14 @@ import { listArtifactFiles, writeHookIndex, writeManifest } from '../../src/buil
 import type { ArtifactManifest } from '../../src/build/manifest.ts';
 import { digest } from '../../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../../src/schemas/agent-skills/contract.ts';
+import { deepFreeze } from '../../src/core/freeze.ts';
+
 
 const fixtureConfigDigest = 'a'.repeat(64);
-const fixtureSourceInputs = Object.freeze([Object.freeze({
+const fixtureSourceInputs = deepFreeze([{
   path: 'agent-bundle.config.ts',
   sha256: fixtureConfigDigest,
-})]);
+}]);
 
 export const writeFixtureManifest = async (options: {
   readonly artifactRoot: string;

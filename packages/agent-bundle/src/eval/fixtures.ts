@@ -10,6 +10,8 @@ import { EvalFixtureError } from './errors.ts';
 import type { EvalFixture } from './types.ts';
 import { isInside } from '../core/paths.ts';
 import { isErrno } from '../core/errors.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 const runCommand = promisify(execFile);
 
@@ -127,10 +129,10 @@ const initializeGitBaseline = async (workspace: string): Promise<void> => {
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_SYSTEM: '/dev/null',
   };
-  const commands: readonly (readonly string[])[] = Object.freeze([
-    Object.freeze(['-c', 'init.defaultBranch=main', 'init', '--quiet']),
-    Object.freeze(['add', '--all']),
-    Object.freeze(['commit', '--no-gpg-sign', '--quiet', '--allow-empty', '--message', 'Eval fixture baseline']),
+  const commands: readonly (readonly string[])[] = deepFreeze([
+    ['-c', 'init.defaultBranch=main', 'init', '--quiet'],
+    ['add', '--all'],
+    ['commit', '--no-gpg-sign', '--quiet', '--allow-empty', '--message', 'Eval fixture baseline'],
   ]);
   for (const args of commands) {
     try {

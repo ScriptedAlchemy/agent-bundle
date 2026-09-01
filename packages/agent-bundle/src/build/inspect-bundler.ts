@@ -16,6 +16,8 @@ import { planCompiledMcpEntries } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
 import { planPackageEntries } from './package-build.ts';
 import { composeEntryLibConfig, type RslibEntry } from './rslib.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 /**
  * `agent-bundle inspect --bundler` (RFC #50 §3.4): surfaces the internal
@@ -331,7 +333,7 @@ export const composeBundlerInspection = async (options: {
     );
   }
   entries.push(...(await packageBuildEntries(options.model, options.tools)));
-  return Object.freeze({
-    entries: Object.freeze(entries.sort(entryOrder)),
+  return deepFreeze({
+    entries: entries.sort(entryOrder),
   });
 };

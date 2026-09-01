@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
 import {
   aggregateEvalTrials,
   createEvalHarness,
@@ -28,7 +29,7 @@ import {
 } from '../src/eval/index.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
 
-const hosts = Object.freeze({ portable: Object.freeze({ model: 'deterministic' }) });
+const hosts = deepFreeze({ portable: { model: 'deterministic' } });
 
 const suiteFor = (assertions: EvalCase['assertions']) => defineEvalSuite({
   cases: [{

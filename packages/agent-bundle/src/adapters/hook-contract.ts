@@ -9,6 +9,8 @@ import type {
   NormalizedNativeHook,
   NormalizedPlugin,
 } from '../core/types.ts';
+import { deepFreeze } from '../core/freeze.ts';
+
 
 export interface TargetHookWrapper {
   readonly event: CanonicalHookEvent;
@@ -172,26 +174,26 @@ export const readCursorNativeHookCommands = (document: unknown): TargetNativeHoo
   return Object.freeze({ commands: Object.freeze(commands), status: 'found' });
 };
 
-const nativeHookInputFields = Object.freeze([
-  Object.freeze({ canonical: 'agentId', native: 'agent_id' }),
-  Object.freeze({ canonical: 'agentTranscriptPath', native: 'agent_transcript_path' }),
-  Object.freeze({ canonical: 'agentType', native: 'agent_type' }),
-  Object.freeze({ canonical: 'cwd', native: 'cwd' }),
-  Object.freeze({ canonical: 'effort', native: 'effort' }),
-  Object.freeze({ canonical: 'hookEventName', native: 'hook_event_name' }),
-  Object.freeze({ canonical: 'lastAssistantMessage', native: 'last_assistant_message' }),
-  Object.freeze({ canonical: 'model', native: 'model' }),
-  Object.freeze({ canonical: 'permissionMode', native: 'permission_mode' }),
-  Object.freeze({ canonical: 'promptId', native: 'prompt_id' }),
-  Object.freeze({ canonical: 'sessionId', native: 'session_id' }),
-  Object.freeze({ canonical: 'source', native: 'source' }),
-  Object.freeze({ canonical: 'stopHookActive', native: 'stop_hook_active' }),
-  Object.freeze({ canonical: 'toolInput', native: 'tool_input' }),
-  Object.freeze({ canonical: 'toolName', native: 'tool_name' }),
-  Object.freeze({ canonical: 'toolResponse', native: 'tool_response' }),
-  Object.freeze({ canonical: 'toolUseId', native: 'tool_use_id' }),
-  Object.freeze({ canonical: 'transcriptPath', native: 'transcript_path' }),
-  Object.freeze({ canonical: 'turnId', native: 'turn_id' }),
+const nativeHookInputFields = deepFreeze([
+  { canonical: 'agentId', native: 'agent_id' },
+  { canonical: 'agentTranscriptPath', native: 'agent_transcript_path' },
+  { canonical: 'agentType', native: 'agent_type' },
+  { canonical: 'cwd', native: 'cwd' },
+  { canonical: 'effort', native: 'effort' },
+  { canonical: 'hookEventName', native: 'hook_event_name' },
+  { canonical: 'lastAssistantMessage', native: 'last_assistant_message' },
+  { canonical: 'model', native: 'model' },
+  { canonical: 'permissionMode', native: 'permission_mode' },
+  { canonical: 'promptId', native: 'prompt_id' },
+  { canonical: 'sessionId', native: 'session_id' },
+  { canonical: 'source', native: 'source' },
+  { canonical: 'stopHookActive', native: 'stop_hook_active' },
+  { canonical: 'toolInput', native: 'tool_input' },
+  { canonical: 'toolName', native: 'tool_name' },
+  { canonical: 'toolResponse', native: 'tool_response' },
+  { canonical: 'toolUseId', native: 'tool_use_id' },
+  { canonical: 'transcriptPath', native: 'transcript_path' },
+  { canonical: 'turnId', native: 'turn_id' },
 ]);
 
 const defined = (value: Record<string, unknown>): Record<string, unknown> =>
@@ -719,7 +721,7 @@ export const planHooks = (
       return eventComparison !== 0 ? eventComparison : left.id.localeCompare(right.id);
     });
   if (selected.length === 0) {
-    return Object.freeze({ diagnostics: Object.freeze(diagnostics), hookEntries: Object.freeze([]) });
+    return deepFreeze({ diagnostics: diagnostics, hookEntries: [] });
   }
 
   const groups: Record<string, unknown[]> = Object.create(null) as Record<string, unknown[]>;

@@ -1,3 +1,5 @@
+import { deepFreeze } from '../core/freeze.ts';
+
 /**
  * Canonical Skill / plugin-surface tokens. Build-time lowering substitutes
  * host syntax only; runtime values are never resolved here.
@@ -158,13 +160,13 @@ export const classifySkillToken = (
   table[host][document]?.[token] ?? none(token, host, document, noSkillMarkdown[host]);
 
 /** Host-native spellings that parse as a canonical token. Longest match wins. */
-export const skillTokenAliases: Readonly<Record<SkillTokenId, readonly string[]>> = Object.freeze({
-  arguments: Object.freeze(['$ARGUMENTS']),
-  pluginData: Object.freeze(['${CLAUDE_PLUGIN_DATA}', '${PLUGIN_DATA}']),
-  pluginRoot: Object.freeze(['${CLAUDE_PLUGIN_ROOT}', '${CURSOR_PLUGIN_ROOT}', '${PLUGIN_ROOT}']),
-  projectRoot: Object.freeze(['${CLAUDE_PROJECT_DIR}', '${workspaceFolder}']),
-  sessionIdentity: Object.freeze(['${CLAUDE_SESSION_ID}']),
-  skillRoot: Object.freeze(['${CLAUDE_SKILL_DIR}']),
+export const skillTokenAliases: Readonly<Record<SkillTokenId, readonly string[]>> = deepFreeze({
+  arguments: ['$ARGUMENTS'],
+  pluginData: ['${CLAUDE_PLUGIN_DATA}', '${PLUGIN_DATA}'],
+  pluginRoot: ['${CLAUDE_PLUGIN_ROOT}', '${CURSOR_PLUGIN_ROOT}', '${PLUGIN_ROOT}'],
+  projectRoot: ['${CLAUDE_PROJECT_DIR}', '${workspaceFolder}'],
+  sessionIdentity: ['${CLAUDE_SESSION_ID}'],
+  skillRoot: ['${CLAUDE_SKILL_DIR}'],
 });
 
 const aliasEntries = (Object.entries(skillTokenAliases) as [SkillTokenId, readonly string[]][])

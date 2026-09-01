@@ -18,6 +18,8 @@ import { promisify } from 'node:util';
 // The native smoke installs the production closure a real consumer would get,
 // so it stays on npm's default metadata staleness checks.
 import { npmInstallArguments, sharedPackedTarball } from './shared-pack.ts';
+import { deepFreeze } from '../../src/core/freeze.ts';
+
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -378,9 +380,9 @@ export const runPackedNativeSmoke = async (options: {
       }
     }
 
-    return Object.freeze({
-      hosts: Object.freeze(reports),
-      package: Object.freeze({ externalBinary: true, productionOnly: true, tarballs: 1 }),
+    return deepFreeze({
+      hosts: reports,
+      package: { externalBinary: true, productionOnly: true, tarballs: 1 },
     });
   } finally {
     await rm(root, { force: true, recursive: true });

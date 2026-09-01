@@ -31,6 +31,8 @@ import type {
 import { PlaygroundStore } from '../src/dev/playground/playground-store.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
 import { eventuallyPasses } from './support/eventually.ts';
+import { deepFreeze } from '../src/core/freeze.ts';
+
 
 const activeEpoch = Object.freeze({
   configDigest: 'config-sha256',
@@ -43,10 +45,10 @@ const activeEpoch = Object.freeze({
   targetDigests: Object.freeze({ codex: 'target-sha256' }),
 });
 
-const currentStatus = (): ProjectStatus => Object.freeze({
-  artifact: Object.freeze({ activeEpoch, currentSourceRevision: 'revision-sha256', state: 'active' as const }),
-  build: Object.freeze({ state: 'idle' as const }),
-  source: Object.freeze({ diagnostics: Object.freeze([]), state: 'ready' as const }),
+const currentStatus = (): ProjectStatus => deepFreeze({
+  artifact: { activeEpoch, currentSourceRevision: 'revision-sha256', state: 'active' as const },
+  build: { state: 'idle' as const },
+  source: { diagnostics: Object.freeze([]), state: 'ready' as const },
 });
 
 const eventually = (assertion: () => void): Promise<void> =>
