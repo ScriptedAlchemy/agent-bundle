@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, open, rm, stat, type FileHandle } from 'node:fs/promises';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -12,6 +12,8 @@ import { liftPromise } from '../effect/lift.ts';
 
 const EVENT_RUNTIME_PROTOCOL_VERSION = 1 as const;
 const MAX_EVENT_MESSAGE_BYTES = 1024 * 1024;
+const ENDPOINT_CLAIM_RETRY_COUNT = 100;
+const ENDPOINT_CLAIM_RETRY_DELAY = Duration.millis(10);
 
 export type EventRuntimeTransportErrorCode =
   | 'epoch-mismatch'
@@ -227,6 +229,16 @@ class EventSocketService extends Context.Service<EventSocketService, EventSocket
 
 type EndpointProbe = 'live' | 'missing' | 'stale';
 
+export interface EventRuntimeServerTestHooks {
+  readonly afterEndpointProbe?: (state: EndpointProbe) => Promise<void>;
+}
+
+interface EndpointClaim {
+  readonly handle: FileHandle;
+  readonly identity: Readonly<{ readonly device: number; readonly inode: number }>;
+  readonly path: string;
+}
+
 const probeEndpoint = (endpoint: string): Effect.Effect<EndpointProbe, EventRuntimeTransportError> =>
   Effect.callback<EndpointProbe, EventRuntimeTransportError>((resume) => {
     const socket = createConnection(endpoint);
@@ -265,17 +277,54 @@ const probeEndpoint = (endpoint: string): Effect.Effect<EndpointProbe, EventRunt
     });
   });
 
-const openServer = (
-  options: CreateEventRuntimeServerOptions,
-): Effect.Effect<EventSocketServiceShape, EventRuntimeTransportError> => Effect.gen(function*() {
-  const endpoint = eventRuntimeEndpoint(options.endpointId);
-  if (process.platform !== 'win32') {
-    yield* liftPromise(async () => {
-      await mkdir(dirname(endpoint), { mode: 0o700, recursive: true });
-      await chmod(dirname(endpoint), 0o700);
-    }).pipe(
-      Effect.mapError((error) => transportError('runtime-failed', 'Unable to prepare the event runtime endpoint.', error)),
-    );
+const tryClaimEndpoint = (
+  endpoint: string,
+): Effect.Effect<EndpointClaim | undefined, EventRuntimeTransportError> =>
+  liftPromise(async () => {
+    const path = `${endpoint}.lock`;
+    let handle: FileHandle | undefined;
+    try {
+      handle = await open(path, 'wx', 0o600);
+      const lockStat = await handle.stat();
+      return {
+        handle,
+        identity: { device: lockStat.dev, inode: lockStat.ino },
+        path,
+      };
+    } catch (error) {
+      await handle?.close();
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
+      throw error;
+    }
+  }).pipe(
+    Effect.mapError((error) => transportError('runtime-failed', 'Unable to claim the event runtime endpoint.', error)),
+  );
+
+const releaseEndpointClaim = (claim: EndpointClaim): Effect.Effect<void> =>
+  liftPromise(async () => {
+    await claim.handle.close();
+    let current;
+    try {
+      current = await stat(claim.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    if (
+      current.dev === claim.identity.device
+      && current.ino === claim.identity.inode
+    ) {
+      await rm(claim.path, { force: true });
+    }
+  }).pipe(Effect.ignore);
+
+const claimEndpoint = Effect.fnUntraced(function*(
+  endpoint: string,
+): Effect.fn.Return<EndpointClaim, EventRuntimeTransportError> {
+  for (let attempt = 0; attempt < ENDPOINT_CLAIM_RETRY_COUNT; attempt += 1) {
+    const claim = yield* tryClaimEndpoint(endpoint);
+    if (claim !== undefined) return claim;
+
     const endpointState = yield* probeEndpoint(endpoint);
     if (endpointState === 'live') {
       return yield* Effect.fail(transportError(
@@ -283,13 +332,25 @@ const openServer = (
         'Event runtime endpoint already has a live server.',
       ));
     }
-    if (endpointState === 'stale') {
-      yield* liftPromise(() => rm(endpoint)).pipe(
-        Effect.mapError((error) => transportError('runtime-failed', 'Unable to remove the stale event runtime endpoint.', error)),
-      );
+    if (attempt + 1 < ENDPOINT_CLAIM_RETRY_COUNT) {
+      yield* Effect.sleep(ENDPOINT_CLAIM_RETRY_DELAY);
     }
   }
-  return yield* Effect.callback<EventSocketServiceShape, EventRuntimeTransportError>((resume) => {
+
+  // A crashed process can leave the claim file behind. Retrying the endpoint
+  // probe is bounded rather than stealing an unverifiable claim and recreating
+  // the same unlink race that this lock prevents.
+  return yield* Effect.fail(transportError(
+    'runtime-failed',
+    'Event runtime endpoint claim did not clear after bounded retries.',
+  ));
+});
+
+const listenServer = (
+  options: CreateEventRuntimeServerOptions,
+  endpoint: string,
+): Effect.Effect<EventSocketServiceShape, EventRuntimeTransportError> =>
+  Effect.callback<EventSocketServiceShape, EventRuntimeTransportError>((resume) => {
     const sockets = new Set<Socket>();
     const server = createServer({ allowHalfOpen: true }, (socket) => {
       sockets.add(socket);
@@ -337,6 +398,57 @@ const openServer = (
       server.close();
     });
   });
+
+const openServer = (
+  options: CreateEventRuntimeServerOptions,
+  testHooks?: EventRuntimeServerTestHooks,
+): Effect.Effect<EventSocketServiceShape, EventRuntimeTransportError> => Effect.gen(function*() {
+  const endpoint = eventRuntimeEndpoint(options.endpointId);
+  if (process.platform === 'win32') return yield* listenServer(options, endpoint);
+
+  yield* liftPromise(async () => {
+    await mkdir(dirname(endpoint), { mode: 0o700, recursive: true });
+    await chmod(dirname(endpoint), 0o700);
+  }).pipe(
+    Effect.mapError((error) => transportError('runtime-failed', 'Unable to prepare the event runtime endpoint.', error)),
+  );
+  const endpointState = yield* probeEndpoint(endpoint);
+  const afterEndpointProbe = testHooks?.afterEndpointProbe;
+  if (afterEndpointProbe !== undefined) {
+    yield* liftPromise(() => afterEndpointProbe(endpointState)).pipe(
+      Effect.mapError((error) => transportError('runtime-failed', 'Event runtime endpoint probe hook failed.', error)),
+    );
+  }
+  if (endpointState === 'live') {
+    return yield* Effect.fail(transportError(
+      'runtime-failed',
+      'Event runtime endpoint already has a live server.',
+    ));
+  }
+
+  return yield* Effect.acquireUseRelease(
+    claimEndpoint(endpoint),
+    () => Effect.gen(function*() {
+      const claimedEndpointState = yield* probeEndpoint(endpoint);
+      if (claimedEndpointState === 'live') {
+        return yield* Effect.fail(transportError(
+          'runtime-failed',
+          'Event runtime endpoint already has a live server.',
+        ));
+      }
+      if (claimedEndpointState === 'stale') {
+        yield* liftPromise(() => rm(endpoint)).pipe(
+          Effect.mapError((error) => transportError(
+            'runtime-failed',
+            'Unable to remove the stale event runtime endpoint.',
+            error,
+          )),
+        );
+      }
+      return yield* listenServer(options, endpoint);
+    }),
+    releaseEndpointClaim,
+  );
 });
 
 const removeOwnedEndpoint = (service: EventSocketServiceShape): Effect.Effect<void> =>
@@ -374,19 +486,32 @@ const closeServer = (service: EventSocketServiceShape): Effect.Effect<void> =>
     ),
   );
 
-const eventSocketLayer = (options: CreateEventRuntimeServerOptions): Layer.Layer<EventSocketService, EventRuntimeTransportError> =>
-  Layer.effect(EventSocketService, Effect.acquireRelease(openServer(options), closeServer));
-
-export const createEventRuntimeServer = async (
+const eventSocketLayer = (
   options: CreateEventRuntimeServerOptions,
+  testHooks?: EventRuntimeServerTestHooks,
+): Layer.Layer<EventSocketService, EventRuntimeTransportError> =>
+  Layer.effect(EventSocketService, Effect.acquireRelease(openServer(options, testHooks), closeServer));
+
+const createEventRuntimeServerWithHooks = async (
+  options: CreateEventRuntimeServerOptions,
+  testHooks?: EventRuntimeServerTestHooks,
 ): Promise<EventRuntimeServer> => {
-  const runtime: ScopedEffectRuntime<EventSocketService> = makeScopedEffectRuntime(eventSocketLayer(options));
+  const runtime: ScopedEffectRuntime<EventSocketService> = makeScopedEffectRuntime(eventSocketLayer(options, testHooks));
   const service = await runtime.run(EventSocketService);
   return Object.freeze({
     close: () => runtime.close(),
     endpoint: service.endpoint,
   });
 };
+
+export const createEventRuntimeServer = async (
+  options: CreateEventRuntimeServerOptions,
+): Promise<EventRuntimeServer> => createEventRuntimeServerWithHooks(options);
+
+export const createEventRuntimeServerForTest = async (
+  options: CreateEventRuntimeServerOptions,
+  testHooks: EventRuntimeServerTestHooks,
+): Promise<EventRuntimeServer> => createEventRuntimeServerWithHooks(options, testHooks);
 
 const connect = (endpoint: string): Effect.Effect<Socket, EventRuntimeTransportError> =>
   Effect.callback<Socket, EventRuntimeTransportError>((resume) => {
