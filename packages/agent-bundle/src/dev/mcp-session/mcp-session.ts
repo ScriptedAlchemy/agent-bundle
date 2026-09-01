@@ -315,6 +315,9 @@ export class McpSession {
 
   #callToolEffect(options: McpSessionToolCallOptions): Effect.Effect<CallToolResult, unknown> {
     return this.#assertEpochCurrentEffect().pipe(Effect.andThen(Effect.suspend(() => {
+      if (options.signal?.aborted) {
+        return Effect.fail(options.signal.reason ?? new Error('MCP session tool call was aborted.'));
+      }
       const requestId = options.requestId ?? randomUUID();
       if (requestId.trim().length === 0) {
         return Effect.fail(new Error('MCP session requestId must be nonempty.'));
