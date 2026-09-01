@@ -111,6 +111,29 @@ const discoverAssets = async (
   })));
 };
 
+/** The declared source path of a payload declaration, or undefined when the declaration is not string-or-`{source}` shaped. */
+export const payloadDeclarationEntry = (declaration: unknown): string | undefined => {
+  const entry = typeof declaration === 'string'
+    ? declaration
+    : isRecord(declaration) ? declaration.source : undefined;
+  return typeof entry === 'string' && entry.trim().length > 0 ? entry : undefined;
+};
+
+/**
+ * The absolute, project-contained source directory of one well-shaped payload
+ * declaration. Malformed or escaping declarations return undefined — source
+ * validation reports those (AB4740-AB4742).
+ */
+export const payloadDeclarationSource = (
+  projectRoot: string,
+  declaration: unknown,
+): string | undefined => {
+  const entry = payloadDeclarationEntry(declaration);
+  if (entry === undefined) return undefined;
+  const source = resolve(projectRoot, entry);
+  return isInside(projectRoot, source) ? source : undefined;
+};
+
 /**
  * The absolute source directories of well-shaped payload declarations.
  * Source snapshots use this to include payload files in the project
@@ -124,10 +147,8 @@ export const configuredPayloadRoots = (
   if (configured === undefined || !isRecord(configured)) return [];
   const roots: string[] = [];
   for (const declaration of Object.values(configured)) {
-    const entry = typeof declaration === 'string' ? declaration : declaration?.source;
-    if (typeof entry !== 'string' || entry.trim().length === 0) continue;
-    const source = resolve(projectRoot, entry);
-    if (isInside(projectRoot, source)) roots.push(source);
+    const source = payloadDeclarationSource(projectRoot, declaration);
+    if (source !== undefined) roots.push(source);
   }
   return [...new Set(roots)].sort((left, right) => left.localeCompare(right));
 };
@@ -146,10 +167,8 @@ const discoverPayloads = async (
   if (configured === undefined || !isRecord(configured)) return [];
   const payloads: DiscoveredPayload[] = [];
   for (const [name, declaration] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
-    const entry = typeof declaration === 'string' ? declaration : declaration?.source;
-    if (typeof entry !== 'string' || entry.trim().length === 0) continue;
-    const source = resolve(projectRoot, entry);
-    if (!isInside(projectRoot, source)) continue;
+    const source = payloadDeclarationSource(projectRoot, declaration);
+    if (source === undefined) continue;
     let stats;
     try {
       stats = await stat(source);
@@ -160,12 +179,13 @@ const discoverPayloads = async (
       payloads.push({ files: [], name, source });
       continue;
     }
-    const matches = (await fastGlob('**', { ...assetGlobOptions, cwd: source })).sort((left, right) => left.localeCompare(right));
+    const matches = (await fastGlob('**', { ...assetGlobOptions, cwd: source, stats: true }))
+      .sort((left, right) => left.path.localeCompare(right.path));
     payloads.push({
-      files: await Promise.all(matches.map(async (file) => ({
-        bytes: (await stat(file)).size,
-        relativePath: relative(source, file).replaceAll('\\', '/'),
-        source: file,
+      files: await Promise.all(matches.map(async (match) => ({
+        bytes: (match.stats ?? await stat(match.path)).size,
+        relativePath: relative(source, match.path).replaceAll('\\', '/'),
+        source: match.path,
       }))),
       name,
       source,

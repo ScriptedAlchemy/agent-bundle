@@ -42,7 +42,7 @@ import type {
   NormalizedSkill,
   SourceProvenance,
 } from '../core/types.ts';
-import type { DiscoveredProject } from './discover.ts';
+import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
@@ -230,18 +230,31 @@ const normalizePayloads = (
   const discoveredByName = new Map((discovered.payloads ?? []).map((payload) => [payload.name, payload]));
   const payloads: NormalizedPayload[] = [];
   for (const [name, declaration] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
-    const entry = typeof declaration === 'string' ? declaration : declaration.source;
-    if (typeof entry !== 'string' || entry.trim().length === 0) continue;
+    const source = payloadDeclarationSource(loaded.context.projectRoot, declaration);
+    if (source === undefined) continue;
     payloads.push({
       files: (discoveredByName.get(name)?.files ?? []).map((file) => ({ ...file })),
       id: `payload:${name}`,
       name,
       provenance: { kind: 'prebuilt', sourcePath: loaded.configPath },
-      source: resolve(loaded.context.projectRoot, entry),
+      source,
       targets: sortedUnique(typeof declaration === 'string' ? targetNames : (declaration.targets ?? targetNames)),
     });
   }
   return payloads;
+};
+
+/** The innermost declared payload whose source directory contains the file. */
+export const owningPayload = <Payload extends { readonly source: string }>(
+  payloads: readonly Payload[],
+  source: string,
+): Payload | undefined => {
+  let best: Payload | undefined;
+  for (const payload of payloads) {
+    if (!isInside(payload.source, source)) continue;
+    if (best === undefined || payload.source.length > best.source.length) best = payload;
+  }
+  return best;
 };
 
 /**
@@ -255,14 +268,10 @@ export const prebuiltArtifactPath = (
   root: string,
   source: string,
 ): string => {
-  let best: NormalizedPayload | undefined;
-  for (const payload of payloads) {
-    if (!isInside(payload.source, source)) continue;
-    if (best === undefined || payload.source.length > best.source.length) best = payload;
-  }
-  return best === undefined
+  const payload = owningPayload(payloads, source);
+  return payload === undefined
     ? relative(root, source).replaceAll('\\', '/')
-    : `${best.name}/${relative(best.source, source).replaceAll('\\', '/')}`;
+    : `${payload.name}/${relative(payload.source, source).replaceAll('\\', '/')}`;
 };
 
 const isHookEntryList = (
@@ -306,9 +315,8 @@ const normalizeHook = (
   const source = resolve(root, prebuilt ? handlerInput.prebuilt : handlerInput);
   const handler = relative(root, source).replaceAll('\\', '/');
   const prebuiltPath = prebuilt ? prebuiltArtifactPath(payloads, root, source) : undefined;
-  const args = prebuilt && entry.args !== undefined
-    ? entry.args.filter((argument): argument is string => typeof argument === 'string')
-    : undefined;
+  // Non-string arguments are a validation error (AB4746); normalization trusts the declared type.
+  const args = prebuilt ? entry.args : undefined;
   const tools = sortedUnique(entry.tools ?? []).filter(
     (tool): tool is CanonicalHookTool => knownHookTools.has(tool as CanonicalHookTool),
   );
@@ -510,9 +518,10 @@ const normalizeMcpApps = (
 
   for (const [serverName, rawServer] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
     const server = serverByName.get(serverName);
+    if (server === undefined || rawServer.apps === undefined) continue;
     // Apps require a local server entry: a compiled source entry, or a prebuilt one.
-    const prebuilt = isPrebuiltEntryInput(rawServer.entry);
-    if (server === undefined || (server.source === undefined && !prebuilt) || rawServer.apps === undefined) continue;
+    const prebuilt = server.provenance.kind === 'prebuilt';
+    if (server.source === undefined && !prebuilt) continue;
     for (const [name, app] of Object.entries(rawServer.apps).sort(([left], [right]) => left.localeCompare(right))) {
       const declaration = app as AgentBundleMcpApp;
       apps.push({

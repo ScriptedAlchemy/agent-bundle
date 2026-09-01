@@ -37,7 +37,12 @@ export interface RscRuntimeRsbuildConfigOptions {
    */
   readonly onAppReload?: () => void;
   readonly onCompile?: Readonly<{
-    beforeAttempt(): string;
+    /**
+     * Allocates the monotonic identity for one completed MultiStats cohort.
+     * Called at the start of every global completion callback, in completion
+     * order, so identity never depends on pairing with `onBeforeDevCompile`.
+     */
+    beginCompletedCohort(): string;
     capture(input: {
       readonly attemptId: string;
       readonly cohortChanged: boolean;
@@ -48,6 +53,15 @@ export interface RscRuntimeRsbuildConfigOptions {
     /** Queues provider activation but never blocks the Rsbuild compile hook. */
     enqueue(snapshot: RscRuntimeCompileSnapshot): unknown;
     failAttempt(attemptId: string, error: unknown, kind: RscRuntimeCompileFailureKind): void;
+    /**
+     * Advisory pre-compile observation. It owns no identity, queue, or
+     * activation barrier, and it must never throw or block a compile. The
+     * session may use it as a bounded collapse hint (briefly holding an
+     * in-flight activation so the observed compile's completed cohort can
+     * supersede it), but a missing completion can only delay one activation
+     * by that bounded grace - never wedge or fail it.
+     */
+    observeCompileStart(): void;
     /**
      * Stages an immutable checkpoint of one environment's completed output
      * root. Awaited inside the environment compiler's `done` hook, where
@@ -111,7 +125,6 @@ const emitRuntimeManifest = (): RsbuildPlugin => ({
 const runtimeCompileObserverPlugin = (
   observer: NonNullable<RscRuntimeRsbuildConfigOptions['onCompile']>,
 ): RsbuildPlugin => {
-  const pendingAttemptIds: string[] = [];
   let capturedCohort: Readonly<{ readonly activationSequence: number; readonly sourceRevision: string }> | undefined;
   let nextActivationSequence = 0;
   return {
@@ -125,7 +138,7 @@ const runtimeCompileObserverPlugin = (
         // environment names, and missing hashes stage nothing here; the
         // global after-compile hook is the loud failure path for those, and
         // rejecting this hook instead would skip that dispatch entirely and
-        // strand the FIFO attempt pairing.
+        // silence the completed-cohort failure lane.
         if (stats === undefined || stats.hasErrors()) return;
         const name = environment.name;
         if (!isCompileEnvironmentName(name)) return;
@@ -137,26 +150,22 @@ const runtimeCompileObserverPlugin = (
         });
       });
       api.onBeforeDevCompile(() => {
-        // Rsbuild documents global hook order, but not one before/after pair
-        // per MultiCompiler cohort. FIFO pairing is only empirical in 2.2.1;
-        // reject identities that cannot be paired unambiguously, while
-        // retaining legitimate overlapping before callbacks in FIFO order.
-        const attemptId = observer.beforeAttempt();
-        if (pendingAttemptIds.includes(attemptId)) {
-          const pairingError = new Error(`RSC runtime compile produced duplicate pending attempt identity ${JSON.stringify(attemptId)}.`);
-          for (const unmatchedAttemptId of [...pendingAttemptIds, attemptId]) {
-            observer.failAttempt(unmatchedAttemptId, pairingError, 'provider-lifecycle');
-          }
-          pendingAttemptIds.length = 0;
-          throw pairingError;
-        }
-        pendingAttemptIds.push(attemptId);
+        // Rsbuild documents global hook order, but not a stable cycle
+        // identity, callback cardinality under coalesced invalidations, or
+        // one-to-one before/after pairing when MultiCompiler children
+        // invalidate at different times. Pre-compile observation is therefore
+        // advisory only: no identity, queue, or activation barrier may derive
+        // from this hook.
+        observer.observeCompileStart();
       });
       api.onAfterDevCompile(async ({ stats }) => {
-        const attemptId = pendingAttemptIds.shift();
-        if (attemptId === undefined) {
-          throw new Error('RSC runtime compile completed without a matching attempt.');
-        }
+        // Each completed MultiStats cohort is the authoritative monotonic
+        // identity: the observer allocates the next ordinal per completion
+        // callback, in completion order. There is no queue pairing this
+        // callback with onBeforeDevCompile, so coalesced, missing,
+        // duplicated, or reordered global callbacks cannot associate Stats
+        // with an older observation.
+        const attemptId = observer.beginCompletedCohort();
         let snapshot: RscRuntimeCompileSnapshot | undefined;
         try {
           if (stats.hasErrors()) {
