@@ -16,9 +16,17 @@ const stateSummaries: Readonly<Record<RouteCatalog['state'], string>> = Object.f
 const counted = (count: number, singular: string, plural = `${singular}s`): string =>
   `${String(count)} ${count === 1 ? singular : plural}`;
 
-const configSummary = (entry: RouteCatalogEntry): string => entry.config.length === 0
-  ? 'No static config export'
-  : entry.config.map((field) => `${field.key}: ${field.value}`).join(' · ');
+/**
+ * `description` is projected as the route's own label, so repeating it here
+ * would print the same sentence twice on every row.
+ */
+const configSummary = (entry: RouteCatalogEntry): string => {
+  if (entry.config.length === 0) return 'No static config export';
+  const fields = entry.config.filter((field) => !(field.key === 'description' && entry.description !== undefined));
+  return fields.length === 0
+    ? 'No config beyond the description'
+    : fields.map((field) => `${field.key}: ${field.value}`).join(' · ');
+};
 
 const commandSummary = (entry: RouteCatalogEntry): string | undefined => {
   const command = entry.command;

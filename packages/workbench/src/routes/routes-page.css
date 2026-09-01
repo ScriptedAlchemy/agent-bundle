@@ -7,7 +7,7 @@
 .route-identity dt { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; margin: 0 0 6px; text-transform: uppercase; }
 .route-identity dd { font-size: 14px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
 .route-digest { font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-weight: 500; }
-    10|.route-state { text-transform: capitalize; }
+.route-state { text-transform: capitalize; }
 .route-state--current { color: #14682f; }
 .route-state--stale { color: #8a5300; }
 .route-state--unavailable { color: #b31b23; }
@@ -17,7 +17,7 @@
 .route-diagnostic-code { font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-weight: 700; }
 .route-group { border-top: 1px solid #d9dee7; margin-top: 26px; padding-top: 18px; }
 .route-group-heading { align-items: baseline; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
-    20|.route-group-heading h2 { font-size: 17px; margin: 0; }
+.route-group-heading h2 { font-size: 17px; margin: 0; }
 .route-group-heading p { color: #596372; font-size: 13px; margin: 0; text-transform: lowercase; }
 .route-table { border-collapse: collapse; margin-top: 14px; table-layout: fixed; width: 100%; }
 .route-table th, .route-table td { border-bottom: 1px solid #e4e8ef; padding: 11px 12px 11px 0; text-align: left; vertical-align: top; }
@@ -27,5 +27,5 @@
 .route-event, .route-command { color: #345080; display: block; font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; margin-top: 4px; overflow-wrap: anywhere; }
 .route-description { color: #596372; display: block; font-size: 13px; font-weight: 400; margin-top: 4px; }
 .route-source { font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; width: 30%; }
-    30|.route-provenance { color: #7a8492; display: block; font-family: inherit; font-size: 11px; margin-top: 4px; text-transform: uppercase; }
+.route-provenance { color: #7a8492; display: block; font-family: inherit; font-size: 11px; margin-top: 4px; text-transform: uppercase; }
 .route-config { color: #4f5866; font-size: 13px; overflow-wrap: anywhere; }

@@ -243,6 +243,10 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
     await expect(page.locator('.route-table')).toContainText('src/scripts/verify-release.ts', { timeout: browserTimeout });
     await expect(page.locator('.route-table')).not.toContainText('script:detect-risk');
     await expect(page.locator('.route-state')).toHaveText('current', { timeout: browserTimeout });
+    // Provenance renders under its source rather than running into it, which is
+    // only true when the catalog stylesheet actually reached the document.
+    await expect(page.locator('.route-provenance')).toHaveText('conventional', { timeout: browserTimeout });
+    expect(await page.locator('.route-provenance').evaluate((node) => getComputedStyle(node).display)).toBe('block');
     await captureExampleState(page, 'hooks-and-scripts', 'routes-catalog');
 
     await page.getByRole('link', { name: 'Logs' }).click();
@@ -556,6 +560,63 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await expect(page.getByText(/finished:/u)).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.eval-counts')).toContainText(/1 passed · 0 failed · 0 inconclusive/u, { timeout: browserTimeout });
     await captureExampleState(page, 'mcp-app', 'eval-completed');
+    await expectHealthyExamplePage(ledger);
+    await writeExampleReport();
+  } finally {
+    await server.close();
+    await project.release();
+  }
+});
+
+e2e('renders the flagship compiled route catalog by server and kind in real Chrome', { timeout: 150_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await copyExample('audiobook-curator');
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  const ledger = createExampleErrorLedger(page, server.url);
+  try {
+    await page.goto(workbenchUrl(server.url, 'routes'));
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.route-state')).toHaveText('current', { timeout: browserTimeout });
+
+    // One generated server owns every MCP kind the curator declares, so each
+    // kind must appear as its own server-scoped group rather than a flat list.
+    for (const group of ['curator · Tools', 'curator · Resources', 'curator · Prompts']) {
+      await expect(page.getByRole('heading', { name: group, exact: true })).toBeVisible({ timeout: browserTimeout });
+    }
+    await expect(page.locator('.route-group-heading').filter({ hasText: 'curator · Tools' })).toContainText('generated', { timeout: browserTimeout });
+    const tools = page.getByRole('region', { name: 'curator · Tools' });
+    await expect(tools.locator('tbody tr')).toHaveCount(15, { timeout: browserTimeout });
+    await expect(tools).toContainText('tool:curator/convert_audiobook', { timeout: browserTimeout });
+    await expect(tools).toContainText('src/mcp/curator/tools/convert_audiobook.tsx', { timeout: browserTimeout });
+    // The extracted config is summarized, never inlined as nested JSON.
+    await expect(tools).toContainText('annotations: 2 keys', { timeout: browserTimeout });
+
+    const resources = page.getByRole('region', { name: 'curator · Resources' });
+    await expect(resources).toContainText('resource:curator/catalog', { timeout: browserTimeout });
+    await expect(resources).toContainText('uri: audiobook-curator://catalog', { timeout: browserTimeout });
+    await expect(page.getByRole('region', { name: 'curator · Prompts' })).toContainText('prompt:curator/curate', { timeout: browserTimeout });
+    await expect(page.locator('.route-provenance').first()).toHaveText('conventional', { timeout: browserTimeout });
+    await expect(page.locator('.route-identity')).toContainText('17', { timeout: browserTimeout });
+
+    // The curator declares its CLI through config rather than `src/cli/**`, so
+    // the compiled catalog must not invent a conventional route for it.
+    await expect(page.getByRole('heading', { name: 'CLI commands', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Scripts', exact: true })).toHaveCount(0);
+    await expect(page.locator('.route-diagnostics')).toHaveCount(0);
+    await captureExampleState(page, 'audiobook-curator', 'routes-catalog-by-server');
+
+    for (const preserved of ['Overview', 'Skills', 'Artifacts', 'Logs']) {
+      await expect(page.getByRole('link', { name: preserved, exact: true })).toBeVisible({ timeout: browserTimeout });
+    }
+    await page.getByRole('link', { name: 'Overview', exact: true }).click();
+    await waitForSettledWorkbench(page);
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();
   } finally {

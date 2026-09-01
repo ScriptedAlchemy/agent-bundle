@@ -131,3 +131,55 @@ it('reports no static config export instead of an empty cell', () => {
 
   expect(markup).toContain('No static config export');
 });
+
+it('does not repeat the description it already renders as the route label', () => {
+  const described: RouteManifest = {
+    ...manifest,
+    servers: [{
+      ...manifest.servers[0]!,
+      routes: [{
+        config: [
+          { key: 'description', kind: 'string', value: 'Echo the request back' },
+          { key: 'title', kind: 'string', value: 'Echo' },
+        ],
+        description: 'Echo the request back',
+        id: 'tool:library/echo',
+        kind: 'tool',
+        provenance: { kind: 'conventional' },
+        serverId: 'mcp:library',
+        source: 'src/mcp/library/tools/echo.ts',
+      }],
+    }],
+  };
+
+  const markup = render(routeCatalogFor(described));
+
+  expect(markup).toContain('title: Echo');
+  expect(markup).not.toContain('description: Echo the request back');
+  expect(markup.match(/Echo the request back/gu)).toHaveLength(1);
+});
+
+it('names a config carrying only the description rather than claiming there is none', () => {
+  const onlyDescription: RouteManifest = {
+    ...manifest,
+    servers: [{
+      ...manifest.servers[0]!,
+      routes: [{
+        config: [{ key: 'description', kind: 'string', value: 'Curate a library' }],
+        description: 'Curate a library',
+        id: 'prompt:library/curate',
+        kind: 'prompt',
+        provenance: { kind: 'conventional' },
+        serverId: 'mcp:library',
+        source: 'src/mcp/library/prompts/curate.ts',
+      }],
+    }],
+  };
+
+  const markup = render(routeCatalogFor(onlyDescription));
+
+  expect(markup).toContain('No config beyond the description');
+  // The CLI route in the same manifest exports no config at all, so the two
+  // empty-config summaries must stay distinguishable rather than collapse.
+  expect(markup).toContain('No static config export');
+});
