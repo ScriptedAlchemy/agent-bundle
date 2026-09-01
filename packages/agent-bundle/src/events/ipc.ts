@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, rm } from 'node:fs/promises';
+import { chmod, mkdir, rm, stat } from 'node:fs/promises';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -216,6 +216,7 @@ const handleConnection = Effect.fnUntraced(function*(
 
 interface EventSocketServiceShape {
   readonly endpoint: string;
+  readonly endpointIdentity?: Readonly<{ readonly device: number; readonly inode: number }>;
   readonly server: Server;
   readonly sockets: Set<Socket>;
 }
@@ -223,6 +224,46 @@ interface EventSocketServiceShape {
 class EventSocketService extends Context.Service<EventSocketService, EventSocketServiceShape>()(
   'agent-bundle/events/EventSocketService',
 ) {}
+
+type EndpointProbe = 'live' | 'missing' | 'stale';
+
+const probeEndpoint = (endpoint: string): Effect.Effect<EndpointProbe, EventRuntimeTransportError> =>
+  Effect.callback<EndpointProbe, EventRuntimeTransportError>((resume) => {
+    const socket = createConnection(endpoint);
+    const cleanup = (): void => {
+      socket.removeListener('connect', onConnect);
+      socket.removeListener('error', onError);
+    };
+    const finish = (effect: Effect.Effect<EndpointProbe, EventRuntimeTransportError>): void => {
+      cleanup();
+      socket.destroy();
+      resume(effect);
+    };
+    const onConnect = (): void => {
+      finish(Effect.succeed('live'));
+    };
+    const onError = (error: NodeJS.ErrnoException): void => {
+      if (error.code === 'ENOENT') {
+        finish(Effect.succeed('missing'));
+        return;
+      }
+      if (error.code === 'ECONNREFUSED') {
+        finish(Effect.succeed('stale'));
+        return;
+      }
+      finish(Effect.fail(transportError(
+        'runtime-failed',
+        'Unable to inspect the existing event runtime endpoint.',
+        error,
+      )));
+    };
+    socket.once('connect', onConnect);
+    socket.once('error', onError);
+    return Effect.sync(() => {
+      cleanup();
+      socket.destroy();
+    });
+  });
 
 const openServer = (
   options: CreateEventRuntimeServerOptions,
@@ -232,10 +273,21 @@ const openServer = (
     yield* liftPromise(async () => {
       await mkdir(dirname(endpoint), { mode: 0o700, recursive: true });
       await chmod(dirname(endpoint), 0o700);
-      await rm(endpoint, { force: true });
     }).pipe(
       Effect.mapError((error) => transportError('runtime-failed', 'Unable to prepare the event runtime endpoint.', error)),
     );
+    const endpointState = yield* probeEndpoint(endpoint);
+    if (endpointState === 'live') {
+      return yield* Effect.fail(transportError(
+        'runtime-failed',
+        'Event runtime endpoint already has a live server.',
+      ));
+    }
+    if (endpointState === 'stale') {
+      yield* liftPromise(() => rm(endpoint)).pipe(
+        Effect.mapError((error) => transportError('runtime-failed', 'Unable to remove the stale event runtime endpoint.', error)),
+      );
+    }
   }
   return yield* Effect.callback<EventSocketServiceShape, EventRuntimeTransportError>((resume) => {
     const sockets = new Set<Socket>();
@@ -267,8 +319,13 @@ const openServer = (
         resume(Effect.succeed({ endpoint, server, sockets }));
         return;
       }
-      void chmod(endpoint, 0o600).then(
-        () => resume(Effect.succeed({ endpoint, server, sockets })),
+      void chmod(endpoint, 0o600).then(() => stat(endpoint)).then(
+        (endpointStat) => resume(Effect.succeed({
+          endpoint,
+          endpointIdentity: { device: endpointStat.dev, inode: endpointStat.ino },
+          server,
+          sockets,
+        })),
         (error: unknown) => {
           server.close();
           resume(Effect.fail(transportError('runtime-failed', 'Unable to secure the event runtime endpoint.', error)));
@@ -281,6 +338,24 @@ const openServer = (
     });
   });
 });
+
+const removeOwnedEndpoint = (service: EventSocketServiceShape): Effect.Effect<void> =>
+  liftPromise(async () => {
+    if (service.endpointIdentity === undefined) return;
+    let current;
+    try {
+      current = await stat(service.endpoint);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    if (
+      current.dev === service.endpointIdentity.device
+      && current.ino === service.endpointIdentity.inode
+    ) {
+      await rm(service.endpoint, { force: true });
+    }
+  }).pipe(Effect.ignore);
 
 const closeServer = (service: EventSocketServiceShape): Effect.Effect<void> =>
   Effect.callback<void>((resume) => {
@@ -295,7 +370,7 @@ const closeServer = (service: EventSocketServiceShape): Effect.Effect<void> =>
     Effect.ensuring(
       process.platform === 'win32'
         ? Effect.void
-        : liftPromise(() => rm(service.endpoint, { force: true })).pipe(Effect.ignore),
+        : removeOwnedEndpoint(service),
     ),
   );
 
