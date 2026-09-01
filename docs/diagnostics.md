@@ -24,7 +24,9 @@ gate a build, a validation, or a dev rebuild.
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB5000` | General CLI and adapter failures. |
+| `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
 | `AB7xxx` | Project preparation and development rebuilds. |
+| `AB7300`–`AB7315` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, and runtime endpoint health. |
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
 
