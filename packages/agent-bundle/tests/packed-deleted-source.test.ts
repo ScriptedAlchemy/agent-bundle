@@ -69,4 +69,60 @@ describe('deleted-source artifact evidence', () => {
       await rm(projectRoot, { force: true, recursive: true });
     }
   });
+
+  it('rejects a receipt from another project before spawning the entry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-deleted-source-mismatch-'));
+    const projectA = join(root, 'project-a');
+    const projectB = join(root, 'project-b');
+    try {
+      await Promise.all([
+        mkdir(join(projectA, 'src'), { recursive: true }),
+        mkdir(join(projectB, 'artifact'), { recursive: true }),
+        mkdir(join(projectB, 'src'), { recursive: true }),
+      ]);
+      const deletedSource = await removeProjectSource({ projectRoot: projectA });
+      const entry = join(projectB, 'artifact', 'entry.mjs');
+
+      const error = await openPackedMcpServer({
+        deletedSource,
+        entry,
+      }).catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(AgentTestError);
+      expect((error as AgentTestError).code).toBe('deleted-source-unverified');
+      expect((error as AgentTestError).message).toContain('does not belong to the deleted-source receipt project');
+      expect((error as AgentTestError).message).toContain(projectA);
+      expect((error as AgentTestError).message).toContain(entry);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('rejects an explicit cwd outside the receipt project before spawning the entry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-deleted-source-cwd-mismatch-'));
+    const projectA = join(root, 'project-a');
+    const projectB = join(root, 'project-b');
+    try {
+      await Promise.all([
+        mkdir(join(projectA, 'src'), { recursive: true }),
+        mkdir(projectB, { recursive: true }),
+      ]);
+      const deletedSource = await removeProjectSource({ projectRoot: projectA });
+      const entry = join(projectA, 'artifact', 'entry.mjs');
+
+      const error = await openPackedMcpServer({
+        cwd: projectB,
+        deletedSource,
+        entry,
+      }).catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(AgentTestError);
+      expect((error as AgentTestError).code).toBe('deleted-source-unverified');
+      expect((error as AgentTestError).message).toContain('does not belong to the deleted-source receipt project');
+      expect((error as AgentTestError).message).toContain(projectA);
+      expect((error as AgentTestError).message).toContain(projectB);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
 });

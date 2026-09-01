@@ -25,9 +25,13 @@ import {
   proofLevelLabel,
 } from './manifest.ts';
 
-/** Verified project-relative paths removed before a packed entry is spawned. */
+/**
+ * Verified project-relative paths removed before a packed entry is spawned.
+ * The receipt upgrades only a session whose entry and any explicit cwd belong
+ * to this same project root.
+ */
 export interface DeletedSourceReceipt {
-  /** Absolute project root against which every removed path was verified. */
+  /** Absolute root that must contain the launched entry and any explicit cwd. */
   readonly projectRoot: string;
   /** Sorted project-relative POSIX paths that existed, were removed, and were verified absent. */
   readonly removed: readonly string[];
@@ -48,7 +52,11 @@ export interface PackedMcpSessionOptions {
   readonly args?: readonly string[];
   /** Working directory for the spawned process; defaults to the entry's directory. */
   readonly cwd?: string;
-  /** Receipt whose paths must still be absent before this session may claim deleted-source proof. */
+  /**
+   * Receipt whose paths must still be absent and whose project root must
+   * contain the entry and any explicit cwd before this session may claim
+   * deleted-source proof.
+   */
   readonly deletedSource?: DeletedSourceReceipt;
   /** Absolute path of the generated stdio entry (`<artifact>/<target>/mcp/<server>.mjs`). */
   readonly entry: string;
@@ -136,6 +144,40 @@ const projectPath = (
     absolute,
     relative: relativePath.split(sep).join('/'),
   };
+};
+
+const belongsToProject = (
+  projectRoot: string,
+  candidate: string,
+  allowRoot: boolean,
+): boolean => {
+  const relativePath = relative(resolve(projectRoot), resolve(candidate));
+  return (allowRoot || relativePath !== '')
+    && relativePath !== '..'
+    && !relativePath.startsWith(`..${sep}`)
+    && !isAbsolute(relativePath);
+};
+
+const verifyDeletedSourceSessionBinding = (
+  receipt: DeletedSourceReceipt,
+  entry: string,
+  cwd: string | undefined,
+): void => {
+  const resolvedEntry = resolve(entry);
+  if (!belongsToProject(receipt.projectRoot, resolvedEntry, false)) {
+    throw deletedSourceError('The launched entry does not belong to the deleted-source receipt project.', {
+      details: [`project root: ${receipt.projectRoot}`, `entry:        ${resolvedEntry}`],
+      recovery: 'Pass the receipt produced for the project that owns the launched entry.',
+    });
+  }
+  if (cwd === undefined) return;
+  const resolvedCwd = resolve(cwd);
+  if (!belongsToProject(receipt.projectRoot, resolvedCwd, true)) {
+    throw deletedSourceError('The launched cwd does not belong to the deleted-source receipt project.', {
+      details: [`project root: ${receipt.projectRoot}`, `cwd:          ${resolvedCwd}`],
+      recovery: 'Pass the receipt produced for the project that owns the launched entry, and keep its cwd inside that project.',
+    });
+  }
 };
 
 const verifyDeletedSourceReceipt = async (receipt: DeletedSourceReceipt): Promise<void> => {
@@ -241,7 +283,10 @@ export const removeProjectSource = async (options: {
 export const openPackedMcpServer = async (
   options: PackedMcpSessionOptions,
 ): Promise<PackedMcpSession> => {
-  if (options.deletedSource !== undefined) await verifyDeletedSourceReceipt(options.deletedSource);
+  if (options.deletedSource !== undefined) {
+    verifyDeletedSourceSessionBinding(options.deletedSource, options.entry, options.cwd);
+    await verifyDeletedSourceReceipt(options.deletedSource);
+  }
   const proofLevel = options.deletedSource === undefined
     ? PACKED_STDIO_PROOF_LEVEL
     : PACKED_DELETED_SOURCE_PROOF_LEVEL;
