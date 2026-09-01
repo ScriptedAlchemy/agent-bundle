@@ -22,20 +22,6 @@ export type JsonValue =
   | readonly JsonValue[]
   | Readonly<{ [key: string]: JsonValue }>;
 
-export type RuntimeStateRecord =
-  | Readonly<{
-      event: EditEvent;
-      idempotencyKey: string;
-      kind: 'edit';
-      stateVersion: number;
-    }>
-  | Readonly<{
-      idempotencyKey: string;
-      kind: 'reset';
-      seed?: JsonValue;
-      stateVersion: number;
-    }>;
-
 export interface RuntimeSnapshot {
   stateVersion: number;
   edits: EditEvent[];

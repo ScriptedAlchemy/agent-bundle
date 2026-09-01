@@ -16,13 +16,13 @@ import { expect, test } from '@rstest/core';
 import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
 import { createRscRuntimeRsbuildConfig } from '../rsbuild.config.js';
 import { ensureExampleBuilt } from './support/ensure-built.js';
+import { withoutNodeSqliteWarning } from './support/state-driver-warnings.js';
 
 const createStateFile = async (): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-mcp-'));
-  const stateFile = join(directory, 'events.jsonl');
+  const stateFile = join(directory, 'state.sqlite');
   const kernel = createFileRuntimeKernel({
     stateFile,
-    createId: () => 'seed-edit',
     now: () => new Date('2026-08-14T10:24:31.000Z'),
   });
 
@@ -109,11 +109,11 @@ test('built stdio MCP serves static tools, file-backed data, Flight results, and
 
     await expect(client.callTool({ name: 'recent_edits', arguments: { limit: 10 } })).resolves.toMatchObject({
       content: [{ type: 'text' }],
-      structuredContent: { edits: [{ eventId: 'seed-edit' }], stateVersion: 1 },
+      structuredContent: { edits: [{ eventId: 'edit-1' }], stateVersion: 1 },
     });
     await expect(client.callTool({ name: 'render_edit_timeline', arguments: {} })).resolves.toMatchObject({
       content: [{ type: 'text' }],
-      structuredContent: { edits: [{ eventId: 'seed-edit' }], stateVersion: 1 },
+      structuredContent: { edits: [{ eventId: 'edit-1' }], stateVersion: 1 },
     });
     const runtimeStatus = await client.callTool({ name: 'runtime_status', arguments: {} });
     expect(runtimeStatus.structuredContent).toMatchObject({ editCount: 1, stateVersion: 1 });
@@ -145,6 +145,22 @@ test('built stdio MCP serves static tools, file-backed data, Flight results, and
     await rm(join(stateFile, '..'), { force: true, recursive: true });
   }
 });
+
+/**
+ * Waits for the HTTP entry's one JSON startup line on stderr, skipping the
+ * documented node:sqlite ExperimentalWarning that precedes it.
+ */
+const httpStartupLine = async (stream: Readable, current: () => string): Promise<{ port: number }> => {
+  for (;;) {
+    const meaningful = withoutNodeSqliteWarning(current()).trim();
+    const newline = meaningful.indexOf('\n');
+    const candidate = newline === -1 ? meaningful : meaningful.slice(0, newline);
+    if (candidate.startsWith('{') && candidate.endsWith('}')) {
+      return JSON.parse(candidate) as { port: number };
+    }
+    await once(stream, 'data');
+  }
+};
 
 const readJsonRpcLine = async (stdout: Readable): Promise<unknown> => {
   let buffered = '';
@@ -278,8 +294,7 @@ test('built Streamable HTTP MCP reports its one JSON startup line and closes cle
 
   const client = createClient();
   try {
-    await once(child.stderr, 'data');
-    const startup = JSON.parse(stderr.trim()) as { port: number };
+    const startup = await httpStartupLine(child.stderr, () => stderr);
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${startup.port}/mcp`));
     await client.connect(transport);
     await expectStaticSurface(client);
@@ -330,8 +345,7 @@ test('built Streamable HTTP MCP accepts only explicitly allowed public tunnel or
   });
 
   try {
-    await once(child.stderr, 'data');
-    const startup = JSON.parse(stderr.trim()) as { port: number };
+    const startup = await httpStartupLine(child.stderr, () => stderr);
     await expect(
       requestStatus({
         headers: { Host: 'tunnel.example', Origin: 'https://tunnel.example' },
@@ -366,8 +380,7 @@ test('adds an explicit public MCP URL domain only to returned resource content',
   const client = createClient();
 
   try {
-    await once(child.stderr, 'data');
-    const startup = JSON.parse(stderr.trim()) as { port: number };
+    const startup = await httpStartupLine(child.stderr, () => stderr);
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${startup.port}/mcp`)));
     const resources = await client.listResources();
     expect(resources.resources[0]._meta?.ui).not.toHaveProperty('domain');

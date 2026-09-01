@@ -721,7 +721,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#activationPhaseBudgetMs = input.testing.activationPhaseBudgetMs ?? defaultActivationPhaseBudgetMs;
     this.#ownedRunsRoot = input.ownedRunsRoot;
     this.#runRoot = input.ownedRunsRoot.root;
-    this.#stateFile = join(resolve(input.context.storageRoot), 'state', `${stateStoreId}.jsonl`);
+    this.#stateFile = join(resolve(input.context.storageRoot), 'state', `${stateStoreId}.sqlite`);
     this.#stateKernel = createFileRuntimeKernel({ stateFile: this.#stateFile });
     this.#preparedRevisions.add(input.preparedRuntime.sourceRevision);
     this.#status = Object.freeze({

@@ -1,3 +1,4 @@
+import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
@@ -218,7 +219,7 @@ test('runs the packaged MCP server after its artifact is isolated from the examp
   await runPackageHosts();
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-isolated-'));
   const pluginRoot = join(temporaryRoot, 'claude');
-  const stateFile = join(temporaryRoot, 'events.jsonl');
+  const stateFile = join(temporaryRoot, 'state.sqlite');
   await cp(join(pluginsRoot, 'claude'), pluginRoot, { recursive: true });
   await writeFile(stateFile, '', 'utf8');
 
@@ -255,7 +256,7 @@ test('runs each packaged native hook from one shell argv path when its plugin ro
     for (const host of ['claude', 'codex'] as const) {
       const pluginRoot = join(temporaryRoot, `${host} plugin root ; ordinary`);
       const workspace = join(temporaryRoot, `${host}-workspace`);
-      const stateFile = join(temporaryRoot, `${host}-events.jsonl`);
+      const stateFile = join(temporaryRoot, `${host}-state.sqlite`);
       const manifestPath = join(pluginRoot, 'hooks/hooks.json');
       const rootVariable = host === 'claude' ? 'CLAUDE_PLUGIN_ROOT' : 'PLUGIN_ROOT';
       const filename = `${host}-note.txt`;
@@ -300,7 +301,8 @@ test('runs each packaged native hook from one shell argv path when its plugin ro
       expect((await readFile(argvFile)).toString('utf8').split('\0').filter(Boolean)).toEqual([
         join(pluginRoot, 'runtime/hook/index.js'), '--host', host,
       ]);
-      expect((await readFile(stateFile, 'utf8')).trim()).toContain(`"host":"${host}"`);
+      const recorded = await createFileRuntimeKernel({ stateFile }).readSnapshot();
+      expect(recorded.edits.map((edit) => edit.host)).toEqual([host]);
       expect(command).toBe(`node "\${${rootVariable}}/runtime/hook/index.js" --host ${host}`);
       expect(command).not.toMatch(/(?:api[ _-]?key|echo|printenv|AGENT_RUNTIME_)/iu);
     }

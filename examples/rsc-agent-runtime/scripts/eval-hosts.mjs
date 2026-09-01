@@ -6,6 +6,7 @@ import { copyFile, chmod, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/pro
 import { once } from 'node:events';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import { classifyNativeEvidence, evidenceFromTranscript, hookEvidenceFromProbe, summarizeHookProbe } from './eval-evidence.mjs';
 import { sanitizedHostEnvironment } from './eval-host-environment.mjs';
@@ -65,10 +66,29 @@ const hookProbeSummary = async (probeFile) => {
   return summarizeHookProbe(records);
 };
 
+/**
+ * Reads committed edit events from the framework state kernel's sqlite
+ * journal (#98) in the legacy record shape `evidenceFromTranscript` matches
+ * on. Read-only: host evidence collection never mutates runtime state.
+ */
+const readStateRecords = (stateFile) => {
+  try {
+    const db = new DatabaseSync(stateFile, { readOnly: true });
+    try {
+      return db
+        .prepare("SELECT payload FROM agent_state_journal WHERE kind = 'event' ORDER BY revision")
+        .all()
+        .map(({ payload }) => ({ event: JSON.parse(payload), kind: 'edit' }));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
+};
+
 const evidenceFrom = async (host, fixture, stateFile, probeFile, transcript, correlation) => {
-  const stateRecords = await readFile(stateFile, 'utf8')
-    .then((contents) => contents.split('\n').filter(Boolean).map((line) => JSON.parse(line)))
-    .catch(() => []);
+  const stateRecords = readStateRecords(stateFile);
   const transcriptEvidence = evidenceFromTranscript(host, transcript, { ...correlation, stateRecords });
   const editObserved = await stat(join(fixture, correlation.editPath)).then(() => true).catch(() => false);
   const hookProbe = await hookProbeSummary(probeFile);
@@ -102,7 +122,7 @@ const evaluateHost = async (host, capturedAt) => {
     finalMarker: `HOST_EVAL_FINAL host=${host} marker=${marker}`,
     marker,
   };
-  const stateFile = join(fixture, '.agent-runtime-demo', 'events.jsonl');
+  const stateFile = join(fixture, '.agent-runtime-demo', 'state.sqlite');
   const probeFile = join(fixture, 'hook-probe.jsonl');
   const sharedEnv = sanitizedHostEnvironment(process.env, { hookProbeFile: probeFile, stateFile });
   let temporaryCodexHome;
