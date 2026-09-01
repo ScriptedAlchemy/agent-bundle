@@ -59,10 +59,23 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/rsbuild-workbench.test.ts',
   'packages/workbench/tests/runtime-inspector.test.ts',
   'packages/workbench/tests/runtime-consent-dialog.test.ts',
-  'packages/workbench/tests/runtime-playground-capture.test.ts',
   'packages/workbench/tests/runtime-playground.e2e.test.ts',
   'packages/workbench/tests/runtime-playground-hmr.e2e.test.ts',
   'packages/workbench/tests/workbench-dev-command.test.ts',
+];
+
+/**
+ * Evidence-capture harnesses: browser journeys whose product is a
+ * documentation artifact (screenshots + evidence.json), not a per-PR
+ * behavioral proof. The behavioral contracts they exercise (HMR activation,
+ * last-good retention, recovery) are already covered per PR by
+ * runtime-playground.e2e.test.ts and runtime-playground-hmr.e2e.test.ts in
+ * the integration pool, so these run through the root `test:evidence`
+ * script in CI's nightly schedule instead — evidence regenerates when the
+ * flow changes, not on every PR (#128).
+ */
+export const nightlyEvidenceTestFiles: readonly string[] = [
+  'packages/workbench/tests/runtime-playground-capture.test.ts',
 ];
 
 /**
