@@ -9,8 +9,9 @@ const operation = discoveryOperations(defaultDiscoveryOperations).inventory;
 
 export const config = {"annotations":{"readOnlyHint":false},"description":"Inventory source audio with retained per-file probe evidence."};
 export const inputSchema = z.object({
-  inventory: z.string().min(1).max(4096).describe('Source audio path to inventory.'),
+  source: z.string().min(1).max(4096).describe('Source audio path to inventory.'),
   report: z.string().min(1).max(4096).optional().describe('Optional report destination.'),
+  strict: z.boolean().optional().describe('Fail when any source cannot be probed.'),
 }).strict();
 export const resultSchema = operation.resultSchema;
 

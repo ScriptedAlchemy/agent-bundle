@@ -603,11 +603,13 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
 
     const inventoryTool = tools.getByRole('row').filter({ hasText: 'tool:curator/inventory_sources' });
     await expect(inventoryTool.getByText('Generated input editor', { exact: true })).toBeVisible({ timeout: browserTimeout });
-    await expect(inventoryTool.getByLabel('Inventory (required)')).toBeVisible({ timeout: browserTimeout });
+    await expect(inventoryTool.getByLabel('Source (required)')).toBeVisible({ timeout: browserTimeout });
     await expect(inventoryTool.getByLabel('Report')).toBeVisible({ timeout: browserTimeout });
+    await expect(inventoryTool.getByLabel('Strict')).toBeVisible({ timeout: browserTimeout });
     await inventoryTool.getByRole('button', { name: 'Validate input' }).click();
-    await expect(inventoryTool.getByRole('alert')).toHaveText('Inventory is required.', { timeout: browserTimeout });
-    await inventoryTool.getByLabel('Inventory (required)').fill('/tmp/audiobooks');
+    await expect(inventoryTool.getByRole('alert')).toHaveText('Source is required.', { timeout: browserTimeout });
+    await inventoryTool.getByLabel('Source (required)').fill('/tmp/audiobooks');
+    await inventoryTool.getByLabel('Strict').check();
     await expect(inventoryTool.getByRole('button', { name: 'Open in MCP session' })).toBeEnabled({ timeout: browserTimeout });
     await inventoryTool.getByRole('button', { name: 'Open in MCP session' }).click();
     await waitForSettledWorkbench(page);
@@ -615,7 +617,8 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await expect(page.locator('#mcp-server-name')).toHaveValue('curator', { timeout: browserTimeout });
     const prefill = page.getByRole('status').filter({ hasText: 'Tool call prefilled from Routes' });
     await expect(prefill).toContainText('inventory_sources', { timeout: browserTimeout });
-    await expect(prefill).toContainText('/tmp/audiobooks', { timeout: browserTimeout });
+    await expect(prefill).toContainText('"source": "/tmp/audiobooks"', { timeout: browserTimeout });
+    await expect(prefill).toContainText('"strict": true', { timeout: browserTimeout });
     await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
     await page.getByRole('link', { name: 'Routes', exact: true }).click();
     await waitForSettledWorkbench(page);

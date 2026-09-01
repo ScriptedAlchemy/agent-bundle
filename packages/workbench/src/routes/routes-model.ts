@@ -346,15 +346,15 @@ export const validateRawRouteInput = (text: string): RawRouteInputValidation => 
 
 const cliOperand = (option: RouteManifestCliCommand['options'][number]): string => {
   const kind = option.kind === 'enum' ? option.choices?.join('|') ?? 'string' : option.kind;
-  return `<${kind}${option.repeated ? '...' : ''}>`;
+  return `<${kind}>`;
 };
 
 export const cliCommandUsage = (command: RouteManifestCliCommand): string => {
   const positionals = command.options.filter((option) => option.positional !== undefined)
     .toSorted((left, right) => left.positional! - right.positional!)
     .map((option) => option.required
-      ? `<${option.key}${option.repeated ? '...' : ''}>`
-      : `[${option.key}${option.repeated ? '...' : ''}]`);
+      ? `<${option.option}${option.repeated ? '...' : ''}>`
+      : `[${option.option}${option.repeated ? '...' : ''}]`);
   const flags = command.options.filter((option) => option.positional === undefined)
     .map((option) => {
       const value = option.kind === 'boolean' ? `--${option.option}` : `--${option.option} ${cliOperand(option)}`;

@@ -232,7 +232,7 @@ it('formats CLI usage and a shell-copyable invocation from validated input', () 
     aliases: [],
     exitCode: 'zero' as const,
     options: [
-      { key: 'input', kind: 'string' as const, option: 'input', positional: 0, repeated: false, required: true },
+      { key: 'input', kind: 'string' as const, option: 'input-file', positional: 0, repeated: false, required: true },
       { choices: ['text', 'json'], key: 'format', kind: 'enum' as const, option: 'format', repeated: false, required: false },
       { key: 'tag', kind: 'string' as const, option: 'tag', repeated: true, required: false },
       { key: 'verbose', kind: 'boolean' as const, option: 'verbose', repeated: false, required: false },
@@ -242,7 +242,7 @@ it('formats CLI usage and a shell-copyable invocation from validated input', () 
   };
 
   expect(cliCommandUsage(command)).toBe(
-    'library audit <input> [--format <text|json>] [--tag <string...>] [--verbose]',
+    'library audit <input-file> [--format <text|json>] [--tag <string>] [--verbose]',
   );
   expect(cliCommandInvocation(command, {
     format: 'json',
