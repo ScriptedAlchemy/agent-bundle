@@ -3,9 +3,19 @@ import { join } from 'node:path';
 
 import { afterAll, expect, it } from '@rstest/core';
 
-import { cleanupScaffoldFixture, expectCleanValidate, npmRun, scaffoldProject } from './support/scaffold-fixture.ts';
+import {
+  cleanupScaffoldFixture,
+  expectCleanValidate,
+  npmRun,
+  scaffoldProject,
+  scaffoldProjectWithMismatchedRuntime,
+} from './support/scaffold-fixture.ts';
 
 afterAll(cleanupScaffoldFixture);
+
+it('rejects a local framework tarball paired with the wrong runtime package', async () => {
+  await expect(scaffoldProjectWithMismatchedRuntime('mismatched-runtime-project')).rejects.toMatchObject({ code: 2 });
+}, 600_000);
 
 /**
  * Per-PR scaffolder smoke: one template through the full consumer journey —

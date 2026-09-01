@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 
 import { describe, expect, it } from '@rstest/core';
 
+import { runtimeSpecForFramework } from '../src/framework.ts';
 import { UsageError, type TargetName } from '../src/options.ts';
 import { assertScaffoldTarget, placeholderName, scaffold } from '../src/scaffold.ts';
 
@@ -12,17 +14,33 @@ const templatesRoot = join(process.cwd(), 'packages', 'create-agent-bundle', 'te
 const scaffoldTemplate = async (
   template: string,
   overrides: Partial<{ packageName: string; pluginName: string; targets: readonly TargetName[] }> = {},
-): Promise<{ readonly files: readonly string[]; readonly root: string }> => {
+): Promise<{ readonly files: readonly string[]; readonly frameworkSpec: string; readonly root: string }> => {
   const root = await mkdtemp(join(tmpdir(), `create-agent-bundle-${template}-`));
+  const packageTarball = (name: string): Buffer => {
+    const manifest = Buffer.from(JSON.stringify({ name }));
+    const archive = Buffer.alloc(512 + Math.ceil(manifest.length / 512) * 512 + 1024);
+    archive.write('package/package.json', 0, 'utf8');
+    archive.write(`${manifest.length.toString(8).padStart(11, '0')}\0`, 124, 'ascii');
+    manifest.copy(archive, 512);
+    return gzipSync(archive);
+  };
+  const frameworkTarball = join(root, 'agent-bundle-0.0.0.tgz');
+  const runtimeTarball = join(root, 'agent-bundle-runtime-0.0.0.tgz');
+  await Promise.all([
+    writeFile(frameworkTarball, packageTarball('agent-bundle')),
+    writeFile(runtimeTarball, packageTarball('@agent-bundle/runtime')),
+  ]);
+  const frameworkSpec = `file:${frameworkTarball}`;
   const files = await scaffold({
-    frameworkSpec: 'file:/tmp/agent-bundle-0.0.0.tgz',
+    frameworkSpec,
     packageName: overrides.packageName ?? 'status-plugin',
     pluginName: overrides.pluginName ?? 'status-plugin',
     targetDirectory: join(root, 'project'),
     targets: overrides.targets ?? ['portable', 'codex', 'claude'],
     templateRoot: join(templatesRoot, template),
   });
-  return { files, root: join(root, 'project') };
+  await Promise.all([rm(frameworkTarball), rm(runtimeTarball)]);
+  return { files, frameworkSpec, root: join(root, 'project') };
 };
 
 describe('scaffold', () => {
@@ -81,7 +99,7 @@ describe('scaffold', () => {
   });
 
   it('replaces every placeholder and pins the framework spec', async () => {
-    const { files, root } = await scaffoldTemplate('cli-tool', {
+    const { files, frameworkSpec, root } = await scaffoldTemplate('cli-tool', {
       packageName: '@scope/status-plugin',
       pluginName: 'status-plugin',
     });
@@ -98,9 +116,9 @@ describe('scaffold', () => {
         readonly name: string;
       };
       expect(manifest.name).toBe('@scope/status-plugin');
-      expect(manifest.devDependencies['agent-bundle']).toBe('file:/tmp/agent-bundle-0.0.0.tgz');
+      expect(manifest.devDependencies['agent-bundle']).toBe(frameworkSpec);
       if (files.includes('src/mcp/status/tools/report-status.tsx')) {
-        expect(manifest.dependencies?.['@agent-bundle/runtime']).toBe('file:/tmp/agent-bundle-runtime-0.0.0.tgz');
+        expect(manifest.dependencies?.['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
       }
       expect(manifest.bin).toEqual({ 'status-plugin': './dist/bin/status-plugin.js' });
       const config = await readFile(join(root, 'agent-bundle.config.ts'), 'utf8');

@@ -469,7 +469,13 @@ it('generates deterministic route-specific types from the compiled graph', () =>
     digest: 'typegen-digest',
     events: [],
     providers: [],
-    scripts: [],
+    scripts: [{
+      config: emptyRouteConfig,
+      id: 'script:rebuild-index',
+      kind: 'script',
+      provenance: { kind: 'conventional', relativePath: 'src/scripts/rebuild-index.ts' },
+      source: '/workspace/project/src/scripts/rebuild-index.ts',
+    }],
     servers: [{
       id: 'mcp:curator',
       mode: 'generated',
@@ -490,6 +496,8 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   expect(second).toBe(first);
   expect(first).toContain('import type * as route0 from "../src/mcp/curator/tools/inspect.js";');
   expect(first).toContain('"tool:curator/inspect": RouteContract<typeof route0.inputSchema, typeof route0.resultSchema>;');
+  expect(first).not.toContain('src/scripts/rebuild-index');
+  expect(first).not.toContain('"script:rebuild-index"');
   expect(first).toContain('export type RouteId = keyof AgentBundleRoutes;');
 });
 
