@@ -8,6 +8,24 @@
       "sessionStart": "SessionStart",
       "stop": "Stop"
     },
+    "eventRoutes": {
+      "agent/start": {
+        "reason": "The pinned Claude Code 2.1.250 hooks contract has no subagent-start event.",
+        "state": "unavailable"
+      },
+      "agent/stop": {
+        "reason": "The pinned Claude Code 2.1.250 hooks contract has no subagent-stop event.",
+        "state": "unavailable"
+      },
+      "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
+      "stop": { "nativeEvent": "Stop", "state": "supported" },
+      "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
+      "tool/before": { "nativeEvent": "PreToolUse", "state": "supported" },
+      "workspace/open": {
+        "reason": "The pinned Claude Code 2.1.250 hooks contract has no workspace-open event.",
+        "state": "unavailable"
+      }
+    },
     "matchers": {
       "file.read": "^Read$",
       "file.write": "^(?:Write|Edit)$",

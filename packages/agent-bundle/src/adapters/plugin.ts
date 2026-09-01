@@ -436,10 +436,26 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   });
 };
 
+const compositeEventCapabilities = Object.freeze(Object.fromEntries(
+  Object.keys(claudeCapabilityTable.hooks.eventRoutes)
+    .sort((left, right) => left.localeCompare(right))
+    .map((event) => {
+      const capability = `event:${event}`;
+      return [
+        capability,
+        intersectCapabilityStates(
+          claudeAdapter.capabilities[capability]!,
+          codexAdapter.capabilities[capability]!,
+        ),
+      ];
+    }),
+));
+
 export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout,
   capabilities: Object.freeze({
+    ...compositeEventCapabilities,
     marketplace: intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
     hooks: intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
     // Claude supports LSP and Codex has no LSP surface, so the intersection

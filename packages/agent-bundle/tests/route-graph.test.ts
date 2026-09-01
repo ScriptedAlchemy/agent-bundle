@@ -567,3 +567,40 @@ it('discovers only the seven v1 event families and validates their component con
   expect(graph.diagnostics[0]?.sourcePath).toBe(join(root, 'src/events/prompt/submit.tsx'));
   expect(graph.diagnostics[1]?.sourcePath).toBe(join(root, 'src/events/tool/before.tsx'));
 });
+
+it('fails unavailable event routes before packaging unless they are target-restricted', async () => {
+  const eventSource = 'export default async function WorkspaceOpen() { return undefined; }\n';
+  const configSource = [
+    'export default {',
+    "  plugin: { name: 'event-capability-fixture', version: '1.0.0' },",
+    "  targets: ['claude', 'cursor'],",
+    '};',
+    '',
+  ].join('\n');
+  const unrestrictedRoot = await createRoot();
+  await writeTree(unrestrictedRoot, {
+    'agent-bundle.config.ts': configSource,
+    'package.json': '{"type":"module"}\n',
+    'src/events/workspace/open.tsx': eventSource,
+  });
+
+  const unrestricted = await inspect({ root: unrestrictedRoot });
+  expect(unrestricted.state).toBe('invalid');
+  expect(unrestricted.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'AB4814',
+    target: 'claude',
+  }));
+
+  const restrictedRoot = await createRoot();
+  await writeTree(restrictedRoot, {
+    'agent-bundle.config.ts': configSource,
+    'package.json': '{"type":"module"}\n',
+    'src/events/workspace/open.tsx': [
+      "export const config = { targets: ['cursor'] };",
+      eventSource,
+    ].join('\n'),
+  });
+
+  const restricted = await inspect({ root: restrictedRoot });
+  expect(restricted.state).toBe('ready');
+});
