@@ -81,6 +81,7 @@ export class ForegroundServerStartError extends Error {
 /** The small coordinator surface required by foreground HTTP routes. */
 export interface ForegroundCoordinator {
   close(): Promise<void>;
+  publishServerUrl?(url: string): Promise<void>;
   rebuild(invalidation: Invalidation): Promise<unknown>;
   start(): Promise<unknown>;
   status(): ProjectStatus;
@@ -599,6 +600,7 @@ export class ForegroundServer {
         throw new Error('Foreground server did not report a TCP address.');
       }
       this.#url = `http://${addressToHost(address)}:${address.port}`;
+      await this.#coordinator.publishServerUrl?.(this.#url);
     } catch (error) {
       if (this.#closePromise !== undefined) throw error;
       this.#closing = true;

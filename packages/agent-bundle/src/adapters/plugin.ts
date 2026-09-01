@@ -19,6 +19,7 @@ import {
   cursorManifest,
   cursorMcpValidator,
   cursorPluginValidator,
+  cursorVariables,
   emptyCursorHooksDocument,
   isValidCursorPluginName,
   planCursorMcpServer,
@@ -60,11 +61,10 @@ const pluginName = 'plugin';
  * hook serves both hosts. Per-host `nativeHooks` passthrough stays with the
  * host targets.
  *
- * Cursor consumes the same root through `.cursor-plugin/plugin.json`: shared
- * `skills/` as-is, an explicit pointer to a Cursor-format MCP document (its
- * auto-discovery reads `mcp.json`, never the Claude-convention `.mcp.json`),
- * and - because Cursor auto-discovers `hooks/hooks.json` with an incompatible
- * schema - an explicit pointer to a Cursor-format hooks document. Cursor's
+ * The full Cursor Plugin contract consumes the same root through `.cursor-plugin/plugin.json`: shared
+ * `skills/` as-is, the conventional root `mcp.json`, and - because
+ * `hooks/hooks.json` has an incompatible Claude/Codex schema - an explicit
+ * pointer to the Cursor-format hooks document. Cursor's
  * hook stdin/stdout envelope is not the shared Claude/Codex format, so that
  * document points at dedicated per-hook `hooks/<name>.cursor.mjs` wrappers
  * carrying the Cursor codec; the empty document remains only as a
@@ -79,7 +79,7 @@ const pluginName = 'plugin';
 const codexBundleMcpPath = '.codex-plugin/mcp.json';
 const cursorPaths = Object.freeze({
   hooks: 'hooks/hooks-cursor.json',
-  mcp: '.cursor-plugin/mcp.json',
+  mcp: 'mcp.json',
   plugin: '.cursor-plugin/plugin.json',
 });
 
@@ -218,7 +218,7 @@ const agentsDocument = (model: NormalizedPlugin): string => {
     '',
     '- **Claude Code**: add this directory (or its repository) as a plugin — `claude plugin marketplace add <source>`.',
     '- **Codex**: `codex plugin marketplace add <source>`; the manifest is `.codex-plugin/plugin.json`.',
-    '- **Cursor**: clone (or symlink) this directory to `~/.cursor/plugins/local/<name>`; the manifest is `.cursor-plugin/plugin.json`.',
+    `- **Cursor**: copy this directory into \`~/.cursor/plugins/local/${model.metadata.name}\`; the manifest is \`.cursor-plugin/plugin.json\`. Symlinks that resolve outside \`~/.cursor/plugins/local\` are rejected by Cursor (staff confirmation: https://forum.cursor.com/t/local-plugins-symlink-on-windows-doesnt-work/159427/6).`,
     '- **VS Code / GitHub Copilot**: install the repository as an agent plugin, or consume `skills/` directly.',
     '- **skills CLI**: `npx skills add <source> --skill <name>` reads the `skills/` directory.',
     '',
@@ -226,7 +226,7 @@ const agentsDocument = (model: NormalizedPlugin): string => {
     '',
     '- `.claude-plugin/` — Claude Code manifest and host documents.',
     '- `.codex-plugin/` — Codex manifest and host documents.',
-    '- `.cursor-plugin/` — Cursor manifest and its MCP document.',
+    '- `.cursor-plugin/plugin.json` and root `mcp.json` — Cursor local-plugin manifest and MCP document.',
     '- `.mcp.json` — Claude Code MCP configuration (plugin-root convention).',
     '- `hooks/` — one `hooks.json` with a host-detecting wrapper per hook (Claude Code and Codex), plus `hooks-cursor.json` with per-hook Cursor wrappers (`<name>.cursor.mjs`).',
     '- `skills/` — agent skills (`SKILL.md` per skill), shared by every host.',
@@ -354,10 +354,12 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
         }
       }
     }
+    const cursorManifestVariables = cursorVariables(cursorMcp);
     const manifest = cursorManifest(model, {
       ...(emitCursorHooks ? { hooks: `./${cursorPaths.hooks}` } : {}),
       ...(cursorMcp !== undefined && cursorMcpValid ? { mcp: `./${cursorPaths.mcp}` } : {}),
       ...(model.skills.some((skill) => skill.targets.includes(pluginName)) ? { skills: './skills/' } : {}),
+      ...(cursorManifestVariables === undefined ? {} : { variables: cursorManifestVariables }),
     });
     const cursorManifestValid = cursorPluginValidator(manifest);
     diagnostics.push(...schemaDiagnostics('cursor-plugin', cursorManifestValid, cursorPluginValidator.errors));

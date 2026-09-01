@@ -128,25 +128,25 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'cursor')).toEqual({
-    adapterRevision: '1.1.0',
+    adapterRevision: '1.3.0',
     capabilityRevision: '2026-08-28',
-    capabilitySha256: 'b8990776721f3e2cf4707364812586a0043b8a1247899a47f256302739c00443',
+    capabilitySha256: '234920e63508664ae79db4e1a5422c1022d93ad572fae345a179bfd774f6f6d7',
     observedVersion: '2026-08-28',
     schemas: [
       {
         name: 'hooks',
         revision: '2026-08-28',
-        sha256: '106d76f79c8fa6600e09cd5bcf25ebf8d06015cde249c48c50fe8060d991e21d',
+        sha256: '06154b7afa0861df462130b988912b897e7ccf962b8dd20c09193100bcde5d81',
       },
       {
         name: 'mcp',
         revision: '2026-08-28',
-        sha256: 'ba5379d4dd3f3d7ff291f2a82a9a04b96b4be7c8dd8c106808a186cad3610764',
+        sha256: 'f3fa4615afefe004c4fbcc09e635d890df0f1ec0cb39540feab72cbd3a31d844',
       },
       {
         name: 'plugin',
         revision: '2026-08-28',
-        sha256: 'ad5099d50f7f59913a5022b90acaf76e9c50e6d9c5058157a1eed55a842d9d61',
+        sha256: 'a393b758901803fcf5cfe0d77bda8a83e987d32c3377dfce2d9edf445af884ed',
       },
     ],
   });

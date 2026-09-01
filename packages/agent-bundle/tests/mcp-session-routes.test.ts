@@ -7,6 +7,7 @@ import {
   type McpSessionRouteService,
   type McpSessionRouteSession,
 } from '../src/dev/mcp-session/mcp-session-routes.ts';
+import { McpSessionStaleEpochError } from '../src/dev/mcp-session/mcp-session-service.ts';
 import type {
   McpSessionConnectionState,
   McpSessionInspectorConfig,
@@ -37,8 +38,11 @@ class RecordingSession implements McpSessionRouteSession {
   #traceOverflow: McpSessionReplayOverflow | undefined;
   #sequence = 0;
 
+  callToolError: Error | undefined;
+
   callTool(options: { readonly arguments: Record<string, unknown>; readonly name: string; readonly requestId?: string }): Promise<unknown> {
     this.calls.push({ kind: 'callTool', options });
+    if (this.callToolError !== undefined) return Promise.reject(this.callToolError);
     return Promise.resolve({ content: [{ text: 'forecast', type: 'text' }], structuredContent: { temperature: 20 } });
   }
 
@@ -181,6 +185,29 @@ it('admits one positive session timeout with the immutable session snapshot', as
       },
     });
     expect(service.opens).toEqual([{ epochId: 'epoch-a', serverName: 'weather', target: 'portable', timeoutMs: 12_345 }]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('maps a stale-epoch tool call failure to its fail-closed diagnostic', async () => {
+  const service = new RecordingService();
+  service.session.callToolError = new McpSessionStaleEpochError('epoch-a');
+  const started = await startRoutes(service);
+
+  try {
+    const response = await fetch(`${started.url}/api/mcp/sessions/session-a/operations`, {
+      body: JSON.stringify({ arguments: {}, name: 'forecast', operation: 'tools/call' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8018',
+        message: 'MCP session epoch is no longer available; the project changed underneath the session.',
+      },
+    });
   } finally {
     await started.close();
   }

@@ -42,6 +42,7 @@ import {
 
 import {
   McpSessionServiceCloseError,
+  McpSessionStaleEpochError,
   type McpClient,
   type McpSessionServiceCloseFailure,
   type McpSessionServiceOptions,
@@ -51,7 +52,7 @@ import {
   type StdioTransport,
 } from './mcp-session-types.ts';
 
-export { McpSessionServiceCloseError };
+export { McpSessionServiceCloseError, McpSessionStaleEpochError };
 export { mcpAppClientCapabilities };
 export { McpSession } from './mcp-session.ts';
 export type {
@@ -295,6 +296,10 @@ export class McpSessionService {
       pluginData = await mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-'));
       const sessionId = randomUUID();
       session = new McpSession({
+        assertEpochAvailable: async () => {
+          const probe = await this.#epochStore.acquireEpochReference(options.epochId);
+          await probe.close();
+        },
         binding: { epochId: options.epochId, serverName: options.serverName, target },
         createClient: this.#createClient,
         createStdioTransport: this.#createStdioTransport,
