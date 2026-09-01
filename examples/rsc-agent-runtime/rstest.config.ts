@@ -8,6 +8,7 @@ export default defineConfig({
   // swept into this plain Node pool where no test manifest is registered.
   exclude: ['tests/route-unit/**'],
   include: ['tests/**/*.test.{ts,tsx}'],
+  exclude: ['tests/route-unit/**/*.test.{ts,tsx}'],
   pool: { maxWorkers: 1 },
   testEnvironment: 'node',
   // Every suite here runs real rsbuild compiles and spawned children, which a
