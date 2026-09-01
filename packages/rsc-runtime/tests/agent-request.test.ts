@@ -131,6 +131,47 @@ describe('agent request store', () => {
     });
   });
 
+  it('snapshots plain Observed inputs at the request boundary so caller mutation cannot leak', async () => {
+    const hostValue = { name: 'claude' };
+    const host = { state: 'available' as const, source: 'native' as const, value: hostValue };
+    const roots = ['/tmp/project'];
+    const filesystem = { state: 'available' as const, source: 'native' as const, value: { roots } };
+    const command = { state: 'unavailable' as const, reason: 'not-provided' as const };
+    const capabilities = {
+      command,
+      filesystem,
+      network: { state: 'unavailable' as const, reason: 'not-provided' as const },
+      projectRoot: { state: 'unavailable' as const, reason: 'not-provided' as const },
+    };
+
+    await runAgentRequest({
+      capabilities,
+      host,
+      invocation: { kind: 'tool' },
+    }, async () => {
+      hostValue.name = 'mutated';
+      roots.push('/tmp/other');
+      (host as { state: string }).state = 'unavailable';
+      (command as { reason: string }).reason = 'unauthenticated';
+
+      const context = await agent();
+      expect(context.host).toEqual({ source: 'native', state: 'available', value: { name: 'claude' } });
+      expect(context.capabilities.filesystem).toEqual({
+        source: 'native',
+        state: 'available',
+        value: { roots: ['/tmp/project'] },
+      });
+      expect(context.capabilities.command).toEqual({ reason: 'not-provided', state: 'unavailable' });
+      expect(Object.isFrozen(context.host)).toBe(true);
+      if (context.host.state === 'available') {
+        expect(Object.isFrozen(context.host.value)).toBe(true);
+      }
+      if (context.capabilities.filesystem.state === 'available') {
+        expect(Object.isFrozen(context.capabilities.filesystem.value.roots)).toBe(true);
+      }
+    });
+  });
+
   it('isolates concurrent invocations including identities and provider values', async () => {
     const barrier = Promise.withResolvers<void>();
     const first = runAgentRequest({

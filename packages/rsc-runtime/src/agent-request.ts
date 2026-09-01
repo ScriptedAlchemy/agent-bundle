@@ -150,6 +150,12 @@ export const available = <T>(value: T, source: ObservedSource): Observed<T> => O
 export const unavailable = <T = never>(reason: AgentContextUnavailableReason = 'not-provided'): Observed<T> =>
   Object.freeze({ reason, state: 'unavailable' });
 
+const snapshotObserved = <T>(observed: Observed<T>): Observed<T> => (
+  observed.state === 'available'
+    ? available(observed.value, observed.source)
+    : unavailable(observed.reason)
+);
+
 const silentProgress: AgentProgressReporter = Object.freeze({
   report: async () => undefined,
 });
@@ -160,6 +166,14 @@ const emptyCapabilities = (): AgentRequestCapabilities => Object.freeze({
   network: unavailable<AgentNetworkAuthority>(),
   projectRoot: unavailable<AgentProjectRootAuthority>(),
 });
+
+const snapshotCapabilities = (capabilities: AgentRequestCapabilities): AgentRequestCapabilities =>
+  Object.freeze({
+    command: snapshotObserved(capabilities.command),
+    filesystem: snapshotObserved(capabilities.filesystem),
+    network: snapshotObserved(capabilities.network),
+    projectRoot: snapshotObserved(capabilities.projectRoot),
+  });
 
 const optionalText = (value: string | undefined): string | undefined => {
   if (value === undefined) return undefined;
@@ -295,18 +309,18 @@ export const runAgentRequest = async <T>(
   operation: () => T | Promise<T>,
 ): Promise<T> => {
   const values: FrozenValues = Object.freeze({
-    actor: init.actor ?? unavailable<AgentActorIdentity>(),
-    capabilities: Object.freeze({ ...(init.capabilities ?? emptyCapabilities()) }),
-    host: init.host ?? unavailable<AgentHostIdentity>(),
+    actor: snapshotObserved(init.actor ?? unavailable<AgentActorIdentity>()),
+    capabilities: snapshotCapabilities(init.capabilities ?? emptyCapabilities()),
+    host: snapshotObserved(init.host ?? unavailable<AgentHostIdentity>()),
     invocation: invocationFrom(init.invocation),
     notices: undefined,
     progress: init.progress ?? silentProgress,
     providers: Object.freeze({ ...(init.providers ?? {}) }),
     services: Object.freeze({ ...(init.services ?? {}) }),
-    session: init.session ?? unavailable<AgentSessionIdentity>(),
+    session: snapshotObserved(init.session ?? unavailable<AgentSessionIdentity>()),
     signal: init.signal ?? new AbortController().signal,
     state: undefined,
-    workspace: init.workspace ?? unavailable<AgentWorkspaceIdentity>(),
+    workspace: snapshotObserved(init.workspace ?? unavailable<AgentWorkspaceIdentity>()),
   });
   const lease: Lease = {
     closed: false,
