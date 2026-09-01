@@ -123,15 +123,17 @@ export interface CompiledCliCommand {
   readonly options: readonly CompiledCliOption[];
   /** Command path segments below the CLI root (`['library', 'audit']`). */
   readonly path: readonly string[];
+  /** True for a `.tsx` route whose async default Server Component renders through the dispatcher (#102 stage 3). */
+  readonly rendered: boolean;
   readonly routeId: string;
 }
 
 /** The CLI command surface assembled from `src/cli/**` route modules. */
 export interface CompiledCliSurface {
   /**
-   * The collision-checked command graph compiled from the plain (`.ts`)
-   * routes; present only in `generated` mode. Rendered (`.tsx`) routes stay
-   * in {@link routes} but compile no command until #102 stage 3.
+   * The collision-checked command graph compiled from the route surface;
+   * present only in `generated` mode. Plain (`.ts`) routes execute directly;
+   * rendered (`.tsx`) routes render through the dispatcher.
    */
   readonly commands?: readonly CompiledCliCommand[];
   readonly mode: CompiledCliMode;

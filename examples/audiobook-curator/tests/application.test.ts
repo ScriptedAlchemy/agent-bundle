@@ -2,7 +2,6 @@ import { describe, expect, it } from '@rstest/core';
 
 import maybeFactoryConfig from '../agent-bundle.config.ts';
 import { compileRouteGraph } from 'agent-bundle/api';
-import { runCli } from '../src/cli.js';
 
 if (typeof maybeFactoryConfig === 'function') throw new Error('expected a static config object');
 const config = maybeFactoryConfig;
@@ -30,7 +29,10 @@ describe('audiobook curator filesystem application', () => {
   it('derives the complete MCP server from route modules and no server config', async () => {
     expect(config.targets).toEqual(['claude', 'codex']);
     expect(config.mcp).toBeUndefined();
-    expect(Object.keys(config.scripts ?? {})).toEqual(['audiobook-curator']);
+    // The manual CLI dispatcher and its explicit `scripts` shipping are
+    // retired (#102 stage 3); the routed src/cli/ commands feed the package
+    // executable instead.
+    expect(config.scripts).toBeUndefined();
     expect(config.skills).toBeUndefined();
 
     const graph = await compileRouteGraph(root, config);
@@ -42,10 +44,13 @@ describe('audiobook curator filesystem application', () => {
     expect(graph.servers[0]!.routes.filter((route) => route.kind === 'prompt').map((route) => route.id)).toEqual(['prompt:curator/curate']);
   });
 
-  it('keeps the handwritten CLI compatibility path non-rendering through stage 3', async () => {
-    const output: string[] = [];
-    await expect(runCli(['--help'], { write: (value) => output.push(value) })).resolves.toBe(0);
-    expect(output.join('')).toContain('inspect [--max-files N] <root>');
-    expect(output.join('')).toContain('prepare [--apply] [--name FILE] --output DIR <source>');
+  it('derives the complete routed CLI from src/cli/ route modules and no cli config', async () => {
+    const graph = await compileRouteGraph(root, config);
+    expect(graph.cli).toMatchObject({ mode: 'generated' });
+    expect(graph.cli!.commands).toHaveLength(15);
+    // Exactly one command renders through the dispatcher; the other
+    // fourteen keep the plain one-JSON-line contract byte for byte.
+    expect(graph.cli!.commands!.filter((command) => command.rendered).map((command) => command.path.join(' ')))
+      .toEqual(['library-audit']);
   });
 });

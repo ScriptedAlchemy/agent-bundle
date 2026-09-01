@@ -16,7 +16,8 @@ import type { CompiledCliOption } from './types.ts';
  * - the top level is `z.object({ ... })` or `z.strictObject({ ... })`,
  *   optionally followed by `.strict()`;
  * - each property is a zod chain rooted at `z.string()`, `z.number()`,
- *   `z.boolean()`, `z.enum([...string literals])`, or `z.array(<element>)`
+ *   `z.boolean()`, `z.url()` (a string-valued option validated as a URL at
+ *   run time), `z.enum([...string literals])`, or `z.array(<element>)`
  *   where the element chain roots at `z.string()`, `z.number()`, or
  *   `z.enum([...])`;
  * - chains may append `.optional()`, `.default(<static literal>)`, and
@@ -212,6 +213,12 @@ const scalarBaseOf = (
     case 'boolean': {
       if (args.length > 0) return reject(`z.${method} with arguments`);
       return { base: { kind: method }, ok: true };
+    }
+    case 'url': {
+      // A string-valued option; the module's real zod schema enforces the
+      // URL format at run time.
+      if (args.length > 0) return reject('z.url with arguments');
+      return { base: { kind: 'string' }, ok: true };
     }
     case 'enum': {
       const argument = args.length === 1 ? unwrapExpression(args[0]!) : undefined;

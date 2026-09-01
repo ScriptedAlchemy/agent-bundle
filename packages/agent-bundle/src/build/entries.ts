@@ -8,7 +8,11 @@ import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
 import {
+  cliEntryRuntimePath,
+  cliEntryRuntimeSpecifier,
   generatedExecutableEntrySource,
+  generatedRenderedRouteWorkerSource,
+  generatedRenderedScriptEntrySource,
   generatedRouteArtifactEpoch,
   generatedRouteFlightWorkerSource,
   generatedRouteMcpEntrySource,
@@ -16,6 +20,7 @@ import {
   mcpEntryRuntimePath,
   mcpEntryRuntimeSpecifier,
 } from './entry-shell.ts';
+import { emptyRouteConfig } from '../routes/types.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
 import { buildWithRslib } from './rslib.ts';
@@ -26,10 +31,18 @@ export interface CompiledEntry {
   readonly outputKind: ArtifactOutputKind;
   readonly source: string;
   readonly sourceInputs: readonly string[];
+  /** The sibling react-server Flight worker of a rendered script (#102 stage 3). */
+  readonly workerOutput?: string;
+  readonly workerSourceInputs?: readonly string[];
 }
 
 interface PlannedScriptEntry extends CompiledEntry {
   readonly mode: NormalizedScript['mode'];
+  /** The conventional rendered-script route this entry renders (#102 stage 3). */
+  readonly rendered?: {
+    readonly routeId: string;
+    readonly workerFile: string;
+  };
 }
 
 export interface CompiledHookEntry extends CompiledEntry {
@@ -63,6 +76,7 @@ export const planCompiledEntries = (
       throw new Error(`Duplicate compiled script destination ${JSON.stringify(`scripts/${filename}`)}.`);
     }
     names.add(filename);
+    const workerFile = `${script.name}-flight.mjs`;
     return {
       mode: script.mode,
       name: script.name,
@@ -71,6 +85,12 @@ export const planCompiledEntries = (
         filename,
       ),
       outputKind: script.mode === 'copy' ? 'copy' as const : 'bundle' as const,
+      ...(script.rendered === true
+        ? {
+          rendered: { routeId: script.id, workerFile },
+          workerOutput: resolveArtifactDestination(resolve(options.outDir, 'scripts'), workerFile),
+        }
+        : {}),
       source: script.source,
       sourceInputs: Object.freeze([...new Set([script.provenance.sourcePath, script.source])]),
     };
@@ -83,23 +103,67 @@ export const compileEntries = async (
 ): Promise<readonly CompiledEntry[]> => {
   const compiled = planCompiledEntries(entries, options);
   const bundled = compiled.filter((entry) => entry.mode === 'bundle');
+  const cliRuntimeShell = bundled.some((entry) => entry.rendered !== undefined)
+    ? cliEntryRuntimePath()
+    : undefined;
   const evidence = await buildWithRslib({
     cwd: options.cwd,
-    entries: await Promise.all(bundled.map(async ({ name, source, sourceInputs }) => {
+    entries: await Promise.all(bundled.flatMap((entry) => {
+      const { name, rendered, source, sourceInputs } = entry;
+      if (rendered !== undefined) {
+        // A rendered script route (#102 stage 3): the entry projects the
+        // dispatcher's render-event stream onto the CLI output contract and
+        // a sibling react-server worker executes the component.
+        return [
+          Promise.resolve({
+            aliases: { [cliEntryRuntimeSpecifier]: cliRuntimeShell! },
+            name,
+            outputRelativePath: `scripts/${name}.mjs`,
+            rscManifest: true as const,
+            source,
+            sourceInputs,
+            virtualSource: generatedRenderedScriptEntrySource({
+              name,
+              routeId: rendered.routeId,
+              workerFile: rendered.workerFile,
+            }),
+          }),
+          Promise.resolve({
+            name: `${name}-flight`,
+            outputRelativePath: `scripts/${rendered.workerFile}`,
+            reactServer: true as const,
+            rscManifest: true as const,
+            source,
+            sourceInputs,
+            virtualSource: generatedRenderedRouteWorkerSource({
+              routes: [{
+                config: emptyRouteConfig,
+                id: rendered.routeId,
+                kind: 'script',
+                provenance: { kind: 'conventional', relativePath: `scripts/${name}` },
+                source,
+              }],
+            }),
+          }),
+        ];
+      }
       // A Script whose module exports `main` receives the framework process
       // envelope (argv, numeric exit codes); self-executing modules keep
       // today's direct-bundle behavior byte for byte.
-      const exports = await scanEntryExports(source);
-      return {
-        name,
-        outputRelativePath: `scripts/${name}.mjs`,
-        source,
-        sourceInputs,
-        ...(exports.hasMainExport
-          ? { virtualSource: generatedExecutableEntrySource({ entrySource: source, exportName: 'main' }) }
-          : {}),
-      };
+      return [(async () => {
+        const exports = await scanEntryExports(source);
+        return {
+          name,
+          outputRelativePath: `scripts/${name}.mjs`,
+          source,
+          sourceInputs,
+          ...(exports.hasMainExport
+            ? { virtualSource: generatedExecutableEntrySource({ entrySource: source, exportName: 'main' }) }
+            : {}),
+        };
+      })()];
     })),
+    ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [cliRuntimeShell] }),
     outputRoot: options.outDir,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   });
@@ -122,6 +186,9 @@ export const compileEntries = async (
     sourceInputs: entry.mode === 'bundle'
       ? evidenceByPath.get(`scripts/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled script evidence for ${JSON.stringify(entry.name)}.`); })()
       : entry.sourceInputs,
+    ...(entry.rendered === undefined ? {} : {
+      workerSourceInputs: evidenceByPath.get(`scripts/${entry.rendered.workerFile}`) ?? (() => { throw new Error(`Missing bundled script worker evidence for ${JSON.stringify(entry.name)}.`); })(),
+    }),
   })));
 };
 

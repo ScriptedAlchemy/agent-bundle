@@ -11,6 +11,7 @@ import {
   cliEntryRuntimeSpecifier,
   generatedCliBinEntrySource,
   generatedExecutableEntrySource,
+  generatedRenderedRouteWorkerSource,
 } from './entry-shell.ts';
 import { buildWithRslib, type RslibEntry } from './rslib.ts';
 
@@ -105,17 +106,22 @@ export const planPackageEntries = async (
       // A routed-CLI bin compiles the framework-generated command program;
       // the cli-entry runtime shell is aliased in so the emitted executable
       // stays self-contained, exactly like generated stdio MCP entries.
+      // Rendered commands add one sibling react-server Flight worker.
+      const rendered = bin.generatedCli.commands.some((command) => command.rendered);
+      const workerFile = `${bin.name}-flight.mjs`;
+      const sourceInputs = Object.freeze([...new Set([
+        bin.provenance.sourcePath,
+        ...bin.generatedCli.routes.map((route) => route.source),
+      ])]);
       entries.push({
         aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath() },
         banner: binShebang,
         executable: true,
         name: `bin-${bin.name}`,
         outputRelativePath: `bin/${bin.name}.js`,
+        ...(rendered ? { rscManifest: true as const } : {}),
         source: bin.source,
-        sourceInputs: Object.freeze([...new Set([
-          bin.provenance.sourcePath,
-          ...bin.generatedCli.routes.map((route) => route.source),
-        ])]),
+        sourceInputs,
         virtualSource: generatedCliBinEntrySource({
           commands: bin.generatedCli.commands,
           plugin: {
@@ -124,8 +130,23 @@ export const planPackageEntries = async (
             version: model.metadata.version,
           },
           routes: bin.generatedCli.routes,
+          ...(rendered ? { workerFile } : {}),
         }),
       });
+      if (rendered) {
+        const renderedRoutes = bin.generatedCli.routes.filter((route) =>
+          bin.generatedCli!.commands.some((command) => command.rendered && command.routeId === route.id));
+        entries.push({
+          executable: false,
+          name: `bin-${bin.name}-flight`,
+          outputRelativePath: `bin/${workerFile}`,
+          reactServer: true,
+          rscManifest: true,
+          source: bin.source,
+          sourceInputs,
+          virtualSource: generatedRenderedRouteWorkerSource({ routes: renderedRoutes }),
+        });
+      }
       continue;
     }
     // A bin entry exporting `main` (or a default function) receives the

@@ -126,9 +126,13 @@ projections run — `inputSchema.parse` → `execute` → `resultSchema.parse` �
 while `cli` and `mcp` are optional per-surface declarations. `render` is
 required on every operation but consumed only by the MCP projection, where
 `lowerMcpResult` synchronously lowers its element tree into the
-`CallToolResult`; the CLI never renders JSX and instead prints the
-validated result as one line of JSON. Operation modules are `.tsx` only
-because `render` returns JSX. The end-to-end walkthrough lives in
+`CallToolResult`; the `runRscCli` compatibility path never renders JSX and
+instead prints the validated result as one line of JSON. Operation modules
+are `.tsx` only because `render` returns JSX. (Routed `src/cli/**` commands
+are the framework-mode CLI: there, `.tsx` routes do render — through the
+Agent renderer's dispatcher with TTY/Markdown/`--json`/`--ndjson` output
+modes — while plain `.ts` routes keep the one-JSON-line contract.) The
+end-to-end walkthrough lives in
 [Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md).
 
 Use `runRscCli(application, argv)` in the conventional `src/cli.ts` entry and

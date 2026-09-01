@@ -7,13 +7,15 @@ import { deepFreeze } from '../core/freeze.ts';
 import type { CompiledAgentRoute, CompiledCliCommand, CompiledCliOption } from './types.ts';
 
 /**
- * The #102 stage-2 command-graph compiler: projects the generated-mode
- * `src/cli/**` route surface into one collision-checked command list. Path
- * segments below the CLI root are the command nesting (`cli:library/audit`
- * -> `library audit`); the statically extracted route config supplies
+ * The #102 command-graph compiler: projects the generated-mode `src/cli/**`
+ * route surface into one collision-checked command list. Path segments below
+ * the CLI root are the command nesting (`cli:library/audit` ->
+ * `library audit`); the statically extracted route config supplies
  * description, aliases, positionals, and the exit-code policy; the bounded
- * argv grammar supplies the option surface. Rendered (`.tsx`) routes compile
- * no command until #102 stage 3 — source validation gates them (AB4816).
+ * argv grammar supplies the option surface. Plain (`.ts`) routes execute
+ * directly; rendered (`.tsx`/`.jsx`) routes render through the dispatcher
+ * (#102 stage 3) — both share one contract: `inputSchema`, `resultSchema`,
+ * and one async default function.
  */
 
 const renderedCliExtensions = new Set(['.jsx', '.tsx']);
@@ -195,7 +197,6 @@ export const compileCliCommands = async (
   const commands: CompiledCliCommand[] = [];
 
   for (const route of [...routes].sort((left, right) => left.id.localeCompare(right.id))) {
-    if (isRenderedCliRoute(route)) continue;
     const relativePath = route.provenance.relativePath;
     const moduleText = await readModuleText(route);
     if (moduleText === undefined) continue;
@@ -237,12 +238,13 @@ export const compileCliCommands = async (
       exitCode: config.exitCode,
       options,
       path: cliCommandPath(route),
+      rendered: isRenderedCliRoute(route),
       routeId: route.id,
     });
   }
 
-  // Collision checks run over the compiled commands plus the rendered routes'
-  // claimed paths, so a `.tsx` sibling still collides deterministically.
+  // Collision checks run over every discovered route's claimed path, so a
+  // sibling that compiled no command still collides deterministically.
   const claimedPaths = new Map<string, string>();
   for (const route of routes) {
     claimedPaths.set(cliCommandPath(route).join('/'), route.provenance.relativePath);

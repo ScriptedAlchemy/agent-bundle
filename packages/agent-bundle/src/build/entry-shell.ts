@@ -95,22 +95,89 @@ export interface GeneratedCliBinEntryOptions {
   readonly commands: readonly CompiledCliCommand[];
   readonly plugin: { readonly description?: string; readonly name: string; readonly version: string };
   readonly routes: readonly CompiledAgentRoute[];
+  /** The sibling react-server worker bundle; required when any command is rendered. */
+  readonly workerFile?: string;
 }
 
 /**
- * The generated routed-CLI executable (#102 stage 2): the compiled command
- * graph rides the bundle as data, the cli-entry shell owns argv parsing,
- * help, exit codes, and signals, and every command executes inside the typed
- * Agent request context. Input validation failures are usage failures
- * (`CliInputError`, exit 2); the route module's zod schemas stay the
- * runtime validation boundary.
+ * The worker-backed render-session factory shared by generated CLI
+ * executables and rendered scripts: one worker per rendered invocation, raw
+ * Flight bytes streamed chunk by chunk into the runtime dispatcher's public
+ * `stream()`, progress messages forwarded to the dispatcher's reporter, and
+ * worker stdout guarded onto stderr (machine output owns stdout).
+ */
+const renderedSessionSource = (workerFile: string): readonly string[] => [
+  'const openRenderedSession = ({ invocation, props, request, routeId, signal, validate }) => {',
+  `  const worker = new Worker(new URL(${JSON.stringify(`./${workerFile}`)}, import.meta.url), { stderr: true, stdout: true });`,
+  "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
+  "  worker.stderr?.on('data', (chunk) => process.stderr.write(chunk));",
+  '  const pending = new Map();',
+  '  let sequence = 0;',
+  '  const failPending = (error) => { for (const entry of [...pending.values()]) entry.fail(error); pending.clear(); };',
+  "  worker.on('error', failPending);",
+  "  worker.on('exit', (code) => { if (code !== 0) failPending(new Error(`Generated render worker exited with code ${String(code)}.`)); });",
+  "  worker.on('message', (message) => {",
+  '    const entry = pending.get(message.id);',
+  '    if (entry === undefined) return;',
+  "    if (message.type === 'progress') { void entry.progress?.report(message.update); return; }",
+  "    if (message.type === 'chunk') { entry.enqueue(message.bytes); return; }",
+  '    pending.delete(message.id);',
+  "    entry.signal.removeEventListener('abort', entry.abort);",
+  "    if (message.type === 'error') { entry.fail(new Error(message.message)); return; }",
+  "    if (message.type === 'end') entry.close();",
+  '  });',
+  '  const host = Object.freeze({',
+  '    execute: async (dispatch) => {',
+  '      const id = ++sequence;',
+  '      let streamController;',
+  '      const stream = new ReadableStream({ start(controller) { streamController = controller; } });',
+  '      const entry = {',
+  "        abort: () => { worker.postMessage({ id, type: 'cancel' }); pending.delete(id); try { streamController.error(new DOMException('Agent render was aborted', 'AbortError')); } catch {} },",
+  '        close: () => { try { streamController.close(); } catch {} },',
+  '        enqueue: (bytes) => { try { streamController.enqueue(bytes); } catch {} },',
+  '        fail: (error) => { pending.delete(id); try { streamController.error(error); } catch {} },',
+  '        progress: dispatch.progress,',
+  '        signal: dispatch.signal,',
+  '      };',
+  '      pending.set(id, entry);',
+  "      dispatch.signal.addEventListener('abort', entry.abort, { once: true });",
+  '      if (dispatch.signal.aborted) { entry.abort(); return stream; }',
+  "      worker.postMessage({ id, props, request, routeId, type: 'render' });",
+  '      return stream;',
+  '    },',
+  '  });',
+  '  const dispatcher = createAgentRenderDispatcher(host);',
+  '  return Object.freeze({',
+  '    close: async () => { await worker.terminate(); },',
+  '    events: () => dispatcher.stream({ invocation, signal }),',
+  '    validate,',
+  '  });',
+  '};',
+];
+
+/**
+ * The generated routed-CLI executable (#102 stages 2-3): the compiled
+ * command graph rides the bundle as data, the cli-entry shell owns argv
+ * parsing, help, output modes, exit codes, and signals, plain commands
+ * execute inside the typed Agent request context, and rendered commands
+ * render through the runtime dispatcher against a sibling react-server
+ * worker. Input validation failures are usage failures (`CliInputError`,
+ * exit 2); the route module's zod schemas stay the runtime validation
+ * boundary.
  */
 export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions): string => {
   const commandRoutes = options.routes.filter((route) =>
     options.commands.some((command) => command.routeId === route.id));
+  const rendered = options.commands.some((command) => command.rendered);
+  if (rendered && options.workerFile === undefined) {
+    throw new Error('A generated CLI with rendered commands requires a worker file.');
+  }
   return [
     `import { CliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
-    "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    rendered
+      ? "import { available, createAgentRenderDispatcher, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
+      : "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...routeImports(commandRoutes),
     '',
     'const routes = Object.freeze({',
@@ -120,15 +187,18 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '',
     `const commands = Object.freeze(${stableJson(options.commands)});`,
     '',
-    'const execute = async (command, input, context) => {',
-    '  const route = routes[command.routeId];',
-    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
-    '  let parsed;',
+    'const parseInput = (route, input) => {',
     '  try {',
-    '    parsed = route.module.inputSchema.parse(input);',
+    '    return route.module.inputSchema.parse(input);',
     '  } catch (error) {',
     '    throw new CliInputError(error instanceof Error ? error.message : String(error));',
     '  }',
+    '};',
+    '',
+    'const execute = async (command, input, context) => {',
+    '  const route = routes[command.routeId];',
+    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
+    '  const parsed = parseInput(route, input);',
     '  const cwd = process.cwd();',
     '  const result = await runAgentRequest({',
     '    capabilities: {',
@@ -145,16 +215,146 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '  return route.module.resultSchema.parse(result);',
     '};',
     '',
+    ...(rendered
+      ? [
+        ...renderedSessionSource(options.workerFile!),
+        '',
+        'const render = (command, input, context) => {',
+        '  const route = routes[command.routeId];',
+        '  const parsed = parseInput(route, input);',
+        '  return openRenderedSession({',
+        "    invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } },",
+        '    props: { input: parsed },',
+        "    request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
+        '    routeId: command.routeId,',
+        '    signal: context.signal,',
+        '    validate: (value) => route.module.resultSchema.parse(value),',
+        '  });',
+        '};',
+        '',
+      ]
+      : []),
     'await runGeneratedCliProcess({',
     '  commands,',
     ...(options.plugin.description === undefined ? [] : [`  description: ${JSON.stringify(options.plugin.description)},`]),
     '  execute,',
     `  name: ${JSON.stringify(options.plugin.name)},`,
+    ...(rendered ? ['  render,'] : []),
     `  version: ${JSON.stringify(options.plugin.version)},`,
     '});',
     '',
   ].join('\n');
 };
+
+export interface GeneratedRenderedRouteWorkerOptions {
+  readonly routes: readonly CompiledAgentRoute[];
+}
+
+/**
+ * The react-server worker behind generated CLI executables and rendered
+ * scripts: renders one route's async default component through Flight,
+ * streaming raw bytes back chunk by chunk, with progress reports and the
+ * typed Agent request context installed around every render.
+ */
+export const generatedRenderedRouteWorkerSource = (
+  options: GeneratedRenderedRouteWorkerOptions,
+): string => [
+  "import { parentPort } from 'node:worker_threads';",
+  "import { createElement } from 'react';",
+  "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
+  "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+  ...routeImports(options.routes),
+  '',
+  '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
+  'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
+  "if (parentPort === null) throw new Error('Generated render worker requires a parent port.');",
+  '// Machine output owns the parent stdout; anything a route logs goes to stderr.',
+  'process.stdout.write = process.stderr.write.bind(process.stderr);',
+  'const routes = Object.freeze({',
+  ...options.routes.map((route, index) =>
+    `  ${JSON.stringify(route.id)}: Object.freeze({ module: route${String(index)} }),`),
+  '});',
+  'const requests = new Map();',
+  '',
+  'const render = async (message) => {',
+  '  const route = routes[message.routeId];',
+  "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export an async function component.');",
+  '  const controller = new AbortController();',
+  '  requests.set(message.id, controller);',
+  '  try {',
+  '    const cwd = process.cwd();',
+  '    await runAgentRequest({',
+  '      capabilities: {',
+  '        command: unavailable(),',
+  '        filesystem: unavailable(),',
+  '        network: unavailable(),',
+  "        projectRoot: available({ root: cwd }, 'derived'),",
+  '      },',
+  "      host: unavailable('unsupported-surface'),",
+  '      invocation: message.request,',
+  "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
+  '      signal: controller.signal,',
+  "      workspace: available({ root: cwd }, 'derived'),",
+  '    }, async () => {',
+  '      const flight = renderAgentFlight(createElement(route.module.default, { ...message.props, signal: controller.signal }), { signal: controller.signal });',
+  '      const reader = flight.getReader();',
+  '      while (true) {',
+  '        const next = await reader.read();',
+  '        if (next.done) break;',
+  '        const bytes = next.value;',
+  "        parentPort.postMessage({ bytes, id: message.id, type: 'chunk' }, [bytes.buffer]);",
+  '      }',
+  '    });',
+  "    parentPort.postMessage({ id: message.id, type: 'end' });",
+  '  } catch (error) {',
+  "    parentPort.postMessage({ id: message.id, message: error instanceof Error ? error.message : String(error), type: 'error' });",
+  '  } finally {',
+  '    requests.delete(message.id);',
+  '  }',
+  '};',
+  '',
+  "parentPort.on('message', (message) => {",
+  "  if (message.type === 'cancel') { requests.get(message.id)?.abort(); return; }",
+  "  if (message.type === 'render') void render(message);",
+  '});',
+  '',
+].join('\n');
+
+export interface GeneratedRenderedScriptEntryOptions {
+  readonly name: string;
+  readonly routeId: string;
+  readonly workerFile: string;
+}
+
+/**
+ * The generated rendered-script executable (`src/scripts/<name>.tsx`,
+ * #102 stage 3): the script's async default component renders through the
+ * runtime dispatcher with the full CLI output contract (`--json`,
+ * `--ndjson`, interactive TTY progress, piped Markdown); every other
+ * argument passes through as the component's `argv` prop.
+ */
+export const generatedRenderedScriptEntrySource = (
+  options: GeneratedRenderedScriptEntryOptions,
+): string => [
+  `import { runGeneratedRenderedScriptProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+  "import { createAgentRenderDispatcher } from '@agent-bundle/runtime';",
+  "import { Worker } from 'node:worker_threads';",
+  '',
+  ...renderedSessionSource(options.workerFile),
+  '',
+  'await runGeneratedRenderedScriptProcess({',
+  '  createSession: (argv, context) => openRenderedSession({',
+  `    invocation: { kind: 'script', props: { input: argv, name: ${JSON.stringify(options.name)} } },`,
+  '    props: { argv },',
+  `    request: { kind: 'script', operationId: ${JSON.stringify(options.routeId)}, surface: ${JSON.stringify(options.name)} },`,
+  `    routeId: ${JSON.stringify(options.routeId)},`,
+  '    signal: context.signal,',
+  '    validate: (value) => value,',
+  '  }),',
+  `  name: ${JSON.stringify(options.name)},`,
+  '});',
+  '',
+].join('\n');
 
 export interface GeneratedRouteMcpEntryOptions {
   readonly plugin: { readonly name: string; readonly version: string };

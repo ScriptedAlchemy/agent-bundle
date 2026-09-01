@@ -60,6 +60,9 @@ Everything else is power-tier reference: custom/remote server modes and
 collision recovery are in [Entry conventions](entry-conventions.md); accepted
 static metadata, generated `.agent-bundle/routes.d.ts`, and diagnostics are in
 [Diagnostics](diagnostics.md). Handwritten `src/mcp/<server>.ts`,
-`defineOperation`, and `createRscMcpServer` remain supported escape hatches.
-The handwritten CLI compatibility path still serializes validated results and
-never renders JSX; routed CLI rendering belongs to #102 stage 3.
+`defineOperation`, and `createRscMcpServer` remain supported escape hatches;
+the handwritten `runRscCli` compatibility path still serializes validated
+results and never renders JSX. Routed `src/cli/**` commands and
+`src/scripts/**` scripts follow one sentence: `.tsx` renders through the
+Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
+is plain.

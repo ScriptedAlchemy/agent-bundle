@@ -59,8 +59,9 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/mcp/<server-id>.ts` | Stdio entry for the declared MCP server `<server-id>` that names no `entry`, `command`, or `url`. | Declare `entry` explicitly |
 | `src/mcp/<server>/{tools,resources,prompts}/*.{ts,tsx}` | Generated MCP server routes; path supplies identity and each executable module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote` |
 | `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required. | Use a custom server or prefix the file with `_` |
-| `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use. A `scripts` entry that references the file claims it. Rendered (`.tsx`) and nested modules are hard errors until later #102 stages (`AB4807`/`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
-| `src/cli/**/*.ts` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Rendered (`.tsx`) command routes are hard errors until #102 stage 3 (`AB4816`). | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
+| `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
+| `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
+| `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 
 Conventions match `.ts` and `.tsx` files exactly.
 
@@ -107,7 +108,7 @@ top-level failure path (stack to stderr, exit code 1). Self-executing modules
 (no `main` export) bundle directly, byte for byte — existing Scripts keep
 their behavior.
 
-### The routed CLI shell (#102 stage 2)
+### The routed CLI shell (#102 stages 2-3)
 
 A generated-mode `src/cli/**` surface compiles into one framework-generated
 executable instead of a hand-written `src/cli.ts` dispatcher. A plain command
@@ -150,6 +151,21 @@ or input failure; 130/143 on SIGINT/SIGTERM, which reach the route's
 already emit the canonical JSON document. Routed CLI projects need
 `@agent-bundle/runtime` as a dependency — the generated executable installs
 the request context through it.
+
+A `.tsx` command route swaps the default function for an async default
+Server Component with the same `{ input, signal }` props and renders through
+the runtime dispatcher's public `stream()` against a sibling
+`dist/bin/<plugin-name>-flight.mjs` react-server worker (one warm worker per
+invocation; raw Flight bytes never reach the terminal). The four output
+modes: an interactive TTY updates progress in place and prints the final
+document as Markdown; piped output emits exactly one final Markdown document
+with no partial fallbacks; `--json` emits the canonical validated final
+value; `--ndjson` emits the sequence-numbered render-event stream — an
+Agent Bundle CLI/script output dialect, not MCP JSON-RPC, and never written
+as non-MCP bytes to an MCP server's stdout. Diagnostics stay on stderr;
+machine output owns stdout. Rendered scripts
+(`src/scripts/<name>.tsx`) share the same shell and output contract with
+`{ argv, signal }` component props and status-derived exit codes.
 
 ### The stdio MCP lifecycle shell
 
