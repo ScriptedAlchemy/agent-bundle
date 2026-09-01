@@ -22,9 +22,105 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # PR-only docs allowlist: docs/**, agent-patterns/**, .changeset/*.md, and
+  # top-level *.md. Nested markdown elsewhere is code because examples and
+  # packages contain compiled SKILL.md artifacts, and package markdown affects
+  # npm pack audits. Classification fails open so uncertain PRs run every heavy
+  # job; pushes to main never skip any job based on changed paths.
+  changes:
+    if: github.event_name == 'pull_request'
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Classify changed files
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          files_file="$(mktemp)"
+          trap 'rm -f "$files_file"' EXIT
+          if ! changed_files="$(
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '.changed_files'
+          )"; then
+            echo "Could not read the PR changed-files count; failing open so heavy jobs run."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$changed_files" =~ ^[0-9]+$ ]]; then
+            echo "Invalid PR changed-files count '$changed_files'; failing open so heavy jobs run."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
+            --paginate \
+            --jq '.[] | [.filename, (.previous_filename // "")] | @tsv' \
+            > "$files_file"; then
+            echo "Could not list changed files; failing open so heavy jobs run."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mapfile -t entries < "$files_file"
+          if (( ${#entries[@]} == 0 )); then
+            echo "No changed files returned; failing open so heavy jobs run."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if (( ${#entries[@]} != changed_files )); then
+            echo "Listed ${#entries[@]} of $changed_files changed files; failing open so heavy jobs run."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          paths=()
+          for entry in "${entries[@]}"; do
+            IFS=$'\t' read -r filename previous_filename <<< "$entry"
+            paths+=("$filename")
+            if [[ -n "$previous_filename" ]]; then
+              paths+=("$previous_filename")
+            fi
+          done
+
+          docs_only=true
+          for f in "${paths[@]}"; do
+            case "$f" in
+              docs/*|agent-patterns/*) ;;
+              .changeset/*.md) ;;
+              */*)
+                echo "'$f' is nested outside the docs allowlist; heavy jobs will run."
+                docs_only=false
+                break
+                ;;
+              *.md) ;;
+              *)
+                echo "'$f' is not a docs-only path; heavy jobs will run."
+                docs_only=false
+                break
+                ;;
+            esac
+          done
+
+          if [[ "$docs_only" == "true" ]]; then
+            echo "All ${#entries[@]} changed files are docs-only; heavy jobs will be skipped."
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   # Builds and checks every public example through its own toolchain.
   examples-check:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: >-
+      ${{ !cancelled() && github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
     name: Examples check (Node 22.19)
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -39,14 +135,20 @@ jobs:
       - run: pnpm examples:check
 
   verify:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: >-
+      ${{ !cancelled() && github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
     name: Verify (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Measured PR Verify cost was 3 legs × ~7 minutes, about 75% of PR
+    # runner-minutes. PRs run newest-LTS Node 24; every main push and manual
+    # dispatch still gates on the full supported matrix.
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['22.19.0', '24', '26']
+        node-version: ${{ github.event_name == 'pull_request' && fromJSON('["24"]') || fromJSON('["22.19.0","24","26"]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/setup@v2
@@ -79,7 +181,10 @@ jobs:
       - run: pnpm test
 
   release-gates:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: >-
+      ${{ !cancelled() && github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
     name: Release gates (Node 22.19)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -138,7 +243,10 @@ jobs:
     # (hook -> RSC worker -> shared kernel state -> MCP tool lowering) without
     # any real Claude/Codex host. Real native-host smokes stay skip-gated in
     # the manually dispatched native-host-smoke workflow on purpose.
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: >-
+      ${{ !cancelled() && github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
     name: RSC runtime micro-eval (Node 22.19)
     runs-on: ubuntu-latest
     timeout-minutes: 15
