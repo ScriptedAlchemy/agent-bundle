@@ -18,6 +18,7 @@
     "test:evidence": "pnpm build && AGENT_BUNDLE_WORKBENCH_PREBUILT=1 AGENT_BUNDLE_PACKAGE_PREBUILT=1 rstest --config rstest.evidence.config.ts",
     "test:watch": "rstest --config rstest.config.ts --watch",
     "lint": "rslint .",
+    "bench:hook-cold-start": "node scripts/measure-hook-cold-start.mjs",
     "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json && tsc --project packages/create-agent-bundle/tsconfig.json",
     "check": "pnpm build && pnpm test:unit && pnpm test:route-unit && pnpm test:integration:run && pnpm lint && pnpm typecheck",
     "check:local-ci": "node scripts/local-ci.mjs",
@@ -45,8 +46,10 @@
     "examples:check": "pnpm build && AGENT_BUNDLE_TEST_TIME_SCALE=${AGENT_BUNDLE_TEST_TIME_SCALE:-2} pnpm --filter './examples/*' --workspace-concurrency=3 check"
   },
   "devDependencies": {
-    "@changesets/cli": "3.0.1",
     "@arethetypeswrong/cli": "0.18.5",
+    "@changesets/cli": "3.0.1",
+    "@effect/language-service": "0.87.2",
+    "@effect/tsgo": "0.39.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@rsbuild/core": "2.2.1",
     "@rsbuild/plugin-react": "2.1.0",

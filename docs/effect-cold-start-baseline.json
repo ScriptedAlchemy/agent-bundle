@@ -1,0 +1,20 @@
+{
+  "effect": "4.0.0-rc.112",
+  "hookPath": "claude/hooks/<generated-session-start>.mjs",
+  "kind": "generated-stdio-hook-cold-start",
+  "maxMs": 43.06,
+  "measuredAt": "2026-09-01T11:12:47.007Z",
+  "medianMs": 39.74,
+  "minMs": 36.41,
+  "node": "v22.23.1",
+  "notes": "Budget gate for Wave 3.5 stage 2. Re-run with pnpm bench:hook-cold-start -- --check.",
+  "samplesMs": [
+    40.96,
+    36.41,
+    36.56,
+    41.76,
+    39.35,
+    39.74,
+    43.06
+  ]
+}

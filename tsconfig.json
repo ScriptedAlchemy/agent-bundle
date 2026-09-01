@@ -5,12 +5,16 @@
       "node"
     ]
   },
+  "exclude": [
+    "repos"
+  ],
   "include": [
     "*.ts",
     "fixtures/**/*.ts",
     "packages/agent-bundle/fixtures/**/*.ts",
     "packages/agent-bundle/fixtures/**/*.tsx",
     "packages/agent-bundle/src/**/*.ts",
-    "packages/agent-bundle/tests/**/*.ts"
+    "packages/agent-bundle/tests/**/*.ts",
+    "scripts/**/*.ts"
   ]
 }
