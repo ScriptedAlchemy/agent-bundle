@@ -88,6 +88,12 @@ export interface McpAppRoutePreviewService {
 
 export interface McpAppRoutesOptions {
   readonly authorize: (request: IncomingMessage) => void;
+  /**
+   * Test-only override for the graceful-close receipt window. Production
+   * callers must leave this unset so the window keeps dominating the frame
+   * relay's force-close budget.
+   */
+  readonly gracefulCloseReceiptTimeoutMs?: number;
   readonly service?: McpAppRoutePreviewService;
 }
 
@@ -449,6 +455,7 @@ const bridgeHostContext = (host: McpAppPreviewHostContext): McpAppBridgeJsonReco
 /** Authenticated HTTP boundary for already-bound MCP App previews. */
 export class McpAppRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
+  readonly #gracefulCloseReceiptTimeoutMs: number;
   readonly #service: McpAppRoutePreviewService | undefined;
   readonly #tails = new Map<string, Promise<void>>();
   readonly #teardowns = new Map<string, ReturnType<typeof setTimeout>>();
@@ -456,6 +463,7 @@ export class McpAppRoutes {
 
   constructor(options: McpAppRoutesOptions) {
     this.#authorize = options.authorize;
+    this.#gracefulCloseReceiptTimeoutMs = options.gracefulCloseReceiptTimeoutMs ?? gracefulCloseReceiptTimeoutMs;
     this.#service = options.service;
   }
 
@@ -648,7 +656,7 @@ export class McpAppRoutes {
     if (this.#closed) return;
     const receipt = setTimeout(() => {
       if (this.#teardowns.get(bindingId) === receipt) this.#teardowns.delete(bindingId);
-    }, gracefulCloseReceiptTimeoutMs);
+    }, this.#gracefulCloseReceiptTimeoutMs);
     this.#teardowns.set(bindingId, receipt);
   }
 
