@@ -3,7 +3,9 @@
  * catalog. Structure — targets, the Skill, the CLI script, the MCP server —
  * lives in `agent-bundle.config.ts` and file conventions; the operations
  * themselves live in feature modules under `./operations/`, and this file
- * only merges their defaults.
+ * only merges their defaults. There is deliberately no JSX here: the only
+ * runtime JSX is each operation's `render`, which delegates to
+ * `<CuratorResult>` in `./result.tsx` for the MCP projection.
  */
 import { defineRscApplication } from '@agent-bundle/rsc-runtime/plugin';
 

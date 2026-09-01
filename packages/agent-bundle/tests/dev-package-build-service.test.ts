@@ -41,6 +41,7 @@ const prepared = (options: {
   outputRoots: [],
   registry: undefined as never,
   root: options.root ?? '/project',
+  snapshotSource: async () => ({ inputs: [], revision: 'test-revision' }),
   source: { diagnostics: [], state: 'ready' },
   ...(options.tools === undefined ? {} : { tools: options.tools }),
 });

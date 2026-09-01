@@ -20,7 +20,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { sha256Hex } from '../src/core/digest.ts';
-import { installedEnvironment, npmInstallArguments } from './support/shared-pack.ts';
+import { cachedNpmInstallArguments, installedEnvironment } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -110,7 +110,7 @@ it('uses only an installed tarball after source deletion', async () => {
     // The two consumers are disjoint directories; npm's cache handles the
     // concurrent installs (the scaffolder e2e relies on the same property).
     await Promise.all([projectRoot, scriptProjectRoot].map(async (consumer) =>
-      execFile('npm', ['install', ...npmInstallArguments, tarball], {
+      execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], {
         cwd: consumer,
         env: installedEnvironment(),
       })));
@@ -331,7 +331,7 @@ it('uses only an installed tarball after source deletion', async () => {
         '',
       ].join('\n')),
     ]);
-    await execFile('npm', ['install', ...npmInstallArguments, tarball], {
+    await execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], {
       cwd: frameworkRoot,
       env: installedEnvironment(),
     });

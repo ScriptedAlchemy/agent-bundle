@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -7,6 +6,7 @@ import { expect, it } from '@rstest/core';
 import { build, validate } from '../src/api.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
+import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 
 const configSource = (options: { readonly payload?: string; readonly hooks?: string; readonly mcp?: string }): string => [
   'export default {',
@@ -34,18 +34,13 @@ const standardHooksBlock = [
 ].join('\n');
 
 /** A payload fixture whose runtime tree is deliberately not framework-shaped. */
-const writePayloadFiles = async (root: string): Promise<void> => {
-  await mkdir(join(root, 'built', 'runtime', 'mcp'), { recursive: true });
-  await mkdir(join(root, 'built', 'runtime', 'chunks'), { recursive: true });
-  await mkdir(join(root, 'built', 'app'), { recursive: true });
-  await Promise.all([
-    // A bare-specifier import would fail the generated-module graph
-    // validation (AB6005); prebuilt payloads are exempt by design.
-    writeFile(join(root, 'built', 'runtime', 'mcp', 'server.js'), 'import express from "express";\nexport default express;\n'),
-    writeFile(join(root, 'built', 'runtime', 'chunks', '417.js'), 'module.exports = require("./418.js");\n'),
-    writeFile(join(root, 'built', 'runtime', 'hook.js'), 'process.stdout.write("{}");\n'),
-    writeFile(join(root, 'built', 'app', 'index.html'), '<html><body>widget</body></html>\n'),
-  ]);
+const payloadFiles: Readonly<Record<string, string>> = {
+  'built/app/index.html': '<html><body>widget</body></html>\n',
+  'built/runtime/chunks/417.js': 'module.exports = require("./418.js");\n',
+  'built/runtime/hook.js': 'process.stdout.write("{}");\n',
+  // A bare-specifier import would fail the generated-module graph
+  // validation (AB6005); prebuilt payloads are exempt by design.
+  'built/runtime/mcp/server.js': 'import express from "express";\nexport default express;\n',
 };
 
 const createProject = async (options: {
@@ -53,10 +48,16 @@ const createProject = async (options: {
   readonly hooks?: string;
   readonly mcp?: string;
   readonly withPayloadFiles?: boolean;
+  readonly files?: Readonly<Record<string, string>>;
 } = {}): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-prebuilt-'));
-  await writeFile(join(root, 'agent-bundle.config.ts'), configSource(options));
-  if (options.withPayloadFiles !== false) await writePayloadFiles(root);
+  const { root } = await createProjectFixture({
+    config: configSource(options),
+    files: {
+      ...(options.withPayloadFiles !== false ? payloadFiles : {}),
+      ...options.files,
+    },
+    prefix: 'agent-bundle-prebuilt-',
+  });
   return root;
 };
 
@@ -142,7 +143,7 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
     const revalidated = await validate({ artifact: join(root, 'out'), root });
     expect(revalidated.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeProjectFixture(root);
   }
 });
 
@@ -171,7 +172,7 @@ it('validates an argument-less prebuilt hook without demanding a wrapper index e
     const revalidated = await validate({ artifact: join(root, 'out'), root });
     expect(revalidated.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeProjectFixture(root);
   }
 });
 
@@ -197,9 +198,8 @@ it('reports the prebuilt payload source diagnostics', async () => {
       "    runtime: { source: './built/runtime', targets: ['claude'] },",
       '  },',
     ].join('\n'),
+    files: { 'src/hook.ts': 'export default () => undefined;\n' },
   });
-  await mkdir(join(root, 'src'), { recursive: true });
-  await writeFile(join(root, 'src', 'hook.ts'), 'export default () => undefined;\n');
   try {
     const result = await validate({ root });
     const codes = result.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity] as const);
@@ -215,7 +215,7 @@ it('reports the prebuilt payload source diagnostics', async () => {
     // Hook arguments: rejected on compiled handlers and on unsafe values.
     expect(result.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4746').length).toBe(2);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await removeProjectFixture(root);
   }
 });
 
@@ -229,7 +229,7 @@ it('refuses to build while a payload is empty, a prebuilt entry is absent, or th
       diagnostics: [expect.objectContaining({ code: 'AB4747' })],
     });
   } finally {
-    await rm(emptyPayloadRoot, { force: true, recursive: true });
+    await removeProjectFixture(emptyPayloadRoot);
   }
 
   const missingEntryRoot = await createProject({
@@ -245,7 +245,7 @@ it('refuses to build while a payload is empty, a prebuilt entry is absent, or th
       diagnostics: [expect.objectContaining({ code: 'AB4748' })],
     });
   } finally {
-    await rm(missingEntryRoot, { force: true, recursive: true });
+    await removeProjectFixture(missingEntryRoot);
   }
 
   const overlapRoot = await createProject({ payload: standardPayloadBlock });
@@ -254,6 +254,6 @@ it('refuses to build while a payload is empty, a prebuilt entry is absent, or th
       diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB4749' })]),
     });
   } finally {
-    await rm(overlapRoot, { force: true, recursive: true });
+    await removeProjectFixture(overlapRoot);
   }
 });

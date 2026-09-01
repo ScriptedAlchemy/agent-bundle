@@ -15,6 +15,10 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
+// The native smoke installs the production closure a real consumer would get,
+// so it stays on npm's default metadata staleness checks.
+import { npmInstallArguments } from './shared-pack.ts';
+
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
@@ -236,9 +240,7 @@ export const runPackedNativeSmoke = async (options: {
     const installed = await runNodeEntrypoint(npmEntrypoint, [
       'install',
       '--omit=dev',
-      '--ignore-scripts',
-      '--no-audit',
-      '--no-fund',
+      ...npmInstallArguments,
       join(tarballs, listing[0].filename),
     ], { cwd: consumer, environment });
     if (installed.exitCode !== 0) throw new Error('Packed native smoke could not install the release tarball.');
