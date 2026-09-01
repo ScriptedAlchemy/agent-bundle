@@ -260,7 +260,7 @@ it('lowers cursor-targeted hooks into the flat versioned document with dedicated
         provenance: { kind: 'config', sourcePath: configPath },
         source: '/workspace/src/hooks/record-write.ts',
         targets: ['cursor'],
-        timeout: 30,
+        timeoutMs: 30_000,
         tools: ['file.write'],
       },
     ],
