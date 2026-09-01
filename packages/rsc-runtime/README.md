@@ -25,7 +25,8 @@ const result = lowerMcpResult(
 ```
 
 The package exports `Hook`, `Mcp`, `lowerHookResult`, `lowerMcpResult`,
-`createRscRequestContext`, `agent`, `runAgentRequest`, and `AgentRequestError`. It does not own an
+`createRscRequestContext`, `agent`, `runAgentRequest`, `available`,
+`unavailable`, and `AgentRequestError`. It does not own an
 RSC renderer, application state, transport, persistence, or host packaging.
 React 19 is a peer dependency and Node 22.19 or newer is required.
 

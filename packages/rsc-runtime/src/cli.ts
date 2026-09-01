@@ -35,12 +35,12 @@ export const runRscCli = async (
   signal.throwIfAborted();
   const cwd = process.cwd();
   const result = await runAgentRequest({
-    capabilities: Object.freeze({
+    capabilities: {
       command: unavailable(),
       filesystem: unavailable(),
       network: unavailable(),
       projectRoot: available({ root: cwd }, 'derived'),
-    }),
+    },
     host: unavailable('unsupported-surface'),
     invocation: {
       kind: 'cli',
