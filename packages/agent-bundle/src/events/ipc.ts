@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdir, rm } from 'node:fs/promises';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { dirname, join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 import { Context, Duration, Effect, Layer } from 'effect';
 import { z } from 'zod';
 
-import { makeScopedEffectRuntime, runPromise, type ScopedEffectRuntime } from '../effect/boundary.ts';
+import { isAbortError, makeScopedEffectRuntime, runPromise, type ScopedEffectRuntime } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 
 const EVENT_RUNTIME_PROTOCOL_VERSION = 1 as const;
@@ -65,7 +66,7 @@ export interface EventRuntimeRequest {
 export interface CreateEventRuntimeServerOptions {
   readonly artifactEpoch: string;
   readonly endpointId: string;
-  readonly handle: (request: EventRuntimeRequest) => Promise<unknown>;
+  readonly handle: (request: EventRuntimeRequest, signal: AbortSignal) => Promise<unknown>;
 }
 
 export interface EventRuntimeServer {
@@ -104,6 +105,8 @@ const readOneMessage = Effect.fnUntraced(function*(
   socket: Socket,
 ): Effect.fn.Return<unknown, EventRuntimeTransportError> {
   return yield* Effect.callback<unknown, EventRuntimeTransportError>((resume) => {
+    const decoder = new StringDecoder('utf8');
+    let receivedBytes = 0;
     let raw = '';
     const cleanup = (): void => {
       socket.removeListener('data', onData);
@@ -114,19 +117,27 @@ const readOneMessage = Effect.fnUntraced(function*(
       cleanup();
       resume(effect);
     };
-    const onData = (chunk: Buffer): void => {
-      raw += chunk.toString('utf8');
-      if (Buffer.byteLength(raw) > MAX_EVENT_MESSAGE_BYTES) {
-        finish(Effect.fail(transportError('invalid-message', 'Event runtime message exceeds the 1 MiB limit.')));
-        socket.destroy();
-      }
-    };
-    const onEnd = (): void => {
+    const parse = (message: string): void => {
       try {
-        finish(Effect.succeed(JSON.parse(raw)));
+        finish(Effect.succeed(JSON.parse(message)));
       } catch (error) {
         finish(Effect.fail(transportError('invalid-message', 'Event runtime message must be one JSON value.', error)));
       }
+    };
+    const onData = (chunk: Buffer): void => {
+      receivedBytes += chunk.byteLength;
+      raw += decoder.write(chunk);
+      if (receivedBytes > MAX_EVENT_MESSAGE_BYTES) {
+        finish(Effect.fail(transportError('invalid-message', 'Event runtime message exceeds the 1 MiB limit.')));
+        socket.destroy();
+        return;
+      }
+      const delimiter = raw.indexOf('\n');
+      if (delimiter !== -1) parse(raw.slice(0, delimiter));
+    };
+    const onEnd = (): void => {
+      raw += decoder.end();
+      parse(raw);
     };
     const onError = (error: Error): void => {
       finish(Effect.fail(transportError('runtime-failed', 'Event runtime socket failed.', error)));
@@ -144,6 +155,7 @@ const readOneMessage = Effect.fnUntraced(function*(
 const handleConnection = Effect.fnUntraced(function*(
   socket: Socket,
   options: CreateEventRuntimeServerOptions,
+  signal: AbortSignal,
 ): Effect.fn.Return<void, never> {
   const raw = yield* readOneMessage(socket).pipe(Effect.exit);
   if (raw._tag === 'Failure') {
@@ -183,7 +195,7 @@ const handleConnection = Effect.fnUntraced(function*(
     hostContractRevision: parsed.data.hostContractRevision,
     native: parsed.data.native,
     target: parsed.data.target,
-  })).pipe(Effect.exit);
+  }, signal)).pipe(Effect.exit);
   if (handled._tag === 'Failure') {
     writeResponse(socket, {
       artifactEpoch: options.artifactEpoch,
@@ -230,7 +242,20 @@ const openServer = (
     const server = createServer({ allowHalfOpen: true }, (socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));
-      void runPromise(handleConnection(socket, options));
+      const controller = new AbortController();
+      const interrupt = (): void => controller.abort();
+      socket.once('close', interrupt);
+      socket.once('end', interrupt);
+      socket.once('error', interrupt);
+      void runPromise(handleConnection(socket, options, controller.signal), { signal: controller.signal })
+        .catch((error: unknown) => {
+          if (!isAbortError(error)) throw error;
+        })
+        .finally(() => {
+          socket.removeListener('close', interrupt);
+          socket.removeListener('end', interrupt);
+          socket.removeListener('error', interrupt);
+        });
     });
     const onError = (error: Error): void => {
       resume(Effect.fail(transportError('runtime-failed', 'Unable to listen on the event runtime endpoint.', error)));
@@ -313,7 +338,7 @@ const requestProgram = (
 ): Effect.Effect<unknown, EventRuntimeTransportError> => Effect.acquireUseRelease(
   connect(eventRuntimeEndpoint(options.endpointId)),
   (socket) => Effect.gen(function*() {
-    socket.end(`${JSON.stringify({
+    socket.write(`${JSON.stringify({
       artifactEpoch: options.artifactEpoch,
       event: options.event,
       hostContractRevision: options.hostContractRevision,

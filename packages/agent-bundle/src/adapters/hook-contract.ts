@@ -23,6 +23,8 @@ export interface TargetHookWrapper {
 }
 
 export interface TargetHookEntry extends TargetHookWrapper {
+  /** Timeout projected into the native host's seconds unit. */
+  readonly timeout?: number;
   readonly virtualSource: string;
 }
 
@@ -316,7 +318,7 @@ const eventRouteHookWrapperSource = (
     `const target = ${JSON.stringify(entry.target)};`,
     `const runtimeMode = ${JSON.stringify(route.runtime)};`,
     `const fallbackMode = ${JSON.stringify(route.fallback)};`,
-    `const timeoutMs = ${String((entry.hook.timeout ?? 5) * 1_000)};`,
+    `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
     "const endpointId = `${artifactEpoch}:${target}:${dirname(dirname(resolve(process.argv[1])))}`;",
     '',
     'const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);',
@@ -696,16 +698,17 @@ export const planHooks = (
     const prebuilt = hook.prebuiltPath !== undefined;
     const relativePath = hook.prebuiltPath ?? contract.wrapperPath(hook);
     const command = generatedHookCommand(contract, relativePath, prebuilt ? hook.args ?? [] : []);
+    const timeout = hook.timeoutMs === undefined ? undefined : Math.ceil(hook.timeoutMs / 1_000);
     const entryInput: TargetHookDocumentEntryInput = {
       command,
       ...(matcher === undefined ? {} : { matcher }),
-      ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
+      ...(timeout === undefined ? {} : { timeout }),
     };
     const group = contract.documentEntry === undefined
       ? {
           hooks: [{
             command,
-            ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
+            ...(timeout === undefined ? {} : { timeout }),
             type: 'command',
           }],
           ...(matcher === undefined ? {} : { matcher }),
@@ -721,6 +724,7 @@ export const planHooks = (
       ...(matcher === undefined ? {} : { nativeMatcher: matcher }),
       relativePath,
       target,
+      ...(timeout === undefined ? {} : { timeout }),
     };
     hookEntries.push({
       ...wrapper,
