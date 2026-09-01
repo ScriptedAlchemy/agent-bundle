@@ -40,8 +40,14 @@ describe('runtimeSpecForFramework', () => {
       .toBe('file:/tmp/agent-bundle-runtime.tgz');
   });
 
+  it('mirrors npm registry framework specs onto the runtime package', () => {
+    expect(runtimeSpecForFramework('0.1.0')).toBe('0.1.0');
+    expect(runtimeSpecForFramework('^0.1.0')).toBe('^0.1.0');
+    expect(runtimeSpecForFramework('next')).toBe('next');
+  });
+
   it('fails closed when a paired runtime spec cannot be derived', () => {
     expect(() => runtimeSpecForFramework('file:/tmp/framework.tgz')).toThrow(UsageError);
-    expect(() => runtimeSpecForFramework('0.1.0')).toThrow(UsageError);
+    expect(() => runtimeSpecForFramework('file:/tmp/framework.tgz')).toThrow('npm registry version, range, or tag');
   });
 });
