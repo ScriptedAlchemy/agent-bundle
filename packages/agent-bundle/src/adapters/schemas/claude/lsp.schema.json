@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/plugin.schema.json",
+  "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/lsp.schema.json",
   "$defs": {
-    "lspServer": {
+    "server": {
       "additionalProperties": false,
       "properties": {
         "args": { "items": { "type": "string" }, "type": "array" },
@@ -28,31 +28,8 @@
       "type": "object"
     }
   },
-  "additionalProperties": false,
-  "properties": {
-    "author": {
-      "additionalProperties": false,
-      "properties": { "name": { "minLength": 1, "type": "string" } },
-      "required": ["name"],
-      "type": "object"
-    },
-    "description": { "minLength": 1, "type": "string" },
-    "hooks": { "const": "./hooks/hooks.json", "type": "string" },
-    "lspServers": {
-      "anyOf": [
-        { "minLength": 1, "type": "string" },
-        { "items": { "minLength": 1, "type": "string" }, "minItems": 1, "type": "array" },
-        {
-          "additionalProperties": { "$ref": "#/$defs/lspServer" },
-          "minProperties": 1,
-          "propertyNames": { "minLength": 1 },
-          "type": "object"
-        }
-      ]
-    },
-    "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
-    "version": { "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$", "type": "string" }
-  },
-  "required": ["name", "version", "description", "author"],
+  "additionalProperties": { "$ref": "#/$defs/server" },
+  "minProperties": 1,
+  "propertyNames": { "minLength": 1 },
   "type": "object"
 }

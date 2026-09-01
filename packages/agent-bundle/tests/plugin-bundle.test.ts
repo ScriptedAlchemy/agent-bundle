@@ -158,6 +158,44 @@ it('lays both host manifests over one shared bundle root', () => {
   });
 });
 
+it('emits Claude-only LSP configuration at the shared composite root', () => {
+  const model = {
+    ...bundleModel,
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config' as const, sourcePath: configPath },
+        target: 'claude',
+        value: {
+          lspServers: {
+            typescript: {
+              command: 'typescript-language-server',
+              extensionToLanguage: { '.ts': 'typescript' },
+            },
+          },
+        },
+      },
+    },
+  } satisfies NormalizedPlugin;
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(documents['.lsp.json']!)).toEqual({
+    typescript: {
+      command: 'typescript-language-server',
+      extensionToLanguage: { '.ts': 'typescript' },
+    },
+  });
+  expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('lspServers');
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('lspServers');
+  expect(documents['AGENTS.md']).toContain('## Language servers');
+  expect(documents['AGENTS.md']).toContain('must install the language server binary separately');
+  expect(documents['AGENTS.md']).toContain('/plugin');
+  expect(documents['AGENTS.md']).toContain('claude --debug');
+});
+
 it('emits each shared surface exactly once with no duplicate artifact paths', () => {
   const plan = planBundle(bundleModel);
   const paths = plan.entries.map((entry) => entry.relativePath);

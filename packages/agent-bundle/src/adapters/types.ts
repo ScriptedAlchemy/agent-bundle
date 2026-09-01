@@ -132,8 +132,22 @@ export const payloadCopyEntries = (
     sourceInputs: sourceInputs(payload.provenance.sourcePath, file.source),
   })));
 
+/** One already-validated host-native document beyond the shared plugin set. */
+export interface StandardPluginHostDocument {
+  readonly document: Record<string, unknown>;
+  readonly relativePath: string;
+  readonly sourceInputs: readonly string[];
+}
+
 export interface StandardPluginArtifactsInput {
   readonly diagnostics: readonly Diagnostic[];
+  /**
+   * Host-native documents a single target owns beyond the shared plugin,
+   * MCP, hook, and marketplace slots (Claude's `.lsp.json`). Callers pass
+   * only documents that already passed their pinned schema, exactly as the
+   * shared slots above are gated on their own validity flags.
+   */
+  readonly hostDocuments?: readonly StandardPluginHostDocument[];
   readonly hookDocument?: Record<string, unknown>;
   readonly hookDocumentValid: boolean;
   readonly hookEntries: readonly TargetHookEntry[];
@@ -269,6 +283,15 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
       relativePath: `assets/${asset.relativePath}`,
       source: asset.source,
       sourceInputs: sourceInputs(asset.source),
+    });
+  }
+
+  for (const hostDocument of input.hostDocuments ?? []) {
+    entries.push({
+      content: `${stableJson(hostDocument.document)}\n`,
+      kind: 'write',
+      relativePath: hostDocument.relativePath,
+      sourceInputs: hostDocument.sourceInputs,
     });
   }
 

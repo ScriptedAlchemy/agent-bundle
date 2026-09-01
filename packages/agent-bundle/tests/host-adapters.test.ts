@@ -82,6 +82,23 @@ const writeEntries = (model: NormalizedPlugin, target: 'codex' | 'claude') => {
 const writeContents = (model: NormalizedPlugin, target: 'codex' | 'claude') =>
   Object.fromEntries(writeEntries(model, target).map((entry) => [entry.relativePath, entry.content]));
 
+const withClaudeLsp = (
+  model: NormalizedPlugin,
+  lspServers: unknown,
+  target = 'claude',
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      target,
+      value: { lspServers },
+    },
+  },
+});
+
 const validateDocuments = async (
   target: 'codex' | 'claude',
   documents: Readonly<Record<string, string>>,
@@ -294,6 +311,184 @@ it('anchors compiled Claude MCP entries with absolute arguments, plugin-root cwd
     cwd: '${CLAUDE_PLUGIN_ROOT}',
     env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CLAUDE_PLUGIN_ROOT}', CACHE_DIR: 'cache' },
   });
+});
+
+it('emits Claude LSP configuration and expands only the four documented token fields', () => {
+  const model = withClaudeLsp(plugin, {
+    typescript: {
+      args: [
+        `--plugin=${pathTokens.pluginRoot}`,
+        `--data=${pathTokens.pluginData}`,
+        `--workspace=${pathTokens.workspaceRoot}`,
+      ],
+      command: `${pathTokens.pluginRoot}/bin/typescript-language-server`,
+      diagnostics: false,
+      env: {
+        DATA: `${pathTokens.pluginData}/lsp`,
+        ROOT: pathTokens.pluginRoot,
+        WORKSPACE: pathTokens.workspaceRoot,
+      },
+      extensionToLanguage: { '.ts': `typescript-${pathTokens.pluginRoot}` },
+      initializationOptions: { token: pathTokens.pluginData },
+      maxRestarts: 3,
+      restartOnCrash: true,
+      settings: { token: pathTokens.workspaceRoot },
+      shutdownTimeout: 2_000,
+      startupTimeout: 5_000,
+      transport: 'socket',
+      workspaceFolder: `${pathTokens.workspaceRoot}/packages`,
+    },
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+  const documents = writeContents(model, 'claude');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(documents['.lsp.json']!)).toEqual({
+    typescript: {
+      args: [
+        '--plugin=${CLAUDE_PLUGIN_ROOT}',
+        '--data=${CLAUDE_PLUGIN_DATA}',
+        '--workspace=${CLAUDE_PROJECT_DIR}',
+      ],
+      command: '${CLAUDE_PLUGIN_ROOT}/bin/typescript-language-server',
+      diagnostics: false,
+      env: {
+        DATA: '${CLAUDE_PLUGIN_DATA}/lsp',
+        ROOT: '${CLAUDE_PLUGIN_ROOT}',
+        WORKSPACE: '${CLAUDE_PROJECT_DIR}',
+      },
+      extensionToLanguage: { '.ts': `typescript-${pathTokens.pluginRoot}` },
+      initializationOptions: { token: pathTokens.pluginData },
+      maxRestarts: 3,
+      restartOnCrash: true,
+      settings: { token: pathTokens.workspaceRoot },
+      shutdownTimeout: 2_000,
+      startupTimeout: 5_000,
+      transport: 'socket',
+      workspaceFolder: '${CLAUDE_PROJECT_DIR}/packages',
+    },
+  });
+  expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('lspServers');
+});
+
+it('pins all documented Claude plugin-manifest LSP declaration forms', async () => {
+  const schema = (await import('../src/adapters/schemas/claude/plugin.schema.json', {
+    with: { type: 'json' },
+  })).default;
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  const validate = validator.compile(schema);
+  const manifest = {
+    author: { name: 'Agent Bundle' },
+    description: 'Claude LSP schema fixture.',
+    name: 'claude-lsp-fixture',
+    version: '1.0.0',
+  };
+  const server = {
+    command: 'typescript-language-server',
+    extensionToLanguage: { '.ts': 'typescript' },
+  };
+
+  for (const lspServers of [
+    './.lsp.json',
+    ['./.lsp.json', './language-servers.json'],
+    { typescript: server },
+  ]) {
+    expect(validate({ ...manifest, lspServers })).toBe(true);
+  }
+  for (const lspServers of [
+    '',
+    [],
+    [1],
+    {},
+    { typescript: { extensionToLanguage: { '.ts': 'typescript' } } },
+    { typescript: { command: 'typescript-language-server' } },
+    { typescript: { ...server, transport: 'pipe' } },
+    { typescript: { ...server, undocumented: true } },
+  ]) {
+    expect(validate({ ...manifest, lspServers })).toBe(false);
+  }
+});
+
+it.each([
+  {
+    code: 'claude.lsp.declaration.invalid',
+    label: 'an empty declaration',
+    lspServers: [],
+  },
+  {
+    code: 'claude.lsp.server.invalid',
+    label: 'a non-object server',
+    lspServers: { typescript: './typescript-lsp.json' },
+  },
+  {
+    code: 'claude.lsp.field.unknown',
+    label: 'an unknown server field',
+    lspServers: {
+      typescript: {
+        command: 'typescript-language-server',
+        extensionToLanguage: { '.ts': 'typescript' },
+        undocumented: true,
+      },
+    },
+  },
+  {
+    code: 'claude.lsp.command.required',
+    label: 'a missing command',
+    lspServers: { typescript: { extensionToLanguage: { '.ts': 'typescript' } } },
+  },
+  {
+    code: 'claude.lsp.extensions.required',
+    label: 'an empty extension map',
+    lspServers: { typescript: { command: 'typescript-language-server', extensionToLanguage: {} } },
+  },
+  {
+    code: 'claude.lsp.token.env.key',
+    label: 'a tokenized environment key',
+    lspServers: {
+      typescript: {
+        command: 'typescript-language-server',
+        env: { [`PREFIX_${pathTokens.pluginRoot}`]: 'literal' },
+        extensionToLanguage: { '.ts': 'typescript' },
+      },
+    },
+  },
+  {
+    code: 'claude.schema.lsp',
+    label: 'a schema-invalid optional field',
+    lspServers: {
+      typescript: {
+        command: 'typescript-language-server',
+        extensionToLanguage: { '.ts': 'typescript' },
+        maxRestarts: -1,
+      },
+    },
+  },
+])('rejects $label without emitting Claude LSP configuration', ({ code, lspServers }) => {
+  const model = withClaudeLsp(plugin, lspServers);
+  const plan = createDefaultRegistry().get('claude').plan(model);
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+  expect(plan.entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
+});
+
+it('withholds Claude LSP configuration when two servers claim one extension', () => {
+  const model = withClaudeLsp(plugin, {
+    first: {
+      command: 'first-language-server',
+      extensionToLanguage: { '.ts': 'typescript' },
+    },
+    second: {
+      command: 'second-language-server',
+      extensionToLanguage: { '.ts': 'typescript' },
+    },
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'claude.lsp.extension.conflict',
+  ]);
+  expect(plan.entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
 });
 
 it.each(['codex', 'claude'] as const)(

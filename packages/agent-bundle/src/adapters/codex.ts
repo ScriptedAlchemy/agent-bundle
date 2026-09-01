@@ -14,7 +14,12 @@ import {
 } from '../core/types.ts';
 import { createMcpPathTokenResolver, standardMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime, resolveTargetRelativeStdioArgument } from '../services/mcp-runtime.ts';
-import { capabilityEvidence, capabilityStateFromSupport, supportedCapability } from './capability-state.ts';
+import {
+  capabilityEvidence,
+  capabilityStateFromSupport,
+  supportedCapability,
+  unavailableCapability,
+} from './capability-state.ts';
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import {
   mergeHookDocuments,
@@ -402,6 +407,12 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
+    // The pinned Codex plugin contract documents no LSP surface at all, so
+    // this is an absent host capability rather than a degraded one: nothing
+    // of Claude's `.lsp.json` is copied to the Codex manifest.
+    lsp: unavailableCapability(
+      'The pinned Codex plugin contract publishes no LSP server surface; language-server configuration reaches Claude Code only.',
+    ),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,

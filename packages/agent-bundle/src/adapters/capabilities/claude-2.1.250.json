@@ -21,6 +21,28 @@
   },
   "observedCliVersion": "2.1.250",
   "plugin": {
+    "lsp": {
+      "config": ".lsp.json",
+      "manifestField": "lspServers",
+      "manifestFieldTypes": ["array", "object", "string"],
+      "optionalFields": [
+        "args",
+        "diagnostics",
+        "env",
+        "initializationOptions",
+        "maxRestarts",
+        "restartOnCrash",
+        "settings",
+        "shutdownTimeout",
+        "startupTimeout",
+        "transport",
+        "workspaceFolder"
+      ],
+      "pathTokenFields": ["args", "command", "env", "workspaceFolder"],
+      "requiredFields": ["command", "extensionToLanguage"],
+      "transports": ["socket", "stdio"],
+      "vendorsServerBinary": false
+    },
     "manifest": ".claude-plugin/plugin.json",
     "marketplace": ".claude-plugin/marketplace.json",
     "skills": true
@@ -29,5 +51,19 @@
     "pluginData": "${CLAUDE_PLUGIN_DATA}",
     "pluginRoot": "${CLAUDE_PLUGIN_ROOT}",
     "workspaceRoot": "${CLAUDE_PROJECT_DIR}"
+  },
+  "provenance": {
+    "observedAt": "2026-09-01",
+    "source": "https://docs.anthropic.com/en/docs/claude-code/plugins",
+    "evidence": [
+      "LSP servers section: \"Location: .lsp.json in plugin root, or inline in plugin.json\"; the file-locations table lists .lsp.json as the default LSP location, alongside .mcp.json, at the plugin root rather than inside .claude-plugin/.",
+      "Component path fields table: lspServers is typed string|array|object with the example \"./.lsp.json\", so a path string, an array of path strings, and an inline server map are all documented forms.",
+      "Required per-server fields are command (\"The LSP binary to execute (must be in PATH)\") and extensionToLanguage; transport accepts socket but Claude Code runs every server over stdio.",
+      "restartOnCrash and shutdownTimeout require Claude Code v2.1.205 or later; before that revision either option made Claude Code skip the server entirely. The pinned 2.1.250 revision is past that floor.",
+      "First-registered-wins collision rule: when more than one enabled server declares the same extension in extensionToLanguage, from one plugin or from different plugins, the first registered handles the extension and the others never start.",
+      "The server binary is never vendored: \"You must install the language server binary separately. LSP plugins configure how Claude Code connects to a language server, but they don't include the server itself.\"",
+      "Placeholder substitution for LSP servers is limited to command, args, env, and workspaceFolder.",
+      "Codex and Cursor publish no plugin LSP surface at their pinned revisions, so the unified bundle's .lsp.json reaches Claude Code only."
+    ]
   }
 }

@@ -51,6 +51,8 @@ npx agent-bundle dev --root .                   # local workbench with live rebu
 
 `targets: ['plugin']` emits one multi-host bundle at `dist/plugin/`: `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared `skills/`, `hooks/`, `mcp/`, and `scripts/` directories. The bundle's generated `AGENTS.md` explains how to install it into each host. Per-host layouts are available as the `claude`, `codex`, `cursor`, and `portable` targets.
 
+Claude Code language servers are declared under `claude.lspServers`; the `claude` target and the Claude half of `plugin` emit the record as plugin-root `.lsp.json`. Agent Bundle expands path tokens only in `command`, `args`, `env`, and `workspaceFolder`, and it does not include the language-server binary — install that separately so the declared command is available on `PATH`. Codex, Cursor, and the portable format do not currently receive this host-scoped configuration.
+
 The same config also owns the npm package build — no second bundler config, bin shims, or hand-rolled stdio lifecycles. `bin` and `lib` entries (or the conventions `src/cli.ts`, `src/index.ts`, and `src/mcp/<server-id>.ts`) emit executable `dist/bin/<name>.js` bundles and a library output alongside the host artifacts; an MCP entry that default-exports a server factory runs under a framework-owned stdio lifecycle; `tools.rsbuild` / `tools.rspack` is the one bundler escape hatch. [Entry conventions](docs/entry-conventions.md) is the full contract, and [Framework mode](docs/framework-mode.md) is the whole authoring model on one screen: structure in config and conventions (`skills/<name>/SKILL.md` ships with no declaration at all), JSX only where something is rendered.
 
 ## Commands

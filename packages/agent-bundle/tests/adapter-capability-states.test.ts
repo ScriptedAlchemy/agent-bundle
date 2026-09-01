@@ -20,11 +20,34 @@ const state = (value: CapabilityState): CapabilityState => Object.freeze(value);
 it('keeps the plugin Boolean capability view as the Claude and Codex intersection', () => {
   const registry = createDefaultRegistry();
 
-  for (const capability of ['marketplace', 'hooks', 'mcp', 'skills']) {
+  for (const capability of ['marketplace', 'hooks', 'lsp', 'mcp', 'skills']) {
     expect(registry.supports('plugin', capability)).toBe(
       registry.supports('claude', capability) && registry.supports('codex', capability),
     );
   }
+});
+
+it('reports Claude LSP support and honest unavailable composite coverage', () => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('claude').capabilities.lsp).toMatchObject({
+    evidence: {
+      observedVersion: '2.1.250',
+      target: 'claude',
+    },
+    state: 'supported',
+  });
+  expect(registry.get('codex').capabilities.lsp).toMatchObject({
+    reason: expect.stringContaining('no LSP server surface'),
+    state: 'unavailable',
+  });
+  expect(registry.get('plugin').capabilities.lsp).toMatchObject({
+    reason: expect.stringContaining('no LSP server surface'),
+    state: 'unavailable',
+  });
+  expect(registry.supports('claude', 'lsp')).toBe(true);
+  expect(registry.supports('codex', 'lsp')).toBe(false);
+  expect(registry.supports('plugin', 'lsp')).toBe(false);
 });
 
 it('intersects supported composite capabilities and merges both evidence records', () => {
