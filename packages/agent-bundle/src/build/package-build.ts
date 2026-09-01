@@ -6,7 +6,12 @@ import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts'
 import { assertInside } from '../core/paths.ts';
 import { listArtifactFiles, publishArtifact, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
-import { generatedExecutableEntrySource } from './entry-shell.ts';
+import {
+  cliEntryRuntimePath,
+  cliEntryRuntimeSpecifier,
+  generatedCliBinEntrySource,
+  generatedExecutableEntrySource,
+} from './entry-shell.ts';
 import { buildWithRslib, type RslibEntry } from './rslib.ts';
 
 /**
@@ -96,6 +101,33 @@ export const planPackageEntries = async (
   if (packageBuild === undefined) return Object.freeze([]);
   const entries: PlannedPackageEntry[] = [];
   for (const bin of packageBuild.bins) {
+    if (bin.generatedCli !== undefined) {
+      // A routed-CLI bin compiles the framework-generated command program;
+      // the cli-entry runtime shell is aliased in so the emitted executable
+      // stays self-contained, exactly like generated stdio MCP entries.
+      entries.push({
+        aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath() },
+        banner: binShebang,
+        executable: true,
+        name: `bin-${bin.name}`,
+        outputRelativePath: `bin/${bin.name}.js`,
+        source: bin.source,
+        sourceInputs: Object.freeze([...new Set([
+          bin.provenance.sourcePath,
+          ...bin.generatedCli.routes.map((route) => route.source),
+        ])]),
+        virtualSource: generatedCliBinEntrySource({
+          commands: bin.generatedCli.commands,
+          plugin: {
+            ...(model.metadata.description === undefined ? {} : { description: model.metadata.description }),
+            name: model.metadata.name,
+            version: model.metadata.version,
+          },
+          routes: bin.generatedCli.routes,
+        }),
+      });
+      continue;
+    }
     // A bin entry exporting `main` (or a default function) receives the
     // generated process envelope; a self-executing module bundles directly.
     const exports = await scanEntryExports(bin.source);
@@ -160,9 +192,13 @@ export const buildPackageOutputs = async (options: {
   await mkdir(stageParent, { recursive: true });
   const stageRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.stage-`));
   try {
+    const cliRuntimeShell = entries.some((entry) => entry.aliases?.[cliEntryRuntimeSpecifier] !== undefined)
+      ? cliEntryRuntimePath()
+      : undefined;
     const evidence = await buildWithRslib({
       cwd: projectRoot,
       entries,
+      ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [cliRuntimeShell] }),
       logLevel: 'error',
       outputRoot: stageRoot,
       ...(options.tools === undefined ? {} : { tools: options.tools }),

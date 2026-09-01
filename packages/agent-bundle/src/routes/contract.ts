@@ -28,12 +28,20 @@ const diagnostic = (
   recovery: string,
 ): Diagnostic => ({ code, message, recovery, severity: 'error', sourcePath });
 
-/** Validates G8's one executable route contract without evaluating the module. */
-export const validateRouteModuleContract = (
+/** The statically scanned export surface of one route module. */
+export interface RouteModuleExports {
+  /** True when the default export is an async function or arrow function. */
+  readonly asyncDefault: boolean;
+  readonly named: ReadonlySet<string>;
+  /** True when the module exports `execute` or `render` (the retired split contract). */
+  readonly splitExport: boolean;
+}
+
+/** Scans one route module's top-level export surface without evaluating it. */
+export const scanRouteModuleExports = (
   moduleText: string,
   relativePath: string,
-  sourcePath: string,
-): readonly Diagnostic[] => {
+): RouteModuleExports => {
   const sourceFile = ts.createSourceFile(relativePath, moduleText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const named = new Set<string>();
   let asyncDefault = false;
@@ -71,6 +79,16 @@ export const validateRouteModuleContract = (
     }
   }
 
+  return Object.freeze({ asyncDefault, named, splitExport });
+};
+
+/** Validates G8's one executable route contract without evaluating the module. */
+export const validateRouteModuleContract = (
+  moduleText: string,
+  relativePath: string,
+  sourcePath: string,
+): readonly Diagnostic[] => {
+  const { asyncDefault, named, splitExport } = scanRouteModuleExports(moduleText, relativePath);
   const missing = ['inputSchema', 'resultSchema'].filter((name) => !named.has(name));
   const diagnostics: Diagnostic[] = [];
   if (missing.length > 0 || !asyncDefault) {

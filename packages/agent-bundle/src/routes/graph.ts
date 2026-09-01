@@ -5,6 +5,7 @@ import { extname, relative, resolve } from 'node:path';
 import fastGlob from 'fast-glob';
 
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
+import { compileCliCommands } from './cli-commands.ts';
 import { extractRouteConfig } from './config-extract.ts';
 import { validateRouteModuleContract } from './contract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -530,7 +531,20 @@ export const compileRouteGraph = async (
         conventionalCli,
       ));
     }
-    cli = { mode, routes: mode === 'conventional' ? [] : cliRoutes };
+    if (mode === 'generated') {
+      const compiled = await compileCliCommands(cliRoutes, async (route) => {
+        try {
+          return await readFile(route.source, 'utf8');
+        } catch {
+          // Racing deletion is handled by the next source snapshot.
+          return undefined;
+        }
+      });
+      diagnostics.push(...compiled.diagnostics);
+      cli = { commands: compiled.commands, mode, routes: cliRoutes };
+    } else {
+      cli = { mode, routes: mode === 'conventional' ? [] : cliRoutes };
+    }
   }
 
   const identity = {

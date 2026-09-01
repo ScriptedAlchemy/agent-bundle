@@ -30,6 +30,7 @@ export default defineConfig({
     entry: {
       api: './src/api.ts',
       cli: './src/cli.ts',
+      'cli-entry': './src/cli-entry.ts',
       config: './src/config/index.ts',
       eval: './src/eval/index.ts',
       index: './src/index.ts',

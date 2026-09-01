@@ -15,6 +15,7 @@ import {
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
 import { isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
+import { isRenderedCliRoute } from '../routes/cli-commands.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleHookEntry,
@@ -1449,6 +1450,47 @@ const validateConventionalScripts = (
   return diagnostics;
 };
 
+/**
+ * The stage-2 routed-CLI gate (#102): a generated-mode `src/cli/**` surface
+ * compiles into one framework-generated bin, so a rendered (`.tsx`) command
+ * route the plain pipeline cannot execute yet, and an explicit `bin` entry
+ * shadowing the generated executable's name, are hard errors naming their
+ * explicit resolution. Discovery is not a packaging choice — a route never
+ * disappears silently.
+ */
+const validateConventionalCliRoutes = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  const cli = discovered.routeGraph?.cli;
+  if (cli?.mode !== 'generated') return diagnostics;
+  for (const route of cli.routes) {
+    if (!isRenderedCliRoute(route)) continue;
+    diagnostics.push({
+      code: 'AB4816',
+      message: `Conventional CLI route ${route.provenance.relativePath} is a rendered-command module; rendered commands are not supported yet.`,
+      recovery: 'Rename the module to .ts to ship a plain command, or prefix a path segment with "_" to keep it private.',
+      severity: 'error',
+      sourcePath: route.source,
+    });
+  }
+  const bin = loaded.config.bin;
+  if ((cli.commands ?? []).length > 0 && bin !== false && bin !== undefined && isRecord(bin)) {
+    const pluginName = loaded.config.plugin.name;
+    if (Object.hasOwn(bin, pluginName)) {
+      diagnostics.push({
+        code: 'AB4813',
+        message: `The explicit bin entry ${JSON.stringify(pluginName)} and the generated src/cli/ command executable share one bin name; the compiler never chooses silently.`,
+        recovery: `Rename the bin.${pluginName} entry, or remove the src/cli/ routes to keep the explicit bin.`,
+        severity: 'error',
+        sourcePath: loaded.configPath,
+      });
+    }
+  }
+  return diagnostics;
+};
+
 export const validateSource = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1525,6 +1567,9 @@ export const validateSource = (
   // own collisions: rendered, nested, and config-conflicting script routes
   // stay hard errors until later #102 stages ship them.
   diagnostics.push(...validateConventionalScripts(loaded, discovered));
+  // The stage-2 gate for routed CLI commands: rendered command routes and
+  // explicit-bin shadowing stay hard errors, never silent omissions.
+  diagnostics.push(...validateConventionalCliRoutes(loaded, discovered));
 
   return diagnostics;
 };

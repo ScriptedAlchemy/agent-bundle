@@ -118,7 +118,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
-## Route graph (`AB4800`–`AB4812`)
+## Route graph (`AB4800`–`AB4816`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -152,6 +152,41 @@ explicit `scripts` entries (#102 stage 1): a plain module directly under
 artifact with `provenance.kind: 'conventional'`. Script routes that pipeline
 cannot ship yet are hard errors (`AB4807`–`AB4809`), never silent omissions.
 
+Conventional `src/cli/**` routes compile into one collision-checked command
+graph (#102 stage 2): the file path below the CLI root is the command
+nesting (`src/cli/library/audit.ts` runs as `<bin> library audit`), the
+static `config` export supplies `description`, `aliases`, `positionals`, and
+the `exitCode` policy, and the graph feeds one framework-generated package
+executable named after the plugin (`dist/bin/<plugin-name>.js`), replacing
+the `src/cli.ts` convention for that project. A plain command route exports
+`inputSchema` and `resultSchema` zod schemas plus one async default function
+receiving `{ input, signal }`; the command runs inside the typed Agent
+request context, writes one canonical JSON line to stdout, and exits 0 (or
+the validated result's integer `exitCode` under `config.exitCode: 'result'`),
+1 on execution failure, 2 on usage or input-validation failure, 130/143
+after SIGINT/SIGTERM. `--help`, `--json`, and `--version` are owned by the
+generated shell.
+
+The argv projection of `inputSchema` is extracted statically — the module is
+parsed, never executed — from a bounded zod grammar: the top level is
+`z.object({ ... })` or `z.strictObject({ ... })` (optionally `.strict()`);
+each property chains from `z.string()`, `z.number()`, `z.boolean()`,
+`z.enum([...string literals])`, or `z.array(<string/number/enum element>)`;
+chains may add `.optional()`, `.default(<static literal>)`, and
+`.describe('<string literal>')`, plus validation-only refinements the
+projection accepts without interpreting (strings: `min`/`max`/`length`/
+`regex`/`startsWith`/`endsWith`/`includes`; numbers: `int`/`min`/`max`/`gt`/
+`gte`/`lt`/`lte`/`positive`/`nonnegative`/`negative`/`nonpositive`/`finite`/
+`safe`/`multipleOf`/`step`; arrays: `min`/`max`/`length`/`nonempty`) because
+the module's real zod schema still validates every input at run time. Keys
+project onto kebab-case options (`maxFiles` becomes `--max-files`); booleans
+are flags and must carry `.optional()` or `.default(...)`;
+`config.positionals` names the keys consumed as bare arguments in order,
+where only the trailing positional may be a `z.array(...)` (variadic).
+Anything outside that grammar — identifier references (including shared
+schema constants), unions, nested objects, transforms, coercions — raises
+`AB4814` naming the offending construct.
+
 | Code | Severity | Trigger |
 | --- | --- | --- |
 | `AB4800` | error | An MCP server has both discovered route modules under `src/mcp/<id>/` and an existing entry claim (the conventional `src/mcp/<id>.ts` module, or a declared `entry`/`command`/`url`) without an explicit `routes.servers.<id>` mode. |
@@ -167,6 +202,10 @@ cannot ship yet are hard errors (`AB4807`–`AB4809`), never silent omissions.
 | `AB4810` | error | A generated MCP route is missing named `inputSchema`/`resultSchema` exports or its default export is not an async function component. |
 | `AB4811` | error | A generated MCP route exports `execute` or `render`; route mode accepts only the async default Server Component contract. |
 | `AB4812` | error | A generated MCP App route has no non-empty static `config.resourceUri`. |
+| `AB4813` | error | The command graph collides: a route is both a command module and a command group, an alias collides with a sibling command, group, or alias, an alias is unsafe or duplicated, or an explicit `bin` entry claims the generated CLI executable's name. |
+| `AB4814` | error | A CLI route's `inputSchema` leaves the bounded argv grammar (the message names the offending construct and position), a key projects onto a reserved or duplicate option name, a required boolean has no flag expression, or `config.positionals` violates the positional policy. |
+| `AB4815` | error | A CLI route does not satisfy the routed command contract: missing named `inputSchema`/`resultSchema` exports, a default export that is not an async function, or malformed `config.description`/`aliases`/`exitCode` fields. |
+| `AB4816` | error | A conventional `src/cli/**` route is a rendered-command module (`.tsx`/`.jsx`); rendered commands are not supported yet. Rename it to `.ts`, or prefix a path segment with `_` to keep it private. |
 
 ## Development package build (`AB7103`)
 

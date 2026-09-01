@@ -60,6 +60,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/mcp/<server>/{tools,resources,prompts}/*.{ts,tsx}` | Generated MCP server routes; path supplies identity and each executable module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote` |
 | `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required. | Use a custom server or prefix the file with `_` |
 | `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use. A `scripts` entry that references the file claims it. Rendered (`.tsx`) and nested modules are hard errors until later #102 stages (`AB4807`/`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
+| `src/cli/**/*.ts` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Rendered (`.tsx`) command routes are hard errors until #102 stage 3 (`AB4816`). | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 
 Conventions match `.ts` and `.tsx` files exactly.
 
@@ -105,6 +106,50 @@ the process exit code, and lets an escaped rejection surface through Node's
 top-level failure path (stack to stderr, exit code 1). Self-executing modules
 (no `main` export) bundle directly, byte for byte — existing Scripts keep
 their behavior.
+
+### The routed CLI shell (#102 stage 2)
+
+A generated-mode `src/cli/**` surface compiles into one framework-generated
+executable instead of a hand-written `src/cli.ts` dispatcher. A plain command
+route is one module:
+
+```ts
+// src/cli/inspect.ts — the whole command a consumer writes
+import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Inspect a bounded source tree without changing it.',
+  positionals: ['root'],
+} satisfies CliRouteConfig;
+export const inputSchema = z.object({
+  maxFiles: z.number().int().min(1).max(256).optional(),
+  root: z.string().min(1),
+}).strict();
+export const resultSchema = z.object({ /* ... */ }).strict();
+
+export default async function inspect({ input, signal }: CliRouteProps<typeof inputSchema>) {
+  // ... do the work ...
+  return result;
+}
+```
+
+The compiler statically projects `inputSchema` onto argv (the bounded grammar
+and every policy rule are documented in
+[Diagnostics](diagnostics.md#route-graph-ab4800ab4816)), generates nested
+help (`--help` at every level, `--version` at the root), and emits
+`dist/bin/<plugin-name>.js` with the shebang and executable bit through the
+same Rslib synthesis as every other bin. At run time the shell resolves the
+command path, parses and coerces argv, validates through the module's own
+zod schemas, executes the default function inside the typed Agent request
+context (`invocation.kind: 'cli'`), writes one canonical JSON line to
+stdout, and maps exit codes deterministically (0 success or the result's
+`exitCode` under `config.exitCode: 'result'`; 1 execution failure; 2 usage
+or input failure; 130/143 on SIGINT/SIGTERM, which reach the route's
+`AbortSignal`). `--json` is accepted on every command; plain commands
+already emit the canonical JSON document. Routed CLI projects need
+`@agent-bundle/runtime` as a dependency — the generated executable installs
+the request context through it.
 
 ### The stdio MCP lifecycle shell
 

@@ -44,6 +44,7 @@ import type {
   NormalizedSkill,
   SourceProvenance,
 } from '../core/types.ts';
+import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
@@ -130,14 +131,43 @@ const safePackageOutputName = (name: string): boolean =>
  */
 export const packageBuildOutputDir = 'dist';
 
+/**
+ * The framework-generated routed-CLI bin (#102 stage 2): a generated-mode
+ * `src/cli/**` surface with at least one compiled command becomes one
+ * executable named after the plugin, exactly where the `src/cli.ts`
+ * convention would have placed it. Rendered routes that compiled no command
+ * are hard source-validation errors (AB4816), so omitting them here is
+ * deterministic hygiene, never a silent choice.
+ */
+const generatedCliBinEntry = (
+  config: Readonly<AgentBundleConfig>,
+  routeCli: CompiledCliSurface | undefined,
+): NormalizedBinEntry | undefined => {
+  if (routeCli?.mode !== 'generated' || !safePackageOutputName(config.plugin.name)) return undefined;
+  const commands = routeCli.commands ?? [];
+  if (commands.length === 0) return undefined;
+  const commandRouteIds = new Set(commands.map((command) => command.routeId));
+  const routes = routeCli.routes.filter((route) => commandRouteIds.has(route.id));
+  const source = routes[0]!.source;
+  return {
+    generatedCli: { commands, routes },
+    id: `bin:${config.plugin.name}`,
+    name: config.plugin.name,
+    provenance: { kind: 'conventional', sourcePath: source },
+    source,
+  };
+};
+
 const normalizeBinEntries = (
   config: Readonly<AgentBundleConfig>,
   root: string,
   configPath: string,
+  routeCli: CompiledCliSurface | undefined,
 ): readonly NormalizedBinEntry[] => {
   if (config.bin === false) return [];
+  const generated = generatedCliBinEntry(config, routeCli);
   if (config.bin !== undefined) {
-    return Object.entries(config.bin)
+    const explicit = Object.entries(config.bin)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, input]) => {
         const declaration = input as string | AgentBundleBinEntry;
@@ -149,7 +179,13 @@ const normalizeBinEntries = (
           source: resolve(root, entry),
         };
       });
+    // Config always wins one name: an explicit bin claiming the plugin name
+    // shadows the generated CLI, and source validation reports the collision.
+    return generated === undefined || explicit.some((entry) => entry.name === generated.name)
+      ? explicit
+      : [...explicit, generated].sort((left, right) => left.name.localeCompare(right.name));
   }
+  if (generated !== undefined) return [generated];
   const conventional = conventionalCliEntrySource(root);
   if (conventional === undefined || !safePackageOutputName(config.plugin.name)) return [];
   return [{
@@ -192,15 +228,17 @@ const normalizeLibEntry = (
 
 /**
  * The framework-owned npm package build: explicit `bin`/`lib` config wins,
- * the `src/cli.ts` and `src/index.ts` conventions fill the gaps, and `false`
- * opts a project out of a convention entirely.
+ * the `src/cli.ts` and `src/index.ts` conventions fill the gaps (a
+ * generated-mode `src/cli/**` command surface supersedes the `src/cli.ts`
+ * bin convention), and `false` opts a project out of a convention entirely.
  */
 export const normalizePackageBuild = (
   config: Readonly<AgentBundleConfig>,
   root: string,
   configPath: string,
+  routeCli?: CompiledCliSurface,
 ): NormalizedPackageBuild | undefined => {
-  const bins = normalizeBinEntries(config, root, configPath);
+  const bins = normalizeBinEntries(config, root, configPath, routeCli);
   const lib = normalizeLibEntry(config, root, configPath);
   if (bins.length === 0 && lib === undefined) return undefined;
   return {
@@ -837,7 +875,12 @@ export const normalizeProject = async (
   const mcpServers = normalizeMcpServers(loaded, discovered, targetNames, payloads);
   const scripts = normalizeScripts(loaded, discovered, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
-  const packageBuild = normalizePackageBuild(loaded.config, loaded.context.projectRoot, loaded.configPath);
+  const packageBuild = normalizePackageBuild(
+    loaded.config,
+    loaded.context.projectRoot,
+    loaded.configPath,
+    discovered.routeGraph?.cli,
+  );
   const model: NormalizedPlugin = {
     ...(assets.length === 0 ? {} : { assets }),
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
