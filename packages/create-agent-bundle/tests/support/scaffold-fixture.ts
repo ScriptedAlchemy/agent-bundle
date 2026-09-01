@@ -104,8 +104,16 @@ export const scaffoldProjectWithMismatchedRuntime = async (projectName: string):
   ], { cwd: runnerRoot, env: installedEnvironment() });
 };
 
-export const npmRun = async (projectRoot: string, script: string): Promise<void> => {
-  await execFile('npm', ['run', script], { cwd: projectRoot, env: installedEnvironment() });
+/**
+ * Runs one project script and returns its combined output, so a caller can
+ * assert on what the script reported instead of on its silence.
+ */
+export const npmRun = async (projectRoot: string, script: string): Promise<string> => {
+  const { stderr, stdout } = await execFile('npm', ['run', script], {
+    cwd: projectRoot,
+    env: installedEnvironment(),
+  });
+  return `${stdout}${stderr}`;
 };
 
 /** Zero diagnostics — including the informational AB473x migration nudges. */

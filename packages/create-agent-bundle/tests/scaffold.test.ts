@@ -75,9 +75,13 @@ describe('scaffold', () => {
         'README.md',
         'agent-bundle.config.ts',
         'package.json',
+        'rstest.projection.config.ts',
+        'rstest.route-unit.config.ts',
         'src/mcp/status/tools/report-status.tsx',
         'src/scripts/check-status.ts',
         'src/status.ts',
+        'tests/projection/mcp-in-memory.test.ts',
+        'tests/route-unit/report-status.test.ts',
         'tests/status.test.ts',
         'tsconfig.json',
       ]);

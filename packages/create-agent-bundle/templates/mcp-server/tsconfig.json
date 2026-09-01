@@ -16,6 +16,8 @@
   },
   "include": [
     "agent-bundle.config.ts",
+    "rstest.projection.config.ts",
+    "rstest.route-unit.config.ts",
     "src/**/*.ts",
     "tests/**/*.ts",
     "src/**/*.tsx"
