@@ -14,6 +14,7 @@ import {
   responseJson,
   type RequestDiagnostic,
 } from '../http.ts';
+import { McpSessionStaleEpochError } from './mcp-session-service.ts';
 import type {
   McpSessionBinding,
   McpSessionConnectionState,
@@ -209,6 +210,12 @@ const traceCursorError = (error: unknown): RequestDiagnostic | undefined =>
 
 const closedSessionError = (error: unknown): boolean => error instanceof Error && error.message === 'MCP session is closed.';
 
+/** Epoch-bound sessions fail closed when their pinned epoch vanished, like the artifact routes. */
+const staleEpochDiagnostic = (error: unknown): RequestDiagnostic | undefined =>
+  error instanceof McpSessionStaleEpochError
+    ? diagnostic('AB8018', 'MCP session epoch is no longer available; the project changed underneath the session.', 409)
+    : undefined;
+
 /**
  * HTTP boundary for the deliberately small browser MCP operation contract.
  * It never turns browser input into a launcher, environment, source path, or
@@ -247,6 +254,8 @@ export class McpSessionRoutes {
       if (isRequestDiagnostic(error)) throw error;
       const cursor = traceCursorError(error);
       if (cursor !== undefined) throw requestError(cursor);
+      const staleEpoch = staleEpochDiagnostic(error);
+      if (staleEpoch !== undefined) throw requestError(staleEpoch);
       if (closedSessionError(error)) throw this.#unavailable();
       if (parsed.kind === 'create') {
         throw requestError(diagnostic('AB8019', 'MCP session could not be opened.', 400));

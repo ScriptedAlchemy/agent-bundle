@@ -435,6 +435,54 @@ it('pins the selected epoch until the persistent session closes', async () => {
   }
 }, 30_000);
 
+it('fails tool calls closed with a typed stale-epoch error when the pinned epoch is removed underneath the session', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-stale-epoch-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    const service = new McpSessionService({ epochStore, projectRoot: root });
+    // A session timeout beyond this test's own timeout proves the stale-epoch
+    // failure below is fail-fast rather than the SDK request timeout.
+    const session = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable', timeoutMs: 120_000 });
+
+    // The serving project moves on; the pinned session must keep working.
+    await publishEpochCopy(
+      root,
+      epochStore,
+      join(root, '.agent-bundle', 'epochs', 'epoch-1'),
+      'epoch-2',
+      '2026-08-14T12:00:02.000Z',
+    );
+    await session.callTool({ arguments: {}, name: 'inspect' });
+
+    const inFlight = session.callTool({ arguments: {}, name: 'hang', requestId: 'stale-epoch-in-flight' });
+    const inFlightFailure = inFlight.then(
+      () => { throw new Error('Expected the in-flight tool call to fail.'); },
+      (error: unknown) => error,
+    );
+
+    // Another process's build retention cannot observe this process's epoch
+    // leases: it removes the pinned epoch directory and metadata underneath
+    // the live session while `active-epoch.json` already names epoch-2.
+    await rm(join(root, '.agent-bundle', 'epochs', 'epoch-1'), { force: true, recursive: true });
+    await rm(join(root, '.agent-bundle', 'epochs', '.metadata', 'epoch-1.json'), { force: true });
+
+    await expect(session.callTool({ arguments: {}, name: 'inspect' })).rejects.toMatchObject({
+      epochId: 'epoch-1',
+      message: 'MCP session epoch "epoch-1" is no longer available; the project changed underneath the session.',
+      name: 'McpSessionStaleEpochError',
+    });
+    await expect(inFlightFailure).resolves.toMatchObject({
+      epochId: 'epoch-1',
+      name: 'McpSessionStaleEpochError',
+    });
+    expect(service.get(session.id)).toBeUndefined();
+    await session.close();
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('executes only the acquired epoch reference root when service and store roots differ', async () => {
   const serviceRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-service-root-'));
   const storeRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-store-root-'));

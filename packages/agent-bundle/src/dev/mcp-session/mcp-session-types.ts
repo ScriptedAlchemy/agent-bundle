@@ -135,6 +135,25 @@ export interface McpSessionServiceCloseFailure {
   readonly sessionId?: McpSessionId;
 }
 
+/**
+ * The session's pinned artifact epoch is no longer available: the project
+ * changed underneath the session (typically another process's build
+ * retention, which cannot observe this process's epoch leases). Tool calls
+ * fail closed with this error instead of hanging against a vanished artifact.
+ */
+export class McpSessionStaleEpochError extends Error {
+  readonly epochId: string;
+
+  constructor(epochId: string, options?: Readonly<{ readonly cause?: unknown }>) {
+    super(
+      `MCP session epoch ${JSON.stringify(epochId)} is no longer available; the project changed underneath the session.`,
+      options?.cause === undefined ? undefined : { cause: options.cause },
+    );
+    this.name = 'McpSessionStaleEpochError';
+    this.epochId = epochId;
+  }
+}
+
 /** Reports every session-service lifecycle failure after all tracked work settles. */
 export class McpSessionServiceCloseError extends Error {
   readonly failures: readonly McpSessionServiceCloseFailure[];

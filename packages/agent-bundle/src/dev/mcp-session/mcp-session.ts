@@ -33,20 +33,21 @@ import {
 } from './mcp-session-launch.ts';
 import { McpSessionTraceLog, type McpSessionTraceSink } from './mcp-session-trace.ts';
 import { RecordingTransport } from './mcp-recording-transport.ts';
-import type {
-  McpClient,
-  McpRequestOptions as RequestOptions,
-  McpSessionConnectionState,
-  McpSessionEvent,
-  McpSessionFrame,
-  McpSessionPromptOptions,
-  McpSessionReplay,
-  McpSessionRequestOptions,
-  McpSessionResourceOptions,
-  McpSessionToolCallOptions,
-  RemoteTransportOptions,
-  StdioOptions,
-  StdioTransport,
+import {
+  McpSessionStaleEpochError,
+  type McpClient,
+  type McpRequestOptions as RequestOptions,
+  type McpSessionConnectionState,
+  type McpSessionEvent,
+  type McpSessionFrame,
+  type McpSessionPromptOptions,
+  type McpSessionReplay,
+  type McpSessionRequestOptions,
+  type McpSessionResourceOptions,
+  type McpSessionToolCallOptions,
+  type RemoteTransportOptions,
+  type StdioOptions,
+  type StdioTransport,
 } from './mcp-session-types.ts';
 
 // A session request can legitimately sit behind an rsbuild compile or Chrome
@@ -125,6 +126,7 @@ const captureStderr = (
  * artifact epoch are fixed when the session opens.
  */
 export class McpSession {
+  readonly #assertEpochAvailable: (() => Promise<void>) | undefined;
   readonly #binding: McpSessionBinding;
   readonly #createClient: () => McpClient;
   readonly #createStdioTransport: (options: StdioOptions) => StdioTransport;
@@ -144,6 +146,7 @@ export class McpSession {
   readonly #requests = new Map<string, AbortController>();
   #capture: StderrCapture | undefined;
   #client: McpClient | undefined;
+  #staleEpochFailure: McpSessionStaleEpochError | undefined;
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #connection: McpSessionConnectionState | undefined;
@@ -154,6 +157,8 @@ export class McpSession {
   #stderrOverflow = false;
 
   constructor(options: {
+    /** Fail-closed probe that the session's pinned epoch still exists in its store. */
+    readonly assertEpochAvailable?: () => Promise<void>;
     readonly binding: McpSessionBinding;
     readonly createClient: () => McpClient;
     readonly createStdioTransport: (options: StdioOptions) => StdioTransport;
@@ -168,6 +173,7 @@ export class McpSession {
     readonly traceSink?: McpSessionTraceSink;
     readonly workspaceRoot: string;
   }) {
+    this.#assertEpochAvailable = options.assertEpochAvailable;
     this.#binding = Object.freeze({ ...options.binding });
     this.#createClient = options.createClient;
     this.#createStdioTransport = options.createStdioTransport;
@@ -300,6 +306,7 @@ export class McpSession {
       throw options.signal.reason ?? new Error('MCP session tool call was aborted.');
     }
     return this.#operation('callTool', async () => {
+      await this.#assertEpochCurrent();
       const requestId = options.requestId ?? randomUUID();
       if (requestId.trim().length === 0) throw new Error('MCP session requestId must be nonempty.');
       if (this.#requests.has(requestId)) throw new Error(`MCP session request ${JSON.stringify(requestId)} is already active.`);
@@ -314,6 +321,17 @@ export class McpSession {
         });
         this.#throwIfStderrExceeded();
         return result;
+      } catch (error) {
+        // A call that failed while the epoch vanished mid-flight reports the
+        // stale epoch, not the incidental abort or timeout it produced.
+        if (this.#staleEpochFailure === undefined && !this.#closed && this.#assertEpochAvailable !== undefined) {
+          try {
+            await this.#assertEpochAvailable();
+          } catch (cause) {
+            this.#failStaleEpoch(cause);
+          }
+        }
+        throw this.#staleEpochFailure ?? error;
       } finally {
         options.signal?.removeEventListener('abort', onAbort);
         this.#requests.delete(requestId);
@@ -379,6 +397,31 @@ export class McpSession {
 
   #assertOpen(): void {
     if (this.#closed) throw new Error('MCP session is closed.');
+  }
+
+  /**
+   * Fails a tool call closed when the pinned epoch no longer exists — the
+   * project changed underneath the session (often another process's build
+   * retention, which cannot observe this process's epoch leases). Discovery
+   * cancels every in-flight request with the same typed failure and closes
+   * the session, mirroring the stderr-overflow contract.
+   */
+  async #assertEpochCurrent(): Promise<void> {
+    if (this.#staleEpochFailure !== undefined) throw this.#staleEpochFailure;
+    if (this.#assertEpochAvailable === undefined) return;
+    try {
+      await this.#assertEpochAvailable();
+    } catch (cause) {
+      throw this.#failStaleEpoch(cause);
+    }
+  }
+
+  #failStaleEpoch(cause: unknown): McpSessionStaleEpochError {
+    this.#staleEpochFailure ??= new McpSessionStaleEpochError(this.#binding.epochId, { cause });
+    const failure = this.#staleEpochFailure;
+    this.#cancelAll(failure.message);
+    void this.close().catch(() => undefined);
+    return failure;
   }
 
   async #operation<Result>(operation: McpSessionOperation, run: () => Promise<Result>): Promise<Result> {
