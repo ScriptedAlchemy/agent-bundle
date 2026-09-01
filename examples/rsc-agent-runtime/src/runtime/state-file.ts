@@ -157,7 +157,10 @@ export const createFileRuntimeKernel = (options: FileRuntimeKernelOptions): Runt
           { host: input.host, path: input.path, sessionId: input.sessionId, toolName: input.toolName },
           { idempotencyKey: input.idempotencyKey, signal: mutationOptions?.signal },
         );
-        return snapshotAt(store, committed.revision, undefined, mutationOptions?.signal);
+        // Idempotent replays return the current head, exactly like the retired
+        // JSONL kernel: a rerun after a later reset must surface the reset
+        // state, not the durable prefix at the original commit.
+        return snapshotAt(store, committed.replayed ? undefined : committed.revision, undefined, mutationOptions?.signal);
       });
     },
 
@@ -169,7 +172,7 @@ export const createFileRuntimeKernel = (options: FileRuntimeKernelOptions): Runt
           ...(input.seed === undefined ? {} : { seed: { edits: [], seed: input.seed } }),
           signal: mutationOptions?.signal,
         });
-        return snapshotAt(store, committed.revision, undefined, mutationOptions?.signal);
+        return snapshotAt(store, committed.replayed ? undefined : committed.revision, undefined, mutationOptions?.signal);
       });
     },
 

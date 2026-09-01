@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@agent-bundle/runtime': workspace:*
+
 importers:
 
   .:
@@ -184,6 +187,9 @@ importers:
 
   packages/agent-bundle:
     dependencies:
+      '@agent-bundle/runtime':
+        specifier: workspace:*
+        version: link:../rsc-runtime
       '@modelcontextprotocol/client':
         specifier: 2.0.0
         version: 2.0.0
@@ -254,9 +260,6 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
     devDependencies:
-      '@agent-bundle/runtime':
-        specifier: workspace:*
-        version: link:../rsc-runtime
       '@types/react':
         specifier: 19.2.18
         version: 19.2.18
