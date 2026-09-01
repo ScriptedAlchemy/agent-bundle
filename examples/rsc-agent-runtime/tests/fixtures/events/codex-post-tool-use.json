@@ -1,0 +1,15 @@
+{
+  "cwd": "/tmp/agent-bundle-schema-conformance",
+  "event_id": "schema-conformance-codex-event",
+  "hook_event_name": "PostToolUse",
+  "session_id": "schema-conformance-codex",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: codex-note.txt\n+recorded\n*** End Patch"
+  },
+  "tool_name": "apply_patch",
+  "tool_response": {
+    "success": true
+  },
+  "tool_use_id": "schema-conformance-codex-patch",
+  "transcript_path": "/tmp/agent-bundle-schema-conformance/codex-transcript.jsonl"
+}
