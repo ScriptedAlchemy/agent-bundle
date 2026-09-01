@@ -1,7 +1,9 @@
-import { resolve } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { stableJson } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import type { NormalizedMcpApp } from '../core/types.ts';
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
@@ -28,15 +30,20 @@ import type {
  *   spawns the generated stdio entry as a real process, and drives it with a
  *   real MCP client. This is the only level here that is process evidence.
  *
- * Browser and deleted-source artifact levels are later stages; nothing here
- * stands in for them.
+ * - `browser-app` compiles MCP App HTML through the production Rsbuild
+ *   profile and mounts it over the product bridge in a real browser page. It
+ *   does not prove host embedding, a packed artifact, or Workbench behavior.
+ *
+ * Deleted-source artifact evidence is a later stage; nothing here stands in
+ * for it.
  */
-export type AgentTestProofLevel = 'route-unit' | 'mcp-in-memory' | 'cli-dispatch' | 'packed-stdio';
+export type AgentTestProofLevel = 'route-unit' | 'mcp-in-memory' | 'cli-dispatch' | 'packed-stdio' | 'browser-app';
 
 export const ROUTE_UNIT_PROOF_LEVEL = 'route-unit' as const;
 export const MCP_IN_MEMORY_PROOF_LEVEL = 'mcp-in-memory' as const;
 export const CLI_DISPATCH_PROOF_LEVEL = 'cli-dispatch' as const;
 export const PACKED_STDIO_PROOF_LEVEL = 'packed-stdio' as const;
+export const BROWSER_APP_PROOF_LEVEL = 'browser-app' as const;
 
 /**
  * One line per level, printed in every harness failure. A red test has to
@@ -53,6 +60,8 @@ export const proofLevelLabel = (level: AgentTestProofLevel): string => {
       return 'cli-dispatch (argv dispatched through the routed CLI shell in-process; NOT a spawned binary)';
     case 'packed-stdio':
       return 'packed-stdio (packed tarball installed into a clean consumer, generated stdio entry spawned as a real process)';
+    case 'browser-app':
+      return 'browser-app (MCP App HTML compiled through the production Rsbuild profile, mounted in a real browser page over the product bridge; NOT host embedding, packed-artifact, or Workbench evidence)';
     default: {
       const exhaustive: never = level;
       throw new TypeError(`Unknown proof level ${String(exhaustive)}.`);
@@ -80,13 +89,33 @@ export interface TestManifestPluginIdentity {
   readonly version: string;
 }
 
+/** One normalized MCP App declaration addressable by the browser proof level. */
+export interface TestableAppDescriptor {
+  readonly _meta?: Readonly<Record<string, unknown>>;
+  readonly id: string;
+  readonly name: string;
+  readonly prebuilt?: true;
+  /** Project-relative POSIX path of the browser entry module. */
+  readonly relativePath: string;
+  readonly resourceUri: string;
+  /** Every MCP server sharing this identical app declaration. */
+  readonly serverIds: readonly string[];
+  /** Absolute browser entry module path. */
+  readonly source: string;
+  readonly targets: readonly string[];
+  /** Absolute optional HTML shell template path. */
+  readonly template?: string;
+}
+
 /**
  * What the compiler tells the test harness about one project: the route
- * inventory, the project identity its generated servers advertise, the
- * selected targets, and the compiler's own diagnostics. Browser-App and
- * artifact descriptors arrive with the stages that can honestly prove them.
+ * and MCP App inventories, the project identity its generated servers
+ * advertise, the selected targets, and the compiler's own diagnostics.
+ * Artifact descriptors arrive with the stage that can honestly prove them.
  */
 export interface AgentBundleTestManifest {
+  /** Collision-checked MCP App declarations from the same compiler pass. */
+  readonly apps: Readonly<Record<string, TestableAppDescriptor>>;
   /**
    * The collision-checked routed-CLI command graph (#102 stage 2) from the
    * same pass, so the CLI dispatch level drives the product's own dispatcher
@@ -131,12 +160,58 @@ const graphRoutes = (graph: CompiledRouteGraph): readonly CompiledAgentRoute[] =
   ...graph.servers.flatMap((server) => server.routes),
 ];
 
+const appDescriptors = (
+  apps: readonly NormalizedMcpApp[],
+  projectRoot: string,
+): Readonly<Record<string, TestableAppDescriptor>> => {
+  const descriptors: Record<string, TestableAppDescriptor> = {};
+  const identities = new Map<string, string>();
+  for (const app of apps) {
+    const identity = stableJson({
+      ...(app._meta === undefined ? {} : { _meta: app._meta }),
+      resourceUri: app.resourceUri,
+      source: app.source,
+      ...(app.template === undefined ? {} : { template: app.template }),
+    });
+    const existing = descriptors[app.name];
+    if (existing !== undefined) {
+      if (identities.get(app.name) !== identity) {
+        throw new Error(
+          `Duplicate compiled MCP App destination ${JSON.stringify(`mcp-apps/${app.name}.html`)}; `
+          + 'servers may share an app name only with an identical declaration.',
+        );
+      }
+      descriptors[app.name] = {
+        ...existing,
+        serverIds: [...new Set([...existing.serverIds, app.serverId])].sort((left, right) => left.localeCompare(right)),
+        targets: [...new Set([...existing.targets, ...app.targets])],
+      };
+      continue;
+    }
+    identities.set(app.name, identity);
+    descriptors[app.name] = {
+      ...(app._meta === undefined ? {} : { _meta: app._meta }),
+      id: app.id,
+      name: app.name,
+      ...(app.prebuilt === undefined ? {} : { prebuilt: app.prebuilt }),
+      relativePath: relative(projectRoot, app.source).split(sep).join('/'),
+      resourceUri: app.resourceUri,
+      serverIds: [app.serverId],
+      source: app.source,
+      targets: [...app.targets],
+      ...(app.template === undefined ? {} : { template: app.template }),
+    };
+  }
+  return descriptors;
+};
+
 /**
  * Projects the compiled route graph into the manifest the harness addresses.
  * The graph is an input here, never recompiled: one compiler pass feeds the
  * build, `inspect`, and the harness alike.
  */
 export const testManifestFromRouteGraph = (input: {
+  readonly apps?: readonly NormalizedMcpApp[];
   readonly configPath?: string;
   readonly diagnostics?: readonly Diagnostic[];
   readonly graph: CompiledRouteGraph;
@@ -147,6 +222,7 @@ export const testManifestFromRouteGraph = (input: {
   const routes: Record<string, TestableRouteDescriptor> = {};
   for (const route of graphRoutes(input.graph)) routes[route.id] = descriptorOf(route);
   return deepFreeze({
+    apps: appDescriptors(input.apps ?? [], input.projectRoot),
     cliCommands: [...(input.graph.cli?.commands ?? [])],
     ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
     diagnostics: [...(input.diagnostics ?? input.graph.diagnostics)],
@@ -182,6 +258,7 @@ export const compileTestManifest = async (
     root,
   }).prepare('inspect');
   return testManifestFromRouteGraph({
+    apps: prepared.model?.mcpApps ?? [],
     configPath: prepared.configPath,
     diagnostics: prepared.diagnostics,
     graph: prepared.routeGraph ?? emptyCompiledRouteGraph,

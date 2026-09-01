@@ -90,12 +90,26 @@ const appIdentity = (app: NormalizedMcpApp): string => stableJson({
   ...(app.template === undefined ? {} : { template: app.template }),
 });
 
+export type McpAppTargetSelection =
+  | Readonly<{ readonly target: string; readonly targets?: never }>
+  | Readonly<{ readonly target?: never; readonly targets: Readonly<Record<string, string>> }>;
+
+const selectedAppTarget = (
+  app: NormalizedMcpApp,
+  selection: McpAppTargetSelection,
+): string | undefined => {
+  const target = selection.target ?? selection.targets[app.id];
+  return target !== undefined && app.targets.includes(target) ? target : undefined;
+};
+
 export const planCompiledMcpApps = (
   apps: readonly NormalizedMcpApp[],
-  options: { readonly outDir: string; readonly target: string },
+  options: Readonly<{ readonly outDir: string } & McpAppTargetSelection>,
 ): readonly CompiledMcpApp[] => {
-  const planned = new Map<string, { identity: string; serverIds: string[]; app: NormalizedMcpApp }>();
-  for (const app of apps.filter((candidate) => candidate.prebuilt !== true && candidate.targets.includes(options.target))) {
+  const planned = new Map<string, { identity: string; serverIds: string[]; app: NormalizedMcpApp; target: string }>();
+  for (const app of apps) {
+    const target = selectedAppTarget(app, options);
+    if (app.prebuilt === true || target === undefined) continue;
     const identity = appIdentity(app);
     const existing = planned.get(app.name);
     if (existing !== undefined) {
@@ -108,9 +122,9 @@ export const planCompiledMcpApps = (
       if (!existing.serverIds.includes(app.serverId)) existing.serverIds.push(app.serverId);
       continue;
     }
-    planned.set(app.name, { app, identity, serverIds: [app.serverId] });
+    planned.set(app.name, { app, identity, serverIds: [app.serverId], target });
   }
-  return Object.freeze([...planned.values()].map(({ app, serverIds }) => Object.freeze({
+  return Object.freeze([...planned.values()].map(({ app, serverIds, target }) => Object.freeze({
     ...(app._meta === undefined ? {} : { _meta: app._meta }),
     id: app.id,
     mimeType: mcpAppMimeType,
@@ -124,7 +138,7 @@ export const planCompiledMcpApps = (
       app.source,
       ...(app.template === undefined ? [] : [app.template]),
     ]),
-    target: options.target,
+    target,
   })));
 };
 
@@ -182,14 +196,16 @@ export const composeMcpAppsRsbuildConfig = (
 
 export const compileMcpApps = async (
   apps: readonly NormalizedMcpApp[],
-  options: {
+  options: Readonly<{
     readonly cwd: string;
     readonly outDir: string;
-    readonly target: string;
     readonly tools?: AgentBundleToolsConfig;
-  },
+  } & McpAppTargetSelection>,
 ): Promise<readonly CompiledMcpApp[]> => {
-  const compiled = planCompiledMcpApps(apps, { outDir: options.outDir, target: options.target });
+  const compiled = planCompiledMcpApps(apps, {
+    outDir: options.outDir,
+    ...(options.target === undefined ? { targets: options.targets } : { target: options.target }),
+  });
   if (compiled.length === 0) {
     return compiled;
   }

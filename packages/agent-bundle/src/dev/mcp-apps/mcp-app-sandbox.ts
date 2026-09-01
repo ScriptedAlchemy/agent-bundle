@@ -312,7 +312,7 @@ const consentScope = (capability: McpAppConsentCapability): 'action' | 'document
 
 const consentSummary = (capability: McpAppConsentCapability): string => `Allow MCP App ${capability.replaceAll('-', ' ')}?`;
 
-export const createMcpAppConsentActionDigest = (capability: McpAppConsentCapability, details: McpAppJsonValue): string => `${capability}:${JSON.stringify(details)}`;
+export { createMcpAppConsentActionDigest } from './mcp-app-consent.ts';
 
 const consentSensitiveName = /(?:api[_-]?key|authorization|bearer|cookie|credential|pass(?:word)?|private[_-]?key|secret|token)/iu;
 

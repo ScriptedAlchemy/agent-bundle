@@ -4,6 +4,12 @@ import { resolve } from 'node:path';
 import { compileTestManifest } from '../test/manifest.ts';
 import { writeRouteTestSetup } from './setup-module.ts';
 
+export { agentBundleBrowserRstest } from './browser.ts';
+export type {
+  AgentBundleBrowserRstestConfig,
+  AgentBundleBrowserRstestOptions,
+} from './browser.ts';
+
 /**
  * The Node condition the React Server Components renderer requires. React
  * refuses to render Flight without it, and it is a process flag, so the

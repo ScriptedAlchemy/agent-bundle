@@ -6,12 +6,17 @@
     "build": "agent-bundle build",
     "check": "pnpm validate && pnpm build",
     "dev": "agent-bundle dev",
+    "test:browser-app": "rstest --config rstest.browser-app.config.ts",
     "validate": "agent-bundle validate"
   },
   "devDependencies": {
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/server": "2.0.0",
+    "@rstest/browser": "0.11.10",
+    "@rstest/core": "0.11.10",
+    "@rstest/playwright": "0.11.10",
     "agent-bundle": "workspace:*",
+    "playwright": "1.62.1",
     "zod": "4.4.3"
   }
 }

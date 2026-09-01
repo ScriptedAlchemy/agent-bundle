@@ -4,9 +4,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from '@rstest/core';
 
 import { routeTestSetupSource } from '../src/rstest/setup-module.ts';
+import { BROWSER_APP_PROOF_LEVEL_LABEL } from '../src/test/browser-registry.ts';
 import { AgentTestError } from '../src/test/errors.ts';
 import { invokeCli } from '../src/test/cli.ts';
-import { compileTestManifest, testManifestFromRouteGraph } from '../src/test/manifest.ts';
+import { compileTestManifest, proofLevelLabel, testManifestFromRouteGraph } from '../src/test/manifest.ts';
 import {
   AGENT_TEST_REGISTRY_SYMBOL_KEY,
   AGENT_TEST_REGISTRY_VERSION,
@@ -39,6 +40,15 @@ const withRealmRegistry = async <T>(registry: unknown, body: () => T | Promise<T
 };
 
 describe('the compiled test manifest', () => {
+  it('names browser-app as compiled browser evidence without overstating host or artifact proof', () => {
+    expect(proofLevelLabel('browser-app')).toBe(
+      'browser-app (MCP App HTML compiled through the production Rsbuild profile, mounted in a real browser page over the product bridge; NOT host embedding, packed-artifact, or Workbench evidence)',
+    );
+    // The browser-safe registry module cannot import this Node-side label, so
+    // it carries its own copy; the copies must never drift apart.
+    expect(BROWSER_APP_PROOF_LEVEL_LABEL).toBe(proofLevelLabel('browser-app'));
+  });
+
   it('names every conventional route the compiler discovered, with its extracted config', () => {
     expect(Object.keys(manifest.routes).sort()).toEqual([
       'app:harness/panel',
@@ -66,6 +76,17 @@ describe('the compiled test manifest', () => {
     expect(manifest.proofLevel).toBe('route-unit');
     expect(manifest.projectRoot).toBe(fixtureRoot);
     expect(manifest.targets).toEqual(['claude']);
+    expect(manifest.apps).toEqual({
+      panel: {
+        id: 'mcp-app:harness:panel',
+        name: 'panel',
+        relativePath: 'src/mcp/harness/apps/panel.tsx',
+        resourceUri: 'ui://harness/panel',
+        serverIds: ['mcp:harness'],
+        source: resolve(fixtureRoot, 'src/mcp/harness/apps/panel.tsx'),
+        targets: ['claude'],
+      },
+    });
   });
 
   it('carries the compiled command graph the CLI dispatch level dispatches over', () => {
@@ -103,11 +124,70 @@ describe('the compiled test manifest', () => {
 
   it('projects an already-compiled graph without touching the filesystem again', async () => {
     const graph = await compileRouteGraph(fixtureRoot, { targets: ['claude'] } as never);
-    const projected = testManifestFromRouteGraph({ graph, projectRoot: fixtureRoot, targets: ['claude'] });
+    const projected = testManifestFromRouteGraph({
+      apps: [{
+        id: 'mcp-app:harness:panel',
+        name: 'panel',
+        provenance: { kind: 'config', sourcePath: resolve(fixtureRoot, 'agent-bundle.config.ts') },
+        resourceUri: 'ui://harness/panel.html',
+        serverId: 'mcp:harness',
+        serverName: 'harness',
+        source: resolve(fixtureRoot, 'views/panel.ts'),
+        targets: ['claude'],
+        template: resolve(fixtureRoot, 'views/panel.html'),
+      }, {
+        id: 'mcp-app:mirror:panel',
+        name: 'panel',
+        provenance: { kind: 'config', sourcePath: resolve(fixtureRoot, 'agent-bundle.config.ts') },
+        resourceUri: 'ui://harness/panel.html',
+        serverId: 'mcp:mirror',
+        serverName: 'mirror',
+        source: resolve(fixtureRoot, 'views/panel.ts'),
+        targets: ['claude'],
+        template: resolve(fixtureRoot, 'views/panel.html'),
+      }],
+      graph,
+      projectRoot: fixtureRoot,
+      targets: ['claude'],
+    });
 
     expect(projected.routes).toEqual(manifest.routes);
+    expect(projected.apps).toEqual({
+      panel: {
+        id: 'mcp-app:harness:panel',
+        name: 'panel',
+        relativePath: 'views/panel.ts',
+        resourceUri: 'ui://harness/panel.html',
+        serverIds: ['mcp:harness', 'mcp:mirror'],
+        source: resolve(fixtureRoot, 'views/panel.ts'),
+        targets: ['claude'],
+        template: resolve(fixtureRoot, 'views/panel.html'),
+      },
+    });
+    expect(Object.isFrozen(projected.apps.panel)).toBe(true);
     expect(Object.isFrozen(projected.routes)).toBe(true);
   });
+
+  it('rejects a shared app name whose compile-relevant declaration differs', async () => {
+    const graph = await compileRouteGraph(fixtureRoot, { targets: ['claude'] } as never);
+    const app = {
+      id: 'mcp-app:harness:panel',
+      name: 'panel',
+      provenance: { kind: 'config' as const, sourcePath: resolve(fixtureRoot, 'agent-bundle.config.ts') },
+      resourceUri: 'ui://harness/panel.html',
+      serverId: 'mcp:harness',
+      serverName: 'harness',
+      source: resolve(fixtureRoot, 'views/panel.ts'),
+      targets: ['claude'],
+    };
+
+    expect(() => testManifestFromRouteGraph({
+      apps: [app, { ...app, id: 'mcp-app:mirror:panel', serverId: 'mcp:mirror', source: resolve(fixtureRoot, 'views/other.ts') }],
+      graph,
+      projectRoot: fixtureRoot,
+    })).toThrow('servers may share an app name only with an identical declaration');
+  });
+
 });
 
 describe('the generated route registry', () => {
@@ -401,6 +481,7 @@ describe('the manifest a route-free project compiles', () => {
     });
 
     expect(empty.routes).toEqual({});
+    expect(empty.apps).toEqual({});
     expect(empty.proofLevel).toBe('route-unit');
     expect(empty.targets).toEqual(['portable']);
   });
@@ -409,7 +490,7 @@ describe('the manifest a route-free project compiles', () => {
 describe('the harness package boundary', () => {
   const packageRoot = resolve(import.meta.dirname, '..');
 
-  it('publishes both harness subpaths', async () => {
+  it('publishes the Node and browser harness subpaths', async () => {
     const declared = JSON.parse(await readFile(resolve(packageRoot, 'package.json'), 'utf8')) as {
       dependencies: Readonly<Record<string, string>>;
       peerDependencies: Readonly<Record<string, string>>;
@@ -419,6 +500,10 @@ describe('the harness package boundary', () => {
 
     expect(declared.exports['./rstest']).toEqual({ import: './dist/rstest.js', types: './dist/rstest/index.d.ts' });
     expect(declared.exports['./test']).toEqual({ import: './dist/test.js', types: './dist/test/index.d.ts' });
+    expect(declared.exports['./test/browser']).toEqual({
+      import: './dist/test/browser.js',
+      types: './dist/test/browser.d.ts',
+    });
     // Declaring the three as optional peers is also what keeps them external in
     // the published bundle: vendoring the Flight server would ship a second
     // React server copy whose RSC manifest is not the consumer project's.
