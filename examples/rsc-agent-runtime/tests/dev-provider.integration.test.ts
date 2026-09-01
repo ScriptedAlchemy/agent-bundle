@@ -375,12 +375,16 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       provider: './src/dev/provider.ts',
       servers: [expect.objectContaining({ name: 'timeline', transport: 'stdio' })],
     });
-    // One prebuilt hook declaration per host, each carrying its own `--host`
-    // argument.
-    expect(prepared.model?.hooks).toEqual(expect.arrayContaining([
-      expect.objectContaining({ prebuiltPath: 'runtime/hook/index.js', targets: ['claude'] }),
-      expect.objectContaining({ prebuiltPath: 'runtime/hook/index.js', targets: ['codex'] }),
-    ]));
+    // The example declares one semantic event route (src/events/tool/after.tsx)
+    // that serves both hosts through the generated native wrappers.
+    expect(prepared.model?.hooks).toEqual([
+      expect.objectContaining({
+        event: 'afterTool',
+        eventRoute: expect.objectContaining({ event: 'tool/after' }),
+        id: 'hook:event-route:tool-after',
+        targets: ['claude', 'codex'],
+      }),
+    ]);
 
     const artifact = await new ArtifactService({ epochStore: new EpochStore({ projectRoot: root }) }).build(prepared);
     if (artifact.outcome !== 'succeeded') throw new Error(JSON.stringify(artifact.diagnostics));
