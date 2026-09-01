@@ -1,4 +1,4 @@
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
@@ -61,7 +61,9 @@ const diagnostic = (
   message,
   recovery: code === 'AB6019'
     ? 'Install Claude Code and ensure `claude` is on PATH, then rerun artifact validation.'
-    : 'Run `claude plugin validate <bundle-dir> --strict`, repair the reported Claude artifact, and rebuild.',
+    : code === 'AB6022'
+      ? 'Verify the Claude CLI starts and responds, then rerun `claude plugin validate <bundle-dir> --strict`.'
+      : 'Run `claude plugin validate <bundle-dir> --strict`, repair the reported Claude artifact, and rebuild.',
   severity,
   target,
 });
@@ -88,33 +90,49 @@ const issueLines = (output: string): readonly { readonly message: string; readon
 export const validateClaudePlugin = async (
   options: ValidateClaudePluginOptions,
 ): Promise<ClaudePluginValidationReport> => {
+  const pluginDirectory = resolve(options.pluginDirectory);
   const executable = options.executable ?? 'claude';
   const run = options.run ?? runClaudeCommand;
-  const cwd = dirname(options.pluginDirectory);
+  const cwd = dirname(pluginDirectory);
   let version: string | undefined;
   try {
     const probe = await run(Object.freeze({ args: Object.freeze(['--version']), cwd, executable }));
     if (probe.exitCode !== 0 || probe.termination !== undefined) {
       return Object.freeze({
         diagnostics: freezeDiagnostics([diagnostic(
-          'AB6019',
-          'The Claude CLI is unavailable for host artifact validation.',
-          'info',
+          'AB6022',
+          probe.termination === 'timed-out'
+            ? 'Claude CLI version probe timed out.'
+            : probe.termination === 'output-limit'
+              ? 'Claude CLI version probe exceeded its output limit.'
+              : `Claude CLI version probe exited with code ${probe.exitCode ?? 'unknown'}.`,
+          'error',
           options.target,
         )]),
         host: 'claude',
-        status: 'unavailable',
+        status: 'failed',
         target: options.target,
       });
     }
     version = versionFrom(`${probe.stdout}\n${probe.stderr}`);
   } catch (error) {
+    if (!isErrno(error, 'ENOENT')) {
+      return Object.freeze({
+        diagnostics: freezeDiagnostics([diagnostic(
+          'AB6022',
+          'Claude CLI version probe could not be started.',
+          'error',
+          options.target,
+        )]),
+        host: 'claude',
+        status: 'failed',
+        target: options.target,
+      });
+    }
     return Object.freeze({
       diagnostics: freezeDiagnostics([diagnostic(
         'AB6019',
-        isErrno(error, 'ENOENT')
-          ? 'The Claude CLI is not installed or is not on PATH; host artifact validation was skipped.'
-          : 'The Claude CLI could not be started; host artifact validation was skipped.',
+        'The Claude CLI is not installed or is not on PATH; host artifact validation was skipped.',
         'info',
         options.target,
       )]),
@@ -127,7 +145,7 @@ export const validateClaudePlugin = async (
   let result: ClaudePluginCommandResult;
   try {
     result = await run(Object.freeze({
-      args: Object.freeze(['plugin', 'validate', options.pluginDirectory, '--strict']),
+      args: Object.freeze(['plugin', 'validate', pluginDirectory, '--strict']),
       cwd,
       executable,
     }));

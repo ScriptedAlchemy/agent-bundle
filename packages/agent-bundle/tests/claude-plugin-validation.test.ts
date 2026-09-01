@@ -1,3 +1,5 @@
+import { dirname, resolve } from 'node:path';
+
 import { expect, it } from '@rstest/core';
 
 import {
@@ -42,6 +44,24 @@ it('runs the installed Claude validator without shell interpolation', async () =
     target: 'claude',
     version: '2.1.251',
   });
+});
+
+it('resolves a multi-segment relative plugin directory before invoking Claude', async () => {
+  const fixture = runWith({ exitCode: 0, stdout: '✔ Validation passed\n' });
+  const pluginDirectory = resolve('fixtures/plugin');
+  await validateClaudePlugin({
+    pluginDirectory: 'fixtures/plugin',
+    run: fixture.run,
+    target: 'claude',
+  });
+
+  expect(fixture.calls).toEqual([
+    expect.objectContaining({ args: ['--version'], cwd: dirname(pluginDirectory) }),
+    expect.objectContaining({
+      args: ['plugin', 'validate', pluginDirectory, '--strict'],
+      cwd: dirname(pluginDirectory),
+    }),
+  ]);
 });
 
 it('keeps host warnings as warnings unless framework strict mode is enabled', async () => {
@@ -120,5 +140,91 @@ it('reports an honest informational skip when Claude is absent', async () => {
     host: 'claude',
     status: 'unavailable',
     target: 'claude',
+  });
+});
+
+it('fails host validation when the Claude version probe times out', async () => {
+  const report = await validateClaudePlugin({
+    pluginDirectory: '/tmp/plugin',
+    run: async () => ({
+      exitCode: null,
+      signal: 'SIGTERM',
+      stderr: '',
+      stdout: '',
+      termination: 'timed-out',
+    }),
+    target: 'claude',
+  });
+
+  expect(report).toMatchObject({
+    diagnostics: [expect.objectContaining({
+      code: 'AB6022',
+      message: expect.stringContaining('version probe timed out'),
+      severity: 'error',
+    })],
+    status: 'failed',
+  });
+});
+
+it('fails host validation when the Claude version probe exits nonzero', async () => {
+  const report = await validateClaudePlugin({
+    pluginDirectory: '/tmp/plugin',
+    run: async () => ({
+      exitCode: 2,
+      signal: null,
+      stderr: 'version failed',
+      stdout: '',
+    }),
+    target: 'claude',
+  });
+
+  expect(report).toMatchObject({
+    diagnostics: [expect.objectContaining({
+      code: 'AB6022',
+      message: expect.stringContaining('version probe exited with code 2'),
+      severity: 'error',
+    })],
+    status: 'failed',
+  });
+});
+
+it('fails host validation when the Claude version probe exceeds its output limit', async () => {
+  const report = await validateClaudePlugin({
+    pluginDirectory: '/tmp/plugin',
+    run: async () => ({
+      exitCode: null,
+      signal: 'SIGTERM',
+      stderr: '',
+      stdout: '',
+      termination: 'output-limit',
+    }),
+    target: 'claude',
+  });
+
+  expect(report).toMatchObject({
+    diagnostics: [expect.objectContaining({
+      code: 'AB6022',
+      message: expect.stringContaining('version probe exceeded its output limit'),
+      severity: 'error',
+    })],
+    status: 'failed',
+  });
+});
+
+it('fails host validation when the Claude version probe cannot be spawned', async () => {
+  const denied = Object.assign(new Error('spawn claude EACCES'), { code: 'EACCES' });
+  const report = await validateClaudePlugin({
+    pluginDirectory: '/tmp/plugin',
+    run: async () => { throw denied; },
+    target: 'claude',
+  });
+
+  expect(report).toMatchObject({
+    diagnostics: [expect.objectContaining({
+      code: 'AB6022',
+      message: expect.stringContaining('version probe could not be started'),
+      severity: 'error',
+    })],
+    status: 'failed',
   });
 });
