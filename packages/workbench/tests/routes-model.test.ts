@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import type { RouteManifest } from '../../agent-bundle/src/contracts/routes.ts';
+import type { RouteInputSchema, RouteManifest } from '../../agent-bundle/src/contracts/routes.ts';
 import {
   cliCommandInvocation,
   cliCommandUsage,
@@ -219,6 +219,37 @@ it('prefills projected defaults and validates typed route input before invoke', 
   });
 });
 
+it('preserves optional boolean omission while validating explicit and required values', () => {
+  const schema: RouteInputSchema = {
+    additionalProperties: false,
+    properties: {
+      defaulted: { default: true, type: 'boolean' },
+      enabled: { type: 'boolean' },
+      strict: { type: 'boolean' },
+    },
+    required: ['enabled'],
+    type: 'object',
+  };
+  const draft = createRouteInputDraft(schema);
+
+  expect(draft).toEqual({ defaulted: true, enabled: false });
+  expect(validateRouteInput(schema, draft)).toEqual({
+    arguments: { defaulted: true, enabled: false },
+    errors: {},
+  });
+  expect(validateRouteInput(schema, { ...draft, strict: true })).toEqual({
+    arguments: { defaulted: true, enabled: false, strict: true },
+    errors: {},
+  });
+  expect(validateRouteInput(schema, { ...draft, strict: false })).toEqual({
+    arguments: { defaulted: true, enabled: false, strict: false },
+    errors: {},
+  });
+  expect(validateRouteInput(schema, { defaulted: true })).toEqual({
+    errors: { enabled: 'Enabled must be true or false.' },
+  });
+});
+
 it('validates the raw JSON fallback without inventing a schema', () => {
   expect(validateRawRouteInput('{')).toEqual({ error: 'Enter a valid JSON object.' });
   expect(validateRawRouteInput('[]')).toEqual({ error: 'Arguments must be a JSON object.' });
@@ -242,7 +273,7 @@ it('formats CLI usage and a shell-copyable invocation from validated input', () 
   };
 
   expect(cliCommandUsage(command)).toBe(
-    'library audit <input-file> [--format <text|json>] [--tag <string>] [--verbose]',
+    'library audit <input-file> [--format <text|json>] [--tag <string> ...] [--verbose]',
   );
   expect(cliCommandInvocation(command, {
     format: 'json',
@@ -250,6 +281,19 @@ it('formats CLI usage and a shell-copyable invocation from validated input', () 
     tag: ['fiction', 'history'],
     verbose: true,
   })).toBe("library audit '/Audio Books' --format json --tag fiction --tag history --verbose");
+});
+
+it('marks required and optional repeated named flags in CLI usage', () => {
+  expect(cliCommandUsage({
+    aliases: [],
+    exitCode: 'zero',
+    options: [
+      { key: 'source', kind: 'string', option: 'source', repeated: true, required: true },
+      { key: 'tag', kind: 'string', option: 'tag', repeated: true, required: false },
+    ],
+    path: ['library', 'import'],
+    routeId: 'cli:library/import',
+  })).toBe('library import --source <string> ... [--tag <string> ...]');
 });
 
 it('maps a tool route server id and final route segment into an MCP prefill', () => {

@@ -52,7 +52,9 @@ const manifest: RouteManifest = {
         additionalProperties: false,
         properties: {
           count: { default: 2, description: 'Repeat count.', type: 'number' },
+          enabled: { default: true, type: 'boolean' },
           format: { enum: ['text', 'json'], type: 'string' },
+          strict: { type: 'boolean' },
           tags: { items: { type: 'string' }, type: 'array' },
         },
         required: ['format'],
@@ -145,8 +147,10 @@ it('renders generated fields, descriptions, defaults, required markers, and a ga
   expect(markup).toContain('Generated input editor');
   expect(markup).toContain('Repeat count.');
   expect(markup).toContain('value="2"');
+  expect(markup).toMatch(/Enabled<input[^>]*type="checkbox"[^>]*checked=""/u);
   expect(markup).toContain('Format (required)');
   expect(markup).toContain('<option value="json">json</option>');
+  expect(markup).toMatch(/Strict<select[^>]*><option value=""[^>]*>\(omitted\)<\/option><option value="true">true<\/option><option value="false">false<\/option><\/select>/u);
   expect(markup).toContain('Add Tags item');
   expect(markup).toContain('Full schema validation runs during execution.');
   expect(markup).toContain('Open in MCP session');
