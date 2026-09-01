@@ -559,6 +559,59 @@ describe('AgentRenderDispatcher streaming', () => {
     await expect(reader.read()).rejects.toMatchObject({ code: 'elapsed-time-exceeded' });
   });
 
+  it('bounds Flight EOF for stream and dispatch and cancels the source', { retry: 2, timeout: 5_000 }, async () => {
+    const finiteReader = (
+      await createWorkerHost('ready').execute({
+        invocation,
+        signal: new AbortController().signal,
+      })
+    ).getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const next = await finiteReader.read();
+      if (next.done) break;
+      chunks.push(next.value);
+    }
+
+    for (const mode of ['stream', 'dispatch'] as const) {
+      let cancelCalls = 0;
+      let resolveCancelled: (() => void) | undefined;
+      const cancelled = new Promise<void>((resolve) => {
+        resolveCancelled = resolve;
+      });
+      const host: AgentFlightExecutionHost = {
+        execute: async () =>
+          new ReadableStream<Uint8Array>({
+            cancel() {
+              cancelCalls += 1;
+              resolveCancelled?.();
+            },
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(chunk);
+            },
+          }),
+      };
+      const dispatcher = createAgentRenderDispatcher(host, { limits: { maxElapsedMs: 150 } });
+      const signal = new AbortController().signal;
+      const startedAt = Date.now();
+
+      if (mode === 'stream') {
+        const reader = dispatcher.stream({ invocation, signal }).getReader();
+        const shell = await reader.read();
+        if (shell.value?.type !== 'shell') throw new Error('expected a shell event');
+        await expect(reader.read()).rejects.toMatchObject({ code: 'elapsed-time-exceeded' });
+      } else {
+        await expect(dispatcher.dispatch({ invocation, signal })).rejects.toMatchObject({
+          code: 'elapsed-time-exceeded',
+        });
+      }
+
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      await cancelled;
+      expect(cancelCalls).toBe(1);
+    }
+  });
+
   it('converts a synchronous host throw into a stream failure', async () => {
     const host: AgentFlightExecutionHost = {
       execute: () => {
