@@ -1,9 +1,14 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type { JsonValue } from './lower-mcp.js';
+import type {
+  AgentNoticeLedger,
+  AgentNoticeRequestLease,
+  AgentNoticesHandle,
+} from './notices/contract.js';
 import type { AgentStateHandle } from './state/contract.js';
 
-export const AGENT_REQUEST_STORE_VERSION = 1;
+export const AGENT_REQUEST_STORE_VERSION = 2;
 
 const STORE_SYMBOL = Symbol.for('@agent-bundle/runtime/request-store');
 
@@ -136,8 +141,12 @@ export interface AgentRequestContext {
    * `runAgentRequest({ state })`; undefined for stateless projects.
    */
   readonly state: AgentStateHandle | undefined;
-  /** Reserved for recipient-aware notices (#99). Wave 1 leaves this undefined. */
-  readonly notices: undefined;
+  /**
+   * Request-bound recipient notice handle (#99 narrow core). `read()` exposes
+   * notices attempted on this admitted event; `publish()` persists a detached
+   * Agent Document snapshot after publish-time authorization.
+   */
+  readonly notices: AgentNoticesHandle | undefined;
 }
 
 export interface AgentRequestInit {
@@ -145,6 +154,8 @@ export interface AgentRequestInit {
   readonly capabilities?: AgentRequestCapabilities;
   readonly host?: Observed<AgentHostIdentity>;
   readonly invocation: AgentInvocationInput;
+  /** Optional durable notice authority; omitted projects load no notice code. */
+  readonly noticeLedger?: AgentNoticeLedger;
   readonly progress?: AgentProgressReporter;
   readonly providers?: AgentProviderValues;
   readonly services?: AgentServiceRegistry;
@@ -240,7 +251,7 @@ interface FrozenValues {
   readonly capabilities: AgentRequestCapabilities;
   readonly host: Observed<AgentHostIdentity>;
   readonly invocation: AgentInvocation;
-  readonly notices: undefined;
+  readonly notices: AgentNoticesHandle | undefined;
   readonly progress: AgentProgressReporter;
   readonly providers: AgentProviderValues;
   readonly services: AgentServiceRegistry;
@@ -348,19 +359,32 @@ export const runAgentRequest = async <T>(
   init: AgentRequestInit,
   operation: () => T | Promise<T>,
 ): Promise<T> => {
+  const actor = snapshotObserved(init.actor ?? unavailable<AgentActorIdentity>());
+  const host = snapshotObserved(init.host ?? unavailable<AgentHostIdentity>());
+  const invocation = invocationFrom(init.invocation);
+  const session = snapshotObserved(init.session ?? unavailable<AgentSessionIdentity>());
+  const signal = init.signal ?? new AbortController().signal;
+  const workspace = snapshotObserved(init.workspace ?? unavailable<AgentWorkspaceIdentity>());
+  const noticeLease: AgentNoticeRequestLease | undefined = init.noticeLedger === undefined
+    ? undefined
+    : await init.noticeLedger.openRequest({
+      invocation,
+      principal: Object.freeze({ actor, host, session, workspace }),
+      signal,
+    });
   const values: FrozenValues = Object.freeze({
-    actor: snapshotObserved(init.actor ?? unavailable<AgentActorIdentity>()),
+    actor,
     capabilities: snapshotCapabilities(init.capabilities ?? emptyCapabilities()),
-    host: snapshotObserved(init.host ?? unavailable<AgentHostIdentity>()),
-    invocation: invocationFrom(init.invocation),
-    notices: undefined,
+    host,
+    invocation,
+    notices: noticeLease?.handle,
     progress: init.progress ?? silentProgress,
     providers: Object.freeze({ ...(init.providers ?? {}) }),
     services: Object.freeze({ ...(init.services ?? {}) }),
-    session: snapshotObserved(init.session ?? unavailable<AgentSessionIdentity>()),
-    signal: init.signal ?? new AbortController().signal,
+    session,
+    signal,
     state: init.state,
-    workspace: snapshotObserved(init.workspace ?? unavailable<AgentWorkspaceIdentity>()),
+    workspace,
   });
   const lease: Lease = {
     closed: false,
@@ -373,5 +397,6 @@ export const runAgentRequest = async <T>(
     return await getStore().storage.run(lease, operation);
   } finally {
     lease.closed = true;
+    noticeLease?.close();
   }
 };

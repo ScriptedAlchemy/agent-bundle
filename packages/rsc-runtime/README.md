@@ -206,3 +206,25 @@ the test stand-in; it is never durable. The workspace-durable driver ships on
 including external ones — must pass the exported conformance suite
 (`stateDriverConformanceCases`); a disconnected adapter is not a completed
 integration.
+
+## Notices (optional)
+
+`@agent-bundle/runtime/notices` is the narrow recipient-scoped notice core.
+It stores detached, finite `AgentDocumentSnapshot` content in one ordinary
+state-kernel definition; host wiring opens that definition with the
+workspace-durable SQLite driver and passes the resulting ledger as
+`runAgentRequest({ noticeLedger })`. Stateless projects import neither
+subpath and ship no state or notice implementation.
+
+Inside an authorized request, `(await agent()).notices` is a request-bound
+handle with `publish()` and `read()`. Recipients use only observed
+host/session/actor/workspace axes. Publish authorization runs before
+persistence, and delivery authorization runs again when a matching event is
+admitted. `read()` exposes notices selected for that event while the ledger
+records a receipt containing the invocation id and state `attempted`.
+
+V1 deliberately exposes only `pending | attempted | expired | unavailable |
+withdrawn`. It does not claim `delivered`, `read`, or `acknowledged`: observing
+the recipient process is not evidence that the agent saw the content. There
+is no router, MCP inbox, timer, retry worker, or autonomous work between
+invocations in this subpath.

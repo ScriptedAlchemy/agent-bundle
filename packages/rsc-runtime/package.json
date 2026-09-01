@@ -49,6 +49,10 @@
     "./state/sqlite": {
       "types": "./dist/state/sqlite.d.ts",
       "import": "./dist/state/sqlite.js"
+    },
+    "./notices": {
+      "types": "./dist/notices/index.d.ts",
+      "import": "./dist/notices.js"
     }
   },
   "scripts": {

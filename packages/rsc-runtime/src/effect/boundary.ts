@@ -28,6 +28,7 @@ export interface RunPromiseOptions {
 
 const TYPED_ERROR_NAMES = new Set([
   'AgentContractError',
+  'AgentNoticeError',
   'AgentRequestError',
   'AgentRuntimeError',
   'AgentStateError',
