@@ -211,6 +211,14 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       join(consumerRoot, 'node_modules', 'ajv'),
       'dir',
     );
+    // The route-graph compiler types its project ignore rules, so the
+    // declaration graph resolves ignore exactly as installed consumers do
+    // (a runtime dependency of the package).
+    await symlink(
+      join(agentBundleNodeModules, 'ignore'),
+      join(consumerRoot, 'node_modules', 'ignore'),
+      'dir',
+    );
     // The tools escape hatch types the Rsbuild environment-config surface, so
     // the declaration graph resolves the bundler packages exactly as
     // installed consumers do. @rsbuild/core is a runtime dependency; the

@@ -118,6 +118,25 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
+## Route graph (`AB4800`–`AB4804`)
+
+The route-graph compiler discovers conventional route modules
+(`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
+`src/providers/*`, `src/cli/**`, `src/scripts/**`) into one immutable IR.
+Discovery is not a packaging choice, so every collision is a hard **error**
+and the compiler never silently picks a side. Modules that explicit
+`scripts`, `hooks`, `bin`, `lib`, or `mcp` configuration references are
+claimed by that declaration and never become routes — config always wins.
+`agent-bundle inspect --routes` dumps the compiled graph.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB4800` | error | An MCP server has both discovered route modules under `src/mcp/<id>/` and an existing entry claim (the conventional `src/mcp/<id>.ts` module, or a declared `entry`/`command`/`url`) without an explicit `routes.servers.<id>` mode. |
+| `AB4801` | error | The conventional `src/cli.ts` entry and `src/cli/` command route modules both exist without an explicit `routes.cli` mode. |
+| `AB4802` | error | Two route modules derive the same route id (for example `.ts` and `.tsx` siblings with one stem). |
+| `AB4803` | error | A route path derives an unsafe identity segment (each segment must match `^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$`). |
+| `AB4804` | error | A `routes` mode override is not `generated`/`custom`/`command`/`remote` for a server, or `generated`/`conventional` for the CLI. |
+
 ## Development package build (`AB7103`)
 
 `agent-bundle dev` rebuilds the framework-owned package build (`dist/` bin

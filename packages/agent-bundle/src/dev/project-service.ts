@@ -28,6 +28,7 @@ import type {
   NormalizedMcpServer,
   NormalizedPlugin,
 } from '../core/types.ts';
+import type { CompiledRouteGraph } from '../routes/types.ts';
 import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
 
@@ -60,6 +61,12 @@ export interface PreparedProject {
   readonly projectContext?: ProjectContext;
   readonly registry: TargetRegistry;
   readonly root: string;
+  /**
+   * The compiled route graph discovery attached (#93); absent when no
+   * conventional route module exists. Carried through preparation so inspect
+   * never re-evaluates the configuration for the routes focus.
+   */
+  readonly routeGraph?: CompiledRouteGraph;
   /**
    * Re-snapshots the project with the same output and payload roots the
    * prepared identity hashed; a divergent re-snapshot would make
@@ -548,6 +555,7 @@ const preparedProject = (
   devRuntimeDiagnostic?: Diagnostic,
   devAgentApiEnabled?: boolean,
   tools?: AgentBundleToolsConfig,
+  routeGraph?: CompiledRouteGraph,
 ): PreparedProject => Object.freeze({
   configPath,
   ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
@@ -559,6 +567,7 @@ const preparedProject = (
   ...(projectContext === undefined ? {} : { projectContext }),
   registry,
   root,
+  ...(routeGraph === undefined ? {} : { routeGraph }),
   snapshotSource,
   source,
   ...(tools === undefined ? {} : { tools }),
@@ -779,7 +788,23 @@ export class ProjectService {
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision, root);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source, snapshotSource);
+      return preparedProject(
+        loaded.configPath,
+        snapshot,
+        sourceDiagnostics,
+        outputRoots,
+        undefined,
+        registry,
+        root,
+        source,
+        snapshotSource,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        discovered.routeGraph,
+      );
     }
 
     let model: NormalizedPlugin;
@@ -894,6 +919,7 @@ export class ProjectService {
       devRuntimeDiagnostic,
       devAgentApiEnabled,
       tools,
+      discovered.routeGraph,
     );
   }
 }

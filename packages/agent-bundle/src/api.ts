@@ -6,7 +6,26 @@ import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
 import { isInsideOrEqual } from './core/paths.ts';
+import { emptyCompiledRouteGraph } from './routes/graph.ts';
+import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
+export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './routes/graph.ts';
+export { inspectRouteGraph } from './routes/inspect.ts';
+export type { RouteGraphInspection } from './routes/inspect.ts';
+export { emptyRouteConfig } from './routes/types.ts';
+export type {
+  CapabilityEvidence,
+  CapabilityState,
+  CompiledAgentRoute,
+  CompiledCliMode,
+  CompiledCliSurface,
+  CompiledProvider,
+  CompiledRouteGraph,
+  CompiledRouteKind,
+  CompiledServerMode,
+  CompiledServerSurface,
+  RouteProvenance,
+} from './routes/types.ts';
 export type { BuildResult } from './build/build.ts';
 export type { PackageBuildResult, PackageOutputFile } from './build/package-build.ts';
 export type { ArtifactOutputKind, ArtifactOutputProvenance } from './build/provenance.ts';
@@ -199,7 +218,7 @@ export interface InspectionPlan {
 }
 
 export interface InspectOptions extends ProjectOptions {
-  readonly focus?: 'bundler' | 'hooks' | 'skills';
+  readonly focus?: 'bundler' | 'hooks' | 'routes' | 'skills';
   readonly target?: string;
 }
 
@@ -211,6 +230,7 @@ export interface ReadyInspectResult {
   readonly selected?: {
     readonly bundler?: BundlerInspection;
     readonly hooks?: NormalizedPlugin['hooks'];
+    readonly routes?: RouteGraphInspection;
     readonly skills?: NormalizedPlugin['skills'];
   };
   readonly state: 'ready';
@@ -472,11 +492,19 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
       ]));
     }
   }
+  // The route focus serves the graph preparation already compiled during
+  // discovery — never a second configuration evaluation, so the focus can
+  // not diverge from the validated model. Route-free projects attach no
+  // graph and serve the shared empty one.
+  const routes: RouteGraphInspection | undefined = options.focus === 'routes'
+    ? inspectRouteGraph(prepared.routeGraph ?? emptyCompiledRouteGraph)
+    : undefined;
   const selected = options.focus === undefined
     ? undefined
     : Object.freeze({
       ...(bundler === undefined ? {} : { bundler }),
       ...(options.focus === 'hooks' ? { hooks: model.hooks } : {}),
+      ...(routes === undefined ? {} : { routes }),
       ...(options.focus === 'skills' ? { skills: model.skills } : {}),
     });
   return Object.freeze({

@@ -6,6 +6,8 @@ import fastGlob from 'fast-glob';
 import { isInside } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
+import { compileRouteGraph, isEmptyRouteGraph } from '../routes/graph.ts';
+import type { CompiledRouteGraph } from '../routes/types.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from './ignore.ts';
 import { isRenderedSkillSourceName } from './rendered-skill.ts';
 import { parseSkill, type SkillDocument } from './skill.ts';
@@ -38,6 +40,12 @@ export interface DiscoveredPayload {
 export interface DiscoveredProject {
   assets?: DiscoveredAsset[];
   payloads?: DiscoveredPayload[];
+  /**
+   * The compiled conventional route graph (#93). Present only when route
+   * discovery found modules or produced diagnostics, so route-free projects
+   * keep their existing discovery shape.
+   */
+  routeGraph?: CompiledRouteGraph;
   /**
    * Conventional `skills/<name>/SKILL.md` documents that explicit `skills`
    * configuration leaves uncovered — the confusable shadowed state surfaced
@@ -229,9 +237,11 @@ export const discoverProject = async (
   const shadowedConventionalSkills = [...shadowedByDir.values()];
 
   const payloads = await discoverPayloads(projectRoot, config.payload);
+  const routeGraph = await compileRouteGraph(projectRoot, config, rules);
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
     ...(payloads.length === 0 ? {} : { payloads }),
+    ...(routeGraph === undefined || isEmptyRouteGraph(routeGraph) ? {} : { routeGraph }),
     ...(shadowedConventionalSkills.length === 0 ? {} : { shadowedConventionalSkills }),
     skills: await Promise.all(
       skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules)),
