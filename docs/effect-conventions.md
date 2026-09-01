@@ -99,6 +99,61 @@ public edge. Pattern files:
 - [agent-patterns/effect-concurrency.md](../agent-patterns/effect-concurrency.md)
 - [agent-patterns/effect-errors.md](../agent-patterns/effect-errors.md)
 
+## Stage 3 (dev seam) outcomes
+
+One subsystem per PR, all behind unchanged Promise APIs and wire contracts
+(#158 boundary, #159 MCP session lifecycles, #160 rebuild scheduler,
+#161 EpochStore). Leaf filesystem/SDK helpers stay imperative and are
+identity-lifted through `src/effect/lift.ts`; the orchestration —
+lifecycles, mutual exclusion, coalescing, compensation, failure
+aggregation — is Effect.
+
+**`ProjectEventHub` (the SSE hub) stays imperative.** Its public contract is
+*synchronous* re-entrant fan-out: `publish` delivers to listeners in the same
+turn (foreground shutdown depends on tombstone frames reaching socket buffers
+before one `setImmediate`, `foreground-server.ts` documents the invariant),
+`subscribe` replays retained history plus replay-gap frames synchronously,
+and listener failures remove the subscription mid-dispatch. Effect `PubSub`
+is an asynchronous fan-out structure; fiber-delivered events would change
+that observable contract, and driving a `PubSub` through unsafe synchronous
+drains would re-implement today's dispatch loop with none of Effect's
+guarantees. Revisit only if the hub's consumers ever move onto fibers
+end-to-end.
+
+### Stage 3 helped / hurt addendum
+
+Helped:
+
+- `Semaphore.make(1)` + `withPermit` is a drop-in for the hand-rolled serial
+  queues (FIFO waiters), including the process-wide per-project lease mutex
+  map in the epoch store.
+- `Deferred` gives coalesced rebuild waiters one shared completion;
+  `Effect.onExit` sits exactly where a `.finally` drain hook sat.
+- `Effect.forEach(..., { concurrency: 'unbounded' })` with per-element
+  `Effect.exit` is the exact analogue of `Promise.allSettled` for
+  settle-then-aggregate teardown contracts (`McpSessionServiceCloseError`,
+  `EpochCleanupError`, publication rollback `AggregateError`).
+- `Effect.gen({ self: this }, function* (this: X) { ... })` keeps `#private`
+  member access inside class-internal Effect programs.
+- `Effect.acquireRelease` + a transferred-ownership flag models "release on
+  failure only until the constructed resource takes ownership" (MCP session
+  open chain).
+
+Hurt / gotchas:
+
+- Effect finalizers are infallible by type. Teardown contracts that
+  *propagate* cleanup failures (the dev seam's last-failure-wins `finally`
+  chains, the staging-root removal that replaces the publish outcome) must be
+  explicit effect sequences — capture the attempt's `Exit`, run the cleanup,
+  then unwrap — never scope finalizers.
+- Bare `Effect.tryPromise(fn)` wraps rejections in `Cause.UnknownError`;
+  always route through `src/effect/lift.ts` so typed dev errors and raw
+  rejection values (`AbortSignal.reason`) cross the boundary untouched.
+- Synchronous admission windows are load-bearing: same-turn rebuild
+  coalescing and session-close invalidation must not move inside a fiber.
+  Construct `Semaphore`/`Deferred` with the boundary's `runSync` and keep the
+  admission bookkeeping synchronous.
+
 ## Banned modules and APIs
 
 - `Effect.runPromise` / `runSync` / `runFork` / `runCallback` (and `*With` /
@@ -108,13 +163,14 @@ public edge. Pattern files:
 - `@effect/vitest` — this repo uses rstest.
 - `NodeRuntime.runMain` / `BunRuntime` as a substitute for the boundary.
 - Ad-hoc `ManagedRuntime` outside a boundary module.
-- `effect/unstable/*` until listed below (Stage 2 listed none).
+- `effect/unstable/*` until listed below (Stages 2 and 3 listed none).
 
 ## Unstable-module adoptions
 
 Re-pin chores re-verify every row. Stage 2 adopts none: Flight is a React
 binary stream, not Ndjson/SchemaBinary, and no other `effect/unstable/*`
-module fits the dispatcher rewrite.
+module fits the dispatcher rewrite. Stage 3 also adopts none: the dev seam
+needed only stable `Semaphore`, `Deferred`, `Scope`, and `Exit`.
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
