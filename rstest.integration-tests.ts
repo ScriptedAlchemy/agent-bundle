@@ -115,6 +115,17 @@ export const packedReleaseOnlyTestFiles: readonly string[] = [
 ];
 
 /**
+ * Route-unit tests (#103): they render route modules through the real Agent
+ * renderer, which requires React's `react-server` condition. That is a
+ * process flag, so the level owns its own pool — `test:route-unit`, built from
+ * the shipped `agentBundleRstest()` helper — and the workspace pools exclude
+ * it. A route-unit pass is not transport, browser, or artifact proof.
+ */
+export const routeUnitTestFiles: readonly string[] = [
+  'packages/agent-bundle/tests/route-unit/**',
+];
+
+/**
  * Checked-in scaffolding templates ship their own test files; they run inside
  * scaffolded projects (the packed e2e drives them through each project's
  * `check`), never through the workspace pools, whose include glob would

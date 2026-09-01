@@ -202,6 +202,9 @@ importers:
       '@rstackjs/load-config':
         specifier: 0.1.2
         version: 0.1.2(jiti@2.7.0)
+      '@rstest/core':
+        specifier: ^0.11.10
+        version: 0.11.10
       acorn:
         specifier: 8.18.0
         version: 8.18.0
@@ -242,6 +245,9 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
     devDependencies:
+      '@agent-bundle/runtime':
+        specifier: workspace:*
+        version: link:../rsc-runtime
       '@types/react':
         specifier: 19.2.18
         version: 19.2.18
@@ -251,6 +257,9 @@ importers:
       react:
         specifier: 19.2.8
         version: 19.2.8
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/create-agent-bundle:
     devDependencies:

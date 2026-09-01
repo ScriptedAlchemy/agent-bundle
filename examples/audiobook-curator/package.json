@@ -22,9 +22,10 @@
   },
   "scripts": {
     "build": "agent-bundle build --output artifact",
-    "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test",
+    "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test && pnpm test:routes",
     "dev": "agent-bundle dev",
-    "test": "rstest tests",
+    "test": "rstest tests --exclude 'tests/route-unit/**'",
+    "test:routes": "rstest --config rstest.route-unit.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "validate": "agent-bundle validate"
   },

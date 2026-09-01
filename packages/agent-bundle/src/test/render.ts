@@ -1,0 +1,428 @@
+import type * as AgentFlightServer from '@agent-bundle/runtime/flight/server';
+import type * as AgentRuntime from '@agent-bundle/runtime';
+import type {
+  AgentDocument,
+  AgentInvocationInput,
+  AgentProgressReporter,
+  AgentProgressUpdate,
+  AgentRenderInvocation,
+  AgentRenderLimits,
+  AgentRequestInit,
+} from '@agent-bundle/runtime';
+import type * as React from 'react';
+
+import { AgentTestError, captured } from './errors.ts';
+import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
+import { registeredRouteLoader, testManifest } from './registry.ts';
+import type {
+  AgentRouteModule,
+  RenderableRouteKind,
+  RenderedRouteProvenance,
+  TestableRouteDescriptor,
+} from './types.ts';
+
+/** Request-scoped overrides for one rendered route, over the runtime's own request contract. */
+export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress' | 'signal'> & {
+  readonly invocation?: Omit<AgentInvocationInput, 'kind'>;
+  readonly progress?: AgentProgressReporter;
+};
+
+export interface RenderRouteOptions {
+  /** CLI route arguments; `cli` routes only. */
+  readonly args?: readonly string[];
+  readonly context?: RenderRouteContext;
+  /** The route's input: tool input, event payload, or script input. */
+  readonly input?: unknown;
+  /** Overrides the route kind when a module is rendered directly; ignored for manifest routes. */
+  readonly kind?: RenderableRouteKind;
+  readonly limits?: Partial<AgentRenderLimits>;
+  /** Renders against an explicit manifest instead of the one the generated configuration registered. */
+  readonly manifest?: AgentBundleTestManifest;
+  /** Names a module rendered directly, so failure diagnostics carry a route identity. */
+  readonly routeId?: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface RenderedRoute {
+  /** The final Agent Document the real renderer produced. */
+  readonly document: AgentDocument;
+  readonly invocation: AgentRenderInvocation;
+  /** The document value parsed by the route's own `resultSchema`; absent when the module exports none. */
+  readonly result?: unknown;
+  /** Request-scoped progress the route reported. These are not render events; the final-only dispatcher emits no event stream. */
+  readonly progress: readonly AgentProgressUpdate[];
+  readonly provenance: RenderedRouteProvenance;
+}
+
+export type RenderRouteTarget = AgentRouteModule | string;
+
+interface Renderer {
+  readonly createAgentRenderDispatcher: typeof AgentRuntime.createAgentRenderDispatcher;
+  readonly createElement: typeof React.createElement;
+  readonly renderAgentFlight: typeof AgentFlightServer.renderAgentFlight;
+  readonly runAgentRequest: typeof AgentRuntime.runAgentRequest;
+}
+
+let rendererPromise: Promise<Renderer> | undefined;
+
+/**
+ * Loads the real renderer on first render. The imports are deliberately not at
+ * module scope: `@agent-bundle/runtime` and `react` are optional peers of this
+ * package, and the Flight server entry throws on import unless the process
+ * enabled the `react-server` condition — so a manifest-only test must be able
+ * to import these helpers without either installed, and a missing condition
+ * must fail with the wiring step rather than an opaque React message.
+ */
+const loadRenderer = async (): Promise<Renderer> => {
+  rendererPromise ??= (async (): Promise<Renderer> => {
+    const [runtime, flight, react] = await Promise.all([
+      import('@agent-bundle/runtime'),
+      import('@agent-bundle/runtime/flight/server'),
+      import('react'),
+    ]);
+    return {
+      createAgentRenderDispatcher: runtime.createAgentRenderDispatcher,
+      createElement: react.createElement,
+      renderAgentFlight: flight.renderAgentFlight,
+      runAgentRequest: runtime.runAgentRequest,
+    };
+  })().catch((error: unknown) => {
+    rendererPromise = undefined;
+    throw new AgentTestError(
+      'render-failed',
+      'Unable to load the Agent renderer for a route-unit render.',
+      {
+        cause: error,
+        details: [`cause:        ${error instanceof Error ? error.message : String(error)}`],
+        recovery: 'Install react and @agent-bundle/runtime, and run the route-unit pool with the react-server condition — agentBundleRstest() from agent-bundle/rstest configures both.',
+      },
+    );
+  });
+  return rendererPromise;
+};
+
+const renderableKind = (
+  descriptor: TestableRouteDescriptor,
+  provenance: RenderedRouteProvenance,
+): RenderableRouteKind => {
+  switch (descriptor.kind) {
+    case 'cli':
+    case 'event-route':
+    case 'prompt':
+    case 'resource':
+    case 'script':
+    case 'tool':
+      return descriptor.kind;
+    case 'app':
+      throw new AgentTestError(
+        'unsupported-route-kind',
+        `Route ${descriptor.id} is a browser App surface, which the route-unit level does not render.`,
+        {
+          provenance,
+          recovery: 'Assert App surfaces at the browser proof level; it compiles the App through its production Rsbuild profile.',
+        },
+      );
+    default: {
+      const exhaustive: never = descriptor.kind;
+      throw new AgentTestError(
+        'unsupported-route-kind',
+        `Unsupported compiled route kind ${String(exhaustive)}.`,
+        { provenance },
+      );
+    }
+  }
+};
+
+const cliArguments = (
+  options: RenderRouteOptions,
+  provenance: RenderedRouteProvenance,
+): readonly string[] => {
+  const candidate = options.args ?? options.input ?? [];
+  if (Array.isArray(candidate) && candidate.every((value) => typeof value === 'string')) {
+    return candidate as readonly string[];
+  }
+  throw new AgentTestError(
+    'invalid-input',
+    'A cli route renders with string arguments.',
+    {
+      details: [`received:     ${captured(candidate)}`],
+      provenance,
+      recovery: 'Pass args: ["--flag", "value"] to renderRoute().',
+    },
+  );
+};
+
+const invocationFor = (
+  kind: RenderableRouteKind,
+  routeId: string,
+  options: RenderRouteOptions,
+  provenance: RenderedRouteProvenance,
+): AgentRenderInvocation => {
+  switch (kind) {
+    // The generated MCP server dispatches tools, resources, and prompts
+    // through one tool invocation; the harness renders them the same way
+    // rather than inventing a second invocation shape.
+    case 'prompt':
+    case 'resource':
+    case 'tool':
+      return { kind: 'tool', props: { input: (options.input ?? {}) as never, operationId: routeId } };
+    case 'event-route':
+      return { kind: 'event', props: { event: routeId, payload: (options.input ?? {}) as never } };
+    case 'cli':
+      return { kind: 'cli', props: { args: cliArguments(options, provenance), command: routeId } };
+    case 'script':
+      return {
+        kind: 'script',
+        props: { name: routeId, ...(options.input === undefined ? {} : { input: options.input as never }) },
+      };
+    default: {
+      const exhaustive: never = kind;
+      throw new AgentTestError(
+        'unsupported-route-kind',
+        `Unsupported renderable route kind ${String(exhaustive)}.`,
+        { provenance },
+      );
+    }
+  }
+};
+
+const knownRouteIds = (manifest: AgentBundleTestManifest): string =>
+  Object.keys(manifest.routes).length === 0
+    ? 'this project compiled no route modules'
+    : Object.keys(manifest.routes).sort().join(', ');
+
+interface ResolvedTarget {
+  readonly component: (props: never) => unknown;
+  readonly kind: RenderableRouteKind;
+  readonly module: AgentRouteModule;
+  readonly provenance: RenderedRouteProvenance;
+}
+
+/** The protocol name a generated server registers, and the request surface it records. */
+const protocolName = (routeId: string): string => routeId.slice(routeId.lastIndexOf('/') + 1);
+
+/**
+ * Props the route component receives. MCP route kinds get exactly the public
+ * route contract's `{ input, signal }` — the same props the generated server's
+ * Flight worker passes. The kinds whose public surface has not landed yet
+ * receive their invocation props beside the signal.
+ */
+const componentProps = (
+  invocation: AgentRenderInvocation,
+  kind: RenderableRouteKind,
+  signal: AbortSignal,
+): Readonly<Record<string, unknown>> => {
+  switch (kind) {
+    case 'prompt':
+    case 'resource':
+    case 'tool':
+      return { input: (invocation.props as { readonly input?: unknown }).input, signal };
+    case 'cli':
+    case 'event-route':
+    case 'script':
+      return { ...invocation.props, signal };
+    default: {
+      const exhaustive: never = kind;
+      throw new AgentTestError('unsupported-route-kind', `Unsupported renderable route kind ${String(exhaustive)}.`);
+    }
+  }
+};
+
+/** The request-scope invocation the generated server opens for one route. */
+const requestInvocation = (
+  invocation: AgentRenderInvocation,
+  routeId: string,
+): AgentInvocationInput => ({
+  kind: invocation.kind,
+  ...(invocation.kind === 'tool' ? { operationId: routeId } : {}),
+  surface: invocation.kind === 'tool' ? protocolName(routeId) : routeId,
+});
+
+const componentOf = (
+  module: AgentRouteModule,
+  provenance: RenderedRouteProvenance,
+): ((props: never) => unknown) => {
+  const component = (module as { default?: unknown }).default;
+  if (typeof component !== 'function') {
+    throw new AgentTestError(
+      'invalid-route-module',
+      'A route module default-exports its route component.',
+      {
+        details: [`received:     default export of type ${typeof component}`],
+        provenance,
+        recovery: 'Export the route component as the module default.',
+      },
+    );
+  }
+  return component as (props: never) => unknown;
+};
+
+const resolveTarget = async (
+  target: RenderRouteTarget,
+  options: RenderRouteOptions,
+): Promise<ResolvedTarget> => {
+  if (typeof target !== 'string') {
+    const kind = options.kind ?? 'tool';
+    const provenance: RenderedRouteProvenance = Object.freeze({
+      kind,
+      proofLevel: ROUTE_UNIT_PROOF_LEVEL,
+      routeId: options.routeId ?? '(module passed to renderRoute)',
+      source: 'module',
+      targets: [],
+    });
+    return { component: componentOf(target, provenance), kind, module: target, provenance };
+  }
+  const manifest = options.manifest ?? testManifest();
+  const descriptor = manifest.routes[target];
+  if (descriptor === undefined) {
+    throw new AgentTestError('route-not-found', `No compiled route is named ${JSON.stringify(target)}.`, {
+      details: [
+        `project root: ${manifest.projectRoot}`,
+        `compiled:     ${knownRouteIds(manifest)}`,
+        ...(manifest.diagnostics.length === 0
+          ? []
+          : [`compiler:     ${String(manifest.diagnostics.length)} diagnostic(s), first ${manifest.diagnostics[0]!.code}: ${manifest.diagnostics[0]!.message}`]),
+      ],
+      recovery: 'Render one of the compiled route ids, or pass the route module to renderRoute() directly.',
+    });
+  }
+  const provenance: RenderedRouteProvenance = Object.freeze({
+    kind: 'tool',
+    manifestDigest: manifest.digest,
+    modulePath: descriptor.source,
+    projectRoot: manifest.projectRoot,
+    proofLevel: ROUTE_UNIT_PROOF_LEVEL,
+    relativePath: descriptor.relativePath,
+    routeId: descriptor.id,
+    ...(descriptor.serverId === undefined ? {} : { serverId: descriptor.serverId }),
+    source: 'manifest',
+    targets: manifest.targets,
+  });
+  const kind = renderableKind(descriptor, provenance);
+  const loader = registeredRouteLoader(descriptor.id);
+  if (loader === undefined) {
+    throw new AgentTestError(
+      'manifest-unavailable',
+      `Route ${descriptor.id} is compiled but no test-time module loader is registered for it.`,
+      {
+        provenance: { ...provenance, kind },
+        recovery: 'Build the Rstest configuration with agentBundleRstest() so the generated setup registers route loaders, or pass the route module to renderRoute() directly.',
+      },
+    );
+  }
+  const module = await loader();
+  return {
+    component: componentOf(module, { ...provenance, kind }),
+    kind,
+    module,
+    provenance: { ...provenance, kind },
+  };
+};
+
+/**
+ * The structured result a generated server would return: the document value
+ * validated by the route's own `resultSchema`. A document that renders but
+ * whose value the route's schema rejects is a route defect, not a pass.
+ */
+const parsedResult = (
+  schema: { readonly parse: (value: unknown) => unknown },
+  document: AgentDocument,
+  provenance: RenderedRouteProvenance,
+): unknown => {
+  try {
+    return schema.parse(document.value);
+  } catch (error) {
+    throw new AgentTestError('result-rejected', "The route's own resultSchema rejected the rendered document value.", {
+      cause: error,
+      details: [
+        `cause:        ${error instanceof Error ? error.message : String(error)}`,
+        `received:     ${document.value === undefined ? 'no document value' : captured(document.value)}`,
+      ],
+      provenance,
+    });
+  }
+};
+
+const drain = async (stream: ReadableStream<Uint8Array>): Promise<readonly Uint8Array[]> => {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) return chunks;
+    chunks.push(next.value);
+  }
+};
+
+const streamOf = (chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> => new ReadableStream<Uint8Array>({
+  start(controller) {
+    for (const chunk of chunks) controller.enqueue(chunk);
+    controller.close();
+  },
+});
+
+/**
+ * Renders one route through the real Agent renderer and returns its final
+ * Agent Document. The route component executes inside a real request scope,
+ * its output is encoded as React Flight, and the runtime's own final-only
+ * dispatcher decodes it — the harness owns no second rendering path.
+ *
+ * This is the route-unit proof level: no transport is opened, no browser
+ * surface is compiled, and no host artifact is built.
+ */
+export const renderRoute = async (
+  target: RenderRouteTarget,
+  options: RenderRouteOptions = {},
+): Promise<RenderedRoute> => {
+  const resolved = await resolveTarget(target, options);
+  const renderer = await loadRenderer();
+  const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, options, resolved.provenance);
+  const collected: AgentProgressUpdate[] = [];
+  const context = options.context ?? {};
+  const progress: AgentProgressReporter = context.progress ?? {
+    report: async (update) => {
+      collected.push(update);
+    },
+  };
+  const signal = options.signal ?? new AbortController().signal;
+  const dispatcher = renderer.createAgentRenderDispatcher({
+    execute: async (request) => streamOf(await renderer.runAgentRequest({
+      ...context,
+      invocation: {
+        ...requestInvocation(request.invocation, resolved.provenance.routeId),
+        ...context.invocation,
+        kind: request.invocation.kind,
+      },
+      progress,
+      signal: request.signal,
+    }, async () => drain(renderer.renderAgentFlight(
+      renderer.createElement(
+        resolved.component as never,
+        componentProps(request.invocation, resolved.kind, request.signal) as never,
+      ),
+      { signal: request.signal },
+    )))),
+  }, options.limits === undefined ? {} : { limits: options.limits });
+
+  let document: AgentDocument;
+  try {
+    document = await dispatcher.dispatch({ invocation, signal });
+  } catch (error) {
+    throw new AgentTestError('render-failed', 'The route render failed.', {
+      cause: error,
+      details: [
+        `cause:        ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`,
+        `invocation:   ${invocation.kind}`,
+      ],
+      provenance: resolved.provenance,
+    });
+  }
+  return Object.freeze({
+    document,
+    invocation,
+    progress: Object.freeze([...collected]),
+    provenance: resolved.provenance,
+    ...(resolved.module.resultSchema === undefined
+      ? {}
+      : { result: parsedResult(resolved.module.resultSchema, document, resolved.provenance) }),
+  });
+};

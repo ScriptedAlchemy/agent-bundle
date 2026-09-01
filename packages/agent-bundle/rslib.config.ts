@@ -35,6 +35,8 @@ export default defineConfig({
       index: './src/index.ts',
       'mcp-apps': './src/mcp-apps.ts',
       'mcp-entry': './src/mcp-entry.ts',
+      rstest: './src/rstest/index.ts',
+      test: './src/test/index.ts',
     },
   },
 });

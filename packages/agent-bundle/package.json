@@ -60,6 +60,14 @@
     "./mcp-entry": {
       "types": "./dist/mcp-entry.d.ts",
       "import": "./dist/mcp-entry.js"
+    },
+    "./rstest": {
+      "types": "./dist/rstest/index.d.ts",
+      "import": "./dist/rstest.js"
+    },
+    "./test": {
+      "types": "./dist/test/index.d.ts",
+      "import": "./dist/test.js"
     }
   },
   "dependencies": {
@@ -86,9 +94,27 @@
     "yaml": "2.9.0"
   },
   "devDependencies": {
+    "@agent-bundle/runtime": "workspace:*",
     "@modelcontextprotocol/server": "2.0.0",
     "@types/react": "19.2.18",
     "@types/ws": "8.18.1",
+    "react": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "peerDependencies": {
+    "@agent-bundle/runtime": "*",
+    "@rstest/core": "^0.11.10",
     "react": "19.2.8"
+  },
+  "peerDependenciesMeta": {
+    "@agent-bundle/runtime": {
+      "optional": true
+    },
+    "@rstest/core": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
   }
 }

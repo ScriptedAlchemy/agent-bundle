@@ -1,4 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,14 +16,20 @@ const skillsOnlyFixture = join(workspaceRoot, 'fixtures', 'integration', 'skills
 type InstalledDependencyTree = Readonly<{
   readonly dependencies?: Readonly<Record<string, InstalledDependencyTree>>;
   readonly name?: string;
+  readonly version?: string;
 }>;
 
+/**
+ * Names npm actually installed. An entry npm records without a version is an
+ * unmet optional peer: it names a dependency the consumer chose not to take,
+ * and nothing for it exists on disk.
+ */
 const installedDependencyNames = (tree: InstalledDependencyTree): readonly string[] => {
   const names = new Set<string>();
   const visit = (node: InstalledDependencyTree): void => {
     if (typeof node.name === 'string') names.add(node.name);
     for (const [name, dependency] of Object.entries(node.dependencies ?? {})) {
-      names.add(name);
+      if (typeof dependency.version === 'string') names.add(name);
       visit(dependency);
     }
   };
@@ -49,8 +56,19 @@ describe.sequential('optional RSC runtime package boundary', () => {
       await execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], { cwd: consumer, env: installedEnvironment() });
       const dependencyTree = JSON.parse((await execFile('npm', ['ls', '--all', '--json'], { cwd: consumer, env: installedEnvironment() })).stdout) as InstalledDependencyTree;
       const installedNames = installedDependencyNames(dependencyTree);
-      for (const name of ['react', 'react-dom', 'react-server-dom-rspack', 'rsbuild-plugin-rsc']) {
+      // The harness subpaths (agent-bundle/test, agent-bundle/rstest) declare
+      // Rstest and React as optional peers, so a project that does not test
+      // routes installs neither (#103).
+      for (const name of [
+        '@agent-bundle/runtime',
+        '@rstest/core',
+        'react',
+        'react-dom',
+        'react-server-dom-rspack',
+        'rsbuild-plugin-rsc',
+      ]) {
         expect(installedNames).not.toContain(name);
+        expect(existsSync(join(consumer, 'node_modules', name))).toBe(false);
       }
 
       await cp(skillsOnlyFixture, project, { recursive: true });
