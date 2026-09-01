@@ -43,7 +43,7 @@
     "example:audiobook": "pnpm build && pnpm --filter @agent-bundle-example/audiobook-curator dev",
     "example:mcp-app": "pnpm build && pnpm --filter @agent-bundle-example/mcp-app dev",
     "example:skills": "pnpm build && pnpm --filter @agent-bundle-example/skills-starter dev",
-    "examples:check": "pnpm build && AGENT_BUNDLE_TEST_TIME_SCALE=${AGENT_BUNDLE_TEST_TIME_SCALE:-2} pnpm --filter './examples/*' --workspace-concurrency=3 check"
+    "examples:check": "pnpm build && node scripts/run-examples-check.mjs"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
