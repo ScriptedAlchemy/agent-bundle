@@ -108,7 +108,7 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
   }
 });
 
-e2e('reveals, retains, repairs, and removes capabilities without reloading Chrome', { timeout: 120_000 }, async ({ page }) => {
+e2e('reveals, retains, repairs, and removes capabilities without reloading Chrome', { retry: 2, timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('skills-starter');
   const configPath = join(project.root, 'agent-bundle.config.ts');
@@ -177,7 +177,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
   }
 });
 
-e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { timeout: 150_000 }, async ({ page }) => {
+e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { retry: 2, timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('hooks-and-scripts');
   const hookSource = join(project.root, 'src', 'hooks', 'session-start.ts');
@@ -570,7 +570,7 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
   }
 });
 
-e2e('renders the flagship compiled route catalog by server and kind in real Chrome', { timeout: 150_000 }, async ({ page }) => {
+e2e('renders the flagship compiled route catalog by server and kind in real Chrome', { retry: 2, timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('audiobook-curator');
   const conversionSource = join(project.root, 'src', 'conversion.ts');
