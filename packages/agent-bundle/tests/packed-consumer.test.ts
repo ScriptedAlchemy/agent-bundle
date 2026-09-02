@@ -234,23 +234,29 @@ it('uses only an installed tarball after source deletion', async () => {
         readonly target: string;
       }[];
     };
-    expect(validationDocument.hostValidation).toHaveLength(1);
-    expect(validationDocument.hostValidation[0]).toMatchObject({
-      host: 'claude',
-      target: 'claude',
-    });
-    if (validationDocument.hostValidation[0]!.status === 'passed') {
-      expect(validationDocument.diagnostics).toEqual([]);
-      expect(validationDocument.hostValidation[0]!.diagnostics).toEqual([]);
+    expect(validationDocument.hostValidation.map(({ host, target }) => ({ host, target }))).toEqual([
+      { host: 'claude', target: 'claude' },
+      { host: 'codex', target: 'codex' },
+    ]);
+    const [claudeValidation, codexValidation] = validationDocument.hostValidation;
+    if (claudeValidation!.status === 'passed') {
+      expect(claudeValidation!.diagnostics).toEqual([]);
     } else {
-      expect(validationDocument.hostValidation[0]).toMatchObject({
+      expect(claudeValidation).toMatchObject({
         diagnostics: [{ code: 'AB6019', severity: 'info' }],
         status: 'unavailable',
       });
-      expect(validationDocument.diagnostics).toEqual([
-        expect.objectContaining({ code: 'AB6019', severity: 'info' }),
-      ]);
     }
+    expect(codexValidation).toMatchObject({
+      diagnostics: [
+        { code: 'AB6030', severity: 'info' },
+        { code: 'AB6031', severity: 'info' },
+      ],
+      status: 'passed',
+    });
+    expect(validationDocument.diagnostics).toEqual(
+      validationDocument.hostValidation.flatMap(({ diagnostics }) => diagnostics),
+    );
 
     const bundlePath = join(artifact, 'portable', 'scripts', 'bundle.mjs');
     await expect(execFile(process.execPath, [
