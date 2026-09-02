@@ -1,21 +1,21 @@
-import React, { useState } from 'react';
+import { useAtom } from '@effect/atom-react';
+import React from 'react';
 
 import type { RouteInputPropertySchema } from '../../../agent-bundle/src/contracts/routes.ts';
+import { routeEditorKey, routeEditorStateAtom } from './route-editor-atoms.ts';
 import {
-  cliCommandInvocation,
   cliCommandUsage,
-  createRouteInputDraft,
+  initialRouteEditorState,
   mcpToolPrefillFor,
   routeInputLabel,
-  validateRawRouteInput,
-  validateRouteInput,
+  setRouteEditorDraftValue,
+  setRouteEditorRaw,
+  validateRouteEditor,
   type McpToolPrefill,
   type RouteCatalog,
   type RouteCatalogEntry,
   type RouteCatalogGroup,
   type RouteCatalogServer,
-  type RouteInputArguments,
-  type RouteInputDraft,
   type RouteInputDraftValue,
 } from './routes-model.ts';
 import './routes-page.css';
@@ -113,57 +113,38 @@ const scalarControl = (
   }
 };
 
-const RouteInputEditor = ({ entry, group, onOpenMcp }: {
+const RouteInputEditor = ({ digest, entry, group, onOpenMcp }: {
+  readonly digest: string;
   readonly entry: RouteCatalogEntry;
   readonly group: RouteCatalogGroup;
   readonly onOpenMcp?: (prefill: McpToolPrefill) => void;
 }) => {
   const schema = entry.inputSchema;
-  const [draft, setDraft] = useState<RouteInputDraft>(() => schema === undefined ? Object.freeze({}) : createRouteInputDraft(schema));
-  const [raw, setRaw] = useState('{}');
-  const [errors, setErrors] = useState<Readonly<Record<string, string>>>({});
-  const [rawError, setRawError] = useState<string>();
-  const [attempted, setAttempted] = useState(false);
-  const [argumentsValue, setArgumentsValue] = useState<RouteInputArguments>();
-  const [argv, setArgv] = useState<string>();
-
-  const commitValidation = (next: RouteInputDraft): void => {
-    if (schema === undefined || !attempted) return;
-    const validated = validateRouteInput(schema, next);
-    setErrors(validated.errors);
-    setArgumentsValue(validated.arguments);
-    setArgv(validated.arguments === undefined || entry.command === undefined
-      ? undefined
-      : cliCommandInvocation(entry.command, validated.arguments));
-  };
+  const [stored, setStored] = useAtom(routeEditorStateAtom(routeEditorKey(digest, entry.id)));
+  const state = stored ?? initialRouteEditorState(schema);
+  const {
+    arguments: argumentsValue,
+    argv,
+    draft,
+    errors,
+    raw,
+    rawError,
+  } = state;
   const setValue = (key: string, value: RouteInputDraftValue | undefined): void => {
-    const entries = { ...draft };
-    if (value === undefined) {
-      delete entries[key];
-    } else {
-      entries[key] = value;
-    }
-    const next = Object.freeze(entries);
-    setDraft(next);
-    commitValidation(next);
+    setStored((current) => setRouteEditorDraftValue(
+      current ?? initialRouteEditorState(schema),
+      schema,
+      entry.command,
+      key,
+      value,
+    ));
   };
   const validate = (): void => {
-    setAttempted(true);
-    if (schema === undefined) {
-      const validated = validateRawRouteInput(raw);
-      setRawError(validated.error);
-      setArgumentsValue(validated.arguments);
-      setArgv(validated.arguments === undefined || entry.command === undefined
-        ? undefined
-        : cliCommandInvocation(entry.command, validated.arguments));
-      return;
-    }
-    const validated = validateRouteInput(schema, draft);
-    setErrors(validated.errors);
-    setArgumentsValue(validated.arguments);
-    setArgv(validated.arguments === undefined || entry.command === undefined
-      ? undefined
-      : cliCommandInvocation(entry.command, validated.arguments));
+    setStored((current) => validateRouteEditor(
+      current ?? initialRouteEditorState(schema),
+      schema,
+      entry.command,
+    ));
   };
   const openMcp = (): void => {
     if (argumentsValue === undefined || onOpenMcp === undefined) return;
@@ -180,12 +161,10 @@ const RouteInputEditor = ({ entry, group, onOpenMcp }: {
             id={editorId(entry.id, 'raw')}
             onChange={(event) => {
               const next = event.currentTarget.value;
-              setRaw(next);
-              if (attempted) {
-                const validated = validateRawRouteInput(next);
-                setRawError(validated.error);
-                setArgumentsValue(validated.arguments);
-              }
+              setStored((current) => setRouteEditorRaw(
+                current ?? initialRouteEditorState(schema),
+                next,
+              ));
             }}
             rows={4}
             value={raw}
@@ -251,7 +230,8 @@ const RouteInputEditor = ({ entry, group, onOpenMcp }: {
 const commandSummary = (entry: RouteCatalogEntry): string | undefined =>
   entry.command === undefined ? undefined : cliCommandUsage(entry.command);
 
-const RouteGroup = ({ group, onOpenMcp }: {
+const RouteGroup = ({ digest, group, onOpenMcp }: {
+  readonly digest: string;
   readonly group: RouteCatalogGroup;
   readonly onOpenMcp?: (prefill: McpToolPrefill) => void;
 }) => <section
@@ -274,7 +254,7 @@ const RouteGroup = ({ group, onOpenMcp }: {
       <td className="route-source">{entry.source}<span className="route-provenance">{entry.provenance}</span></td>
       <td className="route-config">
         <p className="route-config-summary">{configSummary(entry)}</p>
-        <RouteInputEditor entry={entry} group={group} onOpenMcp={onOpenMcp} />
+        <RouteInputEditor digest={digest} entry={entry} group={group} onOpenMcp={onOpenMcp} />
       </td>
     </tr>)}</tbody>
   </table>
@@ -307,6 +287,7 @@ export const RoutesPage = ({ catalog, onOpenMcp }: RoutesPageProps) => <div clas
           {catalog.servers.filter((server) => server.routeCount === 0)
             .map((server) => <EmptyServerSurface key={server.id} server={server} />)}
           {catalog.groups.map((group) => <RouteGroup
+            digest={catalog.digest}
             group={group}
             key={`${catalog.digest}-${group.serverId ?? 'project'}-${group.kind}`}
             onOpenMcp={onOpenMcp}
