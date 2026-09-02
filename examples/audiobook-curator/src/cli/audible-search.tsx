@@ -1,6 +1,10 @@
+import React from 'react';
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
+import type { AudibleSearchReceipt } from '../audible.js';
+import { CandidateRanking } from '../components/candidate-ranking.js';
+import { CuratorDocument } from '../components/curator-document.js';
 import { audibleOperations, audibleRegionList, defaultAudibleOperations } from '../operations/audible.js';
 
 const operation = audibleOperations(defaultAudibleOperations).audibleSearch;
@@ -27,7 +31,7 @@ export const inputSchema = z.object({
 export const resultSchema = operation.resultSchema;
 
 export default async function audibleSearch({ input, signal }: CliRouteProps<typeof inputSchema>) {
-  return operation.handler({
+  const receipt = await operation.handler({
     ...(input.attempts === undefined ? {} : { attempts: input.attempts }),
     ...(input.author === undefined ? {} : { author: input.author }),
     ...(input.duration === undefined ? {} : { durationSeconds: input.duration }),
@@ -36,5 +40,13 @@ export default async function audibleSearch({ input, signal }: CliRouteProps<typ
     ...(input.regions === undefined ? {} : { regions: audibleRegionList(input.regions) }),
     report: input.report,
     title: input.title,
-  }, { signal });
+  }, { signal }) as AudibleSearchReceipt;
+  return (
+    <CuratorDocument
+      headline={`Ranked ${receipt.candidates.length} Audible candidates across reviewed regions; human selection is required.`}
+      receipt={receipt}
+    >
+      <CandidateRanking receipt={receipt} />
+    </CuratorDocument>
+  );
 }

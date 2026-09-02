@@ -595,9 +595,10 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     }
     await expect(page.locator('.route-group-heading').filter({ hasText: 'curator · Tools' })).toContainText('generated', { timeout: browserTimeout });
     const tools = page.getByRole('region', { name: 'curator · Tools' });
-    await expect(tools.locator('tbody tr')).toHaveCount(15, { timeout: browserTimeout });
+    await expect(tools.locator('tbody tr')).toHaveCount(16, { timeout: browserTimeout });
     await expect(tools).toContainText('tool:curator/convert_audiobook', { timeout: browserTimeout });
     await expect(tools).toContainText('src/mcp/curator/tools/convert_audiobook.tsx', { timeout: browserTimeout });
+    await expect(tools).toContainText('tool:curator/review_curation_shelf', { timeout: browserTimeout });
     // The extracted config is summarized, never inlined as nested JSON.
     await expect(tools).toContainText('annotations: 2 keys', { timeout: browserTimeout });
 
@@ -630,7 +631,7 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await expect(page.locator('.route-provenance').first()).toHaveText('conventional', { timeout: browserTimeout });
 
     // The generated CLI is a project surface rather than a server one. It
-    // contains the 15 authored CLI routes plus one projected command for each
+    // contains the 16 authored CLI routes plus one projected command for each
     // MCP tool, preserving the tool route IDs rather than duplicating either
     // category. Each command carries the argv projection compiled from its
     // input schema.
@@ -653,6 +654,7 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
       'cli:library-audit',
       'cli:prepare',
       'cli:select',
+      'cli:shelf',
       'cli:whisper-verify',
     ]);
     expect(projectedMcpRouteIds).toEqual(await tools.locator('.route-id').allTextContents());
@@ -660,6 +662,7 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     expect(cliRouteIds).toHaveLength(authoredCliRouteIds.length + projectedMcpRouteIds.length);
     await expect(cli).toContainText('cli:library-audit', { timeout: browserTimeout });
     await expect(cli).toContainText('src/cli/library-audit.tsx', { timeout: browserTimeout });
+    await expect(cli).toContainText('src/cli/shelf.tsx', { timeout: browserTimeout });
     await expect(cli.locator('.route-command').filter({ hasText: 'library-audit' }))
       .toHaveText('library-audit <sources...> [--concurrency <number>] --report <string> [--strict]', { timeout: browserTimeout });
     const inspectCli = cli.getByRole('row').filter({ hasText: 'cli:inspect' });
@@ -674,14 +677,17 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
       { timeout: browserTimeout },
     );
 
-    // 17 MCP routes plus 15 authored and 15 projected CLI routes, and nothing
-    // invented: the curator declares no conventional event routes, scripts,
-    // or context providers.
+    // 18 MCP routes plus 16 authored and 16 projected CLI routes, and nothing
+    // invented: the curator declares no conventional event routes or scripts
+    // and discovers one conventional context provider.
     await expect(page.getByRole('region', { name: 'Route graph identity' }).locator('dd').first())
-      .toHaveText('47', { timeout: browserTimeout });
+      .toHaveText('50', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Event routes', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Scripts', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: 'Context providers', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Context providers', exact: true })).toBeVisible({ timeout: browserTimeout });
+    const providers = page.getByRole('region', { name: 'Context providers' });
+    const libraryProvider = providers.getByRole('row').filter({ hasText: 'provider:library' });
+    await expect(libraryProvider).toContainText('src/providers/library.ts', { timeout: browserTimeout });
     await expect(page.locator('.route-diagnostics')).toHaveCount(0);
     await captureExampleState(page, 'audiobook-curator', 'routes-catalog-by-server');
 

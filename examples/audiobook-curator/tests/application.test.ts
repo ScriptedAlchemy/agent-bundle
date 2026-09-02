@@ -18,6 +18,7 @@ const toolNames = [
   'inspect_sources',
   'inventory_sources',
   'prepare_audiobook',
+  'review_curation_shelf',
   'search_audible',
   'select_audible_edition',
   'select_sources',
@@ -47,15 +48,15 @@ describe('audiobook curator filesystem application', () => {
   it('derives the complete routed CLI and projected MCP toolset', async () => {
     const graph = await compileRouteGraph(root, config);
     expect(graph.cli).toMatchObject({ mode: 'generated' });
-    expect(graph.cli!.commands).toHaveLength(30);
+    expect(graph.cli!.commands).toHaveLength(32);
     const customCommands = graph.cli!.commands!.filter((command) => command.mcp === undefined);
     const projectedCommands = graph.cli!.commands!.filter((command) => command.mcp !== undefined);
-    expect(customCommands).toHaveLength(15);
+    expect(customCommands).toHaveLength(16);
     expect(projectedCommands.map((command) => command.path.join(' '))).toEqual(
       toolNames.map((tool) => `curator ${tool}`),
     );
     expect(customCommands.filter((command) => command.rendered).map((command) => command.path.join(' ')))
-      .toEqual(['library-audit']);
+      .toEqual(['audible-search', 'audit', 'convert', 'inventory', 'library-audit', 'select', 'shelf']);
     expect(projectedCommands.every((command) => command.rendered)).toBe(true);
   });
 });

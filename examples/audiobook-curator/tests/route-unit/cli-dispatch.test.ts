@@ -9,7 +9,7 @@ import inspectRoute, {
   inputSchema as inspectInputSchema,
   resultSchema as inspectResultSchema,
 } from '../../src/cli/inspect.ts';
-import { resultSchema as inventoryResultSchema } from '../../src/cli/inventory.ts';
+import { resultSchema as inventoryResultSchema } from '../../src/cli/inventory.tsx';
 import { resultSchema as libraryAuditResultSchema } from '../../src/cli/library-audit.tsx';
 import { inputSchema as convertAudiobookInputSchema } from '../../src/mcp/curator/tools/convert_audiobook.tsx';
 import { resultSchema as inspectSourcesResultSchema } from '../../src/mcp/curator/tools/inspect_sources.tsx';
@@ -46,15 +46,20 @@ const invokeLibraryAudit = async (
 };
 
 const libraryAuditMarkdown = [
+  'Audited 0 files (0 bytes) across 1 sources.',
+  '',
   '## Library audit',
   '',
-  'Audited **0** files (0 bytes) across **1** sources.',
+  '- **Files:** 0',
+  '- **Total bytes:** 0',
+  '- **Sources:** 1',
+  '- **Metadata issues:** 0',
+  '- **Duplicate candidates:** 0',
+  '- **Multipart candidates:** 0',
   '',
-  '- metadata issues: **0**',
-  '- duplicate candidates: **0**',
-  '- multipart candidates: **0**',
+  'No duplicate or multipart candidate groups were found.',
   '',
-  'Duplicate and multipart groups are review candidates, never deletion instructions.',
+  '> Duplicate and multipart groups are review candidates, never deletion instructions.',
   '',
 ].join('\n');
 
@@ -63,7 +68,7 @@ afterEach(async () => {
 });
 
 describe('audiobook-curator at the CLI dispatch proof level', () => {
-  describe('plain commands', () => {
+  describe('custom commands', () => {
     it('emits the inspect receipt as one canonical JSON line with direct-operation byte parity', async () => {
       const { library } = await temporaryLibrary();
       const run = await invokeCli(['inspect', library, '--max-files', '1']);
@@ -84,7 +89,7 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
 
     it('uses a successful inventory receipt exit code as the process exit code', async () => {
       const { library, report } = await temporaryLibrary();
-      const run = await invokeCli(['inventory', library, '--report', report, '--strict']);
+      const run = await invokeCli(['inventory', library, '--report', report, '--strict', '--json']);
       const receipt = inventoryResultSchema.parse(cliJson(run));
 
       expect(receipt).toMatchObject({
@@ -105,7 +110,7 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
         // Fail the media probe before an external executable can run.
         process.env['PATH'] = directory;
         try {
-          return await invokeCli(['inventory', library, '--report', report, '--strict']);
+          return await invokeCli(['inventory', library, '--report', report, '--strict', '--json']);
         } finally {
           if (previousPath === undefined) delete process.env['PATH'];
           else process.env['PATH'] = previousPath;

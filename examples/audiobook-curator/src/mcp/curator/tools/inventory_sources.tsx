@@ -2,7 +2,9 @@ import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { CuratorResult, type CuratorReceipt } from '../../../result.js';
+import { CuratorDocument } from '../../../components/curator-document.js';
+import { LibraryShelf } from '../../../components/library-shelf.js';
+import type { InventoryReceipt } from '../../../library.js';
 import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
 
 const operation = discoveryOperations(defaultDiscoveryOperations).inventory;
@@ -16,6 +18,13 @@ export const inputSchema = z.object({
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
-  const receipt = await operation.handler(input, { signal }) as CuratorReceipt;
-  return <CuratorResult receipt={receipt} />;
+  const receipt = await operation.handler(input, { signal }) as InventoryReceipt;
+  return (
+    <CuratorDocument
+      headline={`Inventoried ${receipt.summary.files} media files with ${receipt.summary.errors} retained errors.`}
+      receipt={receipt}
+    >
+      <LibraryShelf receipt={receipt} />
+    </CuratorDocument>
+  );
 }

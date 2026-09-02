@@ -1,8 +1,13 @@
+import { agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { CuratorResult, type CuratorReceipt } from '../../../result.js';
+import type { AudibleSelectionReceipt } from '../../../audible.js';
+import { CandidateRanking } from '../../../components/candidate-ranking.js';
+import { CuratorDocument } from '../../../components/curator-document.js';
+import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
 import { defaultAudibleOperations, audibleOperations } from '../../../operations/audible.js';
+import { CurationShelfStateSchema } from '../../../state.js';
 
 const operation = audibleOperations(defaultAudibleOperations).audibleSelect;
 
@@ -11,6 +16,30 @@ export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
-  const receipt = await operation.handler(input, { signal }) as CuratorReceipt;
-  return <CuratorResult receipt={receipt} />;
+  const receipt = await operation.handler(input, { signal }) as AudibleSelectionReceipt;
+  const context = await agent();
+  const shelf = context.state === undefined
+    ? <ShelfUnavailable />
+    : (
+        <CurationShelf
+          state={CurationShelfStateSchema.parse((await context.state.dispatch('editionSelected', {
+            asin: String(receipt.selected.asin ?? ''),
+            candidateNumber: receipt.candidateNumber,
+            region: receipt.selected.region,
+            selectedAt: receipt.generatedAt,
+            title: String(receipt.selected.title ?? ''),
+          }, {
+            idempotencyKey: `${context.invocation.id}:curation-shelf:edition-selected`,
+          })).state)}
+        />
+      );
+  return (
+    <CuratorDocument
+      headline={`Recorded human-reviewed Audible candidate ${receipt.candidateNumber}.`}
+      receipt={receipt}
+    >
+      <CandidateRanking receipt={receipt} />
+      {shelf}
+    </CuratorDocument>
+  );
 }
