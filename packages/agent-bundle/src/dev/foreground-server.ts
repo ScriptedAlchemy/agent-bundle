@@ -14,6 +14,7 @@ import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { InspectorRoutes, type InspectorRouteService } from './inspector-routes.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playground/hook-playground-routes.ts';
 import { HostDiscoveryRoutes, type HostDiscoveryRouteService } from './playground/host-discovery-routes.ts';
+import type { HostMcpRoutes } from './host-mcp-routes.ts';
 import { LifecycleReplayRoutes, type LifecycleReplayRouteService } from './playground/lifecycle-replay-routes.ts';
 import { McpProbeRoutes, type McpProbeRouteService } from './playground/mcp-probe-routes.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
@@ -136,6 +137,8 @@ export interface ForegroundServerOptions {
   readonly hookPlayground?: HookPlaygroundRouteService;
   /** Read-only host probes, install inventory, bundle drift, and runtime endpoint health. */
   readonly hostDiscovery?: HostDiscoveryRouteService;
+  /** Stateful MCP surface used only by stable development host proxies. */
+  readonly hostMcp?: HostMcpRoutes;
   /** User-initiated read-only initialize and tools/list probing over trusted artifact servers. */
   readonly mcpProbe?: McpProbeRouteService;
   /** Read-only semantic lifecycle replay over the latest valid prepared graph. */
@@ -442,6 +445,7 @@ export class ForegroundServer {
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
   readonly #hostDiscoveryRoutes: HostDiscoveryRoutes;
+  readonly #hostMcpRoutes: HostMcpRoutes | undefined;
   readonly #host: string;
   readonly #inspectorRoutes: InspectorRoutes;
   readonly #lifecycleReplayRoutes: LifecycleReplayRoutes;
@@ -487,6 +491,7 @@ export class ForegroundServer {
     this.#evalLifecycle = options.evalLifecycle;
     this.#eventHub = options.eventHub;
     this.#host = host;
+    this.#hostMcpRoutes = options.hostMcp;
     this.instanceId = instanceId;
     this.#mcpAppPreviews = options.mcpAppPreviews;
     this.#now = options.now ?? (() => new Date());
@@ -682,6 +687,7 @@ export class ForegroundServer {
 
   async #release(): Promise<readonly ForegroundServerCloseFailure[]> {
     this.#mcpAppRoutes.close();
+    this.#hostMcpRoutes?.close();
     this.#mcpSessionRoutes.close();
     this.#runtimeMcpRoutes.close();
     this.#runtimeRoutes.close();
@@ -773,6 +779,7 @@ export class ForegroundServer {
     }
     const pathname = new URL(request.url ?? '/', this.url).pathname;
     const method = request.method ?? 'GET';
+    if (await this.#hostMcpRoutes?.handle(request, response)) return;
     if (pathname === '/mcp') {
       if (this.#agentApi === undefined) return responseDiagnostic(response, diagnostic('AB8007', 'Route was not found.', 404));
       this.#assertAgentApiOrigin(request);

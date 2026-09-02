@@ -17,6 +17,7 @@ import {
   HostDiscoveryService,
   type HostDiscoveryServiceOptions,
 } from './playground/host-discovery-service.ts';
+import { HostMcpRoutes } from './host-mcp-routes.ts';
 import { LifecycleReplayService } from './playground/lifecycle-replay-service.ts';
 import {
   McpProbeService,
@@ -506,6 +507,7 @@ const withMcpSessionLifecycle = (
       runtimeResources: { clientSurfaces, runtime },
     });
   },
+  publishServerUrl: (url: string) => coordinator.publishServerUrl(url),
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: async () => {
     await coordinator.start();
@@ -710,6 +712,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     registry,
     traceSink: createMcpDevLogTraceSink(logs),
   });
+  const hostMcp = new HostMcpRoutes({ epochStore, eventHub, mcpSessions });
   const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry });
   const preparedBundle = () => {
     const prepared = latestValidPreparedProject;
@@ -826,6 +829,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     eventHub,
     hookPlayground,
     hostDiscovery,
+    hostMcp,
     inspector,
     lifecycleReplay,
     logs,
