@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,8 +7,23 @@ export const rstestWorkerId = (): string => process.env['RSTEST_WORKER_ID'] ?? '
 
 const hostTemporaryRoot = tmpdir();
 
+export const rstestWorkerRootPath = (
+  temporaryRoot: string,
+  workerId: string,
+  platform: NodeJS.Platform = process.platform,
+): string => {
+  if (platform === 'win32') return join(temporaryRoot, 'agent-bundle-rstest-w' + workerId);
+  const hash = createHash('sha256')
+    .update(temporaryRoot, 'utf8')
+    .update('\0', 'utf8')
+    .update(workerId, 'utf8')
+    .digest('hex')
+    .slice(0, 16);
+  return join('/tmp', `ab-rstest-${hash}`);
+};
+
 export const rstestWorkerRoot = (): string => {
-  const root = join(hostTemporaryRoot, 'agent-bundle-rstest-w' + rstestWorkerId());
+  const root = rstestWorkerRootPath(hostTemporaryRoot, rstestWorkerId());
   mkdirSync(root, { recursive: true });
   return root;
 };
