@@ -16,6 +16,8 @@ import { ComparisonsPage } from './comparisons/comparisons-page.tsx';
 import { EvalClient } from './evals/eval-client.ts';
 import { EvalsPage } from './evals/evals-page.tsx';
 import { ArtifactsPage } from './artifacts/artifacts-page.tsx';
+import { DiscoveryClient } from './discovery/discovery-client.ts';
+import { DiscoveryPage } from './discovery/discovery-page.tsx';
 import { HookClient } from './hooks/hook-client.ts';
 import { HooksPage } from './hooks/hooks-page.tsx';
 import { LifecycleClient } from './lifecycles/lifecycle-client.ts';
@@ -342,6 +344,7 @@ const navigationItems: readonly Readonly<{ glyph: string; label: string; page: W
   { glyph: '⌘', label: 'Skills', page: 'skills' },
   { glyph: '⌥', label: 'Hooks', page: 'hooks' },
   { glyph: '↻', label: 'Lifecycles', page: 'lifecycles' },
+  { glyph: '⌂', label: 'Hosts', page: 'hosts' },
   { glyph: '⌁', label: 'MCP playground', page: 'mcp' },
   { glyph: '◫', label: 'Runtime', page: 'runtime' },
   { glyph: '▤', label: 'Artifacts', page: 'artifacts' },
@@ -681,6 +684,17 @@ const LifecyclesScreen = ({ connectionError, lifecycleClient, manifestDigest, on
   <LifecyclesPage client={lifecycleClient} manifestDigest={manifestDigest} />
 </WorkbenchScreen>;
 
+const HostsScreen = ({ connectionError, discoveryClient, manifestDigest, onNavigate, pages, runtimeDiagnostic }: {
+  readonly connectionError?: string;
+  readonly discoveryClient: DiscoveryClient;
+  readonly manifestDigest?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly pages: ReadonlySet<WorkbenchPage>;
+  readonly runtimeDiagnostic: string | undefined;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hosts" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
+  <DiscoveryPage client={discoveryClient} manifestDigest={manifestDigest} />
+</WorkbenchScreen>;
+
 const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, initialToolPrefill, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, pages, registerPreviewClose, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly artifactClient: ArtifactClient;
@@ -812,6 +826,7 @@ const Workbench = () => {
   const resetRuntimeInstance = useRef<() => void>(() => undefined);
   const artifactClient = useRef<ArtifactClient | undefined>(undefined);
   const comparisonClient = useRef<ComparisonClient | undefined>(undefined);
+  const discoveryClient = useRef<DiscoveryClient | undefined>(undefined);
   const evalClient = useRef<EvalClient | undefined>(undefined);
   const hookClient = useRef<HookClient | undefined>(undefined);
   const lifecycleClient = useRef<LifecycleClient | undefined>(undefined);
@@ -890,6 +905,7 @@ const Workbench = () => {
   if (runtimeClient.current === undefined) runtimeClient.current = new RuntimeClient(foregroundClient);
   if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient({ foreground: foregroundClient });
   if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient({ foreground: foregroundClient });
+  if (discoveryClient.current === undefined) discoveryClient.current = new DiscoveryClient({ foreground: foregroundClient });
   if (evalClient.current === undefined) evalClient.current = new EvalClient({ foreground: foregroundClient });
   if (hookClient.current === undefined) hookClient.current = new HookClient({ foreground: foregroundClient });
   if (lifecycleClient.current === undefined) lifecycleClient.current = new LifecycleClient({ foreground: foregroundClient });
@@ -909,6 +925,7 @@ const Workbench = () => {
   const capabilityPages = capabilities?.pages ?? generalWorkbenchPages;
   const pages = useMemo<ReadonlySet<WorkbenchPage>>(() => Object.freeze(new Set<WorkbenchPage>([
     ...capabilityPages,
+    'hosts',
     ...(runtimeAvailable ? ['runtime' as const] : []),
   ])), [capabilityPages, runtimeAvailable]);
   const pagesRef = useRef(pages);
@@ -1459,6 +1476,16 @@ const Workbench = () => {
         connectionError={connectionError}
         lifecycleClient={lifecycleClient.current}
         manifestDigest={capabilities!.routes.digest}
+        onNavigate={navigate}
+        pages={pages}
+        runtimeDiagnostic={runtimeError}
+      />);
+    }
+    if (page === 'hosts') {
+      return withConnectionGate(<HostsScreen
+        connectionError={connectionError}
+        discoveryClient={discoveryClient.current}
+        manifestDigest={capabilities?.routes.digest}
         onNavigate={navigate}
         pages={pages}
         runtimeDiagnostic={runtimeError}
