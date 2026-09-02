@@ -61,6 +61,14 @@ const attemptSchema = z.object({
   invocationId: z.string().min(1),
 }).strict().readonly();
 
+const exposureSchema = z.object({
+  channel: z.literal('mcp-inbox'),
+  count: z.number().int().positive(),
+  firstAt: z.string().min(1),
+  lastAt: z.string().min(1),
+  lastInvocationId: z.string().min(1),
+}).strict().readonly();
+
 const noticeSchema = z.object({
   attempts: z.array(attemptSchema).readonly(),
   content: documentSchema,
@@ -68,6 +76,7 @@ const noticeSchema = z.object({
   dedupeKey: z.string().min(1).optional(),
   expiredAt: z.string().min(1).optional(),
   expiresAt: z.string().min(1).optional(),
+  exposure: exposureSchema.optional(),
   id: z.string().min(1),
   priority: z.enum(['low', 'normal', 'high']),
   recipient: recipientSchema,
@@ -88,6 +97,12 @@ export const agentNoticeEventSchemas = {
     invocationId: z.string().min(1),
     principal: principalSchema,
     unavailableIds: z.array(z.string().min(1)),
+  }).strict(),
+  exposed: z.object({
+    at: z.string().min(1),
+    channel: z.literal('mcp-inbox'),
+    invocationId: z.string().min(1),
+    noticeIds: z.array(z.string().min(1)),
   }).strict(),
   expired: z.object({
     at: z.string().min(1),
@@ -211,6 +226,40 @@ const transitionAdmission = (
   }
 };
 
+const transitionExposure = (
+  notice: AgentNotice,
+  input: {
+    readonly at: string;
+    readonly invocationId: string;
+    readonly noticeIds: ReadonlySet<string>;
+  },
+): AgentNotice => {
+  switch (notice.state) {
+    case 'pending': {
+      if (!input.noticeIds.has(notice.id)) return notice;
+      return Object.freeze({
+        ...notice,
+        exposure: Object.freeze({
+          channel: 'mcp-inbox' as const,
+          count: (notice.exposure?.count ?? 0) + 1,
+          firstAt: notice.exposure?.firstAt ?? input.at,
+          lastAt: input.at,
+          lastInvocationId: input.invocationId,
+        }),
+      });
+    }
+    case 'attempted':
+    case 'expired':
+    case 'unavailable':
+    case 'withdrawn':
+      return notice;
+    default: {
+      const exhaustive: never = notice.state;
+      return exhaustive;
+    }
+  }
+};
+
 export const agentNoticeStateDefinition = (
   lifetime: AgentStateLifetime = 'workspace-durable',
 ): AgentStateDefinition<AgentNoticeLedgerState, typeof agentNoticeEventSchemas> =>
@@ -249,6 +298,16 @@ export const agentNoticeStateDefinition = (
               invocationId: event.payload.invocationId,
               principal: event.payload.principal,
               unavailableIds,
+            })),
+          };
+        }
+        case 'exposed': {
+          const noticeIds = new Set(event.payload.noticeIds);
+          return {
+            notices: state.notices.map((notice) => transitionExposure(notice, {
+              at: event.payload.at,
+              invocationId: event.payload.invocationId,
+              noticeIds,
             })),
           };
         }

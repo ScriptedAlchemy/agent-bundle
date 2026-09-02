@@ -189,6 +189,71 @@ describe('the in-memory MCP projection level', () => {
     }
   });
 
+  it('injects the recipient-scoped notice inbox only for stateful servers', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-inbox-'));
+    const sessionIdentity = (sessionId: string) => ({
+      source: 'native' as const,
+      state: 'available' as const,
+      value: { sessionId },
+    });
+    try {
+      const first = await openInMemoryMcpServer({
+        context: { session: sessionIdentity('s1') },
+        state: {
+          definition: stateDefinition,
+          driver: createSqliteStateDriver({ root }),
+        },
+      });
+      try {
+        await first.client.callTool({
+          arguments: { message: 'recipient notice', recipientSession: 's1' },
+          name: 'publish-notice',
+        });
+        const resources = await first.client.listResources();
+        expect(resources.resources.map((resource) => resource.uri)).toContain('agent-bundle://notices/inbox');
+        const read = await first.client.readResource({ uri: 'agent-bundle://notices/inbox' });
+        const content = read.contents[0];
+        if (content === undefined || !('text' in content)) throw new TypeError('Expected text inbox content');
+        const projection = JSON.parse(content.text) as {
+          notices: readonly Readonly<Record<string, unknown>>[];
+        };
+        expect(projection.notices).toEqual([expect.objectContaining({
+          content: {
+            root: { kind: 'text', text: 'recipient notice' },
+            status: 'success',
+            version: 1,
+          },
+          exposure: expect.objectContaining({ channel: 'mcp-inbox', count: 1 }),
+          state: 'pending',
+        })]);
+      } finally {
+        await first.close();
+      }
+
+      for (const context of [{ session: sessionIdentity('s2') }, {}]) {
+        const other = await openInMemoryMcpServer({
+          context,
+          state: {
+            definition: stateDefinition,
+            driver: createSqliteStateDriver({ root }),
+          },
+        });
+        try {
+          const read = await other.client.readResource({ uri: 'agent-bundle://notices/inbox' });
+          const content = read.contents[0];
+          if (content === undefined || !('text' in content)) throw new TypeError('Expected text inbox content');
+          expect(JSON.parse(content.text)).toEqual({ notices: [] });
+        } finally {
+          await other.close();
+        }
+      }
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+
+    expect((await listMcpSurface()).resources).not.toContain('agent-bundle://notices/inbox');
+  });
+
   it('leaves the browser App surface off the in-memory server', async () => {
     const surface = await listMcpSurface();
 

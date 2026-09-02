@@ -24,6 +24,8 @@ export const mcpEntryRuntimeSpecifier = 'agent-bundle/mcp-entry';
  */
 export const mcpServerRuntimeSpecifier = 'agent-bundle/mcp-server-runtime';
 
+const noticeInboxRuntimeSpecifier = '@agent-bundle/runtime/notices/inbox-route';
+
 /**
  * The on-disk location of one runtime module used as a bundler alias, so
  * generated entries inline it instead of leaving an `agent-bundle` import in
@@ -478,6 +480,16 @@ const routeRecords = (routes: readonly CompiledAgentRoute[]): readonly string[] 
   routes.map((route, index) =>
     `  ${JSON.stringify(route.id)}: Object.freeze({ config: ${stableJson(route.config)}, id: ${JSON.stringify(route.id)}, kind: ${JSON.stringify(route.kind)}, module: route${String(index)}, name: ${JSON.stringify(routeProtocolName(route))} }),`);
 
+const noticeInboxImport = (state: NormalizedStateDefinition | undefined): readonly string[] =>
+  state === undefined
+    ? []
+    : [`import * as noticeInboxRoute from ${JSON.stringify(noticeInboxRuntimeSpecifier)};`];
+
+const noticeInboxRecord = (state: NormalizedStateDefinition | undefined): readonly string[] =>
+  state === undefined
+    ? []
+    : ['  [noticeInboxRoute.AGENT_NOTICE_INBOX_ROUTE_ID]: noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute),'];
+
 const eventRouteImports = (
   routes: readonly NormalizedHook[],
   offset: number,
@@ -515,6 +527,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
     "import { runAgentRequest } from '@agent-bundle/runtime';",
     ...generatedStateImports(options.state, 'artifact'),
+    ...noticeInboxImport(options.state),
     ...routeImports(routes),
     ...eventRouteImports(eventRoutes, routes.length),
     ...providerImports(providers),
@@ -535,6 +548,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
       ]),
     'const routes = Object.freeze({',
     ...routeRecords(routes),
+    ...noticeInboxRecord(options.state),
     ...eventRouteRecords(eventRoutes, routes.length),
     '});',
     'const requests = new Map();',
@@ -615,8 +629,21 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
  * `config.uri` and a non-MCP route inside an MCP server are compile-time
  * defects: they must fail the build, not the first request.
  */
-const assertRegistrableMcpRoutes = (routes: readonly CompiledAgentRoute[]): void => {
+const assertRegistrableMcpRoutes = (
+  routes: readonly CompiledAgentRoute[],
+  injectNoticeInbox: boolean,
+): void => {
   for (const route of routes) {
+    if (injectNoticeInbox && routeProtocolName(route) === 'notice-inbox') {
+      throw new Error(
+        `Generated MCP route ${JSON.stringify(route.id)} uses the reserved protocol name "notice-inbox".`,
+      );
+    }
+    if (injectNoticeInbox && route.config['uri'] === 'agent-bundle://notices/inbox') {
+      throw new Error(
+        `Generated MCP route ${JSON.stringify(route.id)} uses the reserved URI "agent-bundle://notices/inbox".`,
+      );
+    }
     switch (route.kind) {
       case 'tool':
       case 'prompt':
@@ -653,7 +680,7 @@ const assertRegistrableMcpRoutes = (routes: readonly CompiledAgentRoute[]): void
  */
 export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOptions): string => {
   const routes = executableMcpRoutes(options.routes);
-  assertRegistrableMcpRoutes(routes);
+  assertRegistrableMcpRoutes(routes, options.state !== undefined);
   const artifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const hasEvents = (options.eventRoutes?.length ?? 0) > 0;
   return [
@@ -666,11 +693,13 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
         ]
       : []),
     "import mcpApps from 'agent-bundle/mcp-apps';",
+    ...noticeInboxImport(options.state),
     ...routeImports(routes),
     '',
     `const ARTIFACT_EPOCH = ${JSON.stringify(artifactEpoch)};`,
     'const routes = Object.freeze({',
     ...routeRecords(routes),
+    ...noticeInboxRecord(options.state),
     '});',
     '',
     ...(hasEvents

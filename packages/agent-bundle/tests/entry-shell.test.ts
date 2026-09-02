@@ -267,6 +267,42 @@ it('fails the build on an MCP route the generated server cannot register', () =>
     kind: 'cli',
     source: '/project/src/cli/migrate.tsx',
   }])).toThrow('non-MCP route');
+  expect(() => generate({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [{
+      config: {},
+      id: 'tool:curator/notice-inbox',
+      kind: 'tool',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/notice-inbox.tsx' },
+      source: '/project/src/mcp/curator/tools/notice-inbox.tsx',
+    }],
+    serverName: 'curator',
+    state: {
+      id: 'project/tasks',
+      lifetime: 'process',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
+      source: '/project/src/state.ts',
+    },
+    workerFile: 'mcp-curator-flight.mjs',
+  })).toThrow('reserved protocol name');
+  expect(() => generate({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [{
+      config: { uri: 'agent-bundle://notices/inbox' },
+      id: 'resource:curator/other',
+      kind: 'resource',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/resources/other.tsx' },
+      source: '/project/src/mcp/curator/resources/other.tsx',
+    }],
+    serverName: 'curator',
+    state: {
+      id: 'project/tasks',
+      lifetime: 'process',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
+      source: '/project/src/state.ts',
+    },
+    workerFile: 'mcp-curator-flight.mjs',
+  })).toThrow('reserved URI');
 });
 
 
@@ -407,8 +443,30 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(volatile).toContain("createGeneratedRuntimeState");
   expect(volatile).toContain('createMemoryStateDriver({ lifetime: "process" })');
   expect(volatile).toContain('noticeLedger');
+  expect(volatile).toContain('import * as noticeInboxRoute from "@agent-bundle/runtime/notices/inbox-route"');
+  expect(volatile).toContain('noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute)');
   expect(volatile).not.toContain('@agent-bundle/runtime/state/sqlite');
   expect(volatile).not.toContain('createSqliteStateDriver');
+  expect(stateless).not.toContain('@agent-bundle/runtime/notices/inbox-route');
+  expect(stateless).not.toContain('agent-bundle:notice-inbox');
+
+  const statelessEntry = entryShellModule.generatedRouteMcpEntrySource({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [route],
+    serverName: 'curator',
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+  expect(statelessEntry).not.toContain('@agent-bundle/runtime/notices/inbox-route');
+  expect(statelessEntry).not.toContain('agent-bundle:notice-inbox');
+  const volatileEntry = entryShellModule.generatedRouteMcpEntrySource({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [route],
+    serverName: 'curator',
+    state: state('process'),
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+  expect(volatileEntry).toContain('import * as noticeInboxRoute from "@agent-bundle/runtime/notices/inbox-route"');
+  expect(volatileEntry).toContain('noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute)');
 
   const durable = entryShellModule.generatedRouteFlightWorkerSource({
     ...base,
@@ -452,7 +510,16 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(volatileCli).not.toContain('@agent-bundle/runtime/state/sqlite');
   expect(volatileCli).toContain('await bindings.close()');
 
-  for (const generated of [stateless, volatile, durable, renderedWorker, statelessCli, volatileCli]) {
+  for (const generated of [
+    stateless,
+    volatile,
+    statelessEntry,
+    volatileEntry,
+    durable,
+    renderedWorker,
+    statelessCli,
+    volatileCli,
+  ]) {
     const transpiled = ts.transpileModule(generated, {
       compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
       reportDiagnostics: true,

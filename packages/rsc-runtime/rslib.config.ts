@@ -50,6 +50,21 @@ export default defineConfig({
     },
     {
       ...sharedLib,
+      // The generated MCP inbox resource is React-bearing and therefore stays
+      // separate from the lean notice ledger entry.
+      output: {
+        cleanDistPath: false,
+        externals: {
+          '../index.js': '../index.js',
+          './index.js': '../notices.js',
+        },
+      },
+      source: {
+        entry: { 'notices/inbox-route': './src/notices/inbox-route.ts' },
+      },
+    },
+    {
+      ...sharedLib,
       // The sqlite driver is its own entry so `node:sqlite` (and its
       // ExperimentalWarning) never loads for volatile-state or stateless
       // consumers. It imports the state entry's runtime instead of
