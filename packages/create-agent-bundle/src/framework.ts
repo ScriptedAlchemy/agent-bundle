@@ -90,6 +90,7 @@ const localTarballPackageName = async (packageSpec: string, baseDirectory: strin
   const path = resolve(baseDirectory, packageSpec.slice('file:'.length));
   try {
     const archive = await unzip(await readFile(path));
+    let packageName: string | undefined;
     for (let offset = 0; offset + tarBlockSize <= archive.length;) {
       const header = archive.subarray(offset, offset + tarBlockSize);
       if (isEndOfArchiveBlock(header)) break;
@@ -108,12 +109,17 @@ const localTarballPackageName = async (packageSpec: string, baseDirectory: strin
         const manifest = JSON.parse(archive.subarray(contentsOffset, contentsOffset + size).toString('utf8')) as {
           readonly name?: unknown;
         };
-        if (typeof manifest.name === 'string') return manifest.name;
-        throw new Error('Packed package manifest has no string name.');
+        if (typeof manifest.name !== 'string') {
+          throw new Error('Packed package manifest has no string name.');
+        }
+        packageName = manifest.name;
       }
       offset = contentsOffset + Math.ceil(size / tarBlockSize) * tarBlockSize;
     }
-    throw new Error('Packed package manifest was not found.');
+    if (packageName === undefined) {
+      throw new Error('Packed package manifest was not found.');
+    }
+    return packageName;
   } catch (error) {
     throw new UsageError(
       `Cannot inspect local package tarball "${packageSpec}": ${error instanceof Error ? error.message : String(error)}`,

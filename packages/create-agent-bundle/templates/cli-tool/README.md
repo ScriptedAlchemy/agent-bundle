@@ -45,6 +45,13 @@ Adopt the harness when the project grows a routed surface:
 
 - `src/cli/**` command routes make `invokeCli` / `cliJson` (the `cli-dispatch`
   level) meaningful — argv resolved and run through the routed CLI's own shell.
+  This template ships the conventional `src/cli.ts` entry (and a matching
+  `scripts` entry in `agent-bundle.config.ts`). Adding command routes while
+  that file remains triggers `AB4801`. Before creating `src/cli/**` modules,
+  remove `src/cli.ts`, drop the `./src/cli.ts` script entry, and port any
+  behavior into route modules — routed commands compile into
+  `dist/bin/<plugin-name>.js` on their own. To keep the single-file CLI
+  instead, set `routes: { cli: 'conventional' }` and do not add `src/cli/**`.
 - `src/mcp/<server>/**` route modules make `renderRoute` (`route-unit`) and
   `invokeMcpTool` (`mcp-in-memory`) meaningful.
 
