@@ -184,13 +184,19 @@ export interface ClaudeDependencyConfig {
 export interface ClaudeHostConfig extends AgentBundleHostConfig {
   /** Project-authored directory copied to the plugin-root `bin/` executable convention. */
   readonly bin?: string;
+  /** Whether a newly installed plugin starts enabled when no stronger host state exists. */
+  readonly defaultEnabled?: boolean;
   /**
    * Plugins Claude Code resolves and auto-installs. A bare name uses the
    * declaring plugin's marketplace; the object form adds a semver range or an
    * explicitly allowlisted cross-marketplace source.
    */
   readonly dependencies?: readonly (string | ClaudeDependencyConfig)[];
+  /** Human-readable plugin name shown in Claude Code UI surfaces. */
+  readonly displayName?: string;
   readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
+  /** Free-form catalog or entitlement data that Claude Code preserves but does not interpret. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly settings?: ClaudeSettingsConfig;
   /** Enable-time options copied into `.claude-plugin/plugin.json`. */
   readonly userConfig?: Readonly<Record<string, ClaudeUserConfigOption>>;
@@ -247,7 +253,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.9.0',
+  adapterRevision: '1.10.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -968,6 +974,77 @@ const planClaudeUserConfig = (model: NormalizedPlugin): ClaudeUserConfigPlan => 
   };
 };
 
+interface ClaudeManifestMetadataPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Readonly<Record<string, unknown>>;
+  readonly sourceInputs: readonly string[];
+}
+
+const noManifestMetadataPlan: ClaudeManifestMetadataPlan = deepFreeze({
+  diagnostics: [],
+  sourceInputs: [],
+});
+
+const manifestMetadataDiagnostic = (
+  code: string,
+  message: string,
+  recovery: string,
+): Diagnostic => ({
+  ...errorDiagnostic(code, message),
+  recovery,
+});
+
+/**
+ * Validates Claude-only manifest metadata fields from the normalized
+ * extension envelope. Normalization already guarantees strict finite JSON;
+ * this boundary additionally requires metadata's top level to be a plain
+ * object because Claude Code only warns and ignores arrays or null.
+ */
+const planClaudeManifestMetadata = (model: NormalizedPlugin): ClaudeManifestMetadataPlan => {
+  const extension = model.extensions[claudeName];
+  if (extension === undefined || !isDataRecord(extension.value)) return noManifestMetadataPlan;
+  const displayName = extension.value['displayName'];
+  const metadataValue = extension.value['metadata'];
+  const defaultEnabled = extension.value['defaultEnabled'];
+  if (displayName === undefined && metadataValue === undefined && defaultEnabled === undefined) {
+    return noManifestMetadataPlan;
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  if (displayName !== undefined && (typeof displayName !== 'string' || displayName.trim().length === 0)) {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'claude.manifest.displayName.invalid',
+      'Claude displayName must be a nonempty string after trimming whitespace.',
+      'Set claude.displayName to the human-readable plugin name shown in Claude Code, or remove it to fall back to plugin.name.',
+    ));
+  }
+  if (metadataValue !== undefined && !isPlainDataRecord(metadataValue)) {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'claude.manifest.metadata.invalid',
+      'Claude metadata must be a plain JSON object; arrays and null are not accepted.',
+      'Set claude.metadata to a plain JSON-serializable object, or remove it.',
+    ));
+  }
+  if (defaultEnabled !== undefined && typeof defaultEnabled !== 'boolean') {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'claude.manifest.defaultEnabled.invalid',
+      'Claude defaultEnabled must be a boolean.',
+      'Set claude.defaultEnabled to true or false, or remove it to use Claude Code\'s default of true.',
+    ));
+  }
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (diagnostics.length > 0) return { diagnostics, sourceInputs: inputs };
+  return {
+    diagnostics,
+    document: Object.freeze({
+      ...(defaultEnabled === undefined ? {} : { defaultEnabled }),
+      ...(displayName === undefined ? {} : { displayName }),
+      ...(metadataValue === undefined ? {} : { metadata: metadataValue }),
+    }),
+    sourceInputs: inputs,
+  };
+};
+
 interface ClaudeBinPlan {
   readonly diagnostics: readonly Diagnostic[];
   readonly entries: readonly TargetArtifactCopy[];
@@ -1226,6 +1303,8 @@ export const planClaudeArtifacts = (
   diagnostics.push(...lsp.diagnostics);
   const userConfig = planClaudeUserConfig(model);
   diagnostics.push(...userConfig.diagnostics);
+  const manifestMetadata = planClaudeManifestMetadata(model);
+  diagnostics.push(...manifestMetadata.diagnostics);
   const bin = planClaudeBin(model, targetName);
   diagnostics.push(...bin.diagnostics);
   const settings = planClaudeSettings(model);
@@ -1244,6 +1323,7 @@ export const planClaudeArtifacts = (
 
   const plugin = {
     author: { name: model.metadata.name },
+    ...manifestMetadata.document,
     ...(dependencies.document === undefined ? {} : { dependencies: dependencies.document }),
     description: model.metadata.description ?? model.metadata.name,
     ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
@@ -1284,7 +1364,11 @@ export const planClaudeArtifacts = (
   }
 
   const basePlan = standardPluginArtifactPlan({
-    additionalPluginSourceInputs: sourceInputs(...userConfig.sourceInputs, ...dependencies.sourceInputs),
+    additionalPluginSourceInputs: sourceInputs(
+      ...userConfig.sourceInputs,
+      ...manifestMetadata.sourceInputs,
+      ...dependencies.sourceInputs,
+    ),
     diagnostics,
     ...(hostDocuments.length === 0 ? {} : { hostDocuments }),
     hookDocument,
@@ -1356,6 +1440,25 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
         capabilityTable.plugin.lsp.manifestField === 'lspServers',
       evidence,
       'The pinned Claude plugin contract does not document the plugin-root .lsp.json LSP surface.',
+    ),
+    manifestMetadata: capabilityStateFromSupport(
+      capabilityTable.plugin.metadata.defaultEnabled.default &&
+        capabilityTable.plugin.metadata.defaultEnabled.field &&
+        capabilityTable.plugin.metadata.displayName.fallback === 'name' &&
+        capabilityTable.plugin.metadata.displayName.field &&
+        capabilityTable.plugin.metadata.freeform.field &&
+        capabilityTable.plugin.metadata.freeform.hostReadsValues === false,
+      evidence,
+      'The pinned Claude plugin contract does not document displayName, metadata, and defaultEnabled manifest fields.',
+    ),
+    manifestPaths: capabilityStateFromSupport(
+      capabilityTable.plugin.paths.addsToDefault.includes('skills') &&
+        capabilityTable.plugin.paths.replacesDefault.includes('commands') &&
+        capabilityTable.plugin.paths.relativePrefix === './' &&
+        capabilityTable.plugin.paths.skillsRootException === '.' &&
+        capabilityTable.plugin.paths.skillsRootExceptionSince === '2.1.221',
+      evidence,
+      'The pinned Claude plugin contract does not document custom component path fields and their replace-versus-add rules.',
     ),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,

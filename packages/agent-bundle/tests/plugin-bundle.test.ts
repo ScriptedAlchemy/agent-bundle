@@ -310,6 +310,44 @@ it('emits Claude userConfig from the unified plugin target only into the Claude 
     .toContain('/workspace/claude.config.ts');
 });
 
+it('emits Claude manifest metadata from the unified target only into the Claude manifest', () => {
+  const model = {
+    ...bundleModel,
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config' as const, sourcePath: '/workspace/claude-metadata.config.ts' },
+        target: 'claude',
+        value: {
+          defaultEnabled: false,
+          displayName: 'Bundle Example',
+          metadata: { catalog: 'internal' },
+        },
+      },
+    },
+  } satisfies NormalizedPlugin;
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).toMatchObject({
+    defaultEnabled: false,
+    displayName: 'Bundle Example',
+    metadata: { catalog: 'internal' },
+  });
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('defaultEnabled');
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('displayName');
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('metadata');
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('defaultEnabled');
+  // Cursor owns an independent generic displayName and must not inherit the
+  // Claude extension's human-readable value.
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toHaveProperty('displayName', 'bundle-example');
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('metadata');
+  expect(plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json')?.sourceInputs)
+    .toContain('/workspace/claude-metadata.config.ts');
+});
+
 it('emits the Claude bin directory from the unified plugin target', () => {
   const model: NormalizedPlugin = {
     ...bundleModel,

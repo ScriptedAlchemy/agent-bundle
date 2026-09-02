@@ -103,8 +103,54 @@
       "transports": ["socket", "stdio"],
       "vendorsServerBinary": false
     },
+    "metadata": {
+      "defaultEnabled": {
+        "default": true,
+        "dependencyRequirementPrecedence": true,
+        "field": true,
+        "marketplaceEntryPrecedence": true,
+        "persistedEnabledPluginsPrecedence": true
+      },
+      "displayName": {
+        "fallback": "name",
+        "field": true
+      },
+      "freeform": {
+        "field": true,
+        "hostReadsValues": false,
+        "nonObjectHandling": "warning-and-ignore",
+        "strictValidation": "failure"
+      },
+      "standardFields": [
+        "$schema",
+        "author",
+        "description",
+        "homepage",
+        "keywords",
+        "license",
+        "repository",
+        "version"
+      ]
+    },
     "manifest": ".claude-plugin/plugin.json",
     "marketplace": ".claude-plugin/marketplace.json",
+    "paths": {
+      "addsToDefault": ["skills"],
+      "fieldTypes": ["array", "string"],
+      "ignoredDefaultFolderWarning": true,
+      "marketplaceRootSkillsSubdirectoriesReplaceDefault": true,
+      "relativePrefix": "./",
+      "replacesDefault": [
+        "agents",
+        "commands",
+        "experimental.monitors",
+        "experimental.themes",
+        "outputStyles",
+        "workflows"
+      ],
+      "skillsRootException": ".",
+      "skillsRootExceptionSince": "2.1.221"
+    },
     "settings": {
       "config": "settings.json",
       "placeholderSubstitution": false,
@@ -173,7 +219,14 @@
       "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies requires cross-marketplace targets in `allowCrossMarketplaceDependenciesOn` on the root marketplace; only the root allowlist is consulted, trust does not chain, and users may manually install a blocked dependency first.",
       "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies documents intersection of constraints from multiple dependents, constrained auto-update, transitive enable, disable refusal while depended upon, release of constraints after uninstall, and pruning only auto-installed orphan dependencies.",
       "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies exposes dependency-unsatisfied, range-conflict, dependency-version-unsatisfied, and no-matching-tag in `claude plugin list --json` errors.",
-      "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted plugin manifest declaring one bare dependency and one `{name, version}` dependency object and prints \"Validation passed\" (host-adapters.native.test.ts)."
+      "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted plugin manifest declaring one bare dependency and one `{name, version}` dependency object and prints \"Validation passed\" (host-adapters.native.test.ts).",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents `displayName` as the human-readable UI name that falls back to `name`, `metadata` as a free-form object Claude Code does not read, and `defaultEnabled` as the boolean fallback enabled state whose default is true. The same metadata table documents `$schema`, version, description, author, homepage, repository, license, and keywords.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents that an existing `enabledPlugins` user setting and an active dependency requirement both take precedence over plugin.json `defaultEnabled`, while a marketplace entry's `defaultEnabled` takes precedence over the plugin manifest value.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents that wrong types make most manifest fields fail plugin loading, but non-object `experimental` and `metadata` values are ignored with a `claude plugin validate` warning; `--strict` promotes warnings to failure. Before v2.1.222, `metadata` was treated as unrecognized.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents custom component path fields as string or array values: commands, agents, workflows, outputStyles, experimental.themes, and experimental.monitors replace their default scans, while skills adds to the default scan. Keeping a replaced default requires listing it explicitly, for example `\"commands\": [\"./commands/\", \"./extras/\"]`.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference requires component paths to be relative to the plugin root and start with `./`, except skills also accepts `.` starting in v2.1.221; before that version `.` failed manifest validation. A marketplace-root source that declares specific skills subdirectories replaces the default skills scan.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents that a default folder shadowed by a replacing manifest path still allows the plugin to load but warns in `claude plugin list` and the `/plugin` detail view. Its file-locations table defines commands/ as flat Markdown Skill files and recommends skills/ for new plugins; Agent Bundle already emits flat `.md` commands in the canonical commands/ directory and deliberately leaves custom-path discovery to the host.",
+      "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted plugin manifest containing displayName, object metadata, and defaultEnabled, and separately accepts `\"commands\": \"./custom/deploy.md\"` when that flat Markdown file exists and no default commands/ directory exists (host-adapters.native.test.ts). These positive probes establish acceptance; they do not claim that the CLI checks custom-path existence or contents."
     ]
   }
 }
