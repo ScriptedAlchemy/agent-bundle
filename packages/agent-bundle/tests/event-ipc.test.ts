@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
 import { dirname } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { Effect } from 'effect';
 import { expect, it } from 'effect-rstest';
@@ -20,15 +21,24 @@ interface EndpointClaimOwner {
   readonly pid: number;
 }
 
-const linuxProcessStartTime = async (pid: number): Promise<string> => {
+interface LinuxProcessStat {
+  readonly startTime: string;
+  readonly state: string;
+}
+
+const linuxProcessStat = async (pid: number): Promise<LinuxProcessStat> => {
   const processStat = await readFile(`/proc/${pid}/stat`, 'utf8');
   const commEnd = processStat.lastIndexOf(')');
   if (commEnd === -1) throw new Error(`Unable to parse process stat for pid ${pid}.`);
   const fieldsAfterComm = processStat.slice(commEnd + 1).trim().split(/\s+/u);
+  const state = fieldsAfterComm[0];
   const startTime = fieldsAfterComm[19];
+  if (state === undefined) throw new Error(`Process stat for pid ${pid} has no state.`);
   if (startTime === undefined) throw new Error(`Process stat for pid ${pid} has no start time.`);
-  return startTime;
+  return { startTime, state };
 };
+
+const linuxProcessStartTime = async (pid: number): Promise<string> => (await linuxProcessStat(pid)).startTime;
 
 const currentProcessOwner = async (): Promise<EndpointClaimOwner> => ({
   ...(process.platform === 'linux' ? { linuxStartTime: await linuxProcessStartTime(process.pid) } : {}),
@@ -65,6 +75,37 @@ const deadChildOwner = async (): Promise<EndpointClaimOwner> => {
   const { child, owner } = await spawnChildOwner();
   await killChild(child);
   return owner;
+};
+
+const spawnZombieOwner = async (): Promise<Readonly<{
+  child: ChildProcess;
+  owner: EndpointClaimOwner;
+}>> => {
+  const child = spawn('sh', ['-c', 'p=$$; { while [ "$(cat /proc/$p/comm 2>/dev/null)" != "sleep" ]; do :; done; } & echo $!; exec sleep 300'], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const pidLine = new Promise<string>((resolve, reject) => {
+    child.stdout?.once('data', (chunk: Buffer) => resolve(chunk.toString('utf8').trim()));
+    child.stdout?.once('error', reject);
+  });
+  await once(child, 'spawn');
+  const zombiePid = Number(await pidLine);
+  if (!Number.isInteger(zombiePid) || zombiePid <= 0) {
+    await killChild(child);
+    throw new Error('Zombie child pid was not reported.');
+  }
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const processStat = await linuxProcessStat(zombiePid).catch(() => undefined);
+    if (processStat?.state === 'Z') {
+      return {
+        child,
+        owner: { linuxStartTime: processStat.startTime, pid: zombiePid },
+      };
+    }
+    await delay(10);
+  }
+  await killChild(child);
+  throw new Error(`Process ${zombiePid} did not become a zombie.`);
 };
 
 const writeEndpointClaim = async (endpointId: string, contents: string): Promise<string> => {
@@ -297,6 +338,262 @@ it.live('reclaims an endpoint claim whose owner process was killed', () => Effec
     (server) => Effect.promise(() => server.close()),
   );
   expect(server.endpoint).toBe(eventRuntimeEndpoint(endpointId));
+  yield* Effect.promise(() => rm(claimPath, { force: true }));
+}));
+
+it.live('serializes concurrent reclamation before either contender can unlink a replacement claim', () => Effect.gen(function*() {
+  if (process.platform !== 'linux') return;
+  const endpointId = `event-ipc-reclaim-race-${crypto.randomUUID()}`;
+  const endpoint = yield* Effect.acquireUseRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => undefined,
+    })),
+    (server) => Effect.succeed(server.endpoint),
+    (server) => Effect.promise(() => server.close()),
+  );
+  yield* Effect.promise(() => writeFile(endpoint, 'stale socket'));
+  const deadOwner = yield* Effect.promise(deadChildOwner);
+  const claimPath = yield* Effect.promise(() => writeEndpointClaim(endpointId, JSON.stringify(deadOwner)));
+  const originalClaim = yield* Effect.promise(() => stat(claimPath));
+
+  let firstSnapshotIdentity: Readonly<{ readonly device: number; readonly inode: number }> | undefined;
+  let markFirstSnapshot!: () => void;
+  let releaseFirstSnapshot!: () => void;
+  let markFirstClaimed!: () => void;
+  let releaseFirstClaim!: () => void;
+  const firstSnapshot = new Promise<void>((resolve) => { markFirstSnapshot = resolve; });
+  const firstCanReclaim = new Promise<void>((resolve) => { releaseFirstSnapshot = resolve; });
+  const firstClaimed = new Promise<void>((resolve) => { markFirstClaimed = resolve; });
+  const firstCanBind = new Promise<void>((resolve) => { releaseFirstClaim = resolve; });
+  const firstServer = createEventRuntimeServerForTest({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }, {
+    afterEndpointClaimAcquired: async () => {
+      markFirstClaimed();
+      await firstCanBind;
+    },
+    afterEndpointClaimReclamationSnapshot: async (identity) => {
+      firstSnapshotIdentity = identity;
+      markFirstSnapshot();
+      await firstCanReclaim;
+    },
+  });
+
+  let secondSnapshotIdentity: Readonly<{ readonly device: number; readonly inode: number }> | undefined;
+  let markSecondSnapshot!: () => void;
+  let releaseSecondSnapshot!: () => void;
+  let markSecondReclamation!: () => void;
+  let secondRemovedClaim: boolean | undefined;
+  const secondSnapshot = new Promise<void>((resolve) => { markSecondSnapshot = resolve; });
+  const secondCanReclaim = new Promise<void>((resolve) => { releaseSecondSnapshot = resolve; });
+  const secondReclamation = new Promise<void>((resolve) => { markSecondReclamation = resolve; });
+  const secondServer = createEventRuntimeServerForTest({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'second' }),
+  }, {
+    afterEndpointClaimReclamation: async (removed) => {
+      secondRemovedClaim = removed;
+      markSecondReclamation();
+    },
+    afterEndpointClaimReclamationSnapshot: async (identity) => {
+      secondSnapshotIdentity = identity;
+      markSecondSnapshot();
+      await secondCanReclaim;
+    },
+  });
+
+  yield* Effect.promise(() => Promise.all([firstSnapshot, secondSnapshot]));
+  expect(firstSnapshotIdentity).toEqual({ device: originalClaim.dev, inode: originalClaim.ino });
+  expect(secondSnapshotIdentity).toEqual(firstSnapshotIdentity);
+
+  releaseFirstSnapshot();
+  yield* Effect.promise(() => firstClaimed);
+  const replacementBeforeSecond = yield* Effect.promise(() => readFile(claimPath, 'utf8'));
+  expect(JSON.parse(replacementBeforeSecond)).toEqual(yield* Effect.promise(currentProcessOwner));
+
+  releaseSecondSnapshot();
+  yield* Effect.promise(() => secondReclamation);
+  expect(secondRemovedClaim).toBe(false);
+  const replacementAfterSecond = yield* Effect.promise(() => readFile(claimPath, 'utf8'));
+  expect(replacementAfterSecond).toBe(replacementBeforeSecond);
+
+  releaseFirstClaim();
+  const winner = yield* Effect.acquireRelease(
+    Effect.promise(() => firstServer),
+    (server) => Effect.promise(() => server.close()),
+  );
+  const loser = yield* Effect.promise(async () => {
+    try {
+      return { server: await secondServer, status: 'opened' as const };
+    } catch (error) {
+      return { error, status: 'failed' as const };
+    }
+  });
+  if (loser.status === 'opened') {
+    yield* Effect.promise(() => loser.server.close());
+    expect(loser.status).toBe('failed');
+    return;
+  }
+  expect(loser.error).toMatchObject({
+    code: 'runtime-failed',
+    message: expect.stringMatching(/already has a live server/u),
+    name: EventRuntimeTransportError.name,
+  });
+  const response = yield* Effect.promise(() => requestEventRuntime({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    event: 'session/start',
+    hostContractRevision: '2.1.250',
+    native: { hook_event_name: 'SessionStart' },
+    signal: new AbortController().signal,
+    target: 'claude',
+    timeoutMs: 1_000,
+  }));
+  expect(response).toEqual({ owner: 'first' });
+  expect(winner.endpoint).toBe(endpoint);
+}));
+
+it.live('excludes a second orphan-claim remover while the recovery gate is held', () => Effect.gen(function*() {
+  if (process.platform !== 'linux') return;
+  const endpointId = `event-ipc-recovery-gate-${crypto.randomUUID()}`;
+  const endpoint = yield* Effect.acquireUseRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => undefined,
+    })),
+    (server) => Effect.succeed(server.endpoint),
+    (server) => Effect.promise(() => server.close()),
+  );
+  yield* Effect.promise(() => writeFile(endpoint, 'stale socket'));
+  const deadOwner = yield* Effect.promise(deadChildOwner);
+  const claimPath = yield* Effect.promise(() => writeEndpointClaim(endpointId, JSON.stringify(deadOwner)));
+  const originalClaim = yield* Effect.promise(() => stat(claimPath));
+
+  let markFirstSnapshot!: () => void;
+  let releaseFirstSnapshot!: () => void;
+  let markFirstInsideGate!: () => void;
+  let releaseFirstInsideGate!: () => void;
+  const firstSnapshot = new Promise<void>((resolve) => { markFirstSnapshot = resolve; });
+  const firstCanEnterGate = new Promise<void>((resolve) => { releaseFirstSnapshot = resolve; });
+  const firstInsideGate = new Promise<void>((resolve) => { markFirstInsideGate = resolve; });
+  const firstCanRemove = new Promise<void>((resolve) => { releaseFirstInsideGate = resolve; });
+  const firstServer = createEventRuntimeServerForTest({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }, {
+    afterEndpointClaimReclamationSnapshot: async () => {
+      markFirstSnapshot();
+      await firstCanEnterGate;
+    },
+    beforeEndpointClaimRemoval: async () => {
+      markFirstInsideGate();
+      await firstCanRemove;
+    },
+  });
+
+  let markSecondSnapshot!: () => void;
+  let releaseSecondSnapshot!: () => void;
+  let markSecondReclamation!: () => void;
+  let releaseSecondReclamation!: () => void;
+  const secondRemovalResults: boolean[] = [];
+  const secondSnapshot = new Promise<void>((resolve) => { markSecondSnapshot = resolve; });
+  const secondCanAttemptReclamation = new Promise<void>((resolve) => { releaseSecondSnapshot = resolve; });
+  const secondReclamation = new Promise<void>((resolve) => { markSecondReclamation = resolve; });
+  const secondCanRetry = new Promise<void>((resolve) => { releaseSecondReclamation = resolve; });
+  const secondServer = createEventRuntimeServerForTest({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'second' }),
+  }, {
+    afterEndpointClaimReclamation: async (removed) => {
+      secondRemovalResults.push(removed);
+      markSecondReclamation();
+      await secondCanRetry;
+    },
+    afterEndpointClaimReclamationSnapshot: async () => {
+      markSecondSnapshot();
+      await secondCanAttemptReclamation;
+    },
+  });
+
+  yield* Effect.promise(() => Promise.all([firstSnapshot, secondSnapshot]));
+  releaseFirstSnapshot();
+  yield* Effect.promise(() => firstInsideGate);
+
+  releaseSecondSnapshot();
+  yield* Effect.promise(() => secondReclamation);
+  expect(secondRemovalResults).toEqual([false]);
+  const claimWhileGateHeld = yield* Effect.promise(() => stat(claimPath));
+  expect({
+    device: claimWhileGateHeld.dev,
+    inode: claimWhileGateHeld.ino,
+  }).toEqual({
+    device: originalClaim.dev,
+    inode: originalClaim.ino,
+  });
+
+  releaseFirstInsideGate();
+  const winner = yield* Effect.acquireRelease(
+    Effect.promise(() => firstServer),
+    (server) => Effect.promise(() => server.close()),
+  );
+  releaseSecondReclamation();
+  const loser = yield* Effect.promise(async () => {
+    try {
+      return { server: await secondServer, status: 'opened' as const };
+    } catch (error) {
+      return { error, status: 'failed' as const };
+    }
+  });
+  if (loser.status === 'opened') {
+    yield* Effect.promise(() => loser.server.close());
+    expect(loser.status).toBe('failed');
+    return;
+  }
+  expect(loser.error).toMatchObject({
+    code: 'runtime-failed',
+    message: expect.stringMatching(/already has a live server/u),
+    name: EventRuntimeTransportError.name,
+  });
+  const response = yield* Effect.promise(() => requestEventRuntime({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    event: 'session/start',
+    hostContractRevision: '2.1.250',
+    native: { hook_event_name: 'SessionStart' },
+    signal: new AbortController().signal,
+    target: 'claude',
+    timeoutMs: 1_000,
+  }));
+  expect(response).toEqual({ owner: 'first' });
+  expect(winner.endpoint).toBe(endpoint);
+}));
+
+it.live('reclaims an endpoint claim owned by a zombie process', () => Effect.gen(function*() {
+  if (process.platform !== 'linux') return;
+  const endpointId = `event-ipc-zombie-claim-${crypto.randomUUID()}`;
+  const { child, owner } = yield* Effect.acquireRelease(
+    Effect.promise(spawnZombieOwner),
+    ({ child }) => Effect.promise(() => killChild(child)),
+  );
+  const claimPath = yield* Effect.promise(() => writeEndpointClaim(endpointId, JSON.stringify(owner)));
+  const server = yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => undefined,
+    })),
+    (server) => Effect.promise(() => server.close()),
+  );
+  expect(server.endpoint).toBe(eventRuntimeEndpoint(endpointId));
+  expect(child.exitCode).toBeNull();
   yield* Effect.promise(() => rm(claimPath, { force: true }));
 }));
 
