@@ -9,7 +9,11 @@ import stateDefinition from '../../fixtures/route-harness/src/state.ts';
 import { AgentTestError } from '../../src/test/errors.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, proofLevelLabel } from '../../src/test/manifest.ts';
 import { runContractMatrix, type ContractMatrixOptions } from '../../src/test/contract.ts';
-import { routeHarnessContractFixtures } from '../support/contract-matrix-fixtures.ts';
+import { openInMemoryMcpServer, type InMemoryMcpSession } from '../../src/test/mcp.ts';
+import {
+  routeHarnessContractFixtures,
+  routeHarnessLifecycleWithoutLiveProgress,
+} from '../support/contract-matrix-fixtures.ts';
 
 const proofLabel = proofLevelLabel(MCP_IN_MEMORY_PROOF_LEVEL);
 
@@ -18,15 +22,27 @@ const withStatefulMatrix = async <T>(
   body: (options: ContractMatrixOptions) => Promise<T>,
 ): Promise<T> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-contract-matrix-'));
+  let restarted: InMemoryMcpSession | undefined;
   try {
-    return await body({
+    const options = {
       fixtures,
+      restart: async () => {
+        restarted = await openInMemoryMcpServer({
+          state: {
+            definition: stateDefinition,
+            driver: createSqliteStateDriver({ root }),
+          },
+        });
+        return restarted;
+      },
       state: {
         definition: stateDefinition,
         driver: createSqliteStateDriver({ root }),
       },
-    } as unknown as ContractMatrixOptions);
+    } as unknown as ContractMatrixOptions;
+    return await body(options);
   } finally {
+    await restarted?.close();
     await rm(root, { force: true, recursive: true });
   }
 };
@@ -39,6 +55,13 @@ describe('the generated-plugin contract matrix', () => {
     expect(report.provenance.proofLevel).toBe('mcp-in-memory');
     expect(report.routes['tool:harness/wait']?.checks.cancellation).toEqual({ status: 'passed' });
     expect(report.routes['tool:harness/ticket']?.checks['version-skew']).toEqual({ status: 'passed' });
+    expect(report.routes['tool:harness/lifecycle']?.checks['lifecycle-replay']).toEqual({ status: 'passed' });
+    expect(report.routes['tool:harness/lifecycle']?.checks['live-progress-before-terminal']).toEqual({
+      status: 'passed',
+    });
+    expect(report.routes['tool:harness/lifecycle']?.checks['state-idempotency']).toEqual({ status: 'passed' });
+    expect(report.routes['tool:harness/lifecycle']?.checks['state-budget']).toEqual({ status: 'passed' });
+    expect(report.routes['tool:harness/lifecycle']?.checks['restart-durability']).toEqual({ status: 'passed' });
     expect(report.routes['app:harness/panel']?.checks['surface-completeness']).toEqual({
       reason: 'MCP Apps are not registered by the in-memory projection level.',
       status: 'not-applicable',
@@ -47,6 +70,17 @@ describe('the generated-plugin contract matrix', () => {
       reason: 'Invocation returned isError; sweep proves successful invocation paths only.',
       status: 'not-applicable',
     });
+  }, 30_000);
+
+  it('reports lifecycle progress that was not live before settlement', async () => {
+    const error = await withStatefulMatrix(routeHarnessLifecycleWithoutLiveProgress(), (options) =>
+      runContractMatrix(options).catch((thrown: unknown) => thrown));
+
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect((error as AgentTestError).code).toBe('contract-violation');
+    expect((error as AgentTestError).message).toContain('tool:harness/lifecycle');
+    expect((error as AgentTestError).message).toContain('live-progress-before-terminal');
+    expect((error as AgentTestError).message).toContain(proofLabel);
   }, 30_000);
 
   it('aggregates missing route coverage with the proof-level label', async () => {

@@ -332,7 +332,9 @@ The contract matrix is the framework-owned generated-plugin wire-contract suite.
 Two entry points share one implementation; boundary differences are explicit
 capability flags, not forked check logic. The project supplies only fixtures —
 valid inputs, a declared `resultCompat` policy for every in-memory tool route,
-optional `previousResults` payloads, and optional `cancellation` cases.
+optional `previousResults` payloads, optional `cancellation` cases, and an
+optional deterministic lifecycle transition driver with declarative
+expectations.
 
 **`runContractMatrix` (`mcp-in-memory`)** opens one real MCP client against
 the real generated server over the SDK's in-memory transport and runs the full
@@ -354,12 +356,24 @@ open/close). It proves process stdio evidence for surface completeness
 successful-path sweeps, advertised input-schema rejection, and client-side
 cancellation hygiene. It cannot load project route modules — source may be
 deleted and verified absent — so serialized-round-trip, compat-probe, and
-version-skew are reported `not-applicable` with an honest reason. The packed
+version-skew (including their per-lifecycle-phase variants) are reported
+`not-applicable` with an honest reason. The packed
 server validates every tool result through its bundled `resultSchema` before
 returning; a successful sweep invocation is that evidence.
 
-**Neither boundary proves:** host install, browser App HTML, or lifecycle replay
-across artifact rebuilds (stage 2+).
+Lifecycle fixtures replay
+`unknown → queued → running → first-progress → repeated-progress → terminal`
+over the matrix's one open client. The framework validates every phase's
+structured content and rendered output, additive/closed compatibility, live
+progress before settlement, journal accumulation, declared notices,
+idempotent commit replay, and typed budget rejection. A caller-supplied
+same-store `restart` callback adds durability evidence at that boundary;
+without one the check is honestly `not-applicable`. Packed callers should wire
+that callback into the existing packed journey's restart rather than creating
+a second pack/build/install path.
+
+**Neither boundary proves:** host install, browser App HTML, artifact-rebuild
+replay, or state-lifetime catalog identity.
 
 When the advertised input schema declares `additionalProperties: false`, plain
 `z.object` tool routes may still strip unknown keys without a protocol failure.

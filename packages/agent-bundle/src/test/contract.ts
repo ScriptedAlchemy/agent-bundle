@@ -4,8 +4,9 @@
  *
  * Both entry points share one implementation. Boundary differences are explicit
  * capability flags, not forked check logic. The project supplies only fixtures
- * — valid inputs, declared result-compat policy, version-skew payloads, and
- * optional cancellation cases — not the check logic itself.
+ * — valid inputs, declared result-compat policy, version-skew payloads,
+ * optional cancellation cases, and deterministic lifecycle transitions —
+ * not the transport, schema, render, or assertion logic itself.
  *
  * **`runContractMatrix` (`mcp-in-memory`)** opens one real MCP client against
  * the real generated server over the SDK's in-memory transport and runs the
@@ -26,8 +27,10 @@
  * every tool result through its bundled `resultSchema` before returning; a
  * successful sweep invocation is that evidence.
  *
- * **Neither boundary proves:** host install, browser App HTML, or lifecycle
- * replay across artifact rebuilds (stage 2+).
+ * Stateful lifecycle fixtures replay over one open client at both boundaries.
+ * Same-store restart callbacks add boundary-local durability evidence; a run
+ * without one reports restart durability as not-applicable. Neither boundary
+ * proves host install, browser App HTML, or state-lifetime catalog identity.
  */
 import type { Client } from '@modelcontextprotocol/client';
 
@@ -50,6 +53,53 @@ import type { AgentRouteModule, TestableRouteDescriptor } from './types.ts';
 /** Declared serialized-result compatibility policy for tool routes. */
 export type ResultCompatPolicy = 'additive' | 'closed';
 
+export type ContractLifecyclePhase =
+  | 'unknown'
+  | 'queued'
+  | 'running'
+  | 'first-progress'
+  | 'repeated-progress'
+  | 'terminal';
+
+export interface ContractLifecycleTransition {
+  readonly expectedStructuredContent: unknown;
+  readonly input: unknown;
+  readonly phase: ContractLifecyclePhase;
+  readonly progressNotifications: number;
+  readonly renderedTextIncludes?: string;
+}
+
+export interface ContractLifecycleFixture {
+  readonly state?: {
+    readonly budget?: {
+      readonly codePath: readonly string[];
+      readonly expectedCode: string;
+      readonly input: unknown;
+      readonly revisionPath: readonly string[];
+    };
+    readonly durability?: {
+      readonly expectedStructuredContent: unknown;
+      readonly input: unknown;
+    };
+    readonly idempotency?: {
+      readonly phase: ContractLifecyclePhase;
+      readonly replayedPath: readonly string[];
+      readonly revisionPath: readonly string[];
+    };
+    readonly journal?: {
+      readonly expected: unknown;
+      readonly path: readonly string[];
+    };
+    readonly notice?: {
+      readonly expected: unknown;
+      readonly path: readonly string[];
+      readonly phase: ContractLifecyclePhase;
+    };
+  };
+  /** Pure deterministic phase driver; transport and assertions remain framework-owned. */
+  readonly transitionDriver: () => readonly ContractLifecycleTransition[];
+}
+
 export interface ContractRouteFixture {
   /** Valid input for the sweep invocation (tools/prompts; resources need none). */
   readonly input?: unknown;
@@ -67,6 +117,12 @@ export interface ContractRouteFixture {
    * leave the session usable.
    */
   readonly cancellation?: { readonly abortAfterMs?: number; readonly input?: unknown };
+  /** Optional stateful replay over this matrix run's single open client. */
+  readonly lifecycle?: ContractLifecycleFixture;
+}
+
+export interface ContractMatrixRestartSession {
+  readonly client: Client;
 }
 
 export interface ContractMatrixOptions extends InMemoryMcpSessionOptions {
@@ -74,6 +130,8 @@ export interface ContractMatrixOptions extends InMemoryMcpSessionOptions {
   readonly server?: string;
   /** Route id -> fixture. Every compiled non-app route on the server must be covered. */
   readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  /** Reopens the same durable store after the matrix closes its initial in-memory session. */
+  readonly restart?: () => Promise<ContractMatrixRestartSession>;
 }
 
 export type ContractCheckStatus = 'failed' | 'not-applicable' | 'passed';
@@ -100,6 +158,8 @@ export interface PackedContractMatrixOptions {
   readonly server?: string;
   /** An already-open packed session; this entry point never opens or closes it. */
   readonly session: PackedMcpSession;
+  /** Caller-owned packed restart; it must close the initial session and reopen the same artifact/store. */
+  readonly restart?: () => Promise<ContractMatrixRestartSession>;
 }
 
 interface MatrixBoundaryCapabilities {
@@ -107,6 +167,7 @@ interface MatrixBoundaryCapabilities {
   readonly moduleSchemaNotApplicableReason: string;
   readonly proofLevel: AgentTestProofLevel;
   readonly registersAppResources: boolean;
+  readonly restart?: () => Promise<ContractMatrixRestartSession>;
 }
 
 const PACKED_MODULE_SCHEMA_NOT_APPLICABLE_REASON =
@@ -119,12 +180,16 @@ const IN_MEMORY_BOUNDARY: MatrixBoundaryCapabilities = Object.freeze({
   registersAppResources: false,
 });
 
-const packedBoundaryFromSession = (session: PackedMcpSession): MatrixBoundaryCapabilities =>
+const packedBoundaryFromSession = (
+  session: PackedMcpSession,
+  restart: (() => Promise<ContractMatrixRestartSession>) | undefined,
+): MatrixBoundaryCapabilities =>
   Object.freeze({
     canLoadRouteModules: false,
     moduleSchemaNotApplicableReason: PACKED_MODULE_SCHEMA_NOT_APPLICABLE_REASON,
     proofLevel: session.provenance.proofLevel,
     registersAppResources: true,
+    ...(restart === undefined ? {} : { restart }),
   });
 
 const COMPAT_PROBE_KEY = '__agentBundleContractProbe';
@@ -137,6 +202,15 @@ const CHECK_COMPAT_PROBE = 'compat-probe';
 const CHECK_VERSION_SKEW = 'version-skew';
 const CHECK_NEGATIVE_INPUTS = 'negative-inputs';
 const CHECK_CANCELLATION = 'cancellation';
+const CHECK_LIFECYCLE_REPLAY = 'lifecycle-replay';
+const CHECK_LIFECYCLE_SERIALIZED_ROUND_TRIP = 'lifecycle-serialized-round-trip';
+const CHECK_LIFECYCLE_COMPAT_PROBE = 'lifecycle-compat-probe';
+const CHECK_LIVE_PROGRESS = 'live-progress-before-terminal';
+const CHECK_STATE_JOURNAL = 'state-journal';
+const CHECK_STATE_NOTICE = 'state-notice';
+const CHECK_STATE_IDEMPOTENCY = 'state-idempotency';
+const CHECK_STATE_BUDGET = 'state-budget';
+const CHECK_RESTART_DURABILITY = 'restart-durability';
 
 interface MatrixFailure {
   readonly check: string;
@@ -305,7 +379,7 @@ const listLiveSurface = async (client: Client): Promise<LiveSurface> => {
 };
 
 type ToolInvocationResult =
-  | { readonly isError: boolean; readonly structuredContent?: unknown; readonly threw: false }
+  | { readonly content?: unknown; readonly isError: boolean; readonly structuredContent?: unknown; readonly threw: false }
   | { readonly threw: true; readonly error: unknown };
 
 const invocationCacheKey = (name: string, input: unknown): string =>
@@ -317,6 +391,7 @@ const callToolResult = async (
   input: unknown,
   options?: {
     readonly cache?: Map<string, ToolInvocationResult>;
+    readonly progressToken?: string | number;
     readonly signal?: AbortSignal;
     readonly timeout?: number;
   },
@@ -327,13 +402,20 @@ const callToolResult = async (
   }
   try {
     const result = await client.callTool(
-      { arguments: (input ?? {}) as Record<string, unknown>, name },
+      {
+        arguments: (input ?? {}) as Record<string, unknown>,
+        name,
+        ...(options?.progressToken === undefined
+          ? {}
+          : { _meta: { progressToken: options.progressToken } }),
+      },
       {
         ...(options?.signal === undefined ? {} : { signal: options.signal }),
         ...(options?.timeout === undefined ? {} : { timeout: options.timeout }),
       },
-    ) as { isError?: boolean; structuredContent?: unknown };
+    ) as { content?: unknown; isError?: boolean; structuredContent?: unknown };
     const settled: ToolInvocationResult = {
+      ...(result.content === undefined ? {} : { content: result.content }),
       isError: result.isError === true,
       ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
       threw: false,
@@ -741,6 +823,251 @@ const runCancellation = async (
   return passed();
 };
 
+const LIFECYCLE_PHASES: readonly ContractLifecyclePhase[] = Object.freeze([
+  'unknown',
+  'queued',
+  'running',
+  'first-progress',
+  'repeated-progress',
+  'terminal',
+]);
+
+const valueAtPath = (value: unknown, path: readonly string[]): unknown => {
+  let current = value;
+  for (const key of path) {
+    if (typeof current !== 'object' || current === null || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+};
+
+const containsExpected = (actual: unknown, expected: unknown): boolean => {
+  if (Array.isArray(expected)) {
+    return Array.isArray(actual)
+      && actual.length === expected.length
+      && expected.every((entry, index) => containsExpected(actual[index], entry));
+  }
+  if (typeof expected === 'object' && expected !== null) {
+    if (typeof actual !== 'object' || actual === null || Array.isArray(actual)) return false;
+    return Object.entries(expected).every(([key, value]) =>
+      containsExpected((actual as Record<string, unknown>)[key], value));
+  }
+  return Object.is(actual, expected);
+};
+
+const renderedText = (content: unknown): string => Array.isArray(content)
+  ? content.flatMap((block) => {
+    if (typeof block !== 'object' || block === null || Array.isArray(block)) return [];
+    const text = (block as { readonly text?: unknown }).text;
+    return typeof text === 'string' ? [text] : [];
+  }).join('\n')
+  : '';
+
+interface LifecyclePhaseEvidence {
+  readonly liveProgress: number;
+  readonly result: ToolInvocationResult;
+  readonly transition: ContractLifecycleTransition;
+}
+
+interface LifecycleEvidence {
+  readonly byPhase: ReadonlyMap<ContractLifecyclePhase, LifecyclePhaseEvidence>;
+  readonly orderFailure?: string;
+}
+
+const executeLifecycleTransitions = async (
+  client: Client,
+  descriptor: TestableRouteDescriptor,
+  lifecycle: ContractLifecycleFixture,
+): Promise<LifecycleEvidence> => {
+  let transitions: readonly ContractLifecycleTransition[];
+  try {
+    transitions = lifecycle.transitionDriver();
+  } catch (error) {
+    return {
+      byPhase: new Map(),
+      orderFailure: `transitionDriver threw: ${error instanceof Error ? error.message : captured(error)}`,
+    };
+  }
+  const actualPhases = transitions.map((transition) => transition.phase);
+  if (
+    actualPhases.length !== LIFECYCLE_PHASES.length
+    || actualPhases.some((phase, index) => phase !== LIFECYCLE_PHASES[index])
+  ) {
+    return {
+      byPhase: new Map(),
+      orderFailure: `transitionDriver returned ${actualPhases.join(' → ') || '(no phases)'}; expected ${LIFECYCLE_PHASES.join(' → ')}`,
+    };
+  }
+
+  const byPhase = new Map<ContractLifecyclePhase, LifecyclePhaseEvidence>();
+  for (const [index, transition] of transitions.entries()) {
+    const progressToken = `agent-bundle-contract-lifecycle:${descriptor.id}:${String(index)}`;
+    let settled = false;
+    let liveProgress = 0;
+    client.setNotificationHandler('notifications/progress', (notification) => {
+      if (notification.params.progressToken === progressToken && !settled) liveProgress += 1;
+    });
+    const result = await callToolResult(
+      client,
+      routeProtocolName(descriptor),
+      transition.input,
+      { progressToken, timeout: 10_000 },
+    );
+    settled = true;
+    byPhase.set(transition.phase, { liveProgress, result, transition });
+  }
+  return { byPhase };
+};
+
+const checkLifecycleReplay = (evidence: LifecycleEvidence): ContractCheckOutcome => {
+  if (evidence.orderFailure !== undefined) return failed(evidence.orderFailure);
+  for (const phase of LIFECYCLE_PHASES) {
+    const phaseEvidence = evidence.byPhase.get(phase);
+    if (phaseEvidence === undefined) return failed(`transitionDriver produced no ${phase} evidence`);
+    const { result, transition } = phaseEvidence;
+    if (result.threw) {
+      return failed(`${phase} callTool threw: ${result.error instanceof Error ? result.error.message : captured(result.error)}`);
+    }
+    if (result.isError || result.structuredContent === undefined) {
+      return failed(`${phase} did not return successful structuredContent`);
+    }
+    if (!containsExpected(result.structuredContent, transition.expectedStructuredContent)) {
+      return failed(`${phase} structuredContent did not include ${captured(transition.expectedStructuredContent)}; received ${captured(result.structuredContent)}`);
+    }
+    if (renderedText(result.content) === '') {
+      return failed(`${phase} returned no rendered Agent Document text output`);
+    }
+    if (transition.renderedTextIncludes !== undefined && !renderedText(result.content).includes(transition.renderedTextIncludes)) {
+      return failed(`${phase} rendered output did not include ${JSON.stringify(transition.renderedTextIncludes)}`);
+    }
+  }
+  return passed();
+};
+
+const checkLifecycleSchema = (
+  evidence: LifecycleEvidence,
+  module: AgentRouteModule & { readonly resultSchema: { parse: (value: unknown) => unknown } },
+): ContractCheckOutcome => {
+  if (evidence.orderFailure !== undefined) return notApplicable('lifecycle phase order failed before schema validation.');
+  for (const phase of LIFECYCLE_PHASES) {
+    const result = evidence.byPhase.get(phase)?.result;
+    if (result === undefined || result.threw || result.isError || result.structuredContent === undefined) {
+      return notApplicable(`${phase} produced no successful structuredContent to validate.`);
+    }
+    try {
+      module.resultSchema.parse(serializedRoundTrip(result.structuredContent));
+    } catch (error) {
+      return failed(`${phase} JSON round-tripped structuredContent failed resultSchema.parse: ${error instanceof Error ? error.message : captured(error)}`);
+    }
+  }
+  return passed();
+};
+
+const checkLifecycleCompat = (
+  evidence: LifecycleEvidence,
+  fixture: ContractRouteFixture,
+  module: AgentRouteModule & { readonly resultSchema: { parse: (value: unknown) => unknown } },
+): ContractCheckOutcome => {
+  if (fixture.resultCompat === undefined) return failed('lifecycle tool fixture must declare resultCompat.');
+  for (const phase of LIFECYCLE_PHASES) {
+    const result = evidence.byPhase.get(phase)?.result;
+    if (result === undefined || result.threw || result.isError || result.structuredContent === undefined) {
+      return notApplicable(`${phase} produced no successful structuredContent for compat probing.`);
+    }
+    const probe = compatProbe(
+      serializedRoundTrip(result.structuredContent),
+      fixture.resultCompat,
+      module.resultSchema.parse.bind(module.resultSchema),
+    );
+    if (fixture.resultCompat === 'additive' && !probe.accepted) {
+      return failed(`${phase} declared additive policy but resultSchema rejected unknown key ${JSON.stringify(COMPAT_PROBE_KEY)}`);
+    }
+    if (fixture.resultCompat === 'closed' && probe.accepted) {
+      return failed(`${phase} declared closed policy but resultSchema accepted unknown key ${JSON.stringify(COMPAT_PROBE_KEY)}`);
+    }
+  }
+  return passed();
+};
+
+const checkLiveProgress = (evidence: LifecycleEvidence): ContractCheckOutcome => {
+  if (evidence.orderFailure !== undefined) return notApplicable('lifecycle phase order failed before progress assertions.');
+  for (const phase of LIFECYCLE_PHASES) {
+    const phaseEvidence = evidence.byPhase.get(phase);
+    if (phaseEvidence === undefined) continue;
+    if (phaseEvidence.liveProgress < phaseEvidence.transition.progressNotifications) {
+      return failed(
+        `${phase} exposed ${String(phaseEvidence.liveProgress)} live progress notification(s) before settlement; expected at least ${String(phaseEvidence.transition.progressNotifications)}`,
+      );
+    }
+  }
+  return passed();
+};
+
+const checkLifecyclePath = (
+  evidence: LifecycleEvidence,
+  phase: ContractLifecyclePhase,
+  path: readonly string[],
+  expected: unknown,
+): ContractCheckOutcome => {
+  const result = evidence.byPhase.get(phase)?.result;
+  if (result === undefined || result.threw || result.structuredContent === undefined) {
+    return notApplicable(`${phase} produced no structuredContent for state assertion.`);
+  }
+  const actual = valueAtPath(result.structuredContent, path);
+  return containsExpected(actual, expected)
+    ? passed()
+    : failed(`${phase} structuredContent path ${path.join('.')} expected ${captured(expected)}; received ${captured(actual)}`);
+};
+
+const runStateIdempotency = async (
+  client: Client,
+  descriptor: TestableRouteDescriptor,
+  evidence: LifecycleEvidence,
+  assertion: NonNullable<NonNullable<ContractLifecycleFixture['state']>['idempotency']>,
+): Promise<ContractCheckOutcome> => {
+  const original = evidence.byPhase.get(assertion.phase);
+  if (original === undefined || original.result.threw || original.result.structuredContent === undefined) {
+    return notApplicable(`${assertion.phase} produced no structuredContent for idempotency replay.`);
+  }
+  const replay = await callToolResult(client, routeProtocolName(descriptor), original.transition.input);
+  if (replay.threw || replay.isError || replay.structuredContent === undefined) {
+    return failed(`replaying ${assertion.phase} did not return successful structuredContent`);
+  }
+  const originalRevision = valueAtPath(original.result.structuredContent, assertion.revisionPath);
+  const replayRevision = valueAtPath(replay.structuredContent, assertion.revisionPath);
+  if (!Object.is(originalRevision, replayRevision)) {
+    return failed(`idempotent replay changed revision from ${captured(originalRevision)} to ${captured(replayRevision)}`);
+  }
+  return valueAtPath(replay.structuredContent, assertion.replayedPath) === true
+    ? passed()
+    : failed(`idempotent replay did not report true at ${assertion.replayedPath.join('.')}`);
+};
+
+const runStateBudget = async (
+  client: Client,
+  descriptor: TestableRouteDescriptor,
+  evidence: LifecycleEvidence,
+  assertion: NonNullable<NonNullable<ContractLifecycleFixture['state']>['budget']>,
+): Promise<ContractCheckOutcome> => {
+  const terminal = evidence.byPhase.get('terminal')?.result;
+  if (terminal === undefined || terminal.threw || terminal.structuredContent === undefined) {
+    return notApplicable('terminal produced no structuredContent for budget boundary comparison.');
+  }
+  const result = await callToolResult(client, routeProtocolName(descriptor), assertion.input);
+  if (result.threw || result.isError || result.structuredContent === undefined) {
+    return failed('budget probe did not return typed successful fixture evidence');
+  }
+  const code = valueAtPath(result.structuredContent, assertion.codePath);
+  if (code !== assertion.expectedCode) {
+    return failed(`budget probe expected typed code ${JSON.stringify(assertion.expectedCode)}; received ${captured(code)}`);
+  }
+  const before = valueAtPath(terminal.structuredContent, assertion.revisionPath);
+  const after = valueAtPath(result.structuredContent, assertion.revisionPath);
+  return Object.is(before, after)
+    ? passed()
+    : failed(`budget-exceeded commit changed revision from ${captured(before)} to ${captured(after)}`);
+};
+
 const matrixRouteDescriptors = (
   manifest: AgentBundleTestManifest,
   serverName: string,
@@ -811,6 +1138,11 @@ const executeContractMatrix = async (options: {
 
   const surface = await listLiveSurface(client);
   const invocationCache = new Map<string, ToolInvocationResult>();
+  const durabilityChecks: Array<{
+    readonly assertion: NonNullable<NonNullable<ContractLifecycleFixture['state']>['durability']>;
+    readonly checks: Record<string, ContractCheckOutcome>;
+    readonly descriptor: TestableRouteDescriptor;
+  }> = [];
 
   for (const descriptor of matrixRouteDescriptors(manifest, serverName)) {
     if (descriptor.kind === 'app' && !boundary.registersAppResources) {
@@ -906,15 +1238,155 @@ const executeContractMatrix = async (options: {
         CHECK_CANCELLATION,
         await runCancellation(client, descriptor, fixture, invocationCache),
       );
+
+      if (fixture.lifecycle === undefined) {
+        const reason = 'no lifecycle fixture declared.';
+        checks[CHECK_LIFECYCLE_REPLAY] = notApplicable(reason);
+        checks[CHECK_LIFECYCLE_SERIALIZED_ROUND_TRIP] = notApplicable(reason);
+        checks[CHECK_LIFECYCLE_COMPAT_PROBE] = notApplicable(reason);
+        checks[CHECK_LIVE_PROGRESS] = notApplicable(reason);
+        checks[CHECK_STATE_JOURNAL] = notApplicable(reason);
+        checks[CHECK_STATE_NOTICE] = notApplicable(reason);
+        checks[CHECK_STATE_IDEMPOTENCY] = notApplicable(reason);
+        checks[CHECK_STATE_BUDGET] = notApplicable(reason);
+        checks[CHECK_RESTART_DURABILITY] = notApplicable(reason);
+      } else {
+        const lifecycle = fixture.lifecycle;
+        const evidence = await executeLifecycleTransitions(client, descriptor, lifecycle);
+        checks[CHECK_LIFECYCLE_REPLAY] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_LIFECYCLE_REPLAY,
+          checkLifecycleReplay(evidence),
+        );
+        checks[CHECK_LIVE_PROGRESS] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_LIVE_PROGRESS,
+          checkLiveProgress(evidence),
+        );
+        if (boundary.canLoadRouteModules) {
+          const module = await loadRouteModule(manifest, descriptor);
+          checks[CHECK_LIFECYCLE_SERIALIZED_ROUND_TRIP] = outcomeFromCheck(
+            failures,
+            descriptor.id,
+            CHECK_LIFECYCLE_SERIALIZED_ROUND_TRIP,
+            checkLifecycleSchema(evidence, module),
+          );
+          checks[CHECK_LIFECYCLE_COMPAT_PROBE] = outcomeFromCheck(
+            failures,
+            descriptor.id,
+            CHECK_LIFECYCLE_COMPAT_PROBE,
+            checkLifecycleCompat(evidence, fixture, module),
+          );
+        } else {
+          checks[CHECK_LIFECYCLE_SERIALIZED_ROUND_TRIP] = moduleSchemaNotApplicable();
+          checks[CHECK_LIFECYCLE_COMPAT_PROBE] = moduleSchemaNotApplicable();
+        }
+        const journal = lifecycle.state?.journal;
+        checks[CHECK_STATE_JOURNAL] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_STATE_JOURNAL,
+          journal === undefined
+            ? notApplicable('no lifecycle state journal assertion declared.')
+            : checkLifecyclePath(evidence, 'terminal', journal.path, journal.expected),
+        );
+        const notice = lifecycle.state?.notice;
+        checks[CHECK_STATE_NOTICE] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_STATE_NOTICE,
+          notice === undefined
+            ? notApplicable('no lifecycle notice assertion declared.')
+            : checkLifecyclePath(evidence, notice.phase, notice.path, notice.expected),
+        );
+        const idempotency = lifecycle.state?.idempotency;
+        checks[CHECK_STATE_IDEMPOTENCY] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_STATE_IDEMPOTENCY,
+          idempotency === undefined
+            ? notApplicable('no lifecycle idempotency assertion declared.')
+            : await runStateIdempotency(client, descriptor, evidence, idempotency),
+        );
+        const budget = lifecycle.state?.budget;
+        checks[CHECK_STATE_BUDGET] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_STATE_BUDGET,
+          budget === undefined
+            ? notApplicable('no lifecycle budget assertion declared.')
+            : await runStateBudget(client, descriptor, evidence, budget),
+        );
+        const durability = lifecycle.state?.durability;
+        if (durability === undefined) {
+          checks[CHECK_RESTART_DURABILITY] = notApplicable(
+            'no lifecycle restart-durability assertion declared.',
+          );
+        } else {
+          durabilityChecks.push({ assertion: durability, checks, descriptor });
+        }
+      }
     } else {
       checks[CHECK_SERIALIZED_ROUND_TRIP] = notApplicable('applies to tool routes only.');
       checks[CHECK_COMPAT_PROBE] = notApplicable('applies to tool routes only.');
       checks[CHECK_VERSION_SKEW] = notApplicable('applies to tool routes only.');
       checks[CHECK_NEGATIVE_INPUTS] = notApplicable('applies to tool routes only.');
       checks[CHECK_CANCELLATION] = notApplicable('applies to tool routes only.');
+      checks[CHECK_LIFECYCLE_REPLAY] = notApplicable('applies to tool routes only.');
+      checks[CHECK_LIFECYCLE_SERIALIZED_ROUND_TRIP] = notApplicable('applies to tool routes only.');
+      checks[CHECK_LIFECYCLE_COMPAT_PROBE] = notApplicable('applies to tool routes only.');
+      checks[CHECK_LIVE_PROGRESS] = notApplicable('applies to tool routes only.');
+      checks[CHECK_STATE_JOURNAL] = notApplicable('applies to tool routes only.');
+      checks[CHECK_STATE_NOTICE] = notApplicable('applies to tool routes only.');
+      checks[CHECK_STATE_IDEMPOTENCY] = notApplicable('applies to tool routes only.');
+      checks[CHECK_STATE_BUDGET] = notApplicable('applies to tool routes only.');
+      checks[CHECK_RESTART_DURABILITY] = notApplicable('applies to tool routes only.');
     }
 
     routeReports[descriptor.id] = { checks };
+  }
+
+  if (durabilityChecks.length > 0) {
+    if (boundary.restart === undefined) {
+      for (const pending of durabilityChecks) {
+        pending.checks[CHECK_RESTART_DURABILITY] = notApplicable(
+          'this matrix run was not supplied a same-store restart callback; durability cannot be inferred from the initial connection.',
+        );
+      }
+    } else {
+      let restarted: ContractMatrixRestartSession | undefined;
+      let restartError: unknown;
+      try {
+        restarted = await boundary.restart();
+      } catch (error) {
+        restartError = error;
+      }
+      for (const pending of durabilityChecks) {
+        let outcome: ContractCheckOutcome;
+        if (restarted === undefined) {
+          outcome = failed(`same-store restart failed: ${restartError instanceof Error ? restartError.message : captured(restartError)}`);
+        } else {
+          const result = await callToolResult(
+            restarted.client,
+            routeProtocolName(pending.descriptor),
+            pending.assertion.input,
+          );
+          outcome = result.threw || result.isError || result.structuredContent === undefined
+            ? failed('restarted session did not return successful structuredContent')
+            : containsExpected(result.structuredContent, pending.assertion.expectedStructuredContent)
+              ? passed()
+              : failed(`restarted structuredContent did not include ${captured(pending.assertion.expectedStructuredContent)}; received ${captured(result.structuredContent)}`);
+        }
+        pending.checks[CHECK_RESTART_DURABILITY] = outcomeFromCheck(
+          failures,
+          pending.descriptor.id,
+          CHECK_RESTART_DURABILITY,
+          outcome,
+        );
+      }
+    }
   }
 
   return finalizeContractMatrixReport(failures, boundary, provenance, routeReports);
@@ -931,15 +1403,28 @@ export const runContractMatrix = async (
 ): Promise<ContractMatrixReport> => {
   const manifest = options.manifest ?? testManifest();
   const serverName = resolveServerName(manifest, options.server);
-  await using session = await openInMemoryMcpServer(options);
-  return await executeContractMatrix({
-    boundary: IN_MEMORY_BOUNDARY,
-    client: session.client,
-    fixtures: options.fixtures,
-    manifest,
-    provenance: session.provenance,
-    serverName,
-  });
+  const session = await openInMemoryMcpServer(options);
+  try {
+    const boundary: MatrixBoundaryCapabilities = options.restart === undefined
+      ? IN_MEMORY_BOUNDARY
+      : Object.freeze({
+        ...IN_MEMORY_BOUNDARY,
+        restart: async () => {
+          await session.close();
+          return options.restart!();
+        },
+      });
+    return await executeContractMatrix({
+      boundary,
+      client: session.client,
+      fixtures: options.fixtures,
+      manifest,
+      provenance: session.provenance,
+      serverName,
+    });
+  } finally {
+    await session.close();
+  }
 };
 
 /**
@@ -951,7 +1436,7 @@ export const runPackedContractMatrix = async (
 ): Promise<ContractMatrixReport> => {
   const serverName = resolveServerName(options.manifest, options.server);
   return executeContractMatrix({
-    boundary: packedBoundaryFromSession(options.session),
+    boundary: packedBoundaryFromSession(options.session, options.restart),
     client: options.session.client,
     fixtures: options.fixtures,
     manifest: options.manifest,
