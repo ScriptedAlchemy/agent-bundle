@@ -759,7 +759,16 @@ export class ProjectService {
       : (loaded.config.targets ?? registry.defaultTargetNames());
     const hostBinRoots = (registry.binSources?.(loaded.config, targetNames) ?? [])
       .flatMap((source) => 'source' in source ? [resolve(dirname(loaded.configPath), source.source)] : []);
-    const additionalSourceRoots = [...configuredPayloadRoots(root, loaded.config), ...hostBinRoots];
+    const hostOutputStyleRoots = (registry.outputStyleSources?.(loaded.config, targetNames) ?? [])
+      .flatMap((source) => 'source' in source ? [resolve(dirname(loaded.configPath), source.source)] : []);
+    const hostWorkflowRoots = (registry.workflowSources?.(loaded.config, targetNames) ?? [])
+      .flatMap((source) => 'source' in source ? [resolve(dirname(loaded.configPath), source.source)] : []);
+    const additionalSourceRoots = [
+      ...configuredPayloadRoots(root, loaded.config),
+      ...hostBinRoots,
+      ...hostOutputStyleRoots,
+      ...hostWorkflowRoots,
+    ];
     let snapshot: ProjectSourceSnapshot;
     try {
       snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots, additionalSourceRoots);

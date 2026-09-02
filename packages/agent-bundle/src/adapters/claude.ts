@@ -6,6 +6,7 @@ import {
   type AgentBundleConfig,
   type AgentBundleHostConfig,
   type NormalizedMcpServer,
+  type NormalizedHostPayloadDirectory,
   type NormalizedPlugin,
 } from '../core/types.ts';
 import {
@@ -205,9 +206,13 @@ export interface ClaudeHostConfig extends AgentBundleHostConfig {
   readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
   /** Free-form catalog or entitlement data that Claude Code preserves but does not interpret. */
   readonly metadata?: Readonly<Record<string, unknown>>;
+  /** Project-authored Markdown files copied to the plugin-root `output-styles/` convention. */
+  readonly outputStyles?: string;
   readonly settings?: ClaudeSettingsConfig;
   /** Enable-time options copied into `.claude-plugin/plugin.json`. */
   readonly userConfig?: Readonly<Record<string, ClaudeUserConfigOption>>;
+  /** Project-authored script files copied to the plugin-root `workflows/` convention. */
+  readonly workflows?: string;
 }
 
 export interface ClaudeConfigExtension {
@@ -261,7 +266,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.11.0',
+  adapterRevision: '1.12.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -1287,6 +1292,125 @@ const planClaudeBin = (model: NormalizedPlugin, targetName: string): ClaudeBinPl
   return deepFreeze({ diagnostics, entries });
 };
 
+interface ClaudePayloadDirectoryPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly entries: readonly TargetArtifactCopy[];
+}
+
+interface ClaudePayloadDirectoryOptions {
+  readonly configField: 'outputStyles' | 'workflows';
+  readonly destination: 'output-styles' | 'workflows';
+  readonly directories: readonly NormalizedHostPayloadDirectory[] | undefined;
+  readonly label: 'output styles' | 'workflows';
+  readonly targetName: string;
+}
+
+const planClaudePayloadDirectory = ({
+  configField,
+  destination,
+  directories,
+  label,
+  targetName,
+}: ClaudePayloadDirectoryOptions): ClaudePayloadDirectoryPlan => {
+  const diagnostics: Diagnostic[] = [];
+  const entries: TargetArtifactCopy[] = [];
+  const codePrefix = `claude.${configField}`;
+  for (const directory of directories ?? []) {
+    if (directory.target !== targetName) continue;
+    if (directory.issue !== undefined) {
+      switch (directory.issue) {
+        case 'missing':
+          diagnostics.push({
+            ...errorDiagnostic(
+              `${codePrefix}.directory.missing`,
+              `Claude ${label} directory ${JSON.stringify(directory.source)} does not exist.`,
+            ),
+            recovery: `Create the configured Claude ${label} directory and add at least one file, then rebuild.`,
+            sourcePath: directory.provenance.sourcePath,
+          });
+          break;
+        case 'empty':
+          diagnostics.push({
+            ...errorDiagnostic(
+              `${codePrefix}.directory.empty`,
+              `Claude ${label} directory ${JSON.stringify(directory.source)} contains no files.`,
+            ),
+            recovery: `Add at least one file to the configured Claude ${label} directory, then rebuild.`,
+            sourcePath: directory.provenance.sourcePath,
+          });
+          break;
+        case 'not-directory':
+          diagnostics.push({
+            ...errorDiagnostic(
+              `${codePrefix}.directory.invalid`,
+              `Claude ${label} source ${JSON.stringify(directory.source)} must name a directory.`,
+            ),
+            recovery: `Set claude.${configField} to a nonempty directory path relative to the config file, then rebuild.`,
+            sourcePath: directory.provenance.sourcePath,
+          });
+          break;
+        case 'outside':
+          diagnostics.push({
+            ...errorDiagnostic(
+              `${codePrefix}.directory.outside`,
+              `Claude ${label} directory ${JSON.stringify(directory.source)} must resolve inside the project root.`,
+            ),
+            recovery: `Move the ${label} directory inside the project and update claude.${configField}, then rebuild.`,
+            sourcePath: directory.provenance.sourcePath,
+          });
+          break;
+        case 'source-error':
+          diagnostics.push({
+            ...errorDiagnostic(`${codePrefix}.source.error`, `Claude ${label} source resolution failed.`),
+            recovery: `Correct the claude.${configField} declaration so the adapter can read it, then rebuild.`,
+            sourcePath: directory.provenance.sourcePath,
+          });
+          break;
+        case 'source-invalid':
+          diagnostics.push({
+            ...errorDiagnostic(
+              `${codePrefix}.source.invalid`,
+              `Claude ${configField} must be a nonempty directory path.`,
+            ),
+            recovery: `Set claude.${configField} to a nonempty directory path relative to the config file, then rebuild.`,
+            sourcePath: directory.provenance.sourcePath,
+          });
+          break;
+        default: {
+          const exhaustive: never = directory.issue;
+          return exhaustive;
+        }
+      }
+      continue;
+    }
+    if (configField === 'outputStyles') {
+      const invalidFiles = directory.files.filter((file) => !file.relativePath.endsWith('.md'));
+      if (invalidFiles.length > 0) {
+        diagnostics.push({
+          ...errorDiagnostic(
+            'claude.outputStyles.file.invalid',
+            `Claude output style file${invalidFiles.length === 1 ? '' : 's'} ${invalidFiles
+              .map((file) => JSON.stringify(file.relativePath))
+              .join(', ')} must use the .md suffix.`,
+          ),
+          recovery: 'Rename every file in the configured Claude output styles directory to use the .md suffix, then rebuild.',
+          sourcePath: directory.provenance.sourcePath,
+        });
+        continue;
+      }
+    }
+    entries.push(...directory.files.map((file): TargetArtifactCopy => ({
+      bytes: file.bytes,
+      kind: 'copy',
+      prebuilt: true,
+      relativePath: `${destination}/${file.relativePath}`,
+      source: file.source,
+      sourceInputs: sourceInputs(directory.provenance.sourcePath, file.source),
+    })));
+  }
+  return deepFreeze({ diagnostics, entries });
+};
+
 /**
  * Every key the pinned plugin `settings.json` contract documents. The emitted
  * document copies this allowlist rather than the declared object, so a
@@ -1451,6 +1575,22 @@ export const planClaudeArtifacts = (
   diagnostics.push(...manifestMetadata.diagnostics);
   const bin = planClaudeBin(model, targetName);
   diagnostics.push(...bin.diagnostics);
+  const outputStyles = planClaudePayloadDirectory({
+    configField: 'outputStyles',
+    destination: 'output-styles',
+    directories: model.hostOutputStyles,
+    label: 'output styles',
+    targetName,
+  });
+  diagnostics.push(...outputStyles.diagnostics);
+  const workflows = planClaudePayloadDirectory({
+    configField: 'workflows',
+    destination: 'workflows',
+    directories: model.hostWorkflows,
+    label: 'workflows',
+    targetName,
+  });
+  diagnostics.push(...workflows.diagnostics);
   const settings = planClaudeSettings(model);
   diagnostics.push(...settings.diagnostics);
   const dependencies = planClaudeDependencies(model);
@@ -1537,6 +1677,8 @@ export const planClaudeArtifacts = (
     entries: sortedEntries([
       ...basePlan.entries,
       ...bin.entries,
+      ...outputStyles.entries,
+      ...workflows.entries,
       ...commandWriteEntries(model, isSelected, claudeCommandMarkdown),
     ]),
   }), model, targetName === 'plugin' ? 'plugin' : 'claude');
@@ -1549,6 +1691,11 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
     allowedSuffixes: Object.freeze(['.md']),
     directory: 'commands',
   }),
+  outputStyles: Object.freeze({
+    allowedSuffixes: Object.freeze(['.md']),
+    directory: 'output-styles',
+  }),
+  workflows: 'workflows',
 });
 
 export const claudeAdapter: TargetAdapter = Object.freeze({
@@ -1617,6 +1764,14 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude contract does not support both required modern MCP transports.',
     ),
+    outputStyles: capabilityStateFromSupport(
+      capabilityTable.plugin.outputStyles.directory === 'output-styles' &&
+        capabilityTable.plugin.outputStyles.manifestField === 'outputStyles' &&
+        capabilityTable.plugin.outputStyles.replacesDefault &&
+        capabilityTable.plugin.outputStyles.allowedSuffixes.includes('.md'),
+      evidence,
+      'The pinned Claude plugin contract does not document the plugin-root output-styles surface.',
+    ),
     rules: unavailableCapability(
       'The pinned Claude Code plugin contract (2.1.250) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
     ),
@@ -1639,6 +1794,14 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude plugin contract does not document enable-time userConfig options.',
     ),
+    workflows: capabilityStateFromSupport(
+      capabilityTable.plugin.workflows.directory === 'workflows' &&
+        capabilityTable.plugin.workflows.manifestField === 'workflows' &&
+        capabilityTable.plugin.workflows.replacesDefault &&
+        capabilityTable.plugin.workflows.fileContents === 'opaque',
+      evidence,
+      'The pinned Claude plugin contract does not document the plugin-root workflows surface.',
+    ),
   }),
   configExtension: Object.freeze({ key: claudeName }),
   hookContract,
@@ -1647,5 +1810,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   name: claudeName,
   binSource: (config: Readonly<AgentBundleConfig>) => config.claude?.bin,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.claude?.nativeHooks,
+  outputStylesSource: (config: Readonly<AgentBundleConfig>) => config.claude?.outputStyles,
   plan: planClaudeArtifacts,
+  workflowsSource: (config: Readonly<AgentBundleConfig>) => config.claude?.workflows,
 });

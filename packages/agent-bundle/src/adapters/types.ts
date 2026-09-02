@@ -413,11 +413,13 @@ export interface TargetArtifactLayout {
   readonly hookWrappers?: TargetArtifactOutputLayout;
   readonly mcpApps?: TargetArtifactOutputLayout;
   readonly mcpEntries?: TargetArtifactOutputLayout;
+  readonly outputStyles?: TargetArtifactOutputLayout;
   /** Adapter-owned plain documents at the artifact root (for example a generated AGENTS.md). */
   readonly rootDocuments?: readonly string[];
   readonly rules?: TargetArtifactOutputLayout;
   readonly scripts?: TargetArtifactOutputLayout;
   readonly skills?: string;
+  readonly workflows?: string;
 }
 
 /**
@@ -502,5 +504,7 @@ export interface TargetAdapter {
   readonly name: string;
   binSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   nativeHookSource?(config: Readonly<AgentBundleConfig>): string | undefined;
+  outputStylesSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   plan(model: NormalizedPlugin): TargetArtifactPlan;
+  workflowsSource?(config: Readonly<AgentBundleConfig>): string | undefined;
 }

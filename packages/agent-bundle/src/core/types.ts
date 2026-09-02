@@ -521,8 +521,8 @@ export interface NormalizedHostBinFile {
   readonly source: string;
 }
 
-/** One adapter-declared host-native plugin executable directory. */
-export interface NormalizedHostBin {
+/** One adapter-declared host-native plugin payload directory. */
+export interface NormalizedHostPayloadDirectory {
   readonly files: readonly NormalizedHostBinFile[];
   readonly issue?: 'empty' | 'missing' | 'not-directory' | 'outside' | 'source-error' | 'source-invalid';
   readonly provenance: SourceProvenance;
@@ -530,6 +530,9 @@ export interface NormalizedHostBin {
   readonly source: string;
   readonly target: string;
 }
+
+/** One adapter-declared host-native plugin executable directory. */
+export type NormalizedHostBin = NormalizedHostPayloadDirectory;
 
 export interface NormalizedNativeHook {
   readonly document?: unknown;
@@ -587,6 +590,10 @@ export interface NormalizedPlugin {
   readonly extensions: Readonly<Record<string, NormalizedConfigExtension>>;
   /** Adapter-declared host-native executable directories, enumerated during normalization. */
   readonly hostBins?: readonly NormalizedHostBin[];
+  /** Adapter-declared host-native output-style directories, enumerated during normalization. */
+  readonly hostOutputStyles?: readonly NormalizedHostPayloadDirectory[];
+  /** Adapter-declared host-native workflow directories, enumerated during normalization. */
+  readonly hostWorkflows?: readonly NormalizedHostPayloadDirectory[];
   readonly hooks: readonly NormalizedHook[];
   readonly marketplace?: true;
   readonly metadata: NormalizedMetadata;
@@ -658,6 +665,8 @@ export type NormalizationHostBinSource =
   | NormalizationHostBinDocument
   | NormalizationHostBinSourceError;
 
+export type NormalizationHostPayloadSource = NormalizationHostBinSource;
+
 export interface NormalizationTargetRegistry {
   binSources?(
     config: Readonly<AgentBundleConfig>,
@@ -671,7 +680,15 @@ export interface NormalizationTargetRegistry {
     config: Readonly<AgentBundleConfig>,
     targetNames: readonly string[],
   ): readonly NormalizationNativeHookSource[];
+  outputStyleSources?(
+    config: Readonly<AgentBundleConfig>,
+    targetNames: readonly string[],
+  ): readonly NormalizationHostPayloadSource[];
   supports(name: string, capability: string): boolean;
+  workflowSources?(
+    config: Readonly<AgentBundleConfig>,
+    targetNames: readonly string[],
+  ): readonly NormalizationHostPayloadSource[];
 }
 
 export interface ConfigFactoryContext {

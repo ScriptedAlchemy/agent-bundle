@@ -2197,6 +2197,18 @@ export const validateModel = (
         recordOutput(posix.join(target.name, 'bin', file.relativePath), file.source, target.name);
       }
     }
+    for (const directory of model.hostOutputStyles ?? []) {
+      if (directory.target !== target.name) continue;
+      for (const file of directory.files) {
+        recordOutput(posix.join(target.name, 'output-styles', file.relativePath), file.source, target.name);
+      }
+    }
+    for (const directory of model.hostWorkflows ?? []) {
+      if (directory.target !== target.name) continue;
+      for (const file of directory.files) {
+        recordOutput(posix.join(target.name, 'workflows', file.relativePath), file.source, target.name);
+      }
+    }
   }
 
   return diagnostics;

@@ -130,6 +130,31 @@ it('reports Claude bin support without inventing coverage on other native hosts'
   expect(registry.supports('plugin', 'bin')).toBe(false);
 });
 
+it.each([
+  ['outputStyles', 'output styles'],
+  ['workflows', 'workflows'],
+] as const)('reports Claude %s support and honest unavailable composite coverage', (capability, label) => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('claude').capabilities[capability]).toMatchObject({
+    evidence: {
+      observedVersion: '2.1.250',
+      target: 'claude',
+    },
+    state: 'supported',
+  });
+  expect(registry.get('plugin').capabilities[capability]).toEqual({
+    reason: `The unified bundle emits Claude-only ${label}, but the pinned Codex and Cursor contracts declare no shared ${label} surface.`,
+    state: 'unavailable',
+  });
+  for (const target of ['codex', 'cursor', 'portable'] as const) {
+    expect(registry.get(target).capabilities[capability]).toBeUndefined();
+    expect(registry.supports(target, capability)).toBe(false);
+  }
+  expect(registry.supports('claude', capability)).toBe(true);
+  expect(registry.supports('plugin', capability)).toBe(false);
+});
+
 it('reports Claude plugin settings support and honest unavailable composite coverage', () => {
   const registry = createDefaultRegistry();
 
