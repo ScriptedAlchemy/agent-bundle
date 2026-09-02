@@ -182,7 +182,8 @@ static assets.
 
 Exact-pin `effect` + `@effect/atom-react` (synchronized with the repo's effect
 pin, currently `4.0.0-rc.112`) are allowed there, but only in dedicated
-browser-state modules (the first is `src/runtime/agent-document-atoms.ts`).
+browser-state modules (`src/runtime/agent-document-atoms.ts` and
+`src/routes/route-editor-atoms.ts`).
 Atoms live in `effect/unstable/reactivity`; React bindings come from
 `@effect/atom-react`.
 
@@ -227,7 +228,7 @@ The #99 notice ledger also adopts none: it needs only stable `Effect` and
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
-| `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
+| `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
 
 ## Language service
 

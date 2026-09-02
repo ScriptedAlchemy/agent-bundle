@@ -96,6 +96,16 @@ export interface RawRouteInputValidation {
   readonly error?: string;
 }
 
+export interface RouteEditorState {
+  readonly attempted: boolean;
+  readonly arguments?: RouteInputArguments;
+  readonly argv?: string;
+  readonly draft: RouteInputDraft;
+  readonly errors: Readonly<Record<string, string>>;
+  readonly raw: string;
+  readonly rawError?: string;
+}
+
 export interface McpToolPrefill {
   readonly arguments: RouteInputArguments;
   readonly serverName: string;
@@ -242,6 +252,13 @@ export const createRouteInputDraft = (schema: RouteInputSchema): RouteInputDraft
     }),
   ));
 };
+
+export const initialRouteEditorState = (schema?: RouteInputSchema): RouteEditorState => Object.freeze({
+  attempted: false,
+  draft: schema === undefined ? Object.freeze({}) : createRouteInputDraft(schema),
+  errors: Object.freeze({}),
+  raw: '{}',
+});
 
 export const routeInputLabel = (key: string): string => {
   const words = key
@@ -409,6 +426,77 @@ export const cliCommandInvocation = (
     if (!appendValues(option, false)) return undefined;
   }
   return argv.join(' ');
+};
+
+const routeEditorArgv = (
+  command: RouteManifestCliCommand | undefined,
+  argumentsValue: RouteInputArguments | undefined,
+): string | undefined => argumentsValue === undefined || command === undefined
+  ? undefined
+  : cliCommandInvocation(command, argumentsValue);
+
+export const setRouteEditorDraftValue = (
+  state: RouteEditorState,
+  schema: RouteInputSchema | undefined,
+  command: RouteManifestCliCommand | undefined,
+  key: string,
+  value: RouteInputDraftValue | undefined,
+): RouteEditorState => {
+  const entries = { ...state.draft };
+  if (value === undefined) {
+    delete entries[key];
+  } else {
+    entries[key] = value;
+  }
+  const draft = Object.freeze(entries);
+  if (!state.attempted || schema === undefined) return Object.freeze({ ...state, draft });
+  const validated = validateRouteInput(schema, draft);
+  return Object.freeze({
+    ...state,
+    arguments: validated.arguments,
+    argv: routeEditorArgv(command, validated.arguments),
+    draft,
+    errors: Object.freeze({ ...validated.errors }),
+  });
+};
+
+export const setRouteEditorRaw = (
+  state: RouteEditorState,
+  raw: string,
+): RouteEditorState => {
+  if (!state.attempted) return Object.freeze({ ...state, raw });
+  const validated = validateRawRouteInput(raw);
+  return Object.freeze({
+    ...state,
+    arguments: validated.arguments,
+    raw,
+    rawError: validated.error,
+  });
+};
+
+export const validateRouteEditor = (
+  state: RouteEditorState,
+  schema: RouteInputSchema | undefined,
+  command: RouteManifestCliCommand | undefined,
+): RouteEditorState => {
+  if (schema === undefined) {
+    const validated = validateRawRouteInput(state.raw);
+    return Object.freeze({
+      ...state,
+      arguments: validated.arguments,
+      argv: routeEditorArgv(command, validated.arguments),
+      attempted: true,
+      rawError: validated.error,
+    });
+  }
+  const validated = validateRouteInput(schema, state.draft);
+  return Object.freeze({
+    ...state,
+    arguments: validated.arguments,
+    argv: routeEditorArgv(command, validated.arguments),
+    attempted: true,
+    errors: Object.freeze({ ...validated.errors }),
+  });
 };
 
 export const mcpToolPrefillFor = (
