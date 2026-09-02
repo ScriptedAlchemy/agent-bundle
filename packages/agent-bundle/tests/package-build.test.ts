@@ -200,6 +200,54 @@ describe('framework-owned package build', () => {
     await expect(stat(join(root, 'dist', 'answer.test.d.ts'))).rejects.toMatchObject({ code: 'ENOENT' });
   }, 120_000);
 
+  it('reports a failed declaration build as AB4716 carrying the underlying TypeScript diagnostics', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      // An exported factory whose inferred declaration type must name a type
+      // its own module does not export. The failure is emit-only: `--noEmit`
+      // type checking stays clean, so only declaration generation catches it.
+      'src/cli-command.ts': [
+        'interface CliCommandDefinition { readonly name: string }',
+        '',
+        'export const defineCliCommand = (name: string): CliCommandDefinition => ({ name });',
+        '',
+      ].join('\n'),
+      'src/index.ts': [
+        "import { defineCliCommand } from './cli-command';",
+        '',
+        "export const audibleOperations = () => ({ list: defineCliCommand('list') });",
+        '',
+      ].join('\n'),
+    });
+    await installTypescriptToolchain(root);
+
+    const stderr: string[] = [];
+    const exitCode = await runCli(
+      ['build', '--root', root, '--output', 'artifact'],
+      { stderr: { write: (chunk: string) => stderr.push(chunk) }, stdout: { write: () => undefined } },
+    );
+    expect(exitCode).toBe(1);
+
+    const diagnostics = JSON.parse(stderr.join('')) as readonly {
+      code: string;
+      message: string;
+      recovery?: string;
+      sourcePath?: string;
+    }[];
+    // The dedicated declaration code, never the AB5000 catch-all that
+    // collides with the dev-lock meaning.
+    expect(diagnostics.length).toBeGreaterThan(0);
+    expect([...new Set(diagnostics.map((diagnostic) => diagnostic.code))]).toEqual(['AB4716']);
+
+    const emitError = diagnostics.find((diagnostic) => diagnostic.message.includes('TS4023'));
+    expect(emitError).toBeDefined();
+    expect(emitError!.message).toContain('src/index.ts(3,14)');
+    expect(emitError!.message).toContain("Exported variable 'audibleOperations'");
+    expect(emitError!.message).toContain('CliCommandDefinition');
+    expect(emitError!.sourcePath).toBe(join(root, 'src', 'index.ts'));
+    expect(emitError!.recovery).toContain('--noEmit');
+  }, 120_000);
+
   it('rejects artifact outputs that overlap the package output directory', async () => {
     const root = await fixtureRoot(conventionFixture());
     await expect(build({ output: 'dist', packageOutputs: true, root })).rejects.toThrow(/overlaps the package build output/u);

@@ -100,6 +100,16 @@ const asRslibRspackHatch = (
 
 const entryLibId = (entry: Pick<RslibEntry, 'name'>): string => `agent-bundle-${entry.name}`;
 
+/**
+ * rsbuild-plugin-dts aborts a failed declaration pass with a stackless prose
+ * Error naming only the Rslib environment ("Error occurred in
+ * agent-bundle-index declaration files generation.") — there is no structured
+ * signal to key on, so the phrase is the contract. A build failure this does
+ * not match is not a declaration failure and keeps its own reporting.
+ */
+export const isDeclarationGenerationFailure = (error: unknown): boolean =>
+  error instanceof Error && /declaration files/iu.test(error.message);
+
 // join (not resolve) so a tokenized output root (`<output>/<target>`) stays
 // a token instead of resolving against the cwd.
 const generatedEntryModulePath = (outputRoot: string, entry: RslibEntry): string =>
