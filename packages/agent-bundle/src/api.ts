@@ -95,6 +95,10 @@ import {
   validateClaudePlugin,
   type ClaudePluginValidationReport,
 } from './host-contracts/claude-plugin-validation.ts';
+import {
+  validateCodexPlugin,
+  type CodexPluginValidationReport,
+} from './host-contracts/codex-plugin-validation.ts';
 import type { EvalComparison } from './eval/compare.ts';
 import { EvalRunStoreError } from './eval/errors.ts';
 import {
@@ -160,6 +164,8 @@ export type {
   NativeHost,
   RedactedEventEnvelope,
 } from './host-contracts/host-contract.ts';
+export { validateClaudePlugin, validateCodexPlugin };
+export type { ClaudePluginValidationReport, CodexPluginValidationReport };
 
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
@@ -237,7 +243,7 @@ export interface ValidateOptions extends ProjectOptions {
 
 export interface ValidateResult {
   readonly diagnostics: readonly Diagnostic[];
-  readonly hostValidation?: readonly ClaudePluginValidationReport[];
+  readonly hostValidation?: readonly (ClaudePluginValidationReport | CodexPluginValidationReport)[];
   readonly model?: NormalizedPlugin;
 }
 
@@ -478,12 +484,18 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
         return Object.freeze({ diagnostics: freezeDiagnostics(validated.diagnostics) });
       }
       const reports = await Promise.all(validated.snapshot.manifest.targets
-        .filter((target) => target.name === 'claude' || target.name === 'plugin')
-        .map((target) => validateClaudePlugin({
-          pluginDirectory: join(artifact, target.name),
-          strict: options.strict,
-          target: target.name,
-        })));
+        .filter((target) => target.name === 'claude' || target.name === 'codex' || target.name === 'plugin')
+        .map((target) => target.name === 'codex'
+          ? validateCodexPlugin({
+            pluginDirectory: join(artifact, target.name),
+            strict: options.strict,
+            target: target.name,
+          })
+          : validateClaudePlugin({
+            pluginDirectory: join(artifact, target.name),
+            strict: options.strict,
+            target: target.name,
+          })));
       return Object.freeze({
         diagnostics: freezeDiagnostics([
           ...validated.diagnostics,

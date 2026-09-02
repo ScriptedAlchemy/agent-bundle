@@ -152,3 +152,11 @@ export type {
   ClaudePluginValidationStatus,
   ValidateClaudePluginOptions,
 } from '../host-contracts/claude-plugin-validation.ts';
+export { validateCodexPlugin } from '../host-contracts/codex-plugin-validation.ts';
+export type {
+  CodexPluginCommandResult,
+  CodexPluginCommandRunner,
+  CodexPluginValidationReport,
+  CodexPluginValidationStatus,
+  ValidateCodexPluginOptions,
+} from '../host-contracts/codex-plugin-validation.ts';

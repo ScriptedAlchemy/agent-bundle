@@ -34,6 +34,20 @@ gate a build, a validation, or a dev rebuild.
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
 
+## Codex host validation (`AB6030`–`AB6033`)
+
+Codex 0.147.0 publishes plugin installation commands but no plugin-validation
+developer tool. Agent Bundle therefore validates built Codex JSON documents
+against its vendored pinned schemas and treats the app-server schema generator
+as a separate drift signal, never as a substitute plugin contract.
+
+| Code | Severity | Meaning | Recovery |
+| --- | --- | --- | --- |
+| `AB6030` | info | The Codex CLI is unavailable, or the installed Codex release publishes no plugin validation command. | Install Codex and put it on `PATH`; until Codex publishes a validator, use the vendored pinned-schema diagnostics. |
+| `AB6031` | info / warning (error in strict mode) | The app-server schema-generation verb is unavailable, or its live output is missing or differs from the pinned generated hook schemas. | Review the attributable host schema source and update the pinned revision only when Codex publishes the matching contract. |
+| `AB6032` | error | A required Codex bundle document is missing, unreadable, invalid JSON, or fails its vendored pinned schema. | Repair the named `.codex-plugin/plugin.json`, `hooks/hooks.json`, `.mcp.json`, or marketplace document and rebuild. |
+| `AB6033` | error | A bounded Codex version or schema-generation command could not start, failed, timed out, exceeded 1 MiB of output, or produced unreadable output. | Verify `codex --version` and `codex app-server generate-json-schema --out <dir>` complete successfully, then rerun validation. |
+
 ## npm prepack gate (`AB7010`–`AB7013`)
 
 | Code | Meaning |
