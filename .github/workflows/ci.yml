@@ -27,6 +27,10 @@ jobs:
   # packages contain compiled SKILL.md artifacts, and package markdown affects
   # npm pack audits. Classification fails open so uncertain PRs run every heavy
   # job; pushes to main never skip any job based on changed paths.
+  # Path rules and fail-open listing checks live in
+  # scripts/classify-docs-only.mjs (unit-tested). This job sparse-checkouts
+  # only that script so the vendored Effect subtree never lands on the
+  # classify critical path.
   changes:
     if: github.event_name == 'pull_request'
     name: Detect changed paths
@@ -37,6 +41,14 @@ jobs:
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          filter: blob:none
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/classify-docs-only.mjs
+          sparse-checkout-cone-mode: false
       - name: Classify changed files
         id: classify
         env:
@@ -52,12 +64,7 @@ jobs:
               --jq '.changed_files'
           )"; then
             echo "Could not read the PR changed-files count; failing open so heavy jobs run."
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ ! "$changed_files" =~ ^[0-9]+$ ]]; then
-            echo "Invalid PR changed-files count '$changed_files'; failing open so heavy jobs run."
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            node scripts/classify-docs-only.mjs --listing-error
             exit 0
           fi
 
@@ -66,54 +73,13 @@ jobs:
             --jq '.[] | [.filename, (.previous_filename // "")] | @tsv' \
             > "$files_file"; then
             echo "Could not list changed files; failing open so heavy jobs run."
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            node scripts/classify-docs-only.mjs --listing-error
             exit 0
           fi
 
-          mapfile -t entries < "$files_file"
-          if (( ${#entries[@]} == 0 )); then
-            echo "No changed files returned; failing open so heavy jobs run."
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if (( ${#entries[@]} != changed_files )); then
-            echo "Listed ${#entries[@]} of $changed_files changed files; failing open so heavy jobs run."
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          paths=()
-          for entry in "${entries[@]}"; do
-            IFS=$'\t' read -r filename previous_filename <<< "$entry"
-            paths+=("$filename")
-            if [[ -n "$previous_filename" ]]; then
-              paths+=("$previous_filename")
-            fi
-          done
-
-          docs_only=true
-          for f in "${paths[@]}"; do
-            case "$f" in
-              docs/*|agent-patterns/*) ;;
-              .changeset/*.md) ;;
-              */*)
-                echo "'$f' is nested outside the docs allowlist; heavy jobs will run."
-                docs_only=false
-                break
-                ;;
-              *.md) ;;
-              *)
-                echo "'$f' is not a docs-only path; heavy jobs will run."
-                docs_only=false
-                break
-                ;;
-            esac
-          done
-
-          if [[ "$docs_only" == "true" ]]; then
-            echo "All ${#entries[@]} changed files are docs-only; heavy jobs will be skipped."
-          fi
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          node scripts/classify-docs-only.mjs \
+            --changed-files-count "$changed_files" \
+            --listing "$files_file"
 
   # Builds and checks every public example through its own toolchain.
   examples-check:

@@ -24,7 +24,9 @@ examples/release/micro-eval gates, so it is a fast signal, not a merge gate.
 Docs-only PRs skip the hosted Verify, examples, release-gates, and micro-eval
 jobs. Docs-only means changes under `docs/` or `agent-patterns/`, changeset
 markdown (`.changeset/*.md`), or top-level markdown. Nested markdown elsewhere
-is treated as code. Pushes to `main` never use this skip.
+is treated as code. Pushes to `main` never use this skip. The allowlist and
+fail-open listing checks are implemented by `scripts/classify-docs-only.mjs`
+and covered by `packages/agent-bundle/tests/classify-docs-only.test.ts`.
 
 ## What it runs
 
