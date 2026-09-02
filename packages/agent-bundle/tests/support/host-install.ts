@@ -1,7 +1,7 @@
 import { execFile as executeFile } from 'node:child_process';
 import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 import { parse as parseYaml } from 'yaml';
@@ -17,9 +17,16 @@ import { createAdapterValidator } from '../../src/adapters/types.ts';
 import { isInsideOrEqual } from '../../src/core/paths.ts';
 import { validateCodexOpenaiYaml } from '../../src/schemas/skill-hosts/contract.ts';
 import {
+  compileTestManifest,
   HOST_INSTALL_PROOF_LEVEL,
   proofLevelLabel,
 } from '../../src/test/manifest.ts';
+import {
+  runInstalledHostContractMatrix,
+  type ContractRouteFixture,
+  type InstalledHostContractMatrixReport,
+} from '../../src/test/contract.ts';
+import { openInstalledHostMcpServer } from '../../src/test/installed.ts';
 import {
   normalClaudeSettingsAndPluginsUnchanged,
   packedNativeEnvironment,
@@ -117,6 +124,14 @@ export interface HostInstallCommand {
   readonly cwd?: string;
   readonly executable: string;
   readonly prefixArguments?: readonly string[];
+}
+
+export interface InstalledHostContractMatrixProofOptions {
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  readonly host: 'claude' | 'codex' | 'cursor';
+  readonly mode: 'adapter-simulator' | 'native-host';
+  readonly mutateInstalled?: (installedRoot: string) => Promise<void>;
 }
 
 interface HostInstallProofOptions {
@@ -369,6 +384,12 @@ const isolatedEnvironment = (
   ...values,
 });
 
+const stringEnvironment = (
+  environment: Readonly<NodeJS.ProcessEnv>,
+): Readonly<Record<string, string>> => Object.fromEntries(
+  Object.entries(environment).filter((entry): entry is [string, string] => entry[1] !== undefined),
+);
+
 const assertInstallResult = (
   document: InstallResult,
   host: 'claude' | 'codex' | 'cursor',
@@ -400,7 +421,7 @@ const buildFixtureProject = async (options: {
   const artifactRoot = join(project, 'artifact');
   try {
     await cp(join(fixturesRoot, options.fixture), project, { recursive: true });
-    await symlink(join(workspaceRoot, 'node_modules'), join(project, 'node_modules'), 'dir');
+    await symlink(join(packageRoot, 'node_modules'), join(project, 'node_modules'), 'dir');
     await options.prepareProject?.(project);
     const result = await run(process.execPath, [
       cli,
@@ -483,6 +504,110 @@ export const buildPortableHostInstallFixture = async (options: {
 
 export const disposeHostInstallFixture = async (fixture: BuiltFixtureProject): Promise<void> => {
   await rm(fixture.root, { force: true, recursive: true });
+};
+
+/**
+ * Stages one already-built target, opens its emitted MCP command from the
+ * installed location, and runs the shared matrix in that same live session.
+ * The adapter-simulator lane is deterministic; native-host mode uses the
+ * existing real CLI install machinery before the same installed-layout spawn.
+ */
+export const runInstalledHostContractMatrixProof = async (
+  fixture: BuiltHostInstallFixture,
+  options: InstalledHostContractMatrixProofOptions,
+): Promise<InstalledHostContractMatrixReport> => {
+  const root = await mkdtemp(join(tmpdir(), `agent-bundle-installed-matrix-${options.host}-`));
+  const home = join(root, 'home');
+  const config = join(root, 'config');
+  const codexHome = join(root, 'codex');
+  const simulatedRoot = join(root, 'installed');
+  try {
+    await Promise.all([
+      mkdir(home, { recursive: true }),
+      mkdir(config, { recursive: true }),
+      mkdir(codexHome, { recursive: true }),
+    ]);
+    const environment = isolatedEnvironment(options.environment, {
+      CLAUDE_CONFIG_DIR: config,
+      CODEX_HOME: codexHome,
+      HOME: home,
+    });
+    let installedRoot: string;
+    let hostBinaryVersion: string | undefined;
+    let sessionEvidence: string | undefined;
+    if (options.mode === 'adapter-simulator') {
+      await cp(fixture.bundles[options.host], simulatedRoot, { recursive: true });
+      installedRoot = simulatedRoot;
+    } else if (options.host === 'cursor') {
+      await mkdir(join(home, '.cursor'), { recursive: true });
+      const installed = await runInstallCommand(fixture, 'cursor', fixture.bundles.cursor, {
+        environment,
+      });
+      assertProof(installed.exitCode === 0, `Cursor public install path failed: ${commandDetail(installed)}`);
+      const document = parseJson<InstallResult>(installed.stdout, 'Cursor install');
+      assertInstallResult(document, 'cursor', 'installed');
+      assertProof(typeof document.destination === 'string', 'Cursor install returned no destination.');
+      installedRoot = document.destination;
+      sessionEvidence = 'unavailable: Cursor exposes no non-interactive plugin-loading session surface; adapter-simulated stdio spawn from isolated installed root';
+    } else {
+      const versioned = await run(options.host, ['--version'], {
+        cwd: fixture.bundles[options.host],
+        environment,
+      });
+      assertProof(versioned.exitCode === 0, `${options.host} --version failed: ${commandDetail(versioned)}`);
+      hostBinaryVersion = /(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)/u.exec(versioned.stdout)?.[1];
+      assertProof(hostBinaryVersion !== undefined, `${options.host} --version did not report a semantic version.`);
+      const installed = await runInstallCommand(
+        fixture,
+        options.host,
+        fixture.bundles[options.host],
+        { environment },
+      );
+      assertProof(installed.exitCode === 0, `${options.host} public install path failed: ${commandDetail(installed)}`);
+      const document = parseJson<InstallResult>(installed.stdout, `${options.host} install`);
+      assertInstallResult(document, options.host, 'installed');
+      installedRoot = options.host === 'claude'
+        ? join(config, 'plugins', 'cache', marketplace, plugin, version)
+        : join(codexHome, 'plugins', 'cache', marketplace, plugin, version);
+      sessionEvidence = 'host-owned installation and adapter-format stdio spawn from isolated installed root';
+    }
+
+    await options.mutateInstalled?.(installedRoot);
+    const projectRoot = dirname(fixture.artifactRoot);
+    const compiledManifest = await compileTestManifest({ root: projectRoot });
+    const manifest = Object.freeze({
+      ...compiledManifest,
+      routes: Object.freeze({
+        ...compiledManifest.routes,
+        'tool:probe/echo': Object.freeze({
+          config: Object.freeze({}),
+          id: 'tool:probe/echo',
+          kind: 'tool' as const,
+          relativePath: 'src/mcp/probe.ts',
+          serverId: 'mcp:probe',
+          source: join(projectRoot, 'src', 'mcp', 'probe.ts'),
+        }),
+      }),
+    });
+    await using session = await openInstalledHostMcpServer({
+      artifactRoot: fixture.artifactRoot,
+      env: stringEnvironment(environment),
+      host: options.host,
+      ...(hostBinaryVersion === undefined ? {} : { hostBinaryVersion }),
+      installedRoot,
+      manifest,
+      server: 'probe',
+      ...(sessionEvidence === undefined ? {} : { sessionEvidence }),
+    });
+    return await runInstalledHostContractMatrix({
+      fixtures: options.fixtures,
+      manifest,
+      server: 'probe',
+      session,
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 };
 
 export const runClaudeHostInstallProof = async (

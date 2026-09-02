@@ -14,6 +14,9 @@ export default {
     name: 'host-install-proof',
     version: '1.0.0',
   },
+  routes: {
+    mcpCommands: true,
+  },
   skills: ['skills/probe'],
   targets: ['claude', 'codex', 'cursor'],
 };
