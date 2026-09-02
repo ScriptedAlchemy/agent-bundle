@@ -9,6 +9,7 @@ import {
   unavailableCapability,
   unionCapabilityStates,
 } from '../src/adapters/capability-state.ts';
+import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.250.json' with { type: 'json' };
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { CapabilityStateError, isCapabilityState } from '../src/core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../src/core/capabilities.ts';
@@ -266,6 +267,81 @@ it('reports Claude dependency support and honest unavailable composite coverage'
   }
   expect(registry.supports('claude', 'dependencies')).toBe(true);
   expect(registry.supports('plugin', 'dependencies')).toBe(false);
+});
+
+const claudeDistributionPolicyCapabilities = [
+  'skillsDirectoryPlugins',
+  'skillsDirectoryProjectTrust',
+  'skillsDirectoryMcpApproval',
+  'skillsDirectoryLspTrust',
+  'skillsDirectoryMonitors',
+  'pluginInstallScopes',
+  'pluginReload',
+  'pluginTrustGates',
+  'syncedPlugins',
+  'managedPluginScope',
+  'managedStrictKnownMarketplaces',
+  'managedBlockedMarketplaces',
+  'managedDisableSideloadFlags',
+  'managedDisableCommandPluginSources',
+  'managedAllowManagedHooksOnly',
+  'managedPluginSuggestions',
+  'pluginCliLifecycle',
+  'marketplaceCliLifecycle',
+] as const;
+
+it('records dated unavailable Claude distribution and policy capability rows', () => {
+  const registry = createDefaultRegistry();
+  const distributionPolicy = (
+    claudeCapabilityTable.plugin as unknown as {
+      readonly distributionPolicy?: Readonly<Record<
+        (typeof claudeDistributionPolicyCapabilities)[number],
+        {
+          readonly commands?: readonly string[];
+          readonly evidence: readonly string[];
+          readonly reason: string;
+          readonly state: string;
+        }
+      >>;
+    }
+  ).distributionPolicy;
+
+  expect(distributionPolicy).toBeDefined();
+  if (distributionPolicy === undefined) return;
+  expect(Object.keys(distributionPolicy).sort()).toEqual([...claudeDistributionPolicyCapabilities].sort());
+  for (const capability of claudeDistributionPolicyCapabilities) {
+    const row = distributionPolicy[capability];
+    expect(row.state).toBe('unavailable');
+    expect(row.reason.length).toBeGreaterThan(0);
+    expect(row.evidence.length).toBeGreaterThan(0);
+    expect(row.evidence.every((line) => line.includes('retrieved 2026-09-02'))).toBe(true);
+    expect(registry.get('claude').capabilities[capability]).toEqual({
+      reason: row.reason,
+      state: 'unavailable',
+    });
+    expect(registry.get('plugin').capabilities[capability]).toMatchObject({
+      state: 'unavailable',
+    });
+  }
+  expect(distributionPolicy.pluginCliLifecycle.commands).toEqual([
+    'init',
+    'new',
+    'install',
+    'uninstall',
+    'prune',
+    'enable',
+    'disable',
+    'update',
+    'list',
+    'details',
+    'tag',
+  ]);
+  expect(distributionPolicy.marketplaceCliLifecycle.commands).toEqual([
+    'add',
+    'list',
+    'remove',
+    'update',
+  ]);
 });
 
 it.each([

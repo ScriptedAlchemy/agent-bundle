@@ -77,6 +77,149 @@
       "semverRanges": true,
       "tagConvention": "{name}--v{version}"
     },
+    "distributionPolicy": {
+      "skillsDirectoryPlugins": {
+        "state": "unavailable",
+        "reason": "Agent Bundle emits a plugin directory but does not place it in a Claude skills directory or register the host-owned @skills-dir identity.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins and https://code.claude.com/docs/en/plugins-reference document that a folder with .claude-plugin/plugin.json under a skills directory auto-loads on the next session as <name>@skills-dir, in place, with no marketplace or install record.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents personal discovery under ~/.claude/skills/ and project discovery under <primary-working-directory>/.claude/skills/; project discovery does not walk up from a subdirectory."
+        ]
+      },
+      "skillsDirectoryProjectTrust": {
+        "state": "unavailable",
+        "reason": "Agent Bundle cannot grant or inspect the workspace trust required before Claude loads a project-scope @skills-dir plugin.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference requires explicit workspace trust for the project folder itself before a project-scope @skills-dir plugin loads; trust for a parent folder and a -p session do not satisfy the gate."
+        ]
+      },
+      "skillsDirectoryMcpApproval": {
+        "state": "unavailable",
+        "reason": "Agent Bundle can emit plugin MCP configuration but cannot complete Claude's per-server approval for a project-scope @skills-dir plugin.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference sends MCP servers declared by a project-scope @skills-dir plugin through the same per-server approval as a project .mcp.json."
+        ]
+      },
+      "skillsDirectoryLspTrust": {
+        "state": "unavailable",
+        "reason": "Agent Bundle can emit plugin LSP configuration but cannot satisfy Claude's workspace-trust gate for a project-scope @skills-dir plugin.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference starts LSP servers from a project-scope @skills-dir plugin only after the user trusts that workspace."
+        ]
+      },
+      "skillsDirectoryMonitors": {
+        "state": "unavailable",
+        "reason": "Agent Bundle cannot make Claude load background monitors from a project-scope @skills-dir plugin, which the host explicitly skips.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference states that background monitors do not load for project-scope @skills-dir plugins; personal-scope plugins do not have that restriction."
+        ]
+      },
+      "pluginInstallScopes": {
+        "state": "unavailable",
+        "reason": "Agent Bundle emits installation instructions but cannot choose or persist a Claude plugin installation scope.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference maps user, project, and local installs to ~/.claude/settings.json, .claude/settings.json, and .claude/settings.local.json respectively, while managed scope is read-only and update-only.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents --scope user|project|local for install and uninstall, scope auto-detection for enable and disable, and --scope user|project|local|managed for update."
+        ]
+      },
+      "pluginReload": {
+        "state": "unavailable",
+        "reason": "Agent Bundle cannot reload or restart a running Claude session after plugin files or installed versions change.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins documents /reload-plugins for development changes and https://code.claude.com/docs/en/plugins-reference says @skills-dir SKILL.md edits are immediate while hooks, MCP, agents, and output styles require /reload-plugins or restart.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference keeps old hook, monitor, MCP, and LSP paths after a mid-session update; /reload-plugins switches hooks, MCP, and LSP, but monitors require restart, and unchanged MCP connections remain live.",
+          "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin --help` describes update as restart-required."
+        ]
+      },
+      "pluginTrustGates": {
+        "state": "unavailable",
+        "reason": "Agent Bundle cannot accept Claude workspace-trust, server-managed-settings approval, or command-source confirmation prompts on a user's behalf.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces runs project-declared headersHelper commands only after trust for that exact folder, runs server-managed commands only after security approval, and cannot show the approval dialog in -p or SDK sessions.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces requires explicit per-install or per-update acceptance for plugin entry headersHelper and command sources; non-interactive users must pass --yes."
+        ]
+      },
+      "syncedPlugins": {
+        "state": "unavailable",
+        "reason": "Agent Bundle cannot synchronize or administer the @synced plugins attached to a user's claude.ai account.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference limits @synced downloads to Cowork and cloud session environments, with no marketplace or install record; local terminal sessions do not load them.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference permits enable and disable by @synced ID but says install, update, and uninstall do not apply; account-level removal takes effect in the next synced session."
+        ]
+      },
+      "managedPluginScope": {
+        "state": "unavailable",
+        "reason": "Agent Bundle cannot create, remove, enable, or disable managed-scope plugins; Claude exposes that host-owned scope as read-only and update-only.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference lists managed plugins under Managed settings as read-only and update-only, and only plugin update accepts --scope managed."
+        ]
+      },
+      "managedStrictKnownMarketplaces": {
+        "state": "unavailable",
+        "reason": "Agent Bundle does not emit or override the organization-managed strictKnownMarketplaces allowlist.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces defines strictKnownMarketplaces as undefined for no restriction, [] for complete lockdown, or a source list for allowlisting; it restricts additions but does not register marketplaces.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces checks the managed allowlist before network or filesystem access on marketplace add and plugin install, update, refresh, and auto-update, and users or projects cannot override it."
+        ]
+      },
+      "managedBlockedMarketplaces": {
+        "state": "unavailable",
+        "reason": "Agent Bundle does not emit or override the organization-managed blockedMarketplaces denylist.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces applies blockedMarketplaces at the same pre-I/O add, install, update, refresh, and auto-update gates as strictKnownMarketplaces.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces documents GitHub owner wildcards from 2.1.223 and URL clone matching from 2.1.232, ignoring .git and appended refs for the latter."
+        ]
+      },
+      "managedDisableSideloadFlags": {
+        "state": "unavailable",
+        "reason": "Agent Bundle cannot configure or bypass disableSideloadFlags in Claude managed settings.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces documents disableSideloadFlags as the managed companion to strictKnownMarketplaces that rejects one-run CLI sideload flags for plugins, agents, and MCP servers; Agent Bundle's agents component remains gate-deferred (#100 stage 2 G5, PR #220) as recorded by claude.settings.agent.deferred."
+        ]
+      },
+      "managedDisableCommandPluginSources": {
+        "state": "unavailable",
+        "reason": "Agent Bundle emits no managed setting that can permit, block, or exempt Claude command plugin sources.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces documents disableCommandPluginSources as the separate control needed because strictKnownMarketplaces allowlists marketplaces rather than their command-source entries.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces says disableCommandPluginSources blocks command sources and headersHelper commands across the organization, except commands declared by managed settings themselves."
+        ]
+      },
+      "managedAllowManagedHooksOnly": {
+        "state": "unavailable",
+        "reason": "Agent Bundle cannot configure allowManagedHooksOnly or claim that emitted plugin commands are exempt from that managed policy.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces says allowManagedHooksOnly blocks command sources by default and blocks headersHelper unless disableCommandPluginSources is explicitly false; a marketplace declared by managed settings remains exempt for its own command.",
+          "retrieved 2026-09-02: the existing pinned settings evidence records that plugin subagentStatusLine commands do not run under allowManagedHooksOnly even when the plugin is force-enabled in managed enabledPlugins, so this row does not invent a settings.json exemption."
+        ]
+      },
+      "managedPluginSuggestions": {
+        "state": "unavailable",
+        "reason": "Agent Bundle does not emit the managed pluginSuggestionMarketplaces allowlist or marketplace relevance signals for contextual installation suggestions.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces documents pluginSuggestionMarketplaces as the managed allowlist for marketplaces whose plugins may appear as contextual install suggestions.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces documents marketplace-entry relevance signals as effective only for an administrator-allowlisted marketplace; suggested command-source plugins are refused in bulk and direct users to the plugin's own review view."
+        ]
+      },
+      "pluginCliLifecycle": {
+        "state": "unavailable",
+        "reason": "Agent Bundle emits Claude plugin artifacts but does not invoke Claude's plugin creation, installation, state, update, inspection, or release commands.",
+        "commands": ["init", "new", "install", "uninstall", "prune", "enable", "disable", "update", "list", "details", "tag"],
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents init with new alias, install, uninstall, prune, enable, disable, update, list, details, and tag, including their scope and safety options.",
+          "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin --help` exposes init|new, install, uninstall, prune, enable, disable, update, list, details, and tag."
+        ]
+      },
+      "marketplaceCliLifecycle": {
+        "state": "unavailable",
+        "reason": "Agent Bundle emits marketplace manifests but does not add, list, remove, or update marketplaces in a user's Claude configuration.",
+        "commands": ["add", "list", "remove", "update"],
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugin-marketplaces documents marketplace add, list, remove (rm alias), and update; remove can target an editable scope, update can target one or all, and seed-managed marketplaces reject remove and update.",
+          "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin marketplace --help` exposes add, list, remove|rm, and update."
+        ]
+      }
+    },
     "experimentalThemes": {
       "defaultDirectory": "themes",
       "experimental": true,
@@ -214,7 +357,7 @@
     "workspaceRoot": "${CLAUDE_PROJECT_DIR}"
   },
   "provenance": {
-    "observedAt": "2026-09-01",
+    "observedAt": "2026-09-02",
     "source": "https://docs.anthropic.com/en/docs/claude-code/plugins",
     "evidence": [
       "LSP servers section: \"Location: .lsp.json in plugin root, or inline in plugin.json\"; the file-locations table lists .lsp.json as the default LSP location, alongside .mcp.json, at the plugin root rather than inside .claude-plugin/.",
