@@ -24,7 +24,7 @@ import {
   createCanonicalEventProps,
   projectEventDocument,
   validateNativeEventEnvelope,
-} from '../../events/project.ts';
+} from '../../events/projection.ts';
 import {
   canonicalAgentEvents,
   type CanonicalAgentEvent,
