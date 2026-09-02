@@ -157,6 +157,25 @@ export interface ClaudeSettingsConfig {
 }
 
 /**
+ * One Claude Code plugin dependency. Without `marketplace`, Claude resolves
+ * the name in the declaring plugin's marketplace. Cross-marketplace
+ * dependencies require the target marketplace in the root marketplace's
+ * `allowCrossMarketplaceDependenciesOn`; only the root allowlist is consulted,
+ * so trust does not chain.
+ *
+ * Version ranges resolve against git tags named `{name}--v{version}`. Git
+ * sources fetch the highest satisfying tag; npm, archive, and command sources
+ * are only checked after loading. Command-source dependencies and dependencies
+ * that require `headersHelper` are never auto-installed. Pre-releases are
+ * excluded unless the range opts in with a suffix such as `^2.0.0-0`.
+ */
+export interface ClaudeDependencyConfig {
+  readonly marketplace?: string;
+  readonly name: string;
+  readonly version?: string;
+}
+
+/**
  * Claude's host config. `lspServers` lives here rather than in a portable
  * top-level block because no other pinned host contract has an LSP surface;
  * the portable LSP component kind stays deferred. `settings` is host-scoped
@@ -165,6 +184,12 @@ export interface ClaudeSettingsConfig {
 export interface ClaudeHostConfig extends AgentBundleHostConfig {
   /** Project-authored directory copied to the plugin-root `bin/` executable convention. */
   readonly bin?: string;
+  /**
+   * Plugins Claude Code resolves and auto-installs. A bare name uses the
+   * declaring plugin's marketplace; the object form adds a semver range or an
+   * explicitly allowlisted cross-marketplace source.
+   */
+  readonly dependencies?: readonly (string | ClaudeDependencyConfig)[];
   readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
   readonly settings?: ClaudeSettingsConfig;
   /** Enable-time options copied into `.claude-plugin/plugin.json`. */
@@ -222,7 +247,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.8.0',
+  adapterRevision: '1.9.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -382,6 +407,203 @@ const isDataRecord = (value: unknown): value is Readonly<Record<string, unknown>
 
 const isPlainDataRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   isDataRecord(value) && [null, Object.prototype].includes(Object.getPrototypeOf(value));
+const dependencyFields: ReadonlySet<string> = new Set(['marketplace', 'name', 'version']);
+const pluginNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const numericSemverIdentifier = '(?:0|[1-9][0-9]*)';
+const prereleaseSemverIdentifier = '(?:0|[1-9][0-9]*|[A-Za-z-][0-9A-Za-z-]*)';
+const semverSuffix = `(?:-${prereleaseSemverIdentifier}(?:\\.${prereleaseSemverIdentifier})*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?`;
+const fullSemverVersion = `${numericSemverIdentifier}\\.${numericSemverIdentifier}\\.${numericSemverIdentifier}${semverSuffix}`;
+const partialSemverVersion = `${numericSemverIdentifier}(?:\\.${numericSemverIdentifier})?`;
+const wildcardSemverVersion = `${numericSemverIdentifier}\\.(?:[xX*]|${numericSemverIdentifier}\\.[xX*])`;
+const semverRangeVersion = `(?:${fullSemverVersion}|${wildcardSemverVersion}|${partialSemverVersion})`;
+const hyphenRangePattern = new RegExp(`^${semverRangeVersion}\\s+-\\s+${semverRangeVersion}$`, 'u');
+const comparatorPattern = new RegExp(`(?:~|\\^|>=|<=|>|<|=)?\\s*${semverRangeVersion}`, 'uy');
+
+/**
+ * Validates npm-style dependency range syntax without resolving versions.
+ * Accepted clauses are bare/partial versions, x-wildcards, `~`, `^`, `>=`,
+ * `<=`, `>`, `<`, and `=` comparators, space-separated intersections, hyphen
+ * ranges, `||` unions, and semver pre-release/build suffixes.
+ */
+export const isValidClaudeDependencyRange = (value: string): boolean => {
+  if (value.length === 0 || value.trim() !== value) return false;
+  for (const clause of value.split('||')) {
+    const range = clause.trim();
+    if (range.length === 0) return false;
+    if (hyphenRangePattern.test(range)) continue;
+    let offset = 0;
+    let comparators = 0;
+    while (offset < range.length) {
+      comparatorPattern.lastIndex = offset;
+      const match = comparatorPattern.exec(range);
+      if (match === null || match.index !== offset) return false;
+      comparators += 1;
+      offset = comparatorPattern.lastIndex;
+      if (offset === range.length) break;
+      const whitespace = /^\s+/u.exec(range.slice(offset));
+      if (whitespace === null) return false;
+      offset += whitespace[0].length;
+    }
+    if (comparators === 0) return false;
+  }
+  return true;
+};
+
+interface ClaudeDependenciesPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: readonly (string | Readonly<Record<string, string>>)[];
+  readonly sourceInputs: readonly string[];
+}
+
+const noDependenciesPlan: ClaudeDependenciesPlan = deepFreeze({
+  diagnostics: [],
+  sourceInputs: [],
+});
+
+const dependencyDiagnostic = (code: string, message: string, recovery: string): Diagnostic => ({
+  ...errorDiagnostic(code, message),
+  recovery,
+});
+
+const planClaudeDependencies = (model: NormalizedPlugin): ClaudeDependenciesPlan => {
+  const extension = model.extensions[claudeName];
+  if (extension === undefined || !isDataRecord(extension.value)) return noDependenciesPlan;
+  const declared = extension.value['dependencies'];
+  if (declared === undefined) return noDependenciesPlan;
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (!Array.isArray(declared) || declared.length === 0) {
+    return {
+      diagnostics: [dependencyDiagnostic(
+        'claude.dependencies.declaration.invalid',
+        'Claude dependencies must be a nonempty array of plugin names or dependency objects.',
+        'Declare at least one dependency as a nonempty plugin name or { name, version?, marketplace? } object, then rebuild.',
+      )],
+      sourceInputs: inputs,
+    };
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  const document: (string | Readonly<Record<string, string>>)[] = [];
+  const seen = new Set<string>();
+  for (const [index, entry] of declared.entries()) {
+    if (typeof entry === 'string') {
+      if (entry.length === 0) {
+        diagnostics.push(dependencyDiagnostic(
+          'claude.dependencies.entry.invalid',
+          `Claude dependency at index ${index} must be a nonempty plugin name or dependency object.`,
+          'Replace the entry with a nonempty plugin name or { name, version?, marketplace? } object, then rebuild.',
+        ));
+        continue;
+      }
+      if (!pluginNamePattern.test(entry)) {
+        diagnostics.push(dependencyDiagnostic(
+          'claude.dependencies.name.invalid',
+          `Claude dependency name ${JSON.stringify(entry)} must match the plugin-name pattern ${pluginNamePattern.source}.`,
+          'Use a lowercase kebab-case Claude plugin name, then rebuild.',
+        ));
+        continue;
+      }
+      if (entry === model.metadata.name) {
+        diagnostics.push(dependencyDiagnostic(
+          'claude.dependencies.self',
+          `Claude plugin ${JSON.stringify(model.metadata.name)} cannot depend on itself.`,
+          'Remove the self-dependency; self-dependencies can deadlock plugin enable and disable operations.',
+        ));
+        continue;
+      }
+      const identity = `\u0000${entry}`;
+      if (seen.has(identity)) {
+        diagnostics.push(dependencyDiagnostic(
+          'claude.dependencies.duplicate',
+          `Claude dependency ${JSON.stringify(entry)} is declared more than once in the same marketplace.`,
+          'Keep one declaration for each dependency name and marketplace pair, then rebuild.',
+        ));
+        continue;
+      }
+      seen.add(identity);
+      document.push(entry);
+      continue;
+    }
+
+    if (!isDataRecord(entry)) {
+      diagnostics.push(dependencyDiagnostic(
+        'claude.dependencies.entry.invalid',
+        `Claude dependency at index ${index} must be a nonempty plugin name or dependency object.`,
+        'Replace the entry with a nonempty plugin name or { name, version?, marketplace? } object, then rebuild.',
+      ));
+      continue;
+    }
+    for (const field of Object.keys(entry).sort()) {
+      if (dependencyFields.has(field)) continue;
+      diagnostics.push(dependencyDiagnostic(
+        'claude.dependencies.field.unknown',
+        `Claude dependency ${index} declares unknown field ${JSON.stringify(field)}.`,
+        'Remove the unknown field; dependency objects support only name, version, and marketplace.',
+      ));
+    }
+    const name = entry['name'];
+    if (typeof name !== 'string' || name.length === 0) {
+      diagnostics.push(dependencyDiagnostic(
+        'claude.dependencies.name.required',
+        `Claude dependency object at index ${index} requires a nonempty name.`,
+        'Set name to a nonempty lowercase kebab-case Claude plugin name, then rebuild.',
+      ));
+      continue;
+    }
+    if (!pluginNamePattern.test(name)) {
+      diagnostics.push(dependencyDiagnostic(
+        'claude.dependencies.name.invalid',
+        `Claude dependency name ${JSON.stringify(name)} must match the plugin-name pattern ${pluginNamePattern.source}.`,
+        'Use a lowercase kebab-case Claude plugin name, then rebuild.',
+      ));
+      continue;
+    }
+    const marketplace = entry['marketplace'];
+    if (marketplace !== undefined && (typeof marketplace !== 'string' || marketplace.length === 0)) {
+      diagnostics.push(dependencyDiagnostic(
+        'claude.dependencies.marketplace.invalid',
+        `Claude dependency ${JSON.stringify(name)} marketplace must be a nonempty string when declared.`,
+        'Set marketplace to a nonempty marketplace name or omit it for same-marketplace resolution, then rebuild.',
+      ));
+      continue;
+    }
+    const version = entry['version'];
+    if (version !== undefined && (typeof version !== 'string' || !isValidClaudeDependencyRange(version))) {
+      diagnostics.push(dependencyDiagnostic(
+        'claude.dependencies.version.invalid',
+        `Claude dependency ${JSON.stringify(name)} version must be a valid npm-style semver range using forms such as ~2.1.0, ^2.0, >=1.4, =2.1.0, || unions, or an explicit pre-release opt-in such as ^2.0.0-0.`,
+        'Replace version with a documented semver range; invalid ranges become range-conflict errors only after distribution.',
+      ));
+      continue;
+    }
+    if (name === model.metadata.name) {
+      diagnostics.push(dependencyDiagnostic(
+        'claude.dependencies.self',
+        `Claude plugin ${JSON.stringify(model.metadata.name)} cannot depend on itself.`,
+        'Remove the self-dependency; self-dependencies can deadlock plugin enable and disable operations.',
+      ));
+      continue;
+    }
+    const identity = `${typeof marketplace === 'string' ? marketplace : ''}\u0000${name}`;
+    if (seen.has(identity)) {
+      diagnostics.push(dependencyDiagnostic(
+        'claude.dependencies.duplicate',
+        `Claude dependency ${JSON.stringify(name)} is declared more than once for marketplace ${JSON.stringify(marketplace ?? 'same marketplace')}.`,
+        'Keep one declaration for each dependency name and marketplace pair, then rebuild.',
+      ));
+      continue;
+    }
+    seen.add(identity);
+    document.push(Object.freeze({
+      ...(typeof marketplace === 'string' ? { marketplace } : {}),
+      name,
+      ...(typeof version === 'string' ? { version } : {}),
+    }));
+  }
+
+  if (hasErrors(diagnostics)) return { diagnostics, sourceInputs: inputs };
+  return { diagnostics, document: Object.freeze(document), sourceInputs: inputs };
+};
 
 const expandLspToken = (value: unknown): unknown =>
   typeof value === 'string' ? expandClaudeToken(value) : value;
@@ -1008,6 +1230,8 @@ export const planClaudeArtifacts = (
   diagnostics.push(...bin.diagnostics);
   const settings = planClaudeSettings(model);
   diagnostics.push(...settings.diagnostics);
+  const dependencies = planClaudeDependencies(model);
+  diagnostics.push(...dependencies.diagnostics);
   const generatedHooks = planHooks(model, targetName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
@@ -1020,6 +1244,7 @@ export const planClaudeArtifacts = (
 
   const plugin = {
     author: { name: model.metadata.name },
+    ...(dependencies.document === undefined ? {} : { dependencies: dependencies.document }),
     description: model.metadata.description ?? model.metadata.name,
     ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
     name: model.metadata.name,
@@ -1059,7 +1284,7 @@ export const planClaudeArtifacts = (
   }
 
   const basePlan = standardPluginArtifactPlan({
-    additionalPluginSourceInputs: userConfig.sourceInputs,
+    additionalPluginSourceInputs: sourceInputs(...userConfig.sourceInputs, ...dependencies.sourceInputs),
     diagnostics,
     ...(hostDocuments.length === 0 ? {} : { hostDocuments }),
     hookDocument,
@@ -1114,6 +1339,14 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       capabilityTable.plugin.commands,
       evidence,
       'The pinned Claude Code plugin contract does not support commands.',
+    ),
+    dependencies: capabilityStateFromSupport(
+      capabilityTable.plugin.dependencies.autoInstall &&
+        capabilityTable.plugin.dependencies.entryForms.includes('name') &&
+        capabilityTable.plugin.dependencies.entryForms.includes('object') &&
+        capabilityTable.plugin.dependencies.semverRanges,
+      evidence,
+      'The pinned Claude plugin contract does not document manifest dependencies.',
     ),
     install: supportedCapability(evidence),
     marketplace: supportedCapability(evidence),

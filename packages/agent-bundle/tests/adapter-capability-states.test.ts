@@ -175,6 +175,28 @@ it('reports Claude userConfig support and honest unavailable composite coverage'
   expect(registry.supports('plugin', 'userConfig')).toBe(false);
 });
 
+it('reports Claude dependency support and honest unavailable composite coverage', () => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('claude').capabilities.dependencies).toMatchObject({
+    evidence: {
+      observedVersion: '2.1.250',
+      target: 'claude',
+    },
+    state: 'supported',
+  });
+  expect(registry.get('plugin').capabilities.dependencies).toMatchObject({
+    reason: expect.stringContaining('Claude Code only'),
+    state: 'unavailable',
+  });
+  for (const target of ['codex', 'cursor', 'portable'] as const) {
+    expect(registry.get(target).capabilities.dependencies).toBeUndefined();
+    expect(registry.supports(target, 'dependencies')).toBe(false);
+  }
+  expect(registry.supports('claude', 'dependencies')).toBe(true);
+  expect(registry.supports('plugin', 'dependencies')).toBe(false);
+});
+
 it('intersects supported composite capabilities and merges both evidence records', () => {
   const intersection = intersectCapabilityStates(
     supportedCapability(evidence('claude')),

@@ -184,7 +184,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.7.0',
+  adapterRevision: '1.8.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -570,6 +570,14 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
     commands: intersectCapabilityStates(
       intersectCapabilityStates(claudeAdapter.capabilities.commands!, codexAdapter.capabilities.commands!),
       cursorAdapter.capabilities.commands!,
+    ),
+    // The Claude half emits the declaration, but neither pinned non-Claude
+    // manifest has a shared dependency-resolution surface.
+    dependencies: intersectCapabilityStates(
+      claudeAdapter.capabilities.dependencies!,
+      unavailableCapability(
+        'The pinned Codex and Cursor plugin contracts publish no dependency declaration or resolution surface; manifest dependencies reach Claude Code only.',
+      ),
     ),
     install: unavailableCapability(
       'Plugin is a multi-host distribution profile, not one host runtime with a single installation transaction.',

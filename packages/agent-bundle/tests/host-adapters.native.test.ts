@@ -70,6 +70,19 @@ const withClaudeSettings = (settings: unknown): NormalizedPlugin => ({
   },
 });
 
+const withClaudeDependencies = (dependencies: unknown): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      target: 'claude',
+      value: { dependencies },
+    },
+  },
+});
+
 const writeClaudeArtifact = async (
   root: string,
   planned: NormalizedPlugin,
@@ -239,6 +252,23 @@ nativeIt('accepts emitted Claude userConfig under strict native validation', asy
     );
     expect(result.code, result.output).toBe(0);
     expect(result.output).toContain('Validation passed');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('accepts emitted Claude plugin dependencies under strict native validation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-dependencies-'));
+
+  try {
+    await writeClaudeArtifact(root, withClaudeDependencies([
+      'audit-logger',
+      { name: 'secrets-vault', version: '~2.1.0' },
+    ]));
+    const validation = await runClaudeValidation(root, root);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

@@ -368,6 +368,36 @@ it('emits Claude-only plugin default settings at the shared composite root', () 
   expect(documents['AGENTS.md']).toContain('- `settings.json` — Claude Code default configuration');
 });
 
+it('emits Claude-only dependencies from the unified plugin target', () => {
+  const model = {
+    ...bundleModel,
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config' as const, sourcePath: configPath },
+        target: 'claude',
+        value: {
+          dependencies: [
+            'audit-logger',
+            { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0' },
+          ],
+        },
+      },
+    },
+  } satisfies NormalizedPlugin;
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(documents['.claude-plugin/plugin.json']!).dependencies).toEqual([
+    'audit-logger',
+    { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0' },
+  ]);
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('dependencies');
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('dependencies');
+});
+
 it('emits each shared surface exactly once with no duplicate artifact paths', () => {
   const plan = planBundle(bundleModel);
   const paths = plan.entries.map((entry) => entry.relativePath);

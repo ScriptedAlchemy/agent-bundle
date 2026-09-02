@@ -2114,6 +2114,63 @@ it('rejects a rehashed Claude settings document that carries an unsupported key'
   }
 });
 
+const claudeDependenciesFiles = async (dependencies: unknown): Promise<string> => {
+  const registry = createDefaultRegistry();
+  const model: NormalizedPlugin = {
+    ...installSurfaceModel('claude'),
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+        target: 'claude',
+        value: { dependencies: ['audit-logger'] },
+      },
+    },
+  };
+  const files = registry.get('claude').plan(model).entries
+    .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
+    .map((entry) => {
+      if (entry.relativePath !== '.claude-plugin/plugin.json') {
+        return { contents: entry.content, kind: 'generated' as const, path: `claude/${entry.relativePath}` };
+      }
+      const manifest = JSON.parse(entry.content) as Record<string, unknown>;
+      manifest.dependencies = dependencies;
+      return {
+        contents: `${JSON.stringify(manifest)}\n`,
+        kind: 'generated' as const,
+        path: 'claude/.claude-plugin/plugin.json',
+      };
+    });
+  return writeArtifact(files, true, [targetFromRegistry(registry, 'claude')]);
+};
+
+it('accepts a Claude plugin manifest carrying valid dependencies', async () => {
+  const root = await claudeDependenciesFiles([
+    'audit-logger',
+    { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0' },
+  ]);
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a rehashed Claude plugin manifest carrying invalid dependencies', async () => {
+  const root = await claudeDependenciesFiles([{ name: 'audit-logger', source: './audit' }]);
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([expect.objectContaining({
+      code: 'AB6012',
+      generatedPath: 'claude/.claude-plugin/plugin.json',
+      message: expect.stringContaining('schema "plugin"'),
+      target: 'claude',
+    })]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 const logoSurfaceModel = (target: 'cursor' | 'plugin'): NormalizedPlugin => ({
   ...installSurfaceModel(target),
   metadata: {
