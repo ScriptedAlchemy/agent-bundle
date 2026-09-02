@@ -192,7 +192,7 @@ it('opens Hooks, MCP, and Playground from the compiled route graph alone', async
   });
 
   expect([...capabilities.pages]).toEqual([
-    'overview', 'routes', 'hooks', 'mcp', 'artifacts', 'playground', 'logs',
+    'overview', 'routes', 'hooks', 'lifecycles', 'mcp', 'artifacts', 'playground', 'logs',
   ]);
   expect(capabilities.counts.hooks).toBe(0);
   expect(capabilities.counts.mcpServers).toBe(0);
@@ -215,6 +215,7 @@ it('reports a manifest compiled from newer source than the published build as st
 
   expect(capabilities.routes.state).toBe('stale');
   expect(capabilities.pages.has('hooks')).toBe(true);
+  expect(capabilities.pages.has('lifecycles')).toBe(true);
 });
 
 it('keeps every artifact-derived page when the manifest route is unavailable', async () => {

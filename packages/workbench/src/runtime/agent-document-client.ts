@@ -83,7 +83,7 @@ const agentDocumentNodeSchema: z.ZodType<AgentDocumentNode> = z.lazy(() => z.dis
   z.strictObject({ code: nonemptyStringSchema, kind: z.literal('error'), message: z.string() }),
 ]));
 
-const agentDocumentSchema: z.ZodType<AgentDocument> = z.strictObject({
+export const agentDocumentSchema: z.ZodType<AgentDocument> = z.strictObject({
   root: agentDocumentNodeSchema,
   status: z.enum(['success', 'represented-error', 'failed']),
   value: z.json().optional(),
@@ -97,7 +97,7 @@ const renderErrorSchema: z.ZodType<AgentRenderError> = z.strictObject({
   message: z.string(),
 });
 
-const agentRenderEventSchema: z.ZodType<AgentRenderEvent> = z.discriminatedUnion('type', [
+export const agentRenderEventSchema: z.ZodType<AgentRenderEvent> = z.discriminatedUnion('type', [
   z.strictObject({ document: agentDocumentSchema, sequence: sequenceSchema, type: z.literal('shell') }),
   progressFieldsSchema.extend({ sequence: sequenceSchema, type: z.literal('progress') }),
   z.strictObject({

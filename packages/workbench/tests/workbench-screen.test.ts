@@ -11,7 +11,7 @@ it('renders only available routes in grouped navigation', () => {
   const markup = renderToStaticMarkup(createElement(Navigation, {
     onNavigate: () => undefined,
     page: 'skills',
-    pages: pages('overview', 'routes', 'skills', 'artifacts', 'logs', 'evals', 'comparisons'),
+    pages: pages('overview', 'routes', 'skills', 'lifecycles', 'artifacts', 'logs', 'evals', 'comparisons'),
   }));
 
   expect(markup).toContain('>Routes<');
@@ -20,6 +20,7 @@ it('renders only available routes in grouped navigation', () => {
   expect(markup).toContain('>Quality<');
   expect(markup).toContain('>Inspect<');
   expect(markup).toContain('>Skills<');
+  expect(markup).toContain('>Lifecycles<');
   expect(markup).toContain('>Evals<');
   expect(markup).not.toContain('>Hooks<');
   expect(markup).not.toContain('MCP playground');
@@ -33,6 +34,7 @@ it('resolves unsupported and unknown hashes to Overview', () => {
   expect(pageForHash('#routes', available)).toBe('routes');
   expect(pageForHash('#routes', pages('overview', 'skills'))).toBe('overview');
   expect(pageForHash('#hooks', available)).toBe('overview');
+  expect(pageForHash('#lifecycles', pages('overview', 'lifecycles'))).toBe('lifecycles');
   expect(pageForHash('#unknown', available)).toBe('overview');
   expect(pageForHash('', available)).toBe('overview');
 });

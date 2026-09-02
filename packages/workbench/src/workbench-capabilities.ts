@@ -63,6 +63,7 @@ const pagesFor = (
   const pages: WorkbenchPage[] = ['overview', 'routes'];
   if (counts.skills > 0) pages.push('skills');
   if (counts.hooks > 0 || compiledEvents) pages.push('hooks');
+  if (compiledEvents) pages.push('lifecycles');
   if (counts.mcpServers > 0 || routeCatalogServerCount(routes) > 0) pages.push('mcp');
   pages.push('artifacts');
   if (counts.hooks + counts.scripts > 0 || compiledEvents || compiledScripts) pages.push('playground');
