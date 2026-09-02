@@ -71,10 +71,11 @@ export const migrationIdempotencyKey = (toVersion: number): string =>
  * payload alone: a committed key retried after the state changed replays
  * the committed result, so the reducer must not run first.
  */
-export const parseEventPayload = <TState, TEvents extends AgentStateEventSchemas>(
+const parseEventPayloadInternal = <TState, TEvents extends AgentStateEventSchemas>(
   definition: AgentStateDefinition<TState, TEvents>,
   name: string,
   payload: unknown,
+  enforceBudget: boolean,
 ): unknown => {
   const schema = definition.events[name];
   if (schema === undefined) {
@@ -90,7 +91,82 @@ export const parseEventPayload = <TState, TEvents extends AgentStateEventSchemas
   if (!isJsonSafe(parsed.data)) {
     throw new AgentStateError('invalid-event', `State '${definition.id}' event '${name}' payload must be JSON-safe`);
   }
+  if (enforceBudget) {
+    const payloadBytes = Buffer.byteLength(canonicalJson(parsed.data), 'utf8');
+    if (payloadBytes > definition.budgets.maxEventBytes) {
+      throw new AgentStateError(
+        'budget-exceeded',
+        `State '${definition.id}' event '${name}' payload is ${String(payloadBytes)} bytes, exceeding maxEventBytes ${String(definition.budgets.maxEventBytes)}`,
+      );
+    }
+  }
   return deepFreezeJson(parsed.data);
+};
+
+export const parseEventPayload = <TState, TEvents extends AgentStateEventSchemas>(
+  definition: AgentStateDefinition<TState, TEvents>,
+  name: string,
+  payload: unknown,
+): unknown => parseEventPayloadInternal(definition, name, payload, true);
+
+const expectStateWithinBudget = <TState, TEvents extends AgentStateEventSchemas>(
+  definition: AgentStateDefinition<TState, TEvents>,
+  stateText: string,
+  kind: 'event' | 'migrate' | 'reset',
+): void => {
+  const stateBytes = Buffer.byteLength(stateText, 'utf8');
+  if (stateBytes > definition.budgets.maxStateBytes) {
+    throw new AgentStateError(
+      'budget-exceeded',
+      `State '${definition.id}' ${kind} state is ${String(stateBytes)} bytes, exceeding maxStateBytes ${String(definition.budgets.maxStateBytes)}`,
+    );
+  }
+};
+
+/**
+ * Enforces caller-initiated commit budgets immediately before append.
+ * Drivers call this inside their atomic write boundary after state
+ * resolution. Already-committed idempotent replay bypasses it. Kernel
+ * migration records use {@link expectMigrationWithinStateBudget} instead:
+ * migrations enforce state bytes but are exempt from revision and time caps.
+ */
+export const expectCommitWithinBudgets = <TState, TEvents extends AgentStateEventSchemas>(
+  definition: AgentStateDefinition<TState, TEvents>,
+  input: {
+    readonly headRevision: number;
+    readonly kind: 'event' | 'reset';
+    readonly nowMs: number;
+    readonly startedAtMs: number;
+    readonly stateText: string;
+  },
+): void => {
+  expectStateWithinBudget(definition, input.stateText, input.kind);
+  const nextRevision = input.headRevision + 1;
+  if (nextRevision > definition.budgets.maxRevisions) {
+    throw new AgentStateError(
+      'budget-exceeded',
+      `State '${definition.id}' ${input.kind} revision ${String(nextRevision)} exceeds maxRevisions ${String(definition.budgets.maxRevisions)}`,
+    );
+  }
+  const elapsedMs = input.nowMs - input.startedAtMs;
+  if (elapsedMs > definition.budgets.maxCommitMs) {
+    throw new AgentStateError(
+      'budget-exceeded',
+      `State '${definition.id}' ${input.kind} commit took ${String(elapsedMs)}ms, exceeding maxCommitMs ${String(definition.budgets.maxCommitMs)}`,
+    );
+  }
+};
+
+/**
+ * Enforces only maxStateBytes for a kernel-generated migration record.
+ * Migration commits are deliberately exempt from maxRevisions and
+ * maxCommitMs so reaching either caller budget cannot brick store opening.
+ */
+export const expectMigrationWithinStateBudget = <TState, TEvents extends AgentStateEventSchemas>(
+  definition: AgentStateDefinition<TState, TEvents>,
+  stateText: string,
+): void => {
+  expectStateWithinBudget(definition, stateText, 'migrate');
 };
 
 /**
@@ -211,7 +287,8 @@ export const replayJournal = <TState, TEvents extends AgentStateEventSchemas>(
       );
     }
     try {
-      state = applyStateEvent(definition, state, record.name, record.payload).state;
+      const payload = parseEventPayloadInternal(definition, record.name, record.payload, false);
+      state = reduceStateEvent(definition, state, record.name, payload);
     } catch (error) {
       throw new AgentStateError(
         'corrupt',

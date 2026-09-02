@@ -87,6 +87,33 @@ directory. Routed CLI bins and rendered scripts use
 in generated mounting v1 (`authorized`); recipient/principal matching remains
 enforced by the ledger, while application authorization policy is deferred.
 
+#### State mutation budgets
+
+`defineState({ ... })` accepts an optional `budgets` runtime policy. Omitted
+fields resolve to these fail-closed defaults:
+
+- `maxEventBytes: 262_144` — UTF-8 bytes in the canonical JSON of each
+  schema-validated event payload.
+- `maxStateBytes: 1_048_576` — UTF-8 bytes in the canonical JSON of the
+  initial state and each event, reset, or migration result.
+- `maxRevisions: 100_000` — total journal revisions admitted for
+  caller-initiated events and resets.
+- `maxCommitMs: 5_000` — wall-clock milliseconds from mutation validation
+  start until the commit is ready to append.
+
+Each override must be an integer of at least 1. A definition whose initial
+state exceeds its state cap is rejected as `invalid-definition`; a mutation
+that exceeds any cap fails typed `budget-exceeded` and commits nothing.
+Raise the corresponding field in `budgets` to admit a larger or slower
+mutation or retain more revisions.
+
+Budgets are runtime policy, not persisted state metadata. The same storage
+may be reopened with different caps. Lowering a cap never breaks reads,
+change cursors, or exact-revision replay of already-committed history.
+Kernel-generated migration commits still enforce `maxStateBytes`, but are
+exempt from `maxRevisions` and `maxCommitMs` so a full journal cannot brick
+an otherwise valid migration.
+
 ### Request context providers (power tier)
 
 Each direct child of `src/providers/` derives its key by camel-casing the file

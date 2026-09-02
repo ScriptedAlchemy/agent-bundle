@@ -37,6 +37,7 @@ export const AGENT_STATE_LIFETIMES: readonly AgentStateLifetime[] = Object.freez
 
 export type AgentStateErrorCode =
   | 'aborted'
+  | 'budget-exceeded'
   | 'corrupt'
   | 'idempotency-conflict'
   | 'invalid-definition'
@@ -114,7 +115,78 @@ export type AgentStateEvent<TEvents extends AgentStateEventSchemas> = {
  */
 export type AgentStateMigrations = Readonly<Record<number, (persisted: unknown) => unknown>>;
 
+/**
+ * Optional runtime policy overrides for state mutations. Budgets are not
+ * persisted in storage metadata: reopening the same storage with different
+ * budgets is allowed.
+ */
+export interface AgentStateBudgetsInput {
+  /**
+   * Maximum wall-clock time in milliseconds from mutation validation start
+   * until just before commit. A slower event or reset fails
+   * `budget-exceeded`; raise this definition budget to admit slower commits.
+   */
+  readonly maxCommitMs?: number;
+  /**
+   * Maximum UTF-8 bytes in a validated event payload, measured with
+   * `Buffer.byteLength(canonicalJson(payload), 'utf8')`. A larger payload
+   * fails `budget-exceeded`; raise this definition budget to admit it.
+   */
+  readonly maxEventBytes?: number;
+  /**
+   * Maximum total journal revisions admitted for caller-initiated commits.
+   * The next event or reset past this cap fails `budget-exceeded`; raise this
+   * definition budget to retain more revisions. Kernel migrations are exempt.
+   */
+  readonly maxRevisions?: number;
+  /**
+   * Maximum UTF-8 bytes in a committed state, measured with
+   * `Buffer.byteLength(canonicalJson(state), 'utf8')`. A larger initial,
+   * event, reset, or migrated state fails closed; raise this definition
+   * budget to admit it.
+   */
+  readonly maxStateBytes?: number;
+}
+
+/** Resolved runtime state budgets. These values are policy, not persisted metadata. */
+export interface AgentStateBudgets {
+  /**
+   * Maximum wall-clock time in milliseconds from mutation validation start
+   * until just before commit. A slower event or reset fails
+   * `budget-exceeded`; raise this definition budget to admit slower commits.
+   */
+  readonly maxCommitMs: number;
+  /**
+   * Maximum UTF-8 bytes in a validated event payload, measured with
+   * `Buffer.byteLength(canonicalJson(payload), 'utf8')`. A larger payload
+   * fails `budget-exceeded`; raise this definition budget to admit it.
+   */
+  readonly maxEventBytes: number;
+  /**
+   * Maximum total journal revisions admitted for caller-initiated commits.
+   * The next event or reset past this cap fails `budget-exceeded`; raise this
+   * definition budget to retain more revisions. Kernel migrations are exempt.
+   */
+  readonly maxRevisions: number;
+  /**
+   * Maximum UTF-8 bytes in a committed state, measured with
+   * `Buffer.byteLength(canonicalJson(state), 'utf8')`. A larger initial,
+   * event, reset, or migrated state fails closed; raise this definition
+   * budget to admit it.
+   */
+  readonly maxStateBytes: number;
+}
+
+export const AGENT_STATE_DEFAULT_BUDGETS: AgentStateBudgets = Object.freeze({
+  maxCommitMs: 5_000,
+  maxEventBytes: 262_144,
+  maxRevisions: 100_000,
+  maxStateBytes: 1_048_576,
+});
+
 export interface AgentStateDefinitionInput<TState, TEvents extends AgentStateEventSchemas> {
+  /** Runtime-only mutation policy; omitted fields resolve from {@link AGENT_STATE_DEFAULT_BUDGETS}. */
+  readonly budgets?: AgentStateBudgetsInput;
   /** Event name to payload schema; dispatch validates payloads before the reducer runs. */
   readonly events: TEvents;
   /** Stable identity for storage naming and cross-process addressing. */
@@ -134,6 +206,8 @@ export interface AgentStateDefinition<
   TState = unknown,
   TEvents extends AgentStateEventSchemas = AgentStateEventSchemas,
 > {
+  /** Resolved runtime-only mutation policy; never persisted in storage metadata. */
+  readonly budgets: AgentStateBudgets;
   readonly events: TEvents;
   readonly id: string;
   readonly initial: TState;
@@ -157,6 +231,23 @@ const expectNonEmptyText = (value: unknown, label: string): string => {
   return value;
 };
 
+const resolveStateBudgets = (id: string, input: AgentStateBudgetsInput | undefined): AgentStateBudgets => {
+  const resolved = {
+    ...AGENT_STATE_DEFAULT_BUDGETS,
+    ...input,
+  };
+  for (const field of ['maxCommitMs', 'maxEventBytes', 'maxRevisions', 'maxStateBytes'] as const) {
+    const value = resolved[field];
+    if (!Number.isInteger(value) || value < 1) {
+      throw new AgentStateError(
+        'invalid-definition',
+        `State '${id}' budget '${field}' must be an integer >= 1`,
+      );
+    }
+  }
+  return Object.freeze(resolved);
+};
+
 export const defineState = <TState, TEvents extends AgentStateEventSchemas>(
   input: AgentStateDefinitionInput<TState, TEvents>,
 ): AgentStateDefinition<TState, TEvents> => {
@@ -167,6 +258,7 @@ export const defineState = <TState, TEvents extends AgentStateEventSchemas>(
   if (typeof input.reduce !== 'function') {
     throw new AgentStateError('invalid-definition', `State '${id}' requires a reduce function`);
   }
+  const budgets = resolveStateBudgets(id, input.budgets);
   const eventNames = Object.keys(input.events);
   if (eventNames.length === 0) {
     throw new AgentStateError('invalid-definition', `State '${id}' must declare at least one event`);
@@ -209,7 +301,15 @@ export const defineState = <TState, TEvents extends AgentStateEventSchemas>(
   if (!isJsonSafe(parsedInitial.data)) {
     throw new AgentStateError('invalid-definition', `State '${id}' initial state must be JSON-safe`);
   }
+  const initialBytes = Buffer.byteLength(canonicalJson(parsedInitial.data), 'utf8');
+  if (initialBytes > budgets.maxStateBytes) {
+    throw new AgentStateError(
+      'invalid-definition',
+      `State '${id}' initial state is ${String(initialBytes)} bytes, exceeding maxStateBytes ${String(budgets.maxStateBytes)}`,
+    );
+  }
   return Object.freeze({
+    budgets,
     events: Object.freeze({ ...input.events }) as TEvents,
     id,
     initial: deepFreezeJson(parsedInitial.data),

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 
 import type {
+  AgentStateBudgetsInput,
   AgentStateDefinition,
   AgentStateErrorCode,
   AgentStateEventSchemas,
@@ -10,6 +11,7 @@ import type {
   AgentStateStore,
 } from './contract.js';
 import {
+  AGENT_STATE_DEFAULT_BUDGETS,
   AGENT_STATE_LIFETIMES,
   AGENT_STATE_RESERVED_KEY_PREFIX,
   AgentStateError,
@@ -81,8 +83,10 @@ const taskEvents = {
 const taskDefinition = (
   lifetime: AgentStateLifetime,
   id = 'agent-state-conformance/tasks',
+  budgets?: AgentStateBudgetsInput,
 ): AgentStateDefinition<TaskState, typeof taskEvents> =>
   defineState({
+    budgets,
     events: taskEvents,
     id,
     initial: { tasks: [], total: 0 },
@@ -128,8 +132,10 @@ const taskSchemaV2 = z
 const taskDefinitionV2 = (
   lifetime: AgentStateLifetime,
   id = 'agent-state-conformance/tasks',
+  budgets?: AgentStateBudgetsInput,
 ): AgentStateDefinition<TaskStateV2, typeof taskEvents> =>
   defineState({
+    budgets,
     events: taskEvents,
     id,
     initial: { labels: [], tasks: [], total: 0 },
@@ -193,6 +199,93 @@ export const stateDriverConformanceCases: readonly StateConformanceCase[] = Obje
         ],
         total: 2,
       });
+    },
+  },
+  {
+    name: 'definitions without budgets use defaults and preserve ordinary commits',
+    run: async (context) => {
+      const definition = taskDefinition(context.lifetime);
+      assert.deepEqual(definition.budgets, AGENT_STATE_DEFAULT_BUDGETS);
+      const store = await context.open(definition);
+      assert.equal((await addTask(store, 'a')).revision, 1);
+    },
+  },
+  {
+    name: 'an over-budget event payload fails without committing',
+    run: async (context) => {
+      const store = await context.open(
+        taskDefinition(context.lifetime, 'agent-state-conformance/event-budget', { maxEventBytes: 10 }),
+      );
+      await assert.rejects(addTask(store, 'a'), rejectsWith('budget-exceeded'));
+      assert.equal((await store.read()).revision, 0);
+    },
+  },
+  {
+    name: 'an over-budget reducer output fails without committing',
+    run: async (context) => {
+      const store = await context.open(
+        taskDefinition(context.lifetime, 'agent-state-conformance/state-budget', { maxStateBytes: 30 }),
+      );
+      await assert.rejects(addTask(store, 'a'), rejectsWith('budget-exceeded'));
+      assert.deepEqual(await store.read(), { revision: 0, state: { tasks: [], total: 0 } });
+    },
+  },
+  {
+    name: 'an over-budget reset seed fails without committing',
+    run: async (context) => {
+      const store = await context.open(
+        taskDefinition(context.lifetime, 'agent-state-conformance/reset-budget', { maxStateBytes: 30 }),
+      );
+      await assert.rejects(
+        store.reset({
+          idempotencyKey: 'reset:large',
+          seed: { tasks: [{ id: 'seed', title: 'Seeded task' }], total: 1 },
+        }),
+        rejectsWith('budget-exceeded'),
+      );
+      assert.deepEqual(await store.read(), { revision: 0, state: { tasks: [], total: 0 } });
+    },
+  },
+  {
+    name: 'maxRevisions blocks new commits but permits replay and a raised runtime policy',
+    run: async (context) => {
+      const id = 'agent-state-conformance/revision-budget';
+      const capped = await context.open(taskDefinition(context.lifetime, id, { maxRevisions: 2 }));
+      const first = await addTask(capped, 'a');
+      await addTask(capped, 'b');
+      await assert.rejects(addTask(capped, 'c'), rejectsWith('budget-exceeded'));
+      assert.equal((await capped.read()).revision, 2);
+
+      const replayed = await addTask(capped, 'a');
+      assert.deepEqual(replayed, { ...first, replayed: true });
+      assert.equal((await capped.read()).revision, 2);
+
+      const raised = await context.reopen(taskDefinition(context.lifetime, id, { maxRevisions: 3 }));
+      assert.equal((await addTask(raised, 'c')).revision, 3);
+    },
+  },
+  {
+    name: 'lowered budgets preserve exact reads and committed replay',
+    run: async (context) => {
+      const id = 'agent-state-conformance/lowered-budget-replay';
+      const original = await context.open(taskDefinition(context.lifetime, id));
+      const first = await addTask(original, 'a');
+      await addTask(original, 'b');
+
+      const loweredEvent = await context.reopen(
+        taskDefinition(context.lifetime, id, { maxEventBytes: 10, maxStateBytes: 30 }),
+      );
+      assert.deepEqual(await loweredEvent.read({ revision: 1 }), {
+        revision: 1,
+        state: first.state,
+      });
+
+      const loweredCommit = await context.reopen(
+        taskDefinition(context.lifetime, id, { maxCommitMs: 1, maxRevisions: 1, maxStateBytes: 30 }),
+      );
+      const replayed = await addTask(loweredCommit, 'a');
+      assert.deepEqual(replayed, { ...first, replayed: true });
+      assert.equal((await loweredCommit.read()).revision, 2);
     },
   },
   {
@@ -447,6 +540,19 @@ export const stateDriverConformanceCases: readonly StateConformanceCase[] = Obje
       );
       assert.equal(after.revision, 4);
       await assert.rejects(context.reopen(taskDefinition(context.lifetime)), rejectsWith('migration-missing'));
+    },
+  },
+  {
+    name: 'an over-budget migrated state fails open without committing',
+    run: async (context) => {
+      const id = 'agent-state-conformance/migration-state-budget';
+      const storeV1 = await context.open(taskDefinition(context.lifetime, id));
+      await addTask(storeV1, 'a');
+      await assert.rejects(
+        context.reopen(taskDefinitionV2(context.lifetime, id, { maxStateBytes: 40 })),
+        rejectsWith('budget-exceeded'),
+      );
+      assert.equal((await storeV1.read()).revision, 1);
     },
   },
   {

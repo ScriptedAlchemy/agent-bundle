@@ -1,6 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
+import {
+  AGENT_STATE_DEFAULT_BUDGETS,
+  type AgentStateBudgets,
+} from '@agent-bundle/runtime/state';
+
 import { capabilityIsSupported } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
@@ -253,9 +258,34 @@ export interface InspectionPlan {
 }
 
 export interface InspectOptions extends ProjectOptions {
-  readonly focus?: 'bundler' | 'hooks' | 'routes' | 'skills';
+  readonly focus?: 'bundler' | 'hooks' | 'routes' | 'skills' | 'state';
   readonly target?: string;
 }
+
+export type StateInspectionDriver = 'memory' | 'sqlite';
+
+export type StateInspection =
+  | {
+    readonly declared: false;
+  }
+  | {
+    readonly budgets:
+      | {
+        readonly resolved: AgentStateBudgets;
+        readonly source: 'declared' | 'defaults';
+      }
+      | {
+        readonly source: 'dynamic';
+      };
+    readonly declared: true;
+    readonly driver: StateInspectionDriver;
+    readonly durableLocation?: string;
+    readonly id: string;
+    readonly lifetime: NonNullable<NormalizedPlugin['state']>['lifetime'];
+    readonly notices: readonly string[];
+    readonly provenance: NonNullable<NormalizedPlugin['state']>['provenance'];
+    readonly source: string;
+  };
 
 export interface ReadyInspectResult {
   readonly diagnostics: readonly Diagnostic[];
@@ -267,6 +297,7 @@ export interface ReadyInspectResult {
     readonly hooks?: NormalizedPlugin['hooks'];
     readonly routes?: RouteGraphInspection;
     readonly skills?: NormalizedPlugin['skills'];
+    readonly state?: StateInspection;
     readonly skillTreeLayouts?: readonly {
       readonly layout?: NormalizedPlugin['skills'][number]['skillTreeLayout'];
       readonly skillId: string;
@@ -491,6 +522,54 @@ const skippedComponentsFor = (
       : 'unsupported-capability') satisfies InspectionSkipReason,
   })));
 
+const durableStateLocation =
+  '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)';
+
+const noticeLedgerInspection =
+  'Generated runtimes co-mount the notice ledger store at the same lifetime under reserved id @agent-bundle/runtime/agent-notice-ledger/v1.';
+
+const stateDriver = (
+  lifetime: NonNullable<NormalizedPlugin['state']>['lifetime'],
+): StateInspectionDriver => {
+  switch (lifetime) {
+    case 'request':
+    case 'process':
+      return 'memory';
+    case 'workspace-durable':
+      return 'sqlite';
+    default: {
+      const unreachable: never = lifetime;
+      throw new TypeError(`Unknown normalized state lifetime ${String(unreachable)}.`);
+    }
+  }
+};
+
+const inspectState = (model: NormalizedPlugin): StateInspection => {
+  const definition = model.state;
+  if (definition === undefined) return Object.freeze({ declared: false });
+  const budgets: Extract<StateInspection, { readonly declared: true }>['budgets'] =
+    definition.budgets === 'dynamic'
+      ? Object.freeze({ source: 'dynamic' })
+      : Object.freeze({
+        resolved: Object.freeze({
+          ...AGENT_STATE_DEFAULT_BUDGETS,
+          ...(definition.budgets?.declared ?? {}),
+        }),
+        source: definition.budgets === undefined ? 'defaults' : 'declared',
+      });
+  return deepFreeze({
+    budgets,
+    declared: true,
+    driver: stateDriver(definition.lifetime),
+    ...(definition.lifetime === 'workspace-durable' ? { durableLocation: durableStateLocation } : {}),
+    id: definition.id,
+    lifetime: definition.lifetime,
+    notices: [noticeLedgerInspection],
+    provenance: definition.provenance,
+    source: definition.source,
+  });
+};
+
 export const inspect = async (options: InspectOptions): Promise<InspectResult> => {
   const prepared = await prepareProject(options, 'inspect');
   if (
@@ -582,6 +661,7 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
           }))),
         }
         : {}),
+      ...(options.focus === 'state' ? { state: inspectState(model) } : {}),
     });
   return Object.freeze({
     diagnostics: prepared.diagnostics,

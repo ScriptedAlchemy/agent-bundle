@@ -65,7 +65,7 @@ export interface DiscoveredProject {
   skills: SkillDocument[];
   /** Conventional src/state.ts declaration and its parse-only diagnostics. */
   state?: {
-    readonly definition?: Pick<NormalizedStateDefinition, 'id' | 'lifetime'>;
+    readonly definition?: Pick<NormalizedStateDefinition, 'budgets' | 'id' | 'lifetime'>;
     readonly diagnostics: readonly Diagnostic[];
     readonly source: string;
   };

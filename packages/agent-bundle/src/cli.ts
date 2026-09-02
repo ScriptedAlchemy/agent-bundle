@@ -25,6 +25,7 @@ import type {
   InstallScope,
 } from './install/install.ts';
 import type {
+  DoctorDurableStateReport,
   DoctorHost,
   DoctorReport,
   runDoctor,
@@ -103,6 +104,7 @@ interface InspectCommandOptions {
   readonly root: string;
   readonly routes?: boolean;
   readonly skills?: boolean;
+  readonly state?: boolean;
   readonly target?: string;
 }
 
@@ -258,6 +260,13 @@ const writeHumanInstall = (output: Output, result: InstallResult): void => {
   );
 };
 
+const formatByteSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  const kibibytes = bytes / 1024;
+  if (kibibytes < 1024) return `${kibibytes.toFixed(1).replace(/\.0$/u, '')} KiB`;
+  return `${(kibibytes / 1024).toFixed(1).replace(/\.0$/u, '')} MiB`;
+};
+
 const writeHumanDoctor = (output: Output, result: DoctorReport): void => {
   for (const host of result.hosts) {
     const detail = host.probe.version ?? host.probe.evidence;
@@ -271,6 +280,18 @@ const writeHumanDoctor = (output: Output, result: DoctorReport): void => {
         ? ''
         : ` ${host.bundle.name}${host.bundle.version === undefined ? '' : `@${host.bundle.version}`}`;
       output.write(`  bundle:${identity} ${host.bundle.state}\n`);
+    }
+    const reports = [
+      ...host.inventory.findings.map((finding) => finding.durableState),
+      host.bundle?.durableState,
+    ].filter((report): report is DoctorDurableStateReport => report !== undefined);
+    const uniqueReports = [...new Map(reports.map((report) => [report.directory, report])).values()];
+    if (uniqueReports.length > 0) {
+      const stores = uniqueReports.reduce((total, report) => total + report.summary.stores, 0);
+      const bytes = uniqueReports.reduce((total, report) => total + report.summary.bytes, 0);
+      output.write(
+        `  durable state: ${stores} ${stores === 1 ? 'store' : 'stores'}, ${formatByteSize(bytes)}\n`,
+      );
     }
   }
   output.write(
@@ -306,6 +327,10 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
     output.write(`${JSON.stringify(result.selected.routes, null, 2)}\n`);
     return;
   }
+  if (result.selected?.state !== undefined) {
+    output.write(`${JSON.stringify(result.selected.state, null, 2)}\n`);
+    return;
+  }
   output.write(`Inspected ${result.model.metadata.name}: ${result.plans.map((plan) => plan.target).join(', ')}\n`);
   // Release identity is derived from package.json (issue #94); a project
   // without a package version gets a clearly labeled development fallback.
@@ -313,6 +338,10 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
     output.write(`Package: ${result.projectContext.packageName}\n`);
   }
   output.write(`Version: ${projectVersionLabel(result.projectContext)}\n`);
+  if (result.model.state !== undefined) {
+    const driver = result.model.state.lifetime === 'workspace-durable' ? 'sqlite' : 'memory';
+    output.write(`state: ${result.model.state.id} (${result.model.state.lifetime}, ${driver} driver)\n`);
+  }
 };
 
 const emptyEvalSummary = Object.freeze({ cases: 0, fail: 0, inconclusive: 0, pass: 0, trials: 0 });
@@ -553,9 +582,16 @@ export const runCli = async (
     .option('--bundler', 'Include the synthesized bundler configuration focus')
     .option('--hooks', 'Include the hook focus')
     .option('--routes', 'Include the compiled route-graph focus')
-    .option('--skills', 'Include the skill focus');
+    .option('--skills', 'Include the skill focus')
+    .option('--state', 'Include the state lifetime focus');
   inspectCommand.action(async (options: InspectCommandOptions) => {
-    const focuses = [options.bundler, options.hooks, options.routes, options.skills].filter((focus) => focus === true);
+    const focuses = [
+      options.bundler,
+      options.hooks,
+      options.routes,
+      options.skills,
+      options.state,
+    ].filter((focus) => focus === true);
     if (focuses.length > 1) {
       throw new TypeError('Choose at most one inspect focus.');
     }
@@ -566,6 +602,7 @@ export const runCli = async (
       ...(options.hooks === true ? { focus: 'hooks' as const } : {}),
       ...(options.routes === true ? { focus: 'routes' as const } : {}),
       ...(options.skills === true ? { focus: 'skills' as const } : {}),
+      ...(options.state === true ? { focus: 'state' as const } : {}),
       ...(options.target === undefined ? {} : { target: options.target }),
     });
     if (options.json === true) writeMachine(stdout, result);

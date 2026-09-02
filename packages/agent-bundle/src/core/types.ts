@@ -515,7 +515,20 @@ export interface NormalizedRuntime {
 }
 
 /** Statically extracted conventional project state used by generated entry emitters. */
+export type AgentStateBudgetName =
+  | 'maxCommitMs'
+  | 'maxEventBytes'
+  | 'maxRevisions'
+  | 'maxStateBytes';
+
+export type NormalizedStateBudgets =
+  | {
+    readonly declared: Readonly<Partial<Record<AgentStateBudgetName, number>>>;
+  }
+  | 'dynamic';
+
 export interface NormalizedStateDefinition {
+  readonly budgets?: NormalizedStateBudgets;
   readonly id: string;
   readonly lifetime: 'request' | 'process' | 'workspace-durable';
   readonly provenance: SourceProvenance;

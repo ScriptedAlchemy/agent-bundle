@@ -4,13 +4,17 @@ import ts from 'typescript-5';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import type { NormalizedStateDefinition } from '../core/types.ts';
+import type {
+  AgentStateBudgetName,
+  NormalizedStateBudgets,
+  NormalizedStateDefinition,
+} from '../core/types.ts';
 
 /** Reserved by the generated runtime for the internal notice ledger store. */
 const AGENT_NOTICE_LEDGER_STATE_ID = '@agent-bundle/runtime/agent-notice-ledger/v1';
 
 export interface ExtractedStateDefinition {
-  readonly definition?: Pick<NormalizedStateDefinition, 'id' | 'lifetime'>;
+  readonly definition?: Pick<NormalizedStateDefinition, 'budgets' | 'id' | 'lifetime'>;
   readonly diagnostics: readonly Diagnostic[];
 }
 
@@ -43,6 +47,54 @@ const property = (
     ts.isPropertyAssignment(candidate)
     && ((ts.isIdentifier(candidate.name) || ts.isStringLiteral(candidate.name)) && candidate.name.text === name));
   return matches.length === 1 ? unwrap(matches[0]!.initializer) : undefined;
+};
+
+const stateBudgetNames = new Set<AgentStateBudgetName>([
+  'maxCommitMs',
+  'maxEventBytes',
+  'maxRevisions',
+  'maxStateBytes',
+]);
+
+const staticPropertyName = (name: ts.PropertyName): string | undefined =>
+  ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : undefined;
+
+const extractBudgets = (object: ts.ObjectLiteralExpression): NormalizedStateBudgets | undefined => {
+  const candidates = object.properties.filter((candidate) =>
+    !ts.isSpreadAssignment(candidate) && staticPropertyName(candidate.name) === 'budgets');
+  if (candidates.length === 0) {
+    return object.properties.some((candidate) =>
+      ts.isSpreadAssignment(candidate) || (!ts.isSpreadAssignment(candidate) && ts.isComputedPropertyName(candidate.name)))
+      ? 'dynamic'
+      : undefined;
+  }
+  const candidate = candidates[0];
+  if (
+    candidates.length !== 1
+    || candidate === undefined
+    || !ts.isPropertyAssignment(candidate)
+  ) {
+    return 'dynamic';
+  }
+  const initializer = unwrap(candidate.initializer);
+  if (!ts.isObjectLiteralExpression(initializer)) return 'dynamic';
+
+  const declared: Partial<Record<AgentStateBudgetName, number>> = {};
+  const seen = new Set<AgentStateBudgetName>();
+  for (const entry of initializer.properties) {
+    if (!ts.isPropertyAssignment(entry)) return 'dynamic';
+    const name = staticPropertyName(entry.name);
+    if (name === undefined || !stateBudgetNames.has(name as AgentStateBudgetName)) return 'dynamic';
+    const budgetName = name as AgentStateBudgetName;
+    if (seen.has(budgetName)) return 'dynamic';
+    const valueNode = unwrap(entry.initializer);
+    if (!ts.isNumericLiteral(valueNode)) return 'dynamic';
+    const value = Number(valueNode.text);
+    if (!Number.isSafeInteger(value) || value <= 0) return 'dynamic';
+    declared[budgetName] = value;
+    seen.add(budgetName);
+  }
+  return { declared };
 };
 
 /**
@@ -85,6 +137,7 @@ export const extractStateDefinition = (
   const input = unwrap(expression.arguments[0]!) as ts.ObjectLiteralExpression;
   const idNode = property(input, 'id');
   const lifetimeNode = property(input, 'lifetime');
+  const budgets = extractBudgets(input);
   const id = idNode !== undefined && ts.isStringLiteral(idNode) ? idNode.text : undefined;
   const lifetime = lifetimeNode !== undefined && ts.isStringLiteral(lifetimeNode) ? lifetimeNode.text : undefined;
   const accepted = lifetime === 'request'
@@ -122,7 +175,11 @@ export const extractStateDefinition = (
     });
   }
   return deepFreeze({
-    definition: { id, lifetime },
+    definition: {
+      ...(budgets === undefined ? {} : { budgets }),
+      id,
+      lifetime,
+    },
     diagnostics: [],
   });
 };

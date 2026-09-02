@@ -409,6 +409,66 @@ describe('sqlite driver storage behavior', () => {
       await driver.close();
     }));
 
+  it('rolls back a commit that exceeds maxCommitMs', () =>
+    withRoot(async (root) => {
+      let nowMs = 0;
+      const driver = createSqliteStateDriver({
+        now: () => {
+          const current = new Date(nowMs);
+          nowMs += 11;
+          return current;
+        },
+        root,
+      });
+      const definition = defineState({
+        events: counterEvents,
+        id: 'state-sqlite-test/commit-time-budget',
+        initial: { count: 0 },
+        lifetime: 'workspace-durable',
+        budgets: { maxCommitMs: 10 },
+        reduce: (state, event) => ({ count: state.count + event.payload.by }),
+        schema: z.object({ count: z.number().int() }).strict(),
+      });
+      const store = await driver.open(definition);
+
+      await expect(
+        store.dispatch('bumped', { by: 1 }, { idempotencyKey: 'slow' }),
+      ).rejects.toMatchObject({ code: 'budget-exceeded', name: 'AgentStateError' });
+      await expect(store.read()).resolves.toEqual({ revision: 0, state: { count: 0 } });
+      await driver.close();
+    }));
+
+  it('exempts kernel migration commits from revision and time budgets', () =>
+    withRoot(async (root) => {
+      const file = join(root, 'migration-budget.sqlite');
+      const definitionV1 = defineState({
+        ...counterDefinition('state-sqlite-test/migration-budget'),
+        budgets: { maxRevisions: 1 },
+      });
+      const driverV1 = createSqliteStateDriver({ file });
+      const storeV1 = await driverV1.open(definitionV1);
+      await storeV1.dispatch('bumped', { by: 1 }, { idempotencyKey: 'i1' });
+      await driverV1.close();
+
+      let nowMs = 0;
+      const definitionV2 = defineState({
+        ...migratingCounterDefinition('state-sqlite-test/migration-budget'),
+        budgets: { maxCommitMs: 1, maxRevisions: 1 },
+      });
+      const driverV2 = createSqliteStateDriver({
+        file,
+        now: () => {
+          const current = new Date(nowMs);
+          nowMs += 10_000;
+          return current;
+        },
+      });
+
+      const migrated = await driverV2.open(definitionV2);
+      await expect(migrated.read()).resolves.toEqual({ revision: 2, state: { count: 10 } });
+      await driverV2.close();
+    }));
+
   it('surfaces database close failures when the store scope otherwise succeeds', () =>
     withRoot(async (root) => {
       const closeFailure = new Error('database close failed');

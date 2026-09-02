@@ -227,6 +227,111 @@ it('accepts a versionless Cursor inventory manifest as installed', async () => {
   }
 });
 
+it('inventories durable SQLite stores and sidecars without opening them', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'stateful');
+  const stateRoot = join(pluginRoot, 'state');
+  const store = 'project-tasks-0123456789abcdef.sqlite';
+  try {
+    await Promise.all([
+      writeJson(join(pluginRoot, 'plugin.json'), { name: 'stateful', version: '1.0.0' }),
+      mkdir(stateRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(stateRoot, store), 'database'),
+      writeFile(join(stateRoot, `${store}-wal`), 'wal!'),
+      writeFile(join(stateRoot, `${store}-shm`), 'shm'),
+      writeFile(join(stateRoot, 'ignore.txt'), 'ignored'),
+    ]);
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find(
+      (entry) => entry.entry === 'stateful',
+    );
+    expect(finding?.durableState).toMatchObject({
+      directory: stateRoot,
+      findings: [{
+        bytes: 15,
+        file: store,
+        mtime: expect.any(String),
+        path: join(stateRoot, store),
+      }],
+      status: 'known',
+      summary: { bytes: 15, stores: 1 },
+    });
+
+    const human: string[] = [];
+    const humanCode = await runCli(
+      ['doctor'],
+      { stdout: { write: (chunk: string) => human.push(chunk) } },
+      { runDoctor: async () => report },
+    );
+    expect(humanCode).toBe(0);
+    expect(human.join('')).toContain('durable state: 1 store, 15 B');
+
+    const json: string[] = [];
+    await runCli(
+      ['doctor', '--json'],
+      { stdout: { write: (chunk: string) => json.push(chunk) } },
+      { runDoctor: async () => report },
+    );
+    expect(JSON.parse(json.join('')).hosts[0].inventory.findings[0].durableState).toMatchObject({
+      findings: [{ bytes: 15, file: store }],
+      summary: { bytes: 15, stores: 1 },
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('inventories durable state under a checked --from bundle', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'codex');
+    const stateRoot = join(bundle, 'state');
+    await mkdir(stateRoot);
+    await writeFile(join(stateRoot, 'from-bundle-fedcba9876543210.sqlite'), 'state');
+    const report = await runDoctor({
+      commandRunner: versionRunner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['codex'],
+    });
+    expect(hostReport(report, 'codex').bundle?.durableState).toMatchObject({
+      directory: stateRoot,
+      findings: [{ bytes: 5, file: 'from-bundle-fedcba9876543210.sqlite' }],
+      summary: { bytes: 5, stores: 1 },
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('warns when an installed bundle state directory cannot be read', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'blocked-state');
+  try {
+    await writeJson(join(pluginRoot, 'plugin.json'), { name: 'blocked-state', version: '1.0.0' });
+    await writeFile(join(pluginRoot, 'state'), 'not a directory');
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB7316', severity: 'warning' }),
+    ]));
+    expect(report.summary).toMatchObject({ errors: 0, warnings: 1 });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('reports a Cursor inventory manifest with a non-string version as corrupt', async () => {
   const fixture = await temporaryDoctor();
   const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');

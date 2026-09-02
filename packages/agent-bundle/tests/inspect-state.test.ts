@@ -1,0 +1,186 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { expect, it } from '@rstest/core';
+
+import { runCli } from '../src/cli.ts';
+
+const createProject = async (): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-inspect-state-'));
+  await Promise.all([
+    mkdir(join(root, 'src'), { recursive: true }),
+    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n')),
+  ]);
+  return root;
+};
+
+const inspectCli = async (
+  root: string,
+  args: readonly string[],
+): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
+  const stderr: string[] = [];
+  const stdout: string[] = [];
+  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
+  const code = await runCli(
+    ['inspect', '--root', root, ...args],
+    {
+      stderr: { write: (chunk: string) => stderr.push(chunk) },
+      stdout: { write: (chunk: string) => stdout.push(chunk) },
+    },
+  );
+  return { code, stderr: stderr.join(''), stdout: stdout.join('') };
+};
+
+it('inspects volatile and workspace-durable state without inventing runtime paths', async () => {
+  const root = await createProject();
+  const stateSource = join(root, 'src', 'state.ts');
+  try {
+    await writeFile(stateSource, [
+      'export default defineState({',
+      "  id: 'fixture/process-state',",
+      "  lifetime: 'process',",
+      '});',
+      '',
+    ].join('\n'));
+
+    const volatile = await inspectCli(root, ['--state', '--json']);
+    expect(volatile).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(volatile.stdout)).toMatchObject({
+      selected: {
+        state: {
+          budgets: {
+            resolved: {
+              maxCommitMs: 5000,
+              maxEventBytes: 262144,
+              maxRevisions: 100000,
+              maxStateBytes: 1048576,
+            },
+            source: 'defaults',
+          },
+          declared: true,
+          driver: 'memory',
+          id: 'fixture/process-state',
+          lifetime: 'process',
+          notices: [expect.stringContaining('@agent-bundle/runtime/agent-notice-ledger/v1')],
+          provenance: { kind: 'conventional', sourcePath: stateSource },
+          source: stateSource,
+        },
+      },
+      state: 'ready',
+    });
+    expect(JSON.parse(volatile.stdout).selected.state).not.toHaveProperty('durableLocation');
+
+    await writeFile(stateSource, [
+      'export default defineState({',
+      "  id: 'fixture/durable-state',",
+      "  lifetime: 'workspace-durable',",
+      '  budgets: { maxStateBytes: 2048 },',
+      '});',
+      '',
+    ].join('\n'));
+    const durable = await inspectCli(root, ['--state', '--json']);
+    expect(durable).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(durable.stdout)).toMatchObject({
+      selected: {
+        state: {
+          budgets: {
+            resolved: {
+              maxCommitMs: 5000,
+              maxEventBytes: 262144,
+              maxRevisions: 100000,
+              maxStateBytes: 2048,
+            },
+            source: 'declared',
+          },
+          declared: true,
+          driver: 'sqlite',
+          durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)',
+          id: 'fixture/durable-state',
+          lifetime: 'workspace-durable',
+        },
+      },
+    });
+
+    const humanFocus = await inspectCli(root, ['--state']);
+    expect(JSON.parse(humanFocus.stdout)).toMatchObject({
+      declared: true,
+      id: 'fixture/durable-state',
+    });
+
+    const humanDefault = await inspectCli(root, []);
+    expect(humanDefault.stdout).toContain(
+      'state: fixture/durable-state (workspace-durable, sqlite driver)',
+    );
+
+    await writeFile(stateSource, [
+      'export default defineState({',
+      "  id: 'fixture/dynamic-state',",
+      "  lifetime: 'request',",
+      '  budgets: { maxCommitMs: MAX_COMMIT_MS },',
+      '});',
+      '',
+    ].join('\n'));
+    const dynamic = await inspectCli(root, ['--state', '--json']);
+    expect(JSON.parse(dynamic.stdout)).toMatchObject({
+      selected: {
+        state: {
+          budgets: { source: 'dynamic' },
+          declared: true,
+          driver: 'memory',
+          id: 'fixture/dynamic-state',
+          lifetime: 'request',
+        },
+      },
+    });
+    expect(JSON.parse(dynamic.stdout).selected.state.budgets).not.toHaveProperty('resolved');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports stateless inspection and rejects competing state focuses', async () => {
+  const root = await createProject();
+  try {
+    const stateless = await inspectCli(root, ['--state', '--json']);
+    expect(stateless).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(stateless.stdout)).toMatchObject({
+      selected: { state: { declared: false } },
+      state: 'ready',
+    });
+
+    await writeFile(join(root, 'src', 'state.ts'), [
+      'export default defineState({',
+      "  id: 'fixture/disabled-state',",
+      "  lifetime: 'process',",
+      '});',
+      '',
+    ].join('\n'));
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '  state: false,',
+      '};',
+      '',
+    ].join('\n'));
+    const disabled = await inspectCli(root, ['--state', '--json']);
+    expect(JSON.parse(disabled.stdout)).toMatchObject({
+      selected: { state: { declared: false } },
+      state: 'ready',
+    });
+
+    const ambiguous = await inspectCli(root, ['--state', '--routes']);
+    expect(ambiguous.code).toBe(1);
+    expect(JSON.parse(ambiguous.stderr)).toMatchObject([{ code: 'AB5000', severity: 'error' }]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
