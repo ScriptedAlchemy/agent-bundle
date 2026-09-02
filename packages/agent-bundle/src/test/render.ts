@@ -444,8 +444,7 @@ const mountManifestState = async (
   if (
     manifest === undefined
     || descriptor === undefined
-    || context.state !== undefined
-    || context.noticeLedger !== undefined
+    || (context.state !== undefined && context.noticeLedger !== undefined)
   ) return noMountedState;
   const loader = registeredStateLoader(manifest);
   if (loader === undefined) {
@@ -478,8 +477,8 @@ const mountManifestState = async (
     let closed = false;
     return Object.freeze({
       context: {
-        noticeLedger: bindings.noticeLedger,
-        state: bindings.state,
+        ...(context.noticeLedger === undefined ? { noticeLedger: bindings.noticeLedger } : {}),
+        ...(context.state === undefined ? { state: bindings.state } : {}),
       },
       async close() {
         if (closed) return;

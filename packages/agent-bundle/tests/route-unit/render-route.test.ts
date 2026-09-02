@@ -101,6 +101,47 @@ describe('renderRoute through the real renderer', () => {
     });
   });
 
+  it('auto-mounts noticeLedger when the caller supplied state alone', async () => {
+    const state = {
+      lifetime: 'workspace-durable',
+      changes: async function*() {},
+      dispatch: async () => ({ replayed: false, revision: 0, state: { entries: [] } }),
+      read: async () => ({ revision: 0, state: { entries: [] } }),
+    } as never;
+    const rendered = await renderRoute('tool:harness/publish-notice', {
+      context: { state },
+      input: { message: 'partial mount', recipientSession: 'sess-a' },
+    });
+
+    expectDocument(rendered).toHaveStatus('success');
+    expect(rendered.result).toMatchObject({ state: 'pending' });
+    expect(typeof (rendered.result as { noticeId: unknown }).noticeId).toBe('string');
+  });
+
+  it('auto-mounts state when the caller supplied noticeLedger alone', async () => {
+    const noticeLedger = {
+      expire: async () => ({ notices: [] }),
+      openRequest: async () => Object.freeze({
+        close: () => undefined,
+        handle: Object.freeze({
+          publish: async () => { throw new Error('unused in journal route'); },
+          read: async () => ({ notices: [] }),
+        }),
+      }),
+      read: async () => ({ notices: [] }),
+      withdraw: async () => ({ notices: [] }),
+    } as never;
+    const rendered = await renderRoute('tool:harness/journal', {
+      context: { noticeLedger },
+      input: { note: 'partial mount' },
+    });
+
+    expectDocument(rendered).toHaveValue({
+      entries: [{ note: 'partial mount' }],
+      revision: 1,
+    });
+  });
+
   it('records progress even when the caller supplies its own reporter', async () => {
     const delegated: unknown[] = [];
     const rendered = await renderRoute('tool:harness/echo', {
