@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { runCli as runSourceCli, type CliDependencies } from '../src/cli.ts';
-import { cachedNpmInstallArguments } from './support/shared-pack.ts';
+import { cachedNpmInstallArguments, packOutputFromJson } from './support/shared-pack.ts';
 import { timeScale } from './support/time-scale.ts';
 
 const execFile = promisify(executeFile);
@@ -130,7 +130,7 @@ const createPackedConsumer = async (): Promise<{ readonly cli: string; readonly 
   const { stdout } = await execFile(
     'npm', ['pack', '--json', '--pack-destination', root], { cwd: packageRoot },
   );
-  const [packed] = JSON.parse(stdout) as Array<{ readonly filename: string }>;
+  const packed = packOutputFromJson(stdout);
   await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
   await execFile(
     'npm', ['install', ...cachedNpmInstallArguments, join(root, packed.filename)],
