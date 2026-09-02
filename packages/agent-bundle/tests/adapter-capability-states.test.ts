@@ -175,6 +175,27 @@ it('reports Claude userConfig support and honest unavailable composite coverage'
   expect(registry.supports('plugin', 'userConfig')).toBe(false);
 });
 
+it('reports Claude channels support and honest unavailable composite coverage', () => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('claude').capabilities.channels).toMatchObject({
+    evidence: {
+      observedVersion: '2.1.250',
+      target: 'claude',
+    },
+    state: 'supported',
+  });
+  expect(registry.get('plugin').capabilities.channels).toEqual({
+    reason: 'The unified bundle emits the Claude-only channels manifest field, but the pinned Codex and Cursor contracts declare no shared message-channel surface.',
+    state: 'unavailable',
+  });
+  for (const target of ['codex', 'cursor', 'portable'] as const) {
+    expect(registry.get(target).capabilities.channels).toBeUndefined();
+  }
+  expect(registry.supports('claude', 'channels')).toBe(true);
+  expect(registry.supports('plugin', 'channels')).toBe(false);
+});
+
 it('reports Claude dependency support and honest unavailable composite coverage', () => {
   const registry = createDefaultRegistry();
 

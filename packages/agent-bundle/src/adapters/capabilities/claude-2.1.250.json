@@ -54,6 +54,10 @@
       "enabledOnly": true,
       "organizationDistributionProhibited": true
     },
+    "channels": {
+      "bindsToPluginMcpServer": true,
+      "perChannelUserConfig": true
+    },
     "commands": true,
     "dependencies": {
       "autoInstall": true,
@@ -214,6 +218,10 @@
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference stores non-sensitive options under `pluginConfigs[<plugin>].options` in user settings and sensitive options in macOS Keychain with credentials-file fallback, or `~/.claude/.credentials.json` without a supported keychain; Keychain storage is shared with OAuth tokens and has an approximately 2 KB total limit. pluginConfigs precedence is managed settings, then `--settings`, then user settings; project and local settings are ignored for pluginConfigs (but not enabledPlugins), while before v2.1.207 they were read.",
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents repeatable `claude plugin install --config key=value` for setting declared userConfig options.",
       "2026-09-01: Claude Code 2.1.257 `claude plugin validate --strict` accepts an emitted plugin manifest declaring userConfig with a sensitive string option and a bounded number option.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference lists the component path field as: \"channels | array | Channel declarations for message injection (Telegram, Slack, Discord style). See Channels\".",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents `channels` as an array of message-channel declarations for Telegram, Slack, or Discord-style injection; each required `server` \"must match a key in the plugin's mcpServers.\"",
+      "2026-09-01: The same Channels section states that optional per-channel `userConfig` \"uses the same schema as the top-level field\", so sensitive channel options follow the top-level secure-storage semantics rather than a second option contract.",
+      "2026-09-01: Local host proof against Claude Code 2.1.257 shows `claude plugin validate --strict` accepts a channel bound to an existing `.mcp.json` server and also accepts a deliberately dangling server name; the CLI validates the declaration shape but does not cross-check the sibling MCP keys, so Agent Bundle's claude.channels.server.unknown plan diagnostic is the binding guard (host-adapters.native.test.ts).",
       "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies documents `.claude-plugin/plugin.json` dependencies as a union of bare plugin-name strings and closed objects with required `name` plus optional `version` and `marketplace`; omitted marketplace resolves in the declaring plugin's marketplace.",
       "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies documents npm-style semver ranges, pre-release exclusion unless a range opts in, and git tag resolution through `{name}--v{version}`. Git sources fetch the highest satisfying tag; npm, archive, and command sources are load-checked only, command-source dependencies are never auto-installed, and a dependency's headersHelper is never run automatically.",
       "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies requires cross-marketplace targets in `allowCrossMarketplaceDependenciesOn` on the root marketplace; only the root allowlist is consulted, trust does not chain, and users may manually install a blocked dependency first.",

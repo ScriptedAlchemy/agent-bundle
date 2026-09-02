@@ -2,6 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/plugin.schema.json",
   "$defs": {
+    "channel": {
+      "additionalProperties": false,
+      "properties": {
+        "server": { "minLength": 1, "type": "string" },
+        "userConfig": {
+          "additionalProperties": { "$ref": "#/$defs/userConfigOption" },
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "type": "object"
+        }
+      },
+      "required": ["server"],
+      "type": "object"
+    },
     "dependency": {
       "additionalProperties": false,
       "properties": {
@@ -114,6 +128,11 @@
       "properties": { "name": { "minLength": 1, "type": "string" } },
       "required": ["name"],
       "type": "object"
+    },
+    "channels": {
+      "items": { "$ref": "#/$defs/channel" },
+      "minItems": 1,
+      "type": "array"
     },
     "defaultEnabled": { "type": "boolean" },
     "description": { "minLength": 1, "type": "string" },
