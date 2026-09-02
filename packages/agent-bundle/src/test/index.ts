@@ -89,9 +89,13 @@ export {
 export type {
   ContractCheckOutcome,
   ContractCheckStatus,
+  ContractLifecycleFixture,
+  ContractLifecyclePhase,
+  ContractLifecycleTransition,
   ContractMatrixOptions,
   ContractMatrixProvenance,
   ContractMatrixReport,
+  ContractMatrixRestartSession,
   ContractRouteFixture,
   ContractRouteReport,
   PackedContractMatrixOptions,

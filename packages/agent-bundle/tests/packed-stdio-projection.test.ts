@@ -9,7 +9,11 @@ import { expect, it } from '@rstest/core';
 import { requestEventRuntime } from '../src/events/ipc.ts';
 import { compileTestManifest } from '../src/test/manifest.ts';
 import { runPackedContractMatrix } from '../src/test/contract.ts';
-import { openPackedMcpServer, removeProjectSource } from '../src/test/packed.ts';
+import {
+  openPackedMcpServer,
+  removeProjectSource,
+  type PackedMcpSession,
+} from '../src/test/packed.ts';
 import { routeHarnessPackedContractFixtures } from './support/contract-matrix-fixtures.ts';
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
 
@@ -99,6 +103,7 @@ it('serves compiled routes and durable state across packed process restarts', as
       entry,
       env,
     });
+    let secondSession: PackedMcpSession | undefined;
     let noticeId: string;
     try {
       expect(firstSession.provenance.proofLevel).toBe('packed-deleted-source');
@@ -111,6 +116,7 @@ it('serves compiled routes and durable state across packed process restarts', as
         'context',
         'echo',
         'journal',
+        'lifecycle',
         'mutation-probe',
         'publish-notice',
         'strict-report',
@@ -123,35 +129,6 @@ it('serves compiled routes and durable state across packed process restarts', as
         expect.objectContaining({ mimeType: 'text/markdown', uri: 'harness://notes' }),
         expect.objectContaining({ mimeType: 'text/html;profile=mcp-app', uri: 'ui://harness/panel' }),
       ]));
-
-      const matrixReport = await runPackedContractMatrix({
-        fixtures: routeHarnessPackedContractFixtures(),
-        manifest: harnessManifest,
-        server: 'harness',
-        session: firstSession,
-      });
-      expect(matrixReport.provenance.proofLevel).toBe('packed-deleted-source');
-      expect(matrixReport.routes['app:harness/panel']?.checks['surface-completeness']).toEqual({
-        status: 'passed',
-      });
-      for (const routeId of [
-        'tool:harness/echo',
-        'tool:harness/ticket',
-        'tool:harness/strict-report',
-      ] as const) {
-        expect(matrixReport.routes[routeId]?.checks['serialized-round-trip']).toEqual({
-          reason: expect.stringContaining('packed sessions cannot load project route modules'),
-          status: 'not-applicable',
-        });
-        expect(matrixReport.routes[routeId]?.checks['compat-probe']).toEqual({
-          reason: expect.stringContaining('packed sessions cannot load project route modules'),
-          status: 'not-applicable',
-        });
-        expect(matrixReport.routes[routeId]?.checks['version-skew']).toEqual({
-          reason: expect.stringContaining('packed sessions cannot load project route modules'),
-          status: 'not-applicable',
-        });
-      }
 
       await expect(firstSession.client.callTool({ arguments: { message: 'packed' }, name: 'echo' }))
         .resolves.toMatchObject({
@@ -220,6 +197,33 @@ it('serves compiled routes and durable state across packed process restarts', as
       })).resolves.toEqual({
         messages: [{ content: { text: 'Summarize chapter one', type: 'text' }, role: 'user' }],
       });
+      const matrixReport = await runPackedContractMatrix({
+        fixtures: routeHarnessPackedContractFixtures(),
+        manifest: harnessManifest,
+        restart: async () => {
+          await firstSession.close();
+          secondSession = await openPackedMcpServer({
+            cwd: project,
+            deletedSource,
+            entry,
+            env,
+          });
+          return secondSession;
+        },
+        server: 'harness',
+        session: firstSession,
+      });
+      expect(matrixReport.provenance.proofLevel).toBe('packed-deleted-source');
+      expect(matrixReport.routes['app:harness/panel']?.checks['surface-completeness']).toEqual({
+        status: 'passed',
+      });
+      expect(matrixReport.routes['tool:harness/lifecycle']?.checks['restart-durability']).toEqual({
+        status: 'passed',
+      });
+      expect(matrixReport.routes['tool:harness/lifecycle']?.checks['lifecycle-serialized-round-trip']).toEqual({
+        reason: expect.stringContaining('packed sessions cannot load project route modules'),
+        status: 'not-applicable',
+      });
       expect(firstSession.stderr()).not.toContain('"jsonrpc"');
     } finally {
       await firstSession.close();
@@ -230,16 +234,11 @@ it('serves compiled routes and durable state across packed process restarts', as
       expect.stringMatching(/\.sqlite$/u),
     ]));
 
-    const secondSession = await openPackedMcpServer({
-      cwd: project,
-      deletedSource,
-      entry,
-      env,
-    });
+    if (secondSession === undefined) throw new TypeError('Contract matrix did not restart the packed session.');
     try {
       await expect(secondSession.client.callTool({ arguments: {}, name: 'journal' }))
         .resolves.toMatchObject({
-          structuredContent: { entries: [{ note: 'packed durable proof' }], revision: 1 },
+          structuredContent: { entries: [{ note: 'packed durable proof' }], revision: 6 },
         });
       const artifactManifest = JSON.parse(
         await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'),

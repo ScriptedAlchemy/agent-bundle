@@ -31,6 +31,7 @@ describe('the CLI dispatch level', () => {
         'harness context',
         'harness echo',
         'harness journal',
+        'harness lifecycle',
         'harness mutation-probe',
         'harness publish-notice',
         'harness strict-report',
