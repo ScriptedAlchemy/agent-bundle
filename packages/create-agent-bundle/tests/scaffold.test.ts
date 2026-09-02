@@ -99,6 +99,64 @@ describe('scaffold', () => {
     }
   });
 
+  it('scaffolds publishable package fields for templates with package builds', async () => {
+    const [cliTool, mcpServer] = await Promise.all([
+      scaffoldTemplate('cli-tool', { pluginName: 'greeter' }),
+      scaffoldTemplate('mcp-server', { pluginName: 'status-plugin' }),
+    ]);
+    try {
+      const cliManifest = JSON.parse(await readFile(join(cliTool.root, 'package.json'), 'utf8')) as {
+        readonly bin: Record<string, string>;
+        readonly files: readonly string[];
+        readonly scripts: Record<string, string>;
+      };
+      expect(cliManifest.files).toEqual(['dist', 'artifact', 'README.md']);
+      expect(cliManifest.bin).toEqual({
+        greeter: './dist/bin/greeter.js',
+        'greeter-install': './dist/bin/greeter-install.js',
+      });
+      expect(cliManifest.scripts.prepack).toBe('agent-bundle prepack --json --output artifact');
+
+      const mcpManifest = JSON.parse(await readFile(join(mcpServer.root, 'package.json'), 'utf8')) as {
+        readonly bin: Record<string, string>;
+        readonly exports: Record<string, { readonly import: string; readonly types: string }>;
+        readonly files: readonly string[];
+        readonly private: boolean;
+        readonly scripts: Record<string, string>;
+      };
+      expect(mcpManifest.private).toBe(true);
+      expect(mcpManifest.files).toEqual(['dist', 'artifact', 'README.md']);
+      expect(mcpManifest.bin).toEqual({ 'status-plugin': './dist/bin/status-plugin.js' });
+      expect(mcpManifest.exports).toEqual({
+        '.': { types: './dist/status.d.ts', import: './dist/status.js' },
+      });
+      expect(mcpManifest.scripts.prepack).toBe('agent-bundle prepack --json --output artifact');
+      await expect(readFile(join(mcpServer.root, 'agent-bundle.config.ts'), 'utf8'))
+        .resolves.toContain("lib: './src/status.ts'");
+    } finally {
+      await Promise.all([
+        rm(cliTool.root, { force: true, recursive: true }),
+        rm(mcpServer.root, { force: true, recursive: true }),
+      ]);
+    }
+  });
+
+  it('leaves the skills-only template without package-build packaging fields', async () => {
+    const { root } = await scaffoldTemplate('minimal');
+    try {
+      const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+        readonly bin?: unknown;
+        readonly files?: unknown;
+        readonly scripts: Record<string, string>;
+      };
+      expect(manifest.bin).toBeUndefined();
+      expect(manifest.files).toBeUndefined();
+      expect(manifest.scripts.prepack).toBeUndefined();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   for (const template of ['minimal', 'cli-tool'] as const) {
     it(`scaffolds the ${template} template without a runtime tarball`, async () => {
       const { root } = await scaffoldTemplate(template, { withRuntimeTarball: false });
@@ -135,7 +193,10 @@ describe('scaffold', () => {
       if (files.includes('src/mcp/status/tools/report-status.tsx')) {
         expect(manifest.dependencies?.['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
       }
-      expect(manifest.bin).toEqual({ 'status-plugin': './dist/bin/status-plugin.js' });
+      expect(manifest.bin).toEqual({
+        'status-plugin': './dist/bin/status-plugin.js',
+        'status-plugin-install': './dist/bin/status-plugin-install.js',
+      });
       const config = await readFile(join(root, 'agent-bundle.config.ts'), 'utf8');
       expect(config).toContain("name: 'status-plugin'");
       expect(config).toContain("'status-plugin': './src/cli.ts'");

@@ -1,6 +1,7 @@
 import { defineConfig } from 'agent-bundle';
 
 export default defineConfig({
+  lib: './src/status.ts',
   plugin: {
     description: 'A stdio MCP server plugin scaffolded from the mcp-server template.',
     name: 'my-agent-plugin',

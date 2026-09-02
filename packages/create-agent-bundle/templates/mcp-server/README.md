@@ -15,14 +15,21 @@ npm run test             # plain module tests
 npm run test:routes      # route-unit pool
 npm run test:projection  # in-memory MCP projection pool
 npx agent-bundle mcp list --server status --target portable --artifact artifact
+
+# after publishing/removing "private" and installing the package
+npx my-agent-plugin install cursor
 ```
+
+Installing the npm package does not mutate any host; run the generated
+`my-agent-plugin install <host>` command explicitly.
 
 ## Layout
 
 - `agent-bundle.config.ts` — plugin identity, targets, and project policy.
 - `src/mcp/status/tools/report-status.tsx` — the complete MCP tool route.
 - `src/scripts/check-status.ts` — an artifact script with a generated process envelope.
-- `src/status.ts` — shared domain logic covered by `tests/`.
+- `src/status.ts` — shared domain logic covered by `tests/` and published as
+  the package library export.
 - `rstest.route-unit.config.ts`, `rstest.projection.config.ts` — the two
   framework-generated test pools (see below).
 

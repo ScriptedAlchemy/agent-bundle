@@ -520,8 +520,8 @@ then Hooks and Scripts, then the interactive MCP App.
 
 Run the complete local delivery gate with `pnpm check && pnpm check:release`.
 `pnpm check:release` is release-only: its exact package-script components are
-`pnpm pack:dry-run`, `pnpm audit:release`, and `pnpm test:packed`, and it does not replace
-`pnpm check`.
+`pnpm pack:dry-run`, `pnpm audit:release`, and `pnpm test:packed:release`, and it does not replace
+`pnpm check`. `pnpm release` runs that release gate before `changeset publish`.
 Native Claude/Codex smokes stay intentionally opt-in and skipped in ordinary CI.
 npm publishing is deferred until the release owner picks the final package name/scope and
 license; pkg.pr.new previews are the interim channel, and the first npm release will use npm

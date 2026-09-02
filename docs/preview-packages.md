@@ -3,7 +3,11 @@
 Nothing is published to npm yet, deliberately: the current package names are
 placeholders, and npm publishing is deferred until the final name is chosen
 (it will then use [npm package provenance](https://docs.npmjs.com/generating-provenance-statements);
-the manifests and release workflow are already wired for it). Until then
+the publish step exports `NPM_CONFIG_PROVENANCE=true` and runs the packed
+release gates before `changeset publish`). Before enabling that path, the
+release owner must resolve the repository-wide `"access": "restricted"`
+policy for `agent-bundle`, which does not currently override it with
+`publishConfig.access`. Until then
 pkg.pr.new is the release channel. Every CI package-preview run publishes real,
 installable tarballs of all three publishable workspace packages to [pkg.pr.new](https://pkg.pr.new)
 — a free continuous-release registry keyed by commit SHA and pull request.
