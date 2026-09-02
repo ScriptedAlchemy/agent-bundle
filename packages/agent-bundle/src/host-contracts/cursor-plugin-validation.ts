@@ -316,7 +316,8 @@ const symlinkDiagnostics = async (
       ));
       return;
     }
-    await Promise.all(entries.map(async (entry) => {
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
       const path = join(directory, entry.name);
       if (entry.isSymbolicLink()) {
         try {
@@ -337,10 +338,10 @@ const symlinkDiagnostics = async (
             target,
           ));
         }
-        return;
+        continue;
       }
       if (entry.isDirectory()) await visit(path);
-    }));
+    }
   };
   await visit(pluginDirectory);
   return freezeDiagnostics(diagnostics);
@@ -348,9 +349,11 @@ const symlinkDiagnostics = async (
 
 const isAllowedTokenLocation = (path: DocumentPath, segments: readonly (number | string)[]): boolean => {
   if (path === 'mcp.json' && segments[0] === 'mcpServers' && typeof segments[1] === 'string') {
-    if (segments.length === 3) return segments[2] === 'command' || segments[2] === 'cwd';
+    if (segments.length === 3) return segments[2] === 'command' || segments[2] === 'cwd' || segments[2] === 'url';
     if (segments.length === 4 && typeof segments[3] === 'number') return segments[2] === 'args';
-    if (segments.length === 4 && typeof segments[3] === 'string') return segments[2] === 'env';
+    if (segments.length === 4 && typeof segments[3] === 'string') {
+      return segments[2] === 'env' || segments[2] === 'headers';
+    }
   }
   return path === 'hooks/hooks.json' &&
     segments.length === 4 &&

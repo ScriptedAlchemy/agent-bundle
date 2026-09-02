@@ -169,6 +169,34 @@ it('accepts valid bytes for every vendored Cursor schema', async () => {
   ]);
 });
 
+it('allows CURSOR_PLUGIN_ROOT in remote MCP URLs and headers', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/plugin.json': {
+      mcpServers: './mcp.json',
+      name: 'fixture-plugin',
+    },
+    'mcp.json': {
+      mcpServers: {
+        remote: {
+          headers: {
+            Authorization: 'Bearer ${CURSOR_PLUGIN_ROOT}',
+          },
+          type: 'streamable-http',
+          url: '${CURSOR_PLUGIN_ROOT}/mcp',
+        },
+      },
+    },
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.diagnostics.filter((entry) => entry.code === 'AB6028')).toEqual([]);
+});
+
 it('rejects an unknown plugin manifest property under the strict pinned schema', async () => {
   const pluginDirectory = await createBundle({
     '.cursor-plugin/plugin.json': { name: 'fixture-plugin', surprise: true },
@@ -298,13 +326,17 @@ it('reports which fallback manifest the pinned loader precedence would select', 
   expect(report.status).toBe('failed');
 });
 
-it('rejects symlinks whose real targets escape the bundle directory', async () => {
+it('reports escaping symlinks in stable path order', async () => {
   const pluginDirectory = await createBundle();
   const outsideRoot = await createFixtureRoot();
-  const outsideFile = join(outsideRoot, 'outside.json');
-  await writeFile(outsideFile, '{"hooks":{}}\n');
-  await mkdir(join(pluginDirectory, 'hooks'), { recursive: true });
-  await symlink(outsideFile, join(pluginDirectory, 'hooks', 'hooks.json'));
+  const firstOutsideFile = join(outsideRoot, 'first.json');
+  const secondOutsideFile = join(outsideRoot, 'second.json');
+  await Promise.all([
+    writeFile(firstOutsideFile, '{}\n'),
+    writeFile(secondOutsideFile, '{}\n'),
+  ]);
+  await symlink(secondOutsideFile, join(pluginDirectory, 'z-outside.json'));
+  await symlink(firstOutsideFile, join(pluginDirectory, 'a-outside.json'));
 
   const report = await validateCursorPlugin({
     pluginDirectory,
@@ -312,12 +344,13 @@ it('rejects symlinks whose real targets escape the bundle directory', async () =
     target: 'cursor',
   });
 
-  expect(report.diagnostics).toEqual(expect.arrayContaining([
-    expect.objectContaining({
-      code: 'AB6028',
-      message: expect.stringContaining('escapes the Cursor bundle directory'),
-    }),
-  ]));
+  expect(report.diagnostics
+    .filter((entry) => entry.code === 'AB6028')
+    .map((entry) => entry.message))
+    .toEqual([
+      'a-outside.json is a symlink whose real target escapes the Cursor bundle directory.',
+      'z-outside.json is a symlink whose real target escapes the Cursor bundle directory.',
+    ]);
   expect(report.status).toBe('failed');
 });
 
