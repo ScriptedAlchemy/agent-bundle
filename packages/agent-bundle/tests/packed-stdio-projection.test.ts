@@ -107,7 +107,10 @@ it('serves compiled routes and durable state across packed process restarts', as
         'echo',
         'journal',
         'publish-notice',
+        'strict-report',
+        'ticket',
         'unavailable',
+        'wait',
       ]);
       const resources = await firstSession.client.listResources();
       expect(resources.resources).toEqual(expect.arrayContaining([

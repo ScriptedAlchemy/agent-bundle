@@ -273,7 +273,7 @@ is never a receipt for another.
 | level | helpers | what it proves |
 | --- | --- | --- |
 | `route-unit` | `renderRoute`, `renderRouteEvents` | a route module renders to the document (and render-event stream) it claims |
-| `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
+| `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
 | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a plain or rendered argv vector resolved and run through the routed CLI's own shell, including rendered Markdown, explicit TTY, JSON, and NDJSON modes, in-process |
 | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })` | the packed stdio process still runs after project source and configuration are removed and verified absent |
@@ -315,6 +315,48 @@ prove native-host install or dispatch, or an install mode that copies the
 artifact elsewhere. `host-install` is separate real-host process evidence for
 built-bundle acceptance and registration, not packed provenance or session
 behavior.
+
+### Contract matrix (`runContractMatrix`)
+
+`runContractMatrix` is the framework-owned generated-plugin contract matrix at
+the `mcp-in-memory` proof level. It opens one real MCP client against the real
+generated server and runs a fixed suite of checks per compiled route. The
+project supplies only fixtures — valid inputs, a declared `resultCompat`
+policy for every tool route, optional `previousResults` payloads, and optional
+`cancellation` cases.
+
+At `mcp-in-memory` the matrix proves: wire surface completeness against the
+compiler manifest, fixture coverage, successful-path invocation sweeps,
+JSON serialized round-trip through each tool route's own `resultSchema`,
+declared additive/closed compat behavior on serialized payloads, acceptance of
+previous-server payloads under the current schema, rejection of negative inputs
+derived from the advertised `listTools` input JSON Schema, and mid-flight
+cancellation hygiene. In-memory transport may pass structured values without
+serialization; the matrix closes that gap with an explicit
+`JSON.parse(JSON.stringify(...))` round-trip before validation.
+
+It deliberately does not prove process spawn, stdio framing, packed tarball
+contents, host install, or browser App HTML. MCP Apps are reported as
+not-applicable for surface registration because the in-memory level does not
+register them.
+
+```ts
+import { runContractMatrix } from 'agent-bundle/test';
+
+await runContractMatrix({
+  fixtures: {
+    'tool:library/summarize': {
+      input: { title: 'Dune' },
+      resultCompat: 'additive',
+      previousResults: [{ chapters: 24 }],
+    },
+  },
+});
+```
+
+A failing matrix throws one aggregated `AgentTestError` with code
+`contract-violation`, naming every failing route, check, and the
+`mcp-in-memory` proof-level label.
 
 ## Evaluation
 
