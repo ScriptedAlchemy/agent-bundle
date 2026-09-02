@@ -169,9 +169,17 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
     });
     expect(inspected.structuredContent).toMatchObject({
       actor: { reason: 'not-provided', state: 'unavailable' },
-      host: { reason: 'not-provided', state: 'unavailable' },
+      host: {
+        source: 'native',
+        state: 'available',
+        value: { name: 'generated-route-test' },
+      },
       session: { reason: 'not-provided', state: 'unavailable' },
-      workspace: { reason: 'not-provided', state: 'unavailable' },
+      workspace: {
+        source: 'derived',
+        state: 'available',
+        value: { root: process.cwd() },
+      },
     });
     const resources = await client.listResources();
     expect(resources).toMatchObject({ resources: [

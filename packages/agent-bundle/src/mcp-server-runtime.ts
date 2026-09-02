@@ -33,10 +33,12 @@ import { canonicalAgentEvents, type CanonicalAgentEvent } from './routes/public.
 import type {
   AgentActorIdentity,
   AgentDocument,
+  AgentHostIdentity,
   AgentProgressReporter,
   AgentRenderDispatch,
   AgentRenderDispatcher,
   AgentSessionIdentity,
+  AgentWorkspaceIdentity,
   McpProgressNotificationParams,
   McpProgressToken,
   Observed,
@@ -94,17 +96,26 @@ export interface RenderedGeneratedRoute {
 
 interface GeneratedRouteIdentity {
   readonly actor?: Observed<AgentActorIdentity>;
+  readonly host?: Observed<AgentHostIdentity>;
   readonly session?: Observed<AgentSessionIdentity>;
+  readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
 
 /** Identity the server derives from the transport's own request context. */
-const requestIdentity = (context: GeneratedRouteRequestContext): GeneratedRouteIdentity => ({
+const requestIdentity = (
+  context: GeneratedRouteRequestContext,
+  clientName: string | undefined,
+): GeneratedRouteIdentity => ({
   ...(context.http?.authInfo?.clientId === undefined
     ? {}
     : { actor: available({ id: context.http.authInfo.clientId }, 'native') }),
+  ...(typeof clientName === 'string' && clientName.trim() !== ''
+    ? { host: available({ name: clientName }, 'native') }
+    : {}),
   ...(typeof context.sessionId === 'string' && context.sessionId.trim() !== ''
     ? { session: available({ sessionId: context.sessionId }, 'native') }
     : {}),
+  workspace: available({ root: process.cwd() }, 'derived'),
 });
 
 /**
@@ -135,6 +146,8 @@ const projectorOptions = (context: GeneratedRouteRequestContext): {
  * Renders one route inside a request scope, projects its render-event stream
  * into an MCP result, and validates the document value against the route's
  * own `resultSchema` — exactly what the generated server does per request.
+ * The host scope establishes the full transport-observed identity and the
+ * warm host's `agent()` probe forwards it into the Flight worker.
  */
 export const renderGeneratedRoute = async (
   dispatcher: AgentRenderDispatcher,
@@ -142,8 +155,9 @@ export const renderGeneratedRoute = async (
   route: GeneratedRouteRecord,
   input: unknown,
   context: GeneratedRouteRequestContext,
+  identity?: { readonly clientName?: string },
 ): Promise<RenderedGeneratedRoute> => runAgentRequest({
-  ...requestIdentity(context),
+  ...requestIdentity(context, identity?.clientName),
   invocation: { artifactEpoch, kind: 'tool', operationId: route.id, surface: route.name },
   signal: context.mcpReq.signal,
 }, async () => {
@@ -183,7 +197,15 @@ export const registerGeneratedRoutes = (
           inputSchema: route.module.inputSchema,
           outputSchema: route.module.resultSchema,
         } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => {
-          const rendered = await renderGeneratedRoute(dispatcher, artifactEpoch, route, input, context);
+          const clientName = server.server.getClientVersion()?.name;
+          const rendered = await renderGeneratedRoute(
+            dispatcher,
+            artifactEpoch,
+            route,
+            input,
+            context,
+            { clientName },
+          );
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
         }) as never);
         break;
@@ -196,8 +218,17 @@ export const registerGeneratedRoutes = (
           route.name,
           uri,
           selectedConfig(route.config, ['_meta', 'description', 'icons', 'mimeType', 'title']) as never,
-          (async (resourceUri: URL, context: GeneratedRouteRequestContext) =>
-            (await renderGeneratedRoute(dispatcher, artifactEpoch, route, { uri: resourceUri.href }, context)).result) as never,
+          (async (resourceUri: URL, context: GeneratedRouteRequestContext) => {
+            const clientName = server.server.getClientVersion()?.name;
+            return (await renderGeneratedRoute(
+              dispatcher,
+              artifactEpoch,
+              route,
+              { uri: resourceUri.href },
+              context,
+              { clientName },
+            )).result;
+          }) as never,
         );
         break;
       }
@@ -205,8 +236,17 @@ export const registerGeneratedRoutes = (
         server.registerPrompt(route.name, {
           ...selectedConfig(route.config, ['_meta', 'description', 'icons', 'title']),
           argsSchema: route.module.inputSchema,
-        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) =>
-          (await renderGeneratedRoute(dispatcher, artifactEpoch, route, input, context)).result) as never);
+        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => {
+          const clientName = server.server.getClientVersion()?.name;
+          return (await renderGeneratedRoute(
+            dispatcher,
+            artifactEpoch,
+            route,
+            input,
+            context,
+            { clientName },
+          )).result;
+        }) as never);
         break;
       default: {
         const unreachable: never = route.kind;
