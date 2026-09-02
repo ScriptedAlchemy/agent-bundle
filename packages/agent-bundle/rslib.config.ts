@@ -36,6 +36,7 @@ export default defineConfig({
       'event-ipc': './src/events/ipc.ts',
       'event-project': './src/events/project.ts',
       index: './src/index.ts',
+      'lifecycle-render-child': './src/dev/playground/lifecycle-render-child.ts',
       'mcp-apps': './src/mcp-apps.ts',
       'mcp-entry': './src/mcp-entry.ts',
       meta: './src/meta.ts',

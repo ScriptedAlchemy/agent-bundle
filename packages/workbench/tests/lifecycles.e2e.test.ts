@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -10,17 +9,6 @@ import { replaceWatchedSource } from './support/watched-files.ts';
 import { workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 30_000 * timeScale;
-const lifecycleService = join(
-  process.cwd(),
-  'packages',
-  'agent-bundle',
-  'src',
-  'contracts',
-  'lifecycles.ts',
-);
-const endpointsAvailable =
-  process.env['AGENT_BUNDLE_LIFECYCLE_E2E'] === '1' &&
-  existsSync(lifecycleService);
 
 const e2e = test.extend({
   playwright: {
@@ -29,7 +17,7 @@ const e2e = test.extend({
   } satisfies PlaywrightOptions,
 });
 
-e2e.skipIf(!endpointsAvailable)(
+e2e(
   'replays fixture and observed lifecycle receipts for Claude and Codex, then repairs stale manifest binding',
   { timeout: 180_000 },
   async ({ page }) => {
@@ -86,6 +74,7 @@ e2e.skipIf(!endpointsAvailable)(
         tool_name: 'Write',
         tool_response: { success: true },
         tool_use_id: 'lifecycle-observed-write',
+        transcript_path: '/tmp/lifecycle-observed-transcript.jsonl',
       });
       await input.fill(observedReceipt);
       await run.click();

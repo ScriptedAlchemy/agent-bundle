@@ -694,6 +694,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       }
       return Object.freeze({
         graph: prepared.routeGraph ?? emptyCompiledRouteGraph,
+        ...(prepared.source.revision === undefined ? {} : { sourceRevision: prepared.source.revision }),
         targets: Object.freeze(prepared.model.targets.map((target) => target.name)),
       });
     },

@@ -97,26 +97,30 @@ export const createNativeEventStarter = (
         session_id: 'lifecycle-replay',
       }
     : {
-        cwd: '/tmp/agent-bundle-lifecycle-replay',
+        cwd: '/tmp',
         hook_event_name: nativeEvent,
         session_id: 'lifecycle-replay',
-        transcript_path: target === 'codex' ? null : '/tmp/agent-bundle-lifecycle-replay/transcript.jsonl',
+        transcript_path: target === 'codex' ? null : '/tmp/agent-bundle-lifecycle-replay-transcript.jsonl',
       };
+  const toolInput = target === 'codex'
+    ? { command: '*** Begin Patch\n*** Add File: lifecycle-replay.txt\n+Lifecycle replay\n*** End Patch' }
+    : { file_path: 'lifecycle-replay.txt' };
+  const toolName = target === 'codex' ? 'apply_patch' : 'Write';
   switch (canonicalEvent) {
     case 'session/start':
       return deepFreeze(target === 'cursor' ? base : { ...base, source: 'startup' });
     case 'tool/before':
       return deepFreeze({
         ...base,
-        tool_input: {},
-        tool_name: 'Write',
+        tool_input: toolInput,
+        tool_name: toolName,
         tool_use_id: 'lifecycle-replay-tool',
       });
     case 'tool/after':
       return deepFreeze({
         ...base,
-        tool_input: {},
-        tool_name: 'Write',
+        tool_input: toolInput,
+        tool_name: toolName,
         ...(target === 'cursor' ? { tool_output: '{}' } : { tool_response: {} }),
         tool_use_id: 'lifecycle-replay-tool',
       });

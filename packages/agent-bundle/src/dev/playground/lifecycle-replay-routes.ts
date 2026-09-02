@@ -88,6 +88,28 @@ const replayResponse = (
     ? Object.freeze({ diagnostics: result.diagnostics })
     : Object.freeze({ replay: result });
 
+const requestAbort = (
+  request: IncomingMessage,
+  response: ServerResponse,
+): Readonly<{ readonly dispose: () => void; readonly signal: AbortSignal }> => {
+  const controller = new AbortController();
+  const abort = (): void => {
+    if (!controller.signal.aborted) controller.abort(new Error('Lifecycle replay request was cancelled.'));
+  };
+  const abortResponse = (): void => {
+    if (!response.writableEnded) abort();
+  };
+  request.once('aborted', abort);
+  response.once('close', abortResponse);
+  return Object.freeze({
+    dispose: () => {
+      request.removeListener('aborted', abort);
+      response.removeListener('close', abortResponse);
+    },
+    signal: controller.signal,
+  });
+};
+
 /** Authenticated foreground boundary for read-only semantic lifecycle replay. */
 export class LifecycleReplayRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
@@ -128,7 +150,13 @@ export class LifecycleReplayRoutes {
         return true;
       }
       const body = await readJsonBody(request, { invalidShape });
-      const result = replayResponse(await service.replay(replayRequest(body)));
+      const cancellation = requestAbort(request, response);
+      let result: ReturnType<typeof replayResponse>;
+      try {
+        result = replayResponse(await service.replay(replayRequest(body), { signal: cancellation.signal }));
+      } finally {
+        cancellation.dispose();
+      }
       if (Buffer.byteLength(JSON.stringify(result), 'utf8') > this.#responseByteLimit) {
         throw requestError(diagnostic('AB8214', 'Lifecycle replay exceeds the 16 MiB response limit.', 413));
       }

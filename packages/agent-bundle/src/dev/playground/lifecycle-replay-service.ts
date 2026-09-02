@@ -1,3 +1,9 @@
+import { fork } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { createJiti } from 'jiti';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
@@ -13,7 +19,7 @@ import type {
   LifecycleTarget,
 } from '../../contracts/lifecycles.ts';
 import { deepFreeze } from '../../core/freeze.ts';
-import { isJsonRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';
+import { isJsonRecord, isRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';
 import {
   createCanonicalEventProps,
   projectEventDocument,
@@ -24,15 +30,21 @@ import {
   type CanonicalAgentEvent,
 } from '../../routes/public.ts';
 import type { CompiledAgentRoute, CompiledRouteGraph } from '../../routes/types.ts';
-import { renderRouteEvents } from '../../test/render.ts';
+import type { renderRouteEvents } from '../../test/render.ts';
 import type { AgentRouteModule } from '../../test/types.ts';
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
+import type {
+  LifecycleRenderChildRequest,
+  LifecycleRenderChildResponse,
+  LifecycleRenderChildResult,
+} from './lifecycle-render-protocol.ts';
 
 const concreteHosts = new Set(['claude', 'codex', 'cursor']);
 const projectionDiagnosticCode = 'lifecycle.projection.unsupported';
 
 export interface LifecyclePreparedProject {
   readonly graph: CompiledRouteGraph;
+  readonly sourceRevision?: string;
   readonly targets: readonly string[];
 }
 
@@ -76,10 +88,118 @@ const importRouteModule = async (source: string): Promise<AgentRouteModule> => {
   return jiti.import<AgentRouteModule>(source);
 };
 
+const lazyRenderRouteEvents: typeof renderRouteEvents = async (target, options) => {
+  const renderer = await import('../../test/render.ts');
+  return renderer.renderRouteEvents(target, options);
+};
+
+const lifecycleRenderChildPath = (): string => {
+  const current = fileURLToPath(import.meta.url);
+  const candidates = current.endsWith('.ts')
+    ? [
+        fileURLToPath(new URL('./lifecycle-render-child.ts', import.meta.url)),
+        fileURLToPath(new URL('../../../dist/lifecycle-render-child.js', import.meta.url)),
+      ]
+    : [
+        fileURLToPath(new URL('./lifecycle-render-child.js', import.meta.url)),
+        fileURLToPath(new URL('./lifecycle-render-child.ts', import.meta.url)),
+        resolve(process.cwd(), 'packages/agent-bundle/src/dev/playground/lifecycle-render-child.ts'),
+      ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error('Unable to locate the lifecycle react-server render child.');
+};
+
+const isLifecycleRenderChildResponse = (value: unknown): value is LifecycleRenderChildResponse => {
+  if (!isRecord(value)) return false;
+  if (value.type === 'result') return isRecord(value.result);
+  return value.type === 'error'
+    && isRecord(value.error)
+    && typeof value.error.name === 'string'
+    && typeof value.error.message === 'string';
+};
+
+const renderInChild = (
+  request: LifecycleRenderChildRequest,
+  signal: AbortSignal,
+): Promise<LifecycleRenderChildResult> => {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException('Lifecycle replay was aborted.', 'AbortError'));
+  }
+  const childPath = lifecycleRenderChildPath();
+  const jitiRegister = join(
+    dirname(createRequire(import.meta.url).resolve('jiti/package.json')),
+    'lib',
+    'jiti-register.mjs',
+  );
+  const child = fork(childPath, [], {
+    execArgv: [
+      '--conditions=react-server',
+      ...(childPath.endsWith('.ts')
+        ? ['--import', jitiRegister]
+        : []),
+    ],
+    serialization: 'json',
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  child.stdout?.on('data', (chunk: Uint8Array) => process.stderr.write(chunk));
+  child.stderr?.on('data', (chunk: Uint8Array) => process.stderr.write(chunk));
+  return new Promise((resolvePromise, rejectPromise) => {
+    let settled = false;
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', abort);
+      child.removeListener('error', fail);
+      child.removeListener('exit', exited);
+      child.removeListener('message', receive);
+    };
+    const settle = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      action();
+    };
+    const abort = (): void => {
+      try { child.kill('SIGKILL'); }
+      catch { /* The exit path reports an already-closed process. */ }
+      settle(() => rejectPromise(signal.reason ?? new DOMException('Lifecycle replay was aborted.', 'AbortError')));
+    };
+    const fail = (error: Error): void => settle(() => rejectPromise(error));
+    const exited = (code: number | null, exitSignal: NodeJS.Signals | null): void => {
+      settle(() => rejectPromise(new Error(
+        `Lifecycle render child exited before replying (code ${String(code)}, signal ${String(exitSignal)}).`,
+      )));
+    };
+    const receive = (message: unknown): void => {
+      if (!isLifecycleRenderChildResponse(message)) {
+        settle(() => rejectPromise(new Error('Lifecycle render child returned an invalid response.')));
+        return;
+      }
+      if (message.type === 'error') {
+        const error = new Error(message.error.message);
+        error.name = message.error.name;
+        settle(() => rejectPromise(error));
+        return;
+      }
+      settle(() => resolvePromise(message.result));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    child.once('error', fail);
+    child.once('exit', exited);
+    child.once('message', receive);
+    child.send(request, (error) => {
+      if (error !== null) fail(error);
+    });
+  });
+};
+
 const expandedTargets = (targets: readonly string[]): readonly string[] => Object.freeze(
   [...new Set(targets.flatMap((target) => target === 'plugin' ? ['claude', 'codex'] : [target]))]
     .sort((left, right) => left.localeCompare(right)),
 );
+
+const preparedManifestDigest = (prepared: LifecyclePreparedProject): string =>
+  prepared.sourceRevision ?? prepared.graph.digest;
 
 const eventForRouteId = (routeId: string): CanonicalAgentEvent | undefined => {
   if (!routeId.startsWith('event:')) return undefined;
@@ -159,13 +279,15 @@ export class LifecycleReplayService {
   readonly #prepared: () => LifecyclePreparedProject;
   readonly #registry: TargetRegistry;
   readonly #render: typeof renderRouteEvents;
+  readonly #renderInProcess: boolean;
 
   constructor(options: LifecycleReplayServiceOptions) {
     this.#loadRouteModule = options.loadRouteModule ?? importRouteModule;
     this.#logger = options.logger;
     this.#prepared = options.prepared;
     this.#registry = options.registry ?? createDefaultRegistry();
-    this.#render = options.render ?? renderRouteEvents;
+    this.#render = options.render ?? lazyRenderRouteEvents;
+    this.#renderInProcess = options.loadRouteModule !== undefined || options.render !== undefined;
   }
 
   list(): LifecycleListResponse {
@@ -180,7 +302,7 @@ export class LifecycleReplayService {
         targets: projected.targets,
       });
     });
-    return deepFreeze({ lifecycles, manifestDigest: prepared.graph.digest });
+    return deepFreeze({ lifecycles, manifestDigest: preparedManifestDigest(prepared) });
   }
 
   async replay(
@@ -208,7 +330,7 @@ export class LifecycleReplayService {
 
   async #replay(request: LifecycleReplayRequest, signal: AbortSignal): Promise<LifecycleReplay | LifecycleReplayDiagnosticResult> {
     const prepared = this.#prepared();
-    if (request.binding.manifestDigest !== prepared.graph.digest) {
+    if (request.binding.manifestDigest !== preparedManifestDigest(prepared)) {
       throw new LifecycleReplayRequestError('AB8213', 'Lifecycle replay manifest binding is stale.', 409);
     }
     const route = prepared.graph.events.find((candidate) => candidate.id === request.binding.routeId);
@@ -256,21 +378,39 @@ export class LifecycleReplayService {
       const message = error instanceof Error ? error.message : String(error);
       throw new LifecycleReplayRequestError('AB8211', message, 400);
     }
-    const props = createCanonicalEventProps(
-      event,
-      nativeInput,
-      target.target,
-      target.nativeEvent,
-      target.hostContractRevision,
-      signal,
-    );
-    const module = await this.#loadRouteModule(route.source);
-    const rendered = await this.#render(module, {
-      input: props,
-      kind: 'event-route',
-      routeId: route.id,
-      signal,
-    });
+    let rendered: LifecycleRenderChildResult;
+    if (this.#renderInProcess) {
+      const props = createCanonicalEventProps(
+        event,
+        nativeInput,
+        target.target,
+        target.nativeEvent,
+        target.hostContractRevision,
+        signal,
+      );
+      const module = await this.#loadRouteModule(route.source);
+      const result = await this.#render(module, {
+        input: props,
+        kind: 'event-route',
+        routeId: route.id,
+        signal,
+      });
+      rendered = Object.freeze({
+        canonical: props.canonical,
+        document: result.document,
+        events: result.events,
+      });
+    } else {
+      rendered = await renderInChild({
+        event,
+        hostContractRevision: target.hostContractRevision,
+        nativeEvent: target.nativeEvent,
+        nativeInput,
+        routeId: route.id,
+        routeSource: route.source,
+        target: target.target,
+      }, signal);
+    }
     let nativeResponse: Readonly<Record<string, unknown>> | undefined;
     let projectionDiagnostic: Readonly<{ readonly code: string; readonly message: string }> | undefined;
     try {
@@ -284,7 +424,7 @@ export class LifecycleReplayService {
     }
     return deepFreeze({
       binding: { ...request.binding },
-      canonical: props.canonical,
+      canonical: rendered.canonical,
       document: rendered.document,
       events: rendered.events,
       nativeInput,
