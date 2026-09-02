@@ -1,6 +1,7 @@
 import type { SkillDocument } from '../config/skill.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { isRecord } from '../core/strict-json.ts';
 import type {
   ClaudeSkillExtension,
   CodexSkillExtension,
@@ -66,9 +67,6 @@ const codexPolicyKeys = new Set(['allowImplicitInvocation', 'allow_implicit_invo
 const codexDependenciesKeys = new Set(['tools']);
 const codexToolKeys = new Set(['description', 'transport', 'type', 'url', 'value']);
 
-const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const asString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length > 0 ? value : undefined;
 
@@ -92,7 +90,7 @@ const asStringOrList = (value: unknown): string | readonly string[] | undefined 
 };
 
 const metadataRecord = (value: unknown): Readonly<Record<string, string>> | undefined => {
-  if (!isPlainRecord(value)) return undefined;
+  if (!isRecord(value)) return undefined;
   const entries = Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string');
   return entries.length === 0 ? undefined : Object.freeze(Object.fromEntries(entries));
 };
@@ -132,7 +130,7 @@ const claudeFrom = (fields: Readonly<Record<string, unknown>>): ClaudeSkillExten
       || fields.effort === 'xhigh' || fields.effort === 'max'
       ? { effort: fields.effort }
       : {}),
-    ...(isPlainRecord(fields.hooks) ? { hooks: Object.freeze({ ...fields.hooks }) } : {}),
+    ...(isRecord(fields.hooks) ? { hooks: Object.freeze({ ...fields.hooks }) } : {}),
     ...(asString(fields.model) === undefined ? {} : { model: asString(fields.model) }),
     ...(asStringList(fields.paths) === undefined ? {} : { paths: asStringList(fields.paths) }),
     ...(fields.shell === 'bash' || fields.shell === 'powershell' ? { shell: fields.shell } : {}),
@@ -162,12 +160,12 @@ const pickBoolean = (record: Readonly<Record<string, unknown>>, camel: string, s
   asBoolean(record[camel]) ?? asBoolean(record[snake]);
 
 const codexFrom = (value: unknown): CodexSkillExtension | undefined => {
-  if (!isPlainRecord(value)) return undefined;
-  const iface = isPlainRecord(value.interface) ? value.interface : undefined;
-  const policy = isPlainRecord(value.policy) ? value.policy : undefined;
-  const dependencies = isPlainRecord(value.dependencies) ? value.dependencies : undefined;
+  if (!isRecord(value)) return undefined;
+  const iface = isRecord(value.interface) ? value.interface : undefined;
+  const policy = isRecord(value.policy) ? value.policy : undefined;
+  const dependencies = isRecord(value.dependencies) ? value.dependencies : undefined;
   const tools = Array.isArray(dependencies?.tools)
-    ? dependencies.tools.filter(isPlainRecord).map((tool) => Object.freeze({
+    ? dependencies.tools.filter(isRecord).map((tool) => Object.freeze({
       ...(asString(tool.description) === undefined ? {} : { description: asString(tool.description) }),
       ...(asString(tool.transport) === undefined ? {} : { transport: asString(tool.transport) }),
       ...(asString(tool.type) === undefined ? {} : { type: asString(tool.type) }),
@@ -263,7 +261,7 @@ const peelTargets = (
   diagnostics: Diagnostic[],
 ): SkillIrExtensions => {
   if (value === undefined) return {};
-  if (!isPlainRecord(value)) {
+  if (!isRecord(value)) {
     diagnostics.push({
       code: 'AB3006',
       message: 'Skill `targets` must be an object with optional `claude`, `cursor`, and `codex` keys.',
@@ -275,15 +273,15 @@ const peelTargets = (
   }
   const unknown = Object.keys(value).filter((key) => key !== 'claude' && key !== 'codex' && key !== 'cursor');
   for (const key of unknown) diagnostics.push(unknownField(source, `targets.${key}`));
-  if (isPlainRecord(value.claude)) {
+  if (isRecord(value.claude)) {
     reportUnknownFields(value.claude, claudeTargetKeys, 'targets.claude', source, diagnostics);
   }
-  if (isPlainRecord(value.cursor)) {
+  if (isRecord(value.cursor)) {
     reportUnknownFields(value.cursor, cursorTargetKeys, 'targets.cursor', source, diagnostics);
   }
-  if (isPlainRecord(value.codex)) {
+  if (isRecord(value.codex)) {
     reportUnknownFields(value.codex, codexTargetKeys, 'targets.codex', source, diagnostics);
-    if (isPlainRecord(value.codex.interface)) {
+    if (isRecord(value.codex.interface)) {
       reportUnknownFields(
         value.codex.interface,
         codexInterfaceKeys,
@@ -292,7 +290,7 @@ const peelTargets = (
         diagnostics,
       );
     }
-    if (isPlainRecord(value.codex.policy)) {
+    if (isRecord(value.codex.policy)) {
       reportUnknownFields(
         value.codex.policy,
         codexPolicyKeys,
@@ -301,7 +299,7 @@ const peelTargets = (
         diagnostics,
       );
     }
-    if (isPlainRecord(value.codex.dependencies)) {
+    if (isRecord(value.codex.dependencies)) {
       reportUnknownFields(
         value.codex.dependencies,
         codexDependenciesKeys,
@@ -311,7 +309,7 @@ const peelTargets = (
       );
       if (Array.isArray(value.codex.dependencies.tools)) {
         value.codex.dependencies.tools.forEach((tool, index) => {
-          if (isPlainRecord(tool)) {
+          if (isRecord(tool)) {
             reportUnknownFields(
               tool,
               codexToolKeys,
@@ -324,7 +322,7 @@ const peelTargets = (
       }
     }
   }
-  const claude = isPlainRecord(value.claude)
+  const claude = isRecord(value.claude)
     ? claudeFrom({
       ...value.claude,
       'argument-hint': value.claude.argumentHint ?? value.claude['argument-hint'],
@@ -335,7 +333,7 @@ const peelTargets = (
       'allowed-tools': value.claude.allowedTools ?? value.claude['allowed-tools'],
     })
     : undefined;
-  const cursor = isPlainRecord(value.cursor)
+  const cursor = isRecord(value.cursor)
     ? cursorFrom({
       ...value.cursor,
       'disable-model-invocation': value.cursor.disableModelInvocation ?? value.cursor['disable-model-invocation'],

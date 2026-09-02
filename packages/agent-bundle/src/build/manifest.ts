@@ -5,7 +5,7 @@ import {
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
 import { isValidPackageName, isValidPackageVersion } from '../core/project-context.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
 export type ArtifactManifestValidationStatus = 'passed';
@@ -104,11 +104,8 @@ const fail = (message: string): never => {
   throw new TypeError(`Artifact manifest ${message}`);
 };
 
-const isPlainObject = (value: unknown): value is JsonRecord => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
+// Inputs are parsed JSON, so the canonical guard's narrowing is retyped to JsonRecord.
+const isPlainObject = isPlainRecord as (value: unknown) => value is JsonRecord;
 
 const requireRecord = (value: unknown, location: string): JsonRecord =>
   isPlainObject(value) ? value : fail(`${location} must be a plain object.`);

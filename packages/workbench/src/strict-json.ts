@@ -1,5 +1,6 @@
 export {
   hasOnlyOwnKeys,
+  isJsonRecord,
   isPlainRecord,
   mapStrictJsonReason,
   snapshotStrictJsonValue,

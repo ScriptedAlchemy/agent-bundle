@@ -11,6 +11,7 @@ import type {
 } from '../../agent-bundle/src/contracts/runtime.ts';
 import type { JsonValue, ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/contracts/runtime.ts';
 import type { RuntimeBootstrap } from './runtime-client.ts';
+import { isJsonRecord, isPlainRecord as sharedIsPlainRecord } from './strict-json.ts';
 
 export type RuntimeInspectorTab = 'tree' | 'result' | 'document' | 'flight' | 'protocol' | 'state' | 'diagnostics';
 
@@ -162,10 +163,7 @@ const emptyProfiles = Object.freeze([]) as readonly RuntimeProfileOption[];
 const emptyCounts = Object.freeze(Object.create(null)) as Readonly<Record<string, number>>;
 const runtimeTabs = new Set<RuntimeInspectorTab>(['tree', 'result', 'document', 'flight', 'protocol', 'state', 'diagnostics']);
 
-const isPlainRecord = (value: object): value is Record<string, unknown> => {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
+const isPlainRecord: (value: object) => value is Record<string, unknown> = sharedIsPlainRecord;
 
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0;
@@ -272,8 +270,6 @@ const sameStableVector = (left: RuntimeVector, right: RuntimeVector): boolean =>
   left.sourceRevision === right.sourceRevision &&
   left.stateStoreId === right.stateStoreId;
 
-const isJsonRecord = (value: JsonValue): value is Readonly<Record<string, JsonValue>> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const sameJson = (left: JsonValue, right: JsonValue): boolean => {
   if (left === right) return true;

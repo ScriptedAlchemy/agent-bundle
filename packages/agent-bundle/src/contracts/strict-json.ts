@@ -4,6 +4,7 @@
  */
 export {
   hasOnlyOwnKeys,
+  isJsonRecord,
   isPlainRecord,
   mapStrictJsonReason,
   parseJsonWithoutDuplicateKeys,

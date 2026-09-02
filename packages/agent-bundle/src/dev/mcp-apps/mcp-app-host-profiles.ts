@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { relative, resolve } from 'node:path';
 
+import { isPlainRecord } from '../../core/strict-json.ts';
+
 import {
   MCP_APP_PROFILE_DESCRIPTORS,
   type McpAppHostProfile,
@@ -360,11 +362,7 @@ const capabilities = new Set<McpAppCapability>(['camera', 'clipboardWrite', 'geo
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
-const isConfigExtensionRecord = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
+const isConfigExtensionRecord: (value: unknown) => value is Record<string, unknown> = isPlainRecord;
 
 const cloneRecord = (value: unknown, label: string): { readonly [key: string]: McpAppJsonValue } => {
   const cloned = cloneMcpAppFiniteJson(value, label);

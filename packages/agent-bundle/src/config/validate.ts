@@ -3,7 +3,7 @@ import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } fr
 
 import { scanEntryExportsSource } from '../build/entry-exports.ts';
 import { toPosixRelative } from '../core/paths.ts';
-import { isRecord } from '../core/strict-json.ts';
+import { isPlainRecord, isRecord } from '../core/strict-json.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
@@ -206,11 +206,6 @@ const validateHooks = (
     }
   }
   return diagnostics;
-};
-
-const isPlainRecord = (value: object): value is Record<string, unknown> => {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 };
 
 const isProtocolJsonValue = (value: unknown, ancestors = new Set<object>()): boolean => {
