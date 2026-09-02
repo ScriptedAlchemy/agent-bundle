@@ -148,6 +148,7 @@ interface ServerRuntime {
 }
 
 interface Renderer {
+  readonly agent: typeof import('@agent-bundle/runtime').agent;
   readonly createElement: typeof import('react').createElement;
   readonly createGeneratedRuntimeState: typeof createGeneratedRuntimeState;
   readonly createWarmFlightHost: typeof import('@agent-bundle/runtime').createWarmFlightHost;
@@ -185,6 +186,7 @@ const loadDependencies = async (): Promise<ServerRuntime & Renderer & Sdk> => {
     return {
       Client: client.Client,
       InMemoryTransport: client.InMemoryTransport,
+      agent: runtime.agent,
       createElement: react.createElement,
       createGeneratedRuntimeState: mount.createGeneratedRuntimeState,
       createGeneratedRouteMcpServer: serverRuntime.createGeneratedRouteMcpServer,
@@ -306,6 +308,7 @@ export const openInMemoryMcpServer = async <
     artifactEpoch,
     host: {
       execute: async (request): Promise<ReadableStream<Uint8Array>> => {
+        const transport = await dependencies.agent();
         // The generated server dispatches every MCP route kind as a tool
         // invocation, so the operation id is the compiled route id.
         const props = request.invocation.props as { readonly input?: unknown; readonly operationId?: string };
@@ -318,6 +321,12 @@ export const openInMemoryMcpServer = async <
         const bindings = await runtimeState?.requestBindings({ signal: request.signal });
         try {
           return streamOf(await dependencies.runAgentRequest({
+            // Mirror the Flight worker boundary while allowing the documented
+            // harness context seam to override forwarded transport identity.
+            actor: transport.actor,
+            host: transport.host,
+            session: transport.session,
+            workspace: transport.workspace,
             ...context,
             invocation: {
               kind: 'tool' as const,

@@ -108,8 +108,10 @@ it('serves compiled routes and durable state across packed process restarts', as
       const tools = await firstSession.client.listTools();
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'catalog',
+        'context',
         'echo',
         'journal',
+        'mutation-probe',
         'publish-notice',
         'strict-report',
         'ticket',
@@ -155,6 +157,23 @@ it('serves compiled routes and durable state across packed process restarts', as
         .resolves.toMatchObject({
           content: [{ text: '# Echo\n\npacked', type: 'text' }, { text: expect.stringContaining('workspace:'), type: 'text' }],
           structuredContent: { message: 'packed', operationId: 'tool:harness/echo' },
+        });
+      await expect(firstSession.client.callTool({ arguments: {}, name: 'context' }))
+        .resolves.toMatchObject({
+          structuredContent: {
+            actor: { reason: 'not-provided', state: 'unavailable' },
+            host: {
+              source: 'native',
+              state: 'available',
+              value: { name: 'agent-bundle-packed-proof' },
+            },
+            session: { reason: 'not-provided', state: 'unavailable' },
+            workspace: {
+              source: 'derived',
+              state: 'available',
+              value: { root: project },
+            },
+          },
         });
       await expect(firstSession.client.callTool({ arguments: { genre: 'mystery' }, name: 'catalog' }))
         .resolves.toMatchObject({

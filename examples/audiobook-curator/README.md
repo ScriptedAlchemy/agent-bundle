@@ -57,9 +57,10 @@ the `curator` server, lifecycle entry, warm Flight worker, and MCP registrations
 there is no `src/application.ts`, operation-array registry, handwritten
 `src/mcp/curator.ts`, or per-operation server selector.
 
-The existing handwritten CLI remains a compatibility escape hatch until routed
-CLI rendering in #102 stage 3. It uses the same domain helpers but still prints
-validated JSON directly and never renders JSX.
+The routed CLI under `src/cli/` shares the generated command graph with all
+fifteen MCP tools projected as `audiobook-curator curator <tool>`. Projected
+tools accept one optional `--input '<JSON object>'`; tools explicitly annotated
+read-only run directly, while every mutation-capable tool requires `--yes`.
 
 ## Source layout
 
