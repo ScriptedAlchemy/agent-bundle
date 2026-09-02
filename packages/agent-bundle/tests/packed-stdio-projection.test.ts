@@ -7,7 +7,10 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { requestEventRuntime } from '../src/events/ipc.ts';
+import { compileTestManifest } from '../src/test/manifest.ts';
+import { runPackedContractMatrix } from '../src/test/contract.ts';
 import { openPackedMcpServer, removeProjectSource } from '../src/test/packed.ts';
+import { routeHarnessPackedContractFixtures } from './support/contract-matrix-fixtures.ts';
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
@@ -87,6 +90,7 @@ it('serves compiled routes and durable state across packed process restarts', as
     expect(workerSource).toContain('createSqliteStateDriver');
     expect(workerSource).toContain('AGENT_BUNDLE_PLUGIN_ROOT');
     expect(workerSource).toMatch(/new URL\(["']\.\.["'], import\.meta\.url\)/u);
+    const harnessManifest = await compileTestManifest({ root: project });
     const deletedSource = await removeProjectSource({ projectRoot: project });
 
     const firstSession = await openPackedMcpServer({
@@ -117,6 +121,35 @@ it('serves compiled routes and durable state across packed process restarts', as
         expect.objectContaining({ mimeType: 'text/markdown', uri: 'harness://notes' }),
         expect.objectContaining({ mimeType: 'text/html;profile=mcp-app', uri: 'ui://harness/panel' }),
       ]));
+
+      const matrixReport = await runPackedContractMatrix({
+        fixtures: routeHarnessPackedContractFixtures(),
+        manifest: harnessManifest,
+        server: 'harness',
+        session: firstSession,
+      });
+      expect(matrixReport.provenance.proofLevel).toBe('packed-deleted-source');
+      expect(matrixReport.routes['app:harness/panel']?.checks['surface-completeness']).toEqual({
+        status: 'passed',
+      });
+      for (const routeId of [
+        'tool:harness/echo',
+        'tool:harness/ticket',
+        'tool:harness/strict-report',
+      ] as const) {
+        expect(matrixReport.routes[routeId]?.checks['serialized-round-trip']).toEqual({
+          reason: expect.stringContaining('packed sessions cannot load project route modules'),
+          status: 'not-applicable',
+        });
+        expect(matrixReport.routes[routeId]?.checks['compat-probe']).toEqual({
+          reason: expect.stringContaining('packed sessions cannot load project route modules'),
+          status: 'not-applicable',
+        });
+        expect(matrixReport.routes[routeId]?.checks['version-skew']).toEqual({
+          reason: expect.stringContaining('packed sessions cannot load project route modules'),
+          status: 'not-applicable',
+        });
+      }
 
       await expect(firstSession.client.callTool({ arguments: { message: 'packed' }, name: 'echo' }))
         .resolves.toMatchObject({
