@@ -612,8 +612,19 @@ const catalogItems = (catalog: readonly unknown[], fallback: string): readonly C
     };
   });
 
+const formattedJson = new WeakMap<object, string>();
+
+const prettyJson = (value: object): string => {
+  const cached = formattedJson.get(value);
+  if (cached !== undefined) return cached;
+  const formatted = JSON.stringify(value, null, 2) ?? String(value);
+  formattedJson.set(value, formatted);
+  return formatted;
+};
+
 const display = (value: unknown): string => {
   try {
+    if (value !== null && typeof value === 'object') return prettyJson(value);
     return JSON.stringify(value, null, 2) ?? String(value);
   } catch {
     return '[Unserializable protocol value]';

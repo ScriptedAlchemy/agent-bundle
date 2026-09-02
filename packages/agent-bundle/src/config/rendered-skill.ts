@@ -6,6 +6,7 @@ import { stringify as stringifyYaml } from 'yaml';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { errorMessage } from '../core/errors.ts';
+import { isPlainRecord } from '../core/strict-json.ts';
 import { MarkdownRenderError, renderElementToMarkdown } from './render-markdown.ts';
 
 /**
@@ -50,12 +51,6 @@ const failure = (code: string, message: string, sourcePath: string): RenderedSki
   diagnostic: { code, message, severity: 'error', sourcePath },
   status: 'failed',
 });
-
-const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
 
 /**
  * Loads and compiles one rendered skill source to its Markdown document. The

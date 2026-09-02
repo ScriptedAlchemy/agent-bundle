@@ -7,6 +7,7 @@ import type {
   PlaygroundEpochIdentity,
   PlaygroundExport,
   PlaygroundJsonObject,
+  PlaygroundJsonValue,
   PlaygroundReplay,
   PlaygroundSession,
   PlaygroundTarget,
@@ -635,39 +636,53 @@ const DetailRows = ({ label, rows }: {
   </dl>
 </section>;
 
+const formattedJson = new WeakMap<object, string>();
+
+const prettyJson = (value: PlaygroundJsonValue): string => {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value, undefined, 2);
+  const cached = formattedJson.get(value);
+  if (cached !== undefined) return cached;
+  const formatted = JSON.stringify(value, undefined, 2);
+  formattedJson.set(value, formatted);
+  return formatted;
+};
+
 /** The ordered server trace, where every selected assertion remains a persisted raw event reference. */
-export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps) => <div className="playground-trace">
-  <p className="playground-summary" role="status">{view.summary}</p>
-  {view.promotionBlocker === undefined
-    ? undefined
-    : <p className="playground-blocker" role="status">{view.promotionBlocker}</p>}
-  {view.identity.length === 0 ? undefined : <DetailRows label="Server-owned session identity" rows={view.identity} />}
-  {view.outcome.length === 0 ? undefined : <DetailRows label="Server-owned outcome" rows={view.outcome} />}
-  {view.workspace === undefined ? undefined : <section className="playground-detail">
-    <h2>Recorded workspace</h2>
-    <pre className="playground-json"><code>{formatPlaygroundJson(view.workspace)}</code></pre>
-  </section>}
-  <section aria-label="Ordered trace" className="playground-detail">
-    <h2>Ordered trace</h2>
-    {view.rows.length === 0
-      ? <p className="empty-row">This session has recorded no trace events yet.</p>
-      : <div className="playground-event-cards">
-        {view.rows.map((entry) => <details className="playground-event-card" key={entry.key} open>
-          <summary><span className="playground-event-sequence">#{entry.sequence}</span><strong>{entry.kind}</strong><span>{entry.summary}</span></summary>
-          <div className="playground-event-meta">
-            <span>{entry.timestamp}</span><span>{entry.source}</span><span className="identifier" title={entry.epochDigest}>Build {entry.epochId}</span><span className="identifier">{entry.rawEventRef}</span>
-            <label><input
-              aria-label={`Select ${entry.rawEventRef} for the draft eval case`}
-              checked={view.selectedRefs.includes(entry.rawEventRef)}
-              onChange={() => onToggle?.(entry.rawEventRef)}
-              type="checkbox"
-            /> Select for draft</label>
-          </div>
-          <pre className="playground-json"><code>{formatPlaygroundJson(entry.raw)}</code></pre>
-        </details>)}
-      </div>}
-  </section>
-</div>;
+export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps) => {
+  const selectedRefSet = new Set(view.selectedRefs);
+  return <div className="playground-trace">
+    <p className="playground-summary" role="status">{view.summary}</p>
+    {view.promotionBlocker === undefined
+      ? undefined
+      : <p className="playground-blocker" role="status">{view.promotionBlocker}</p>}
+    {view.identity.length === 0 ? undefined : <DetailRows label="Server-owned session identity" rows={view.identity} />}
+    {view.outcome.length === 0 ? undefined : <DetailRows label="Server-owned outcome" rows={view.outcome} />}
+    {view.workspace === undefined ? undefined : <section className="playground-detail">
+      <h2>Recorded workspace</h2>
+      <pre className="playground-json"><code>{formatPlaygroundJson(view.workspace)}</code></pre>
+    </section>}
+    <section aria-label="Ordered trace" className="playground-detail">
+      <h2>Ordered trace</h2>
+      {view.rows.length === 0
+        ? <p className="empty-row">This session has recorded no trace events yet.</p>
+        : <div className="playground-event-cards">
+          {view.rows.map((entry) => <details className="playground-event-card" key={entry.key} open>
+            <summary><span className="playground-event-sequence">#{entry.sequence}</span><strong>{entry.kind}</strong><span>{entry.summary}</span></summary>
+            <div className="playground-event-meta">
+              <span>{entry.timestamp}</span><span>{entry.source}</span><span className="identifier" title={entry.epochDigest}>Build {entry.epochId}</span><span className="identifier">{entry.rawEventRef}</span>
+              <label><input
+                aria-label={`Select ${entry.rawEventRef} for the draft eval case`}
+                checked={selectedRefSet.has(entry.rawEventRef)}
+                onChange={() => onToggle?.(entry.rawEventRef)}
+                type="checkbox"
+              /> Select for draft</label>
+            </div>
+            <pre className="playground-json"><code>{prettyJson(entry.raw)}</code></pre>
+          </details>)}
+        </div>}
+    </section>
+  </div>;
+};
 
 /**
  * Starts typed server-owned operations, then observes their durable session by

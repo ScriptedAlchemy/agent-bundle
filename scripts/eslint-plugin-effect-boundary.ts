@@ -18,7 +18,6 @@ const RUN_NAMES = new Set([
   'runSyncWith',
 ]);
 
-const EFFECT_MODULES = new Set(['effect']);
 const EFFECT_NAMESPACES = new Set(['Effect', 'Runtime']);
 const EFFECT_RUNNER_NAMESPACE_MODULES = new Set(['effect/Effect', 'effect/Runtime']);
 
@@ -27,13 +26,8 @@ const posixPath = (filename: string): string => filename.replaceAll('\\', '/');
 export const isEffectBoundaryFile = (filename: string): boolean =>
   posixPath(filename).endsWith('/src/effect/boundary.ts');
 
-const importedName = (node: {
-  readonly imported?: { readonly name?: string; readonly type?: string };
-}): string | undefined => {
-  const imported = node.imported;
-  if (imported === undefined) return undefined;
-  return imported.name;
-};
+const importedName = (node: { readonly imported?: { readonly name?: string } }): string | undefined =>
+  node.imported?.name;
 
 const localName = (node: { readonly local?: { readonly name?: string } }): string | undefined =>
   node.local?.name;
@@ -42,7 +36,7 @@ const moduleName = (node: { readonly source?: { readonly value?: unknown } }): s
   typeof node.source?.value === 'string' ? node.source.value : undefined;
 
 const isEffectModule = (source: string | undefined): boolean =>
-  source !== undefined && (EFFECT_MODULES.has(source) || source.startsWith('effect/'));
+  source !== undefined && (source === 'effect' || source.startsWith('effect/'));
 
 type MemberObject = {
   readonly computed?: boolean;

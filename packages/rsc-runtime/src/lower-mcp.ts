@@ -147,11 +147,8 @@ const jsonRecord = (value: unknown, message: string): JsonObject => {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
       throw new Error('not a plain object');
     }
-    const clone = cloneJsonValue(value, new Set(), '');
-    if (Array.isArray(clone) || clone === null || typeof clone !== 'object') {
-      throw new Error('not a plain object');
-    }
-    return clone as JsonObject;
+    // cloneJsonValue either throws or returns a clone of the guarded plain object.
+    return cloneJsonValue(value, new Set(), '') as JsonObject;
   } catch (error) {
     throw new Error(`${message} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
   }
