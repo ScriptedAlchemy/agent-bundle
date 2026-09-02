@@ -127,6 +127,41 @@ it('maps a bounded, frozen successful probe snapshot and redacted launch', async
   }
 });
 
+it('redacts absolute paths after key-value and list separators', async () => {
+  const root = await createBundle();
+  try {
+    const service = serviceFor(root, {
+      createClient: () => client({
+        getInstructions: () => 'config=/home/alice/private.json',
+        listTools: async () => ({
+          tools: [
+            {
+              description: String.raw`cwd:C:\Users\alice\private`,
+              inputSchema: { type: 'object' as const },
+              name: 'windows-path',
+            },
+            {
+              description: 'paths,/var/private/config.json',
+              inputSchema: { type: 'object' as const },
+              name: 'list-path',
+            },
+          ],
+        }),
+      }),
+    });
+
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+
+    expect(report.snapshot?.instructions).toBe('[REDACTED]');
+    expect(report.snapshot?.tools.map((tool) => tool.description)).toEqual([
+      '[REDACTED]',
+      '[REDACTED]',
+    ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('truncates server instructions to the named text budget', async () => {
   const root = await createBundle();
   try {
@@ -190,6 +225,48 @@ it('times out within the total budget and destroys the transport', async () => {
     expect(report.failure?.kind).toBe('connect');
     expect(transportCloses).toBeGreaterThan(0);
   } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('returns a timed-out report without awaiting stalled teardown', async () => {
+  const root = await createBundle();
+  let clientCloses = 0;
+  let transportCloses = 0;
+  let guard: NodeJS.Timeout | undefined;
+  try {
+    const stalledClose = async (): Promise<void> =>
+      new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    const service = serviceFor(root, {
+      createClient: () => client({
+        close: async () => {
+          clientCloses += 1;
+          await stalledClose();
+        },
+        connect: () => new Promise(() => undefined),
+      }),
+      createStdioTransport: () => transport(async () => {
+        transportCloses += 1;
+        await stalledClose();
+      }),
+      timeoutMs: 10,
+    });
+
+    const report = await Promise.race([
+      service.probe({ host: 'claude', serverName: 'timeline' }),
+      new Promise<never>((_resolve, reject) => {
+        guard = setTimeout(
+          () => reject(new Error('The timed-out probe remained blocked on teardown.')),
+          150,
+        );
+      }),
+    ]);
+
+    expect(report.status).toBe('timed-out');
+    expect(clientCloses).toBe(1);
+    expect(transportCloses).toBeGreaterThan(0);
+  } finally {
+    if (guard !== undefined) clearTimeout(guard);
     await rm(root, { force: true, recursive: true });
   }
 });
