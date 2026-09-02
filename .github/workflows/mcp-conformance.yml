@@ -1,0 +1,36 @@
+name: MCP conformance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-conformance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mcp-conformance:
+    name: MCP conformance (Node 22.19)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v2
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:mcp-conformance
+        env:
+          AGENT_BUNDLE_MCP_CONFORMANCE_OUTPUT: artifacts/mcp-conformance
+      - name: Preserve MCP conformance results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: warn
+          name: mcp-conformance-results
+          path: artifacts/mcp-conformance
+          retention-days: 14

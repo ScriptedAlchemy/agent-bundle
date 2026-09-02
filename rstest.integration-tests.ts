@@ -101,6 +101,15 @@ export const nightlyEvidenceTestFiles: readonly string[] = [
 ];
 
 /**
+ * Official MCP server conformance runs only through the manually dispatched
+ * lane. It builds one generated fixture, opens loopback HTTP, and invokes the
+ * external runner, so no default Rstest pool may collect it.
+ */
+export const mcpConformanceTestFiles: readonly string[] = [
+  'packages/agent-bundle/tests/mcp-conformance.test.ts',
+];
+
+/**
  * Pack-and-install tests: each one consumes the run-level release tarball
  * (and usually a clean `npm install` of it), which dominates the serialized
  * integration pool. They run through the root `test:packed` /

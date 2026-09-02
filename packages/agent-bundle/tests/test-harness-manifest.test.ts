@@ -198,7 +198,7 @@ describe('the compiled test manifest', () => {
       projected('publish-notice', 'Publishes a durable notice for a later session event.', true),
       projected('strict-report', 'Returns a closed-object report that rejects unknown serialized keys.', true),
       projected('ticket', 'Returns a cargo-conductor-shaped ticket status with optional diagnostics fields.', true),
-      projected('unavailable', undefined, true),
+      projected('unavailable', 'Returns a typed unavailable result for projection checks.', true),
       projected('wait', 'Waits until aborted or holdMs elapses, for cancellation contract proof.', true),
     ]);
   });
