@@ -4,11 +4,14 @@ import { afterAll, beforeAll, expect, it } from '@rstest/core';
 
 import {
   buildHostInstallFixture,
+  buildPortableHostInstallFixture,
   disposeHostInstallFixture,
   runClaudeHostInstallProof,
   runCodexHostInstallProof,
   runCursorHostInstallProof,
+  runPortableHostInstallProof,
   type BuiltHostInstallFixture,
+  type BuiltPortableHostInstallFixture,
 } from './support/host-install.ts';
 import {
   HOST_INSTALL_PROOF_LEVEL,
@@ -32,18 +35,32 @@ const claudePluginIt = claudeAvailable ? it : it.skip;
 const codexPluginIt = codexAvailable ? it : it.skip;
 
 let fixture: BuiltHostInstallFixture | undefined;
+let portableFixture: BuiltPortableHostInstallFixture | undefined;
 
 beforeAll(async () => {
-  fixture = await buildHostInstallFixture({ environment: process.env });
+  [fixture, portableFixture] = await Promise.all([
+    buildHostInstallFixture({ environment: process.env }),
+    buildPortableHostInstallFixture({ environment: process.env }),
+  ]);
 }, 180_000);
 
 afterAll(async () => {
-  if (fixture !== undefined) await disposeHostInstallFixture(fixture);
+  await Promise.all([
+    fixture === undefined ? Promise.resolve() : disposeHostInstallFixture(fixture),
+    portableFixture === undefined ? Promise.resolve() : disposeHostInstallFixture(portableFixture),
+  ]);
 });
 
 const builtFixture = (): BuiltHostInstallFixture => {
   if (fixture === undefined) throw new Error(`[${proofLabel}] shared fixture build did not complete.`);
   return fixture;
+};
+
+const builtPortableFixture = (): BuiltPortableHostInstallFixture => {
+  if (portableFixture === undefined) {
+    throw new Error(`[${proofLabel}] portable fixture build did not complete.`);
+  }
+  return portableFixture;
 };
 
 const expectHygienicReport = (report: unknown): void => {
@@ -155,3 +172,41 @@ it('installs into an isolated Cursor home, validates schemas, and is idempotent'
   });
   expectHygienicReport(report);
 }, 180_000);
+
+it(
+  'installs the emitted Agent Plugins 1.0.0 package into an isolated Cursor home and validates it against the pinned spec schemas (filesystem/schema conformance; not an IDE-loading proof)',
+  async () => {
+    const report = await runPortableHostInstallProof(
+      builtPortableFixture(),
+      { environment: process.env },
+    );
+
+    expect(report, proofLabel).toEqual({
+      destination: '.cursor/plugins/local/host-install-portable-proof',
+      documents: {
+        mcp: 'schema-valid',
+        plugin: 'schema-valid',
+      },
+      hooks: 'not-emitted',
+      host: 'cursor',
+      install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+      pluginVariables: {
+        allowedLocations: 'args/env values/cwd only',
+        locations: [
+          'mcp.json#/mcpServers/probe/cwd',
+          'mcp.json#/mcpServers/probe/env/AGENT_BUNDLE_PLUGIN_ROOT',
+        ],
+        reservedEnvKeys: 'absent',
+        resolvedAtInstall: false,
+        sessionEvidence: 'unavailable: Cursor loads Agent Plugins only at restart or window reload; no non-interactive plugin-loading session surface',
+      },
+      proofLevel: 'host-install (emitted install.mjs + isolated Cursor home filesystem + pinned Agent Plugins 1.0.0 schemas; NOT IDE plugin-loader evidence)',
+      proofScope: 'installer+filesystem+pinned-schema conformance against an isolated Cursor home; IDE plugin-loader behavior not observed by this test',
+      skill: '.cursor/plugins/local/host-install-portable-proof/skills/probe/SKILL.md',
+      specVersion: '1.0.0',
+      status: 'passed',
+    });
+    expectHygienicReport(report);
+  },
+  180_000,
+);

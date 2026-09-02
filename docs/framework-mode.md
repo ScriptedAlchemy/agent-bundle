@@ -117,6 +117,18 @@ and install through their public plugin CLIs; Cursor bundles use the documented
 `~/.cursor/plugins/local/<name>` location because Cursor exposes marketplace
 management but no non-interactive plugin install verb.
 
+The `portable` target emits the [Agent Plugins open standard](https://agent-plugins.org)
+(specification 1.0.0), with schema hashes and the specification repository
+revision pinned in `src/adapters/schemas/portable/PROVENANCE.json`. Cursor loads
+this format natively alongside Cursor Plugins; Codex, VS Code, GitHub Copilot,
+Kiro, and ChatGPT are native clients too. Claude Code consumes the standard
+only through CLI translation, so its dedicated target remains necessary. The
+standard packages only skills and MCP servers, leaving rules, commands, and
+hooks honestly unavailable on the portable target. A dogfood proof against the
+real Cursor IDE plugin loader (discovery, skill listing, MCP launch, and three
+observed Cursor 3.18.25 placeholder-expansion conformance gaps) is recorded in
+`docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md`.
+
 The framework CLI performs those same operations:
 
 ```sh

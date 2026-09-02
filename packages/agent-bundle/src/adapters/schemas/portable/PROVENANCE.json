@@ -1,6 +1,6 @@
 {
   "normativeTextWinsOnConflict": true,
-  "retrievedAt": "2026-08-14",
+  "retrievedAt": "2026-09-01",
   "schemas": {
     "mcp.schema.json": {
       "bytes": 3408,
@@ -12,6 +12,11 @@
       "sha256": "0a4aad95ce337878ad38802ebf0daa3fde76abe3f65400c86bcbb1ec0b3ab883",
       "url": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
     }
+  },
+  "specRepository": {
+    "commit": "ff8ab5e392cc87bd88d87c060815a87490e51003",
+    "committedAt": "2026-08-19T16:34:23Z",
+    "url": "https://github.com/agentplugins/agent-plugins-spec"
   },
   "specification": "https://agent-plugins.org/specification",
   "version": "1.0.0"

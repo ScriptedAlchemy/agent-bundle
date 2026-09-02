@@ -1,5 +1,10 @@
 {
   "install": {
+    "evidence": [
+      "2026-09-01: Cursor loads Agent Plugins natively from ~/.cursor/plugins/local/<name> (https://cursor.com/docs/plugins).",
+      "2026-09-01: Native launch clients are ChatGPT, Codex, Cursor, GitHub Copilot, Kiro, and VS Code (https://agent-plugins.org).",
+      "2026-09-01: Claude Code is not a native client; Agent Plugins installations there require CLI translation."
+    ],
     "reason": "Portable is a distribution profile, not a host runtime with one universal plugin installation location.",
     "source": "https://agent-plugins.org/",
     "state": "unavailable"
@@ -15,6 +20,11 @@
   },
   "host": "portable",
   "mcp": {
+    "evidence": [
+      "2026-09-02: Cursor 3.18.25 (stable, 280eca2911f1) discovers the emitted plugin, its skill, and its mcp.json from ~/.cursor/plugins/local and spawns the configured stdio server (docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md).",
+      "2026-09-02: Cursor 3.18.25 does not expand ${PLUGIN_ROOT} in cwd or args and does not default an omitted cwd to the plugin root (spec 7.2.1/9.2 MUSTs), so spec-conformant stdio servers fail to launch there; its proprietary ${CURSOR_PLUGIN_ROOT} expands and connects.",
+      "2026-09-02: With a launchable configuration the Cursor IDE completed the stdio handshake (connect_success with stable heartbeat), so the launch pipeline itself consumes this format."
+    ],
     "pathTokens": {
       "args": [
         "${PLUGIN_DATA}",

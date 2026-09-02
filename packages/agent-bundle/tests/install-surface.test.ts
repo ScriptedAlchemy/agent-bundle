@@ -86,6 +86,17 @@ it('emits a standalone safe-copy installer only for Cursor-compatible fallback p
   }
 });
 
+it('documents native Agent Plugins clients for the portable profile', () => {
+  const install = writesFor('portable').get('INSTALL.md');
+
+  expect(install).toContain(
+    'the Agent Plugins open standard (Agent Plugins 1.0.0, https://agent-plugins.org)',
+  );
+  expect(install).toContain('`~/.cursor/plugins/local/<name>`');
+  expect(install).toContain('Developer: Reload Window');
+  expect(install).toContain('Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT');
+});
+
 it('documents every real host path from the composite profile', () => {
   const install = writesFor('plugin').get('INSTALL.md');
 
