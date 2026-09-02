@@ -1,0 +1,47 @@
+server:
+  # 2026-09-02: Generated route servers do not register the optional completion/complete operation.
+  - completion-complete
+  # 2026-09-02: Generated route servers do not register the optional logging/setLevel operation.
+  - logging-set-level
+  # 2026-09-02: route-harness has no generated test_elicitation_sep1034_defaults tool.
+  - elicitation-sep1034-defaults
+  # 2026-09-02: route-harness has no generated test_elicitation_sep1330_enums tool.
+  - elicitation-sep1330-enums
+  # 2026-09-02: route-harness has no generated test_prompt_with_embedded_resource prompt.
+  - prompts-get-embedded-resource
+  # 2026-09-02: route-harness has no generated test_simple_prompt prompt.
+  - prompts-get-simple
+  # 2026-09-02: route-harness has no generated test_prompt_with_arguments prompt.
+  - prompts-get-with-args
+  # 2026-09-02: route-harness has no generated test_prompt_with_image prompt.
+  - prompts-get-with-image
+  # 2026-09-02: route-harness has no generated test://static-binary resource.
+  - resources-read-binary
+  # 2026-09-02: route-harness has no generated test://static-text resource.
+  - resources-read-text
+  # 2026-09-02: Generated static resources do not register the optional resources/subscribe operation.
+  - resources-subscribe
+  # 2026-09-02: route-harness has no generated test://template/{id}/data resource template.
+  - resources-templates-read
+  # 2026-09-02: Generated static resources do not register the optional resources/unsubscribe operation.
+  - resources-unsubscribe
+  # 2026-09-02: route-harness has no generated test_audio_content tool.
+  - tools-call-audio
+  # 2026-09-02: route-harness has no generated test_elicitation tool.
+  - tools-call-elicitation
+  # 2026-09-02: route-harness has no generated test_embedded_resource tool.
+  - tools-call-embedded-resource
+  # 2026-09-02: route-harness has no generated test_error_handling tool.
+  - tools-call-error
+  # 2026-09-02: route-harness has no generated test_image_content tool.
+  - tools-call-image
+  # 2026-09-02: route-harness has no generated test_multiple_content_types tool.
+  - tools-call-mixed-content
+  # 2026-09-02: route-harness has no generated test_sampling tool.
+  - tools-call-sampling
+  # 2026-09-02: route-harness has no generated test_simple_text tool.
+  - tools-call-simple-text
+  # 2026-09-02: route-harness has no generated tool that emits SDK logging notifications.
+  - tools-call-with-logging
+  # 2026-09-02: route-harness has no generated test_tool_with_progress tool.
+  - tools-call-with-progress

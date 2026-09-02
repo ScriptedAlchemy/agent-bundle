@@ -1,7 +1,10 @@
 import { Agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
-export const config = { title: 'Unavailable' };
+export const config = {
+  description: 'Returns a typed unavailable result for projection checks.',
+  title: 'Unavailable',
+};
 
 export const inputSchema = z.object({});
 
