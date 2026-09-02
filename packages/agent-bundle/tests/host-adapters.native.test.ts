@@ -16,10 +16,17 @@ interface ClaudeValidation {
   readonly output: string;
 }
 
-const runClaudeValidation = async (cwd: string, target: string): Promise<ClaudeValidation> =>
+const runClaude = async (
+  cwd: string,
+  args: readonly string[],
+  configDir?: string,
+): Promise<ClaudeValidation> =>
   new Promise((resolvePromise, reject) => {
-    const child = spawn('claude', ['plugin', 'validate', '--strict', target], {
+    const child = spawn('claude', args, {
       cwd,
+      ...(configDir === undefined
+        ? {}
+        : { env: { ...process.env, CLAUDE_CONFIG_DIR: configDir } }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -34,6 +41,9 @@ const runClaudeValidation = async (cwd: string, target: string): Promise<ClaudeV
     child.once('error', reject);
     child.once('close', (code) => resolvePromise({ code, output }));
   });
+
+const runClaudeValidation = async (cwd: string, target: string): Promise<ClaudeValidation> =>
+  runClaude(cwd, ['plugin', 'validate', '--strict', target]);
 
 const model: NormalizedPlugin = {
   extensions: {},
@@ -160,6 +170,96 @@ const writeClaudeArtifact = async (
   }
   return written;
 };
+
+nativeIt('pins Claude plugin and marketplace lifecycle command help', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-lifecycle-help-'));
+
+  try {
+    const [version, pluginHelp, marketplaceHelp] = await Promise.all([
+      runClaude(root, ['--version'], root),
+      runClaude(root, ['plugin', '--help'], root),
+      runClaude(root, ['plugin', 'marketplace', '--help'], root),
+    ]);
+
+    expect(version.code, version.output).toBe(0);
+    expect(version.output).toContain('2.1.257');
+    expect(pluginHelp.code, pluginHelp.output).toBe(0);
+    for (const command of [
+      'details',
+      'disable',
+      'enable',
+      'init|new',
+      'install|i',
+      'list',
+      'marketplace',
+      'prune|autoremove',
+      'tag',
+      'uninstall|remove',
+      'update',
+    ]) {
+      expect(pluginHelp.output).toContain(command);
+    }
+    expect(pluginHelp.output).toContain('restart required to apply');
+    expect(marketplaceHelp.code, marketplaceHelp.output).toBe(0);
+    for (const command of ['add', 'list', 'remove|rm', 'update']) {
+      expect(marketplaceHelp.output).toContain(command);
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('adds, lists, and removes a marketplace only in an isolated config directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-marketplace-lifecycle-'));
+  const marketplaceRoot = join(root, 'marketplace');
+  const pluginRoot = join(marketplaceRoot, 'plugin');
+  const configRoot = join(root, 'config');
+  const marketplaceName = 'agent-bundle-native-policy';
+
+  try {
+    await Promise.all([
+      mkdir(join(marketplaceRoot, '.claude-plugin'), { recursive: true }),
+      mkdir(join(pluginRoot, '.claude-plugin'), { recursive: true }),
+      mkdir(configRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        join(marketplaceRoot, '.claude-plugin', 'marketplace.json'),
+        `${JSON.stringify({
+          name: marketplaceName,
+          owner: { name: 'agent-bundle' },
+          plugins: [{
+            description: 'Native lifecycle proof.',
+            name: 'native-policy-proof',
+            source: './plugin',
+            version: '1.0.0',
+          }],
+        })}\n`,
+      ),
+      writeFile(
+        join(pluginRoot, '.claude-plugin', 'plugin.json'),
+        `${JSON.stringify({
+          description: 'Native lifecycle proof.',
+          name: 'native-policy-proof',
+          version: '1.0.0',
+        })}\n`,
+      ),
+    ]);
+
+    const added = await runClaude(root, ['plugin', 'marketplace', 'add', marketplaceRoot], configRoot);
+    expect(added.code, added.output).toBe(0);
+    const listed = await runClaude(root, ['plugin', 'marketplace', 'list'], configRoot);
+    expect(listed.code, listed.output).toBe(0);
+    expect(listed.output).toContain(marketplaceName);
+    const removed = await runClaude(root, ['plugin', 'marketplace', 'remove', marketplaceName], configRoot);
+    expect(removed.code, removed.output).toBe(0);
+    const listedAfterRemoval = await runClaude(root, ['plugin', 'marketplace', 'list'], configRoot);
+    expect(listedAfterRemoval.code, listedAfterRemoval.output).toBe(0);
+    expect(listedAfterRemoval.output).not.toContain(marketplaceName);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 nativeIt('accepts the emitted Claude marketplace under strict native validation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-marketplace-'));

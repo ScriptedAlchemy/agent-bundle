@@ -295,11 +295,12 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.13.0',
+  adapterRevision: '1.14.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
 const evidence = capabilityEvidence(claudeName, metadata);
+const distributionPolicy = capabilityTable.plugin.distributionPolicy;
 
 const artifactValidation = deepFreeze({
   documents: [
@@ -2024,6 +2025,28 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude plugin contract does not document manifest dependencies.',
     ),
+    managedAllowManagedHooksOnly: unavailableCapability(
+      distributionPolicy.managedAllowManagedHooksOnly.reason,
+    ),
+    managedBlockedMarketplaces: unavailableCapability(
+      distributionPolicy.managedBlockedMarketplaces.reason,
+    ),
+    managedDisableCommandPluginSources: unavailableCapability(
+      distributionPolicy.managedDisableCommandPluginSources.reason,
+    ),
+    managedDisableSideloadFlags: unavailableCapability(
+      distributionPolicy.managedDisableSideloadFlags.reason,
+    ),
+    managedPluginScope: unavailableCapability(distributionPolicy.managedPluginScope.reason),
+    managedPluginSuggestions: unavailableCapability(
+      distributionPolicy.managedPluginSuggestions.reason,
+    ),
+    managedStrictKnownMarketplaces: unavailableCapability(
+      distributionPolicy.managedStrictKnownMarketplaces.reason,
+    ),
+    marketplaceCliLifecycle: unavailableCapability(
+      distributionPolicy.marketplaceCliLifecycle.reason,
+    ),
     install: supportedCapability(evidence),
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
@@ -2081,6 +2104,10 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude plugin contract does not document the plugin-root output-styles surface.',
     ),
+    pluginCliLifecycle: unavailableCapability(distributionPolicy.pluginCliLifecycle.reason),
+    pluginInstallScopes: unavailableCapability(distributionPolicy.pluginInstallScopes.reason),
+    pluginReload: unavailableCapability(distributionPolicy.pluginReload.reason),
+    pluginTrustGates: unavailableCapability(distributionPolicy.pluginTrustGates.reason),
     rules: unavailableCapability(
       'The pinned Claude Code plugin contract (2.1.250) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
     ),
@@ -2096,6 +2123,22 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude plugin contract does not support skills.',
     ),
+    skillsDirectoryLspTrust: unavailableCapability(
+      distributionPolicy.skillsDirectoryLspTrust.reason,
+    ),
+    skillsDirectoryMcpApproval: unavailableCapability(
+      distributionPolicy.skillsDirectoryMcpApproval.reason,
+    ),
+    skillsDirectoryMonitors: unavailableCapability(
+      distributionPolicy.skillsDirectoryMonitors.reason,
+    ),
+    skillsDirectoryPlugins: unavailableCapability(
+      distributionPolicy.skillsDirectoryPlugins.reason,
+    ),
+    skillsDirectoryProjectTrust: unavailableCapability(
+      distributionPolicy.skillsDirectoryProjectTrust.reason,
+    ),
+    syncedPlugins: unavailableCapability(distributionPolicy.syncedPlugins.reason),
     themes: capabilityStateFromSupport(
       capabilityTable.plugin.experimentalThemes.defaultDirectory === 'themes' &&
         capabilityTable.plugin.experimentalThemes.experimental &&
