@@ -26,10 +26,20 @@ gate a build, a validation, or a dev rebuild.
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree). |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
+| `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7xxx` | Project preparation and development rebuilds. |
 | `AB7300`–`AB7316` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health, and durable-state inventory. |
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
+
+## npm prepack gate (`AB7010`–`AB7013`)
+
+| Code | Meaning |
+| --- | --- |
+| `AB7010` | The dry-run npm inventory omits a package output, artifact manifest/file, install surface, or README. Include `dist` and the artifact directory in the package `files` allowlist. |
+| `AB7011` | An on-disk artifact file no longer matches its manifest SHA-256. Rebuild and do not modify generated host packs. |
+| `AB7012` | A `package.json` bin points outside the packed `dist` output (including `src/`) or names a file npm omitted. Point it at the generated `dist/bin` file. |
+| `AB7013` | `package.json`, normalized plugin metadata, a host manifest, or artifact provenance reports a different release version. Make every release identity agree. |
 
 ## Declaration generation (`AB4716`)
 

@@ -108,6 +108,25 @@ export const cliEntryRuntimePath = (): string => {
   throw new Error('Unable to locate the agent-bundle/cli-entry runtime module for generated CLI executables.');
 };
 
+export const installEntryRuntimeSpecifier = 'agent-bundle/install-entry';
+
+export const installEntryRuntimePath = (): string => runtimeModulePath('install-entry');
+
+export const generatedInstallBinEntrySource = (options: {
+  readonly artifactRelativeUrl: string;
+  readonly hosts: readonly ('claude' | 'codex' | 'cursor')[];
+  readonly name: string;
+}): string => [
+  `import { runGeneratedInstallProcess } from ${JSON.stringify(installEntryRuntimeSpecifier)};`,
+  '',
+  'process.exitCode = await runGeneratedInstallProcess(process.argv.slice(2), Object.freeze({',
+  `  artifactRelativeUrl: ${JSON.stringify(options.artifactRelativeUrl)},`,
+  `  hosts: Object.freeze(${stableJson(options.hosts)}),`,
+  `  name: ${JSON.stringify(options.name)},`,
+  '}));',
+  '',
+].join('\n');
+
 export interface GeneratedCliBinEntryOptions {
   readonly commands: readonly CompiledCliCommand[];
   readonly plugin: { readonly description?: string; readonly name: string; readonly version: string };

@@ -13,6 +13,7 @@ import type {
   build,
   compareEvals,
   inspect,
+  prepack,
   runEvals,
   startDevServer,
   validate,
@@ -53,6 +54,7 @@ interface CliSignalSource {
 
 export interface CliDependencies {
   readonly installBundle?: typeof installBundle;
+  readonly prepack?: typeof prepack;
   readonly runDoctor?: typeof runDoctor;
   /** Injectable only to make foreground shutdown behavior deterministic in tests. */
   readonly signals?: CliSignalSource;
@@ -250,6 +252,12 @@ const writeHumanBuild = (output: Output, result: Awaited<ReturnType<typeof build
   if (result.packageBuild !== undefined) {
     output.write(`Package build (${result.packageBuild.files.length} file(s)) at ${result.packageBuild.outputRoot}\n`);
   }
+};
+
+const writeHumanPrepack = (output: Output, result: Awaited<ReturnType<typeof prepack>>): void => {
+  output.write(
+    `Prepack validated ${result.pack.files.length} file(s) for ${result.build.model.metadata.name}\n`,
+  );
 };
 
 const writeHumanInstall = (output: Output, result: InstallResult): void => {
@@ -474,6 +482,20 @@ export const runCli = async (
     const result = await build({ ...projectOptions(options), output: options.output, packageOutputs: true });
     if (options.json === true) writeMachine(stdout, result);
     else writeHumanBuild(stdout, result);
+  });
+
+  const prepackCommand = configureSourceOptions(
+    program.command('prepack').description('Build and validate the npm pack inventory'),
+  ).option('--output <path>', 'Artifact output path relative to --root');
+  prepackCommand.action(async (options: BuildCommandOptions) => {
+    const { prepack } = await import('./api.ts');
+    const result = await (dependencies.prepack ?? prepack)({
+      ...projectOptions(options),
+      output: options.output,
+      packageOutputs: true,
+    });
+    if (options.json === true) writeMachine(stdout, result);
+    else writeHumanPrepack(stdout, result);
   });
 
   const installCommand = program.command('install')

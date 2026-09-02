@@ -6,14 +6,16 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { isolatedCommandEnvironment } from '../../../../rstest.worker-isolation.ts';
+import {
+  packOutputFromJson,
+  type PackOutput as SharedPackOutput,
+} from '../../src/build/pack-inventory.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 
-export interface SharedPackOutput {
-  readonly filename: string;
-  readonly files: readonly { readonly path: string }[];
-}
+export { packOutputFromJson };
+export type { SharedPackOutput };
 
 export interface SharedPack {
   /** First `npm pack --json` entry recorded when the tarball was produced. */
@@ -22,26 +24,6 @@ export interface SharedPack {
 }
 
 export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle' | 'runtime';
-
-export const packOutputFromJson = (stdout: string): SharedPackOutput => {
-  const parsed: unknown = JSON.parse(stdout);
-  const entries = Array.isArray(parsed)
-    ? parsed
-    : parsed !== null && typeof parsed === 'object'
-      ? Object.values(parsed)
-      : undefined;
-  if (entries === undefined) {
-    throw new TypeError('npm pack --json returned neither an array nor a package-keyed object.');
-  }
-  if (entries.length !== 1) {
-    throw new TypeError(`npm pack --json returned ${String(entries.length)} entries; expected exactly one.`);
-  }
-  const [entry] = entries;
-  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-    throw new TypeError('npm pack --json returned an invalid pack entry; expected one object.');
-  }
-  return entry as SharedPackOutput;
-};
 
 /**
  * NODE_PATH-free environment with per-command npm cache and tmp roots under

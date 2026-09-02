@@ -141,9 +141,11 @@ const resolveBundleRoot = async (from: string, host: InstallHost): Promise<strin
   if (await exists(join(root, manifest))) return root;
   const targetRoot = join(root, host);
   if (await exists(join(targetRoot, manifest))) return targetRoot;
+  const pluginRoot = join(root, 'plugin');
+  if (await exists(join(pluginRoot, manifest))) return pluginRoot;
   throw failure(
     'AB7001',
-    `No ${host} bundle manifest was found in ${JSON.stringify(root)} or its ${JSON.stringify(host)} target directory.`,
+    `No ${host} bundle manifest was found in ${JSON.stringify(root)}, its ${JSON.stringify(host)} target directory, or its "plugin" target directory.`,
     host,
   );
 };

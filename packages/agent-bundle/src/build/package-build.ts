@@ -14,7 +14,10 @@ import {
   cliEntryRuntimeSpecifier,
   generatedCliBinEntrySource,
   generatedExecutableEntrySource,
+  generatedInstallBinEntrySource,
   generatedRenderedRouteWorkerSource,
+  installEntryRuntimePath,
+  installEntryRuntimeSpecifier,
 } from './entry-shell.ts';
 import { projectMeta } from './meta.ts';
 import type { BundledOutputEvidence } from './provenance.ts';
@@ -102,6 +105,10 @@ const synthesizeDtsTsconfig = async (options: {
 export const planPackageEntries = async (
   model: NormalizedPlugin,
   dtsTsconfigPath: string | undefined,
+  options: {
+    readonly artifactRoot?: string;
+    readonly packageOutputRoot?: string;
+  } = {},
 ): Promise<readonly PlannedPackageEntry[]> => {
   const packageBuild = model.packageBuild;
   if (packageBuild === undefined) return Object.freeze([]);
@@ -175,6 +182,35 @@ export const planPackageEntries = async (
         : { virtualSource: generatedExecutableEntrySource({ entrySource: bin.source, exportName }) }),
     });
   }
+  const installHosts = Object.freeze((['claude', 'codex', 'cursor'] as const)
+    .filter((host) => model.targets.some((target) => target.name === host || target.name === 'plugin')));
+  if (
+    installHosts.length > 0 &&
+    options.artifactRoot !== undefined &&
+    options.packageOutputRoot !== undefined
+  ) {
+    const name = packageBuild.bins.some((bin) => bin.name === model.metadata.name)
+      ? `${model.metadata.name}-install`
+      : model.metadata.name;
+    const outputRelativePath = `bin/${name}.js`;
+    const emittedBinDirectory = dirname(resolve(options.packageOutputRoot, outputRelativePath));
+    const relativeArtifact = relative(emittedBinDirectory, options.artifactRoot).replaceAll('\\', '/');
+    const source = packageBuild.bins[0]?.source ?? packageBuild.lib!.source;
+    entries.push({
+      aliases: { [installEntryRuntimeSpecifier]: installEntryRuntimePath() },
+      banner: binShebang,
+      executable: true,
+      name: `bin-${name}`,
+      outputRelativePath,
+      source,
+      sourceInputs: Object.freeze([model.metadata.provenance.sourcePath, source]),
+      virtualSource: generatedInstallBinEntrySource({
+        artifactRelativeUrl: relativeArtifact === '' ? './' : `${relativeArtifact}/`,
+        hosts: installHosts,
+        name,
+      }),
+    });
+  }
   if (packageBuild.lib !== undefined) {
     const lib = packageBuild.lib;
     entries.push({
@@ -229,6 +265,7 @@ const declarationSource = (sourceDir: string, declarationPath: string): string |
 };
 
 export const buildPackageOutputs = async (options: {
+  readonly artifactRoot?: string;
   readonly model: NormalizedPlugin;
   readonly projectRoot: string;
   readonly tools?: AgentBundleToolsConfig;
@@ -241,7 +278,10 @@ export const buildPackageOutputs = async (options: {
   const dtsTsconfig = packageBuild.lib?.dts === true && libSourceDir !== undefined
     ? await synthesizeDtsTsconfig({ projectRoot, sourceDir: libSourceDir })
     : undefined;
-  const entries = await planPackageEntries(options.model, dtsTsconfig?.path);
+  const entries = await planPackageEntries(options.model, dtsTsconfig?.path, {
+    ...(options.artifactRoot === undefined ? {} : { artifactRoot: resolve(options.artifactRoot) }),
+    packageOutputRoot: outputRoot,
+  });
   if (entries.length === 0) {
     await dtsTsconfig?.cleanup();
     return undefined;
@@ -251,13 +291,18 @@ export const buildPackageOutputs = async (options: {
   await mkdir(stageParent, { recursive: true });
   const stageRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.stage-`));
   try {
-    const cliRuntimeShell = entries.some((entry) => entry.aliases?.[cliEntryRuntimeSpecifier] !== undefined)
-      ? cliEntryRuntimePath()
-      : undefined;
+    const ignoredRuntimeRoots = Object.freeze([
+      ...(entries.some((entry) => entry.aliases?.[cliEntryRuntimeSpecifier] !== undefined)
+        ? [runtimeIgnoredRoot(cliEntryRuntimePath())]
+        : []),
+      ...(entries.some((entry) => entry.aliases?.[installEntryRuntimeSpecifier] !== undefined)
+        ? [runtimeIgnoredRoot(installEntryRuntimePath())]
+        : []),
+    ]);
     const evidence = await buildPackageEntries({
       cwd: projectRoot,
       entries,
-      ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(cliRuntimeShell)] }),
+      ...(ignoredRuntimeRoots.length === 0 ? {} : { ignoredSourcePaths: ignoredRuntimeRoots }),
       logLevel: 'error',
       meta: projectMeta(options.model.metadata),
       outputRoot: stageRoot,
