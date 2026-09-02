@@ -1,5 +1,10 @@
+import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { expect, it } from '@rstest/core';
 
+import type { TargetRegistry } from '../src/adapters/registry.ts';
 import type { HostDiscoveryReport } from '../src/contracts/discovery.ts';
 import { HostDiscoveryService } from '../src/dev/playground/host-discovery-service.ts';
 import type {
@@ -143,4 +148,80 @@ it('shares only an in-flight scan and starts a fresh scan after settlement', asy
   const freshReport = await service.discover();
   expect(calls).toBe(2);
   expect(freshReport).not.toBe(firstReport);
+});
+
+it('enumerates sorted modern MCP servers from a valid bundle manifest', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-discovery-mcp-'));
+  try {
+    await writeFile(join(root, '.mcp.json'), JSON.stringify({
+      mcpServers: {
+        zeta: { headers: {}, type: 'http', url: 'https://example.com/mcp' },
+        alpha: { args: [], command: 'node', type: 'stdio' },
+      },
+    }));
+    const service = new HostDiscoveryService({
+      doctor: async () => Object.freeze({
+        ...doctorReport,
+        hosts: Object.freeze([
+          Object.freeze({
+            ...doctorReport.hosts[0]!,
+            bundle: Object.freeze({ ...doctorReport.hosts[0]!.bundle!, bundleRoot: root }),
+          }),
+        ]),
+      }),
+    });
+
+    const report = await service.discover();
+
+    expect(report.hosts[0]?.bundle?.mcpServers).toEqual([
+      { name: 'alpha', transport: 'stdio' },
+      { name: 'zeta', transport: 'streamable-http' },
+    ]);
+    expect(Object.isFrozen(report.hosts[0]?.bundle?.mcpServers)).toBe(true);
+    expect(Object.isFrozen(report.hosts[0]?.bundle?.mcpServers?.[0])).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('distinguishes empty MCP manifests from manifests that could not be enumerated', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-discovery-mcp-empty-'));
+  try {
+    const service = new HostDiscoveryService({
+      doctor: async () => Object.freeze({
+        ...doctorReport,
+        hosts: Object.freeze([
+          Object.freeze({
+            ...doctorReport.hosts[0]!,
+            bundle: Object.freeze({ ...doctorReport.hosts[0]!.bundle!, bundleRoot: root }),
+          }),
+        ]),
+      }),
+    });
+
+    await writeFile(join(root, '.mcp.json'), '{"mcpServers":{}}');
+    expect((await service.discover()).hosts[0]?.bundle?.mcpServers).toEqual([]);
+
+    await writeFile(join(root, '.mcp.json'), '{"mcpServers":{"broken":');
+    expect((await service.discover()).hosts[0]?.bundle).not.toHaveProperty('mcpServers');
+
+    await unlink(join(root, '.mcp.json'));
+    expect((await service.discover()).hosts[0]?.bundle).not.toHaveProperty('mcpServers');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('leaves MCP server enumeration absent when the host has no MCP runtime', async () => {
+  const registry = {
+    mcpRuntime: () => undefined,
+  } as unknown as TargetRegistry;
+  const service = new HostDiscoveryService({
+    doctor: async () => doctorReport,
+    registry,
+  });
+
+  const report = await service.discover();
+
+  expect(report.hosts[0]?.bundle).not.toHaveProperty('mcpServers');
 });

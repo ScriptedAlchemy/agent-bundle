@@ -1,0 +1,274 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { expect, it } from '@rstest/core';
+
+import type { TargetRegistry } from '../src/adapters/registry.ts';
+import {
+  McpProbeService,
+  McpProbeTargetNotFoundError,
+  mcpProbeInstructionTextLimit,
+  mcpProbeToolLimit,
+  type McpProbeClient,
+  type McpProbeServiceOptions,
+  type McpProbeTransport,
+} from '../src/dev/playground/mcp-probe-service.ts';
+
+const createBundle = async (
+  servers: Readonly<Record<string, unknown>> = {
+    timeline: {
+      args: ['${CLAUDE_PLUGIN_ROOT}/mcp/timeline.js', '--token=super-secret-value'],
+      command: 'node',
+      env: { LANG: 'en_US.UTF-8', SECRET_TOKEN: 'super-secret-value' },
+      type: 'stdio',
+    },
+  },
+): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-'));
+  await mkdir(join(root, '.claude-plugin'), { recursive: true });
+  await writeFile(join(root, '.claude-plugin', 'plugin.json'), '{"name":"probe","version":"1.0.0"}');
+  await writeFile(join(root, '.mcp.json'), JSON.stringify({ mcpServers: servers }));
+  return root;
+};
+
+const transport = (
+  close: () => Promise<void> = async () => undefined,
+): McpProbeTransport => ({
+  close,
+  send: async () => undefined,
+  start: async () => undefined,
+});
+
+const client = (
+  overrides: Partial<McpProbeClient> = {},
+): McpProbeClient => ({
+  close: async () => undefined,
+  connect: async () => undefined,
+  getInstructions: () => 'Use token=abc12345678901234567 at /home/private/config.json',
+  getNegotiatedProtocolVersion: () => '2025-11-25',
+  getServerCapabilities: () => ({
+    experimental: {},
+    prompts: {},
+    resources: {},
+    tools: {},
+  }),
+  getServerVersion: () => ({
+    name: 'timeline',
+    title: 'Timeline Server',
+    version: '1.2.3',
+  }),
+  listTools: async () => ({
+    tools: Array.from({ length: mcpProbeToolLimit + 1 }, (_, index) => ({
+      description: index === 0
+        ? 'Reads token=abc12345678901234567 from /home/private/config.json'
+        : `Tool ${index}`,
+      inputSchema: { type: 'object' as const },
+      name: `tool-${index}`,
+      title: `Tool ${index}`,
+    })),
+  }),
+  ...overrides,
+});
+
+const serviceFor = (
+  bundleRoot: string,
+  overrides: Partial<McpProbeServiceOptions> = {},
+): McpProbeService => new McpProbeService({
+  createClient: () => client(),
+  createStdioTransport: () => transport(),
+  createStreamableHttpTransport: () => transport(),
+  now: () => new Date('2026-09-02T07:00:00.000Z'),
+  prepared: () => Object.freeze({ bundleSource: bundleRoot }),
+  projectRoot: '/workspace/project',
+  ...overrides,
+});
+
+it('maps a bounded, frozen successful probe snapshot and redacted launch', async () => {
+  const root = await createBundle();
+  try {
+    const report = await serviceFor(root).probe({ host: 'claude', serverName: 'timeline' });
+
+    expect(report.status).toBe('ok');
+    expect(report.generatedAt).toBe('2026-09-02T07:00:00.000Z');
+    expect(report.launch).toEqual({
+      args: [join(root, 'mcp', 'timeline.js'), '[REDACTED]'],
+      command: 'node',
+      cwd: root,
+      env: { LANG: 'en_US.UTF-8' },
+      kind: 'stdio',
+    });
+    expect(report.snapshot).toMatchObject({
+      capabilities: {
+        experimental: true,
+        prompts: true,
+        resources: true,
+        tools: true,
+      },
+      protocolVersion: '2025-11-25',
+      serverInfo: {
+        name: 'timeline',
+        title: 'Timeline Server',
+        version: '1.2.3',
+      },
+      toolsTruncated: true,
+    });
+    expect(report.snapshot?.instructions).toBe('[REDACTED]');
+    expect(report.snapshot?.tools).toHaveLength(mcpProbeToolLimit);
+    expect(report.snapshot?.tools[0]?.description).toBe('[REDACTED]');
+    expect(JSON.stringify(report)).not.toContain('super-secret-value');
+    expect(JSON.stringify(report)).not.toContain('abc12345678901234567');
+    expect(JSON.stringify(report)).not.toContain('/home/private');
+    expect(Object.isFrozen(report)).toBe(true);
+    expect(Object.isFrozen(report.snapshot)).toBe(true);
+    expect(Object.isFrozen(report.snapshot?.tools)).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('truncates server instructions to the named text budget', async () => {
+  const root = await createBundle();
+  try {
+    const service = serviceFor(root, {
+      createClient: () => client({
+        getInstructions: () => 'x'.repeat(mcpProbeInstructionTextLimit + 100),
+        listTools: async () => ({ tools: [] }),
+      }),
+    });
+
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+
+    const instructions = report.snapshot?.instructions;
+    expect(instructions).toHaveLength(mcpProbeInstructionTextLimit);
+    expect(instructions?.endsWith('…')).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports connect rejection as an honest unreachable probe result', async () => {
+  const root = await createBundle();
+  try {
+    const service = serviceFor(root, {
+      createClient: () => client({
+        connect: async () => {
+          const error = new Error('connect ECONNREFUSED /home/private/server.sock') as NodeJS.ErrnoException;
+          error.code = 'ECONNREFUSED';
+          throw error;
+        },
+      }),
+    });
+
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+
+    expect(report).toMatchObject({
+      failure: { detail: '[REDACTED]', kind: 'connect' },
+      status: 'unreachable',
+    });
+    expect(report).not.toHaveProperty('snapshot');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('times out within the total budget and destroys the transport', async () => {
+  const root = await createBundle();
+  let transportCloses = 0;
+  try {
+    const service = serviceFor(root, {
+      createClient: () => client({ connect: () => new Promise(() => undefined) }),
+      createStdioTransport: () => transport(async () => {
+        transportCloses += 1;
+      }),
+      timeoutMs: 10,
+    });
+
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+
+    expect(report.status).toBe('timed-out');
+    expect(report.failure?.kind).toBe('connect');
+    expect(transportCloses).toBeGreaterThan(0);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('coalesces only identical in-flight probes and clears them after settlement', async () => {
+  const root = await createBundle();
+  const connectStarted = Promise.withResolvers<void>();
+  const connected = Promise.withResolvers<void>();
+  let clients = 0;
+  try {
+    const service = serviceFor(root, {
+      createClient: () => {
+        clients += 1;
+        return client({
+          connect: () => {
+            connectStarted.resolve();
+            return connected.promise;
+          },
+          listTools: async () => ({ tools: [] }),
+        });
+      },
+    });
+    const first = service.probe({ host: 'claude', serverName: 'timeline' });
+    const concurrent = service.probe({ host: 'claude', serverName: 'timeline' });
+    expect(first).toBe(concurrent);
+    await connectStarted.promise;
+    expect(clients).toBe(1);
+
+    connected.resolve();
+    const [firstReport, concurrentReport] = await Promise.all([first, concurrent]);
+    expect(firstReport).toBe(concurrentReport);
+
+    await service.probe({ host: 'claude', serverName: 'timeline' });
+    expect(clients).toBe(2);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('throws typed not-found errors for unavailable trusted probe targets', async () => {
+  const root = await createBundle();
+  try {
+    await expect(new McpProbeService({
+      prepared: () => undefined,
+      projectRoot: '/workspace/project',
+    }).probe({ host: 'claude', serverName: 'timeline' })).rejects.toBeInstanceOf(McpProbeTargetNotFoundError);
+
+    await expect(serviceFor(root).probe({
+      host: 'claude',
+      serverName: 'missing',
+    })).rejects.toBeInstanceOf(McpProbeTargetNotFoundError);
+
+    const registry = { mcpRuntime: () => undefined } as unknown as TargetRegistry;
+    await expect(serviceFor(root, { registry }).probe({
+      host: 'claude',
+      serverName: 'timeline',
+    })).rejects.toBeInstanceOf(McpProbeTargetNotFoundError);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('removes the fresh plugin data directory after every probe', async () => {
+  const root = await createBundle();
+  let pluginData: string | undefined;
+  try {
+    const service = serviceFor(root, {
+      createPluginData: async () => {
+        pluginData = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-data-'));
+        await writeFile(join(pluginData, 'proof.txt'), 'present');
+        return pluginData;
+      },
+    });
+
+    await service.probe({ host: 'claude', serverName: 'timeline' });
+
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
+    await rm(root, { force: true, recursive: true });
+  }
+});

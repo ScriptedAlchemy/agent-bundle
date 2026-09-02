@@ -84,6 +84,22 @@ it('returns false for paths outside the discovery route', async () => {
   expect(authorized).toBe(false);
 });
 
+it('leaves the live MCP probe route for its dedicated handler', async () => {
+  let authorized = false;
+  const routes = new HostDiscoveryRoutes({
+    authorize: () => {
+      authorized = true;
+    },
+    service: new RecordingService(),
+  });
+
+  await expect(routes.handle(
+    { url: '/api/discovery/probes' } as IncomingMessage,
+    {} as ServerResponse,
+  )).resolves.toBe(false);
+  expect(authorized).toBe(false);
+});
+
 it('rejects discovery subpaths', async () => {
   const started = await startRoutes(new RecordingService());
   try {

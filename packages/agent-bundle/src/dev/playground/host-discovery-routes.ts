@@ -28,6 +28,9 @@ const responseJson = (response: ServerResponse, body: unknown): void =>
 const matchesDiscoveryRoute = (requestTarget: string | undefined): boolean => {
   const pathname = rawPathname(requestTarget);
   if (pathname === '/api/discovery') return true;
+  if (pathname === '/api/discovery/probes' || pathname.startsWith('/api/discovery/probes/')) {
+    return false;
+  }
   if (pathname.startsWith('/api/discovery/')) {
     throw requestError(diagnostic('AB8215', 'Host discovery route path is not valid.', 400));
   }
