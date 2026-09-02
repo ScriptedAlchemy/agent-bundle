@@ -2,16 +2,20 @@ import { Agent, agent } from '@agent-bundle/runtime';
 import React, { Suspense } from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { AudiobookCard } from '../../../components/audiobook-card.js';
+import { FileCard } from '../../../components/audiobook-card.js';
 import { CuratorDocument } from '../../../components/curator-document.js';
 import { LibraryAnalysis } from '../../../components/library-analysis.js';
 import { DataList } from '../../../components/primitives.js';
+import { fileCardModel } from '../../../components/view-models.js';
 import type { LibraryAuditReceipt } from '../../../library.js';
 import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
 
 const operation = discoveryOperations(defaultDiscoveryOperations).libraryAudit;
 
-export const config = {"annotations":{"readOnlyHint":false},"description":"Audit audiobook library metadata, duplicates, and multipart evidence without deletion advice."};
+export const config = {
+  annotations: { readOnlyHint: false },
+  description: 'Audit audiobook library metadata, duplicates, and multipart evidence without deletion advice.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 
@@ -39,7 +43,7 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
         { label: 'Probe failures', value: receipt.summary.probeFailures },
       ]} />
       {receipt.files.slice(0, 20).map((file) => (
-        <AudiobookCard file={file} key={file.path} kind="file" />
+        <FileCard {...fileCardModel(file)} key={file.path} />
       ))}
       {receipt.files.length > 20
         ? <Agent.Markdown>{`_+${String(receipt.files.length - 20)} more files retained in the structured receipt._`}</Agent.Markdown>

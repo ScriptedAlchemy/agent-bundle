@@ -1,4 +1,4 @@
-import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
+import { Agent, agent } from '@agent-bundle/runtime';
 import type { CliRouteConfig } from 'agent-bundle';
 import React from 'react';
 import { z } from 'zod';
@@ -25,7 +25,7 @@ export default async function Shelf() {
   const state = (await agent()).state;
   if (state === undefined) {
     return (
-      <Agent.Result value={emptyShelf as unknown as JsonValue}>
+      <Agent.Result value={emptyShelf}>
         <Agent.Text>Persisted curation shelf unavailable.</Agent.Text>
         <ShelfUnavailable />
       </Agent.Result>
@@ -33,7 +33,7 @@ export default async function Shelf() {
   }
   const shelf = CurationShelfStateSchema.parse((await state.read()).state);
   return (
-    <Agent.Result value={shelf as unknown as JsonValue}>
+    <Agent.Result value={shelf}>
       <Agent.Text>Persisted curation shelf ready.</Agent.Text>
       <CurationShelf state={shelf} />
     </Agent.Result>

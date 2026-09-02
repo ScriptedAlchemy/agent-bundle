@@ -4,13 +4,19 @@ import React from 'react';
 import type { AcousticIdentifyReceipt, AcousticReceipt, WhisperReceipt } from '../evidence.ts';
 import { Callout, DataList } from './primitives.tsx';
 
-type EvidenceReceipt = AcousticIdentifyReceipt | AcousticReceipt | WhisperReceipt;
-
-export interface EvidenceTrailProps {
-  readonly receipt: EvidenceReceipt;
+export interface AcousticTrailProps {
+  readonly receipt: AcousticReceipt;
 }
 
-const acousticTrail = (receipt: AcousticReceipt) => (
+export interface IdentifyTrailProps {
+  readonly receipt: AcousticIdentifyReceipt;
+}
+
+export interface WhisperTrailProps {
+  readonly receipt: WhisperReceipt;
+}
+
+export const AcousticTrail = ({ receipt }: AcousticTrailProps) => (
   <>
     <DataList fields={[
       { label: 'File', value: receipt.file },
@@ -38,7 +44,7 @@ const acousticTrail = (receipt: AcousticReceipt) => (
   </>
 );
 
-const identifyTrail = (receipt: AcousticIdentifyReceipt) => (
+export const IdentifyTrail = ({ receipt }: IdentifyTrailProps) => (
   <>
     <Agent.Markdown>
       {[
@@ -57,7 +63,7 @@ const identifyTrail = (receipt: AcousticIdentifyReceipt) => (
   </>
 );
 
-const whisperTrail = (receipt: WhisperReceipt) => (
+export const WhisperTrail = ({ receipt }: WhisperTrailProps) => (
   <>
     <DataList fields={[
       { label: 'File', value: receipt.file },
@@ -79,18 +85,3 @@ const whisperTrail = (receipt: WhisperReceipt) => (
     </Callout>
   </>
 );
-
-export const EvidenceTrail = ({ receipt }: EvidenceTrailProps) => {
-  switch (receipt.operation) {
-    case 'audiolocate':
-      return acousticTrail(receipt);
-    case 'acoustic-identify':
-      return identifyTrail(receipt);
-    case 'whisper-identity':
-      return whisperTrail(receipt);
-    default: {
-      const unhandled: never = receipt;
-      throw new Error(`Unhandled evidence trail: ${JSON.stringify(unhandled)}`);
-    }
-  }
-};

@@ -3,7 +3,8 @@ import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
 import { CuratorDocument } from '../components/curator-document.js';
-import { LibraryShelf } from '../components/library-shelf.js';
+import { inventoryHeadline } from '../components/headlines.js';
+import { InventoryShelf } from '../components/library-shelf.js';
 import type { InventoryReceipt } from '../library.js';
 import { defaultDiscoveryOperations, discoveryOperations } from '../operations/discovery.js';
 
@@ -27,10 +28,10 @@ export default async function inventory({ input, signal }: CliRouteProps<typeof 
   const receipt = await operation.handler(input, { signal }) as InventoryReceipt;
   return (
     <CuratorDocument
-      headline={`Inventoried ${receipt.summary.files} media files with ${receipt.summary.errors} retained errors.`}
+      headline={inventoryHeadline(receipt)}
       receipt={receipt}
     >
-      <LibraryShelf receipt={receipt} />
+      <InventoryShelf receipt={receipt} />
     </CuratorDocument>
   );
 }

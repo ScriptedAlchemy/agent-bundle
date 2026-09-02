@@ -4,15 +4,18 @@ import type { ToolRouteProps } from 'agent-bundle';
 
 import { CuratorDocument } from '../../../components/curator-document.js';
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
-import { IntegrityReport } from '../../../components/integrity-report.js';
-import { MutationReceipt } from '../../../components/mutation-receipt.js';
+import { MetadataIntegrityReport } from '../../../components/integrity-report.js';
+import { MetadataMutation } from '../../../components/mutation-receipt.js';
 import type { MetadataReceipt } from '../../../media-mutation.js';
 import { defaultMediaMutationOperations, mediaMutationOperations } from '../../../operations/media-mutation.js';
 import { CurationShelfStateSchema } from '../../../state.js';
 
 const operation = mediaMutationOperations(defaultMediaMutationOperations).applyMetadata;
 
-export const config = {"annotations":{"destructiveHint":true,"readOnlyHint":false},"description":"Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream."};
+export const config = {
+  annotations: { destructiveHint: true, readOnlyHint: false },
+  description: 'Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 
@@ -38,8 +41,8 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       );
   return (
     <CuratorDocument headline={headline} receipt={receipt}>
-      <MutationReceipt receipt={receipt} />
-      <IntegrityReport receipt={receipt} />
+      <MetadataMutation receipt={receipt} />
+      <MetadataIntegrityReport receipt={receipt} />
       {shelf}
     </CuratorDocument>
   );

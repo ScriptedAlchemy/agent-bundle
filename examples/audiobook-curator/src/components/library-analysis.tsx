@@ -4,7 +4,8 @@ import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 
 import type { LibraryAuditReceipt } from '../library.ts';
-import { Callout, DataList } from './primitives.tsx';
+import { CandidateGroupCallout } from './candidate-group-callout.tsx';
+import { Callout, DataList, FileList } from './primitives.tsx';
 
 export interface LibraryAnalysisProps {
   readonly receipt: LibraryAuditReceipt;
@@ -63,21 +64,31 @@ export const LibraryAnalysis = async ({ receipt, signal }: LibraryAnalysisProps)
             ]} />
             {unavailable.length > 0
               ? (
-                <Callout tone="warning">
-                  {`Could not measure ${String(unavailable.length)} candidate files: ${unavailable.map((file) => `${file.path} (${file.error})`).join(', ')}. Reclaimable bytes include only files that remain measurable.`}
-                </Callout>
+                <>
+                  <Callout tone="warning">
+                    {`Could not measure ${String(unavailable.length)} candidate files. Reclaimable bytes include only files that remain measurable.`}
+                  </Callout>
+                  <FileList files={unavailable.map((file) => `${file.path} (${file.error})`)} />
+                </>
               )
               : null}
-            <Callout tone="review">
-              {`Duplicate candidate group ${group.identityKey}: ${group.files.join(', ')}. ${receipt.reviewNote}`}
-            </Callout>
+            <CandidateGroupCallout
+              files={group.files}
+              identityKey={group.identityKey}
+              kind="duplicate"
+              reviewNote={receipt.reviewNote}
+            />
           </React.Fragment>
         );
       })}
       {receipt.multipartCandidates.slice(0, 10).map((group) => (
-        <Callout key={`${group.directory}/${group.identityKey}`} tone="review">
-          {`Multipart candidate group ${group.identityKey}: ${group.files.map((file) => `part ${String(file.part)} ${file.path}`).join(', ')}. ${receipt.reviewNote}`}
-        </Callout>
+        <CandidateGroupCallout
+          files={group.files.map((file) => `part ${String(file.part)} ${file.path}`)}
+          identityKey={group.identityKey}
+          key={`${group.directory}/${group.identityKey}`}
+          kind="multipart"
+          reviewNote={receipt.reviewNote}
+        />
       ))}
       {receipt.duplicateCandidates.length === 0 && receipt.multipartCandidates.length === 0
         ? (

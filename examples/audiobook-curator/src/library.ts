@@ -9,7 +9,7 @@ const maximumFiles = 4096;
 
 export type MediaDetails = Record<string, unknown>;
 
-export interface MediaRecord {
+export type MediaRecord = {
   readonly artworkStreams?: number;
   readonly bitDepth?: number;
   readonly bitRate?: number;
@@ -25,9 +25,9 @@ export interface MediaRecord {
   readonly sampleFormat?: string;
   readonly sampleRate: number;
   readonly tags: Readonly<Record<string, string>>;
-}
+};
 
-export interface InventoryReceipt {
+export type InventoryReceipt = {
   readonly errors: readonly { readonly error: string; readonly path: string }[];
   readonly exitCode: 0 | 1;
   readonly files: readonly MediaRecord[];
@@ -41,9 +41,9 @@ export interface InventoryReceipt {
     errors: number;
     files: number;
   }>;
-}
+};
 
-export interface LibraryAuditFile extends Partial<MediaRecord> {
+export type LibraryAuditFile = Partial<MediaRecord> & {
   readonly bytes: number;
   readonly error: string | null;
   readonly extension: string;
@@ -56,9 +56,9 @@ export interface LibraryAuditFile extends Partial<MediaRecord> {
   }>;
   readonly path: string;
   readonly relativePath: string;
-}
+};
 
-export interface LibraryAuditReceipt {
+export type LibraryAuditReceipt = {
   readonly duplicateCandidates: readonly { readonly files: readonly string[]; readonly identityKey: string }[];
   readonly exitCode: 0 | 1;
   readonly files: readonly LibraryAuditFile[];
@@ -73,9 +73,9 @@ export interface LibraryAuditReceipt {
   readonly reviewNote: string;
   readonly sources: readonly string[];
   readonly summary: Readonly<Record<'bytes' | 'files' | 'missingAlbum' | 'missingArtwork' | 'missingAuthor' | 'missingChapters' | 'missingTitle' | 'probeFailures', number>>;
-}
+};
 
-export interface SelectionRow {
+export type SelectionRow = {
   readonly alternates: readonly MediaRecord[];
   readonly durationSpreadSeconds: number;
   readonly identityKey: string;
@@ -83,15 +83,15 @@ export interface SelectionRow {
   readonly reviewReason: string | null;
   readonly reviewRequired: boolean;
   readonly selected: MediaRecord;
-}
+};
 
-export interface SelectionReceipt {
+export type SelectionReceipt = {
   readonly generatedAt: string;
   readonly inventory?: string;
   readonly mutation: false;
   readonly operation: 'quality-selection';
   readonly selections: readonly SelectionRow[];
-}
+};
 
 export interface LibraryDependencies {
   readonly ffprobe?: string;
