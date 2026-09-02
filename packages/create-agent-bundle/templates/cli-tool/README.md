@@ -18,7 +18,7 @@ npm run check      # validate + build + typecheck + test
 node dist/bin/my-agent-plugin.js World
 
 # after publishing/installing the package
-npx my-agent-plugin-install install cursor
+npx my-agent-plugin-install install claude
 ```
 
 Installing the npm package does not mutate any host; run the generated
