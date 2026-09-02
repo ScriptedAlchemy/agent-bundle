@@ -108,6 +108,8 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
   }
 });
 
+// #122's delayed duplicate event is signature-gated; this retry still covers the first
+// Chokidar event racing the immediate manual rebuild after each source write.
 e2e('reveals, retains, repairs, and removes capabilities without reloading Chrome', { retry: 2, timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('skills-starter');
@@ -177,6 +179,8 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
   }
 });
 
+// #122's delayed duplicate event is signature-gated; this retry still covers the first
+// Chokidar event racing the immediate manual rebuild after each source write.
 e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { retry: 2, timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('hooks-and-scripts');
@@ -571,6 +575,8 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
   }
 });
 
+// #122's delayed duplicate event is signature-gated; this retry still covers the first
+// Chokidar event racing the immediate manual rebuild after each staged source replacement.
 e2e('renders the flagship compiled route catalog by server and kind in real Chrome', { retry: 2, timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('audiobook-curator');
