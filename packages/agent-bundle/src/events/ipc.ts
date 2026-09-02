@@ -820,10 +820,7 @@ const connect = (endpoint: string): Effect.Effect<Socket, EventRuntimeTransportE
     };
     const onError = (error: Error): void => {
       socket.removeListener('connect', onConnect);
-      const code = (error as NodeJS.ErrnoException).code;
-      resume(Effect.fail(code === 'ENOENT' || code === 'ECONNREFUSED'
-        ? transportError('runtime-unavailable', 'Shared event runtime is unavailable.', error)
-        : transportError('runtime-failed', 'Shared event runtime connection failed.', error)));
+      resume(Effect.fail(transportError('runtime-unavailable', 'Shared event runtime is unavailable.', error)));
     };
     socket.once('connect', onConnect);
     socket.once('error', onError);
