@@ -6,13 +6,16 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import type { NormalizedStateDefinition } from '../core/types.ts';
 
+/** Reserved by the generated runtime for the internal notice ledger store. */
+const AGENT_NOTICE_LEDGER_STATE_ID = '@agent-bundle/runtime/agent-notice-ledger/v1';
+
 export interface ExtractedStateDefinition {
   readonly definition?: Pick<NormalizedStateDefinition, 'id' | 'lifetime'>;
   readonly diagnostics: readonly Diagnostic[];
 }
 
 const diagnostic = (
-  code: 'AB4818' | 'AB4819' | 'AB4820',
+  code: 'AB4818' | 'AB4819' | 'AB4820' | 'AB4821',
   message: string,
   recovery: string,
   sourcePath: string,
@@ -104,6 +107,16 @@ export const extractStateDefinition = (
         'AB4820',
         `State module ${relativePath} selects external lifetime, but generated mounting v1 supports request, process, and workspace-durable lifetimes only.`,
         'Use a supported generated lifetime, or wire the external driver from an embedder.',
+        sourcePath,
+      )],
+    });
+  }
+  if (id === AGENT_NOTICE_LEDGER_STATE_ID) {
+    return deepFreeze({
+      diagnostics: [diagnostic(
+        'AB4821',
+        `State module ${relativePath} uses the reserved notice-ledger id ${AGENT_NOTICE_LEDGER_STATE_ID}.`,
+        'Choose a project-scoped state id; the generated runtime owns the notice ledger store under that id.',
         sourcePath,
       )],
     });

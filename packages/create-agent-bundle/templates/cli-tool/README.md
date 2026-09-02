@@ -71,9 +71,12 @@ export default defineConfig(await agentBundleRstest());
 "test:routes": "rstest --config rstest.route-unit.config.ts"
 ```
 
-Route rendering needs `react` and `@agent-bundle/runtime` (the same packages
-the generated entries import) plus `@rstest/core`; install them alongside the
-first route module. The `mcp-server` template ships this wiring already.
+Route rendering needs `react`, `zod`, and `@agent-bundle/runtime` (the same
+packages the generated entries import) plus `@rstest/core`; install them
+alongside the first route module. Routed commands export zod-based
+`inputSchema` and `resultSchema`, so the scaffold cannot typecheck without
+`zod` once `src/cli/**` modules exist. The `mcp-server` template ships this
+wiring already.
 
 ## The agent-bundle dependency
 

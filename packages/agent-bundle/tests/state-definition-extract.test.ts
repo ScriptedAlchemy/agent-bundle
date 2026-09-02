@@ -47,4 +47,16 @@ describe('state definition extraction', () => {
     expect(result.diagnostics[0]).toMatchObject({ code: 'AB4820', severity: 'error' });
     expect(result.diagnostics[0]!.message).toContain('request, process, and workspace-durable');
   });
+
+  it('rejects the reserved notice-ledger state id', () => {
+    const result = extract([
+      'export default defineState({',
+      "  id: '@agent-bundle/runtime/agent-notice-ledger/v1',",
+      "  lifetime: 'workspace-durable',",
+      '});',
+    ].join('\n'));
+    expect(result.definition).toBeUndefined();
+    expect(result.diagnostics[0]).toMatchObject({ code: 'AB4821', severity: 'error' });
+    expect(result.diagnostics[0]!.message).toContain('notice-ledger');
+  });
 });
