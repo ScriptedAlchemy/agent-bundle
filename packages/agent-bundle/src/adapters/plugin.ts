@@ -184,7 +184,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.6.0',
+  adapterRevision: '1.7.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -609,6 +609,9 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
     skills: intersectCapabilityStates(
       intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),
       cursorAdapter.capabilities.skills!,
+    ),
+    userConfig: unavailableCapability(
+      'The unified bundle emits the Claude-only userConfig manifest field, but the pinned Codex and Cursor contracts declare no shared enable-time option surface.',
     ),
   }),
   componentCapabilities,

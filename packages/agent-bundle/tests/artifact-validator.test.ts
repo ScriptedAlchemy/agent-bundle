@@ -1752,6 +1752,79 @@ it.each([
   }
 });
 
+it('validates Claude plugin artifacts carrying the pinned userConfig contract', async () => {
+  const registry = createDefaultRegistry();
+  const target = targetFromRegistry(registry, 'claude');
+  const pluginPath = 'claude/.claude-plugin/plugin.json';
+  const basePlugin = {
+    author: { name: 'Agent Bundle' },
+    description: 'Claude userConfig artifact fixture.',
+    name: 'claude-user-config-artifact',
+    version: '1.0.0',
+  };
+  const validFiles = [
+    { contents: '# Install claude-user-config-artifact\n', kind: 'generated' as const, path: 'claude/INSTALL.md' },
+    {
+      contents: `${JSON.stringify({
+        ...basePlugin,
+        userConfig: {
+          api_token: {
+            description: 'API authentication token.',
+            sensitive: true,
+            title: 'API token',
+            type: 'string',
+          },
+          retries: {
+            default: 3,
+            description: 'Retry count.',
+            max: 5,
+            min: 0,
+            title: 'Retries',
+            type: 'number',
+          },
+        },
+      })}\n`,
+      kind: 'generated' as const,
+      path: pluginPath,
+    },
+  ];
+  const root = await writeArtifact(validFiles, true, [target]);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: root, registry })).toEqual([]);
+
+    const invalidFiles = [
+      validFiles[0]!,
+      {
+        contents: `${JSON.stringify({
+          ...basePlugin,
+          userConfig: {
+            api_token: {
+              description: 'API authentication token.',
+              title: 'API token',
+              type: 'string',
+              unknown: true,
+            },
+          },
+        })}\n`,
+        kind: 'generated' as const,
+        path: pluginPath,
+      },
+    ];
+    await writeFile(join(root, pluginPath), invalidFiles[1]!.contents);
+    await writeFile(
+      join(root, 'agent-bundle.manifest.json'),
+      assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [target])).bytes,
+    );
+
+    expect(await validateArtifact({ artifactRoot: root, registry })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6012', generatedPath: pluginPath, target: 'claude' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('validates a canonically rehashed Codex marketplace at its emitted path', async () => {
   const registry = createDefaultRegistry();
   const target = targetFromRegistry(registry, 'codex');

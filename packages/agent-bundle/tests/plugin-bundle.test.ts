@@ -268,6 +268,48 @@ it('emits Claude-only LSP configuration at the shared composite root', () => {
   expect(documents['AGENTS.md']).toContain('claude --debug');
 });
 
+it('emits Claude userConfig from the unified plugin target only into the Claude manifest', () => {
+  const model = {
+    ...bundleModel,
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config' as const, sourcePath: '/workspace/claude.config.ts' },
+        target: 'claude',
+        value: {
+          userConfig: {
+            workspace: {
+              description: 'Workspace directory.',
+              required: true,
+              title: 'Workspace',
+              type: 'directory',
+            },
+          },
+        },
+      },
+    },
+  } satisfies NormalizedPlugin;
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).toMatchObject({
+    userConfig: {
+      workspace: {
+        description: 'Workspace directory.',
+        required: true,
+        title: 'Workspace',
+        type: 'directory',
+      },
+    },
+  });
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('userConfig');
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('userConfig');
+  expect(plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json')?.sourceInputs)
+    .toContain('/workspace/claude.config.ts');
+});
+
 it('emits the Claude bin directory from the unified plugin target', () => {
   const model: NormalizedPlugin = {
     ...bundleModel,
