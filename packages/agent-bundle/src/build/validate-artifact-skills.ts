@@ -170,6 +170,15 @@ export const validateEmittedSkills = async (options: {
         skillRecovery,
       ));
     }
+    if (parsed.body.trim().length === 0) {
+      diagnostics.push(diagnostic(
+        'AB6034',
+        'Emitted Skill Markdown must contain instructions after its YAML frontmatter.',
+        skill.path,
+        skill.target,
+        artifactDiagnosticRecoveries.AB6034,
+      ));
+    }
 
     const resources = new Set(
       (resourceFilesBySkill.get(skill.root) ?? []).map((file) => file.path.slice(skill.root.length + 1)),
