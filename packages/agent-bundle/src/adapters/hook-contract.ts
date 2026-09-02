@@ -45,7 +45,7 @@ export interface TargetHookDocumentEntryInput {
 }
 
 export interface TargetHookContract {
-  readonly capabilityRevision?: string;
+  readonly hostContractRevision?: string;
   readonly commandRoot: string;
   /**
    * Shapes one generated hook command into the host's per-event array entry.
@@ -318,7 +318,7 @@ export const eventArtifactEpochToken = '__AGENT_BUNDLE_EVENT_ARTIFACT_EPOCH__';
 
 const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
-  capabilityRevision: string,
+  hostContractRevision: string,
 ): string => {
   const route = entry.hook.eventRoute!;
   const standalone = route.runtime === 'standalone' || route.fallback === 'standalone';
@@ -342,7 +342,7 @@ const eventRouteHookWrapperSource = (
     '',
     `const artifactEpoch = ${JSON.stringify(eventArtifactEpochToken)};`,
     `const canonicalEvent = ${JSON.stringify(route.event)};`,
-    `const capabilityRevision = ${JSON.stringify(capabilityRevision)};`,
+    `const capabilityRevision = ${JSON.stringify(hostContractRevision)};`,
     `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
     `const artifactTarget = ${JSON.stringify(entry.target)};`,
     ...targetSource,
@@ -779,7 +779,7 @@ export const planHooks = (
       ...wrapper,
       virtualSource: hook.eventRoute === undefined
         ? contract.wrapperSource(wrapper)
-        : eventRouteHookWrapperSource(wrapper, contract.capabilityRevision ?? target),
+        : eventRouteHookWrapperSource(wrapper, contract.hostContractRevision ?? target),
     });
   }
 

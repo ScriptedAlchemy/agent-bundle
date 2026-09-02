@@ -56,8 +56,6 @@ const validManifest = (): ArtifactManifest => ({
   targets: [
     {
       adapterRevision: 'codex-adapter-v1',
-      capabilityRevision: 'codex-cli-0.147.0',
-      capabilitySha256: hash('f'),
       name: 'codex',
       observedVersion: '0.147.0',
       schemas: [

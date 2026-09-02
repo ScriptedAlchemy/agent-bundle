@@ -14,8 +14,6 @@ import { CapabilityStateError, isCapabilityState } from '../src/core/capabilitie
 import type { CapabilityEvidence, CapabilityState } from '../src/core/capabilities.ts';
 
 const evidence = (target: string): CapabilityEvidence => Object.freeze({
-  capabilityRevision: `${target}-capability-revision`,
-  capabilitySha256: target.repeat(64).slice(0, 64),
   observedVersion: `${target}-version`,
   target,
 });
@@ -120,11 +118,9 @@ it('intersects supported composite capabilities and merges both evidence records
   expect(intersection.state).toBe('supported');
   if (intersection.state !== 'supported') throw new Error('Expected a supported capability intersection.');
   expect(intersection.evidence).toMatchObject({
-    capabilityRevision: 'claude@claude-capability-revision+codex@codex-capability-revision',
     observedVersion: 'claude@claude-version+codex@codex-version',
     target: 'claude+codex',
   });
-  expect(intersection.evidence.capabilitySha256).toMatch(/^[0-9a-f]{64}$/);
 });
 
 it('applies prohibited, unavailable, degraded, and supported intersection precedence', () => {
@@ -265,8 +261,6 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
   });
   if (cursor.capabilities.mcp?.state !== 'supported') throw new Error('Expected Cursor MCP support evidence.');
   expect(cursor.capabilities.mcp.evidence).toEqual({
-    capabilityRevision: '2026-08-28',
-    capabilitySha256: 'fd5a8171963f9b1bd05876cc333ba808bdcffb73b49b133bcf681b3a0fd57941',
     observedVersion: '2026-08-28',
     target: 'cursor',
   });

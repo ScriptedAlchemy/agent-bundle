@@ -59,8 +59,6 @@ const validatePlugin = schemaValidator.compile(pluginSchema);
 const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
   adapterRevision: '1.2.0',
-  capabilityRevision: capabilityTable.observedSpecificationVersion,
-  capabilitySha256: '60f63a2cf3c6783a178173c5006234a89ae186fe3542fe61339542cac117389e',
   observedVersion: capabilityTable.observedSpecificationVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.version),
 });

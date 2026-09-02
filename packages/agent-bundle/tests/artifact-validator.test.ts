@@ -106,8 +106,6 @@ const writeArtifact = async (
 const customTarget = 'custom';
 const customMetadata = Object.freeze({
   adapterRevision: 'custom-adapter-v1',
-  capabilityRevision: 'custom-capabilities-v1',
-  capabilitySha256: 'a'.repeat(64),
   observedVersion: 'custom-observed-v1',
   schemas: Object.freeze([Object.freeze({
     name: 'document',
@@ -124,8 +122,6 @@ const customManifestTarget = Object.freeze({
 const coherenceTarget = 'coherent';
 const coherenceMetadata = Object.freeze({
   adapterRevision: 'coherence-adapter-v1',
-  capabilityRevision: 'coherence-capabilities-v1',
-  capabilitySha256: 'c'.repeat(64),
   observedVersion: 'coherence-observed-v1',
   schemas: Object.freeze([]),
 });
@@ -148,8 +144,6 @@ const coherenceRegistry = (): TargetRegistry => new TargetRegistry().register({
 const hookCoherenceTarget = 'hooked';
 const hookCoherenceMetadata = Object.freeze({
   adapterRevision: 'hook-coherence-adapter-v1',
-  capabilityRevision: 'hook-coherence-capabilities-v1',
-  capabilitySha256: 'd'.repeat(64),
   observedVersion: 'hook-coherence-observed-v1',
   schemas: Object.freeze([]),
 });
@@ -975,8 +969,6 @@ it('does not attribute compiler MCP outputs to an equal-length sibling target', 
   const siblingTarget = 'neighbor';
   const siblingMetadata = Object.freeze({
     adapterRevision: 'neighbor-adapter-v1',
-    capabilityRevision: 'neighbor-capabilities-v1',
-    capabilitySha256: 'e'.repeat(64),
     observedVersion: 'neighbor-observed-v1',
     schemas: Object.freeze([]),
   });
@@ -1656,8 +1648,6 @@ it('requires manifest target metadata to match the supplied registry exactly', a
 
     for (const target of [
       { ...customManifestTarget, adapterRevision: 'different-adapter' },
-      { ...customManifestTarget, capabilityRevision: 'different-capabilities' },
-      { ...customManifestTarget, capabilitySha256: 'c'.repeat(64) },
       { ...customManifestTarget, observedVersion: 'different-observed-version' },
       { ...customManifestTarget, schemas: [{ ...customMetadata.schemas[0]!, sha256: 'c'.repeat(64) }] },
       {

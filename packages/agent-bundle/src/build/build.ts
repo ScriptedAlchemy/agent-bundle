@@ -282,8 +282,6 @@ const manifestTargets = (
     const metadata = registry.metadata(name);
     return Object.freeze({
       adapterRevision: metadata.adapterRevision,
-      capabilityRevision: metadata.capabilityRevision,
-      capabilitySha256: metadata.capabilitySha256,
       name,
       observedVersion: metadata.observedVersion,
       schemas: Object.freeze(metadata.schemas

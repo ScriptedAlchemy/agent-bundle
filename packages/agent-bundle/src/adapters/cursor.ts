@@ -136,7 +136,7 @@ export interface CursorHookContractOptions {
  * Claude/Codex format; see cursorHookWrapperSource).
  */
 export const createCursorHookContract = (options: CursorHookContractOptions): TargetHookContract => Object.freeze({
-  capabilityRevision: capabilityTable.observedCliVersion,
+  hostContractRevision: capabilityTable.observedCliVersion,
   commandRoot: '${CURSOR_PLUGIN_ROOT}',
   documentEntry: cursorHookDocumentEntry,
   documentEnvelope: cursorHookDocumentEnvelope,
@@ -266,8 +266,6 @@ export const cursorManifest = (
 
 const metadata = Object.freeze({
   adapterRevision: '1.5.0',
-  capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'fd5a8171963f9b1bd05876cc333ba808bdcffb73b49b133bcf681b3a0fd57941',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });

@@ -7,8 +7,6 @@ import { sha256Hex } from '../src/core/digest.ts';
 
 const validMetadata = () => ({
   adapterRevision: '1.0.0',
-  capabilityRevision: '1.0.0',
-  capabilitySha256: 'a'.repeat(64),
   observedVersion: '1.0.0',
   schemas: [
     { name: 'mcp', revision: '1.0.0', sha256: 'b'.repeat(64) },
@@ -40,8 +38,6 @@ const registryMetadata = (registry: TargetRegistry, name: string) =>
   (registry as unknown as {
     metadata(target: string): {
       readonly adapterRevision: string;
-      readonly capabilityRevision: string;
-      readonly capabilitySha256: string;
       readonly observedVersion: string;
       readonly schemas: readonly {
         readonly name: string;
@@ -56,8 +52,6 @@ it('records exact immutable metadata for every built-in target', () => {
 
   expect(registryMetadata(registry, 'portable')).toEqual({
     adapterRevision: '1.2.0',
-    capabilityRevision: '1.0.0',
-    capabilitySha256: '60f63a2cf3c6783a178173c5006234a89ae186fe3542fe61339542cac117389e',
     observedVersion: '1.0.0',
     schemas: [
       {
@@ -74,8 +68,6 @@ it('records exact immutable metadata for every built-in target', () => {
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
     adapterRevision: '1.2.0',
-    capabilityRevision: '0.147.0',
-    capabilitySha256: 'bb0a685d680ffd95c468acfcf2fc20dc8fec672ea718f3dd1934fccad3b726c5',
     observedVersion: '0.147.0',
     schemas: [
       {
@@ -102,8 +94,6 @@ it('records exact immutable metadata for every built-in target', () => {
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
     adapterRevision: '1.5.0',
-    capabilityRevision: '2.1.250',
-    capabilitySha256: 'd78b76bda7020f7ea64d332c50d73f7ba3213ef69731835d474383ea6ef46612',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -135,8 +125,6 @@ it('records exact immutable metadata for every built-in target', () => {
   });
   expect(registryMetadata(registry, 'cursor')).toEqual({
     adapterRevision: '1.5.0',
-    capabilityRevision: '2026-08-28',
-    capabilitySha256: 'fd5a8171963f9b1bd05876cc333ba808bdcffb73b49b133bcf681b3a0fd57941',
     observedVersion: '2026-08-28',
     schemas: [
       {
@@ -163,7 +151,7 @@ it('records exact immutable metadata for every built-in target', () => {
   });
 });
 
-it('rehashes every declared capability and schema snapshot against its pinned provenance', async () => {
+it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {
   const registry = createDefaultRegistry();
   const targets = [
     { capabilityFile: 'portable-1.0.0.json', provenanceFile: 'portable/PROVENANCE.json', target: 'portable', versionKey: 'version' },
@@ -185,7 +173,6 @@ it('rehashes every declared capability and schema snapshot against its pinned pr
       readonly [key: string]: unknown;
     };
 
-    expect(metadata.capabilitySha256).toBe(sha256Hex(capability));
     expect(metadata.observedVersion).toBe(capabilityTable.observedCliVersion ?? capabilityTable.observedSpecificationVersion);
     expect(metadata.observedVersion).toBe(provenance[versionKey]);
     expect(metadata.schemas.map((schema) => schema.name)).toEqual(
@@ -306,9 +293,7 @@ it('snapshots canonical immutable artifact output suffixes and rejects malformed
 it('rejects malformed metadata atomically and preserves existing collision behavior', () => {
   const malformed = [
     { ...validMetadata(), adapterRevision: '' },
-    { ...validMetadata(), capabilityRevision: '  ' },
     { ...validMetadata(), observedVersion: '' },
-    { ...validMetadata(), capabilitySha256: 'A'.repeat(64) },
     { ...validMetadata(), schemas: [{ ...validMetadata().schemas[0]!, sha256: 'not-a-hash' }] },
     { ...validMetadata(), schemas: [{ ...validMetadata().schemas[0]!, name: '' }] },
     { ...validMetadata(), schemas: [{ ...validMetadata().schemas[0]!, revision: '' }] },

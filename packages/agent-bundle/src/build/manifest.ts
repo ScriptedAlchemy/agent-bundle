@@ -60,8 +60,6 @@ export interface ArtifactManifestTargetSchema {
 
 export interface ArtifactManifestTarget {
   readonly adapterRevision: string;
-  readonly capabilityRevision: string;
-  readonly capabilitySha256: string;
   readonly name: string;
   readonly observedVersion: string;
   readonly schemas: readonly ArtifactManifestTargetSchema[];
@@ -244,16 +242,12 @@ const parseTargets = (value: unknown): readonly ArtifactManifestTarget[] => {
     const target = requireRecord(candidate, `targets[${index}]`);
     requireExactKeys(target, `targets[${index}]`, [
       'adapterRevision',
-      'capabilityRevision',
-      'capabilitySha256',
       'name',
       'observedVersion',
       'schemas',
     ]);
     return {
       adapterRevision: requireString(target.adapterRevision, `targets[${index}].adapterRevision`),
-      capabilityRevision: requireString(target.capabilityRevision, `targets[${index}].capabilityRevision`),
-      capabilitySha256: requireHash(target.capabilitySha256, `targets[${index}].capabilitySha256`),
       name: requireString(target.name, `targets[${index}].name`),
       observedVersion: requireString(target.observedVersion, `targets[${index}].observedVersion`),
       schemas: parseTargetSchemas(target.schemas, `targets[${index}].schemas`),

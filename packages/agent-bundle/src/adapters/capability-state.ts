@@ -1,4 +1,4 @@
-import { sha256Hex, stableJson } from '../core/digest.ts';
+import { stableJson } from '../core/digest.ts';
 import { CapabilityStateError, unknownCapabilityStateError } from '../core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 import type { TargetAdapterMetadata } from './types.ts';
@@ -8,8 +8,6 @@ export const capabilityEvidence = (
   target: string,
   metadata: TargetAdapterMetadata,
 ): CapabilityEvidence => Object.freeze({
-  capabilityRevision: metadata.capabilityRevision,
-  capabilitySha256: metadata.capabilitySha256,
   observedVersion: metadata.observedVersion,
   target,
 });
@@ -161,8 +159,6 @@ export const mergeCapabilityEvidence = (
     return targetOrder === 0 ? stableJson(first).localeCompare(stableJson(second)) : targetOrder;
   });
   return Object.freeze({
-    capabilityRevision: evidence.map((entry) => `${entry.target}@${entry.capabilityRevision}`).join('+'),
-    capabilitySha256: sha256Hex(stableJson(evidence)),
     observedVersion: evidence.map((entry) => `${entry.target}@${entry.observedVersion}`).join('+'),
     target: evidence.map((entry) => entry.target).join('+'),
   });

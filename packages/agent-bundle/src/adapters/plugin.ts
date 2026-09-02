@@ -1,6 +1,6 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { sha256Hex, stableJson } from '../core/digest.ts';
+import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedPlugin } from '../core/types.ts';
 import {
   allMcpPathTokenFields,
@@ -116,7 +116,7 @@ for (const key of new Set([...Object.keys(claudeMatchers), ...Object.keys(codexM
 }
 
 const bundleHookContract: TargetHookContract = Object.freeze({
-  capabilityRevision: `${claudeCapabilityTable.observedCliVersion}+${codexCapabilityTable.observedCliVersion}`,
+  hostContractRevision: `${claudeCapabilityTable.observedCliVersion}+${codexCapabilityTable.observedCliVersion}`,
   // ${CLAUDE_PLUGIN_ROOT} reaches both hosts: Claude substitutes its own
   // token and Codex exports the variable as a documented compatibility alias
   // into a real shell.
@@ -183,15 +183,6 @@ const artifactValidation = deepFreeze({
 
 const metadata = Object.freeze({
   adapterRevision: '1.4.0',
-  capabilityRevision: `claude ${claudeAdapter.metadata.observedVersion} + codex ${codexAdapter.metadata.observedVersion} + cursor ${cursorAdapter.metadata.observedVersion}`,
-  // The composite fingerprint covers every host pin the bundle's capability
-  // claims depend on, so a single-host capability-table correction at the
-  // same observed version still changes this manifest identity.
-  capabilitySha256: sha256Hex(stableJson([
-    { capabilitySha256: claudeAdapter.metadata.capabilitySha256, target: 'claude' },
-    { capabilitySha256: codexAdapter.metadata.capabilitySha256, target: 'codex' },
-    { capabilitySha256: cursorAdapter.metadata.capabilitySha256, target: 'cursor' },
-  ])),
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex

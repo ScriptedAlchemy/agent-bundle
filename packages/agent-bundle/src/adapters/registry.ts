@@ -102,8 +102,6 @@ const snapshotMetadata = (metadata: unknown): TargetAdapterMetadata => {
 
   return Object.freeze({
     adapterRevision: requireNonempty(candidate.adapterRevision, 'adapter revision'),
-    capabilityRevision: requireNonempty(candidate.capabilityRevision, 'capability revision'),
-    capabilitySha256: requireSha256(candidate.capabilitySha256, 'capability hash'),
     observedVersion: requireNonempty(candidate.observedVersion, 'observed version'),
     schemas: Object.freeze(schemas),
   });

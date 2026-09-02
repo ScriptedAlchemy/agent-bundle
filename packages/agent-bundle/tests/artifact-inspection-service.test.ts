@@ -35,8 +35,6 @@ const fixtureInputs = Object.freeze([
 
 const fixtureMetadata: TargetAdapterMetadata = Object.freeze({
   adapterRevision: 'synthetic-adapter-v1',
-  capabilityRevision: 'synthetic-capabilities-v1',
-  capabilitySha256: 'c'.repeat(64),
   observedVersion: 'synthetic-observed-v1',
   schemas: Object.freeze([]),
 });

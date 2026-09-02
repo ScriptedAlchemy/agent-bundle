@@ -271,8 +271,6 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
     hookContract: contract,
     metadata: {
       adapterRevision: 'test',
-      capabilityRevision: 'test',
-      capabilitySha256: '0'.repeat(64),
       observedVersion: 'test',
       schemas: [],
     },

@@ -108,7 +108,7 @@ export const codexPluginDocumentValidator = (mcpRelativePath: string): TargetArt
   validateJsonSchemaDocument(pluginValidatorFor(mcpRelativePath));
 const validateHooks = validator.compile(hooksSchema);
 const hookContract = Object.freeze({
-  capabilityRevision: capabilityTable.observedCliVersion,
+  hostContractRevision: capabilityTable.observedCliVersion,
   commandRoot: '${PLUGIN_ROOT}',
   encodePlaygroundInput: encodeNativeHookPlaygroundInput,
   encodePlaygroundOutput: (result, event, nativeEvent) =>
@@ -123,8 +123,6 @@ const hookContract = Object.freeze({
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
   adapterRevision: '1.2.0',
-  capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'bb0a685d680ffd95c468acfcf2fc20dc8fec672ea718f3dd1934fccad3b726c5',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
