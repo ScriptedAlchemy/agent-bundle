@@ -94,6 +94,17 @@ export interface BuiltHostInstallTokenFixture extends BuiltFixtureProject {
   readonly loweredSkillMarkdown: string;
 }
 
+export interface HostInstallCommand {
+  readonly cwd?: string;
+  readonly executable: string;
+  readonly prefixArguments?: readonly string[];
+}
+
+interface HostInstallProofOptions {
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+  readonly installCommand?: HostInstallCommand;
+}
+
 export interface ClaudeHostInstallReport {
   readonly host: 'claude';
   readonly install: { readonly state: 'installed'; readonly version: '1.0.0' };
@@ -245,6 +256,33 @@ const runNodeCli = (
   { ...options, timeout: 180_000 },
 );
 
+const runInstallCommand = (
+  fixture: BuiltHostInstallFixture,
+  host: 'claude' | 'codex' | 'cursor',
+  bundle: string,
+  options: HostInstallProofOptions,
+): Promise<CommandResult> => {
+  if (options.installCommand === undefined) {
+    return runNodeCli(fixture, [
+      'install',
+      host,
+      '--from',
+      bundle,
+      '--json',
+    ], { cwd: bundle, environment: isolatedEnvironment(options.environment, {}) });
+  }
+  return run(options.installCommand.executable, [
+    ...(options.installCommand.prefixArguments ?? []),
+    'install',
+    host,
+    '--json',
+  ], {
+    cwd: options.installCommand.cwd ?? bundle,
+    environment: isolatedEnvironment(options.environment, {}),
+    timeout: 180_000,
+  });
+};
+
 const parseJson = <T>(text: string, context: string): T => {
   try {
     return JSON.parse(text) as T;
@@ -305,9 +343,11 @@ const assertInstallResult = (
  * separate `packed-stdio` proof level.
  */
 const buildFixtureProject = async (options: {
+  readonly buildCommand?: 'build' | 'prepack';
   readonly bundleNames: readonly string[];
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly fixture: string;
+  readonly prepareProject?: (projectRoot: string) => Promise<void>;
 }): Promise<BuiltFixtureProject> => {
   const root = await mkdtemp(join(tmpdir(), `agent-bundle-${options.fixture}-build-`));
   const project = join(root, 'project');
@@ -315,9 +355,10 @@ const buildFixtureProject = async (options: {
   try {
     await cp(join(fixturesRoot, options.fixture), project, { recursive: true });
     await symlink(join(workspaceRoot, 'node_modules'), join(project, 'node_modules'), 'dir');
+    await options.prepareProject?.(project);
     const result = await run(process.execPath, [
       cli,
-      'build',
+      options.buildCommand ?? 'build',
       '--root',
       project,
       '--output',
@@ -337,12 +378,16 @@ const buildFixtureProject = async (options: {
 };
 
 export const buildHostInstallFixture = async (options: {
+  readonly buildCommand?: 'build' | 'prepack';
   readonly environment: Readonly<NodeJS.ProcessEnv>;
+  readonly prepareProject?: (projectRoot: string) => Promise<void>;
 }): Promise<BuiltHostInstallFixture> => {
   const built = await buildFixtureProject({
+    ...(options.buildCommand === undefined ? {} : { buildCommand: options.buildCommand }),
     bundleNames: ['claude', 'codex', 'cursor'],
     environment: options.environment,
     fixture: 'host-install',
+    ...(options.prepareProject === undefined ? {} : { prepareProject: options.prepareProject }),
   });
   return Object.freeze({
     ...built,
@@ -382,7 +427,7 @@ export const disposeHostInstallFixture = async (fixture: BuiltFixtureProject): P
 
 export const runClaudeHostInstallProof = async (
   fixture: BuiltHostInstallFixture,
-  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+  options: HostInstallProofOptions,
 ): Promise<ClaudeHostInstallReport> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-host-install-claude-'));
   const config = join(root, 'config');
@@ -393,13 +438,10 @@ export const runClaudeHostInstallProof = async (
       CLAUDE_CONFIG_DIR: config,
       HOME: home,
     });
-    const installed = await runNodeCli(fixture, [
-      'install',
-      'claude',
-      '--from',
-      fixture.bundles.claude,
-      '--json',
-    ], { cwd: fixture.bundles.claude, environment });
+    const installed = await runInstallCommand(fixture, 'claude', fixture.bundles.claude, {
+      ...options,
+      environment,
+    });
     assertProof(installed.exitCode === 0, `Claude public install path failed: ${commandDetail(installed)}`);
     const installDocument = parseJson<InstallResult>(installed.stdout, 'Claude install');
     assertInstallResult(installDocument, 'claude', 'installed');
@@ -461,7 +503,7 @@ export const runClaudeHostInstallProof = async (
 
 export const runCodexHostInstallProof = async (
   fixture: BuiltHostInstallFixture,
-  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+  options: HostInstallProofOptions,
 ): Promise<CodexHostInstallReport> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-host-install-codex-'));
   const codexHome = join(root, 'codex');
@@ -472,13 +514,10 @@ export const runCodexHostInstallProof = async (
       CODEX_HOME: codexHome,
       HOME: home,
     });
-    const installed = await runNodeCli(fixture, [
-      'install',
-      'codex',
-      '--from',
-      fixture.bundles.codex,
-      '--json',
-    ], { cwd: fixture.bundles.codex, environment });
+    const installed = await runInstallCommand(fixture, 'codex', fixture.bundles.codex, {
+      ...options,
+      environment,
+    });
     assertProof(installed.exitCode === 0, `Codex public install path failed: ${commandDetail(installed)}`);
     const installDocument = parseJson<InstallResult>(installed.stdout, 'Codex install');
     assertInstallResult(installDocument, 'codex', 'installed');
@@ -616,20 +655,17 @@ const assertCursorPluginRootVariable = (input: {
 
 export const runCursorHostInstallProof = async (
   fixture: BuiltHostInstallFixture,
-  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+  options: HostInstallProofOptions,
 ): Promise<CursorHostInstallReport> => {
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-host-install-cursor-'));
   try {
     await mkdir(join(home, '.cursor'), { recursive: true });
     const environment = isolatedEnvironment(options.environment, { HOME: home });
     const install = async (): Promise<InstallResult> => {
-      const result = await runNodeCli(fixture, [
-        'install',
-        'cursor',
-        '--from',
-        fixture.bundles.cursor,
-        '--json',
-      ], { cwd: fixture.bundles.cursor, environment });
+      const result = await runInstallCommand(fixture, 'cursor', fixture.bundles.cursor, {
+        ...options,
+        environment,
+      });
       assertProof(result.exitCode === 0, `Cursor public install path failed: ${commandDetail(result)}`);
       return parseJson<InstallResult>(result.stdout, 'Cursor install');
     };

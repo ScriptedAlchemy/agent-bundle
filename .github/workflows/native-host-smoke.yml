@@ -54,6 +54,9 @@ jobs:
       - name: ${{ matrix.host }} real host install proof
         if: inputs.host == 'both' || inputs.host == matrix.host
         run: pnpm test:host-install
+      - name: ${{ matrix.host }} packed-tarball host install proof
+        if: inputs.host == 'both' || inputs.host == matrix.host
+        run: pnpm test:host-install:packed
       # Claude only: the session-token proof needs a signed-in `claude -p` turn,
       # and Codex and Cursor have no equivalent non-interactive surface.
       - name: ${{ matrix.host }} real session token proof
