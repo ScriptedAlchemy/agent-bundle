@@ -38,6 +38,78 @@ it('renders the curation prompt route into a final Agent Document', async () => 
   expect(rendered.provenance).toMatchObject({ proofLevel: 'route-unit', routeId: 'prompt:curator/curate' });
 });
 
+it('renders the composed library-audit tool document with its canonical receipt', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'curator-route-unit-tool-audit-'));
+  try {
+    const sources = join(directory, 'library');
+    await mkdir(sources, { recursive: true });
+    const rendered = await renderRoute('tool:curator/audit_library', {
+      input: { concurrency: 1, sources: [sources] },
+    });
+    const receipt = rendered.document.value as {
+      readonly duplicateCandidates: readonly unknown[];
+      readonly operation: string;
+      readonly summary: { readonly files: number };
+    };
+
+    expectDocument(rendered)
+      .toHaveStatus('success')
+      .toContainText('Audited 0 library media files')
+      .toContainMarkdown('**Files:** 0')
+      .toContainContext('review candidates')
+      .toHaveValue(receipt);
+    expect(receipt).toMatchObject({
+      duplicateCandidates: [],
+      operation: 'library-audit',
+      summary: { files: 0 },
+    });
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+it('renders composed inspection and inventory tool documents with unchanged values', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'curator-route-unit-discovery-'));
+  try {
+    const sources = join(directory, 'library');
+    await mkdir(sources, { recursive: true });
+    const inspected = await renderRoute('tool:curator/inspect_sources', {
+      input: { root: sources },
+    });
+    const inventoried = await renderRoute('tool:curator/inventory_sources', {
+      input: { source: sources },
+    });
+    const inventoryReceipt = inventoried.document.value as {
+      readonly files: readonly unknown[];
+      readonly operation: string;
+      readonly summary: { readonly files: number };
+    };
+
+    expectDocument(inspected)
+      .toHaveStatus('success')
+      .toContainText('Inspected 0 audio files')
+      .toContainMarkdown('**Files:** 0')
+      .toHaveValue({
+        files: [],
+        operation: 'inspect',
+        root: sources,
+        totalBytes: 0,
+      });
+    expectDocument(inventoried)
+      .toHaveStatus('success')
+      .toContainText('Inventoried 0 media files')
+      .toContainMarkdown('**Files:** 0')
+      .toHaveValue(inventoryReceipt);
+    expect(inventoryReceipt).toMatchObject({
+      files: [],
+      operation: 'inventory',
+      summary: { files: 0 },
+    });
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
 it('renders the library-audit CLI route with in-flight progress and the canonical receipt (#102 stage 3)', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'curator-route-unit-audit-'));
   try {

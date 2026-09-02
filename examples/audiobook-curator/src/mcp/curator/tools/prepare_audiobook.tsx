@@ -1,7 +1,9 @@
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { CuratorResult, type CuratorReceipt } from '../../../result.js';
+import { CuratorDocument } from '../../../components/curator-document.js';
+import { MutationReceipt } from '../../../components/mutation-receipt.js';
+import type { PrepareReceipt } from '../../../curator-core.js';
 import { defaultOutputOperations, outputOperations } from '../../../operations/output.js';
 
 const operation = outputOperations(defaultOutputOperations).prepare;
@@ -11,6 +13,13 @@ export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
-  const receipt = await operation.handler(input, { signal }) as CuratorReceipt;
-  return <CuratorResult receipt={receipt} />;
+  const receipt = await operation.handler(input, { signal }) as PrepareReceipt;
+  const headline = receipt.applied
+    ? `Prepared audiobook output at ${receipt.output}.`
+    : `Planned audiobook output at ${receipt.output}; no media was changed.`;
+  return (
+    <CuratorDocument headline={headline} receipt={receipt}>
+      <MutationReceipt receipt={receipt} />
+    </CuratorDocument>
+  );
 }
