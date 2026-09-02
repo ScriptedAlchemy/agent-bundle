@@ -49,7 +49,7 @@ describe('scaffold', () => {
         'README.md',
         'agent-bundle.config.ts',
         'package.json',
-        'skills/getting-started/SKILL.md',
+        'src/skills/getting-started/SKILL.md',
         'tests/skill.test.ts',
         'tsconfig.json',
       ]);

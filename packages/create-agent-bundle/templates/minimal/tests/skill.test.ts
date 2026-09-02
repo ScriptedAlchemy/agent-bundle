@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 import { expect, it } from '@rstest/core';
 
-const skillPath = new URL('../skills/getting-started/SKILL.md', import.meta.url);
+const skillPath = new URL('../src/skills/getting-started/SKILL.md', import.meta.url);
 
 it('keeps the getting-started Skill frontmatter aligned with its directory', async () => {
   const contents = await readFile(skillPath, 'utf8');
