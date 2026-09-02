@@ -173,6 +173,17 @@ export interface CompiledCliCommand {
   readonly description?: string;
   /** Exit-code policy: `zero` on success, or `result` reading the validated result's `exitCode`. */
   readonly exitCode: 'result' | 'zero';
+  /**
+   * Provenance and safety policy for a command projected from an MCP tool.
+   * `confirm` is false only when the tool explicitly declares
+   * `annotations.readOnlyHint: true`; the MCP defaults are mutation-capable,
+   * so missing or malformed annotations fail closed.
+   */
+  readonly mcp?: {
+    readonly confirm: boolean;
+    readonly server: string;
+    readonly tool: string;
+  };
   readonly options: readonly CompiledCliOption[];
   /** Command path segments below the CLI root (`['library', 'audit']`). */
   readonly path: readonly string[];
@@ -181,7 +192,7 @@ export interface CompiledCliCommand {
   readonly routeId: string;
 }
 
-/** The CLI command surface assembled from `src/cli/**` route modules. */
+/** The CLI command surface assembled from custom CLI routes and selected projected MCP tools. */
 export interface CompiledCliSurface {
   /**
    * The collision-checked command graph compiled from the route surface;
@@ -190,7 +201,7 @@ export interface CompiledCliSurface {
    */
   readonly commands?: readonly CompiledCliCommand[];
   readonly mode: CompiledCliMode;
-  /** Discovered command routes; empty when `conventional` mode omits them. */
+  /** Backing routes for every compiled command; empty when `conventional` mode omits them. */
   readonly routes: readonly CompiledAgentRoute[];
 }
 

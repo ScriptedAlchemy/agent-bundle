@@ -415,6 +415,48 @@ it('selects the compiled graph under the routes inspect focus', async () => {
   expect(routes!.digest).toMatch(/^[a-f\d]{64}$/u);
 });
 
+it('shows projected MCP command provenance and safety in the routes inspect focus', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      '  routes: { mcpCommands: true },',
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    'package.json': '{"type":"module"}\n',
+    'src/mcp/curator/tools/read_item.tsx': [
+      "export const config = { annotations: { readOnlyHint: true }, description: 'Read one item.' };",
+      moduleSource,
+    ].join('\n'),
+    'src/mcp/curator/tools/write_item.tsx': moduleSource,
+  });
+
+  const result = await inspect({ focus: 'routes', root });
+
+  expect(result.state).toBe('ready');
+  const routes = (result as ReadyInspectResult).selected?.routes;
+  expect(routes?.cli?.commands).toEqual([
+    expect.objectContaining({
+      mcp: { confirm: false, server: 'curator', tool: 'read_item' },
+      routeId: 'tool:curator/read_item',
+    }),
+    expect.objectContaining({
+      mcp: { confirm: true, server: 'curator', tool: 'write_item' },
+      routeId: 'tool:curator/write_item',
+    }),
+  ]);
+  expect(routes?.servers[0]?.routes.map((route) => route.provenance.relativePath)).toEqual([
+    'src/mcp/curator/tools/read_item.tsx',
+    'src/mcp/curator/tools/write_item.tsx',
+  ]);
+  const declarations = routesModule.generateRouteTypes(routes!);
+  expect(declarations.match(/"tool:curator\/read_item"/gu)).toHaveLength(1);
+  expect(declarations.match(/"tool:curator\/write_item"/gu)).toHaveLength(1);
+});
+
 it('dumps the graph through the CLI --routes focus and rejects ambiguous focuses', async () => {
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const root = await createInspectProject({

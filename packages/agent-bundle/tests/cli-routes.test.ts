@@ -149,6 +149,14 @@ const plainCommandModule = (options: {
   '',
 ].join('\n');
 
+const toolModule = (config?: string): string => [
+  ...(config === undefined ? [] : [`export const config = ${config};`]),
+  'export const inputSchema = operation.inputSchema;',
+  'export const resultSchema = operation.resultSchema;',
+  'export default async function Tool() { return undefined; }',
+  '',
+].join('\n');
+
 describe('compiled command graph', () => {
   it('compiles nesting, aliases, positionals, and the exit-code policy into graph.cli.commands', async () => {
     const root = await createRoot();
@@ -313,6 +321,193 @@ describe('compiled command graph', () => {
     expect(result.state).toBe('invalid');
     expect(codesOf(result.diagnostics)).toContain('AB4813');
   });
+
+  it('projects generated MCP tools with deterministic JSON options and fail-closed confirmation metadata', async () => {
+    const root = await createRoot();
+    await writeTree(root, {
+      'src/mcp/alpha/tools/mutate_item.tsx': toolModule("{ description: 'Mutates one item.' }"),
+      'src/mcp/alpha/tools/read_item.tsx': toolModule(
+        "{ annotations: { readOnlyHint: true }, description: 'Reads one item.' }",
+      ),
+      'src/mcp/zeta/tools/inspect.tsx': toolModule(),
+    });
+
+    const graph = await compileRouteGraph(root, fixtureConfig({ routes: { mcpCommands: true } }));
+
+    expect(graph.diagnostics).toEqual([]);
+    expect(graph.cli?.mode).toBe('generated');
+    expect(graph.cli?.commands).toEqual([
+      {
+        aliases: [],
+        description: 'Mutates one item.',
+        exitCode: 'zero',
+        mcp: { confirm: true, server: 'alpha', tool: 'mutate_item' },
+        options: [
+          {
+            description: 'Tool input as one JSON object.',
+            key: 'input',
+            kind: 'string',
+            option: 'input',
+            repeated: false,
+            required: false,
+          },
+          {
+            description: 'Confirm running this mutation-capable MCP tool.',
+            key: 'yes',
+            kind: 'boolean',
+            option: 'yes',
+            repeated: false,
+            required: false,
+          },
+        ],
+        path: ['alpha', 'mutate_item'],
+        rendered: true,
+        routeId: 'tool:alpha/mutate_item',
+      },
+      {
+        aliases: [],
+        description: 'Reads one item.',
+        exitCode: 'zero',
+        mcp: { confirm: false, server: 'alpha', tool: 'read_item' },
+        options: [{
+          description: 'Tool input as one JSON object.',
+          key: 'input',
+          kind: 'string',
+          option: 'input',
+          repeated: false,
+          required: false,
+        }],
+        path: ['alpha', 'read_item'],
+        rendered: true,
+        routeId: 'tool:alpha/read_item',
+      },
+      {
+        aliases: [],
+        exitCode: 'zero',
+        mcp: { confirm: true, server: 'zeta', tool: 'inspect' },
+        options: [
+          expect.objectContaining({ key: 'input', option: 'input' }),
+          expect.objectContaining({ key: 'yes', option: 'yes' }),
+        ],
+        path: ['zeta', 'inspect'],
+        rendered: true,
+        routeId: 'tool:zeta/inspect',
+      },
+    ]);
+    expect(Object.isFrozen(graph.cli!.commands![0]!.mcp)).toBe(true);
+  });
+
+  it('selects projected tools with literal-star patterns and reports every unmatched pattern', async () => {
+    const root = await createRoot();
+    await writeTree(root, {
+      'src/mcp/alpha/tools/mutate_item.tsx': toolModule(),
+      'src/mcp/alpha/tools/read_item.tsx': toolModule("{ annotations: { readOnlyHint: true } }"),
+      'src/mcp/beta/tools/read_item.tsx': toolModule("{ annotations: { readOnlyHint: true } }"),
+    });
+
+    const selected = await compileRouteGraph(root, fixtureConfig({
+      routes: {
+        mcpCommands: {
+          exclude: ['*:mutate_*'],
+          include: ['alpha:*'],
+        },
+      },
+    }));
+    expect(selected.diagnostics).toEqual([]);
+    expect(selected.cli?.commands?.map((command) => command.path.join('/'))).toEqual(['alpha/read_item']);
+
+    const excludedAll = await compileRouteGraph(root, fixtureConfig({
+      routes: { mcpCommands: { exclude: ['*:*'] } },
+    }));
+    expect(excludedAll.diagnostics).toEqual([]);
+    expect(excludedAll.cli?.commands).toEqual([]);
+
+    const unmatched = await compileRouteGraph(root, fixtureConfig({
+      routes: {
+        mcpCommands: {
+          exclude: ['missing:*'],
+          include: ['alpha:read_*', 'beta:missing'],
+        },
+      },
+    }));
+    expect(codesOf(unmatched.diagnostics)).toEqual(['AB4822', 'AB4822']);
+    expect(unmatched.diagnostics.map((diagnostic) => diagnostic.message).join('\n')).toContain('alpha:mutate_item');
+    expect(unmatched.diagnostics.every((diagnostic) =>
+      diagnostic.recovery?.includes('routes.mcpCommands') === true)).toBe(true);
+
+    const emptyInclude = await compileRouteGraph(root, fixtureConfig({
+      routes: { mcpCommands: { include: [] } },
+    }));
+    expect(codesOf(emptyInclude.diagnostics)).toEqual(['AB4822']);
+  });
+
+  it('rejects malformed routes.mcpCommands declarations with AB4804', async () => {
+    const root = await createRoot();
+    await writeTree(root, { 'src/mcp/alpha/tools/read.tsx': toolModule() });
+
+    for (const mcpCommands of [
+      false,
+      'yes',
+      { include: 'alpha:*' },
+      { exclude: [42] },
+      { extra: [] },
+    ]) {
+      const graph = await compileRouteGraph(root, fixtureConfig({ routes: { mcpCommands } }));
+      expect(codesOf(graph.diagnostics), JSON.stringify(mcpCommands)).toEqual(['AB4804']);
+      expect(graph.diagnostics[0]!.recovery).toContain('routes.mcpCommands');
+    }
+  });
+
+  it('builds a standalone generated CLI surface from projected tools without src/cli routes', async () => {
+    const root = await createRoot();
+    await writeTree(root, {
+      'src/mcp/alpha/tools/read.tsx': toolModule("{ annotations: { readOnlyHint: true } }"),
+    });
+
+    const graph = await compileRouteGraph(root, fixtureConfig({ routes: { mcpCommands: true } }));
+
+    expect(graph.cli).toMatchObject({
+      commands: [expect.objectContaining({ routeId: 'tool:alpha/read' })],
+      mode: 'generated',
+    });
+    expect(graph.cli?.routes.map((route) => route.id)).toEqual(['tool:alpha/read']);
+  });
+
+  it('reports selection errors beside a conventional CLI conflict', async () => {
+    const root = await createRoot();
+    await writeTree(root, {
+      'src/cli.ts': 'export const main = async () => 0;\n',
+      'src/mcp/alpha/tools/read.tsx': toolModule("{ annotations: { readOnlyHint: true } }"),
+    });
+
+    const graph = await compileRouteGraph(root, fixtureConfig({
+      routes: { mcpCommands: { include: ['missing:*'] } },
+    }));
+
+    expect(codesOf(graph.diagnostics)).toEqual(['AB4801', 'AB4822']);
+    expect(graph.diagnostics[0]!.message).toContain('routes.mcpCommands');
+  });
+
+  it.each([
+    ['server group', 'src/cli/alpha.ts', plainCommandModule()],
+    ['projected command path', 'src/cli/alpha/read.ts', plainCommandModule()],
+    ['alias at the server level', 'src/cli/status.ts', plainCommandModule({ config: "{ aliases: ['alpha'] }" })],
+    ['alias at the tool level', 'src/cli/alpha/status.ts', plainCommandModule({ config: "{ aliases: ['read'] }" })],
+  ])('reports an actionable AB4813 collision for a custom %s', async (_label, path, source) => {
+    const root = await createRoot();
+    await writeTree(root, {
+      [path]: source,
+      'src/mcp/alpha/tools/read.tsx': toolModule("{ annotations: { readOnlyHint: true } }"),
+    });
+
+    const graph = await compileRouteGraph(root, fixtureConfig({ routes: { mcpCommands: true } }));
+
+    expect(codesOf(graph.diagnostics)).toContain('AB4813');
+    const collision = graph.diagnostics.find((diagnostic) => diagnostic.code === 'AB4813')!;
+    expect(collision.message).toContain('alpha:read');
+    expect(collision.recovery).toContain('routes.mcpCommands.exclude');
+    expect(collision.recovery).toContain('rename');
+  });
 });
 
 describe('generated bin normalization', () => {
@@ -468,6 +663,73 @@ describe('generated CLI shell', () => {
     return { calls, code, stderr: stderr.join(''), stdout: stdout.join('') };
   };
 
+  const mutationTool: CompiledCliCommand = {
+    aliases: [],
+    description: 'Mutates one item.',
+    exitCode: 'zero',
+    mcp: { confirm: true, server: 'curator', tool: 'apply_item' },
+    options: [
+      {
+        description: 'Tool input as one JSON object.',
+        key: 'input',
+        kind: 'string',
+        option: 'input',
+        repeated: false,
+        required: false,
+      },
+      {
+        description: 'Confirm running this mutation-capable MCP tool.',
+        key: 'yes',
+        kind: 'boolean',
+        option: 'yes',
+        repeated: false,
+        required: false,
+      },
+    ],
+    path: ['curator', 'apply_item'],
+    rendered: true,
+    routeId: 'tool:curator/apply_item',
+  };
+  const readOnlyTool: CompiledCliCommand = {
+    ...mutationTool,
+    mcp: { confirm: false, server: 'curator', tool: 'read_item' },
+    options: [mutationTool.options[0]!],
+    path: ['curator', 'read_item'],
+    routeId: 'tool:curator/read_item',
+  };
+  const runMcp = async (
+    argv: readonly string[],
+  ): Promise<RunResult> => {
+    const calls: RunResult['calls'] = [];
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await runGeneratedCliEntry({
+      argv,
+      commands: [mutationTool, readOnlyTool],
+      execute: async () => {
+        throw new Error('plain execute must not run for an MCP command');
+      },
+      isTty: () => false,
+      name: 'curator',
+      render: (command, input) => {
+        calls.push({ command, input, json: argv.includes('--json') });
+        return {
+          close: async () => undefined,
+          events: () => eventStream([{
+            document: completeDocument('success', input, [{ kind: 'json', value: input }]),
+            sequence: 0,
+            type: 'complete',
+          }]),
+          validate: (value) => value,
+        };
+      },
+      version: '1.2.3',
+      writeErr: (text) => void stderr.push(text),
+      writeOut: (text) => void stdout.push(text),
+    });
+    return { calls, code, stderr: stderr.join(''), stdout: stdout.join('') };
+  };
+
   it('prints root help on bare invocation and --help, and the version on --version', async () => {
     const bare = await run([]);
     expect(bare.code).toBe(0);
@@ -611,6 +873,66 @@ describe('generated CLI shell', () => {
     const result = await run(['doctor', '/library', '--ndjson']);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('--ndjson requires a rendered command.');
+  });
+
+  it('shows projected MCP provenance, JSON input, and fail-closed safety in command help', async () => {
+    const gated = await runMcp(['curator', 'apply_item', '--help']);
+    expect(gated.code).toBe(0);
+    expect(gated.stdout).toContain('MCP tool: curator:apply_item');
+    expect(gated.stdout).toContain('Mutation-capable; requires --yes.');
+    expect(gated.stdout).toContain('--input <string>');
+    expect(gated.stdout).toContain('--yes');
+    expect(gated.stdout).toContain('--ndjson');
+
+    const readOnly = await runMcp(['curator', 'read_item', '--help']);
+    expect(readOnly.stdout).toContain('MCP tool: curator:read_item');
+    expect(readOnly.stdout).not.toContain('Mutation-capable');
+  });
+
+  it('parses exactly one JSON object for MCP input and strips only synthesized argv keys', async () => {
+    const document = { input: 'document field', nested: { count: 2 }, yes: 'document field' };
+    const supplied = await runMcp([
+      'curator',
+      'apply_item',
+      '--input',
+      JSON.stringify(document),
+      '--yes',
+      '--json',
+    ]);
+    expect(supplied.code).toBe(0);
+    expect(supplied.calls).toEqual([{
+      command: mutationTool,
+      input: document,
+      json: true,
+    }]);
+    expect(JSON.parse(supplied.stdout)).toEqual(document);
+
+    const absent = await runMcp(['curator', 'read_item', '--json']);
+    expect(absent.code).toBe(0);
+    expect(absent.calls[0]!.input).toEqual({});
+  });
+
+  it('fails closed before rendering a mutation-capable MCP command without --yes', async () => {
+    const denied = await runMcp(['curator', 'apply_item', '--input', '{"id":"one"}']);
+    expect(denied.code).toBe(2);
+    expect(denied.stdout).toBe('');
+    expect(denied.stderr).toContain('mutation-capable');
+    expect(denied.stderr).toContain('requires --yes');
+    expect(denied.calls).toEqual([]);
+  });
+
+  it.each([
+    ['{', 'valid JSON object'],
+    ['[]', 'JSON object'],
+    ['null', 'JSON object'],
+    ['1', 'JSON object'],
+    ['"text"', 'JSON object'],
+  ])('rejects MCP --input %s as a usage failure', async (input, message) => {
+    const invalid = await runMcp(['curator', 'read_item', '--input', input]);
+    expect(invalid.code).toBe(2);
+    expect(invalid.stdout).toBe('');
+    expect(invalid.stderr).toContain(message);
+    expect(invalid.calls).toEqual([]);
   });
 });
 

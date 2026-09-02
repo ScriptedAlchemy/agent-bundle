@@ -86,11 +86,12 @@ export interface RouteManifestCliOption {
   readonly required: boolean;
 }
 
-/** One executable command compiled from a `src/cli/**` route. */
+/** One executable command compiled from a custom CLI route or projected MCP tool. */
 export interface RouteManifestCliCommand {
   readonly aliases: readonly string[];
   readonly description?: string;
   readonly exitCode: CompiledCliCommand['exitCode'];
+  readonly mcp?: NonNullable<CompiledCliCommand['mcp']>;
   readonly options: readonly RouteManifestCliOption[];
   readonly path: readonly string[];
   readonly routeId: string;
@@ -208,6 +209,7 @@ const manifestCliCommand = (command: CompiledCliCommand): RouteManifestCliComman
   aliases: [...command.aliases],
   ...(command.description === undefined ? {} : { description: command.description }),
   exitCode: command.exitCode,
+  ...(command.mcp === undefined ? {} : { mcp: { ...command.mcp } }),
   options: command.options.map(manifestCliOption),
   path: [...command.path],
   routeId: command.routeId,

@@ -128,6 +128,11 @@ const cliCommandSchema: z.ZodType<RouteManifestCliCommand> = z.strictObject({
   aliases: z.array(z.string()),
   description: z.string().optional(),
   exitCode: z.enum(['result', 'zero']),
+  mcp: z.strictObject({
+    confirm: z.boolean(),
+    server: z.string(),
+    tool: z.string(),
+  }).optional(),
   options: z.array(cliOptionSchema),
   path: z.array(z.string()),
   routeId: z.string(),

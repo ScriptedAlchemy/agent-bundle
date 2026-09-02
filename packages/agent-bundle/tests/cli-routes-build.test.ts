@@ -46,6 +46,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       "import { defineConfig } from 'agent-bundle/config';",
       'export default defineConfig({',
       "  plugin: { description: 'Routed CLI fixture.', name: 'cli-bin-fixture', version: '1.0.0' },",
+      '  routes: { mcpCommands: true },',
       "  targets: ['portable'],",
       '});',
       '',
@@ -113,6 +114,33 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       '}',
       '',
     ].join('\n')),
+    writeProjectFile(root, 'src/mcp/harness/tools/lookup.tsx', [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { z } from 'zod';",
+      "export const config = { annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
+      'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
+      "export const resultSchema = z.object({ invocation: z.literal('tool'), message: z.string(), operationId: z.string() }).strict();",
+      'export default async function Lookup({ input }) {',
+      '  const context = await agent();',
+      "  await context.progress.report({ completed: 1, message: 'lookup', total: 1 });",
+      '  const result = { invocation: context.invocation.kind, message: input.message, operationId: context.invocation.operationId };',
+      '  return <Agent.Result value={result}><Agent.Markdown>{`Lookup: ${input.message}`}</Agent.Markdown></Agent.Result>;',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/mcp/harness/tools/apply.tsx', [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { z } from 'zod';",
+      "export const config = { description: 'Applies one value.' };",
+      'export const inputSchema = z.object({ value: z.string() }).strict();',
+      "export const resultSchema = z.object({ invocation: z.literal('tool'), operationId: z.string(), value: z.string() }).strict();",
+      'export default async function Apply({ input }) {',
+      '  const context = await agent();',
+      '  const result = { invocation: context.invocation.kind, operationId: context.invocation.operationId, value: input.value };',
+      '  return <Agent.Result value={result}><Agent.Text>{`Applied ${input.value}.`}</Agent.Text></Agent.Result>;',
+      '}',
+      '',
+    ].join('\n')),
     writeProjectFile(root, 'src/scripts/summarize.tsx', [
       "import React from 'react';",
       "import { Agent } from '@agent-bundle/runtime';",
@@ -143,6 +171,8 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   expect(binEvidence?.sourceInputs).toEqual(expect.arrayContaining([
     'src/cli/doctor.ts',
     'src/cli/library/audit.ts',
+    'src/mcp/harness/tools/apply.tsx',
+    'src/mcp/harness/tools/lookup.tsx',
   ]));
 
   // Help and version come from the compiled command graph.
@@ -194,6 +224,40 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   expect(events[events.length - 1]!.type).toBe('complete');
   // Rendered input-validation failures stay usage failures.
   await expect(execFile(binPath, ['report'])).rejects.toMatchObject({ code: 2, stdout: '' });
+
+  // Projected MCP tools share this executable and invoke the tool route
+  // contract, including machine output and fail-closed mutation gating.
+  const projectedJson = await execFile(binPath, [
+    'harness', 'lookup', '--input', '{"message":"packed"}', '--json',
+  ]);
+  expect(JSON.parse(projectedJson.stdout)).toEqual({
+    invocation: 'tool',
+    message: 'packed',
+    operationId: 'tool:harness/lookup',
+  });
+  const projectedNdjson = await execFile(binPath, [
+    'harness', 'lookup', '--input', '{"message":"events"}', '--ndjson',
+  ]);
+  const projectedEvents = projectedNdjson.stdout.trimEnd().split('\n')
+    .map((line) => JSON.parse(line) as { jsonrpc?: unknown; sequence: number; type: string });
+  expect(projectedEvents.some((event) => event.type === 'progress')).toBe(true);
+  expect(projectedEvents.at(-1)?.type).toBe('complete');
+  expect(projectedEvents.every((event) => event.jsonrpc === undefined)).toBe(true);
+  await expect(execFile(binPath, [
+    'harness', 'apply', '--input', '{"value":"blocked"}', '--json',
+  ])).rejects.toMatchObject({
+    code: 2,
+    stderr: expect.stringContaining('requires --yes'),
+    stdout: '',
+  });
+  const projectedMutation = await execFile(binPath, [
+    'harness', 'apply', '--input', '{"value":"allowed"}', '--yes', '--json',
+  ]);
+  expect(JSON.parse(projectedMutation.stdout)).toEqual({
+    invocation: 'tool',
+    operationId: 'tool:harness/apply',
+    value: 'allowed',
+  });
 
   // A worker that exits cleanly before completing a request must fail that
   // request explicitly instead of leaving its Flight stream unsettled.

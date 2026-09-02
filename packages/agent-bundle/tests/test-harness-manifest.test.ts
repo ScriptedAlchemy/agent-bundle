@@ -73,12 +73,14 @@ describe('the compiled test manifest', () => {
       'tool:harness/catalog',
       'tool:harness/echo',
       'tool:harness/journal',
+      'tool:harness/mutation-probe',
       'tool:harness/publish-notice',
       'tool:harness/unavailable',
     ]);
     expect(manifest.diagnostics).toEqual([]);
     expect(manifest.routes['tool:harness/echo']).toEqual({
       config: {
+        annotations: { readOnlyHint: true },
         description: 'Echoes one message back with the observed workspace root.',
         title: 'Echo',
       },
@@ -111,7 +113,7 @@ describe('the compiled test manifest', () => {
   });
 
   it('carries the compiled command graph the CLI dispatch level dispatches over', () => {
-    expect(manifest.cliCommands).toEqual([
+    expect(manifest.cliCommands.filter((command) => command.mcp === undefined)).toEqual([
       {
         aliases: [],
         description: 'Applies pending harness migrations.',
@@ -151,10 +153,51 @@ describe('the compiled test manifest', () => {
         routeId: 'cli:report',
       },
     ]);
+    const inputOption = {
+      description: 'Tool input as one JSON object.',
+      key: 'input',
+      kind: 'string',
+      option: 'input',
+      repeated: false,
+      required: false,
+    };
+    const confirmationOption = {
+      description: 'Confirm running this mutation-capable MCP tool.',
+      key: 'yes',
+      kind: 'boolean',
+      option: 'yes',
+      repeated: false,
+      required: false,
+    };
+    const projected = (
+      tool: string,
+      description: string | undefined,
+      confirm: boolean,
+    ) => ({
+      aliases: [],
+      ...(description === undefined ? {} : { description }),
+      exitCode: 'zero',
+      mcp: { confirm, server: 'harness', tool },
+      options: confirm ? [inputOption, confirmationOption] : [inputOption],
+      path: ['harness', tool],
+      rendered: true,
+      routeId: `tool:harness/${tool}`,
+    });
+    expect(manifest.cliCommands.filter((command) => command.mcp !== undefined)).toEqual([
+      projected('catalog', 'Streams the harness catalog behind one Suspense boundary.', true),
+      projected('echo', 'Echoes one message back with the observed workspace root.', false),
+      projected('journal', 'Records and reads durable route-harness journal entries.', true),
+      projected('mutation-probe', 'Records how many times the mutation probe executed.', true),
+      projected('publish-notice', 'Publishes a durable notice for a later session event.', true),
+      projected('unavailable', undefined, true),
+    ]);
   });
 
   it('reuses the compiler pass rather than compiling a second route graph', async () => {
-    const graph = await compileRouteGraph(fixtureRoot, { targets: ['claude'] } as never);
+    const graph = await compileRouteGraph(fixtureRoot, {
+      routes: { mcpCommands: true },
+      targets: ['claude'],
+    } as never);
 
     expect(manifest.digest).toBe(graph.digest);
   });
@@ -236,6 +279,7 @@ describe('the generated route registry', () => {
     expect(loaders).toContain('"event:tool/after": () => import(');
     expect(loaders).toContain('"tool:harness/echo": () => import(');
     expect(loaders).toContain('"tool:harness/journal": () => import(');
+    expect(loaders).toContain('"tool:harness/mutation-probe": () => import(');
     expect(loaders).toContain('"tool:harness/unavailable": () => import(');
     expect(loaders).not.toContain('app:harness/panel');
     expect(loaders).toContain('"resource:harness/notes": () => import(');

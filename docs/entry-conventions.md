@@ -203,7 +203,7 @@ export default async function inspect({ input, signal }: CliRouteProps<typeof in
 
 The compiler statically projects `inputSchema` onto argv (the bounded grammar
 and every policy rule are documented in
-[Diagnostics](diagnostics.md#route-graph-ab4800ab4817)), generates nested
+[Diagnostics](diagnostics.md#route-graph-state-and-provider-conventions-ab4800ab4822-ab4940ab4942)), generates nested
 help (`--help` at every level, `--version` at the root), and emits
 `dist/bin/<plugin-name>.js` with the shebang and executable bit through the
 same Rslib synthesis as every other bin. At run time the shell resolves the
@@ -232,6 +232,45 @@ as non-MCP bytes to an MCP server's stdout. Diagnostics stay on stderr;
 machine output owns stdout. Rendered scripts
 (`src/scripts/<name>.tsx`) share the same shell and output contract with
 `{ argv, signal }` component props and status-derived exit codes.
+
+#### Project generated MCP tools into the CLI (power tier)
+
+`routes.mcpCommands` adds tools from generated MCP servers to the same command
+graph and executable, including projects with no `src/cli/**` routes:
+
+```ts
+export default defineConfig({
+  routes: {
+    mcpCommands: {
+      include: ['curator:*'],
+      exclude: ['curator:apply_*'],
+    },
+  },
+});
+```
+
+`true` selects every eligible tool. Object-form `include` defaults to every
+eligible tool when omitted; `exclude` removes matches afterward. Patterns
+match the `<server>:<tool>` identity and support only literal text plus `*`
+(zero or more characters). Every declared pattern must match at least one
+eligible tool; `include: []` and misspellings fail with `AB4822`, whose
+diagnostic lists the available identities. Excluding every selected tool is
+legal.
+
+Each projected tool runs as `<plugin-bin> <server> <tool>` with the protocol
+tool name preserved verbatim. Its only input option is
+`--input '<one JSON object>'`; omission supplies `{}`, while invalid JSON,
+arrays, `null`, and scalars exit 2 before route execution. A tool is read-only
+only when its static MCP annotations explicitly set `readOnlyHint: true`.
+Every other tool is mutation-capable and fails closed unless `--yes` is
+present. Help and `agent-bundle inspect --routes` expose the source server,
+tool, and confirmation policy, and collisions with custom command paths,
+groups, or aliases fail with `AB4813`.
+
+This is an in-house projection over the compiled route graph, per gate G7; it
+does not depend on MCPorter or introduce a second command model. MCPorter can
+still be pointed independently at the generated MCP server when a live-server
+client is desired.
 
 ### The stdio MCP lifecycle shell
 
