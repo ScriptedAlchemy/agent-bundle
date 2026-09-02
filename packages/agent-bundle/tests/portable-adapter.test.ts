@@ -24,24 +24,24 @@ const plugin = (): NormalizedPlugin => ({
     {
       body: 'Use the included resource.\n',
       description: 'A skill with every discovered file.',
-      dir: '/workspace/skills/reporter',
+      dir: '/workspace/src/skills/reporter',
       frontmatter: { description: 'A skill with every discovered file.', name: 'reporter' },
       id: 'skill:reporter',
       name: 'reporter',
-      provenance: { kind: 'conventional', sourcePath: '/workspace/skills/reporter/SKILL.md' },
+      provenance: { kind: 'conventional', sourcePath: '/workspace/src/skills/reporter/SKILL.md' },
       resources: [
         {
           bytes: 23,
           relativePath: 'SKILL.md',
-          source: '/workspace/skills/reporter/SKILL.md',
+          source: '/workspace/src/skills/reporter/SKILL.md',
         },
         {
           bytes: 12,
           relativePath: 'references/guide.md',
-          source: '/workspace/skills/reporter/references/guide.md',
+          source: '/workspace/src/skills/reporter/references/guide.md',
         },
       ],
-      source: '/workspace/skills/reporter/SKILL.md',
+      source: '/workspace/src/skills/reporter/SKILL.md',
       targets: ['portable'],
     },
   ],
@@ -100,19 +100,19 @@ it('plans a schema-valid skills-only plugin with every discovered resource', () 
       bytes: 23,
       kind: 'copy',
       relativePath: 'skills/reporter/SKILL.md',
-      source: '/workspace/skills/reporter/SKILL.md',
+      source: '/workspace/src/skills/reporter/SKILL.md',
     },
     {
       bytes: 12,
       kind: 'copy',
       relativePath: 'skills/reporter/references/guide.md',
-      source: '/workspace/skills/reporter/references/guide.md',
+      source: '/workspace/src/skills/reporter/references/guide.md',
     },
   ]);
   expect(pluginEntries.map((entry) => entry.sourceInputs)).toEqual([
     ['/workspace/agent-bundle.config.ts'],
-    ['/workspace/skills/reporter/SKILL.md'],
-    ['/workspace/skills/reporter/SKILL.md', '/workspace/skills/reporter/references/guide.md'],
+    ['/workspace/src/skills/reporter/SKILL.md'],
+    ['/workspace/src/skills/reporter/SKILL.md', '/workspace/src/skills/reporter/references/guide.md'],
   ]);
 });
 

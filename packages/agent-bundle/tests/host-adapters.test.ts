@@ -54,17 +54,17 @@ const plugin = Object.freeze({
     Object.freeze({
       body: '# Review\n',
       description: 'Review code and explain findings.',
-      dir: '/workspace/skills/review',
+      dir: '/workspace/src/skills/review',
       frontmatter: Object.freeze({ description: 'Review code and explain findings.', name: 'review' }),
       id: 'skill:review',
       name: 'review',
-      provenance: Object.freeze({ kind: 'conventional' as const, sourcePath: '/workspace/skills/review/SKILL.md' }),
+      provenance: Object.freeze({ kind: 'conventional' as const, sourcePath: '/workspace/src/skills/review/SKILL.md' }),
       resources: Object.freeze([
-        Object.freeze({ bytes: 9, relativePath: 'SKILL.md', source: '/workspace/skills/review/SKILL.md' }),
-        Object.freeze({ bytes: 3, relativePath: 'assets/icon.bin', source: '/workspace/skills/review/assets/icon.bin' }),
-        Object.freeze({ bytes: 8, relativePath: 'references/guide.md', source: '/workspace/skills/review/references/guide.md' }),
+        Object.freeze({ bytes: 9, relativePath: 'SKILL.md', source: '/workspace/src/skills/review/SKILL.md' }),
+        Object.freeze({ bytes: 3, relativePath: 'assets/icon.bin', source: '/workspace/src/skills/review/assets/icon.bin' }),
+        Object.freeze({ bytes: 8, relativePath: 'references/guide.md', source: '/workspace/src/skills/review/references/guide.md' }),
       ]),
-      source: '/workspace/skills/review/SKILL.md',
+      source: '/workspace/src/skills/review/SKILL.md',
       targets: Object.freeze(['codex', 'claude']),
     }),
   ]),
@@ -379,8 +379,8 @@ it('lowers Claude commands with documented kebab-case frontmatter and body-only 
         id: 'command:review',
         markdown: '---\ndescription: Review changes\ntargets:\n  - claude\n---\nReview the staged diff.\n',
         name: 'review',
-        provenance: { kind: 'conventional', sourcePath: '/workspace/commands/review.md' },
-        source: '/workspace/commands/review.md',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/commands/review.md' },
+        source: '/workspace/src/commands/review.md',
         targets: ['claude'],
       },
       {
@@ -389,8 +389,8 @@ it('lowers Claude commands with documented kebab-case frontmatter and body-only 
         id: 'command:explain',
         markdown: '# Explain\n\nExplain this code.',
         name: 'explain',
-        provenance: { kind: 'conventional', sourcePath: '/workspace/commands/explain.md' },
-        source: '/workspace/commands/explain.md',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/commands/explain.md' },
+        source: '/workspace/src/commands/explain.md',
         targets: ['claude'],
       },
     ],
@@ -435,7 +435,7 @@ it('emits validated Claude manifest metadata fields with extension provenance', 
     kind: 'write',
     sourceInputs: [
       '/workspace/agent-bundle.config.ts',
-      '/workspace/skills/review/SKILL.md',
+      '/workspace/src/skills/review/SKILL.md',
       '/workspace/manifest-metadata.config.ts',
     ],
   });
@@ -968,9 +968,9 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
       kind: 'write',
       relativePath: '.mcp.json',
     },
-    { bytes: 9, kind: 'copy', relativePath: 'skills/review/SKILL.md', source: '/workspace/skills/review/SKILL.md' },
-    { bytes: 3, kind: 'copy', relativePath: 'skills/review/assets/icon.bin', source: '/workspace/skills/review/assets/icon.bin' },
-    { bytes: 8, kind: 'copy', relativePath: 'skills/review/references/guide.md', source: '/workspace/skills/review/references/guide.md' },
+    { bytes: 9, kind: 'copy', relativePath: 'skills/review/SKILL.md', source: '/workspace/src/skills/review/SKILL.md' },
+    { bytes: 3, kind: 'copy', relativePath: 'skills/review/assets/icon.bin', source: '/workspace/src/skills/review/assets/icon.bin' },
+    { bytes: 8, kind: 'copy', relativePath: 'skills/review/references/guide.md', source: '/workspace/src/skills/review/references/guide.md' },
   ]);
   expect(claudePluginEntries).toMatchObject([
     {
@@ -988,25 +988,25 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
       kind: 'write',
       relativePath: '.mcp.json',
     },
-    { bytes: 9, kind: 'copy', relativePath: 'skills/review/SKILL.md', source: '/workspace/skills/review/SKILL.md' },
-    { bytes: 3, kind: 'copy', relativePath: 'skills/review/assets/icon.bin', source: '/workspace/skills/review/assets/icon.bin' },
-    { bytes: 8, kind: 'copy', relativePath: 'skills/review/references/guide.md', source: '/workspace/skills/review/references/guide.md' },
+    { bytes: 9, kind: 'copy', relativePath: 'skills/review/SKILL.md', source: '/workspace/src/skills/review/SKILL.md' },
+    { bytes: 3, kind: 'copy', relativePath: 'skills/review/assets/icon.bin', source: '/workspace/src/skills/review/assets/icon.bin' },
+    { bytes: 8, kind: 'copy', relativePath: 'skills/review/references/guide.md', source: '/workspace/src/skills/review/references/guide.md' },
   ]);
   expect(codexPluginEntries.map((entry) => entry.sourceInputs)).toEqual([
     ['/workspace/agent-bundle.config.ts'],
-    ['/workspace/agent-bundle.config.ts', '/workspace/skills/review/SKILL.md'],
+    ['/workspace/agent-bundle.config.ts', '/workspace/src/skills/review/SKILL.md'],
     ['/workspace/agent-bundle.config.ts'],
-    ['/workspace/skills/review/SKILL.md'],
-    ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/assets/icon.bin'],
-    ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/references/guide.md'],
+    ['/workspace/src/skills/review/SKILL.md'],
+    ['/workspace/src/skills/review/SKILL.md', '/workspace/src/skills/review/assets/icon.bin'],
+    ['/workspace/src/skills/review/SKILL.md', '/workspace/src/skills/review/references/guide.md'],
   ]);
   expect(claudePluginEntries.map((entry) => entry.sourceInputs)).toEqual([
     ['/workspace/agent-bundle.config.ts'],
-    ['/workspace/agent-bundle.config.ts', '/workspace/skills/review/SKILL.md'],
+    ['/workspace/agent-bundle.config.ts', '/workspace/src/skills/review/SKILL.md'],
     ['/workspace/agent-bundle.config.ts'],
-    ['/workspace/skills/review/SKILL.md'],
-    ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/assets/icon.bin'],
-    ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/references/guide.md'],
+    ['/workspace/src/skills/review/SKILL.md'],
+    ['/workspace/src/skills/review/SKILL.md', '/workspace/src/skills/review/assets/icon.bin'],
+    ['/workspace/src/skills/review/SKILL.md', '/workspace/src/skills/review/references/guide.md'],
   ]);
   await validateDocuments('codex', writeContents(plugin, 'codex'));
   await validateDocuments('claude', writeContents(plugin, 'claude'));
@@ -1213,7 +1213,7 @@ it('emits sorted, allowlisted Claude userConfig declarations with config provena
   expect(plan.diagnostics).toEqual([]);
   expect(manifest).toMatchObject({
     kind: 'write',
-    sourceInputs: ['/workspace/agent-bundle.config.ts', '/workspace/skills/review/SKILL.md', '/workspace/claude.config.ts'],
+    sourceInputs: ['/workspace/agent-bundle.config.ts', '/workspace/src/skills/review/SKILL.md', '/workspace/claude.config.ts'],
   });
   if (manifest?.kind !== 'write') throw new Error('Expected an emitted Claude plugin manifest.');
   expect(JSON.parse(manifest.content).userConfig).toEqual({
@@ -2400,8 +2400,8 @@ it('records every selected component provenance for generated host documents', (
     },
     skills: plugin.skills.map((skill) => ({
       ...skill,
-      provenance: { kind: 'conventional' as const, sourcePath: '/inputs/skills/review/SKILL.md' },
-      source: '/inputs/skills/review/SKILL.md',
+      provenance: { kind: 'conventional' as const, sourcePath: '/inputs/src/skills/review/SKILL.md' },
+      source: '/inputs/src/skills/review/SKILL.md',
     })),
     targets: plugin.targets.map((target) => ({
       ...target,
@@ -2416,7 +2416,7 @@ it('records every selected component provenance for generated host documents', (
       `/inputs/${target}.target.ts`,
       '/inputs/mcp.config.ts',
       '/inputs/hook.config.ts',
-      '/inputs/skills/review/SKILL.md',
+      '/inputs/src/skills/review/SKILL.md',
     ];
     expect(byPath[target === 'codex' ? '.codex-plugin/plugin.json' : '.claude-plugin/plugin.json']?.sourceInputs).toEqual(common);
     expect(byPath['.mcp.json']?.sourceInputs).toEqual([
@@ -2614,7 +2614,7 @@ it('filters host components and builds portable, Codex, and Claude target roots'
 
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-host-adapter-'));
   const outputRoot = join(root, 'dist');
-  const skillRoot = join(root, 'skills', 'review');
+  const skillRoot = join(root, 'src', 'skills', 'review');
   const skillMarkdown = '---\nname: review\ndescription: Review code and explain findings.\n---\n# Review\n';
   await mkdir(join(skillRoot, 'references'), { recursive: true });
   await Promise.all([

@@ -35,7 +35,7 @@ const createProject = async (): Promise<string> => (await createProjectFixture({
     '',
   ].join('\n'),
   files: {
-    'skills/review/SKILL.md': [
+    'src/skills/review/SKILL.md': [
       '---',
       'name: review',
       'description: Reviews changed files',
@@ -45,9 +45,9 @@ const createProject = async (): Promise<string> => (await createProjectFixture({
       'Read [the guide](guide.md) and ![the image](assets/pixel.bin).',
       '',
     ].join('\n'),
-    'skills/review/guide.md': '# Guide\n',
-    'skills/review/assets/pixel.bin': new Uint8Array([0, 255, 17, 9]),
-    'skills/review/assets/probe.html': '<script>window.__skillResourceExecuted = true</script>\n',
+    'src/skills/review/guide.md': '# Guide\n',
+    'src/skills/review/assets/pixel.bin': new Uint8Array([0, 255, 17, 9]),
+    'src/skills/review/assets/probe.html': '<script>window.__skillResourceExecuted = true</script>\n',
   },
   prefix: 'agent-bundle-skill-document-',
 })).root;
@@ -88,7 +88,7 @@ it('serves parsed source documents and exact source resources by a model-owned S
     });
     expect(binary.contentType).toBe('application/octet-stream');
     expect(binary.body).toEqual(new Uint8Array([0, 255, 17, 9]));
-    expect([...await readFile(join(root, 'skills', 'review', 'assets', 'pixel.bin'))]).toEqual([...binary.body]);
+    expect([...await readFile(join(root, 'src', 'skills', 'review', 'assets', 'pixel.bin'))]).toEqual([...binary.body]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -255,7 +255,7 @@ it('rejects traversal and symlink resource mutations after exact model membershi
       projectService: new ProjectService({ root }),
       root,
     });
-    const pixel = join(root, 'skills', 'review', 'assets', 'pixel.bin');
+    const pixel = join(root, 'src', 'skills', 'review', 'assets', 'pixel.bin');
     const outside = join(root, 'outside.bin');
     await writeFile(outside, 'outside');
 

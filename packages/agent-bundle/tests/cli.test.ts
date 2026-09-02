@@ -56,7 +56,7 @@ const createCliProject = async (): Promise<{ readonly output: string; readonly r
   const parent = await mkdtemp(join(tmpdir(), 'agent bundle cli parent-'));
   const root = join(parent, 'project with spaces');
   const output = join(root, 'artifact with spaces');
-  await mkdir(join(root, 'skills', 'review'), { recursive: true });
+  await mkdir(join(root, 'src', 'skills', 'review'), { recursive: true });
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
     writeFile(
@@ -71,7 +71,7 @@ const createCliProject = async (): Promise<{ readonly output: string; readonly r
       ].join('\n'),
     ),
     writeFile(
-      join(root, 'skills', 'review', 'SKILL.md'),
+      join(root, 'src', 'skills', 'review', 'SKILL.md'),
       '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
     ),
   ]);

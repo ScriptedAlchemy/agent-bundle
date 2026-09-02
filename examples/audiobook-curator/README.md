@@ -203,7 +203,7 @@ The completion contract and real-volume checklist are in
 
 This example is the reference consumer of the framework-owned package build:
 one `agent-bundle.config.ts` declares the structure, conventional
-`src/mcp/**`, `src/cli/**`, `src/providers/**`, and `src/state.ts` modules supply
-the application surfaces, and agent-bundle owns the generated package and host
-artifacts. See [`docs/entry-conventions.md`](../../docs/entry-conventions.md)
-for the contract.
+`src/skills/**`, `src/mcp/**`, `src/cli/**`, `src/providers/**`, and
+`src/state.ts` modules supply the application surfaces, and agent-bundle owns
+the generated package and host artifacts. See
+[`docs/entry-conventions.md`](../../docs/entry-conventions.md) for the contract.

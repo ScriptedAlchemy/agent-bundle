@@ -701,7 +701,7 @@ it('requires the same origin and session token before a browser can request a re
     });
 
     const accepted = await fetch(`${server.url}/api/project/rebuild`, {
-      body: '{"paths":["skills/review/SKILL.md"]}',
+      body: '{"paths":["src/skills/review/SKILL.md"]}',
       headers: {
         'content-type': 'application/json',
         origin: server.url,
@@ -711,7 +711,7 @@ it('requires the same origin and session token before a browser can request a re
     });
     expect(accepted.status).toBe(200);
     expect(coordinator.invalidations).toEqual([expect.objectContaining({
-      paths: ['skills/review/SKILL.md'],
+      paths: ['src/skills/review/SKILL.md'],
       reason: 'manual',
     })]);
   } finally {

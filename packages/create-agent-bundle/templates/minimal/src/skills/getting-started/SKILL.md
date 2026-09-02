@@ -17,11 +17,12 @@ agent-bundle project: one config, one Skill, and a delivery gate.
 
 ## How to add a Skill
 
-1. Create `skills/<skill-id>/SKILL.md` with `name` and `description`
+1. Create `src/skills/<skill-id>/SKILL.md` with `name` and `description`
    frontmatter. The `name` must match the directory name.
 2. Add supporting material under `references/` (read-only context) and
    `assets/` (files the agent fills in or copies).
-3. List the new directory in the `skills` array of `agent-bundle.config.ts`.
+3. Leave `agent-bundle.config.ts` unchanged unless overriding the conventional
+   Skill layout.
 4. Run the project's `check` script: it validates the config, builds every
    host artifact, and runs the tests.
 

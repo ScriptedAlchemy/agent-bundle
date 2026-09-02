@@ -26,7 +26,7 @@ it('canonicalizes artifact outputs and project inputs into deeply frozen stable 
       path: '/tmp/agent-bundle.stage/portable/scripts/greeting.mjs',
       sourceInputs: [
         '/work/project/src/greeting.ts',
-        '/work/project/skills/review/../review/scripts/greeting.ts',
+        '/work/project/src/skills/review/../review/scripts/greeting.ts',
         '/work/project/src/greeting.ts',
       ],
     } satisfies ArtifactOutputCandidate],
@@ -35,7 +35,7 @@ it('canonicalizes artifact outputs and project inputs into deeply frozen stable 
   expect(records).toEqual([{
     kind: 'bundle',
     path: 'portable/scripts/greeting.mjs',
-    sourceInputs: ['skills/review/scripts/greeting.ts', 'src/greeting.ts'],
+    sourceInputs: ['src/greeting.ts', 'src/skills/review/scripts/greeting.ts'],
   }]);
   expect(Object.isFrozen(records)).toBe(true);
   expect(Object.isFrozen(records[0]!)).toBe(true);
@@ -47,7 +47,7 @@ it('canonicalizes artifact outputs and project inputs into deeply frozen stable 
       kind: 'bundle',
       path: '/tmp/another-agent-bundle.stage/portable/scripts/greeting.mjs',
       sourceInputs: [
-        '/another/project/skills/review/scripts/greeting.ts',
+        '/another/project/src/skills/review/scripts/greeting.ts',
         '/another/project/src/greeting.ts',
       ],
     }],
@@ -81,7 +81,7 @@ it('collects nested authored module inputs from public stats without using ident
   const evidence = collectBundledOutputEvidence({
     expectedAssets: [{
       path: 'portable/scripts/greeting.mjs',
-      sourceInputs: ['/work/project/skills/review/scripts/greeting script.ts'],
+      sourceInputs: ['/work/project/src/skills/review/scripts/greeting script.ts'],
     }],
     projectRoot,
     stats: {
@@ -91,9 +91,9 @@ it('collects nested authored module inputs from public stats without using ident
           identifier: '/outside/must-not-be-read.ts',
           modules: [{
             identifier: '/outside/also-not-read.ts',
-            nameForCondition: '/work/project/skills/review/scripts/local greeting module.ts',
+            nameForCondition: '/work/project/src/skills/review/scripts/local greeting module.ts',
           }],
-          nameForCondition: '/work/project/skills/review/scripts/greeting script.ts',
+          nameForCondition: '/work/project/src/skills/review/scripts/greeting script.ts',
         }],
       }),
     },
@@ -102,8 +102,8 @@ it('collects nested authored module inputs from public stats without using ident
   expect(evidence).toEqual([{
     path: 'portable/scripts/greeting.mjs',
     sourceInputs: [
-      '/work/project/skills/review/scripts/greeting script.ts',
-      '/work/project/skills/review/scripts/local greeting module.ts',
+      '/work/project/src/skills/review/scripts/greeting script.ts',
+      '/work/project/src/skills/review/scripts/local greeting module.ts',
     ],
   }]);
   expect(Object.isFrozen(evidence)).toBe(true);

@@ -5,6 +5,6 @@ export default {
     name: 'packed-native-smoke',
     version: '1.0.0',
   },
-  skills: ['skills/review'],
+  skills: ['src/skills/review'],
   targets: ['claude', 'codex'],
 };

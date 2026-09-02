@@ -2,10 +2,12 @@
 
 Agent Bundle has one newcomer model:
 
-1. **Files under conventional `src/` roots are the app.** For MCP, put one
+1. **Authored source lives under `src/`.** For MCP, put one
    module at `src/mcp/<server>/{tools,resources,prompts}/<name>.tsx`; its path
-   is its identity. `skills/<name>/SKILL.md`, `src/scripts/<name>.ts`,
-   `src/cli.ts`, and `src/index.ts` keep their existing conventions.
+   is its identity. Skills, commands, rules, scripts, routes, and state use
+   their conventional `src/` roots, including `src/skills/<name>/SKILL.md`,
+   `src/commands/*.md`, and `src/rules/*.mdc`. Top-level `assets/` holds
+   static resources, and `agent-bundle.config.ts` stays at the project root.
 2. **One small flat config.** `agent-bundle.config.ts` holds project identity,
    targets, and policy that no route file can own.
 3. **JSX = rendering.** An executable route is one async default Server
