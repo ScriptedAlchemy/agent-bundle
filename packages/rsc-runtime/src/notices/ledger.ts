@@ -248,6 +248,49 @@ const deliveryFor = (
   return receipt === undefined ? undefined : Object.freeze({ notice, receipt });
 };
 
+const inboxProgram = (
+  store: NoticeStore,
+  authorize: AgentNoticeAuthorizer,
+  request: AgentNoticeRequest,
+): Effect.Effect<readonly AgentNotice[], Error> => Effect.gen(function*() {
+  const before = yield* storeEffect(() => store.read({ signal: request.signal }));
+  const readTime = Date.parse(request.invocation.startedAt);
+  const candidates = before.state.notices.filter((notice) =>
+    notice.state === 'pending'
+    && Date.parse(notice.createdAt) <= readTime
+    // Inbox reads do not own durable expiry; event admission remains the expiry boundary.
+    && (notice.expiresAt === undefined || Date.parse(notice.expiresAt) > readTime)
+    && recipientMatchesPrincipal(notice.recipient, request.principal));
+  const decisions = yield* Effect.forEach(candidates, (notice) =>
+    authorizeEffect(authorize, {
+      noticeId: notice.id,
+      phase: 'read',
+      principal: request.principal,
+      recipient: notice.recipient,
+    }).pipe(Effect.map((decision) => ({ decision, id: notice.id }))));
+  const noticeIds = decisions
+    .filter(({ decision }) => decision.state === 'authorized')
+    .map(({ id }) => id);
+  if (noticeIds.length === 0) return Object.freeze([]);
+  const committed = yield* storeEffect(() => store.dispatch(
+    'exposed',
+    {
+      at: request.invocation.startedAt,
+      channel: 'mcp-inbox',
+      invocationId: request.invocation.id,
+      noticeIds,
+    },
+    {
+      idempotencyKey: `agent-notices:expose:${request.invocation.id}`,
+      signal: request.signal,
+    },
+  ));
+  const returnedIds = new Set(noticeIds);
+  return Object.freeze(committed.state.notices
+    .filter((notice) => notice.state === 'pending' && returnedIds.has(notice.id))
+    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)));
+});
+
 export const createAgentNoticeLedger = (
   store: NoticeStore,
   options: CreateAgentNoticeLedgerOptions,
@@ -319,6 +362,12 @@ export const createAgentNoticeLedger = (
 
       let closed = false;
       const handle: AgentNoticesHandle = Object.freeze({
+        inbox() {
+          return runPromise(Effect.gen(function*() {
+            yield* noticeEffect(() => assertOpen(closed, request.signal));
+            return yield* inboxProgram(store, options.authorize, request);
+          }));
+        },
         publish(input: AgentNoticePublishInput, publishOptions: AgentNoticePublishOptions) {
           return runPromise(Effect.gen(function*() {
             yield* noticeEffect(() => assertOpen(closed, request.signal));

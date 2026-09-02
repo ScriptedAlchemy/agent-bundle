@@ -151,6 +151,7 @@ interface Renderer {
   readonly createElement: typeof import('react').createElement;
   readonly createGeneratedRuntimeState: typeof createGeneratedRuntimeState;
   readonly createWarmFlightHost: typeof import('@agent-bundle/runtime').createWarmFlightHost;
+  readonly noticeInboxRoute: typeof import('@agent-bundle/runtime/notices/inbox-route');
   readonly renderAgentFlight: typeof import('@agent-bundle/runtime/flight/server').renderAgentFlight;
   readonly runAgentRequest: typeof import('@agent-bundle/runtime').runAgentRequest;
 }
@@ -172,10 +173,11 @@ let dependenciesPromise: Promise<ServerRuntime & Renderer & Sdk> | undefined;
  */
 const loadDependencies = async (): Promise<ServerRuntime & Renderer & Sdk> => {
   dependenciesPromise ??= (async () => {
-    const [serverRuntime, runtime, mount, flight, react, client] = await Promise.all([
+    const [serverRuntime, runtime, mount, noticeInboxRoute, flight, react, client] = await Promise.all([
       import('../mcp-server-runtime.ts'),
       import('@agent-bundle/runtime'),
       import('@agent-bundle/runtime/mount'),
+      import('@agent-bundle/runtime/notices/inbox-route'),
       import('@agent-bundle/runtime/flight/server'),
       import('react'),
       import('@modelcontextprotocol/client'),
@@ -187,6 +189,7 @@ const loadDependencies = async (): Promise<ServerRuntime & Renderer & Sdk> => {
       createGeneratedRuntimeState: mount.createGeneratedRuntimeState,
       createGeneratedRouteMcpServer: serverRuntime.createGeneratedRouteMcpServer,
       createWarmFlightHost: runtime.createWarmFlightHost,
+      noticeInboxRoute,
       renderAgentFlight: flight.renderAgentFlight,
       runAgentRequest: runtime.runAgentRequest,
     };
@@ -285,6 +288,10 @@ export const openInMemoryMcpServer = async <
       module: { ...module, resultSchema: module.resultSchema },
       name: descriptor.id.slice(descriptor.id.lastIndexOf('/') + 1),
     };
+  }
+  if (options.state !== undefined) {
+    const record = dependencies.noticeInboxRoute.noticeInboxRouteRecord(dependencies.noticeInboxRoute);
+    routes[record.id] = record as never;
   }
 
   // The in-process stand-in for the artifact's Flight worker: same request

@@ -143,6 +143,8 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
       'node:sqlite',
       'createSqliteStateDriver',
       'noticeLedger: bindings.noticeLedger',
+      '@agent-bundle/runtime/notices/inbox-route',
+      'agent-bundle:notice-inbox',
     ]) {
       expect(source).not.toContain(forbidden);
     }
@@ -164,10 +166,12 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
       content: [{ text: 'Inspected **library**.', type: 'text' }],
       structuredContent: { invocationKind: 'tool', source: 'library' },
     });
-    await expect(client.listResources()).resolves.toMatchObject({ resources: [
+    const resources = await client.listResources();
+    expect(resources).toMatchObject({ resources: [
       expect.objectContaining({ uri: 'catalog://books' }),
       expect.objectContaining({ uri: 'ui://curator/dashboard.html' }),
     ] });
+    expect(resources.resources.map((resource) => resource.uri)).not.toContain('agent-bundle://notices/inbox');
     await expect(client.readResource({ uri: 'catalog://books' })).resolves.toEqual({
       contents: [{ mimeType: 'application/json', text: '{"books":1}', uri: 'catalog://books' }],
     });
@@ -258,6 +262,19 @@ it('observes one process-lifetime provider across consecutive generated tool cal
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-warm-'));
   roots.push(root);
   await writeGeneratedProject(root, {
+    'src/state.ts': [
+      "import { defineState } from '@agent-bundle/runtime/state';",
+      "import { z } from 'zod';",
+      "export default defineState({",
+      "  events: { changed: z.object({ value: z.string() }).strict() },",
+      "  id: 'generated-routes/process-state',",
+      '  initial: { value: "" },',
+      "  lifetime: 'process',",
+      '  reduce: (_state, event) => ({ value: event.payload.value }),',
+      '  schema: z.object({ value: z.string() }).strict(),',
+      '});',
+      '',
+    ].join('\n'),
     'src/mcp/curator/tools/warmth.tsx': [
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
@@ -293,6 +310,16 @@ it('observes one process-lifetime provider across consecutive generated tool cal
     const secondContent = second.structuredContent as { instanceId: string; pid: number };
     expect(secondContent.instanceId).toBe(firstId);
     expect(secondContent.pid).toBe((first.structuredContent as { pid: number }).pid);
+    await expect(session.client.listResources()).resolves.toMatchObject({
+      resources: [expect.objectContaining({ uri: 'agent-bundle://notices/inbox' })],
+    });
+    await expect(session.client.readResource({ uri: 'agent-bundle://notices/inbox' })).resolves.toEqual({
+      contents: [{
+        mimeType: 'application/json',
+        text: '{"notices":[]}',
+        uri: 'agent-bundle://notices/inbox',
+      }],
+    });
   } finally {
     await session.close();
   }

@@ -19,6 +19,7 @@ export type {
   AgentNoticeAuthorizer,
   AgentNoticeDelivery,
   AgentNoticeErrorCode,
+  AgentNoticeExposure,
   AgentNoticeExpiryOptions,
   AgentNoticeLedger,
   AgentNoticeLedgerSnapshot,

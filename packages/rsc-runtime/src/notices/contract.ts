@@ -42,6 +42,14 @@ export interface AgentNoticeAttemptReceipt {
   readonly invocationId: string;
 }
 
+export interface AgentNoticeExposure {
+  readonly channel: 'mcp-inbox';
+  readonly count: number;
+  readonly firstAt: string;
+  readonly lastAt: string;
+  readonly lastInvocationId: string;
+}
+
 export type AgentNoticeUnavailableReason = 'delivery-authorization-unavailable';
 
 export interface AgentNotice {
@@ -51,6 +59,7 @@ export interface AgentNotice {
   readonly dedupeKey?: string;
   readonly expiredAt?: string;
   readonly expiresAt?: string;
+  readonly exposure?: AgentNoticeExposure;
   readonly id: string;
   readonly priority: AgentNoticePriority;
   readonly recipient: AgentRecipient;
@@ -100,7 +109,7 @@ export type AgentNoticeAuthorizationDecision =
 
 export interface AgentNoticeAuthorizationRequest {
   readonly noticeId?: string;
-  readonly phase: 'deliver' | 'publish';
+  readonly phase: 'deliver' | 'publish' | 'read';
   readonly principal: AgentNoticePrincipal;
   readonly recipient: AgentRecipient;
 }
@@ -115,6 +124,7 @@ export interface AgentNoticeDelivery {
 }
 
 export interface AgentNoticesHandle {
+  inbox(): Promise<readonly AgentNotice[]>;
   publish(input: AgentNoticePublishInput, options: AgentNoticePublishOptions): Promise<AgentNoticePublishResult>;
   read(): Promise<readonly AgentNoticeDelivery[]>;
 }

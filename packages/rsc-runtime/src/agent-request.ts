@@ -142,8 +142,9 @@ export interface AgentRequestContext {
    */
   readonly state: AgentStateHandle | undefined;
   /**
-   * Request-bound recipient notice handle (#99 narrow core). `read()` exposes
-   * notices attempted on this admitted event; `publish()` persists a detached
+   * Request-bound recipient notice handle (#99). `inbox()` exposes authorized
+   * pending notices without acknowledging them, `read()` exposes notices
+   * attempted on this admitted event, and `publish()` persists a detached
    * Agent Document snapshot after publish-time authorization.
    */
   readonly notices: AgentNoticesHandle | undefined;

@@ -54,6 +54,10 @@
       "types": "./dist/notices/index.d.ts",
       "import": "./dist/notices.js"
     },
+    "./notices/inbox-route": {
+      "types": "./dist/notices/inbox-route.d.ts",
+      "import": "./dist/notices/inbox-route.js"
+    },
     "./mount": {
       "types": "./dist/mount/index.d.ts",
       "import": "./dist/mount.js"
