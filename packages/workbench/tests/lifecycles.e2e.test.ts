@@ -80,6 +80,13 @@ e2e(
       await run.click();
       await expect(provenance).toContainText('Observed', { timeout: browserTimeout });
       await expect(stage).toContainText('Recorded observed-lifecycle.txt from claude', { timeout: browserTimeout });
+      const requestContext = page.locator('.lifecycle-detail').filter({
+        has: page.getByRole('heading', { name: 'Request context' }),
+      });
+      await expect(requestContext).toContainText('claude · receipt');
+      await expect(requestContext).toContainText('lifecycle-observed · receipt');
+      await expect(requestContext).toContainText('/tmp · receipt');
+      await expect(requestContext).toContainText('Unavailable · not-provided');
 
       const sessionToken = await page.evaluate(async () => {
         const response = await fetch('/api/project/session', { credentials: 'same-origin' });
@@ -115,6 +122,8 @@ e2e(
       await run.click();
       await expect(provenance).toContainText('Observed', { timeout: browserTimeout });
       await expect(stage).toContainText('Recorded observed-lifecycle.txt from claude', { timeout: browserTimeout });
+      await expect(requestContext).toContainText('lifecycle-observed · receipt');
+      await expect(requestContext).toContainText('Unavailable · not-provided');
       expect(pageErrors).toEqual([]);
     } finally {
       await fixture.close();

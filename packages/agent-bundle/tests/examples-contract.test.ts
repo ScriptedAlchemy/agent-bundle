@@ -175,8 +175,12 @@ it('publishes the MCP App example service readiness across targets and returns d
     } finally {
       await writeFile(fixturePath, healthyFixture);
     }
-    await expect(readFile(join(output, 'portable', 'mcp-apps', 'status.html'), 'utf8'))
-      .resolves.toContain('aria-label="Service checks"');
+    const appHtml = await readFile(join(output, 'portable', 'mcp-apps', 'status.html'), 'utf8');
+    expect(appHtml).toContain('aria-label="Service checks"');
+    expect(appHtml).toContain('mcp-app-example');
+    expect(appHtml).toContain('1.0.0');
+    expect(appHtml).not.toContain('mcp-app-status-panel');
+    expect(appHtml).not.toContain('agent-bundle/meta');
     expect(built.build.compiledMcpApps).toMatchObject([{ name: 'status', target: 'portable' }]);
     expect(built.build.compiledMcpEntries.map(({ target }) => target).sort()).toEqual(['claude', 'codex', 'portable']);
     await Promise.all(built.build.compiledMcpEntries.map(({ output: mcpOutput }) =>

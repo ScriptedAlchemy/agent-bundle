@@ -18,6 +18,7 @@ import type {
   LifecycleReplayRequest,
   LifecycleTarget,
 } from '../../contracts/lifecycles.ts';
+import type { RequestContextProvenance } from '../../contracts/request-provenance.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 import { isJsonRecord, isRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';
 import {
@@ -30,7 +31,7 @@ import {
   type CanonicalAgentEvent,
 } from '../../routes/public.ts';
 import type { CompiledAgentRoute, CompiledRouteGraph } from '../../routes/types.ts';
-import type { renderRouteEvents } from '../../test/render.ts';
+import type { RenderRouteContext, renderRouteEvents } from '../../test/render.ts';
 import type { AgentRouteModule } from '../../test/types.ts';
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
 import type {
@@ -41,6 +42,50 @@ import type {
 
 const concreteHosts = new Set(['claude', 'codex', 'cursor']);
 const projectionDiagnosticCode = 'lifecycle.projection.unsupported';
+
+const nativeText = (native: Readonly<Record<string, unknown>>, key: string): string | undefined => {
+  const value = native[key];
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+};
+
+const replayRequestContext = (
+  event: CanonicalAgentEvent,
+  native: Readonly<Record<string, unknown>>,
+  routeId: string,
+  target: string,
+  hostContractRevision: string,
+): RequestContextProvenance => {
+  const sessionId = nativeText(native, 'session_id') ?? nativeText(native, 'conversation_id');
+  const workspaceRoot = nativeText(native, 'cwd');
+  return deepFreeze({
+    actor: { reason: 'not-provided', state: 'unavailable' },
+    host: { source: 'receipt', state: 'available', value: { name: target } },
+    invocation: {
+      hostContractRevision,
+      kind: 'event',
+      operationId: routeId,
+      surface: event,
+    },
+    session: sessionId === undefined
+      ? { reason: 'not-provided', state: 'unavailable' }
+      : { source: 'receipt', state: 'available', value: { sessionId } },
+    workspace: workspaceRoot === undefined
+      ? { reason: 'not-provided', state: 'unavailable' }
+      : { source: 'receipt', state: 'available', value: { root: workspaceRoot } },
+  });
+};
+
+const renderContext = (requestContext: RequestContextProvenance): RenderRouteContext => deepFreeze({
+  actor: requestContext.actor,
+  host: requestContext.host,
+  invocation: {
+    ...(requestContext.invocation.hostContractRevision === undefined
+      ? {}
+      : { hostContractRevision: requestContext.invocation.hostContractRevision }),
+  },
+  session: requestContext.session,
+  workspace: requestContext.workspace,
+});
 
 export interface LifecyclePreparedProject {
   readonly graph: CompiledRouteGraph;
@@ -378,6 +423,13 @@ export class LifecycleReplayService {
       const message = error instanceof Error ? error.message : String(error);
       throw new LifecycleReplayRequestError('AB8211', message, 400);
     }
+    const requestContext = replayRequestContext(
+      event,
+      nativeInput,
+      route.id,
+      target.target,
+      target.hostContractRevision,
+    );
     let rendered: LifecycleRenderChildResult;
     if (this.#renderInProcess) {
       const props = createCanonicalEventProps(
@@ -390,6 +442,7 @@ export class LifecycleReplayService {
       );
       const module = await this.#loadRouteModule(route.source);
       const result = await this.#render(module, {
+        context: renderContext(requestContext),
         input: props,
         kind: 'event-route',
         routeId: route.id,
@@ -406,6 +459,7 @@ export class LifecycleReplayService {
         hostContractRevision: target.hostContractRevision,
         nativeEvent: target.nativeEvent,
         nativeInput,
+        requestContext,
         routeId: route.id,
         routeSource: route.source,
         target: target.target,
@@ -430,13 +484,7 @@ export class LifecycleReplayService {
       nativeInput,
       ...(nativeResponse === undefined ? {} : { nativeResponse }),
       ...(projectionDiagnostic === undefined ? {} : { projectionDiagnostic }),
-      requestContext: {
-        hostContractRevision: target.hostContractRevision,
-        invocationKind: 'event',
-        nativeEvent: target.nativeEvent,
-        routeId: route.id,
-        target: target.target,
-      },
+      requestContext,
       source: request.source,
     });
   }

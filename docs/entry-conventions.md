@@ -375,6 +375,21 @@ Export detection is a static scan of the entry source (comment-, string-, and
 template-safe). The generated shells re-verify the export shape at runtime
 with a clear error.
 
+### Workbench lifecycle replay provenance
+
+The Workbench Lifecycles view exposes the request context used for each
+deterministic replay. Host, session, actor, and workspace are separate
+observed axes beside invocation kind, operation, surface, and host-contract
+revision. Values parsed from the checked-in or pasted native receipt use the
+`receipt` source — never `native`, because a Workbench replay is not evidence
+that the named host dispatched the event. A missing session, actor, or
+workspace remains visibly `unavailable` with its typed reason.
+
+The same projected axes are mounted into the route request scope before
+rendering, so `await agent()` and the Workbench evidence panel describe one
+context rather than parallel snapshots. User-edited business input cannot
+replace these axes.
+
 ## `agent-bundle/meta` — build-time release identity
 
 Plugin code reads its own identity from the framework instead of maintaining

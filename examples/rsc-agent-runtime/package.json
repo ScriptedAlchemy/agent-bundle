@@ -1,6 +1,7 @@
 {
   "name": "@agent-bundle/rsc-agent-runtime-demo",
   "private": true,
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "build": "rsbuild build --mode production && agent-bundle build --json --output dist/plugins",

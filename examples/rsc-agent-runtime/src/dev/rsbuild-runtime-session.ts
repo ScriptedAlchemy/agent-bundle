@@ -12,6 +12,7 @@ import {
   type RscRuntimeCompileFailureKind,
   type RscRuntimeCompileSnapshot,
 } from '../../rsbuild.config.js';
+import { projectName, projectVersion } from '../project-identity.js';
 import {
   createRscEnvironmentCheckpointStore,
   type RscEnvironmentCheckpointStore,
@@ -809,7 +810,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         }),
         protocolEra: 'modern',
         protocolVersion: '2025-06-18',
-        server: Object.freeze({ name: 'rsc-agent-runtime-demo', version: '1.0.0' }),
+        server: Object.freeze({ name: projectName, version: projectVersion }),
       });
       const sessionReference: { current: RsbuildRuntimeSession | undefined } = { current: undefined };
       const connector: RuntimeMcpConnector = Object.freeze({

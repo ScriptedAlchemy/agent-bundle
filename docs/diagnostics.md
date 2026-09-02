@@ -82,13 +82,15 @@ the project context, artifact manifests, `inspect` output, and dev status.
 `plugin.name` stays the host-native slug and is never derived from the npm
 package name.
 
-`plugin.version` is **optional**. When it is omitted, the version every
-surface reports — manifests, host projections, dev status, and the
-`agent-bundle/meta` constant compiled into plugin code — is the `package.json`
-version. When it is declared, the declared value still wins so a legacy
-config never changes meaning mid-migration, and a disagreement reports the
-`AB4008` **warning**. Declaring it as anything but a nonempty string is an
-`AB4001` error.
+`plugin.version` is **deprecated and optional**. New projects declare the
+release version only in `package.json`; removal of the compatibility field
+follows the normal breaking-change policy rather than a fixed window. When it
+is omitted, the version every surface reports — manifests, host projections,
+dev status, and the `agent-bundle/meta` constant compiled into plugin code —
+is the `package.json` version. When it is declared, the declared value still
+wins so a legacy config never changes meaning mid-migration, and a
+disagreement reports the `AB4008` **warning**. Declaring it as anything but a
+nonempty string is an `AB4001` error.
 
 A project with neither an authored `plugin.version` nor a valid `package.json`
 version has no release identity. Development commands (`dev`, `inspect`,

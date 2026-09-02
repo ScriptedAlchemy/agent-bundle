@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp, useHostStyles } from '@modelcontextprotocol/ext-apps/react';
 
+import { projectName, projectVersion } from '../project-identity.js';
 import type { EditEvent } from '../runtime/contracts.js';
 import { createWidgetStateAdapter, safeAreaCustomProperties, type HostContext } from './host-adapters.js';
 
@@ -89,7 +90,7 @@ export const App = () => {
   const [selectedEventId, setSelectedEventId] = useState<string>();
   const widgetState = useMemo(() => createWidgetStateAdapter(window as Window & { openai?: unknown }), []);
   const { app } = useApp({
-    appInfo: { name: 'rsc-agent-runtime-timeline', version: '1.0.0' },
+    appInfo: { name: `${projectName}-timeline`, version: projectVersion },
     capabilities: {},
     onAppCreated: (createdApp) => {
       createdApp.onteardown = () => ({});

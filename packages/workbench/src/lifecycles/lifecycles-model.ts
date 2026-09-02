@@ -1,4 +1,5 @@
 import { deeplyFrozenHookValue } from '../hooks/hook-client.ts';
+import type { RequestProvenanceAxis } from '../../../agent-bundle/src/contracts/request-provenance.ts';
 import type {
   LifecycleDiagnostic,
   LifecycleListResponse,
@@ -66,6 +67,20 @@ const noResultDiagnostics: readonly LifecycleResultDiagnostic[] = Object.freeze(
 
 const row = (label: string, value: string): LifecycleDetailRow => Object.freeze({ label, value });
 
+const observedRow = <Value>(
+  label: string,
+  axis: RequestProvenanceAxis<Value>,
+  display: (value: Value) => string,
+): LifecycleDetailRow => row(
+  label,
+  axis.state === 'available'
+    ? `${display(axis.value)} · ${axis.source}`
+    : `Unavailable · ${axis.reason}`,
+);
+
+const optionalRow = (label: string, value: string | undefined): LifecycleDetailRow =>
+  row(label, value ?? 'Unavailable · not-provided');
+
 export const lifecycleOptionKeyFor = (routeId: string, target: string): string => `${target}/${routeId}`;
 
 export const lifecycleOptionsFor = (list: LifecycleListResponse): readonly LifecycleOption[] => Object.freeze(
@@ -108,11 +123,14 @@ export const canonicalRowsFor = (replay: LifecycleReplay): readonly LifecycleDet
 ]);
 
 export const requestRowsFor = (replay: LifecycleReplay): readonly LifecycleDetailRow[] => Object.freeze([
-  row('Invocation kind', replay.requestContext.invocationKind),
-  row('Route ID', replay.requestContext.routeId),
-  row('Target', replay.requestContext.target),
-  row('Native event', replay.requestContext.nativeEvent),
-  row('Host contract revision', replay.requestContext.hostContractRevision),
+  row('Invocation kind', replay.requestContext.invocation.kind),
+  optionalRow('Operation ID', replay.requestContext.invocation.operationId),
+  optionalRow('Surface', replay.requestContext.invocation.surface),
+  optionalRow('Host contract revision', replay.requestContext.invocation.hostContractRevision),
+  observedRow('Host', replay.requestContext.host, ({ name }) => name),
+  observedRow('Session', replay.requestContext.session, ({ sessionId }) => sessionId),
+  observedRow('Actor', replay.requestContext.actor, ({ id }) => id),
+  observedRow('Workspace', replay.requestContext.workspace, ({ root }) => root),
 ]);
 
 export const resultDiagnosticsFor = (replay: LifecycleReplay): readonly LifecycleResultDiagnostic[] => Object.freeze([
@@ -143,7 +161,7 @@ const summaryFor = (state: LifecyclesViewState, replay: LifecycleReplay | undefi
     case 'replayed':
       return replay === undefined
         ? 'The deterministic lifecycle replay completed.'
-        : `Replayed ${replay.canonical.event} for ${replay.requestContext.target} from ${replay.source} input.`;
+        : `Replayed ${replay.canonical.event} for ${replay.binding.target} from ${replay.source} input.`;
     case 'ready':
       return 'Choose a compiled event route and host target, then run a deterministic replay.';
     default: {

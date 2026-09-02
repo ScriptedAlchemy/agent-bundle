@@ -3,6 +3,7 @@ import { expect, it } from '@rstest/core';
 import type { AgentRouteModule } from '../src/test/types.ts';
 import { LifecycleReplayService } from '../src/dev/playground/lifecycle-replay-service.ts';
 import type { CompiledRouteGraph } from '../src/routes/types.ts';
+import type { RenderRouteContext } from '../src/test/render.ts';
 
 const graph = Object.freeze({
   diagnostics: Object.freeze([]),
@@ -85,5 +86,64 @@ it('surfaces the real native envelope validator message as a malformed request',
     code: 'AB8211',
     message: 'Agent Bundle event route error: native tool_response must be an object',
     status: 400,
+  });
+});
+
+it('mounts and reports honest receipt provenance for a Workbench replay', async () => {
+  let renderedContext: RenderRouteContext | undefined;
+  const replayService = new LifecycleReplayService({
+    prepared: () => ({
+      graph,
+      targets: ['claude'],
+    }),
+    loadRouteModule: async () => ({ default: async () => undefined }) as AgentRouteModule,
+    render: async (_target, options = {}) => {
+      renderedContext = options.context;
+      return {
+        document: {
+          root: { children: [], kind: 'result' },
+          status: 'success',
+          version: 1,
+        },
+        events: [],
+      } as never;
+    },
+  });
+
+  const result = await replayService.replay({
+    binding: { manifestDigest: 'manifest-a', routeId: 'event:tool/after', target: 'claude' },
+    native: {
+      cwd: '/tmp/lifecycle-replay',
+      hook_event_name: 'PostToolUse',
+      session_id: 'session-1',
+      tool_input: { file_path: 'README.md' },
+      tool_name: 'Write',
+      tool_response: { success: true },
+      tool_use_id: 'tool-1',
+      transcript_path: '/tmp/lifecycle-replay/transcript.jsonl',
+    },
+    source: 'observed',
+  });
+  if ('diagnostics' in result) throw new Error('Expected a lifecycle replay.');
+
+  const requestContext = {
+    actor: { reason: 'not-provided', state: 'unavailable' },
+    host: { source: 'receipt', state: 'available', value: { name: 'claude' } },
+    invocation: {
+      hostContractRevision: '2.1.250',
+      kind: 'event',
+      operationId: 'event:tool/after',
+      surface: 'tool/after',
+    },
+    session: { source: 'receipt', state: 'available', value: { sessionId: 'session-1' } },
+    workspace: { source: 'receipt', state: 'available', value: { root: '/tmp/lifecycle-replay' } },
+  };
+  expect(result.requestContext).toEqual(requestContext);
+  expect(renderedContext).toEqual({
+    actor: requestContext.actor,
+    host: requestContext.host,
+    invocation: { hostContractRevision: '2.1.250' },
+    session: requestContext.session,
+    workspace: requestContext.workspace,
   });
 });
