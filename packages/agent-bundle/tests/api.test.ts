@@ -312,6 +312,45 @@ it('reports one modern-MCP source diagnostic for a legacy SSE declaration', asyn
   }
 });
 
+it('resolves artifact output with CLI, config, and default precedence', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  output: { distPath: 'artifact-out' },",
+      "  plugin: { name: 'output-path-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const inspection = await readyInspection({ root });
+    const configured = await build({ root });
+    const overridden = await build({ output: 'cli-artifact', root });
+
+    expect(inspection.output).toEqual({ distPath: 'artifact-out' });
+    expect(Object.isFrozen(inspection.output)).toBe(true);
+    expect(configured.build.outputRoot).toBe(join(root, 'artifact-out'));
+    expect((await stat(join(root, 'artifact-out'))).isDirectory()).toBe(true);
+    await expect(validate({ artifact: join(root, 'artifact-out'), root })).resolves.toEqual({ diagnostics: [] });
+    expect(overridden.build.outputRoot).toBe(join(root, 'cli-artifact'));
+
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'output-path-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    const defaults = await build({ root });
+
+    expect(defaults.build.outputRoot).toBe(join(root, 'dist'));
+    expect((await stat(join(root, 'dist'))).isDirectory()).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('deduplicates identical adapter diagnostics without collapsing distinct stable identities', async () => {
   const root = await createProject();
   const diagnostic = (code: string, overrides: Partial<Diagnostic> = {}): Diagnostic => ({

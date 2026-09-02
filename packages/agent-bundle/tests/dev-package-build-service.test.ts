@@ -33,6 +33,7 @@ const prepared = (options: {
   readonly root?: string;
   readonly tools?: PreparedProject['tools'];
 } = {}): PreparedProject => ({
+  artifactDistPath: 'dist',
   configPath: `${options.root ?? '/project'}/agent-bundle.config.ts`,
   diagnostics: [],
   model: {

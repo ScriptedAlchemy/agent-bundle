@@ -115,6 +115,17 @@ export interface AgentBundleMcpConfig {
   servers: Readonly<Record<string, AgentBundleMcpServer>>;
 }
 
+/** Optional artifact output location config, inspired by Rsbuild's `output.distPath`. */
+export interface AgentBundleOutputConfig {
+  /**
+   * The artifact output directory of `agent-bundle build`, relative to the
+   * project root. Defaults to `dist`. The per-invocation CLI `--output` flag
+   * still wins, and remains the only way to target an absolute path outside
+   * the project.
+   */
+  distPath?: string;
+}
+
 export interface AgentBundleHostConfig {
   nativeHooks?: string;
 }
@@ -252,6 +263,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   lib?: AgentBundleLibConfig;
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
+  output?: AgentBundleOutputConfig;
   payload?: AgentBundlePayloadConfig;
   plugin: AgentBundlePluginConfig;
   runtime?: AgentBundleRuntimeConfig;

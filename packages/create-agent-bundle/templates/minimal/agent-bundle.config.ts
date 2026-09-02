@@ -8,5 +8,8 @@ export default defineConfig({
     name: 'my-agent-plugin',
     version: '0.1.0',
   },
+  // Optional: move the build artifact root (default `dist`); the CLI
+  // `--output` flag still wins.
+  // output: { distPath: 'artifact' },
   targets: ['portable', 'codex', 'claude'],
 });

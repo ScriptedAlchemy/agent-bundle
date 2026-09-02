@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { basename, dirname, extname, posix, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, posix, relative, resolve, sep, win32 } from 'node:path';
 
 import { digest } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -176,6 +176,51 @@ const safePackageOutputName = (name: string): boolean =>
  * outputs never enter project source snapshots or skill/asset discovery.
  */
 export const packageBuildOutputDir = 'dist';
+
+/** The default artifact output directory of `agent-bundle build`, relative to the project root. */
+export const defaultArtifactDistPath = 'dist';
+
+export type ArtifactDistPathIssue = 'path' | 'reserved' | 'shape';
+
+const reservedArtifactDistPathSegments = new Set([
+  '.agent-bundle',
+  '.git',
+  'node_modules',
+  'src',
+]);
+
+export const isArtifactOutputConfig = (
+  value: unknown,
+): value is Readonly<Record<string, unknown>> => {
+  if (!isRecord(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === null || prototype === Object.prototype;
+};
+
+/** Classifies one configured artifact output path without consulting the filesystem. */
+export const artifactDistPathIssue = (value: unknown): ArtifactDistPathIssue | undefined => {
+  if (typeof value !== 'string' || value.length === 0) return 'shape';
+  if (posix.isAbsolute(value) || win32.isAbsolute(value) || value.includes('\\')) return 'path';
+  const segments = value.split('/');
+  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+    return 'path';
+  }
+  return reservedArtifactDistPathSegments.has(segments[0]!) ? 'reserved' : undefined;
+};
+
+/** Returns the validated config path, falling back so downstream path resolution cannot throw on malformed input. */
+export const configuredArtifactDistPath = (config: AgentBundleConfig): string => {
+  try {
+    const output = config.output as unknown;
+    if (!isArtifactOutputConfig(output)) return defaultArtifactDistPath;
+    const distPath = output.distPath;
+    return artifactDistPathIssue(distPath) === undefined
+      ? distPath as string
+      : defaultArtifactDistPath;
+  } catch {
+    return defaultArtifactDistPath;
+  }
+};
 
 /**
  * The framework-generated routed-CLI bin (#102 stage 2): a generated-mode

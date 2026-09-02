@@ -26,10 +26,21 @@ const unavailableCommand = (executable: string): NodeJS.ErrnoException => {
   return error;
 };
 
-it('serves authenticated host discovery from the real dev server', { timeout: 30_000 }, async () => {
+it.each([
+  { artifactDistPath: 'dist', configOutput: '', label: 'default output' },
+  {
+    artifactDistPath: 'artifact-out',
+    configOutput: "  output: { distPath: 'artifact-out' },\n",
+    label: 'configured output',
+  },
+])('serves authenticated host discovery from the real dev server with $label', { timeout: 30_000 }, async ({
+  artifactDistPath,
+  configOutput,
+}) => {
   const project = await createProjectFixture({
     config: [
       'export default {',
+      configOutput.trimEnd(),
       "  plugin: { name: 'host-discovery-dev-server', version: '1.0.0' },",
       "  targets: ['claude'],",
       '};',
@@ -103,7 +114,7 @@ it('serves authenticated host discovery from the real dev server', { timeout: 30
     const report = await response.json() as HostDiscoveryReport;
 
     expect(report).toEqual({
-      bundleSource: expect.stringMatching(/\/dist$/u),
+      bundleSource: join(project.root, artifactDistPath),
       diagnostics: expect.any(Array),
       endpoints: {
         diagnostics: [],
@@ -121,7 +132,7 @@ it('serves authenticated host discovery from the real dev server', { timeout: 30
         warnings: expect.any(Number),
       },
     });
-    expect(report.bundleSource).toBe(join(project.root, 'dist'));
+    expect(report.bundleSource).toBe(join(project.root, artifactDistPath));
     expect(report.manifestDigest).not.toBe('');
     expect(report.hosts).toHaveLength(3);
     for (const host of report.hosts) {

@@ -476,7 +476,7 @@ export const runCli = async (
 
   const buildCommand = configureSourceOptions(
     program.command('build').description('Build a validated Agent Bundle artifact'),
-  ).option('--output <path>', 'Artifact output path relative to --root');
+  ).option('--output <path>', 'Artifact output path relative to --root (overrides config output.distPath; default dist)');
   buildCommand.action(async (options: BuildCommandOptions) => {
     const { build } = await import('./api.ts');
     const result = await build({ ...projectOptions(options), output: options.output, packageOutputs: true });
@@ -486,7 +486,7 @@ export const runCli = async (
 
   const prepackCommand = configureSourceOptions(
     program.command('prepack').description('Build and validate the npm pack inventory'),
-  ).option('--output <path>', 'Artifact output path relative to --root');
+  ).option('--output <path>', 'Artifact output path relative to --root (overrides config output.distPath; default dist)');
   prepackCommand.action(async (options: BuildCommandOptions) => {
     const { prepack } = await import('./api.ts');
     const result = await (dependencies.prepack ?? prepack)({

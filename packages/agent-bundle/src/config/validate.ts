@@ -30,9 +30,11 @@ import type {
   NormalizedPlugin,
 } from '../core/types.ts';
 import {
+  artifactDistPathIssue,
   conventionalCliEntrySource,
   conventionalIndexEntrySource,
   conventionalMcpEntrySource,
+  isArtifactOutputConfig,
   owningPayload,
   reservedPayloadDestinations,
 } from './normalize.ts';
@@ -48,7 +50,14 @@ const sourceDiagnostic = (
   code: string,
   message: string,
   sourcePath: string,
-): Diagnostic => ({ code, message, severity: 'error', sourcePath });
+  recovery?: string,
+): Diagnostic => ({
+  code,
+  message,
+  ...(recovery === undefined ? {} : { recovery }),
+  severity: 'error',
+  sourcePath,
+});
 
 /**
  * Informational migration nudges (AB473x): they surface pre-convention
@@ -1118,6 +1127,60 @@ const validateBin = (loaded: LoadedConfig): Diagnostic[] => {
   return diagnostics;
 };
 
+const outputShapeRecovery =
+  'Declare output.distPath as a non-empty project-root-relative path string or remove the output block.';
+const outputPathRecovery =
+  'Use a project-root-contained relative POSIX path; pass the CLI --output flag for per-invocation absolute locations.';
+const outputReservedRecovery =
+  'Choose a directory outside the framework, VCS, dependency, and source namespaces.';
+
+const validateOutput = (loaded: LoadedConfig): Diagnostic[] => {
+  if (!Object.hasOwn(loaded.config, 'output')) return [];
+  const output = loaded.config.output as unknown;
+  if (!isArtifactOutputConfig(output)) {
+    return [sourceDiagnostic(
+      'AB4707',
+      'Output configuration must be an object with an optional distPath string.',
+      loaded.configPath,
+      outputShapeRecovery,
+    )];
+  }
+  if (!Object.hasOwn(output, 'distPath')) return [];
+  const distPath = output.distPath;
+  const issue = artifactDistPathIssue(distPath);
+  switch (issue) {
+    case undefined:
+      return [];
+    case 'shape':
+      return [sourceDiagnostic(
+        'AB4707',
+        'Output distPath must be a non-empty string when declared.',
+        loaded.configPath,
+        outputShapeRecovery,
+      )];
+    case 'path':
+      return [sourceDiagnostic(
+        'AB4708',
+        `Output distPath ${JSON.stringify(distPath)} must be a project-root-contained relative POSIX path without backslashes, ".." traversal, or empty segments, and cannot resolve to the project root.`,
+        loaded.configPath,
+        outputPathRecovery,
+      )];
+    case 'reserved': {
+      const firstSegment = (distPath as string).split('/')[0]!;
+      return [sourceDiagnostic(
+        'AB4709',
+        `Output distPath ${JSON.stringify(distPath)} uses reserved first path segment ${JSON.stringify(firstSegment)}.`,
+        loaded.configPath,
+        outputReservedRecovery,
+      )];
+    }
+    default: {
+      const exhaustive: never = issue;
+      return exhaustive;
+    }
+  }
+};
+
 const validateEventRoutes = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1826,6 +1889,7 @@ export const validateSource = (
   diagnostics.push(...validateHooks(loaded, registry, payloads));
   diagnostics.push(...validateLib(loaded));
   diagnostics.push(...validateMcp(loaded, registry, payloads));
+  diagnostics.push(...validateOutput(loaded));
   diagnostics.push(...validatePayload(loaded, registry, options?.payloadFreshness !== false));
   diagnostics.push(...validateRuntime(loaded));
   diagnostics.push(...validateCommands(loaded, discovered, registry));
