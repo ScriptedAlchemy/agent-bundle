@@ -233,13 +233,16 @@ const packedBoundaryFromSession = (
     ...(restart === undefined ? {} : { restart }),
   });
 
-const INSTALLED_HOST_BOUNDARY: MatrixBoundaryCapabilities = Object.freeze({
-  canLoadRouteModules: false,
-  moduleSchemaNotApplicableReason: INSTALLED_HOST_MODULE_SCHEMA_NOT_APPLICABLE_REASON,
-  proofLevel: 'host-install',
-  registersAppResources: true,
-  recovery: 'Fix the installed layout, route, or fixture; reinstall and re-run runInstalledHostContractMatrix.',
-});
+const installedHostBoundaryFromSession = (
+  session: InstalledHostMcpSession,
+): MatrixBoundaryCapabilities =>
+  Object.freeze({
+    canLoadRouteModules: false,
+    moduleSchemaNotApplicableReason: INSTALLED_HOST_MODULE_SCHEMA_NOT_APPLICABLE_REASON,
+    proofLevel: session.provenance.proofLevel,
+    registersAppResources: true,
+    recovery: 'Fix the installed layout, route, or fixture; reinstall and re-run runInstalledHostContractMatrix.',
+  });
 
 const COMPAT_PROBE_KEY = '__agentBundleContractProbe';
 
@@ -923,6 +926,10 @@ interface LifecycleEvidence {
   readonly orderFailure?: string;
 }
 
+type ClientNotificationHandler = (
+  ...arguments_: readonly unknown[]
+) => void | Promise<void>;
+
 const executeLifecycleTransitions = async (
   client: Client,
   descriptor: TestableRouteDescriptor,
@@ -949,21 +956,48 @@ const executeLifecycleTransitions = async (
   }
 
   const byPhase = new Map<ContractLifecyclePhase, LifecyclePhaseEvidence>();
-  for (const [index, transition] of transitions.entries()) {
-    const progressToken = `agent-bundle-contract-lifecycle:${descriptor.id}:${String(index)}`;
-    let settled = false;
-    let liveProgress = 0;
-    client.setNotificationHandler('notifications/progress', (notification) => {
-      if (notification.params.progressToken === progressToken && !settled) liveProgress += 1;
-    });
-    const result = await callToolResult(
-      client,
-      routeProtocolName(descriptor),
-      transition.input,
-      { progressToken, timeout: 10_000 },
-    );
-    settled = true;
-    byPhase.set(transition.phase, { liveProgress, result, transition });
+  const progressMethod = 'notifications/progress';
+  const notificationHandlers = (
+    client as unknown as {
+      readonly _notificationHandlers: Map<string, ClientNotificationHandler>;
+    }
+  )._notificationHandlers;
+  const callerHandler = notificationHandlers.get(progressMethod);
+  let activeProgressToken: string | undefined;
+  let settled = true;
+  let liveProgress = 0;
+  notificationHandlers.set(progressMethod, async (...arguments_) => {
+    const notification = arguments_[0] as {
+      readonly params?: { readonly progressToken?: string | number };
+    };
+    if (
+      notification.params?.progressToken === activeProgressToken
+      && !settled
+    ) {
+      liveProgress += 1;
+    }
+    await callerHandler?.(...arguments_);
+  });
+  try {
+    for (const [index, transition] of transitions.entries()) {
+      activeProgressToken = `agent-bundle-contract-lifecycle:${descriptor.id}:${String(index)}`;
+      settled = false;
+      liveProgress = 0;
+      const result = await callToolResult(
+        client,
+        routeProtocolName(descriptor),
+        transition.input,
+        { progressToken: activeProgressToken, timeout: 10_000 },
+      );
+      settled = true;
+      byPhase.set(transition.phase, { liveProgress, result, transition });
+    }
+  } finally {
+    if (callerHandler === undefined) {
+      notificationHandlers.delete(progressMethod);
+    } else {
+      notificationHandlers.set(progressMethod, callerHandler);
+    }
   }
   return { byPhase };
 };
@@ -1502,7 +1536,7 @@ export const runInstalledHostContractMatrix = async (
 ): Promise<InstalledHostContractMatrixReport> => {
   const serverName = resolveServerName(options.manifest, options.server);
   const matrix = await executeContractMatrix({
-    boundary: INSTALLED_HOST_BOUNDARY,
+    boundary: installedHostBoundaryFromSession(options.session),
     client: options.session.client,
     fixtures: options.fixtures,
     manifest: options.manifest,

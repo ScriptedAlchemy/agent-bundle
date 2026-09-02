@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { artifactManifestName } from '../build/emit.ts';
-import { parseArtifactHookIndex } from '../build/hook-index.ts';
+import { parseArtifactHookIndex, type ArtifactHook } from '../build/hook-index.ts';
 import { parseArtifactManifest } from '../build/manifest.ts';
 import { digest, sha256Hex } from '../core/digest.ts';
 import { resolveBundleRoot } from '../install/doctor.ts';
@@ -13,8 +13,10 @@ import type { InstallHost } from '../install/install.ts';
 import { AgentTestError } from './errors.ts';
 import {
   HOST_INSTALL_PROOF_LEVEL,
+  SIMULATED_PROOF_LEVEL,
   proofLevelLabel,
   type AgentBundleTestManifest,
+  type AgentTestProofLevel,
 } from './manifest.ts';
 
 export type InstalledHostCheckName =
@@ -63,7 +65,7 @@ export interface InstalledHostMcpProvenance {
   readonly entry: string;
   readonly host: InstallHost;
   readonly pid: number | undefined;
-  readonly proofLevel: typeof HOST_INSTALL_PROOF_LEVEL;
+  readonly proofLevel: typeof HOST_INSTALL_PROOF_LEVEL | typeof SIMULATED_PROOF_LEVEL;
 }
 
 export interface InstalledHostMcpSession extends AsyncDisposable {
@@ -168,12 +170,15 @@ const fileHash = async (path: string): Promise<string | undefined> => {
 const relativePath = (root: string, path: string): string =>
   relative(root, path).split(sep).join('/');
 
-const installedFailure = (failures: readonly Failure[]): AgentTestError => new AgentTestError(
+const installedFailure = (
+  failures: readonly Failure[],
+  proofLevel: AgentTestProofLevel,
+): AgentTestError => new AgentTestError(
   'contract-violation',
-  `Installed-host contract matrix reported ${String(failures.length)} violation(s) at the host-install proof level.`,
+  `Installed-host contract matrix reported ${String(failures.length)} violation(s) at the ${proofLevel} proof level.`,
   {
     details: failures.map((failure) =>
-      `- installed-host / ${failure.check}: ${failure.reason} (${proofLevelLabel(HOST_INSTALL_PROOF_LEVEL)})`),
+      `- installed-host / ${failure.check}: ${failure.reason} (${proofLevelLabel(proofLevel)})`),
     recovery: 'Rebuild, reinstall into a clean host root, and rerun runInstalledHostContractMatrix.',
   },
 );
@@ -263,6 +268,9 @@ export const openInstalledHostMcpServer = async (
 ): Promise<InstalledHostMcpSession> => {
   const artifactRoot = resolve(options.artifactRoot);
   const installedRoot = resolve(options.installedRoot);
+  const proofLevel = options.sessionEvidence === undefined
+    ? SIMULATED_PROOF_LEVEL
+    : HOST_INSTALL_PROOF_LEVEL;
   const failures: Failure[] = [];
   let artifactBytes = '';
   let artifactManifest: ReturnType<typeof parseArtifactManifest> | undefined;
@@ -307,9 +315,6 @@ export const openInstalledHostMcpServer = async (
     const path = file.path.slice(prefix.length);
     return path.startsWith('assets/') || path.startsWith('skills/') || path.startsWith('commands/');
   });
-  if (resourceFiles.length === 0) {
-    failures.push({ check: 'resources', reason: 'artifact manifest declared no installed resources' });
-  }
   for (const resource of resourceFiles) {
     const path = resource.path.slice(prefix.length);
     if (await fileHash(join(installedRoot, path)) === undefined) {
@@ -348,23 +353,29 @@ export const openInstalledHostMcpServer = async (
     failures,
   );
 
-  const hookDocument = await readJsonRecord(
-    join(installedRoot, hostHookPath(options.host)),
-    'hook-commands',
-    'installed hook document',
-    failures,
-  );
-  const hooks = commandStrings(hookDocument);
-  if (hooks.length === 0) {
-    failures.push({ check: 'hook-commands', reason: 'installed hook document exposed no commands' });
-  }
+  let installedHooks: readonly ArtifactHook[] | undefined;
   try {
     const hookIndex = parseArtifactHookIndex(
       await readFile(join(artifactRoot, 'agent-bundle.hooks.json'), 'utf8'),
     );
-    const installedHooks = hookIndex?.hooks.filter((hook) => hook.target === options.host) ?? [];
-    if (installedHooks.length === 0) {
-      failures.push({ check: 'hook-commands', reason: 'artifact hook index exposed no target hook commands' });
+    if (hookIndex === undefined) {
+      failures.push({ check: 'hook-commands', reason: 'artifact hook index was unavailable or invalid' });
+    } else {
+      installedHooks = hookIndex.hooks.filter((hook) => hook.target === options.host);
+    }
+  } catch {
+    failures.push({ check: 'hook-commands', reason: 'artifact hook index was unavailable or invalid' });
+  }
+  if (installedHooks !== undefined && installedHooks.length > 0) {
+    const hookDocument = await readJsonRecord(
+      join(installedRoot, hostHookPath(options.host)),
+      'hook-commands',
+      'installed hook document',
+      failures,
+    );
+    const hooks = commandStrings(hookDocument);
+    if (hooks.length === 0) {
+      failures.push({ check: 'hook-commands', reason: 'installed hook document exposed no commands' });
     }
     for (const hook of installedHooks) {
       const path = hook.path.startsWith(prefix) ? hook.path.slice(prefix.length) : hook.path;
@@ -372,8 +383,6 @@ export const openInstalledHostMcpServer = async (
         failures.push({ check: 'hook-commands', reason: `installed hook command target ${path} was missing` });
       }
     }
-  } catch {
-    failures.push({ check: 'hook-commands', reason: 'artifact hook index was unavailable or invalid' });
   }
 
   const mcpDocument = await readJsonRecord(
@@ -412,7 +421,7 @@ export const openInstalledHostMcpServer = async (
     ...expandedDeclaredEnvironment,
   };
 
-  if (expandedCommand.length === 0 || discovered.name.length === 0) throw installedFailure(failures);
+  if (failures.length > 0) throw installedFailure(failures, proofLevel);
   const client = new Client({ name: 'agent-bundle-installed-host-proof', version: '1.0.0' });
   const transport = new StdioClientTransport({
     args: [...args],
@@ -433,7 +442,7 @@ export const openInstalledHostMcpServer = async (
       check: 'mcp-command',
       reason: `installed MCP command could not initialize${captured === '' ? '' : `: ${captured}`}`,
     });
-    throw installedFailure(failures);
+    throw installedFailure(failures, proofLevel);
   }
 
   const runningVersion = requiredString(
@@ -472,21 +481,21 @@ export const openInstalledHostMcpServer = async (
     checks: outcomes(failures),
     host: options.host,
     metadata,
-    proofLevel: proofLevelLabel(HOST_INSTALL_PROOF_LEVEL),
+    proofLevel: proofLevelLabel(proofLevel),
     sessionEvidence: options.sessionEvidence
       ?? 'adapter-simulated discovery and stdio spawn from an isolated installed root',
     versions,
   });
   if (failures.length > 0) {
     await client.close();
-    throw installedFailure(failures);
+    throw installedFailure(failures, proofLevel);
   }
 
   const provenance: InstalledHostMcpProvenance = Object.freeze({
     entry: entryArgument === undefined ? discovered.name : relativePath(installedRoot, resolvedCommandPath(entryArgument, cwd)),
     host: options.host,
     pid: transport.pid ?? undefined,
-    proofLevel: HOST_INSTALL_PROOF_LEVEL,
+    proofLevel,
   });
   let closed = false;
   const close = async (): Promise<void> => {

@@ -1,21 +1,31 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from '@rstest/core';
 import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
 
 import stateDefinition from '../../fixtures/route-harness/src/state.ts';
 import { AgentTestError } from '../../src/test/errors.ts';
-import { MCP_IN_MEMORY_PROOF_LEVEL, proofLevelLabel } from '../../src/test/manifest.ts';
-import { runContractMatrix, type ContractMatrixOptions } from '../../src/test/contract.ts';
+import {
+  compileTestManifest,
+  MCP_IN_MEMORY_PROOF_LEVEL,
+  proofLevelLabel,
+} from '../../src/test/manifest.ts';
+import {
+  runContractMatrix,
+  runPackedContractMatrix,
+  type ContractMatrixOptions,
+} from '../../src/test/contract.ts';
 import { openInMemoryMcpServer, type InMemoryMcpSession } from '../../src/test/mcp.ts';
+import type { PackedMcpSession } from '../../src/test/packed.ts';
 import {
   routeHarnessContractFixtures,
   routeHarnessLifecycleWithoutLiveProgress,
 } from '../support/contract-matrix-fixtures.ts';
 
 const proofLabel = proofLevelLabel(MCP_IN_MEMORY_PROOF_LEVEL);
+const fixtureRoot = resolve(import.meta.dirname, '../../fixtures/route-harness');
 
 const withStatefulMatrix = async <T>(
   fixtures: ContractMatrixOptions['fixtures'],
@@ -81,6 +91,64 @@ describe('the generated-plugin contract matrix', () => {
     expect((error as AgentTestError).message).toContain('tool:harness/lifecycle');
     expect((error as AgentTestError).message).toContain('live-progress-before-terminal');
     expect((error as AgentTestError).message).toContain(proofLabel);
+  }, 30_000);
+
+  it('composes and restores a caller-owned progress handler after lifecycle replay', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-contract-handler-'));
+    const compiledManifest = await compileTestManifest({ root: fixtureRoot });
+    const manifest = Object.freeze({
+      ...compiledManifest,
+      apps: Object.freeze({}),
+      routes: Object.freeze(Object.fromEntries(
+        Object.entries(compiledManifest.routes).filter(([, route]) => route.kind !== 'app'),
+      )),
+    });
+    const session = await openInMemoryMcpServer({
+      manifest,
+      state: {
+        definition: stateDefinition,
+        driver: createSqliteStateDriver({ root }),
+      },
+    });
+    const packedSession: PackedMcpSession = Object.freeze({
+      client: session.client,
+      close: session.close,
+      provenance: Object.freeze({
+        entry: 'in-memory progress-handler regression fixture',
+        pid: undefined,
+        proofLevel: 'packed-stdio' as const,
+      }),
+      stderr: () => '',
+      [Symbol.asyncDispose]: session[Symbol.asyncDispose],
+    });
+    type NotificationHandler = (...arguments_: readonly unknown[]) => void | Promise<void>;
+    const notificationHandlers = (
+      session.client as unknown as {
+        readonly _notificationHandlers: Map<string, NotificationHandler>;
+      }
+    )._notificationHandlers;
+    let callerProgress = 0;
+    session.client.setNotificationHandler('notifications/progress', () => {
+      callerProgress += 1;
+    });
+    const callerHandler = notificationHandlers.get('notifications/progress');
+    try {
+      const report = await runPackedContractMatrix({
+        fixtures: routeHarnessContractFixtures(),
+        manifest,
+        server: 'harness',
+        session: packedSession,
+      });
+
+      expect(report.routes['tool:harness/lifecycle']?.checks['lifecycle-replay']).toEqual({
+        status: 'passed',
+      });
+      expect(callerProgress).toBeGreaterThan(0);
+      expect(notificationHandlers.get('notifications/progress')).toBe(callerHandler);
+    } finally {
+      await session.close();
+      await rm(root, { force: true, recursive: true });
+    }
   }, 30_000);
 
   it('aggregates missing route coverage with the proof-level label', async () => {
