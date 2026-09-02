@@ -67,6 +67,47 @@ results and never renders JSX. Routed `src/cli/**` commands and
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
 is plain.
 
+## Config reference
+
+### `output`
+
+`output` controls where the host artifact root lives; it never changes the
+framework-owned layout inside each target:
+
+```ts
+export default defineConfig({
+  plugin: { ... },
+  output: {
+    distPath: 'artifact',
+  },
+});
+```
+
+`output.distPath` defaults to `dist`. A CLI `--output <path>` overrides the
+configured path, so precedence is CLI `--output`, then `output.distPath`, then
+`dist`; existing projects are unchanged. The configured directory is excluded
+from project source snapshots (as `dist` always was), ignored by the dev
+watcher, and used by Workbench host discovery and doctor drift checks.
+
+Config values must be non-empty, project-root-contained relative POSIX paths.
+A malformed `output` block or non-string/empty `distPath` reports `AB4707`;
+absolute paths, backslashes, `.`, empty segments, and `..` traversal report
+`AB4708`; reserved first segments (`.agent-bundle`,
+`.git`, `node_modules`, and `src`) report `AB4709`. Projects with package
+`bin` or `lib` entries must keep host artifacts separate from the npm package
+build at `dist/` (`AB4706`); `output: { distPath: 'artifact' }` provides that
+separation without a CLI flag.
+
+The name follows Rsbuild/Rslib's `output.distPath`, but Agent Bundle accepts
+only the string shorthand, not Rsbuild 2.x's per-asset `DistPathConfig` for
+such paths as JavaScript, CSS, and SVG subdirectories.
+`output.filename` templates, `output.assetPrefix`, and `output.cleanDistPath`
+are also deliberately deferred: host packs have a framework-owned
+`<target>/skills|mcp|scripts|assets/...` layout content-addressed by the
+artifact manifest. Unlike machine-local Rsbuild config, the hashed, portable
+release-identity config rejects absolute paths; use the per-invocation CLI
+flag when an absolute path is required.
+
 ## Distribution
 
 `agent-bundle build` makes each target directory independently distributable.

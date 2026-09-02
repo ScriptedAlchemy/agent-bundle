@@ -265,6 +265,46 @@ describe('bin, lib, and tools validation', () => {
   });
 });
 
+describe('artifact output validation', () => {
+  const validated = async (output: unknown) => {
+    const root = await projectRoot({});
+    return validateSource(loadedProject({
+      output: output as never,
+      plugin: { name: 'review-tools', version: '1.0.0' },
+    }, root), { skills: [] }, registry);
+  };
+
+  it.each([
+    { code: 'AB4707', label: 'an undefined block', output: undefined },
+    { code: 'AB4707', label: 'an array block', output: [] },
+    { code: 'AB4707', label: 'a string block', output: 'artifact' },
+    { code: 'AB4707', label: 'an undefined path', output: { distPath: undefined } },
+    { code: 'AB4707', label: 'a non-string path', output: { distPath: 7 } },
+    { code: 'AB4707', label: 'an empty path', output: { distPath: '' } },
+    { code: 'AB4708', label: 'an absolute path', output: { distPath: '/abs/path' } },
+    { code: 'AB4708', label: 'a parent path', output: { distPath: '../out' } },
+    { code: 'AB4708', label: 'nested parent traversal', output: { distPath: 'a/../../b' } },
+    { code: 'AB4708', label: 'the project root', output: { distPath: '.' } },
+    { code: 'AB4708', label: 'a backslash path', output: { distPath: 'a\\b' } },
+    { code: 'AB4708', label: 'an empty segment', output: { distPath: 'a//b' } },
+    { code: 'AB4709', label: 'the framework namespace', output: { distPath: '.agent-bundle' } },
+    { code: 'AB4709', label: 'the source namespace', output: { distPath: 'src' } },
+    { code: 'AB4709', label: 'the dependency namespace', output: { distPath: 'node_modules/x' } },
+    { code: 'AB4709', label: 'the VCS namespace', output: { distPath: '.git' } },
+  ])('rejects $label with $code', async ({ code, output }) => {
+    const diagnostics = await validated(output);
+    expect(diagnostics).toEqual([expect.objectContaining({
+      code,
+      recovery: expect.any(String),
+      severity: 'error',
+    })]);
+  });
+
+  it.each(['artifact', 'build/artifact', 'dist'])('accepts %s', async (distPath) => {
+    await expect(validated({ distPath })).resolves.toEqual([]);
+  });
+});
+
 describe('migration nudges (AB473x)', () => {
   const factoryEntry = 'export default () => ({ close() {}, async connect() {} });\n';
   const selfConnectingEntry = [

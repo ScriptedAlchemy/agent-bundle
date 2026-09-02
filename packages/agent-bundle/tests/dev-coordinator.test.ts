@@ -545,9 +545,17 @@ it('does not build until its watcher is ready and forwards project watcher exclu
   }
 });
 
-it('forwards a prepared generated eval root to its watcher', async () => {
+it('forwards prepared artifact and eval output roots to its watcher', async () => {
   const root = await createProject();
   let watcherOptions: import('../src/dev/watcher.ts').ProjectWatcherOptions | undefined;
+  await writeFile(join(root, 'agent-bundle.config.ts'), [
+    'export default {',
+    "  output: { distPath: 'artifact-out' },",
+    "  plugin: { name: 'dev-coordinator-fixture', version: '1.0.0' },",
+    "  targets: ['portable'],",
+    '};',
+    '',
+  ].join('\n'));
   const prepared = await new ProjectService({ root }).prepare('dev');
   const evalRuns = join(root, 'recorded-evals');
   const withEvalRuns = Object.freeze({ ...prepared, outputRoots: Object.freeze([...prepared.outputRoots, evalRuns]) });
@@ -567,6 +575,7 @@ it('forwards a prepared generated eval root to its watcher', async () => {
     });
 
     await coordinator.start();
+    expect(watcherOptions?.outputPaths).toContain(join(root, 'artifact-out'));
     expect(watcherOptions?.outputPaths).toContain(evalRuns);
     await coordinator.close();
   } finally {
@@ -574,7 +583,7 @@ it('forwards a prepared generated eval root to its watcher', async () => {
   }
 });
 
-it('adds a recovered eval runs root to the live watcher before generated run writes arrive', async () => {
+it('adds recovered artifact and eval roots to the live watcher before generated writes arrive', async () => {
   const root = await createProject();
   const sourceWatcher = new EventSourceWatcher();
   const evalRuns = join(root, 'recorded-evals');
@@ -608,6 +617,7 @@ it('adds a recovered eval runs root to the live watcher before generated run wri
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  evals: { runsDir: 'recorded-evals' },",
+      "  output: { distPath: 'artifact-out' },",
       "  plugin: { name: 'dev-coordinator-fixture', version: '1.0.0' },",
       "  targets: ['portable'],",
       '};',
@@ -618,6 +628,7 @@ it('adds a recovered eval runs root to the live watcher before generated run wri
     expect(builds).toBe(2);
 
     sourceWatcher.emit('change', join(evalRuns, 'run.json'));
+    sourceWatcher.emit('change', join(root, 'artifact-out', 'portable', 'plugin.json'));
     await projectWatcher?.flush();
     expect(builds).toBe(2);
     await coordinator.close();

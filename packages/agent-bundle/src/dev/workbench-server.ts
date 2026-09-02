@@ -675,7 +675,12 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
         });
       }
     },
-    outputPaths: ['dist', '.agent-bundle/runtime', '.agent-bundle/playground'],
+    outputPaths: [
+      'dist',
+      initialPreparedProject.artifactDistPath,
+      '.agent-bundle/runtime',
+      '.agent-bundle/playground',
+    ],
     prepareCommand: 'dev',
     projectService,
     root,
@@ -697,7 +702,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       const prepared = latestValidPreparedProject;
       if (prepared?.model === undefined) return undefined;
       return Object.freeze({
-        bundleSource: join(root, 'dist'),
+        bundleSource: join(root, prepared.artifactDistPath),
         ...(prepared.source.revision === undefined
           ? {}
           : { manifestDigest: prepared.source.revision }),

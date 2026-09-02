@@ -487,7 +487,7 @@ export class DevCoordinator {
       return this.#completeFailure(this.#beginBuild(invalidation, source), source, source.diagnostics);
     }
 
-    this.#watcher?.addOutputPaths?.(prepared.outputRoots);
+    this.#watcher?.addOutputPaths?.([prepared.artifactDistPath, ...prepared.outputRoots]);
     const running = this.#beginBuild(invalidation, prepared.source);
     try {
       await this.#onPreparedProject?.(prepared);

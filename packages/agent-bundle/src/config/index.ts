@@ -54,6 +54,7 @@ export type {
   AgentBundleMcpApp,
   AgentBundleMcpConfig,
   AgentBundleMcpServer,
+  AgentBundleOutputConfig,
   McpTransport,
   NormalizedConfigExtension,
   NormalizedMetadata,

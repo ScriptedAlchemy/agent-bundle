@@ -18,7 +18,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB44xx` | Script configuration. |
 | `AB4500` | Registered config extensions (strict finite JSON). |
 | `AB46xx` | Assets and the generated-runtime floor. |
-| `AB470x` | Package build `bin` configuration (`AB4706`: artifact output overlaps `dist`). |
+| `AB470x` | Package build `bin` configuration (`AB4706`: artifact output overlaps `dist`; `AB4707`–`AB4709`: `output.distPath` shape, root escape, reserved namespace). |
 | `AB471x` | Package build `lib` configuration (`AB4710`–`AB4715`) and declaration generation (`AB4716`; see below). |
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch. |
 | `AB473x` | Migration nudges (informational; see below). |

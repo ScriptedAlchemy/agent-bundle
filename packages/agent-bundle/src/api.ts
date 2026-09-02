@@ -299,6 +299,9 @@ export type StateInspection =
 export interface ReadyInspectResult {
   readonly diagnostics: readonly Diagnostic[];
   readonly model: NormalizedPlugin;
+  readonly output: {
+    readonly distPath: string;
+  };
   readonly plans: readonly InspectionPlan[];
   readonly projectContext: ProjectContext;
   readonly selected?: {
@@ -433,8 +436,8 @@ const invalidInspection = (diagnostics: readonly Diagnostic[]): InvalidInspectRe
     state: 'invalid',
   });
 
-const resolveOutput = (root: string, output: string | undefined): string =>
-  resolve(root, output ?? 'dist');
+const resolveOutput = (root: string, output: string): string =>
+  resolve(root, output);
 
 const registryFor = (options: ProjectOptions): TargetRegistry =>
   options.registry ?? createDefaultRegistry();
@@ -690,6 +693,7 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
   return Object.freeze({
     diagnostics: prepared.diagnostics,
     model,
+    output: Object.freeze({ distPath: prepared.artifactDistPath }),
     plans,
     projectContext,
     ...(selected === undefined ? {} : { selected }),
@@ -713,8 +717,15 @@ const assertPackageOutputSources = (
 
 export const build = async (options: BuildOptions): Promise<BuildProjectResult> => {
   const root = resolve(options.root);
-  const output = resolveOutput(root, options.output);
-  const prepared = await new ProjectService({ ...options, outputRoots: [output], root }).prepare('build');
+  const outputRoots = options.output === undefined
+    ? undefined
+    : [resolveOutput(root, options.output)];
+  const prepared = await new ProjectService({
+    ...options,
+    ...(outputRoots === undefined ? {} : { outputRoots }),
+    root,
+  }).prepare('build');
+  const output = resolve(root, options.output ?? prepared.artifactDistPath);
   const model = requirePreparedModel(prepared);
   const projectContext = prepared.projectContext;
   if (projectContext === undefined) throw new DiagnosticError(prepared.diagnostics);
@@ -724,7 +735,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   if (packageOutputRoot !== undefined && (isInsideOrEqual(packageOutputRoot, output) || isInsideOrEqual(output, packageOutputRoot))) {
     throw new DiagnosticError([{
       code: 'AB4706',
-      message: `Artifact output ${JSON.stringify(output)} overlaps the package build output ${JSON.stringify(packageOutputRoot)}; pass a different --output.`,
+      message: `Artifact output ${JSON.stringify(output)} overlaps the package build output ${JSON.stringify(packageOutputRoot)}; configure a different output.distPath or pass a different --output.`,
       severity: 'error',
     }]);
   }

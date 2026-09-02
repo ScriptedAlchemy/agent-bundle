@@ -648,6 +648,66 @@ it('excludes configured output trees from project identity and reports unsafe ou
   }
 });
 
+it('resolves, excludes, and falls back from configured artifact output paths', async () => {
+  const skill = [
+    '---',
+    'name: review',
+    'description: Reviews output paths',
+    '---',
+    'Review output paths.',
+    '',
+  ].join('\n');
+  const configuredRoot = await createProject(skill);
+  const defaultRoot = await createProject(skill);
+  const malformedRoot = await createProject(skill);
+  const configuredOutput = join(configuredRoot, 'build', 'artifact');
+  try {
+    await Promise.all([
+      writeFile(join(configuredRoot, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  output: { distPath: 'build/artifact' },",
+        "  plugin: { name: 'configured-output', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n')),
+      writeFile(join(malformedRoot, 'agent-bundle.config.ts'), [
+        'export default {',
+        '  output: { distPath: 7 },',
+        "  plugin: { name: 'malformed-output', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+    await mkdir(configuredOutput, { recursive: true });
+    await writeFile(join(configuredOutput, 'generated.js'), 'generated\n');
+
+    const [configured, defaults, malformed] = await Promise.all([
+      new ProjectService({ root: configuredRoot }).prepare('inspect'),
+      new ProjectService({ root: defaultRoot }).prepare('inspect'),
+      new ProjectService({ root: malformedRoot }).prepare('inspect'),
+    ]);
+
+    expect(configured.artifactDistPath).toBe('build/artifact');
+    expect(configured.outputRoots).toContain(configuredOutput);
+    expect(configured.projectContext?.sourceInputs.map((input) => input.path))
+      .not.toContain('build/artifact/generated.js');
+    expect(defaults.artifactDistPath).toBe('dist');
+    expect(defaults.outputRoots).toContain(join(defaultRoot, 'dist'));
+    expect(malformed.artifactDistPath).toBe('dist');
+    expect(malformed.diagnostics).toEqual([
+      expect.objectContaining({ code: 'AB4707', severity: 'error' }),
+    ]);
+  } finally {
+    await Promise.all([
+      rm(configuredRoot, { force: true, recursive: true }),
+      rm(defaultRoot, { force: true, recursive: true }),
+      rm(malformedRoot, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('treats a configured eval run directory as generated output, not project source', async () => {
   const root = await createProject([
     '---',

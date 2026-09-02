@@ -8,6 +8,8 @@ import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.t
 import { loadConfig } from '../config/load.ts';
 import { normalizeEvalConfig } from '../eval/config.ts';
 import {
+  configuredArtifactDistPath,
+  defaultArtifactDistPath,
   normalizeProject,
 } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
@@ -54,6 +56,8 @@ export interface ProjectServiceOptions {
 }
 
 export interface PreparedProject {
+  /** The project-relative artifact output directory: config `output.distPath` or the `dist` default. */
+  readonly artifactDistPath: string;
   readonly configPath: string;
   /** The validated development-only Agent API flag from the prepared configuration. */
   readonly devAgentApiEnabled?: boolean;
@@ -545,6 +549,7 @@ const configWithRuntimeMetadataRemoved = (config: Record<string, unknown>): Read
 };
 
 const preparedProject = (
+  artifactDistPath: string,
   configPath: string,
   snapshot: ProjectSourceSnapshot,
   diagnostics: readonly Diagnostic[],
@@ -561,6 +566,7 @@ const preparedProject = (
   tools?: AgentBundleToolsConfig,
   routeGraph?: CompiledRouteGraph,
 ): PreparedProject => Object.freeze({
+  artifactDistPath,
   configPath,
   ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
   diagnostics,
@@ -611,6 +617,7 @@ const invalidPreparedProject = (options: {
 }): PreparedProject => {
   const snapshot = options.snapshot ?? emptySnapshot();
   return preparedProject(
+    defaultArtifactDistPath,
     options.configPath,
     snapshot,
     options.diagnostics,
@@ -660,6 +667,7 @@ export class ProjectService {
     const requestedRoot = resolve(this.#options.root);
     const registry = this.#registry;
     const requestedConfigPath = resolve(requestedRoot, this.#options.configPath ?? 'agent-bundle.config.ts');
+    let artifactDistPath: string;
     let root = requestedRoot;
     let outputRoots: readonly string[] = Object.freeze([]);
     const failedPreparation = (
@@ -713,6 +721,14 @@ export class ProjectService {
         targets: this.#options.targets,
       });
       devAgentApiEnabled = agentApiEnabled(loaded.config);
+      artifactDistPath = configuredArtifactDistPath(loaded.config);
+      const artifactOutputRoots = await resolveOutputRoots(
+        requestedRoot,
+        root,
+        [artifactDistPath],
+      );
+      outputRoots = Object.freeze([...new Set([...outputRoots, ...artifactOutputRoots])]
+        .sort((left, right) => left.localeCompare(right)));
       // Eval runs are generated records, even when a project deliberately
       // stores them outside the conventional .agent-bundle directory.  Keep
       // the resolved configuration as the single source of that ownership.
@@ -801,6 +817,7 @@ export class ProjectService {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision, root);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
       return preparedProject(
+        artifactDistPath,
         loaded.configPath,
         snapshot,
         sourceDiagnostics,
@@ -918,6 +935,7 @@ export class ProjectService {
       ? toolsValue as AgentBundleToolsConfig
       : undefined;
     return preparedProject(
+      artifactDistPath,
       loaded.configPath,
       snapshot,
       frozenDiagnostics,
