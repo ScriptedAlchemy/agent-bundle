@@ -18,6 +18,7 @@ export interface ProjectSourceInput {
 /** Snapshot status for one discovered input before a context can be committed. */
 export interface ProjectSourceSnapshotInput {
   readonly error?: string;
+  readonly executable?: boolean;
   readonly path: string;
   readonly sha256?: string;
 }

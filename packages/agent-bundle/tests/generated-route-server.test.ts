@@ -547,11 +547,24 @@ it('renders one tool/after event route through two native thin clients', { retry
       '}',
       '',
     ].join('\n')),
+    writeProjectFile(root, 'src/events/workspace/open.tsx', [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { targets: ['cursor'] };",
+      'export default async function WorkspaceOpen({ native }) {',
+      '  const workspace = (await agent()).workspace;',
+      '  if (workspace.state !== "available" || workspace.value.root !== native.workspace_roots[0]) {',
+      '    throw new Error(`workspace identity mismatch: ${JSON.stringify(workspace)}`);',
+      '  }',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n')),
   ]);
 
   const output = join(root, 'artifact');
   const compiled = await build({ output, root, targets: ['claude', 'cursor'] });
-  expect(compiled.model.hooks.filter((hook) => hook.eventRoute !== undefined)).toHaveLength(1);
+  expect(compiled.model.hooks.filter((hook) => hook.eventRoute !== undefined)).toHaveLength(2);
   expect(compiled.build.compiledHooks.filter((hook) => hook.id === 'hook:event-route:tool-after')).toHaveLength(2);
 
   for (const target of ['claude', 'cursor'] as const) {
@@ -602,6 +615,17 @@ it('renders one tool/after event route through two native thin clients', { retry
               hookEventName: 'PostToolUse',
             },
           });
+      if (target === 'cursor') {
+        const workspaceOpen = compiled.build.compiledHooks.find((entry) =>
+          entry.target === 'cursor' && entry.event === 'workspaceOpen');
+        expect(workspaceOpen).toBeDefined();
+        await expect(runHook(workspaceOpen!.output, {
+          cursor_version: '1.7.2',
+          hook_event_name: 'workspaceOpen',
+          user_email: null,
+          workspace_roots: [root, join(root, 'secondary')],
+        })).resolves.toBeUndefined();
+      }
     } finally {
       await client.close();
     }

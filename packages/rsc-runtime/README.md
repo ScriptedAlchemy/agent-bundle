@@ -58,8 +58,12 @@ with `const context = await agent()`. The store is a versioned realm singleton
 installed at MCP and CLI entrypoints (and at any other real invocation via
 `runAgentRequest`). Identities are `Observed<T>` — unavailable host, session,
 actor, or workspace is a typed reason, never a fabricated string. The context
-handle throws after the request completes. `state`, `notices`, and `providers`
-are reserved extension slots; provider discovery and `useAgent()` arrive later.
+handle throws after the request completes. Workspace identity is deliberately
+scalar: when a native envelope provides multiple `workspace_roots` and no
+`cwd`, the first root is the primary workspace exposed by `agent()`; later
+roots remain available only in the native event payload. `state`, `notices`,
+and `providers` are reserved extension slots; provider discovery and
+`useAgent()` arrive later.
 
 Structured MCP metadata and content are copied through a strict finite-JSON
 boundary before being returned, so later caller mutations do not alter a result.

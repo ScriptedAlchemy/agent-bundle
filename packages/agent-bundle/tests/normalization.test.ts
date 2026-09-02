@@ -33,6 +33,13 @@ const extensionRegistry: NormalizationTargetRegistry = {
   supports: (name, capability) => name === 'example' && capability === 'hooks',
 };
 
+it.each(['SRC', '.Git', 'NODE_MODULES', '.AGENT-BUNDLE'])(
+  'reserves artifact output segment %s without case sensitivity',
+  (distPath) => {
+    expect(normalizeModule.artifactDistPathIssue(distPath)).toBe('reserved');
+  },
+);
+
 it('keeps internal config-extension finite JSON failures non-constructible', () => {
   expect(normalizeModule).not.toHaveProperty('ConfigExtensionFiniteJsonError');
 });

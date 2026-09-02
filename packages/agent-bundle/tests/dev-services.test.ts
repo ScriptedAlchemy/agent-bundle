@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 
@@ -820,6 +820,43 @@ it('reports snapshot failures as frozen preparation diagnostics', async () => {
   }
 });
 
+it.each([
+  { code: 'claude.outputStyles.directory.outside', field: 'outputStyles' },
+  { code: 'claude.workflows.directory.outside', field: 'workflows' },
+] as const)('preserves the $code diagnostic for an escaped payload symlink', async ({ code, field }) => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews escaped payloads',
+    '---',
+    'Review escaped payloads.',
+    '',
+  ].join('\n'));
+  const outside = await mkdtemp(join(tmpdir(), `agent-bundle-${field}-outside-`));
+  try {
+    await writeFile(join(outside, 'payload.md'), 'outside\n');
+    await symlink(outside, join(root, 'payload'), 'dir');
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      `  claude: { ${field}: './payload' },`,
+      "  plugin: { name: 'escaped-payload', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const prepared = await new ProjectService({ root }).prepare('inspect');
+
+    expect(prepared.diagnostics).toContainEqual(expect.objectContaining({ code, severity: 'error' }));
+    expect(prepared.diagnostics).not.toContainEqual(expect.objectContaining({ code: 'AB7003' }));
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(outside, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('routes API validation through the project service for configuration failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-api-config-'));
   try {
@@ -876,6 +913,44 @@ it('derives source revisions from authored bytes, including resources and invali
       rm(equivalentRoot, { force: true, recursive: true }),
       rm(invalidRoot, { force: true, recursive: true }),
     ]);
+  }
+});
+
+it('changes a payload source revision when an executable bit is lost', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews executable payloads',
+    '---',
+    'Review executable payloads.',
+    '',
+  ].join('\n'));
+  const binRoot = join(root, 'bin');
+  const executable = join(binRoot, 'review');
+  try {
+    await mkdir(binRoot);
+    await writeFile(executable, '#!/bin/sh\nprintf "reviewed\\n"\n');
+    await chmod(executable, 0o755);
+    const initial = await snapshotProjectSource(
+      root,
+      join(root, 'agent-bundle.config.ts'),
+      [],
+      [binRoot],
+    );
+
+    await chmod(executable, 0o644);
+    const changed = await snapshotProjectSource(
+      root,
+      join(root, 'agent-bundle.config.ts'),
+      [],
+      [binRoot],
+    );
+
+    expect(changed.inputs.find((input) => input.path === 'bin/review')?.sha256)
+      .toBe(initial.inputs.find((input) => input.path === 'bin/review')?.sha256);
+    expect(changed.revision).not.toBe(initial.revision);
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 
