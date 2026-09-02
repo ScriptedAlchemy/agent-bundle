@@ -89,6 +89,13 @@ interface MemoryStoreInternals<TState, TEvents extends AgentStateEventSchemas> {
   keys: Map<string, CommittedResult<TState>>;
 }
 
+/** Generics-erased entry type for the driver-wide open-store collections. */
+type AnyMemoryStoreEntry = MemoryStoreEntry<unknown, AgentStateEventSchemas>;
+
+const eraseEntry = <TState, TEvents extends AgentStateEventSchemas>(
+  entry: MemoryStoreEntry<TState, TEvents>,
+): AnyMemoryStoreEntry => entry as unknown as AnyMemoryStoreEntry;
+
 interface MemoryStoreEntry<TState, TEvents extends AgentStateEventSchemas> {
   readonly activate: () => Promise<void>;
   readonly internals: MemoryStoreInternals<TState, TEvents>;
@@ -366,8 +373,8 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
   const now = options.now ?? ((): Date => new Date());
   // Heterogeneously typed per definition; entries are cast back at the one
   // retrieval site below, keyed by the definition id they were created for.
-  const registry = new Map<string, MemoryStoreEntry<unknown, AgentStateEventSchemas>>();
-  const openStores = new Set<MemoryStoreEntry<unknown, AgentStateEventSchemas>>();
+  const registry = new Map<string, AnyMemoryStoreEntry>();
+  const openStores = new Set<AnyMemoryStoreEntry>();
   const pendingOpens = createPendingOpenTracker();
   let closed = false;
   let closing: Promise<void> | undefined;
@@ -410,9 +417,9 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
               switch (lifetime) {
                 case 'request': {
                   const created = createMemoryStore(definition, lifetime, now, () => {
-                    openStores.delete(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                    openStores.delete(eraseEntry(created));
                   });
-                  openStores.add(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                  openStores.add(eraseEntry(created));
                   return created;
                 }
                 case 'process': {
@@ -420,10 +427,10 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
                   if (existing === undefined) {
                     const created = createMemoryStore(definition, lifetime, now, () => {
                       registry.delete(definition.id);
-                      openStores.delete(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                      openStores.delete(eraseEntry(created));
                     });
-                    registry.set(definition.id, created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
-                    openStores.add(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                    registry.set(definition.id, eraseEntry(created));
+                    openStores.add(eraseEntry(created));
                     return created;
                   }
                   if (definition.version !== existing.internals.definition.version) {

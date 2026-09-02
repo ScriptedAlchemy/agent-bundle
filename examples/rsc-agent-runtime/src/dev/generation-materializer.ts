@@ -3,6 +3,7 @@ import { open, lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promis
 import { spawn } from 'node:child_process';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { canonicalJson, digestValue } from './canonical-json.js';
 import { emitRuntimeArtifacts } from '../build/emit-artifacts.js';
 import type {
   RscEnvironmentCheckpointValidator,
@@ -89,25 +90,6 @@ export interface MaterializeRuntimeGenerationOptions {
 }
 
 const digestBytes = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
-
-const canonicalJson = (value: unknown): string => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new TypeError('Runtime metadata contains a non-finite number.');
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (typeof value !== 'object') throw new TypeError('Runtime metadata is not JSON serializable.');
-
-  const input = value as Record<string, unknown>;
-  return `{${Object.keys(input).sort().flatMap((key) => {
-    const item = input[key];
-    return item === undefined ? [] : [`${JSON.stringify(key)}:${canonicalJson(item)}`];
-  }).join(',')}}`;
-};
-
-const digestValue = (value: unknown): string =>
-  createHash('sha256').update(canonicalJson(value)).digest('hex');
 
 const freezeJson = (value: unknown, seen = new WeakSet<object>()): JsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;

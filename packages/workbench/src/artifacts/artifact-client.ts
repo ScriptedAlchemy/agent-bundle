@@ -2,6 +2,7 @@ import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics
 import { snapshotStrictJsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
+import { isRecord } from '../client-helpers.ts';
 
 export interface ArtifactClientOptions {
   readonly foreground: ForegroundRequestAuthority;
@@ -21,9 +22,6 @@ export class ArtifactClientError extends Error {
     this.diagnostics = diagnostics;
   }
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): ArtifactClientError =>
   new ArtifactClientError('AB8063', 'Artifact route returned an invalid response.');

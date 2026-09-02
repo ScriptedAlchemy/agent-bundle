@@ -2,6 +2,8 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { isIP, type Socket } from 'node:net';
 
+import { isRecord } from '../../core/strict-json.ts';
+
 import type { McpAppJsonValue } from './mcp-app-binding-service.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 
@@ -143,7 +145,12 @@ export interface McpAppSandboxPolicy {
   readonly warnings: readonly McpAppSandboxWarning[];
 }
 
-export type McpAppConsentCapability = 'call-tool' | 'download-file' | 'open-external-link' | 'clipboard-write' | 'camera' | 'microphone' | 'geolocation' | 'request-display-mode';
+const mcpAppConsentCapabilities = ['call-tool', 'download-file', 'open-external-link', 'clipboard-write', 'camera', 'microphone', 'geolocation', 'request-display-mode'] as const;
+
+export type McpAppConsentCapability = (typeof mcpAppConsentCapabilities)[number];
+
+export const isMcpAppConsentCapability = (value: unknown): value is McpAppConsentCapability =>
+  (mcpAppConsentCapabilities as readonly unknown[]).includes(value);
 
 export interface McpAppConsentGrant {
   readonly authorizationId: string;
@@ -300,8 +307,6 @@ export interface McpAppSandboxBridge {
   receive(event: McpAppSandboxMessageEvent): boolean;
   send(message: McpAppSandboxMessage): boolean;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const finiteJson = (value: unknown): value is McpAppJsonValue => value === null || typeof value === 'string' || typeof value === 'boolean'
   || typeof value === 'number' && Number.isFinite(value)

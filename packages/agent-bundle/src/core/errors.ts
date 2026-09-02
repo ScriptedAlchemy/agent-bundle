@@ -2,6 +2,10 @@
 export const isErrno = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
+/** Human-readable message for an arbitrary thrown value. */
+export const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 /**
  * Shared shape for the codebase's coded error classes. Subclasses pass their
  * own name explicitly so bundler minification cannot corrupt wire-visible names.

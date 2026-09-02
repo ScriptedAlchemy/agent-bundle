@@ -10,7 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 // without flags, and G3 chose it precisely because it adds zero dependencies.
 // This import lives behind the dedicated `./state/sqlite` subpath so volatile
 // state users and stateless projects never load it or see the warning.
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
   Context,
@@ -251,6 +251,8 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
   readonly #now: () => Date;
   readonly #onClose: () => void;
   readonly #runtime: ScopedEffectRuntime<SqliteConnection>;
+  /** Statement cache: the schema is fixed after open, so entries never go stale. */
+  readonly #statements = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
 
   constructor(
     definition: AgentStateDefinition<TState, TEvents>,
@@ -309,8 +311,22 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     });
   }
 
+  #prepare(db: DatabaseSync, sql: string): StatementSync {
+    let cache = this.#statements.get(db);
+    if (cache === undefined) {
+      cache = new Map();
+      this.#statements.set(db, cache);
+    }
+    let statement = cache.get(sql);
+    if (statement === undefined) {
+      statement = db.prepare(sql);
+      cache.set(sql, statement);
+    }
+    return statement;
+  }
+
   #headRow(db: DatabaseSync, action: string): { revision: number; state: string } {
-    const row = db.prepare('SELECT revision, state FROM agent_state_head WHERE id = 1').get() as
+    const row = this.#prepare(db, 'SELECT revision, state FROM agent_state_head WHERE id = 1').get() as
       | { revision: number; state: string }
       | undefined;
     if (row === undefined || !Number.isInteger(row.revision) || row.revision < 0) {
@@ -335,15 +351,15 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
   #journalRecords(db: DatabaseSync, upTo?: number): AgentStateJournalRecord[] {
     const rows = (
       upTo === undefined
-        ? db.prepare('SELECT * FROM agent_state_journal ORDER BY revision').all()
-        : db.prepare('SELECT * FROM agent_state_journal WHERE revision <= ? ORDER BY revision').all(upTo)
+        ? this.#prepare(db, 'SELECT * FROM agent_state_journal ORDER BY revision').all()
+        : this.#prepare(db, 'SELECT * FROM agent_state_journal WHERE revision <= ? ORDER BY revision').all(upTo)
     ) as unknown as JournalRow[];
     return rows.map((row) => recordFromRow(this.#definition.id, row));
   }
 
   #latestMigrationRevision(db: DatabaseSync): number {
-    const row = db
-      .prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM agent_state_journal WHERE kind = 'migrate'")
+    const row = this
+      .#prepare(db, "SELECT COALESCE(MAX(revision), 0) AS revision FROM agent_state_journal WHERE kind = 'migrate'")
       .get() as { revision: number };
     return row.revision;
   }
@@ -352,7 +368,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     db: DatabaseSync,
     key: string,
   ): { readonly record: AgentStateJournalRecord; readonly resultStateText: string | null } | undefined {
-    const row = db.prepare('SELECT * FROM agent_state_journal WHERE idempotency_key = ?').get(key) as
+    const row = this.#prepare(db, 'SELECT * FROM agent_state_journal WHERE idempotency_key = ?').get(key) as
       | JournalRow
       | undefined;
     return row === undefined
@@ -401,8 +417,9 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     state: TState,
     stateText: string,
   ): AgentStateCommitResult<TState> {
-    db
-      .prepare(
+    this
+      .#prepare(
+        db,
         'INSERT INTO agent_state_journal (revision, kind, name, payload, state, result_state, to_version, idempotency_key, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
@@ -418,7 +435,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         record.idempotencyKey,
         record.committedAt,
       );
-    db.prepare('UPDATE agent_state_head SET revision = ?, state = ? WHERE id = 1').run(record.revision, stateText);
+    this.#prepare(db, 'UPDATE agent_state_head SET revision = ?, state = ? WHERE id = 1').run(record.revision, stateText);
     return Object.freeze({ replayed: false, revision: record.revision, state });
   }
 
@@ -614,8 +631,8 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         Effect.andThen(
           this.#transaction('read', 'changes', (db) => {
             const head = this.#headRow(db, 'changes');
-            const rows = db
-              .prepare('SELECT * FROM agent_state_journal WHERE revision > ? ORDER BY revision LIMIT ?')
+            const rows = this
+              .#prepare(db, 'SELECT * FROM agent_state_journal WHERE revision > ? ORDER BY revision LIMIT ?')
               .all(options.afterRevision, options.limit ?? -1) as unknown as JournalRow[];
             const changes = rows.map((row) => changeFromJournalRecord(recordFromRow(this.#definition.id, row)));
             return Object.freeze({ changes: Object.freeze(changes), headRevision: head.revision });
@@ -787,6 +804,9 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
   }
 }
 
+/** Generics-erased store type for the driver-wide open-store collection. */
+type AnySqliteStore = SqliteStore<unknown, AgentStateEventSchemas>;
+
 export const createSqliteStateDriver = (options: SqliteStateDriverOptions): AgentStateDriver => {
   if ((options.root === undefined) === (options.file === undefined)) {
     throw new AgentStateError('invalid-input', 'Sqlite state drivers require exactly one of root or file');
@@ -796,7 +816,7 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
     throw new AgentStateError('invalid-input', 'busyTimeoutMs must be an integer >= 1');
   }
   const now = options.now ?? ((): Date => new Date());
-  const openStores = new Set<SqliteStore<unknown, AgentStateEventSchemas>>();
+  const openStores = new Set<AnySqliteStore>();
   const pendingOpens = createPendingOpenTracker();
   let closed = false;
   let closing: Promise<void> | undefined;
@@ -894,7 +914,7 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
           let store: SqliteStore<TState, TEvents>;
           try {
             store = new SqliteStore(definition, file, now, () =>
-              openStores.delete(store as unknown as SqliteStore<unknown, AgentStateEventSchemas>),
+              openStores.delete(store as unknown as AnySqliteStore),
               runtime,
             );
             await store.initialize(busyTimeoutMs);
@@ -911,7 +931,7 @@ export const createSqliteStateDriver = (options: SqliteStateDriverOptions): Agen
             await store.close();
             throw new AgentStateError('store-closed', `State '${definition.id}' cannot open on a closed driver`);
           }
-          openStores.add(store as unknown as SqliteStore<unknown, AgentStateEventSchemas>);
+          openStores.add(store as unknown as AnySqliteStore);
           return store;
         })(),
       );

@@ -241,16 +241,16 @@ const sourcePaths = async (root: string, outputRoots: readonly string[]): Promis
 
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });
+    const subdirectories: string[] = [];
     for (const entry of entries) {
       const source = join(directory, entry.name);
       if (isProjectPathIgnored(rules, root, source)) continue;
       if (outputRoots.some((outputRoot) => containedPathComponents(outputRoot, source) !== undefined)) continue;
-      if (entry.isDirectory()) {
-        await visit(source);
-        continue;
-      }
-      if (entry.isFile()) paths.push(source);
+      if (entry.isDirectory()) subdirectories.push(source);
+      else if (entry.isFile()) paths.push(source);
     }
+    // Sibling directories descend concurrently; the final sort restores determinism.
+    await Promise.all(subdirectories.map(visit));
   };
 
   await visit(root);
@@ -270,11 +270,13 @@ const payloadSourcePaths = async (
       // A payload that does not exist yet contributes no source inputs.
       return;
     }
+    const subdirectories: string[] = [];
     for (const entry of entries) {
       const source = join(directory, entry.name);
-      if (entry.isDirectory()) await visit(source);
+      if (entry.isDirectory()) subdirectories.push(source);
       else if (entry.isFile()) paths.push(source);
     }
+    await Promise.all(subdirectories.map(visit));
   };
   for (const payloadRoot of payloadRoots) {
     const requested = resolve(root, payloadRoot);

@@ -9,6 +9,7 @@ import type {
 } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isMcpSessionTarget, type McpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
+import { isRecord } from '../client-helpers.ts';
 
 export type McpRouteTarget = McpSessionTarget;
 
@@ -38,6 +39,24 @@ export interface McpRouteRuntimeSession {
   readonly connection: McpRouteConnection;
   readonly state: 'connecting' | 'ready' | 'restarting' | 'failed' | 'closed';
 }
+
+/** The stable identity fields a runtime binding is compared by. */
+export type McpRuntimeBindingIdentity = Pick<
+  DevRuntimeMcpAppRunBinding,
+  | 'definitionDigest'
+  | 'registryRevision'
+  | 'serverDigest'
+  | 'serverName'
+  | 'sessionId'
+  | 'sessionRevision'
+  | 'target'
+  | 'transportDigest'
+>;
+
+export const sameRuntimeBinding = (left: McpRuntimeBindingIdentity, right: McpRuntimeBindingIdentity): boolean =>
+  left.definitionDigest === right.definitionDigest && left.registryRevision === right.registryRevision &&
+  left.serverDigest === right.serverDigest && left.serverName === right.serverName && left.sessionId === right.sessionId &&
+  left.sessionRevision === right.sessionRevision && left.target === right.target && left.transportDigest === right.transportDigest;
 
 export interface McpRouteRuntimeRestart {
   readonly reconcile: DevRuntimeMcpRegistryReconcileResult;
@@ -105,9 +124,6 @@ interface Diagnostic {
   readonly message: string;
   readonly phase?: string;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isTarget = isMcpSessionTarget;
 

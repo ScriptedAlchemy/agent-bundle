@@ -18,6 +18,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { Client } from '@modelcontextprotocol/client';
 
+import { isErrno } from '../core/errors.ts';
 import { AgentTestError } from './errors.ts';
 import {
   PACKED_DELETED_SOURCE_PROOF_LEVEL,
@@ -102,7 +103,7 @@ const pathExists = async (path: string): Promise<boolean> => {
     await lstat(path);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if (isErrno(error, 'ENOENT')) return false;
     throw error;
   }
 };

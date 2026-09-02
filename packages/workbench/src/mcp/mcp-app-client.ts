@@ -2,7 +2,7 @@ import { isCallToolResult } from '@modelcontextprotocol/client';
 
 import type { ProjectClient } from '../project-client.ts';
 import type { ProjectEventMessage } from '../../../agent-bundle/src/contracts/project.ts';
-import { validateMcpAppUiUri } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+import { isMcpAppConsentCapability, validateMcpAppUiUri } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, runtimeAppMessageLimits } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { McpAppProfileId } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type {
@@ -20,8 +20,9 @@ import type {
 } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { McpAppConsentRequest, McpAppDocumentPolicySnapshot } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 
+import { isRecord } from '../client-helpers.ts';
 import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
-import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp-route-client.ts';
+import { ForegroundRouteClient, ForegroundRouteClientError, sameRuntimeBinding, type McpRuntimeBindingIdentity } from './mcp-route-client.ts';
 
 export type McpAppJsonPrimitive = null | boolean | number | string;
 
@@ -187,9 +188,6 @@ const runtimeResponseJson = async (response: Response): Promise<unknown> => {
   return parsed;
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): McpAppJsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
   if (typeof value === 'number') {
@@ -321,38 +319,23 @@ const runtimeProfileId = (value: unknown): 'portable' | 'chatgpt' | 'claude' => 
   return runtimeInvalid('Runtime MCP App route returned an invalid profile.');
 };
 
-const runtimeJsonRecord = (value: unknown, message?: string): Readonly<Record<string, McpAppJsonValue>> => {
-  const record = asRecord(value);
-  if (message !== undefined && !hasOnlyKeys(record, Object.keys(record))) runtimeInvalid(message);
-  return record;
-};
-
 const runtimeVector = (value: unknown): McpAppPublicRuntimeVector => {
   const record = runtimeOptionalRecord(value, ['artifactEpochId', 'runtimeGenerationId', 'sourceRevision', 'stateVersion']);
+  const runtimeGenerationId = runtimeText(record.runtimeGenerationId, 'runtime generation');
+  const sourceRevision = runtimeText(record.sourceRevision, 'source revision');
   if (
-    !runtimeText(record.runtimeGenerationId, 'runtime generation') ||
-    !runtimeText(record.sourceRevision, 'source revision') ||
     !nonnegativeInteger(record.stateVersion) ||
     (record.artifactEpochId !== undefined && typeof record.artifactEpochId !== 'string')
   ) runtimeInvalid('Runtime MCP App route returned an invalid runtime vector.');
   return Object.freeze({
     ...(record.artifactEpochId === undefined ? {} : { artifactEpochId: record.artifactEpochId }),
-    runtimeGenerationId: record.runtimeGenerationId,
-    sourceRevision: record.sourceRevision,
+    runtimeGenerationId,
+    sourceRevision,
     stateVersion: record.stateVersion,
   }) as McpAppPublicRuntimeVector;
 };
 
-const runtimeStableBinding = (value: unknown): Readonly<{
-  readonly definitionDigest: string;
-  readonly registryRevision: number;
-  readonly serverDigest: string;
-  readonly serverName: string;
-  readonly sessionId: string;
-  readonly sessionRevision: number;
-  readonly target: string;
-  readonly transportDigest: string;
-}> => {
+const runtimeStableBinding = (value: unknown): McpRuntimeBindingIdentity => {
   const record = runtimeRecord(value, [
     'definitionDigest', 'registryRevision', 'serverDigest', 'serverName', 'sessionId', 'sessionRevision', 'target', 'transportDigest',
   ]);
@@ -369,13 +352,6 @@ const runtimeStableBinding = (value: unknown): Readonly<{
     transportDigest: runtimeText(record.transportDigest, 'transport digest'),
   });
 };
-
-const sameRuntimeBinding = (
-  left: Readonly<{ readonly definitionDigest: string; readonly registryRevision: number; readonly serverDigest: string; readonly serverName: string; readonly sessionId: string; readonly sessionRevision: number; readonly target: string; readonly transportDigest: string }>,
-  right: Readonly<{ readonly definitionDigest: string; readonly registryRevision: number; readonly serverDigest: string; readonly serverName: string; readonly sessionId: string; readonly sessionRevision: number; readonly target: string; readonly transportDigest: string }>,
-): boolean => left.definitionDigest === right.definitionDigest && left.registryRevision === right.registryRevision &&
-  left.serverDigest === right.serverDigest && left.serverName === right.serverName && left.sessionId === right.sessionId &&
-  left.sessionRevision === right.sessionRevision && left.target === right.target && left.transportDigest === right.transportDigest;
 
 const runtimeBinding = (value: unknown): McpAppRuntimeBindingSnapshot => {
   const record = runtimeRecord(value, [
@@ -417,7 +393,7 @@ const runtimeConnection = (value: unknown): Readonly<{
   const record = runtimeRecord(value, ['capabilities', 'protocolEra', 'protocolVersion', 'server']);
   if (record.capabilities !== undefined && !isRecord(record.capabilities)) runtimeInvalid('Runtime MCP App route returned invalid server capabilities.');
   const server = record.server === undefined ? undefined : runtimeRecord(record.server, ['name', 'version']);
-  const capabilities = record.capabilities === undefined ? undefined : runtimeJsonRecord(record.capabilities);
+  const capabilities = record.capabilities === undefined ? undefined : asRecord(record.capabilities);
   const protocolEra = runtimeEra(record.protocolEra);
   const protocolVersion = runtimeStringOrUndefined(record.protocolVersion, 'protocol version');
   return Object.freeze({
@@ -462,12 +438,12 @@ const runtimeMetadata = (value: unknown, host = false): unknown => {
   if (!hasExactKeys(record, host && record.claudeDomain !== undefined
     ? ['claudeDomain', 'extensions', 'provenance', 'raw', 'standard']
     : ['extensions', 'provenance', 'raw', 'standard'])) runtimeInvalid('Runtime MCP App route returned invalid metadata inspection.');
-  const raw = runtimeJsonRecord(record.raw);
+  const raw = asRecord(record.raw);
   const standard = runtimeOptionalRecord(record.standard, ['ui']);
   const extensions = runtimeRecord(record.extensions, ['claude', 'openai']);
-  const openai = runtimeJsonRecord(extensions.openai);
-  const claude = runtimeJsonRecord(extensions.claude);
-  const provenance = runtimeJsonRecord(record.provenance);
+  const openai = asRecord(extensions.openai);
+  const claude = asRecord(extensions.claude);
+  const provenance = asRecord(record.provenance);
   if (!Object.keys(raw).every((key) => Object.hasOwn(provenance, key)) || Object.keys(provenance).some((key) => !Object.hasOwn(raw, key))) {
     runtimeInvalid('Runtime MCP App metadata provenance does not match its raw metadata.');
   }
@@ -511,15 +487,15 @@ const runtimeHostContext = (value: unknown): unknown => {
   return Object.freeze({
     availableDisplayModes: Object.freeze([...availableDisplayModes]),
     containerDimensions: Object.freeze({ height: dimensions.height, width: dimensions.width }),
-    deviceCapabilities: runtimeJsonRecord(record.deviceCapabilities),
+    deviceCapabilities: asRecord(record.deviceCapabilities),
     displayMode: record.displayMode,
     locale: record.locale,
     platform: record.platform,
     safeAreaInsets: Object.freeze({ bottom: insets.bottom, left: insets.left, right: insets.right, top: insets.top }),
-    styles: runtimeJsonRecord(record.styles),
+    styles: asRecord(record.styles),
     theme: record.theme,
     timeZone: record.timeZone,
-    toolInfo: runtimeJsonRecord(record.toolInfo),
+    toolInfo: asRecord(record.toolInfo),
     userAgent: record.userAgent,
   });
 };
@@ -808,9 +784,7 @@ const runtimeOperationRequest = (value: unknown): McpAppBindingOperation => {
 const runtimeConsentRequest = (value: unknown): McpAppConsentRequest => {
   const record = runtimeRequestRecord(value);
   if (!hasExactKeys(record, ['actionFingerprint', 'capability', 'details', 'scope', 'summary']) ||
-    (record.capability !== 'call-tool' && record.capability !== 'download-file' && record.capability !== 'open-external-link' &&
-      record.capability !== 'clipboard-write' && record.capability !== 'camera' && record.capability !== 'microphone' &&
-      record.capability !== 'geolocation' && record.capability !== 'request-display-mode') ||
+    !isMcpAppConsentCapability(record.capability) ||
     (record.scope !== 'action' && record.scope !== 'document')) runtimeInputInvalid();
   return Object.freeze({
     actionFingerprint: runtimeText(record.actionFingerprint, 'consent fingerprint'),
@@ -858,9 +832,7 @@ const runtimeGrant = (
 ): NonNullable<McpAppConsentDecisionResponse['grant']> => {
   const record = runtimeRecord(value, ['authorizationId', 'bindingId', 'capability', 'challengeId', 'scope']);
   if (record.bindingId !== bindingId || record.challengeId !== consentId || record.capability !== challenge.capability || record.scope !== challenge.scope ||
-    (record.capability !== 'call-tool' && record.capability !== 'download-file' && record.capability !== 'open-external-link' &&
-      record.capability !== 'clipboard-write' && record.capability !== 'camera' && record.capability !== 'microphone' &&
-      record.capability !== 'geolocation' && record.capability !== 'request-display-mode')) runtimeInvalid('Runtime MCP App route returned an invalid consent grant.');
+    !isMcpAppConsentCapability(record.capability)) runtimeInvalid('Runtime MCP App route returned an invalid consent grant.');
   return Object.freeze({
     authorizationId: runtimeText(record.authorizationId, 'authorization id'),
     bindingId,

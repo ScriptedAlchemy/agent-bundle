@@ -6,7 +6,8 @@ import type {
   EvalRunSelection,
   EvalSuiteListing,
 } from '../../../agent-bundle/src/contracts/eval.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import { type JsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import { exactKeys, isRecord, parseStrictResponseJson } from '../client-helpers.ts';
 import type { EvalHarnessName, EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/contracts/eval.ts';
 import { awaitWithAbort, type ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import {
@@ -70,10 +71,6 @@ const maximumArtifactBytes = 8 * 1024 * 1024;
 const maximumEventFrameBytes = 256 * 1024;
 const safeArtifactSegment = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const evalHarnesses = new Set<EvalHarness>(['deterministic', 'claude', 'codex']);
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-const exactKeys = (value: unknown, keys: readonly string[]): value is Readonly<Record<string, unknown>> =>
-  isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isIsoTimestamp = (value: unknown): value is string =>
@@ -254,15 +251,7 @@ const runResultSchema = z.strictObject({
 });
 const conforms = (schema: z.ZodType, value: unknown): boolean => schema.safeParse(value).success;
 
-const snapshot = (value: unknown): JsonValue => {
-  try { return snapshotStrictJsonValue(value); }
-  catch { throw invalidResponse(); }
-};
-
-const parseResponseJson = (bytes: Uint8Array): JsonValue => {
-  try { return snapshot(parseJsonWithoutDuplicateKeys(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); }
-  catch { throw invalidResponse(); }
-};
+const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalidResponse);
 
 const eventFor = (value: unknown): EvalRunEvent => {
   if (!exactKeys(value, ['kind', 'payload', 'sequence', 'timestamp']) ||

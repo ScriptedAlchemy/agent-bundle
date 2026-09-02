@@ -1,3 +1,4 @@
+import { isPlainRecord } from '../core/strict-json.ts';
 import {
   McpAppRuntimeBindingService,
   type McpAppBoundOperationResult,
@@ -206,9 +207,7 @@ const systemOperationClock: McpAppRuntimeOperationClock = Object.freeze({
   setTimeout: (callback: () => void, milliseconds: number) => setTimeout(callback, milliseconds),
 });
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) &&
-  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+const isRecord = isPlainRecord;
 
 const canonicalCallToolConsentDetails = (
   catalog: PreviewEntry['catalog'],

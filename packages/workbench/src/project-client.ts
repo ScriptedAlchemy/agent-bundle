@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
+import { isRecord } from './client-helpers.ts';
 import {
   freezeJsonValue,
   type ArtifactEpoch,
@@ -88,9 +89,6 @@ const projectEventTypes = [
 const browserEvents: EventSourceFactory = (url) => new EventSource(url);
 const retryDelay = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const retryDelayMilliseconds = 250;
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const hasExactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean =>
   Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key));

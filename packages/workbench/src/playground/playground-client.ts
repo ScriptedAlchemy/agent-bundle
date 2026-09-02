@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { NATIVE_HOSTS } from '../../../agent-bundle/src/contracts/playground.ts';
+import { isRecord } from '../client-helpers.ts';
 import type {
   DraftEvalCase,
   PlaygroundExport,
@@ -36,9 +37,6 @@ export class PlaygroundClientError extends Error {
     this.code = code;
   }
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): PlaygroundClientError =>
   new PlaygroundClientError('AB8043', 'Playground route returned an invalid response.');

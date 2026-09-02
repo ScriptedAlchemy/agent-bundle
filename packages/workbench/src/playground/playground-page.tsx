@@ -16,6 +16,7 @@ import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-b
 import { NATIVE_HOST_LABELS } from '../../../agent-bundle/src/contracts/playground.ts';
 import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/contracts/playground.ts';
 
+import { errorMessage as messageFrom } from '../client-helpers.ts';
 import { canonicalHookInputFor } from '../hooks/hooks-page.tsx';
 import { parseRawJsonRecord, serializeJsonRecord } from '../mcp/mcp-json-input.tsx';
 import { PlaygroundClientError, type PlaygroundClient } from './playground-client.ts';
@@ -83,7 +84,7 @@ export type PlaygroundOperation = PlaygroundOperationRequest['operation'];
 const jsonDraftError = 'This field must contain a JSON object.';
 
 const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The playground request could not be completed.';
+  messageFrom(reason, 'The playground request could not be completed.');
 
 const asJsonObject = (value: Readonly<Record<string, unknown>>): PlaygroundJsonObject => value as PlaygroundJsonObject;
 

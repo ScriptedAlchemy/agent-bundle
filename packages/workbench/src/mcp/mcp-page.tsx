@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } f
 
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type { DevRuntimeMcpAppRunBinding } from '../../../agent-bundle/src/contracts/runtime.ts';
+import { isRecord } from '../client-helpers.ts';
 
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
 import {
@@ -559,9 +560,6 @@ export const mcpPageSessionControls = (
   };
 };
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const text = (value: unknown): string | undefined => typeof value === 'string' && value.length > 0 ? value : undefined;
 
 const browserMcpAppHost = (): McpAppHostContext => {
@@ -954,12 +952,17 @@ const McpPageArtifactPreview = ({ client, host, onLifecycleChange, previewProfil
     onLifecycleChange(current);
     const unsubscribe = current.subscribe(setState);
     let active = true;
+    // The poll ticks constantly; keeping the previous array reference when the
+    // challenge set is unchanged avoids re-rendering the preview 4x/second.
+    const sameChallenges = (left: readonly McpAppConsentChallenge[], right: readonly McpAppConsentChallenge[]): boolean =>
+      left.length === right.length &&
+      left.every((challenge, index) => challenge.id === right[index]?.id && challenge.expiresAt === right[index]?.expiresAt);
     const refreshConsent = async (): Promise<void> => {
       try {
         const challenges = await current.consentChallenges();
-        if (active) setConsentChallenges(challenges);
+        if (active) setConsentChallenges((previous) => sameChallenges(previous, challenges) ? previous : challenges);
       } catch {
-        if (active) setConsentChallenges(Object.freeze([]));
+        if (active) setConsentChallenges((previous) => previous.length === 0 ? previous : Object.freeze([]));
       }
     };
     void current.start().then(refreshConsent);

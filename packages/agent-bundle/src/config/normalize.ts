@@ -4,6 +4,7 @@ import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, extname, posix, relative, resolve, sep, win32 } from 'node:path';
 
 import { digest } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isInside } from '../core/paths.ts';
 import {
@@ -586,7 +587,7 @@ const normalizeNativeHooks = async (
       });
     } catch (error) {
       nativeHooks.push({
-        issue: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'parse',
+        issue: isErrno(error, 'ENOENT') ? 'missing' : 'parse',
         provenance: { ...provenance },
         source,
         target,

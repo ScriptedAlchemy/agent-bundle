@@ -7,7 +7,7 @@ import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { defaultEvalRunsDir } from './config.ts';
 import { findCredentialConfiguration } from './credentials.ts';
 import { EvalRunStoreError } from './errors.ts';
@@ -215,9 +215,6 @@ const runEvalRunStoreDurabilityTestHook = async (
 };
 
 const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isProcessRunning = (pid: number): boolean => {
   try {

@@ -1,6 +1,7 @@
 import React, { type Ref, useState } from 'react';
 
 import type { JsonObject, JsonValue } from '../../../agent-bundle/src/contracts/runtime.ts';
+import { isRecord } from '../client-helpers.ts';
 
 export type ImmutableJsonValue = JsonValue;
 export type ImmutableJsonRecord = JsonObject;
@@ -81,9 +82,6 @@ const supportedFieldKeywords = new Set([
   'title',
   'type',
 ]);
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const hasOnlyKeys = (value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean =>
   Object.keys(value).every((key) => allowed.has(key));

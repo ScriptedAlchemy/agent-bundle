@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
+import { isRecord } from '../client-helpers.ts';
 import type {
   RouteManifest,
   RouteManifestCliCommand,
@@ -189,9 +190,6 @@ const manifestSchema: z.ZodType<RouteManifest> = z.strictObject({
 });
 
 const responseSchema = z.strictObject({ manifest: manifestSchema });
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const diagnosticError = (value: unknown, status: number): RouteManifestClientError => {
   if (

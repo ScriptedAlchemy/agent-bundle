@@ -6,6 +6,7 @@ import type {
   HookPlaygroundReplay,
   HookPlaygroundSimulation,
 } from '../../../agent-bundle/src/contracts/hooks.ts';
+import { isRecord } from '../client-helpers.ts';
 import { z } from 'zod';
 
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
@@ -32,9 +33,6 @@ export class HookClientError extends Error {
     this.code = code;
   }
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): HookClientError =>
   new HookClientError('AB8033', 'Hook playground route returned an invalid response.');

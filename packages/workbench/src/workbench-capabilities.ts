@@ -1,6 +1,8 @@
 import type { ArtifactInspection } from '../../agent-bundle/src/contracts/artifacts.ts';
 import type { SkillDocumentTree } from '../../agent-bundle/src/contracts/skills.ts';
 
+import { errorMessage as messageFrom } from './client-helpers.ts';
+
 import type { ArtifactClient } from './artifacts/artifact-client.ts';
 import type { EvalClient } from './evals/eval-client.ts';
 import type { RouteManifestClient } from './routes/route-manifest-client.ts';
@@ -73,7 +75,7 @@ const pagesFor = (
 };
 
 const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'The compiled route manifest could not be read.';
+  messageFrom(reason, 'The compiled route manifest could not be read.');
 
 /**
  * An absent or refused manifest route degrades this one section rather than the

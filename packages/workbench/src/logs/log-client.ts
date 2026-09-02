@@ -6,9 +6,9 @@ import type {
 } from '../../../agent-bundle/src/contracts/dev-logs.ts';
 import {
   parseJsonWithoutDuplicateKeys,
-  snapshotStrictJsonValue,
   type JsonValue,
 } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import { exactKeys, isRecord, parseStrictResponseJson, strictJsonSnapshot } from '../client-helpers.ts';
 import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/contracts/credentials.ts';
 import {
   awaitWithAbort,
@@ -71,10 +71,6 @@ const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isDate = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-const hasExactKeys = (value: unknown, keys: readonly string[]): value is Readonly<Record<string, unknown>> =>
-  isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const hasControlOrSeparators = (value: string): boolean => [...value].some((character) =>
   character === '/' || character === '\\' || character <= '\u001F' || character === '\u007F');
 const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
@@ -98,27 +94,21 @@ const isLevel = (value: unknown): boolean => typeof value === 'string' && (devLo
 const isContext = (value: unknown): value is Readonly<Record<string, string>> => isRecord(value) && Object.entries(value).every(([key, entry]) =>
   safeContextKeys.has(key) && typeof entry === 'string' && safeIdentifier.test(entry) && isSafeWireText(entry, 256));
 const isDevRecord = (value: unknown): value is DevLogRecord => {
-  if (!hasExactKeys(value, ['context', 'details', 'kind', 'level', 'occurredAt', 'producer', 'sequence', 'summary']) || !isProducer(value.producer)) return false;
+  if (!exactKeys(value, ['context', 'details', 'kind', 'level', 'occurredAt', 'producer', 'sequence', 'summary']) || !isProducer(value.producer)) return false;
   return safeInteger(value.sequence, 1) && isDate(value.occurredAt) && isLevel(value.level) &&
     typeof value.kind === 'string' && (devLogKinds[value.producer] as readonly string[]).includes(value.kind) &&
     isSafeWireText(value.summary, maximumSummaryLength) && isContext(value.context) && isSafeDetail(value.details as JsonValue);
 };
-const isGap = (value: unknown): value is DevLogReplayGap => hasExactKeys(value, [
+const isGap = (value: unknown): value is DevLogReplayGap => exactKeys(value, [
   'earliestAvailableSequence', 'latestDroppedSequence', 'requestedAfterSequence', 'type',
 ]) && value.type === 'replay.gap' && safeInteger(value.requestedAfterSequence) && safeInteger(value.earliestAvailableSequence, 1) &&
   safeInteger(value.latestDroppedSequence) && value.earliestAvailableSequence === value.latestDroppedSequence + 1 &&
   value.requestedAfterSequence < value.earliestAvailableSequence;
 const invalid = (): LogClientError => new LogClientError('AB8093', 'Dev Log route returned an invalid response.');
-const snapshot = (value: unknown): JsonValue => {
-  try { return snapshotStrictJsonValue(value); }
-  catch { throw invalid(); }
-};
-const parseResponseJson = (bytes: Uint8Array): JsonValue => {
-  try { return snapshot(parseJsonWithoutDuplicateKeys(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); }
-  catch { throw invalid(); }
-};
+const snapshot = (value: unknown): JsonValue => strictJsonSnapshot(value, invalid);
+const parseResponseJson = (bytes: Uint8Array): JsonValue => parseStrictResponseJson(bytes, invalid);
 const parseMessage = (line: string): JsonValue => {
-  try { return snapshot(parseJsonWithoutDuplicateKeys(line)); }
+  try { return strictJsonSnapshot(parseJsonWithoutDuplicateKeys(line), invalid); }
   catch { throw invalid(); }
 };
 const contiguous = (records: readonly DevLogRecord[], afterSequence: number): boolean => records.every((record, index) =>
@@ -126,11 +116,11 @@ const contiguous = (records: readonly DevLogRecord[], afterSequence: number): bo
 
 const replayFor = (value: unknown, afterSequence: number): DevLogReplay => {
   const detached = snapshot(value);
-  if (!hasExactKeys(detached, ['replay']) || !isRecord(detached.replay)) throw invalid();
+  if (!exactKeys(detached, ['replay']) || !isRecord(detached.replay)) throw invalid();
   const rawReplay = detached.replay;
   if (
-    !(hasExactKeys(rawReplay, ['cursor', 'records']) || hasExactKeys(rawReplay, ['cursor', 'gap', 'records'])) ||
-    !hasExactKeys(rawReplay.cursor, ['afterSequence']) || !safeInteger(rawReplay.cursor.afterSequence) ||
+    !(exactKeys(rawReplay, ['cursor', 'records']) || exactKeys(rawReplay, ['cursor', 'gap', 'records'])) ||
+    !exactKeys(rawReplay.cursor, ['afterSequence']) || !safeInteger(rawReplay.cursor.afterSequence) ||
     rawReplay.cursor.afterSequence < afterSequence || !Array.isArray(rawReplay.records) || !rawReplay.records.every(isDevRecord) ||
     (Object.hasOwn(rawReplay, 'gap') && !isGap(rawReplay.gap))
   ) throw invalid();
@@ -168,7 +158,7 @@ const diagnosticMessages = new Map<string, string>([
   ['AB8093', 'Dev Log route returned an invalid response.'],
 ]);
 const diagnosticFor = (value: unknown): LogClientError => {
-  if (!hasExactKeys(value, ['diagnostic']) || !hasExactKeys(value.diagnostic, ['code', 'message']) ||
+  if (!exactKeys(value, ['diagnostic']) || !exactKeys(value.diagnostic, ['code', 'message']) ||
     typeof value.diagnostic.code !== 'string' || typeof value.diagnostic.message !== 'string') return invalid();
   const message = diagnosticMessages.get(value.diagnostic.code);
   return message === undefined ? invalid() : new LogClientError(value.diagnostic.code, message);
