@@ -120,6 +120,7 @@ const safeContextKeys = new Set([
   'epochId',
   'hookId',
   'projectId',
+  'routeId',
   'runId',
   'sessionId',
   'target',

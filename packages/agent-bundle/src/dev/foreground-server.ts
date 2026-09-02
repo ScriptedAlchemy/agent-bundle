@@ -13,6 +13,7 @@ import { EvalRoutes, type EvalRouteService } from './eval/eval-routes.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { InspectorRoutes, type InspectorRouteService } from './inspector-routes.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playground/hook-playground-routes.ts';
+import { LifecycleReplayRoutes, type LifecycleReplayRouteService } from './playground/lifecycle-replay-routes.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session/mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session/mcp-session-service.ts';
@@ -131,6 +132,8 @@ export interface ForegroundServerOptions {
   readonly mcpAppPreviews?: McpAppRoutePreviewService;
   /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
   readonly hookPlayground?: HookPlaygroundRouteService;
+  /** Read-only semantic lifecycle replay over the latest valid prepared graph. */
+  readonly lifecycleReplay?: LifecycleReplayRouteService;
   /** Opt-in standalone MCP Inspector child; never auto-started. */
   readonly inspector?: InspectorRouteService;
   /** Persistent MCP sessions are supplied by the workbench service, never by browser input. */
@@ -434,6 +437,7 @@ export class ForegroundServer {
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
   readonly #host: string;
   readonly #inspectorRoutes: InspectorRoutes;
+  readonly #lifecycleReplayRoutes: LifecycleReplayRoutes;
   readonly #mcpAppPreviews: McpAppRoutePreviewService | undefined;
   readonly #mcpAppRoutes: McpAppRoutes;
   readonly #runtimeMcpRoutes: RuntimeMcpRoutes;
@@ -512,6 +516,10 @@ export class ForegroundServer {
     this.#hookPlaygroundRoutes = new HookPlaygroundRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.hookPlayground === undefined ? {} : { service: options.hookPlayground }),
+    });
+    this.#lifecycleReplayRoutes = new LifecycleReplayRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.lifecycleReplay === undefined ? {} : { service: options.lifecycleReplay }),
     });
     this.#inspectorRoutes = new InspectorRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -674,6 +682,7 @@ export class ForegroundServer {
     this.#inspectorRoutes.close();
     this.#artifactRoutes.close();
     this.#routeManifestRoutes.close();
+    this.#lifecycleReplayRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
     void releaseEvals.catch(() => undefined);
     // Fence both public Eval authorities in this turn. Agent API handlers can
@@ -756,6 +765,7 @@ export class ForegroundServer {
     if (await this.#runtimeMcpRoutes.handle(request, response)) return;
     if (await this.#runtimeRoutes.handle(request, response)) return;
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
+    if (await this.#lifecycleReplayRoutes.handle(request, response)) return;
     if (await this.#playgroundRoutes.handle(request, response)) return;
     if (await this.#inspectorRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;

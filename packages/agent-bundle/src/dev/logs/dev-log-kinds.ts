@@ -24,7 +24,14 @@ export const devLogKinds = Object.freeze({
     'invalidation.diagnostic', 'runtime.event.diagnostic', 'source.changed.diagnostic', 'source.status.diagnostic',
   ] as const),
   eval: Object.freeze(['eval.run.completed', 'eval.run.failed', 'eval.run.started'] as const),
-  hook: Object.freeze(['hook.simulate.completed', 'hook.simulate.failed', 'hook.simulate.started'] as const),
+  hook: Object.freeze([
+    'hook.simulate.completed',
+    'hook.simulate.failed',
+    'hook.simulate.started',
+    'lifecycle.replay.completed',
+    'lifecycle.replay.failed',
+    'lifecycle.replay.started',
+  ] as const),
   mcp: Object.freeze(['mcp.logging', 'mcp.stderr', 'mcp.operation.failed', 'mcp.operation.started', 'mcp.operation.succeeded'] as const),
   playground: Object.freeze(['playground.event.appended'] as const),
   project: Object.freeze([
