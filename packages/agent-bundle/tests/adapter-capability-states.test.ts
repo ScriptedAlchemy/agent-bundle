@@ -290,6 +290,22 @@ const claudeDistributionPolicyCapabilities = [
   'marketplaceCliLifecycle',
 ] as const;
 
+it('reports Claude plugin install scopes from the scoped installer implementation', () => {
+  const row = claudeCapabilityTable.plugin.distributionPolicy.pluginInstallScopes;
+  const capability = createDefaultRegistry().get('claude').capabilities.pluginInstallScopes;
+
+  expect(row).toMatchObject({
+    evidence: expect.arrayContaining([
+      expect.stringContaining('src/install/install.ts'),
+    ]),
+    state: 'supported',
+  });
+  expect(capability).toMatchObject({
+    evidence: { observedVersion: '2.1.250', target: 'claude' },
+    state: 'supported',
+  });
+});
+
 it('records dated unavailable Claude distribution and policy capability rows', () => {
   const registry = createDefaultRegistry();
   const distributionPolicy = (
@@ -311,14 +327,21 @@ it('records dated unavailable Claude distribution and policy capability rows', (
   expect(Object.keys(distributionPolicy).sort()).toEqual([...claudeDistributionPolicyCapabilities].sort());
   for (const capability of claudeDistributionPolicyCapabilities) {
     const row = distributionPolicy[capability];
-    expect(row.state).toBe('unavailable');
-    expect(row.reason.length).toBeGreaterThan(0);
+    expect(row.state).toBe(capability === 'pluginInstallScopes' ? 'supported' : 'unavailable');
+    if (capability !== 'pluginInstallScopes') expect(row.reason.length).toBeGreaterThan(0);
     expect(row.evidence.length).toBeGreaterThan(0);
     expect(row.evidence.every((line) => line.includes('retrieved 2026-09-02'))).toBe(true);
-    expect(registry.get('claude').capabilities[capability]).toEqual({
-      reason: row.reason,
-      state: 'unavailable',
-    });
+    if (capability === 'pluginInstallScopes') {
+      expect(registry.get('claude').capabilities[capability]).toMatchObject({
+        evidence: { observedVersion: '2.1.250', target: 'claude' },
+        state: 'supported',
+      });
+    } else {
+      expect(registry.get('claude').capabilities[capability]).toEqual({
+        reason: row.reason,
+        state: 'unavailable',
+      });
+    }
     expect(registry.get('plugin').capabilities[capability]).toMatchObject({
       state: 'unavailable',
     });

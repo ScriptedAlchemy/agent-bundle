@@ -3,7 +3,7 @@
   "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/theme.schema.json",
   "additionalProperties": false,
   "properties": {
-    "base": { "minLength": 1, "type": "string" },
+    "base": { "enum": ["dark", "light"] },
     "name": { "minLength": 1, "type": "string" },
     "overrides": {
       "additionalProperties": { "minLength": 1, "type": "string" },

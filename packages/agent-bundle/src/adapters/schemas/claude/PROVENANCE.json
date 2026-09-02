@@ -41,8 +41,8 @@
       "url": "https://code.claude.com/docs/en/plugins"
     },
     "theme.schema.json": {
-      "bytes": 458,
-      "sha256": "1ee6c8485855bf90402a1c527830efeca0643be7037ca2ff3e178c51e5973089",
+      "bytes": 451,
+      "sha256": "721aa9b0bc7c60cd9359343e5c7205ffbdfea82da312f601720c9dfaa2d8cf0d",
       "url": "https://code.claude.com/docs/en/plugins-reference"
     }
   },
