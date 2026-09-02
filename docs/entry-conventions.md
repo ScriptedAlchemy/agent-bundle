@@ -139,8 +139,13 @@ Conventional route components receive only their surface props, such as
 invocation plus `host`, `session`, `actor`, and `workspace` identity axes.
 Each identity axis is `Observed`: transports publish an `available` value and
 source when they know it, or `unavailable` with a typed reason when they do
-not. Generated event scopes currently mount no actor principal, so event
-routes observe actor as unavailable rather than receiving a fabricated value.
+not. Generated MCP request scopes observe the negotiated client identity as a
+native host, derive workspace from the server process working directory, and
+use native transport session and HTTP authentication data when supplied. Bare
+stdio supplies neither a session id nor HTTP actor authentication, so those
+axes remain honestly unavailable. Generated event scopes currently mount no
+actor principal, so event routes observe actor as unavailable rather than
+receiving a fabricated value.
 
 Handlers authored with `defineOperation` receive the same handle as optional
 `context.request` in the second `execute` argument:

@@ -72,14 +72,24 @@ describe('the in-memory MCP projection level', () => {
     expect(invocation.provenance.proofLevel).toBe('mcp-in-memory');
   });
 
-  it('reports the identity axes the in-memory projection actually installs', async () => {
-    const invocation = await invokeMcpTool('context');
+  it('reports transport identity without accepting lookalike input fields', async () => {
+    const invocation = await invokeMcpTool('context', {
+      input: { host: 'spoofed-host', session: 'spoofed-session' },
+    });
 
     expect(invocation.structuredContent).toEqual({
       actor: { reason: 'not-provided', state: 'unavailable' },
-      host: { reason: 'not-provided', state: 'unavailable' },
+      host: {
+        source: 'native',
+        state: 'available',
+        value: { name: 'agent-bundle-in-memory-projection' },
+      },
       session: { reason: 'not-provided', state: 'unavailable' },
-      workspace: { reason: 'not-provided', state: 'unavailable' },
+      workspace: {
+        source: 'derived',
+        state: 'available',
+        value: { root: process.cwd() },
+      },
     });
   });
 
