@@ -26,7 +26,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB5000` | General CLI and adapter failures. |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
 | `AB7xxx` | Project preparation and development rebuilds. |
-| `AB7300`–`AB7315` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, and runtime endpoint health. |
+| `AB7300`–`AB7316` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health, and durable-state inventory. |
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
 
@@ -151,7 +151,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
-## Route graph, state, and provider conventions (`AB4800`–`AB4820`, `AB4940`–`AB4942`)
+## Route graph, state, and provider conventions (`AB4800`–`AB4821`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -264,9 +264,20 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4818` | error | `src/state.ts` is present but does not default-export one direct `defineState({ ... })` call, or `state` config is not the supported `false` opt-out. |
 | `AB4819` | error | The state definition's `id` or `lifetime` is missing, non-literal, empty, duplicated, or outside the state lifetime vocabulary. |
 | `AB4820` | error | A generated project selects `external` state lifetime; v1 generated mounting supports only `request`, `process`, and `workspace-durable` because external drivers require embedder wiring. |
+| `AB4821` | error | A project state definition uses the reserved notice-ledger id `@agent-bundle/runtime/agent-notice-ledger/v1`; generated runtimes own that id for the co-mounted notice store. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |
+
+## Read-only Doctor durable-state inventory (`AB7316`)
+
+`agent-bundle doctor` inventories workspace-durable SQLite stores by directory
+entry and filesystem metadata only. It never opens a database or creates
+SQLite lock or shared-memory files.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB7316` | warning | An installed bundle's `state/` directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Repair permissions and rerun Doctor; Doctor never repairs state. |
 
 ## Development package build (`AB7103`)
 

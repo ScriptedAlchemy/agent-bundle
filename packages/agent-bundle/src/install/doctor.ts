@@ -57,12 +57,32 @@ export interface DoctorHostProbe {
 }
 
 export interface DoctorFinding {
+  readonly durableState?: DoctorDurableStateReport;
   readonly entry?: string;
   readonly manifest?: string;
   readonly name?: string;
   readonly path?: string;
   readonly state: DoctorFindingState;
   readonly version?: string;
+}
+
+export interface DoctorDurableStateStore {
+  /** Main database plus any present `-wal` and `-shm` sidecars. */
+  readonly bytes: number;
+  readonly file: string;
+  readonly mtime: string;
+  readonly path: string;
+}
+
+export interface DoctorDurableStateReport {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly directory: string;
+  readonly findings: readonly DoctorDurableStateStore[];
+  readonly status: 'known' | 'warnings';
+  readonly summary: {
+    readonly bytes: number;
+    readonly stores: number;
+  };
 }
 
 export interface DoctorInventory {
@@ -244,6 +264,81 @@ const freezeInventory = (
   findings: Object.freeze(findings.map(freezeFinding)),
   status,
 });
+
+const durableStateReport = (
+  directory: string,
+  findings: readonly DoctorDurableStateStore[],
+  diagnostics: readonly Diagnostic[],
+): DoctorDurableStateReport => {
+  const frozenDiagnostics = freezeDiagnostics(diagnostics);
+  return Object.freeze({
+    diagnostics: frozenDiagnostics,
+    directory,
+    findings: Object.freeze(findings.map((finding) => Object.freeze({ ...finding }))),
+    status: frozenDiagnostics.length === 0 ? 'known' : 'warnings',
+    summary: Object.freeze({
+      bytes: findings.reduce((total, finding) => total + finding.bytes, 0),
+      stores: findings.length,
+    }),
+  });
+};
+
+const inspectDurableState = async (
+  pluginRoot: string,
+  target?: DoctorHost,
+): Promise<DoctorDurableStateReport | undefined> => {
+  const directory = join(pluginRoot, 'state');
+  let entries: readonly string[];
+  try {
+    entries = (await readdir(directory)).sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return undefined;
+    const diagnostics = [diagnostic(
+      'AB7316',
+      `Durable state directory ${JSON.stringify(directory)} could not be read.`,
+      'Repair directory permissions and rerun `agent-bundle doctor`; Doctor never opens or repairs state databases.',
+      'warning',
+      target,
+    )];
+    return durableStateReport(directory, [], diagnostics);
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  const findings: DoctorDurableStateStore[] = [];
+  for (const file of entries.filter((entry) => entry.endsWith('.sqlite'))) {
+    const path = join(directory, file);
+    try {
+      const metadata = await lstat(path);
+      if (!metadata.isFile()) continue;
+      let bytes = metadata.size;
+      for (const suffix of ['-wal', '-shm'] as const) {
+        try {
+          const sidecar = await lstat(`${path}${suffix}`);
+          if (sidecar.isFile()) bytes += sidecar.size;
+        } catch (error) {
+          if (isErrno(error, 'ENOENT')) continue;
+          throw error;
+        }
+      }
+      findings.push({
+        bytes,
+        file,
+        mtime: metadata.mtime.toISOString(),
+        path,
+      });
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) continue;
+      diagnostics.push(diagnostic(
+        'AB7316',
+        `Durable state store ${JSON.stringify(path)} could not be inspected.`,
+        'Repair file permissions and rerun `agent-bundle doctor`; Doctor never opens or repairs state databases.',
+        'warning',
+        target,
+      ));
+    }
+  }
+  return durableStateReport(directory, findings, diagnostics);
+};
 
 const probeBinary = async (
   host: Exclude<DoctorHost, 'cursor'>,
@@ -478,7 +573,10 @@ const cursorInventory = async (
       ));
       continue;
     }
+    const durableState = await inspectDurableState(path, 'cursor');
+    if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
     findings.push({
+      ...(durableState === undefined ? {} : { durableState }),
       entry,
       manifest: manifest.manifest,
       name: manifest.name,
@@ -988,7 +1086,15 @@ const doctorHost = async (
           ? await claudeBundle(identity, probed.probe, run)
           : codexBundle(identity);
       diagnostics.push(...checked.diagnostics);
-      bundle = checked.finding;
+      if (checked.finding === undefined) {
+        throw new TypeError(`The ${host} bundle check returned no finding.`);
+      }
+      const durableState = await inspectDurableState(identity.bundleRoot, host);
+      if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
+      bundle = Object.freeze({
+        ...checked.finding,
+        ...(durableState === undefined ? {} : { durableState }),
+      });
     } catch (error) {
       const malformed = malformedBundle(host, error);
       diagnostics.push(...malformed.diagnostics);

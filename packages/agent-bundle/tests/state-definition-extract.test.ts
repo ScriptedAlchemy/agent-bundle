@@ -22,6 +22,59 @@ describe('state definition extraction', () => {
       diagnostics: [],
     });
     expect(Object.isFrozen(result)).toBe(true);
+    expect(result.definition?.budgets).toBeUndefined();
+  });
+
+  it('extracts full literal budgets', () => {
+    const result = extract([
+      'export default defineState({',
+      "  id: 'project/tasks',",
+      "  lifetime: 'workspace-durable',",
+      '  budgets: {',
+      '    maxEventBytes: 262144,',
+      '    maxStateBytes: 1048576,',
+      '    maxRevisions: 100000,',
+      '    maxCommitMs: 5000,',
+      '  },',
+      '});',
+    ].join('\n'));
+
+    expect(result.definition?.budgets).toEqual({
+      declared: {
+        maxCommitMs: 5000,
+        maxEventBytes: 262144,
+        maxRevisions: 100000,
+        maxStateBytes: 1048576,
+      },
+    });
+  });
+
+  it('extracts partial literal budgets', () => {
+    const result = extract([
+      'export default defineState({',
+      "  id: 'project/tasks',",
+      "  lifetime: 'process',",
+      '  budgets: { maxRevisions: 42 },',
+      '});',
+    ].join('\n'));
+
+    expect(result.definition?.budgets).toEqual({ declared: { maxRevisions: 42 } });
+  });
+
+  it.each([
+    ['computed value', 'budgets: { maxStateBytes: MAX_STATE_BYTES }'],
+    ['unknown key', 'budgets: { maxStateBytes: 1024, burst: 2 }'],
+  ])('marks %s budgets as dynamic', (_label, budgets) => {
+    const result = extract([
+      'export default defineState({',
+      "  id: 'project/tasks',",
+      "  lifetime: 'request',",
+      `  ${budgets},`,
+      '});',
+    ].join('\n'));
+
+    expect(result.definition?.budgets).toBe('dynamic');
+    expect(result.diagnostics).toEqual([]);
   });
 
   it.each([
