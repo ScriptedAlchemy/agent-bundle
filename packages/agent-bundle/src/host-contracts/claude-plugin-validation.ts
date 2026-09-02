@@ -1,5 +1,7 @@
-import { dirname, resolve } from 'node:path';
+import { readFile, readdir } from 'node:fs/promises';
+import { dirname, join, posix, resolve } from 'node:path';
 
+import { claudeArtifactValidation } from '../adapters/claude.ts';
 import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
@@ -38,6 +40,11 @@ export interface ValidateClaudePluginOptions {
   readonly run?: ClaudePluginCommandRunner;
   /** Promote host warnings to Agent Bundle errors. Claude itself always runs with `--strict`. */
   readonly strict?: boolean;
+  readonly target: string;
+}
+
+export interface ValidateClaudePluginFilesOptions {
+  readonly pluginDirectory: string;
   readonly target: string;
 }
 
@@ -85,6 +92,113 @@ const issueLines = (output: string): readonly { readonly message: string; readon
     issues.push(Object.freeze({ message: line.slice(2).trim(), severity: section }));
   }
   return Object.freeze(issues);
+};
+
+const matchingDocumentPaths = async (
+  root: string,
+  contractPath: string,
+): Promise<readonly string[]> => {
+  const wildcard = contractPath.indexOf('*');
+  if (wildcard === -1) return Object.freeze([contractPath]);
+  const directory = posix.dirname(contractPath);
+  const name = contractPath.slice(directory.length + 1);
+  const nameWildcard = name.indexOf('*');
+  const prefix = name.slice(0, nameWildcard);
+  const suffix = name.slice(nameWildcard + 1);
+  let entries;
+  try {
+    entries = await readdir(join(root, directory), { withFileTypes: true });
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return Object.freeze([]);
+    throw error;
+  }
+  return Object.freeze(entries
+    .filter((entry) =>
+      (entry.isFile() || entry.isSymbolicLink()) &&
+      entry.name.startsWith(prefix) &&
+      entry.name.endsWith(suffix) &&
+      entry.name.length > prefix.length + suffix.length)
+    .map((entry) => posix.join(directory, entry.name))
+    .sort((left, right) => left.localeCompare(right)));
+};
+
+const localDiagnostic = (
+  code: 'AB6006' | 'AB6011' | 'AB6012',
+  message: string,
+  target: string,
+): Diagnostic => Object.freeze({
+  code,
+  message,
+  recovery: 'Repair the generated Claude document so it satisfies the vendored pinned schema, then rebuild.',
+  severity: 'error',
+  target,
+});
+
+export const validateClaudePluginFiles = async (
+  options: ValidateClaudePluginFilesOptions,
+): Promise<readonly Diagnostic[]> => {
+  const pluginDirectory = resolve(options.pluginDirectory);
+  const validators = new Map(
+    claudeArtifactValidation.schemas.map((schema) => [schema.name, schema.validate]),
+  );
+  const diagnostics: Diagnostic[] = [];
+  for (const contract of claudeArtifactValidation.documents) {
+    let paths: readonly string[];
+    try {
+      paths = await matchingDocumentPaths(pluginDirectory, contract.path);
+    } catch {
+      diagnostics.push(localDiagnostic(
+        'AB6012',
+        `Claude bundle document pattern ${JSON.stringify(contract.path)} could not be read.`,
+        options.target,
+      ));
+      continue;
+    }
+    if (paths.length === 0 && contract.required) {
+      diagnostics.push(localDiagnostic(
+        'AB6011',
+        `Required Claude bundle document ${JSON.stringify(contract.path)} is missing.`,
+        options.target,
+      ));
+      continue;
+    }
+    for (const relativePath of paths) {
+      let document: unknown;
+      try {
+        document = JSON.parse(await readFile(join(pluginDirectory, relativePath), 'utf8')) as unknown;
+      } catch (error) {
+        if (isErrno(error, 'ENOENT') && !contract.required) continue;
+        diagnostics.push(localDiagnostic(
+          isErrno(error, 'ENOENT') ? 'AB6011' : 'AB6006',
+          isErrno(error, 'ENOENT')
+            ? `Required Claude bundle document ${JSON.stringify(relativePath)} is missing.`
+            : `Claude bundle document ${JSON.stringify(relativePath)} is unreadable or not valid JSON.`,
+          options.target,
+        ));
+        continue;
+      }
+      const validate = validators.get(contract.schema);
+      if (validate === undefined) continue;
+      let issues;
+      try {
+        issues = validate(document);
+      } catch {
+        issues = Object.freeze([Object.freeze({
+          instancePath: '/',
+          message: 'schema validation failed',
+        })]);
+      }
+      for (const issue of issues) {
+        diagnostics.push(localDiagnostic(
+          'AB6012',
+          `Claude bundle document ${JSON.stringify(relativePath)} is invalid for schema ` +
+            `${JSON.stringify(contract.schema)} at ${issue.instancePath || '/'}: ${issue.message}.`,
+          options.target,
+        ));
+      }
+    }
+  }
+  return freezeDiagnostics(diagnostics);
 };
 
 export const validateClaudePlugin = async (
