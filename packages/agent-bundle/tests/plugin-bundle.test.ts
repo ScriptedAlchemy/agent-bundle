@@ -297,6 +297,35 @@ it('emits the Claude bin directory from the unified plugin target', () => {
   expect(writeContents(model)['AGENTS.md']).toContain('`bin/`');
 });
 
+it('emits Claude-only plugin default settings at the shared composite root', () => {
+  const model = {
+    ...bundleModel,
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config' as const, sourcePath: configPath },
+        target: 'claude',
+        value: {
+          settings: {
+            subagentStatusLine: { command: 'node scripts/rows.mjs', type: 'command' },
+          },
+        },
+      },
+    },
+  } satisfies NormalizedPlugin;
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(documents['settings.json']!)).toEqual({
+    subagentStatusLine: { command: 'node scripts/rows.mjs', type: 'command' },
+  });
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('settings');
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('settings');
+  expect(documents['AGENTS.md']).toContain('- `settings.json` — Claude Code default configuration');
+});
+
 it('emits each shared surface exactly once with no duplicate artifact paths', () => {
   const plan = planBundle(bundleModel);
   const paths = plan.entries.map((entry) => entry.relativePath);

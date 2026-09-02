@@ -161,6 +161,7 @@ const artifactValidation = deepFreeze({
     Object.freeze({ path: claudeArtifactPaths.marketplace, required: false, schema: 'claude-marketplace' }),
     Object.freeze({ path: claudeArtifactPaths.mcp, required: false, schema: 'claude-mcp' }),
     Object.freeze({ path: claudeArtifactPaths.plugin, required: true, schema: 'claude-plugin' }),
+    Object.freeze({ path: claudeArtifactPaths.settings, required: false, schema: 'claude-settings' }),
     Object.freeze({ path: codexArtifactPaths.marketplace, required: false, schema: 'codex-marketplace' }),
     Object.freeze({ path: codexBundleMcpPath, required: false, schema: 'codex-mcp' }),
     Object.freeze({ path: codexArtifactPaths.plugin, required: true, schema: 'codex-plugin' }),
@@ -183,7 +184,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.5.0',
+  adapterRevision: '1.6.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -234,6 +235,8 @@ interface AgentsDocumentOptions {
   readonly lsp: boolean;
   /** True when the Cursor half emitted conventional `.mdc` rules. */
   readonly rules: boolean;
+  /** True when the Claude half of this bundle emitted `settings.json`. */
+  readonly settings: boolean;
 }
 
 const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions): string => {
@@ -263,6 +266,11 @@ const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions)
     ...(options.lsp
       ? [
           '- `.lsp.json` — Claude Code language-server configuration (plugin-root convention). Claude Code only; Codex and Cursor have no LSP surface.',
+        ]
+      : []),
+    ...(options.settings
+      ? [
+          '- `settings.json` — Claude Code default configuration applied when the plugin is enabled (plugin-root convention). Claude Code only; Codex and Cursor have no plugin settings surface.',
         ]
       : []),
     ...(options.commands
@@ -490,6 +498,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       commands: selectedCommands.length > 0,
       lsp: entries.some((entry) => entry.relativePath === claudeArtifactPaths.lsp),
       rules: selectedRules.length > 0,
+      settings: entries.some((entry) => entry.relativePath === claudeArtifactPaths.settings),
     }),
     kind: 'write',
     relativePath: 'AGENTS.md',
@@ -587,6 +596,15 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
     rules: intersectCapabilityStates(
       intersectCapabilityStates(claudeAdapter.capabilities.rules!, codexAdapter.capabilities.rules!),
       cursorAdapter.capabilities.rules!,
+    ),
+    // Neither pinned non-Claude contract declares a plugin settings-defaults
+    // surface at all, so this intersection is honestly unavailable even
+    // though the Claude half still emits `settings.json`.
+    settings: intersectCapabilityStates(
+      claudeAdapter.capabilities.settings!,
+      unavailableCapability(
+        'The pinned Codex and Cursor plugin contracts publish no plugin settings-defaults surface; plugin-root settings.json reaches Claude Code only.',
+      ),
     ),
     skills: intersectCapabilityStates(
       intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),

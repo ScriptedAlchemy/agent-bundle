@@ -130,6 +130,30 @@ it('reports Claude bin support without inventing coverage on other native hosts'
   expect(registry.supports('plugin', 'bin')).toBe(false);
 });
 
+it('reports Claude plugin settings support and honest unavailable composite coverage', () => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('claude').capabilities.settings).toMatchObject({
+    evidence: {
+      observedVersion: '2.1.250',
+      target: 'claude',
+    },
+    state: 'supported',
+  });
+  expect(registry.get('plugin').capabilities.settings).toMatchObject({
+    reason: expect.stringContaining('no plugin settings-defaults surface'),
+    state: 'unavailable',
+  });
+  // Codex and Cursor declare no settings row at all, so an absent capability
+  // stays an honest "not declared" rather than an inferred support claim.
+  for (const target of ['codex', 'cursor', 'portable'] as const) {
+    expect(registry.get(target).capabilities.settings).toBeUndefined();
+    expect(registry.supports(target, 'settings')).toBe(false);
+  }
+  expect(registry.supports('claude', 'settings')).toBe(true);
+  expect(registry.supports('plugin', 'settings')).toBe(false);
+});
+
 it('intersects supported composite capabilities and merges both evidence records', () => {
   const intersection = intersectCapabilityStates(
     supportedCapability(evidence('claude')),

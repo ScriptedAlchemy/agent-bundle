@@ -120,6 +120,22 @@ const withClaudeBin = (
   }],
 });
 
+const withClaudeSettings = (
+  model: NormalizedPlugin,
+  settings: unknown,
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      target: 'claude',
+      value: { settings },
+    },
+  },
+});
+
 const validateDocuments = async (
   target: 'codex' | 'claude',
   documents: Readonly<Record<string, string>>,
@@ -728,6 +744,159 @@ it('withholds Claude LSP configuration when two servers claim one extension', ()
     'claude.lsp.extension.conflict',
   ]);
   expect(plan.entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
+});
+
+it('emits Claude plugin default settings at the plugin root with the declaring config as its input', () => {
+  const model = withClaudeSettings(plugin, {
+    agent: 'security-reviewer',
+    subagentStatusLine: { command: '~/.claude/subagent-statusline.sh', type: 'command' },
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+  const documents = writeContents(model, 'claude');
+  const entry = plan.entries.find((candidate) => candidate.relativePath === 'settings.json');
+
+  expect(JSON.parse(documents['settings.json']!)).toEqual({
+    agent: 'security-reviewer',
+    subagentStatusLine: { command: '~/.claude/subagent-statusline.sh', type: 'command' },
+  });
+  expect(entry?.sourceInputs).toEqual(['/workspace/agent-bundle.config.ts']);
+  // The manifest keeps no `settings` pointer: settings.json is discovered by
+  // convention and takes priority over manifest `settings` anyway.
+  expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('settings');
+  // Declaring `agent` is shippable host configuration, so the deferred
+  // plugin-agents component is a warning rather than a build failure.
+  expect(plan.diagnostics).toEqual([{
+    code: 'claude.settings.agent.deferred',
+    message: expect.stringContaining('agents component stays deferred'),
+    severity: 'warning',
+    target: 'claude',
+  }]);
+});
+
+it('emits a Claude subagent status line alone without any diagnostic', () => {
+  const model = withClaudeSettings(plugin, {
+    subagentStatusLine: { command: 'node scripts/rows.mjs', type: 'command' },
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(writeContents(model, 'claude')['settings.json']!)).toEqual({
+    subagentStatusLine: { command: 'node scripts/rows.mjs', type: 'command' },
+  });
+});
+
+it('emits no Claude settings document when the host config declares none', () => {
+  const plan = createDefaultRegistry().get('claude').plan(plugin);
+
+  expect(plan.entries.some((entry) => entry.relativePath === 'settings.json')).toBe(false);
+});
+
+it.each([
+  {
+    code: 'claude.settings.declaration.invalid',
+    label: 'a non-object declaration',
+    settings: './settings.json',
+  },
+  {
+    code: 'claude.settings.declaration.invalid',
+    label: 'an empty declaration',
+    settings: {},
+  },
+  {
+    code: 'claude.settings.field.unknown',
+    label: 'an unknown settings key',
+    settings: { agent: 'security-reviewer', statusLine: { command: 'row.sh', type: 'command' } },
+  },
+  {
+    code: 'claude.settings.agent.invalid',
+    label: 'an empty agent name',
+    settings: { agent: '' },
+  },
+  {
+    code: 'claude.settings.agent.invalid',
+    label: 'a non-string agent',
+    settings: { agent: 7 },
+  },
+  {
+    code: 'claude.settings.token.unsupported',
+    label: 'a tokenized agent name',
+    settings: { agent: `${pathTokens.pluginRoot}/agents/reviewer.md` },
+  },
+  {
+    code: 'claude.settings.statusline.invalid',
+    label: 'a non-object subagent status line',
+    settings: { subagentStatusLine: './rows.sh' },
+  },
+  {
+    code: 'claude.settings.statusline.field.unknown',
+    label: 'the statusLine-only padding field',
+    settings: { subagentStatusLine: { command: 'rows.sh', padding: 0, type: 'command' } },
+  },
+  {
+    code: 'claude.settings.statusline.type.invalid',
+    label: 'an undocumented subagent status line type',
+    settings: { subagentStatusLine: { command: 'rows.sh', type: 'inline' } },
+  },
+  {
+    code: 'claude.settings.statusline.command.required',
+    label: 'a missing subagent status line command',
+    settings: { subagentStatusLine: { type: 'command' } },
+  },
+  {
+    code: 'claude.settings.token.unsupported',
+    label: 'a tokenized subagent status line command',
+    settings: { subagentStatusLine: { command: `${pathTokens.pluginRoot}/rows.sh`, type: 'command' } },
+  },
+])('rejects $label without emitting Claude settings', ({ code, settings }) => {
+  const model = withClaudeSettings(plugin, settings);
+  const plan = createDefaultRegistry().get('claude').plan(model);
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+  expect(plan.diagnostics.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
+  expect(plan.entries.some((entry) => entry.relativePath === 'settings.json')).toBe(false);
+});
+
+it('pins the closed Claude plugin settings schema to the two documented keys', async () => {
+  const schema = (await import('../src/adapters/schemas/claude/settings.schema.json', {
+    with: { type: 'json' },
+  })).default;
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  const validate = validator.compile(schema);
+
+  for (const settings of [
+    { agent: 'security-reviewer' },
+    { subagentStatusLine: { command: '~/.claude/subagent-statusline.sh', type: 'command' } },
+    { agent: 'security-reviewer', subagentStatusLine: { command: 'rows.sh', type: 'command' } },
+  ]) {
+    expect(validate(settings), JSON.stringify(validate.errors)).toBe(true);
+  }
+  for (const settings of [
+    // An empty document declares no default configuration at all.
+    {},
+    { agent: '' },
+    { agent: 7 },
+    { statusLine: { command: 'rows.sh', type: 'command' } },
+    { subagentStatusLine: 'rows.sh' },
+    { subagentStatusLine: { type: 'command' } },
+    { subagentStatusLine: { command: '', type: 'command' } },
+    { subagentStatusLine: { command: 'rows.sh', type: 'inline' } },
+    // `padding` is documented for the user statusLine, not for a plugin default.
+    { subagentStatusLine: { command: 'rows.sh', padding: 0, type: 'command' } },
+  ]) {
+    expect(validate(settings)).toBe(false);
+  }
+});
+
+it('registers the Claude settings document against its pinned schema contract', () => {
+  const validation = createDefaultRegistry().artifactValidation('claude');
+  const settingsSchema = validation.schemas.find((schema) => schema.name === 'settings');
+
+  expect(validation.documents).toContainEqual({ path: 'settings.json', required: false, schema: 'settings' });
+  expect(settingsSchema?.validate({ agent: 'security-reviewer' })).toEqual([]);
+  expect(settingsSchema?.validate({ agent: 'security-reviewer', statusLine: {} })).toEqual([
+    expect.objectContaining({ instancePath: '' }),
+  ]);
 });
 
 it.each(['codex', 'claude'] as const)(
