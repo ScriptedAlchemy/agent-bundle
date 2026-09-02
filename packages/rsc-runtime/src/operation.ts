@@ -1,9 +1,19 @@
 import type { ReactNode } from 'react';
 import type { ZodType } from 'zod';
 
+import { currentAgentRequest, type AgentRequestContext } from './agent-request.js';
 import { frozenJsonRecord } from './lower-mcp.js';
 
+/**
+ * Per-invocation values supplied independently of business input.
+ *
+ * `request` is the transport-installed request handle when execution occurs
+ * inside `runAgentRequest`. Its identity axes are `Observed`, so an axis the
+ * transport cannot know is unavailable with a typed reason rather than
+ * fabricated.
+ */
 export interface RscOperationContext {
+  readonly request?: AgentRequestContext;
   readonly signal: AbortSignal;
 }
 
@@ -31,6 +41,10 @@ export interface RscMcpDefinition {
 
 export interface RscOperationInput<TInput, TResult> {
   readonly cli?: RscCliDefinition<TInput, TResult>;
+  /**
+   * Receives validated business input separately from transport-owned request
+   * identity. Fields in `input` cannot override `context.request`.
+   */
   readonly execute: (input: TInput, context: RscOperationContext) => Promise<TResult>;
   readonly id: string;
   readonly inputSchema: ZodType<TInput>;
@@ -100,9 +114,15 @@ export const defineOperation = <TInput, TResult>(
 
   return Object.freeze<RscOperationDefinition>({
     ...(cli === undefined ? {} : { cli }),
-    execute: async (value, context) => input.resultSchema.parse(
-      await input.execute(input.inputSchema.parse(value), context),
-    ),
+    execute: async (value, context) => {
+      const request = context.request ?? currentAgentRequest();
+      const operationContext: RscOperationContext = request === undefined
+        ? context
+        : { ...context, request };
+      return input.resultSchema.parse(
+        await input.execute(input.inputSchema.parse(value), operationContext),
+      );
+    },
     id,
     inputSchema: input.inputSchema,
     ...(mcp === undefined ? {} : { mcp }),

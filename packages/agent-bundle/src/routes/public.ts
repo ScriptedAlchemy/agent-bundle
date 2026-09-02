@@ -39,7 +39,15 @@ export interface AgentEventCanonicalIdentity {
 /** Complete host envelope after the adapter's schema and byte-bound validation. */
 export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
 
-/** Props received by an event route's async default Server Component. */
+/**
+ * Props received by an event route's async default Server Component.
+ *
+ * Read transport-owned request identity with `await agent()` from
+ * `@agent-bundle/runtime`. The invocation, host, session, actor, and workspace
+ * axes are `Observed`, including typed unavailable reasons when the host
+ * cannot know an axis. Business payload fields cannot override them.
+ * Generated event scopes currently expose actor as unavailable.
+ */
 export interface AgentEventRouteProps {
   readonly canonical: AgentEventCanonicalIdentity;
   readonly native: AgentEventNativePayload;
@@ -71,7 +79,14 @@ export interface AgentEventRouteConfig {
   readonly tools?: readonly string[];
 }
 
-/** Props received by every executable MCP route's async default Server Component. */
+/**
+ * Props received by every executable MCP route's async default Server Component.
+ *
+ * Read transport-owned invocation, host, session, actor, and workspace axes
+ * with `await agent()` from `@agent-bundle/runtime`. Every identity axis is
+ * `Observed`; unavailable axes carry a typed reason, and `input` cannot
+ * override request identity.
+ */
 export interface ToolRouteProps<InputSchema extends RouteSchema> {
   readonly input: RouteSchemaOutput<InputSchema>;
   readonly signal: AbortSignal;
@@ -127,7 +142,14 @@ export interface CliRouteConfig {
   readonly positionals?: readonly string[];
 }
 
-/** Props received by every routed CLI command's async default function. */
+/**
+ * Props received by every routed CLI command's async default function.
+ *
+ * Read transport-owned invocation, host, session, actor, and workspace axes
+ * with `await agent()` from `@agent-bundle/runtime`. Every identity axis is
+ * `Observed`; unavailable axes carry a typed reason, and parsed command input
+ * cannot override request identity.
+ */
 export interface CliRouteProps<InputSchema extends RouteSchema> {
   readonly input: RouteSchemaOutput<InputSchema>;
   readonly signal: AbortSignal;

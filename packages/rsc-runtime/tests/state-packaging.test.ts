@@ -84,6 +84,7 @@ describe.sequential('state kernel packaging boundaries', () => {
       './state',
       './state/sqlite',
       './notices',
+      './notices/inbox-route',
       './mount',
     ]);
     for (const subpath of Object.keys(packageJson.exports)) {

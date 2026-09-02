@@ -5,6 +5,7 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
   'prompt:harness/summarize': { input: { note: 'chapter one' } },
   'resource:harness/notes': {},
   'tool:harness/catalog': { input: { genre: 'mystery' }, resultCompat: 'additive' },
+  'tool:harness/context': { resultCompat: 'closed' },
   'tool:harness/echo': { input: { message: 'contract matrix' }, resultCompat: 'additive' },
   'tool:harness/journal': { input: { note: 'matrix proof' }, resultCompat: 'closed' },
   'tool:harness/publish-notice': {
