@@ -135,6 +135,10 @@ it('installs into an isolated Cursor home, validates schemas, and is idempotent'
     },
     host: 'cursor',
     install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+    logo: {
+      path: './assets/docs/media/logo.svg',
+      resolvesInsideDeployTree: true,
+    },
     pluginRootVariable: {
       locations: [
         'hooks/hooks.json#/hooks/sessionStart/0/command',

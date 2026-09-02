@@ -1,7 +1,7 @@
 import { execFile as executeFile } from 'node:child_process';
 import { access, cp, mkdir, mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 import { parse as parseYaml } from 'yaml';
@@ -11,6 +11,7 @@ import {
   cursorMcpValidator,
   cursorPluginValidator,
 } from '../../src/adapters/cursor.ts';
+import { isInsideOrEqual } from '../../src/core/paths.ts';
 import { validateCodexOpenaiYaml } from '../../src/schemas/skill-hosts/contract.ts';
 import {
   HOST_INSTALL_PROOF_LEVEL,
@@ -146,6 +147,10 @@ export interface CursorHostInstallReport {
     readonly first: 'installed';
     readonly second: 'already-installed';
     readonly version: '1.0.0';
+  };
+  readonly logo: {
+    readonly path: string;
+    readonly resolvesInsideDeployTree: true;
   };
   readonly pluginRootVariable: {
     readonly locations: readonly string[];
@@ -635,6 +640,16 @@ export const runCursorHostInstallProof = async (
 
     const pluginDocument = await readJson(join(destination, '.cursor-plugin', 'plugin.json'), 'Cursor plugin manifest');
     assertProof(cursorPluginValidator(pluginDocument), `Cursor plugin manifest failed its pinned schema: ${JSON.stringify(cursorPluginValidator.errors)}`);
+    const logo = record(pluginDocument)?.logo;
+    assertProof(typeof logo === 'string' && logo.length > 0, 'Cursor plugin manifest did not emit a logo path.');
+    assertProof(!logo.includes('..'), `Cursor plugin logo ${JSON.stringify(logo)} escapes the deploy tree.`);
+    const logoRelative = logo.replace(/^\.\//u, '');
+    const logoPath = resolve(destination, logoRelative);
+    assertProof(
+      isInsideOrEqual(destination, logoPath),
+      `Cursor plugin logo ${JSON.stringify(logo)} does not resolve inside the deploy tree.`,
+    );
+    await access(logoPath).catch(() => fail(`Cursor plugin logo ${JSON.stringify(logo)} is missing from the deploy tree.`));
     const hooksText = await readText(join(destination, 'hooks', 'hooks.json'), 'Cursor hooks document');
     const hooksDocument = parseJson<unknown>(hooksText, 'Cursor hooks document');
     assertProof(cursorHooksValidator(hooksDocument), `Cursor hooks document failed its pinned schema: ${JSON.stringify(cursorHooksValidator.errors)}`);
@@ -667,6 +682,10 @@ export const runCursorHostInstallProof = async (
         first: 'installed',
         second: 'already-installed',
         version,
+      }),
+      logo: Object.freeze({
+        path: logo,
+        resolvesInsideDeployTree: true as const,
       }),
       pluginRootVariable: Object.freeze({
         locations: pluginRootLocations,

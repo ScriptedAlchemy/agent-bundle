@@ -37,6 +37,7 @@ import type {
 } from './artifact-validation-types.ts';
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 import { validateHookCoherence } from './validate-artifact-hooks.ts';
+import { manifestLogoPathDiagnostics } from './validate-artifact-logo.ts';
 import { validateMcpCoherence } from './validate-artifact-mcp.ts';
 import { pathTarget, targetNamespaces, validateEmittedSkills } from './validate-artifact-skills.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
@@ -393,6 +394,18 @@ const validateTargetContracts = async (options: {
           generatedPath,
           target.name,
         ));
+      }
+      if (
+        document.path.endsWith('plugin.json') &&
+        isRecord(parsed) &&
+        typeof parsed.logo === 'string'
+      ) {
+        diagnostics.push(...manifestLogoPathDiagnostics({
+          files,
+          generatedPath,
+          logo: parsed.logo,
+          target: target.name,
+        }));
       }
     }
   }

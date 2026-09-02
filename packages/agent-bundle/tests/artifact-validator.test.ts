@@ -1877,7 +1877,7 @@ it('documents recovery for every stable artifact diagnostic code', async () => {
       'AB6000', 'AB6001', 'AB6002', 'AB6003', 'AB6004', 'AB6005', 'AB6006',
       'AB6007', 'AB6008', 'AB6009', 'AB6010', 'AB6011', 'AB6012', 'AB6013',
       'AB6014', 'AB6015', 'AB6016', 'AB6017', 'AB6018', 'AB6019', 'AB6020',
-      'AB6021', 'AB6022', 'AB6023', 'AB6024',
+      'AB6021', 'AB6022', 'AB6023', 'AB6024', 'AB6025',
     ]);
     expect(Object.values(artifactDiagnosticRecoveries).every((recovery) => recovery.trim().length > 0)).toBe(true);
     expect(artifactDiagnosticRecoveries.AB6015).not.toBe(artifactDiagnosticRecoveries.AB6016);
@@ -1976,3 +1976,63 @@ it.each(['claude', 'codex'] as const)(
     }
   },
 );
+
+const logoSurfaceModel = (target: 'cursor' | 'plugin'): NormalizedPlugin => ({
+  ...installSurfaceModel(target),
+  metadata: {
+    ...installSurfaceModel(target).metadata,
+    logo: {
+      bytes: 12,
+      path: 'assets/docs/media/logo.svg',
+      source: '/project/docs/media/logo.svg',
+    },
+  },
+});
+
+it('fails artifact validation when a Cursor manifest logo is missing from the deploy tree', async () => {
+  const registry = createDefaultRegistry();
+  const files = registry.get('cursor').plan(logoSurfaceModel('cursor')).entries
+    .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
+    .map((entry) => ({
+      contents: entry.content,
+      kind: 'generated' as const,
+      path: `cursor/${entry.relativePath}`,
+    }));
+  const root = await writeArtifact(files, true, [targetFromRegistry(registry, 'cursor')]);
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB6025',
+        generatedPath: 'cursor/.cursor-plugin/plugin.json',
+        target: 'cursor',
+      }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('accepts a Cursor manifest logo that resolves inside the artifact', async () => {
+  const registry = createDefaultRegistry();
+  const files = [
+    ...registry.get('cursor').plan(logoSurfaceModel('cursor')).entries
+      .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
+      .map((entry) => ({
+        contents: entry.content,
+        kind: 'generated' as const,
+        path: `cursor/${entry.relativePath}`,
+      })),
+    {
+      contents: '<svg xmlns="http://www.w3.org/2000/svg"/>\n',
+      kind: 'copy' as const,
+      path: 'cursor/assets/docs/media/logo.svg',
+    },
+  ];
+  const root = await writeArtifact(files, true, [targetFromRegistry(registry, 'cursor')]);
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root });
+    expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6025')).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});

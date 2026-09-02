@@ -25,7 +25,8 @@ export type ArtifactDiagnosticCode =
   | 'AB6021'
   | 'AB6022'
   | 'AB6023'
-  | 'AB6024';
+  | 'AB6024'
+  | 'AB6025';
 
 export const artifactDiagnosticRecoveries: Readonly<Record<ArtifactDiagnosticCode, string>> = Object.freeze({
   AB6000: 'Restore a readable artifact root and canonical manifest, then rebuild the artifact.',
@@ -53,6 +54,7 @@ export const artifactDiagnosticRecoveries: Readonly<Record<ArtifactDiagnosticCod
   AB6022: 'Restore a bounded Claude validator process, then rerun artifact validation.',
   AB6023: 'Rebuild the artifact so every built-in target includes its generated INSTALL.md.',
   AB6024: 'Rebuild the Cursor-compatible artifact so it includes its generated install.mjs.',
+  AB6025: 'Rebuild the artifact so every manifest-declared logo path copies into the deploy tree.',
 });
 
 const isArtifactDiagnosticCode = (code: string): code is ArtifactDiagnosticCode =>

@@ -158,6 +158,36 @@ it('validates Cursor documents against the vendored real-host schemas', () => {
   expect(cursorHooksValidator({ hooks: { afterShellExecutionn: [{ command: 'echo typo' }] }, version: 1 })).toBe(false);
   expect(cursorHooksValidator({ hooks: { stop: [{ timeout: 5 }] }, version: 1 })).toBe(false);
   expect(cursorHooksValidator({ hooks: {}, version: 2 })).toBe(false);
+  expect(cursorPluginValidator({
+    logo: './assets/docs/media/logo.svg',
+    name: 'cursor-review',
+    version: '1.2.3',
+  })).toBe(true);
+});
+
+it('copies plugin.logo into the artifact and references it from plugin.json', () => {
+  const model: NormalizedPlugin = {
+    ...plugin(),
+    metadata: {
+      ...plugin().metadata,
+      logo: {
+        bytes: 12,
+        path: 'assets/docs/media/logo.svg',
+        source: '/workspace/docs/media/logo.svg',
+      },
+    },
+  };
+  const plan = cursorAdapter.plan(model);
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!)).toMatchObject({
+    logo: './assets/docs/media/logo.svg',
+  });
+  expect(plan.entries).toContainEqual(expect.objectContaining({
+    bytes: 12,
+    kind: 'copy',
+    relativePath: 'assets/docs/media/logo.svg',
+    source: '/workspace/docs/media/logo.svg',
+  }));
 });
 
 it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit manifest pointers', () => {
