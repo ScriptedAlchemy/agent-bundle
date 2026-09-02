@@ -50,6 +50,57 @@
     "marketplace": ".agents/plugins/marketplace.json",
     "skills": true
   },
+  "validation": {
+    "observedAt": "2026-09-02",
+    "versionProbe": {
+      "command": "codex --version",
+      "exitCode": 0,
+      "stdout": "codex-cli 0.147.0"
+    },
+    "pluginDeveloperTools": {
+      "command": "codex plugin --help",
+      "exitCode": 0,
+      "subcommands": ["add", "list", "marketplace", "remove", "help"],
+      "validator": {
+        "reason": "Codex 0.147.0 lists plugin installation and marketplace management only; it publishes no plugin validate command.",
+        "state": "unavailable"
+      }
+    },
+    "appServerSchemaGeneration": {
+      "command": "codex app-server generate-json-schema --out <DIR>",
+      "exitCode": 0,
+      "jsonFileCount": 285,
+      "stderrBytes": 0,
+      "stdoutBytes": 0,
+      "topLevelBundles": {
+        "codex_app_server_protocol.schemas.json": {
+          "sha256": "f72b2caa3cbfa4298de9e85c62dda6dfbaf2266ffeb916fed30615ca69ff8c74"
+        },
+        "codex_app_server_protocol.v2.schemas.json": {
+          "sha256": "f3dec1e031d99a420b137b903f02196d4325eece57620c925bb7130b25f168d2"
+        }
+      }
+    },
+    "pinnedGeneratedComparison": {
+      "liveRevision": "codex-cli 0.147.0 app-server protocol",
+      "matchingRelativePaths": [],
+      "missingPinnedRelativePaths": [
+        "subagent-start.command.input.schema.json",
+        "subagent-start.command.output.schema.json",
+        "subagent-stop.command.input.schema.json",
+        "subagent-stop.command.output.schema.json"
+      ],
+      "pinnedRepositorySha256": {
+        "subagent-start.command.input.schema.json": "e1cacc5cd92217e96e327cf182038fa93099d194c3107439b4dad4b806d414cc",
+        "subagent-start.command.output.schema.json": "531f7a457ad8430de82388319ff2bf030fd3a1dc0e9a0d4078447bc30948448b",
+        "subagent-stop.command.input.schema.json": "27842578768e74fb8bcd86b30156b207011829a81dc01b00cfd55340df8b079f",
+        "subagent-stop.command.output.schema.json": "a3987dab22b8684ab108bbb76ec5306471d9e01b1b7cac007b1ed90bc9e055cf"
+      },
+      "pinnedRevision": "rust-v0.147.0 hook command schemas",
+      "reason": "The command emits app-server protocol schemas, not the vendored hook command schemas. There are no matching relative paths to hash-compare, so this output is unpinned for plugin conformance.",
+      "state": "unavailable"
+    }
+  },
   "tokens": {
     "pluginData": false,
     "pluginRoot": "relative-with-plugin-root-cwd",

@@ -72,7 +72,7 @@ const skill = (
     resources?: string[];
   } = {},
 ): DiscoveredProject['skills'][number] => {
-  const dir = `${root}/skills/${directory}`;
+  const dir = `${root}/src/skills/${directory}`;
 
   return {
     body: options.body ?? '# Skill\n',
@@ -578,7 +578,7 @@ it('produces root-independent IDs, complete provenance, and deeply immutable out
   const rightRoot = '/different/right';
   const config: AgentBundleConfig = {
     plugin: { name: 'review-tools', version: '1.0.0' },
-    skills: ['skills/review'],
+    skills: ['src/skills/review'],
   };
   const leftSkill = skill(leftRoot, 'review', 'review', {
     resources: ['SKILL.md', 'references/checklist.md'],

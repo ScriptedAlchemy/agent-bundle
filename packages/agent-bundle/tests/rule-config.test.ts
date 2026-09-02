@@ -50,9 +50,9 @@ const withProject = async (
 
 it('accepts body-only rules and retains exact authored bytes', async () => {
   await withProject(async (root) => {
-    const source = join(root, 'rules', 'review.mdc');
+    const source = join(root, 'src', 'rules', 'review.mdc');
     const markdown = '# Review\n\nCheck the staged diff.';
-    await mkdir(join(root, 'rules'));
+    await mkdir(join(root, 'src', 'rules'), { recursive: true });
     await writeFile(source, markdown);
 
     const rule = await parseRule(source);
@@ -71,8 +71,8 @@ it('accepts body-only rules and retains exact authored bytes', async () => {
 
 it('peels targets and rejects unknown frontmatter fields and malformed field shapes', async () => {
   await withProject(async (root) => {
-    await mkdir(join(root, 'rules'));
-    const validSource = join(root, 'rules', 'cursor-only.mdc');
+    await mkdir(join(root, 'src', 'rules'), { recursive: true });
+    const validSource = join(root, 'src', 'rules', 'cursor-only.mdc');
     const validMarkdown = [
       '---',
       'description: Cursor review guidance',
@@ -111,7 +111,7 @@ it('peels targets and rejects unknown frontmatter fields and malformed field sha
     ].join('\n'));
     expect(valid.emittedMarkdown).not.toContain('targets:');
 
-    const invalidSource = join(root, 'rules', 'invalid.mdc');
+    const invalidSource = join(root, 'src', 'rules', 'invalid.mdc');
     await writeFile(
       invalidSource,
       [
@@ -141,10 +141,10 @@ it('peels targets and rejects unknown frontmatter fields and malformed field sha
 
 it('preserves target-free frontmatter bytes and emits target-only rules as body-only', async () => {
   await withProject(async (root) => {
-    await mkdir(join(root, 'rules'));
-    const targetFreeSource = join(root, 'rules', 'target-free.mdc');
+    await mkdir(join(root, 'src', 'rules'), { recursive: true });
+    const targetFreeSource = join(root, 'src', 'rules', 'target-free.mdc');
     const targetFreeMarkdown = '---\r\ndescription: Keep CRLF\r\n---\r\nBody without trailing newline';
-    const targetOnlySource = join(root, 'rules', 'target-only.mdc');
+    const targetOnlySource = join(root, 'src', 'rules', 'target-only.mdc');
     await Promise.all([
       writeFile(targetFreeSource, targetFreeMarkdown),
       writeFile(targetOnlySource, '---\ntargets:\n  - cursor\n---\nTarget-only body'),
@@ -164,8 +164,8 @@ it('preserves target-free frontmatter bytes and emits target-only rules as body-
 
 it('reports malformed YAML frontmatter with a fresh rule diagnostic', async () => {
   await withProject(async (root) => {
-    const source = join(root, 'rules', 'malformed.mdc');
-    await mkdir(join(root, 'rules'));
+    const source = join(root, 'src', 'rules', 'malformed.mdc');
+    await mkdir(join(root, 'src', 'rules'), { recursive: true });
     await writeFile(source, '---\nglobs: [unterminated\n---\n# Broken\n');
 
     expect((await parseRule(source)).diagnostics).toEqual([
@@ -176,12 +176,12 @@ it('reports malformed YAML frontmatter with a fresh rule diagnostic', async () =
 
 it('discovers flat non-ignored rules deterministically and omits the collection when empty', async () => {
   await withProject(async (root) => {
-    await mkdir(join(root, 'rules'));
+    await mkdir(join(root, 'src', 'rules'), { recursive: true });
     await Promise.all([
-      writeFile(join(root, '.gitignore'), 'rules/ignored.mdc\n'),
-      writeFile(join(root, 'rules', 'zeta.mdc'), '# Zeta\n'),
-      writeFile(join(root, 'rules', 'alpha.mdc'), '# Alpha\n'),
-      writeFile(join(root, 'rules', 'ignored.mdc'), '# Ignored\n'),
+      writeFile(join(root, '.gitignore'), 'src/rules/ignored.mdc\n'),
+      writeFile(join(root, 'src', 'rules', 'zeta.mdc'), '# Zeta\n'),
+      writeFile(join(root, 'src', 'rules', 'alpha.mdc'), '# Alpha\n'),
+      writeFile(join(root, 'src', 'rules', 'ignored.mdc'), '# Ignored\n'),
     ]);
     const config: AgentBundleConfig = {
       plugin: { name: 'rule-fixture', version: '1.0.0' },
@@ -189,11 +189,11 @@ it('discovers flat non-ignored rules deterministically and omits the collection 
 
     const discovered = await discoverProject(root, config);
     expect(discovered.rules?.map((rule) => rule.source)).toEqual([
-      join(root, 'rules', 'alpha.mdc'),
-      join(root, 'rules', 'zeta.mdc'),
+      join(root, 'src', 'rules', 'alpha.mdc'),
+      join(root, 'src', 'rules', 'zeta.mdc'),
     ]);
 
-    await rm(join(root, 'rules'), { recursive: true });
+    await rm(join(root, 'src', 'rules'), { recursive: true });
     expect(await discoverProject(root, config)).not.toHaveProperty('rules');
   });
 });
@@ -214,7 +214,7 @@ it('normalizes peeled rule targets and reports unknown, unavailable, and duplica
     });
     const registry = createDefaultRegistry();
     const cursorLoaded = loadedProject(root, ['cursor']);
-    const cursorRule = rule(join(root, 'rules', 'review.mdc'), ['cursor']);
+    const cursorRule = rule(join(root, 'src', 'rules', 'review.mdc'), ['cursor']);
     const cursorDiscovered: DiscoveredProject = { rules: [cursorRule], skills: [] };
     const model = await normalizeProject(cursorLoaded, cursorDiscovered, registry);
 
@@ -230,13 +230,13 @@ it('normalizes peeled rule targets and reports unknown, unavailable, and duplica
       targets: ['cursor'],
     }]);
 
-    const unknown = rule(join(root, 'rules', 'unknown.mdc'), ['claude']);
+    const unknown = rule(join(root, 'src', 'rules', 'unknown.mdc'), ['claude']);
     expect(validateSource(cursorLoaded, { rules: [unknown], skills: [] }, registry)).toEqual([
       expect.objectContaining({ code: 'AB4904', sourcePath: unknown.source }),
     ]);
 
     const claudeLoaded = loadedProject(root, ['claude']);
-    const unavailable = rule(join(root, 'rules', 'unavailable.mdc'), ['claude']);
+    const unavailable = rule(join(root, 'src', 'rules', 'unavailable.mdc'), ['claude']);
     expect(validateSource(claudeLoaded, { rules: [unavailable], skills: [] }, registry)).toEqual([
       expect.objectContaining({
         code: 'AB4905',

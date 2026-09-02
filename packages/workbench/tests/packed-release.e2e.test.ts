@@ -109,7 +109,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
     });
     await expect(access(join(project, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' });
     const configSource = join(project, 'agent-bundle.config.ts');
-    const skillSource = join(project, 'skills', 'review', 'SKILL.md');
+    const skillSource = join(project, 'src', 'skills', 'review', 'SKILL.md');
     const [originalConfig, originalSkill] = await Promise.all([
       readFile(configSource, 'utf8'),
       readFile(skillSource, 'utf8'),

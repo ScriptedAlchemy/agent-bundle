@@ -99,7 +99,7 @@ it('builds initially, skips untracked changes, and rebuilds tracked inputs', asy
   });
   expect(builds).toBe(1);
 
-  await expect(service.build(project, invalidation('source-change', ['skills/review/SKILL.md'])))
+  await expect(service.build(project, invalidation('source-change', ['src/skills/review/SKILL.md'])))
     .resolves.toEqual({ diagnostics: [], state: 'skipped' });
   expect(builds).toBe(1);
 
@@ -143,7 +143,7 @@ it('rebuilds on manual invalidations and on package build identity changes', asy
   )).resolves.toMatchObject({ state: 'built' });
   await expect(service.build(
     prepared({ packageBuild: packageBuild('renamed') }),
-    invalidation('source-change', ['skills/review/SKILL.md']),
+    invalidation('source-change', ['src/skills/review/SKILL.md']),
   )).resolves.toMatchObject({ state: 'built' });
   expect(builds).toBe(3);
 });
@@ -170,7 +170,7 @@ it('surfaces failures as one AB7103 warning and retries on the next change', asy
   });
 
   // A failed build never records inputs, so even an untracked change retries.
-  await expect(service.build(project, invalidation('source-change', ['skills/review/SKILL.md'])))
+  await expect(service.build(project, invalidation('source-change', ['src/skills/review/SKILL.md'])))
     .resolves.toMatchObject({ state: 'built' });
   expect(attempts).toBe(2);
 });
@@ -213,21 +213,21 @@ it('includes the tools hatch in the rebuild identity, comparing functions by sou
   // An identical hatch source with an untracked change skips.
   await expect(service.build(
     prepared({ packageBuild: build, tools: unchangedHatch() }),
-    invalidation('source-change', ['skills/review/SKILL.md']),
+    invalidation('source-change', ['src/skills/review/SKILL.md']),
   )).resolves.toMatchObject({ state: 'skipped' });
   expect(builds).toBe(1);
 
   // A changed hatch rebuilds even when no tracked source input changed.
   await expect(service.build(
     prepared({ packageBuild: build, tools: editedHatch }),
-    invalidation('source-change', ['skills/review/SKILL.md']),
+    invalidation('source-change', ['src/skills/review/SKILL.md']),
   )).resolves.toMatchObject({ state: 'built' });
   expect(builds).toBe(2);
 
   // An rsbuild-fragment change rebuilds too.
   await expect(service.build(
     prepared({ packageBuild: build, tools: { rsbuild: { output: { legalComments: 'linked' } } } }),
-    invalidation('source-change', ['skills/review/SKILL.md']),
+    invalidation('source-change', ['src/skills/review/SKILL.md']),
   )).resolves.toMatchObject({ state: 'built' });
   expect(builds).toBe(3);
 });

@@ -118,7 +118,7 @@ export const seedEvalProject = async (
         : []),
       ...(options.marketplace === true ? ['  marketplace: true,'] : []),
       "  plugin: { name: 'review', version: '1.0.0' },",
-      "  skills: ['skills/review'],",
+      "  skills: ['src/skills/review'],",
       `  targets: ${JSON.stringify(options.targets ?? ['portable'])},`,
       '});',
       '',

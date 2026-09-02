@@ -136,7 +136,7 @@ describe('rendered skill compilation', () => {
 
   it('compiles the JSX fixture through jiti to the full SKILL.md document', async () => {
     const compiled = await compileRenderedSkill(
-      join(fixtureRoot, 'skills', 'deploy-checklist', 'SKILL.tsx'),
+      join(fixtureRoot, 'src', 'skills', 'deploy-checklist', 'SKILL.tsx'),
     );
     expect(compiled.status).toBe('compiled');
     if (compiled.status !== 'compiled') return;
@@ -151,7 +151,7 @@ describe('rendered skill compilation', () => {
   });
 
   it('parses a rendered skill directory: compiled body, module source, no source-file resource', async () => {
-    const skill = await parseSkill(join(fixtureRoot, 'skills', 'deploy-checklist'), fixtureRoot);
+    const skill = await parseSkill(join(fixtureRoot, 'src', 'skills', 'deploy-checklist'), fixtureRoot);
     expect(skill.diagnostics).toEqual([]);
     expect(skill.rendered).toBe(true);
     expect(skill.source.endsWith('SKILL.tsx')).toBe(true);
@@ -209,14 +209,14 @@ describe('rendered skill compilation', () => {
 
   it('loads rendered modules that build plain element objects without react', async () => {
     const root = await projectRoot({
-      'skills/plain/SKILL.ts': [
+      'src/skills/plain/SKILL.ts': [
         "export const frontmatter = { description: 'A plain rendered skill.', name: 'plain' };",
         "const paragraph = { props: { children: 'Composed without JSX.' }, type: 'p' };",
         "export default () => [{ props: { children: 'Plain' }, type: 'h1' }, paragraph];",
         '',
       ].join('\n'),
     });
-    const skill = await parseSkill(join(root, 'skills', 'plain'), root);
+    const skill = await parseSkill(join(root, 'src', 'skills', 'plain'), root);
     expect(skill.diagnostics).toEqual([]);
     expect(skill.markdown).toBe([
       '---',
@@ -233,23 +233,23 @@ describe('rendered skill compilation', () => {
 
   it('reports AB3003 for a module that fails to load', async () => {
     const root = await projectRoot({
-      'skills/broken/SKILL.ts': "throw new Error('boom');\nexport default () => null;\n",
+      'src/skills/broken/SKILL.ts': "throw new Error('boom');\nexport default () => null;\n",
     });
-    const skill = await parseSkill(join(root, 'skills', 'broken'), root);
+    const skill = await parseSkill(join(root, 'src', 'skills', 'broken'), root);
     expect(skill.diagnostics).toEqual([expect.objectContaining({ code: 'AB3003', severity: 'error' })]);
   });
 
   it('reports AB3004 for a missing default component or frontmatter export', async () => {
     const root = await projectRoot({
-      'skills/no-component/SKILL.ts': "export const frontmatter = { name: 'no-component' };\n",
-      'skills/no-frontmatter/SKILL.ts': "export default () => ({ props: { children: 'x' }, type: 'p' });\n",
+      'src/skills/no-component/SKILL.ts': "export const frontmatter = { name: 'no-component' };\n",
+      'src/skills/no-frontmatter/SKILL.ts': "export default () => ({ props: { children: 'x' }, type: 'p' });\n",
     });
-    const noComponent = await parseSkill(join(root, 'skills', 'no-component'), root);
+    const noComponent = await parseSkill(join(root, 'src', 'skills', 'no-component'), root);
     expect(noComponent.diagnostics).toEqual([expect.objectContaining({
       code: 'AB3004',
       message: expect.stringContaining('default-export a component'),
     })]);
-    const noFrontmatter = await parseSkill(join(root, 'skills', 'no-frontmatter'), root);
+    const noFrontmatter = await parseSkill(join(root, 'src', 'skills', 'no-frontmatter'), root);
     expect(noFrontmatter.diagnostics).toEqual([expect.objectContaining({
       code: 'AB3004',
       message: expect.stringContaining('frontmatter'),
@@ -258,13 +258,13 @@ describe('rendered skill compilation', () => {
 
   it('reports AB3005 when the tree renders outside the supported subset', async () => {
     const root = await projectRoot({
-      'skills/tabular/SKILL.ts': [
+      'src/skills/tabular/SKILL.ts': [
         "export const frontmatter = { description: 'Tables are unsupported.', name: 'tabular' };",
         "export default () => ({ props: {}, type: 'table' });",
         '',
       ].join('\n'),
     });
-    const skill = await parseSkill(join(root, 'skills', 'tabular'), root);
+    const skill = await parseSkill(join(root, 'src', 'skills', 'tabular'), root);
     expect(skill.diagnostics).toEqual([expect.objectContaining({
       code: 'AB3005',
       message: expect.stringContaining('<table>'),
@@ -273,14 +273,14 @@ describe('rendered skill compilation', () => {
 
   it('nudges AB4735 when a hand-authored SKILL.md shadows the rendered source', async () => {
     const root = await projectRoot({
-      'skills/both/SKILL.md': '---\nname: both\ndescription: The authored document wins.\n---\n\n# Both\n\nAuthored.\n',
-      'skills/both/SKILL.tsx': [
+      'src/skills/both/SKILL.md': '---\nname: both\ndescription: The authored document wins.\n---\n\n# Both\n\nAuthored.\n',
+      'src/skills/both/SKILL.tsx': [
         "export const frontmatter = { description: 'Never compiled.', name: 'both' };",
         "export default () => ({ props: { children: 'Rendered' }, type: 'h1' });",
         '',
       ].join('\n'),
     });
-    const skill = await parseSkill(join(root, 'skills', 'both'), root);
+    const skill = await parseSkill(join(root, 'src', 'skills', 'both'), root);
     expect(skill.rendered).toBeUndefined();
     expect(skill.body).toContain('Authored.');
     expect(skill.diagnostics).toEqual([expect.objectContaining({

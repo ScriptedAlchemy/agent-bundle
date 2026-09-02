@@ -1,6 +1,6 @@
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createServer, type Server } from 'node:net';
+import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -647,9 +647,18 @@ it('reports Codex bundle registration as unknown', async () => {
   }
 });
 
-const listen = async (path: string): Promise<Server> => {
+const serverSockets = new WeakMap<Server, Set<Socket>>();
+
+const listen = async (path: string, response?: unknown): Promise<Server> => {
   await mkdir(dirname(path), { recursive: true });
-  const server = createServer();
+  const server = createServer((socket) => {
+    const sockets = serverSockets.get(server)!;
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    if (response === undefined) return;
+    socket.once('data', () => socket.end(`${JSON.stringify(response)}\n`));
+  });
+  serverSockets.set(server, new Set());
   await new Promise<void>((resolvePromise, reject) => {
     server.once('error', reject);
     server.listen(path, resolvePromise);
@@ -658,6 +667,7 @@ const listen = async (path: string): Promise<Server> => {
 };
 
 const close = (server: Server): Promise<void> => new Promise((resolvePromise, reject) => {
+  for (const socket of serverSockets.get(server) ?? []) socket.destroy();
   server.close((error) => {
     if (error === undefined) resolvePromise();
     else reject(error);
@@ -675,10 +685,16 @@ const findDeadPid = (): Promise<number> => new Promise((resolvePromise, reject) 
   child.once('exit', () => { resolvePromise(pid); });
 });
 
-it('scans live sockets and a lock with a live sibling without warnings', async () => {
+it('reports old live runtime sockets as unsupported without warnings', async () => {
   const fixture = await temporaryDoctor();
   const endpoint = join(fixture.endpointDirectory, 'event-live.sock');
-  const server = await listen(endpoint);
+  const server = await listen(endpoint, {
+    artifactEpoch: 'epoch-old',
+    code: 'invalid-message',
+    message: 'Event runtime request does not match the wire schema.',
+    protocolVersion: 1,
+    status: 'error',
+  });
   try {
     await writeFile(`${endpoint}.lock`, '');
     const report = await runDoctor({
@@ -687,10 +703,76 @@ it('scans live sockets and a lock with a live sibling without warnings', async (
       hosts: [],
     });
     expect(report.endpoints.findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: endpoint, state: 'live' }),
+      expect.objectContaining({ path: endpoint, runtime: { status: 'unsupported' }, state: 'live' }),
       expect.objectContaining({ path: `${endpoint}.lock`, state: 'live' }),
     ]));
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB7317', severity: 'info' }),
+    ]));
     expect(report.endpoints.summary).toMatchObject({ live: 1, staleLocks: 0, staleSockets: 0 });
+  } finally {
+    await close(server);
+    await fixture.cleanup();
+  }
+});
+
+it('reports runtime identity from a live status endpoint', async () => {
+  const fixture = await temporaryDoctor();
+  const endpoint = join(fixture.endpointDirectory, 'event-identity.sock');
+  const server = await listen(endpoint, {
+    kind: 'status',
+    protocolVersion: 1,
+    runtime: {
+      artifactEpoch: 'epoch-a',
+      availability: 'available',
+      instanceId: 'runtime-a',
+      pid: 1234,
+    },
+    status: 'ok',
+  });
+  try {
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: [],
+    });
+    expect(report.endpoints.findings).toEqual([
+      expect.objectContaining({
+        path: endpoint,
+        runtime: {
+          artifactEpoch: 'epoch-a',
+          availability: 'available',
+          instanceId: 'runtime-a',
+          pid: 1234,
+          status: 'available',
+        },
+        state: 'live',
+      }),
+    ]);
+  } finally {
+    await close(server);
+    await fixture.cleanup();
+  }
+});
+
+it('bounds a silent runtime status probe', async () => {
+  const fixture = await temporaryDoctor();
+  const endpoint = join(fixture.endpointDirectory, 'event-silent.sock');
+  const server = await listen(endpoint);
+  try {
+    const started = Date.now();
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: [],
+    });
+    expect(Date.now() - started).toBeLessThan(2_500);
+    expect(report.endpoints.findings).toEqual([
+      expect.objectContaining({ runtime: { status: 'failed' }, state: 'live' }),
+    ]);
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB7318', severity: 'error' }),
+    ]));
   } finally {
     await close(server);
     await fixture.cleanup();

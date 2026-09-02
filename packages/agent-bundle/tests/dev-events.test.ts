@@ -82,7 +82,7 @@ it('assigns monotonic sequence IDs and freezes published event payloads', () => 
   const hub = new ProjectEventHub();
 
   const first = hub.publish({
-    payload: invalidation(['skills/review/SKILL.md']),
+    payload: invalidation(['src/skills/review/SKILL.md']),
     type: 'source.changed',
   });
   const second = hub.publish({

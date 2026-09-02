@@ -360,7 +360,7 @@ it('expands glob patterns in explicit skills entries and deduplicates overlappin
 
     const discovered = await discoverProject(fixture.root, {
       plugin: { name: 'review', version: '1.0.0' },
-      skills: ['skills/*', 'custom/*/SKILL.md', 'custom/selected'],
+      skills: ['src/skills/*', 'custom/*/SKILL.md', 'custom/selected'],
     });
 
     expect(discovered.skills.map((skill) => skill.dir).sort()).toEqual(

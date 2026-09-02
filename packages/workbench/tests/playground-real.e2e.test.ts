@@ -132,7 +132,7 @@ const writePlaygroundProject = async (root: string): Promise<void> => {
       "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
       "  plugin: { name: 'playground-real-fixture', version: '1.0.0' },",
       "  scripts: { large: './src/large-output.ts', review: './src/review.ts' },",
-      "  skills: ['skills/review'],",
+      "  skills: ['src/skills/review'],",
       "  targets: ['claude'],",
       '});',
       '',

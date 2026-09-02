@@ -60,7 +60,7 @@ const readPackageManifest = async (): Promise<PackageManifest> =>
 const createBuildProject = async (root: string): Promise<{ readonly output: string; readonly project: string }> => {
   const project = join(root, 'manifest-version-project');
   const output = join(project, 'manifest-version-artifact');
-  await mkdir(join(project, 'skills', 'review'), { recursive: true });
+  await mkdir(join(project, 'src', 'skills', 'review'), { recursive: true });
   await Promise.all([
     writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
     writeFile(
@@ -68,7 +68,7 @@ const createBuildProject = async (root: string): Promise<{ readonly output: stri
       "export default { plugin: { name: 'manifest-version-fixture', version: '1.0.0' }, targets: ['portable'] };\n",
     ),
     writeFile(
-      join(project, 'skills', 'review', 'SKILL.md'),
+      join(project, 'src', 'skills', 'review', 'SKILL.md'),
       '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
     ),
   ]);

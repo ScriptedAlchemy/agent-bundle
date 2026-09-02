@@ -482,36 +482,102 @@ describe('migration nudges (AB473x)', () => {
     return { diagnostics: validateSource(loaded, discovered, registry), root };
   };
 
+  it('errors with AB4736 for a skill in the removed top-level conventional location', async () => {
+    const { diagnostics, root } = await discoveredAndValidated(
+      {},
+      { 'skills/legacy/SKILL.md': skillMarkdown('legacy') },
+    );
+
+    expect(diagnostics).toEqual([{
+      code: 'AB4736',
+      message: expect.stringContaining('skills/legacy/SKILL.md'),
+      recovery: expect.stringContaining('src/skills/legacy/SKILL.md'),
+      severity: 'error',
+      sourcePath: `${root}/skills/legacy/SKILL.md`,
+    }]);
+  });
+
+  it('does not report AB4736 when explicit skills config claims a top-level skill', async () => {
+    const { diagnostics } = await discoveredAndValidated(
+      { skills: ['skills/legacy'] },
+      { 'skills/legacy/SKILL.md': skillMarkdown('legacy') },
+    );
+
+    expect(diagnostics.filter(({ code }) => code === 'AB4736')).toEqual([]);
+  });
+
+  it('errors with AB4736 for top-level command and rule documents', async () => {
+    const { diagnostics, root } = await discoveredAndValidated(
+      {},
+      {
+        'commands/legacy.md': '# Legacy command\n',
+        'rules/legacy.mdc': '---\ndescription: Legacy rule\n---\nAlways verify.\n',
+      },
+    );
+
+    expect(diagnostics).toEqual([
+      {
+        code: 'AB4736',
+        message: expect.stringContaining('commands/legacy.md'),
+        recovery: expect.stringContaining('src/commands/legacy.md'),
+        severity: 'error',
+        sourcePath: `${root}/commands/legacy.md`,
+      },
+      {
+        code: 'AB4736',
+        message: expect.stringContaining('rules/legacy.mdc'),
+        recovery: expect.stringContaining('src/rules/legacy.mdc'),
+        severity: 'error',
+        sourcePath: `${root}/rules/legacy.mdc`,
+      },
+    ]);
+  });
+
+  it('discovers skills from the src convention', async () => {
+    const root = await projectRoot({
+      'src/skills/review/SKILL.md': skillMarkdown('review'),
+    });
+
+    const discovered = await discoverProject(root, {
+      plugin: { name: 'review-tools', version: '1.0.0' },
+    });
+
+    expect(discovered.skills).toMatchObject([{
+      dir: `${root}/src/skills/review`,
+      source: `${root}/src/skills/review/SKILL.md`,
+    }]);
+  });
+
   it('nudges AB4734 when explicit skills configuration shadows a conventional skill', async () => {
     const { diagnostics, root } = await discoveredAndValidated(
-      { skills: ['skills/covered'] },
+      { skills: ['src/skills/covered'] },
       {
-        'skills/covered/SKILL.md': skillMarkdown('covered'),
-        'skills/shadowed/SKILL.md': skillMarkdown('shadowed'),
+        'src/skills/covered/SKILL.md': skillMarkdown('covered'),
+        'src/skills/shadowed/SKILL.md': skillMarkdown('shadowed'),
       },
     );
     expect(diagnostics).toEqual([{
       code: 'AB4734',
-      message: expect.stringContaining('skills/shadowed/SKILL.md'),
+      message: expect.stringContaining('src/skills/shadowed/SKILL.md'),
       recovery: expect.stringContaining('Optional'),
       severity: 'info',
-      sourcePath: `${root}/skills/shadowed/SKILL.md`,
+      sourcePath: `${root}/src/skills/shadowed/SKILL.md`,
     }]);
   });
 
   it('stays silent when skills config is absent or covers every conventional skill', async () => {
     const files = {
-      'skills/one/SKILL.md': skillMarkdown('one'),
-      'skills/two/SKILL.md': skillMarkdown('two'),
+      'src/skills/one/SKILL.md': skillMarkdown('one'),
+      'src/skills/two/SKILL.md': skillMarkdown('two'),
     };
     const conventional = await discoveredAndValidated({}, files);
     expect(conventional.diagnostics).toEqual([]);
 
-    const globCovered = await discoveredAndValidated({ skills: ['skills/*'] }, files);
+    const globCovered = await discoveredAndValidated({ skills: ['src/skills/*'] }, files);
     expect(globCovered.diagnostics).toEqual([]);
 
     const literalCovered = await discoveredAndValidated(
-      { skills: ['skills/one', 'skills/two/SKILL.md'] },
+      { skills: ['src/skills/one', 'src/skills/two/SKILL.md'] },
       files,
     );
     expect(literalCovered.diagnostics).toEqual([]);

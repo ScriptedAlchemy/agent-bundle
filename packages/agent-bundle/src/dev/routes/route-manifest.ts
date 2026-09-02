@@ -1,5 +1,10 @@
 import type { Diagnostic } from '../../core/diagnostics.ts';
 import { deepFreeze } from '../../core/freeze.ts';
+import {
+  stateDefinitionProjection,
+  type StateDefinitionProjection,
+} from '../../core/state-inspection.ts';
+import type { NormalizedStateDefinition } from '../../core/types.ts';
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
@@ -113,6 +118,9 @@ export interface RouteManifestProvider {
   readonly source: string;
 }
 
+/** The effective static state declaration exposed to the browser catalog. */
+export type RouteManifestState = StateDefinitionProjection;
+
 /**
  * The browser projection of one compiled route graph. It is the same compiler
  * pass the build, `inspect`, and the test harness read — the Workbench derives
@@ -127,6 +135,8 @@ export interface RouteManifest {
   readonly providers: readonly RouteManifestProvider[];
   readonly scripts: readonly RouteManifestRoute[];
   readonly servers: readonly RouteManifestServer[];
+  /** Absent when the project declares no conventional state module. */
+  readonly state?: RouteManifestState;
   /**
    * The source revision of the compiler pass that produced the graph. The
    * browser compares it against the published build's project revision so a
@@ -231,6 +241,7 @@ const manifestProvider = (provider: CompiledProvider): RouteManifestProvider => 
 export const routeManifestFor = (
   graph: CompiledRouteGraph,
   sourceRevision: string,
+  state?: NormalizedStateDefinition,
 ): RouteManifest => deepFreeze({
   ...(graph.cli === undefined ? {} : { cli: manifestCli(graph.cli) }),
   diagnostics: graph.diagnostics.map((diagnostic) => ({ ...diagnostic })),
@@ -239,5 +250,6 @@ export const routeManifestFor = (
   providers: graph.providers.map(manifestProvider),
   scripts: graph.scripts.map(manifestRoute),
   servers: graph.servers.map(manifestServer),
+  ...(state === undefined ? {} : { state: stateDefinitionProjection(state, 'src/state.ts') }),
   sourceRevision,
 });

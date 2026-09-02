@@ -15,6 +15,11 @@ import {
 } from './build/pack-inventory.ts';
 import type { CapabilityState } from './core/capabilities.ts';
 import { isInsideOrEqual } from './core/paths.ts';
+import {
+  stateDefinitionProjection,
+  type StateProjectionBudgets,
+  type StateProjectionDriver,
+} from './core/state-inspection.ts';
 import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
@@ -95,6 +100,14 @@ import {
   validateClaudePlugin,
   type ClaudePluginValidationReport,
 } from './host-contracts/claude-plugin-validation.ts';
+import {
+  validateCodexPlugin,
+  type CodexPluginValidationReport,
+} from './host-contracts/codex-plugin-validation.ts';
+import {
+  validateCursorPlugin,
+  type CursorPluginValidationReport,
+} from './host-contracts/cursor-plugin-validation.ts';
 import type { EvalComparison } from './eval/compare.ts';
 import { EvalRunStoreError } from './eval/errors.ts';
 import {
@@ -160,6 +173,8 @@ export type {
   NativeHost,
   RedactedEventEnvelope,
 } from './host-contracts/host-contract.ts';
+export { validateClaudePlugin, validateCodexPlugin, validateCursorPlugin };
+export type { ClaudePluginValidationReport, CodexPluginValidationReport, CursorPluginValidationReport };
 
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
@@ -237,7 +252,11 @@ export interface ValidateOptions extends ProjectOptions {
 
 export interface ValidateResult {
   readonly diagnostics: readonly Diagnostic[];
-  readonly hostValidation?: readonly ClaudePluginValidationReport[];
+  readonly hostValidation?: readonly (
+    | ClaudePluginValidationReport
+    | CodexPluginValidationReport
+    | CursorPluginValidationReport
+  )[];
   readonly model?: NormalizedPlugin;
 }
 
@@ -264,14 +283,9 @@ export interface InspectOptions extends ProjectOptions {
   readonly target?: string;
 }
 
-export type StateInspectionDriver = 'memory' | 'sqlite';
+export type StateInspectionDriver = StateProjectionDriver;
 
-export interface StateInspectionBudgets {
-  readonly maxCommitMs: number;
-  readonly maxEventBytes: number;
-  readonly maxRevisions: number;
-  readonly maxStateBytes: number;
-}
+export type StateInspectionBudgets = StateProjectionBudgets;
 
 export type StateInspection =
   | {
@@ -478,12 +492,24 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
         return Object.freeze({ diagnostics: freezeDiagnostics(validated.diagnostics) });
       }
       const reports = await Promise.all(validated.snapshot.manifest.targets
-        .filter((target) => target.name === 'claude' || target.name === 'plugin')
-        .map((target) => validateClaudePlugin({
-          pluginDirectory: join(artifact, target.name),
-          strict: options.strict,
-          target: target.name,
-        })));
+        .filter((target) =>
+          target.name === 'claude' || target.name === 'codex' || target.name === 'cursor' || target.name === 'plugin')
+        .map((target) => target.name === 'codex'
+          ? validateCodexPlugin({
+            pluginDirectory: join(artifact, target.name),
+            strict: options.strict,
+            target: target.name,
+          })
+          : target.name === 'cursor'
+            ? validateCursorPlugin({
+              pluginDirectory: join(artifact, target.name),
+              target: target.name,
+            })
+            : validateClaudePlugin({
+              pluginDirectory: join(artifact, target.name),
+              strict: options.strict,
+              target: target.name,
+            })));
       return Object.freeze({
         diagnostics: freezeDiagnostics([
           ...validated.diagnostics,
@@ -539,61 +565,14 @@ const skippedComponentsFor = (
       : 'unsupported-capability') satisfies InspectionSkipReason,
   })));
 
-const durableStateLocation =
-  '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)';
-
-const noticeLedgerInspection =
-  'Generated runtimes co-mount the notice ledger store at the same lifetime under reserved id @agent-bundle/runtime/agent-notice-ledger/v1.';
-
-// Keep static inspection independent of the optional runtime peer. The
-// cross-package inspection test compares these policy defaults with the
-// runtime export so the two package boundaries cannot drift silently.
-const agentStateDefaultBudgets: StateInspectionBudgets = Object.freeze({
-  maxCommitMs: 5_000,
-  maxEventBytes: 262_144,
-  maxRevisions: 100_000,
-  maxStateBytes: 1_048_576,
-});
-
-const stateDriver = (
-  lifetime: NonNullable<NormalizedPlugin['state']>['lifetime'],
-): StateInspectionDriver => {
-  switch (lifetime) {
-    case 'request':
-    case 'process':
-      return 'memory';
-    case 'workspace-durable':
-      return 'sqlite';
-    default: {
-      const unreachable: never = lifetime;
-      throw new TypeError(`Unknown normalized state lifetime ${String(unreachable)}.`);
-    }
-  }
-};
-
 const inspectState = (model: NormalizedPlugin): StateInspection => {
   const definition = model.state;
   if (definition === undefined) return Object.freeze({ declared: false });
-  const budgets: Extract<StateInspection, { readonly declared: true }>['budgets'] =
-    definition.budgets === 'dynamic'
-      ? Object.freeze({ source: 'dynamic' })
-      : Object.freeze({
-        resolved: Object.freeze({
-          ...agentStateDefaultBudgets,
-          ...(definition.budgets?.declared ?? {}),
-        }),
-        source: definition.budgets === undefined ? 'defaults' : 'declared',
-      });
+  const projection = stateDefinitionProjection(definition);
   return deepFreeze({
-    budgets,
     declared: true,
-    driver: stateDriver(definition.lifetime),
-    ...(definition.lifetime === 'workspace-durable' ? { durableLocation: durableStateLocation } : {}),
-    id: definition.id,
-    lifetime: definition.lifetime,
-    notices: [noticeLedgerInspection],
+    ...projection,
     provenance: definition.provenance,
-    source: definition.source,
   });
 };
 

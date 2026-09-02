@@ -76,6 +76,7 @@ export type {
   AgentRuntimeErrorCode,
   CreateWarmFlightHostOptions,
   WarmFlightHost,
+  WarmRuntimeAvailability,
   WarmRuntimeIdentity,
 } from './warm-runtime.js';
 export { decodeAgentFlightStream } from './reconciler.js';

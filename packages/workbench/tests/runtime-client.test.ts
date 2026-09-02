@@ -265,17 +265,17 @@ it('shares one injected foreground bootstrap across MCP, Runtime, and Project cl
   const runtime = new RuntimeClient(foreground);
   const project = new ProjectClient({ foreground });
 
-  await Promise.all([mcp.session('session-a'), runtime.bootstrap(), project.rebuild(['skills/review/SKILL.md'])]);
+  await Promise.all([mcp.session('session-a'), runtime.bootstrap(), project.rebuild(['src/skills/review/SKILL.md'])]);
   expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(1);
 
   mcp.forgetAuthentication();
   mcp.forgetAuthentication();
-  await project.rebuild(['skills/review/SKILL.md']);
+  await project.rebuild(['src/skills/review/SKILL.md']);
   expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(2);
 
   project.close();
   project.close();
-  await new ProjectClient({ foreground }).rebuild(['skills/review/SKILL.md']);
+  await new ProjectClient({ foreground }).rebuild(['src/skills/review/SKILL.md']);
   expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(2);
 });
 
@@ -293,7 +293,7 @@ it('fences an in-flight Project rebuild when root shutdown invalidates foregroun
   });
   const client = new ProjectClient({ foreground });
 
-  const rebuilding = client.rebuild(['skills/review/SKILL.md']);
+  const rebuilding = client.rebuild(['src/skills/review/SKILL.md']);
   client.close();
   foreground.forgetAuthentication();
   session.resolve(json(foregroundSession));

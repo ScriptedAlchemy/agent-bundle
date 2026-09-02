@@ -1,6 +1,6 @@
 /**
  * The minimal honest React-element-tree → Markdown renderer behind rendered
- * skills (`skills/<name>/SKILL.tsx`). It walks plain element objects (the
+ * skills (`src/skills/<name>/SKILL.tsx`). It walks plain element objects (the
  * shape React's automatic JSX runtime produces) without depending on React
  * itself, resolves function components (sync or async), and hand-emits
  * Markdown for a documented element subset. Anything outside the subset is a

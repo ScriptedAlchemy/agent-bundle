@@ -7,6 +7,7 @@ import type {
   RouteManifestKind,
   RouteManifestRoute,
   RouteManifestServerMode,
+  RouteManifestState,
   RouteInputArrayItemSchema,
   RouteInputPropertySchema,
   RouteInputSchema,
@@ -80,6 +81,7 @@ export interface RouteCatalog {
   readonly servers: readonly RouteCatalogServer[];
   readonly sourceRevision?: string;
   readonly state: RouteCatalogState;
+  readonly stateDefinition?: RouteManifestState;
 }
 
 export type RouteInputDraftValue = boolean | string | readonly (boolean | string)[];
@@ -202,6 +204,7 @@ export const routeCatalogFor = (
       .sort((left, right) => left.name.localeCompare(right.name))),
     sourceRevision: manifest.sourceRevision,
     state: epochSourceRevision === undefined || epochSourceRevision === manifest.sourceRevision ? 'current' : 'stale',
+    ...(manifest.state === undefined ? {} : { stateDefinition: manifest.state }),
   });
 };
 

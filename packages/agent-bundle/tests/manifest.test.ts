@@ -15,7 +15,7 @@ const hash = (character: string): string => character.repeat(64);
 
 const sourceInputs = Object.freeze([
   Object.freeze({ path: 'agent-bundle.config.ts', sha256: hash('a') }),
-  Object.freeze({ executable: true, path: 'skills/review/SKILL.md', sha256: hash('b') }),
+  Object.freeze({ executable: true, path: 'src/skills/review/SKILL.md', sha256: hash('b') }),
 ]);
 
 const validManifest = (): ArtifactManifest => ({
@@ -38,7 +38,7 @@ const validManifest = (): ArtifactManifest => ({
       mode: 0o755,
       path: 'codex/scripts/review.mjs',
       sha256: hash('d'),
-      sourceInputs: ['agent-bundle.config.ts', 'skills/review/SKILL.md'],
+      sourceInputs: ['agent-bundle.config.ts', 'src/skills/review/SKILL.md'],
     },
   ],
   producer: {

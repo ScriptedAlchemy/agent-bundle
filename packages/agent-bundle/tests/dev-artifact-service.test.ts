@@ -20,7 +20,7 @@ const sha256 = (value: string | Uint8Array): string =>
 
 const createProject = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-service-'));
-  await mkdir(join(root, 'skills', 'review'), { recursive: true });
+  await mkdir(join(root, 'src', 'skills', 'review'), { recursive: true });
   await Promise.all([
     writeFile(
       join(root, 'agent-bundle.config.ts'),
@@ -33,7 +33,7 @@ const createProject = async (): Promise<string> => {
       ].join('\n'),
     ),
     writeFile(
-      join(root, 'skills', 'review', 'SKILL.md'),
+      join(root, 'src', 'skills', 'review', 'SKILL.md'),
       [
         '---',
         'name: review',
@@ -248,7 +248,7 @@ it.each(['added', 'changed', 'removed'] as const)(
   async (mutation) => {
     const root = await createProject();
     const store = new EpochStore({ projectRoot: root });
-    const deletedSource = join(root, 'skills', 'review', 'guide.txt');
+    const deletedSource = join(root, 'src', 'skills', 'review', 'guide.txt');
     const attempts: string[] = [];
     try {
       if (mutation === 'removed') await writeFile(deletedSource, 'Guide before removal.\n');
@@ -261,7 +261,7 @@ it.each(['added', 'changed', 'removed'] as const)(
             await mkdir(join(root, 'src'), { recursive: true });
             await writeFile(join(root, 'src', 'added.ts'), 'export const added = true;\n');
           } else if (mutation === 'changed') {
-            await writeFile(join(root, 'skills', 'review', 'SKILL.md'), [
+            await writeFile(join(root, 'src', 'skills', 'review', 'SKILL.md'), [
               '---',
               'name: review',
               'description: Reviews changed source',

@@ -125,7 +125,7 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
       "  mcp: { servers: { fixture: { entry: './src/server.ts', env: { NO_COLOR: '1', SECRET_TOKEN: 'fixture-secret' } } } },",
       "  portable: { fixtureMarker: 'artifact-extension-initial' },",
       "  plugin: { name: 'workbench-mcp-fixture', version: '1.0.0' },",
-      "  skills: ['skills/review'],",
+      "  skills: ['src/skills/review'],",
       "  targets: ['portable'],",
       '});',
       '',
@@ -1505,7 +1505,7 @@ e2e('lists an immutable build Skill tree even after the current source Skill is 
   const project = await createProjectFixture();
   const { server } = await startFrozenEpochServer(project.root);
   try {
-    const renamed = join(project.root, 'skills', 'revised');
+    const renamed = join(project.root, 'src', 'skills', 'revised');
     await rename(project.skillDir, renamed);
     await writeFile(join(renamed, 'SKILL.md'), project.skillMarkdown.replace('name: review', 'name: revised'));
 

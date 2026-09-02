@@ -38,7 +38,7 @@ scripted and asks nothing — the remaining values fall back to their defaults.
 
 | Template | What you get |
 | --- | --- |
-| `minimal` | A skills-only plugin: one Skill directory and nothing else. |
+| `minimal` | A skills-only plugin: one `src/skills/<name>/SKILL.md` directory and nothing else. |
 | `mcp-server` | A stdio MCP server from one `src/mcp/<server>/tools/<name>.tsx` route module plus one artifact script, with the framework test harness wired up. |
 | `cli-tool` | An installable CLI through the `src/cli.ts` bin convention plus a `src/index.ts` library export with declarations. |
 

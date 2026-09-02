@@ -333,6 +333,7 @@ export const createFlightWorkerHost = (
   });
   worker.on('exit', (code: number) => {
     exited = true;
+    warmHost.markUnavailable(code === 0 ? 'runtime-unavailable' : 'runtime-restarted');
     failPending(new AgentRuntimeError(
       code === 0 ? 'runtime-unavailable' : 'runtime-restarted',
       code === 0
@@ -360,7 +361,7 @@ export const createFlightWorkerHost = (
       },
     }));
   });
-  return createWarmFlightHost({
+  const warmHost = createWarmFlightHost({
     artifactEpoch,
     close: async (): Promise<void> => {
       await worker.terminate();
@@ -404,6 +405,7 @@ export const createFlightWorkerHost = (
       },
     },
   });
+  return warmHost;
 };
 
 /** The render host a generated server closes over, plus its teardown. */
@@ -464,10 +466,13 @@ const canonicalEvent = (event: string): CanonicalAgentEvent => {
 const startEventRuntime = async (
   events: GeneratedEventRuntimeBinding,
   dispatcher: AgentRenderDispatcher,
-): Promise<{ readonly close: () => Promise<void> }> => events.createEventRuntimeServer({
-  artifactEpoch: events.artifactEpoch,
-  endpointId: events.endpointId,
-  handle: async (request, signal) => {
+  host: WarmFlightHost,
+): Promise<{ readonly close: () => Promise<void> }> => {
+  const startedAt = new Date().toISOString();
+  return events.createEventRuntimeServer({
+    artifactEpoch: events.artifactEpoch,
+    endpointId: events.endpointId,
+    handle: async (request, signal) => {
     const event = canonicalEvent(request.event);
     const target = events.allowedTargets.find((candidate) => candidate === request.target);
     if (target === undefined) {
@@ -519,8 +524,16 @@ const startEventRuntime = async (
       target,
       nativeEvent,
     ));
-  },
-});
+    },
+    status: () => ({
+      artifactEpoch: host.identity.artifactEpoch,
+      availability: host.availability(),
+      instanceId: host.identity.instanceId,
+      pid: process.pid,
+      startedAt,
+    }),
+  });
+};
 
 /**
  * Builds the MCP server a generated artifact serves: the dispatcher over the
@@ -536,7 +549,7 @@ export const createGeneratedRouteMcpServer = async (
   const dispatcher = createAgentRenderDispatcher(options.host);
   const events = options.events === undefined
     ? undefined
-    : await startEventRuntime(options.events, dispatcher);
+    : await startEventRuntime(options.events, dispatcher, options.host);
   registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch);
   registerGeneratedMcpApps(server, options.apps ?? []);
   const close = server.close.bind(server);

@@ -13,14 +13,14 @@ required. Both eval suites are deterministic and read only checked-in fixtures.
 ## What is authored
 
 - `agent-bundle.config.ts` declares the plugin and its portable, Codex, and
-  Claude targets. The Skills are not listed there: every `skills/*/SKILL.md`
+  Claude targets. The Skills are not listed there: every `src/skills/*/SKILL.md`
   directory is discovered automatically by convention, the model described in
   [`docs/framework-mode.md`](../../docs/framework-mode.md).
-- `skills/incident-triage/SKILL.md` guides a production incident from first
+- `src/skills/incident-triage/SKILL.md` guides a production incident from first
   signal through containment, evidence collection, and a handoff-ready update.
-- `skills/dependency-upgrade/SKILL.md` plans dependency upgrades with API,
+- `src/skills/dependency-upgrade/SKILL.md` plans dependency upgrades with API,
   runtime, rollout, and rollback checks.
-- `skills/release-review/SKILL.md` defines the evidence, severity, workflow,
+- `src/skills/release-review/SKILL.md` defines the evidence, severity, workflow,
   and final-report requirements for an explicit release review.
 - Each Skill links its own `references/` checklist or runbook and reusable
   `assets/` handoff or planning template.

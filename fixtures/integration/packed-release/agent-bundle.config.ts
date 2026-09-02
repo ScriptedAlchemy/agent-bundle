@@ -25,6 +25,6 @@ export default {
   scripts: {
     review: './src/review.ts',
   },
-  skills: ['skills/review'],
+  skills: ['src/skills/review'],
   targets: ['portable', 'claude'],
 };

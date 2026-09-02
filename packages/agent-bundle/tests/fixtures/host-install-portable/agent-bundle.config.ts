@@ -12,6 +12,6 @@ export default {
     name: 'host-install-portable-proof',
     version: '1.0.0',
   },
-  skills: ['skills/probe'],
+  skills: ['src/skills/probe'],
   targets: ['portable'],
 };
