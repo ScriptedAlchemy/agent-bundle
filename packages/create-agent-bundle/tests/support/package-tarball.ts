@@ -52,3 +52,54 @@ export const tamperedPackageTarball = (name: string): Buffer => {
   writeOctalField(archive, 0o777, tarModeOffset, 8);
   return gzipSync(archive);
 };
+
+const writeTarEntry = (
+  archive: Buffer,
+  headerOffset: number,
+  entryName: string,
+  contents: Buffer,
+): number => {
+  const header = archive.subarray(headerOffset, headerOffset + tarBlockSize);
+  header.fill(0);
+  header.write(entryName, 0, 'utf8');
+  writeOctalField(header, 0o644, tarModeOffset, 8);
+  writeOctalField(header, 0, 108, 8);
+  writeOctalField(header, 0, 116, 8);
+  writeOctalField(header, contents.length, 124, 12);
+  writeOctalField(header, 0, 136, 12);
+  header.write('0', 156, 'ascii');
+  header.write('ustar', 257, 'ascii');
+  header.write('00', 263, 'ascii');
+  applyHeaderChecksum(header);
+  const contentsOffset = headerOffset + tarBlockSize;
+  contents.copy(archive, contentsOffset);
+  return contentsOffset + Math.ceil(contents.length / tarBlockSize) * tarBlockSize;
+};
+
+/**
+ * Like `packageTarArchive`, but adds a trailing entry after `package/package.json`
+ * so callers can tamper with a later header without touching the manifest block.
+ */
+export const packageTarArchiveWithTrailingEntry = (name: string): Buffer => {
+  const manifest = Buffer.from(JSON.stringify({ name }));
+  const trailing = Buffer.from('trailing payload');
+  const archive = Buffer.alloc(
+    tarBlockSize
+    + Math.ceil(manifest.length / tarBlockSize) * tarBlockSize
+    + tarBlockSize
+    + Math.ceil(trailing.length / tarBlockSize) * tarBlockSize
+    + tarBlockSize * 2,
+  );
+  const manifestEnd = writeTarEntry(archive, 0, 'package/package.json', manifest);
+  writeTarEntry(archive, manifestEnd, 'package/trailing.txt', trailing);
+  return archive;
+};
+
+/** Manifest checksum is valid; a later tar header checksum is not. */
+export const tamperedTrailingHeaderPackageTarball = (name: string): Buffer => {
+  const archive = packageTarArchiveWithTrailingEntry(name);
+  const manifestBlocks = Math.ceil(Buffer.from(JSON.stringify({ name })).length / tarBlockSize) * tarBlockSize;
+  const trailingHeaderOffset = tarBlockSize + manifestBlocks;
+  writeOctalField(archive, 0o777, trailingHeaderOffset + tarModeOffset, 8);
+  return gzipSync(archive);
+};

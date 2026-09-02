@@ -12,7 +12,11 @@ import {
   validatedRuntimeSpecForFramework,
 } from '../src/framework.ts';
 import { UsageError } from '../src/options.ts';
-import { packageTarball, tamperedPackageTarball } from './support/package-tarball.ts';
+import {
+  packageTarball,
+  tamperedPackageTarball,
+  tamperedTrailingHeaderPackageTarball,
+} from './support/package-tarball.ts';
 
 const withTarballDirectory = async (
   run: (directory: string) => Promise<void>,
@@ -120,6 +124,16 @@ describe('assertLocalFrameworkTarball', () => {
     await withTarballDirectory(async (directory) => {
       const tarball = join(directory, 'agent-bundle-0.0.0.tgz');
       await writeFile(tarball, tamperedPackageTarball('agent-bundle'));
+      await expect(assertLocalFrameworkTarball(`file:${tarball}`, directory)).rejects.toThrow(UsageError);
+      await expect(assertLocalFrameworkTarball(`file:${tarball}`, directory))
+        .rejects.toThrow('Invalid tar header checksum');
+    });
+  });
+
+  it('rejects a tarball whose manifest is valid but a later tar header is corrupt', async () => {
+    await withTarballDirectory(async (directory) => {
+      const tarball = join(directory, 'agent-bundle-0.0.0.tgz');
+      await writeFile(tarball, tamperedTrailingHeaderPackageTarball('agent-bundle'));
       await expect(assertLocalFrameworkTarball(`file:${tarball}`, directory)).rejects.toThrow(UsageError);
       await expect(assertLocalFrameworkTarball(`file:${tarball}`, directory))
         .rejects.toThrow('Invalid tar header checksum');
