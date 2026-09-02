@@ -70,6 +70,21 @@ const withClaudeSettings = (settings: unknown): NormalizedPlugin => ({
   },
 });
 
+const withClaudeExperimental = (
+  experimental: Readonly<{ readonly monitors?: unknown; readonly themes?: unknown }>,
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      target: 'claude',
+      value: experimental,
+    },
+  },
+});
+
 const withClaudeDependencies = (dependencies: unknown): NormalizedPlugin => ({
   ...model,
   extensions: {
@@ -199,6 +214,95 @@ nativeIt('records that strict native validation never inspects plugin settings.j
     // author gets before the plugin is enabled in a session.
     expect(validation.code, validation.output).toBe(0);
     expect(validation.output).not.toContain('settings.json');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('accepts emitted Claude experimental themes and monitors under strict native validation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-experimental-'));
+
+  try {
+    const written = await writeClaudeArtifact(root, withClaudeExperimental({
+      monitors: [{
+        command: 'node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs',
+        description: 'Watch the review queue.',
+        name: 'review-queue',
+        when: 'always',
+      }],
+      themes: {
+        dracula: {
+          base: 'dark',
+          overrides: { claude: '#bd93f9', error: '#ff5555' },
+        },
+      },
+    }));
+    expect(written).toEqual(expect.arrayContaining([
+      'monitors/monitors.json',
+      'themes/dracula.json',
+    ]));
+    const validation = await runClaudeValidation(root, root);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records whether strict native validation inspects monitors/monitors.json contents', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-monitors-invalid-'));
+
+  try {
+    await writeClaudeArtifact(root, model);
+    await mkdir(join(root, 'monitors'), { recursive: true });
+    await writeFile(
+      join(root, 'monitors', 'monitors.json'),
+      '[{"name":"missing-command","description":"Missing its required command."}]\n',
+    );
+    const validation = await runClaudeValidation(root, root);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+    expect(validation.output).not.toContain('monitors.json');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records whether strict native validation inspects plugin theme contents', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-theme-invalid-'));
+
+  try {
+    await writeClaudeArtifact(root, model);
+    await mkdir(join(root, 'themes'), { recursive: true });
+    await writeFile(
+      join(root, 'themes', 'invalid.json'),
+      '{"name":"Missing base","overrides":{"error":7},"typo":true}\n',
+    );
+    const validation = await runClaudeValidation(root, root);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+    expect(validation.output).not.toContain('invalid.json');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records that strict native validation rejects the deprecated top-level monitors key', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-monitors-top-level-'));
+
+  try {
+    await writeClaudeArtifact(root, model);
+    const manifestPath = join(root, '.claude-plugin', 'plugin.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest['monitors'] = './monitors/monitors.json';
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    const validation = await runClaudeValidation(root, root);
+
+    expect(validation.code).not.toBe(0);
+    expect(validation.output).toContain('monitors');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

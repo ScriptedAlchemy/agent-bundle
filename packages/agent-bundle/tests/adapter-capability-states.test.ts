@@ -221,6 +221,31 @@ it('reports Claude channels support and honest unavailable composite coverage', 
   expect(registry.supports('plugin', 'channels')).toBe(false);
 });
 
+it.each([
+  ['themes', 'experimental themes'],
+  ['monitors', 'background monitors'],
+] as const)('reports Claude %s support without inventing shared composite coverage', (capability, reason) => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('claude').capabilities[capability]).toMatchObject({
+    evidence: {
+      observedVersion: '2.1.250',
+      target: 'claude',
+    },
+    state: 'supported',
+  });
+  expect(registry.get('plugin').capabilities[capability]).toMatchObject({
+    reason: expect.stringContaining(reason),
+    state: 'unavailable',
+  });
+  for (const target of ['codex', 'cursor', 'portable'] as const) {
+    expect(registry.get(target).capabilities[capability]).toBeUndefined();
+    expect(registry.supports(target, capability)).toBe(false);
+  }
+  expect(registry.supports('claude', capability)).toBe(true);
+  expect(registry.supports('plugin', capability)).toBe(false);
+});
+
 it('reports Claude dependency support and honest unavailable composite coverage', () => {
   const registry = createDefaultRegistry();
 

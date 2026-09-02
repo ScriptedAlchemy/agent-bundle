@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/theme.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "base": { "minLength": 1, "type": "string" },
+    "name": { "minLength": 1, "type": "string" },
+    "overrides": {
+      "additionalProperties": { "minLength": 1, "type": "string" },
+      "type": "object"
+    }
+  },
+  "required": ["base"],
+  "type": "object"
+}

@@ -191,6 +191,23 @@ const withClaudeSettings = (
   },
 });
 
+const withClaudeExperimental = (
+  model: NormalizedPlugin,
+  experimental: Readonly<{ readonly monitors?: unknown; readonly themes?: unknown }>,
+  target = 'claude',
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/experimental.config.ts' },
+      target,
+      value: experimental,
+    },
+  },
+});
+
 const withClaudeDependencies = (
   model: NormalizedPlugin,
   dependencies: unknown,
@@ -1485,6 +1502,131 @@ it('emits no Claude settings document when the host config declares none', () =>
   const plan = createDefaultRegistry().get('claude').plan(plugin);
 
   expect(plan.entries.some((entry) => entry.relativePath === 'settings.json')).toBe(false);
+});
+
+it('emits validated Claude themes and monitors at their default experimental locations', () => {
+  const model = withClaudeExperimental(plugin, {
+    monitors: [{
+      command: 'node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs',
+      description: 'Watch the review queue.',
+      name: 'review-queue',
+      when: 'on-skill-invoke:review',
+    }],
+    themes: {
+      dracula: {
+        base: 'dark',
+        overrides: {
+          claude: '#bd93f9',
+          error: '#ff5555',
+          success: '#50fa7b',
+        },
+      },
+      paper: { base: 'light', name: 'Paper' },
+    },
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+  const documents = writeContents(model, 'claude');
+
+  expect(JSON.parse(documents['themes/dracula.json']!)).toEqual({
+    base: 'dark',
+    name: 'dracula',
+    overrides: {
+      claude: '#bd93f9',
+      error: '#ff5555',
+      success: '#50fa7b',
+    },
+  });
+  expect(JSON.parse(documents['themes/paper.json']!)).toEqual({ base: 'light', name: 'Paper' });
+  expect(JSON.parse(documents['monitors/monitors.json']!)).toEqual([{
+    command: 'node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs',
+    description: 'Watch the review queue.',
+    name: 'review-queue',
+    when: 'on-skill-invoke:review',
+  }]);
+  for (const path of ['themes/dracula.json', 'themes/paper.json', 'monitors/monitors.json']) {
+    expect(plan.entries.find((entry) => entry.relativePath === path)?.sourceInputs)
+      .toEqual(['/workspace/agent-bundle.config.ts', '/workspace/experimental.config.ts']);
+  }
+  const manifest = JSON.parse(documents['.claude-plugin/plugin.json']!);
+  expect(manifest).not.toHaveProperty('themes');
+  expect(manifest).not.toHaveProperty('monitors');
+  expect(manifest).not.toHaveProperty('experimental');
+  expect(plan.diagnostics).toEqual([{
+    code: 'claude.monitors.availability',
+    message: expect.stringContaining('interactive CLI sessions'),
+    severity: 'warning',
+    target: 'claude',
+  }]);
+});
+
+it.each([
+  { code: 'claude.themes.declaration.invalid', label: 'a non-object themes declaration', themes: [] },
+  { code: 'claude.themes.declaration.invalid', label: 'an empty themes declaration', themes: {} },
+  { code: 'claude.themes.key.invalid', label: 'an unsafe theme file stem', themes: { '../escape': { base: 'dark' } } },
+  { code: 'claude.themes.entry.invalid', label: 'a non-object theme declaration', themes: { dark: 'dark' } },
+  { code: 'claude.themes.field.unknown', label: 'an unknown theme field', themes: { dark: { base: 'dark', typo: true } } },
+  { code: 'claude.themes.base.required', label: 'a missing theme base', themes: { dark: { name: 'Dark' } } },
+  { code: 'claude.themes.base.required', label: 'an empty theme base', themes: { dark: { base: '' } } },
+  { code: 'claude.themes.name.invalid', label: 'an empty theme display name', themes: { dark: { base: 'dark', name: '' } } },
+  { code: 'claude.themes.overrides.invalid', label: 'a non-object overrides map', themes: { dark: { base: 'dark', overrides: [] } } },
+  { code: 'claude.themes.overrides.value.invalid', label: 'a non-string override', themes: { dark: { base: 'dark', overrides: { error: 7 } } } },
+  { code: 'claude.themes.overrides.value.invalid', label: 'an empty override', themes: { dark: { base: 'dark', overrides: { error: '' } } } },
+])('rejects $label without emitting Claude themes', ({ code, themes }) => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeExperimental(plugin, { themes }));
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+  expect(plan.entries.some((entry) => entry.relativePath.startsWith('themes/'))).toBe(false);
+});
+
+it.each([
+  { code: 'claude.monitors.declaration.invalid', label: 'a non-array monitors declaration', monitors: {} },
+  { code: 'claude.monitors.declaration.invalid', label: 'an empty monitors declaration', monitors: [] },
+  { code: 'claude.monitors.entry.invalid', label: 'a non-object monitor entry', monitors: ['watch'] },
+  { code: 'claude.monitors.field.unknown', label: 'an unknown monitor field', monitors: [{ command: 'watch', description: 'Watch.', name: 'watch', typo: true }] },
+  { code: 'claude.monitors.name.required', label: 'a missing monitor name', monitors: [{ command: 'watch', description: 'Watch.' }] },
+  { code: 'claude.monitors.name.duplicate', label: 'a duplicate monitor name', monitors: [
+    { command: 'watch-a', description: 'Watch A.', name: 'watch' },
+    { command: 'watch-b', description: 'Watch B.', name: 'watch' },
+  ] },
+  { code: 'claude.monitors.command.required', label: 'an empty monitor command', monitors: [{ command: '', description: 'Watch.', name: 'watch' }] },
+  { code: 'claude.monitors.command.userConfig', label: 'a user config substitution', monitors: [{ command: 'watch ${user_config.token}', description: 'Watch.', name: 'watch' }] },
+  { code: 'claude.monitors.description.required', label: 'an empty monitor description', monitors: [{ command: 'watch', description: '', name: 'watch' }] },
+  { code: 'claude.monitors.when.invalid', label: 'an unsupported monitor trigger', monitors: [{ command: 'watch', description: 'Watch.', name: 'watch', when: 'session-start' }] },
+  { code: 'claude.monitors.when.invalid', label: 'an empty skill trigger', monitors: [{ command: 'watch', description: 'Watch.', name: 'watch', when: 'on-skill-invoke:' }] },
+  { code: 'claude.monitors.when.invalid', label: 'a trigger for a missing plugin skill', monitors: [{ command: 'watch', description: 'Watch.', name: 'watch', when: 'on-skill-invoke:missing' }] },
+])('rejects $label without emitting Claude monitors', ({ code, monitors }) => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeExperimental(plugin, { monitors }));
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+  expect(plan.entries.some((entry) => entry.relativePath === 'monitors/monitors.json')).toBe(false);
+});
+
+it('pins and registers the closed Claude theme and monitor schemas', async () => {
+  const [themeModule, monitorsModule] = await Promise.all([
+    import('../src/adapters/schemas/claude/theme.schema.json', { with: { type: 'json' } }),
+    import('../src/adapters/schemas/claude/monitors.schema.json', { with: { type: 'json' } }),
+  ]);
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  const validateTheme = validator.compile(themeModule.default);
+  const validateMonitors = validator.compile(monitorsModule.default);
+
+  expect(validateTheme({ base: 'dark', name: 'Dracula', overrides: { claude: '#bd93f9' } })).toBe(true);
+  expect(validateTheme({ base: 'dark', typo: true })).toBe(false);
+  expect(validateTheme({ name: 'No base' })).toBe(false);
+  expect(validateTheme({ base: 'dark', overrides: { error: 7 } })).toBe(false);
+  expect(validateMonitors([{ command: 'watch', description: 'Watch.', name: 'watch' }])).toBe(true);
+  expect(validateMonitors([])).toBe(false);
+  expect(validateMonitors([{ description: 'Watch.', name: 'watch' }])).toBe(false);
+  expect(validateMonitors([{ command: 'watch', description: 'Watch.', name: 'watch', when: 'later' }])).toBe(false);
+
+  const validation = createDefaultRegistry().artifactValidation('claude');
+  expect(validation.documents).toContainEqual({ path: 'themes/*.json', required: false, schema: 'theme' });
+  expect(validation.documents).toContainEqual({ path: 'monitors/monitors.json', required: false, schema: 'monitors' });
+  expect(validation.schemas.find((schema) => schema.name === 'theme')
+    ?.validate({ base: 'dark', name: 'Dracula' })).toEqual([]);
+  expect(validation.schemas.find((schema) => schema.name === 'monitors')
+    ?.validate([{ command: 'watch', description: 'Watch.', name: 'watch' }])).toEqual([]);
 });
 
 it('emits Claude plugin dependencies in authored order with closed object keys and extension provenance', async () => {

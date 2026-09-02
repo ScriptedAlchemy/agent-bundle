@@ -160,8 +160,10 @@ const artifactValidation = deepFreeze({
     Object.freeze({ path: claudeArtifactPaths.lsp, required: false, schema: 'claude-lsp' }),
     Object.freeze({ path: claudeArtifactPaths.marketplace, required: false, schema: 'claude-marketplace' }),
     Object.freeze({ path: claudeArtifactPaths.mcp, required: false, schema: 'claude-mcp' }),
+    Object.freeze({ path: claudeArtifactPaths.monitors, required: false, schema: 'claude-monitors' }),
     Object.freeze({ path: claudeArtifactPaths.plugin, required: true, schema: 'claude-plugin' }),
     Object.freeze({ path: claudeArtifactPaths.settings, required: false, schema: 'claude-settings' }),
+    Object.freeze({ path: claudeArtifactPaths.themes, required: false, schema: 'claude-theme' }),
     Object.freeze({ path: codexArtifactPaths.marketplace, required: false, schema: 'codex-marketplace' }),
     Object.freeze({ path: codexBundleMcpPath, required: false, schema: 'codex-mcp' }),
     Object.freeze({ path: codexArtifactPaths.plugin, required: true, schema: 'codex-plugin' }),
@@ -184,7 +186,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.11.0',
+  adapterRevision: '1.12.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -631,6 +633,9 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
       intersectCapabilityStates(claudeAdapter.capabilities.mcp!, codexAdapter.capabilities.mcp!),
       cursorAdapter.capabilities.mcp!,
     ),
+    monitors: unavailableCapability(
+      'The unified bundle emits Claude-only experimental background monitors, but the pinned Codex and Cursor contracts declare no shared monitor surface.',
+    ),
     outputStyles: unavailableCapability(
       'The unified bundle emits Claude-only output styles, but the pinned Codex and Cursor contracts declare no shared output styles surface.',
     ),
@@ -653,6 +658,9 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
     skills: intersectCapabilityStates(
       intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),
       cursorAdapter.capabilities.skills!,
+    ),
+    themes: unavailableCapability(
+      'The unified bundle emits Claude-only experimental themes, but the pinned Codex and Cursor contracts declare no shared theme surface.',
     ),
     userConfig: unavailableCapability(
       'The unified bundle emits the Claude-only userConfig manifest field, but the pinned Codex and Cursor contracts declare no shared enable-time option surface.',

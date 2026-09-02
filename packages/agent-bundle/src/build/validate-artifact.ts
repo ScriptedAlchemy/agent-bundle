@@ -322,6 +322,17 @@ const validateSchemaDocument = (
   }
 };
 
+const matchesArtifactDocumentPath = (contractPath: string, relativePath: string): boolean => {
+  const wildcard = contractPath.indexOf('*');
+  if (wildcard === -1) return contractPath === relativePath;
+  if (contractPath.indexOf('*', wildcard + 1) !== -1) return false;
+  const prefix = contractPath.slice(0, wildcard);
+  const suffix = contractPath.slice(wildcard + 1);
+  if (!relativePath.startsWith(prefix) || !relativePath.endsWith(suffix)) return false;
+  const matched = relativePath.slice(prefix.length, relativePath.length - suffix.length);
+  return matched.length > 0 && !matched.includes('/');
+};
+
 const validateTargetContracts = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
@@ -365,47 +376,57 @@ const validateTargetContracts = async (options: {
     const validation = options.registry.artifactValidation(target.name);
     const validators = new Map(validation.schemas.map((schema) => [schema.name, schema.validate]));
     for (const document of validation.documents) {
-      const generatedPath = `${target.name}/${document.path}`;
-      if (!files.has(generatedPath)) {
+      const targetPrefix = `${target.name}/`;
+      const generatedPaths = document.path.includes('*')
+        ? [...files]
+          .filter((path) =>
+            path.startsWith(targetPrefix) &&
+            matchesArtifactDocumentPath(document.path, path.slice(targetPrefix.length)))
+          .sort((left, right) => left.localeCompare(right))
+        : [`${targetPrefix}${document.path}`].filter((path) => files.has(path));
+      if (generatedPaths.length === 0) {
         if (document.required) {
           diagnostics.push(diagnostic(
             'AB6011',
             `Target ${JSON.stringify(target.name)} is missing required document ${JSON.stringify(document.path)}.`,
-            generatedPath,
+            `${targetPrefix}${document.path}`,
             target.name,
           ));
         }
         continue;
       }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(await readFile(resolve(options.artifactRoot, generatedPath), 'utf8')) as unknown;
-      } catch {
-        continue;
-      }
-      const validate = validators.get(document.schema);
-      if (validate === undefined) continue;
-      const issues = validateSchemaDocument(validate, parsed);
-      const issue = issues[0];
-      if (issue !== undefined) {
-        diagnostics.push(diagnostic(
-          'AB6012',
-          `Target ${JSON.stringify(target.name)} document ${JSON.stringify(document.path)} is invalid for schema ${JSON.stringify(document.schema)} at ${issue.instancePath || '/'}: ${issue.message}.`,
-          generatedPath,
-          target.name,
-        ));
-      }
-      if (
-        document.path.endsWith('plugin.json') &&
-        isRecord(parsed) &&
-        typeof parsed.logo === 'string'
-      ) {
-        diagnostics.push(...manifestLogoPathDiagnostics({
-          files,
-          generatedPath,
-          logo: parsed.logo,
-          target: target.name,
-        }));
+      for (const generatedPath of generatedPaths) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(await readFile(resolve(options.artifactRoot, generatedPath), 'utf8')) as unknown;
+        } catch {
+          continue;
+        }
+        const validate = validators.get(document.schema);
+        if (validate === undefined) continue;
+        const issues = validateSchemaDocument(validate, parsed);
+        const issue = issues[0];
+        if (issue !== undefined) {
+          const relativePath = generatedPath.slice(targetPrefix.length);
+          diagnostics.push(diagnostic(
+            'AB6012',
+            `Target ${JSON.stringify(target.name)} document ${JSON.stringify(relativePath)} is invalid for schema ${JSON.stringify(document.schema)} at ${issue.instancePath || '/'}: ${issue.message}.`,
+            generatedPath,
+            target.name,
+          ));
+        }
+        if (
+          document.path.endsWith('plugin.json') &&
+          isRecord(parsed) &&
+          typeof parsed.logo === 'string'
+        ) {
+          diagnostics.push(...manifestLogoPathDiagnostics({
+            files,
+            generatedPath,
+            logo: parsed.logo,
+            target: target.name,
+          }));
+        }
       }
     }
   }
@@ -454,7 +475,8 @@ const isTargetArtifactPath = (
     isAdapterRootDocument(relativePath, layout.rootDocuments) ||
     relativePath === hookContract?.manifestPath ||
     relativePath === mcpRuntime?.manifestPath ||
-    registry.artifactValidation(target).documents.some((document) => document.path === relativePath);
+    registry.artifactValidation(target).documents.some((document) =>
+      matchesArtifactDocumentPath(document.path, relativePath));
 };
 
 const validateArtifactOwnership = (options: {
