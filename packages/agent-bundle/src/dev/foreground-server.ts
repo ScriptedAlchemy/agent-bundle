@@ -13,6 +13,7 @@ import { EvalRoutes, type EvalRouteService } from './eval/eval-routes.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { InspectorRoutes, type InspectorRouteService } from './inspector-routes.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playground/hook-playground-routes.ts';
+import { HostDiscoveryRoutes, type HostDiscoveryRouteService } from './playground/host-discovery-routes.ts';
 import { LifecycleReplayRoutes, type LifecycleReplayRouteService } from './playground/lifecycle-replay-routes.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session/mcp-session-routes.ts';
@@ -132,6 +133,8 @@ export interface ForegroundServerOptions {
   readonly mcpAppPreviews?: McpAppRoutePreviewService;
   /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
   readonly hookPlayground?: HookPlaygroundRouteService;
+  /** Read-only host probes, install inventory, bundle drift, and runtime endpoint health. */
+  readonly hostDiscovery?: HostDiscoveryRouteService;
   /** Read-only semantic lifecycle replay over the latest valid prepared graph. */
   readonly lifecycleReplay?: LifecycleReplayRouteService;
   /** Opt-in standalone MCP Inspector child; never auto-started. */
@@ -435,6 +438,7 @@ export class ForegroundServer {
   readonly #evalRoutes: EvalRoutes;
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
+  readonly #hostDiscoveryRoutes: HostDiscoveryRoutes;
   readonly #host: string;
   readonly #inspectorRoutes: InspectorRoutes;
   readonly #lifecycleReplayRoutes: LifecycleReplayRoutes;
@@ -516,6 +520,10 @@ export class ForegroundServer {
     this.#hookPlaygroundRoutes = new HookPlaygroundRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.hookPlayground === undefined ? {} : { service: options.hookPlayground }),
+    });
+    this.#hostDiscoveryRoutes = new HostDiscoveryRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.hostDiscovery === undefined ? {} : { service: options.hostDiscovery }),
     });
     this.#lifecycleReplayRoutes = new LifecycleReplayRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -673,6 +681,7 @@ export class ForegroundServer {
     // abort callbacks may synchronously re-enter foreground shutdown, and
     // must observe the already-published close outcome.
     const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
+    this.#hostDiscoveryRoutes.close();
     // App tombstone publication below deliberately yields once before joining
     // resource drains. Observe this promise now so a fast drain failure cannot
     // become an unhandled rejection during that handoff; allSettled below still
@@ -765,6 +774,7 @@ export class ForegroundServer {
     if (await this.#runtimeMcpRoutes.handle(request, response)) return;
     if (await this.#runtimeRoutes.handle(request, response)) return;
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
+    if (await this.#hostDiscoveryRoutes.handle(request, response)) return;
     if (await this.#lifecycleReplayRoutes.handle(request, response)) return;
     if (await this.#playgroundRoutes.handle(request, response)) return;
     if (await this.#inspectorRoutes.handle(request, response)) return;
