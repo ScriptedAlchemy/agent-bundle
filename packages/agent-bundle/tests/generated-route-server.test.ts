@@ -110,11 +110,11 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
       "import { z } from 'zod';",
       "export const config = { annotations: { readOnlyHint: true }, description: 'Inspect one source.' };",
       "export const inputSchema = z.object({ source: z.string() }).strict();",
-      "export const resultSchema = z.object({ invocationKind: z.literal('tool'), source: z.string() }).strict();",
+      "export const resultSchema = z.object({ actor: z.unknown(), host: z.unknown(), invocationKind: z.literal('tool'), session: z.unknown(), source: z.string(), workspace: z.unknown() }).strict();",
       'export default async function Inspect({ input, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
       '  const context = await agent();',
-      '  const result = { invocationKind: context.invocation.kind, source: input.source };',
+      '  const result = { actor: context.actor, host: context.host, invocationKind: context.invocation.kind, session: context.session, source: input.source, workspace: context.workspace };',
       '  return (',
       '    <Agent.Result value={result}>',
       '      <Agent.Markdown>{`Inspected **${input.source}**.`}</Agent.Markdown>',
@@ -162,9 +162,16 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
     await expect(client.listTools()).resolves.toMatchObject({
       tools: [{ annotations: { readOnlyHint: true }, description: 'Inspect one source.', name: 'inspect' }],
     });
-    await expect(client.callTool({ arguments: { source: 'library' }, name: 'inspect' }, { signal: AbortSignal.timeout(10_000) })).resolves.toMatchObject({
+    const inspected = await client.callTool({ arguments: { source: 'library' }, name: 'inspect' }, { signal: AbortSignal.timeout(10_000) });
+    expect(inspected).toMatchObject({
       content: [{ text: 'Inspected **library**.', type: 'text' }],
       structuredContent: { invocationKind: 'tool', source: 'library' },
+    });
+    expect(inspected.structuredContent).toMatchObject({
+      actor: { reason: 'not-provided', state: 'unavailable' },
+      host: { reason: 'not-provided', state: 'unavailable' },
+      session: { reason: 'not-provided', state: 'unavailable' },
+      workspace: { reason: 'not-provided', state: 'unavailable' },
     });
     const resources = await client.listResources();
     expect(resources).toMatchObject({ resources: [
@@ -524,7 +531,11 @@ it('renders one tool/after event route through two native thin clients', { retry
       '  const context = await agent();',
       '  const requestValue = context.providers.requestValue as { kind: string };',
       '  const tool = typeof native.tool_name === "string" ? native.tool_name : "unknown";',
-      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${canonical.provenance.host}:${tool}:${requestValue.kind}:${String(Object.isFrozen(context.providers))}`));',
+      "  const actor = context.actor.state === 'unavailable' ? `unavailable:${context.actor.reason}` : `available:${context.actor.value.id}`;",
+      "  const host = context.host.state === 'unavailable' ? `unavailable:${context.host.reason}` : `available:${context.host.source}:${context.host.value.name}`;",
+      "  const session = context.session.state === 'unavailable' ? `unavailable:${context.session.reason}` : `available:${context.session.source}:${context.session.value.sessionId}`;",
+      "  const workspace = context.workspace.state === 'unavailable' ? `unavailable:${context.workspace.reason}` : `available:${context.workspace.source}:${context.workspace.value.root}`;",
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${canonical.provenance.host}:${tool}:${requestValue.kind}:${String(Object.isFrozen(context.providers))}:host:${host}:session:${session}:workspace:${workspace}:actor:${actor}`));',
       '}',
       '',
     ].join('\n')),
@@ -576,10 +587,10 @@ it('renders one tool/after event route through two native thin clients', { retry
           };
       const response = await runHook(hook.output, native);
       expect(response).toEqual(target === 'cursor'
-        ? { additional_context: 'cursor:Write:event:true' }
+        ? { additional_context: `cursor:Write:event:true:host:available:native:cursor:session:available:native:session-1:workspace:available:native:${root}:actor:unavailable:not-provided` }
         : {
             hookSpecificOutput: {
-              additionalContext: 'claude:Write:event:true',
+              additionalContext: `claude:Write:event:true:host:available:native:claude:session:available:native:session-1:workspace:available:native:${root}:actor:unavailable:not-provided`,
               hookEventName: 'PostToolUse',
             },
           });

@@ -131,6 +131,54 @@ unavailable-shaped value instead of throwing. `processLifetime` is reserved
 for the framework-owned process identity and hit counter, so provider filenames
 must not derive that key.
 
+### Handler request context
+
+Conventional route components receive only their surface props, such as
+`{ input, signal }`. They read transport-owned request context with
+`await agent()` from `@agent-bundle/runtime`. The handle exposes the
+invocation plus `host`, `session`, `actor`, and `workspace` identity axes.
+Each identity axis is `Observed`: transports publish an `available` value and
+source when they know it, or `unavailable` with a typed reason when they do
+not. Generated event scopes currently mount no actor principal, so event
+routes observe actor as unavailable rather than receiving a fabricated value.
+
+Handlers authored with `defineOperation` receive the same handle as optional
+`context.request` in the second `execute` argument:
+
+```ts
+const status = defineOperation({
+  // ...
+  execute: async (input, context) => {
+    const request = context.request;
+    // request is the identical handle returned by await agent() in this invocation.
+    return inspect(input, request);
+  },
+});
+```
+
+The runtime supplies `context.request` inside `runAgentRequest`; direct
+operation calls outside a request scope leave it absent. Transport context is
+separate from validated business input, so fields named `host`, `session`, or
+similar inside `input` cannot override request identity.
+
+Route-unit tests inject identity through the harness context seam:
+
+```ts
+import { available } from '@agent-bundle/runtime';
+import { renderRoute } from 'agent-bundle/test';
+
+await renderRoute('tool:curator/status', {
+  context: {
+    host: available({ name: 'test-host' }, 'native'),
+    session: available({ sessionId: 'test-session' }, 'native'),
+  },
+  input: { subject: 'library' },
+});
+```
+
+The same seam accepts `actor`, `workspace`, and `capabilities`; tests can use
+`unavailable(...)` to pin a transport's honest absence semantics.
+
 ### Migration nudges
 
 Source validation reports **informational** nudges (never errors — migrations
