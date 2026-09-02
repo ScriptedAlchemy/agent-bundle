@@ -31,6 +31,7 @@ import type {
   DoctorReport,
   runDoctor,
 } from './install/doctor.ts';
+import type { runHostMcpProxy } from './dev/host-mcp-proxy.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
@@ -56,6 +57,7 @@ export interface CliDependencies {
   readonly installBundle?: typeof installBundle;
   readonly prepack?: typeof prepack;
   readonly runDoctor?: typeof runDoctor;
+  readonly runHostMcpProxy?: typeof runHostMcpProxy;
   /** Injectable only to make foreground shutdown behavior deterministic in tests. */
   readonly signals?: CliSignalSource;
   readonly startDevServer?: typeof startDevServer;
@@ -129,6 +131,12 @@ interface DevCommandOptions {
   readonly open?: boolean;
   readonly port?: number;
   readonly root: string;
+}
+
+interface DevProxyCommandOptions {
+  readonly server: string;
+  readonly target: string;
+  readonly url?: string;
 }
 
 const collect = (value: string, previous: string[]): string[] => [...previous, value];
@@ -472,6 +480,22 @@ export const runCli = async (
     });
     stdout.write(`Development workbench at ${session.url}\n`);
     closeForegroundOnSignal(session, dependencies.signals ?? process, stderr);
+  });
+
+  const devProxyCommand = devCommand.command('proxy')
+    .description('Bridge host stdio MCP traffic to a running development server')
+    .requiredOption('--server <server>', 'Generated MCP server name')
+    .option('--target <target>', 'Generated target containing the MCP server', 'portable')
+    .option('--url <url>', 'Explicit loopback development server origin');
+  devProxyCommand.action(async (options: DevProxyCommandOptions) => {
+    const proxy = dependencies.runHostMcpProxy ?? (await import('./dev/host-mcp-proxy.ts')).runHostMcpProxy;
+    exitCode = await proxy({
+      projectRoot: devCommand.opts<DevCommandOptions>().root,
+      serverName: options.server,
+      target: options.target,
+      ...(options.url === undefined ? {} : { url: options.url }),
+      writeDiagnostic: (message) => { stderr.write(`${message}\n`); },
+    });
   });
 
   const buildCommand = configureSourceOptions(

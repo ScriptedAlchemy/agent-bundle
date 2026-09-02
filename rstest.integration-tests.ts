@@ -36,6 +36,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/host-adapters.native.test.ts',
   'packages/agent-bundle/tests/host-adapters.test.ts',
   'packages/agent-bundle/tests/host-discovery-dev-server.test.ts',
+  'packages/agent-bundle/tests/host-mcp-proxy.test.ts',
   'packages/agent-bundle/tests/host-install-proof.test.ts',
   'packages/agent-bundle/tests/host-install-session.test.ts',
   'packages/agent-bundle/tests/installer-entry.test.ts',
@@ -98,6 +99,15 @@ export const integrationTestFiles: readonly string[] = [
  */
 export const nightlyEvidenceTestFiles: readonly string[] = [
   'packages/workbench/tests/runtime-playground-capture.test.ts',
+];
+
+/**
+ * Official MCP server conformance runs only through the manually dispatched
+ * lane. It builds one generated fixture, opens loopback HTTP, and invokes the
+ * external runner, so no default Rstest pool may collect it.
+ */
+export const mcpConformanceTestFiles: readonly string[] = [
+  'packages/agent-bundle/tests/mcp-conformance.test.ts',
 ];
 
 /**

@@ -2,6 +2,7 @@ import { defineConfig } from '@rstest/core';
 
 import {
   integrationTestFiles,
+  mcpConformanceTestFiles,
   nightlyEvidenceTestFiles,
   packedReleaseOnlyTestFiles,
   packedTestFiles,
@@ -19,6 +20,7 @@ export default defineConfig({
   ],
   exclude: [
     ...integrationTestFiles,
+    ...mcpConformanceTestFiles,
     ...nightlyEvidenceTestFiles,
     // Packs and installs like packedTestFiles, and is release-boundary-only:
     // `test:packed:release` owns it, not the build-free per-PR pool.
