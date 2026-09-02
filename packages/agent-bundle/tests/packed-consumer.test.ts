@@ -20,7 +20,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { sha256Hex } from '../src/core/digest.ts';
-import { cachedNpmInstallArguments, installedEnvironment } from './support/shared-pack.ts';
+import { cachedNpmInstallArguments, installedEnvironment, packOutputFromJson } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -92,7 +92,7 @@ it('uses only an installed tarball after source deletion', async () => {
       cwd: packedPackageRoot,
       env: installedEnvironment(),
     });
-    const tarball = join(consumerRoot, (JSON.parse(packed) as Array<{ filename: string }>)[0]!.filename);
+    const tarball = join(consumerRoot, packOutputFromJson(packed).filename);
     await cp(fixtureRoot, projectRoot, { recursive: true });
     const [sourceShellMode, sourcePythonMode] = await Promise.all([
       stat(join(projectRoot, 'src', 'shell.sh')).then((metadata) => metadata.mode & 0o777),
