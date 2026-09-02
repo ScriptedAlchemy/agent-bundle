@@ -1,8 +1,8 @@
 /**
  * The generated-plugin contract matrix — framework-owned wire-contract checks
- * at two proof boundaries today (`mcp-in-memory` and packed stdio).
+ * at three proof boundaries (`mcp-in-memory`, packed stdio, and host install).
  *
- * Both entry points share one implementation. Boundary differences are explicit
+ * All three entry points share one implementation. Boundary differences are explicit
  * capability flags, not forked check logic. The project supplies only fixtures
  * — valid inputs, declared result-compat policy, version-skew payloads,
  * optional cancellation cases, and deterministic lifecycle transitions —
@@ -27,10 +27,16 @@
  * every tool result through its bundled `resultSchema` before returning; a
  * successful sweep invocation is that evidence.
  *
- * Stateful lifecycle fixtures replay over one open client at both boundaries.
+ * Stateful lifecycle fixtures replay over one open client at every boundary.
  * Same-store restart callbacks add boundary-local durability evidence; a run
- * without one reports restart durability as not-applicable. Neither boundary
- * proves host install, browser App HTML, or state-lifetime catalog identity.
+ * without one reports restart durability as not-applicable.
+ *
+ * **The installed-host boundary** discovers and spawns the emitted MCP command
+ * from a clean installed layout. It carries static layout checks and the
+ * source/artifact/installed/running version quadruple from `installed.ts`.
+ *
+ * No boundary here proves browser App HTML, state-lifetime catalog identity,
+ * or runtime-instance identity beyond the live MCP initialize result (#269).
  */
 import type { Client } from '@modelcontextprotocol/client';
 
@@ -46,6 +52,13 @@ import {
   type InMemoryMcpSessionOptions,
   type McpProjectionProvenance,
 } from './mcp.ts';
+import type {
+  InstalledHostCheckOutcome,
+  InstalledHostEvidenceMetadata,
+  InstalledHostMcpProvenance,
+  InstalledHostMcpSession,
+  InstalledHostVersionQuadruple,
+} from './installed.ts';
 import type { PackedMcpProvenance, PackedMcpSession } from './packed.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import type { AgentRouteModule, TestableRouteDescriptor } from './types.ts';
@@ -145,7 +158,10 @@ export interface ContractRouteReport {
   readonly checks: Readonly<Record<string, ContractCheckOutcome>>;
 }
 
-export type ContractMatrixProvenance = McpProjectionProvenance | PackedMcpProvenance;
+export type ContractMatrixProvenance =
+  | InstalledHostMcpProvenance
+  | McpProjectionProvenance
+  | PackedMcpProvenance;
 
 export interface ContractMatrixReport {
   readonly provenance: ContractMatrixProvenance;
@@ -162,22 +178,46 @@ export interface PackedContractMatrixOptions {
   readonly restart?: () => Promise<ContractMatrixRestartSession>;
 }
 
+export interface InstalledHostContractMatrixOptions {
+  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  readonly manifest: AgentBundleTestManifest;
+  readonly server?: string;
+  /** An already-open installed-host session; this entry point never opens or closes it. */
+  readonly session: InstalledHostMcpSession;
+}
+
+export interface InstalledHostContractMatrixReport {
+  readonly checks: Readonly<Record<string, InstalledHostCheckOutcome>>;
+  readonly host: InstalledHostMcpSession['provenance']['host'];
+  readonly matrix: ContractMatrixReport;
+  readonly metadata: InstalledHostEvidenceMetadata;
+  readonly proofLevel: string;
+  readonly sessionEvidence: string;
+  readonly status: 'passed';
+  readonly versions: InstalledHostVersionQuadruple;
+}
+
 interface MatrixBoundaryCapabilities {
   readonly canLoadRouteModules: boolean;
   readonly moduleSchemaNotApplicableReason: string;
   readonly proofLevel: AgentTestProofLevel;
   readonly registersAppResources: boolean;
+  readonly recovery: string;
   readonly restart?: () => Promise<ContractMatrixRestartSession>;
 }
 
 const PACKED_MODULE_SCHEMA_NOT_APPLICABLE_REASON =
   'packed sessions cannot load project route modules (source may be deleted and verified absent); loading a module would silently break deleted-source proof. The packed server validates every tool result through its bundled resultSchema before returning — a successful sweep invocation is that evidence.';
 
+const INSTALLED_HOST_MODULE_SCHEMA_NOT_APPLICABLE_REASON =
+  'installed-host sessions cannot load project route modules without crossing back into the source/build tree; the installed server validates every tool result through its bundled resultSchema before returning — a successful sweep invocation is that evidence.';
+
 const IN_MEMORY_BOUNDARY: MatrixBoundaryCapabilities = Object.freeze({
   canLoadRouteModules: true,
   moduleSchemaNotApplicableReason: '',
   proofLevel: MCP_IN_MEMORY_PROOF_LEVEL,
   registersAppResources: false,
+  recovery: 'Fix the failing route, fixture, or declared resultCompat policy; re-run runContractMatrix.',
 });
 
 const packedBoundaryFromSession = (
@@ -189,8 +229,17 @@ const packedBoundaryFromSession = (
     moduleSchemaNotApplicableReason: PACKED_MODULE_SCHEMA_NOT_APPLICABLE_REASON,
     proofLevel: session.provenance.proofLevel,
     registersAppResources: true,
+    recovery: 'Fix the failing route or fixture; re-run runPackedContractMatrix.',
     ...(restart === undefined ? {} : { restart }),
   });
+
+const INSTALLED_HOST_BOUNDARY: MatrixBoundaryCapabilities = Object.freeze({
+  canLoadRouteModules: false,
+  moduleSchemaNotApplicableReason: INSTALLED_HOST_MODULE_SCHEMA_NOT_APPLICABLE_REASON,
+  proofLevel: 'host-install',
+  registersAppResources: true,
+  recovery: 'Fix the installed layout, route, or fixture; reinstall and re-run runInstalledHostContractMatrix.',
+});
 
 const COMPAT_PROBE_KEY = '__agentBundleContractProbe';
 
@@ -1096,9 +1145,7 @@ const finalizeContractMatrixReport = (
     `Contract matrix reported ${String(failures.length)} violation(s) at the ${boundary.proofLevel} proof level.`,
     {
       details,
-      recovery: boundary.canLoadRouteModules
-        ? 'Fix the failing route, fixture, or declared resultCompat policy; re-run runContractMatrix.'
-        : 'Fix the failing route or fixture; re-run runPackedContractMatrix.',
+      recovery: boundary.recovery,
     },
   );
 };
@@ -1442,5 +1489,34 @@ export const runPackedContractMatrix = async (
     manifest: options.manifest,
     provenance: options.session.provenance,
     serverName,
+  });
+};
+
+/**
+ * Runs the shared contract matrix over an already-open MCP process discovered
+ * and spawned from a host-owned installed layout. The returned report carries
+ * the separately observed source/artifact/installed/running version evidence.
+ */
+export const runInstalledHostContractMatrix = async (
+  options: InstalledHostContractMatrixOptions,
+): Promise<InstalledHostContractMatrixReport> => {
+  const serverName = resolveServerName(options.manifest, options.server);
+  const matrix = await executeContractMatrix({
+    boundary: INSTALLED_HOST_BOUNDARY,
+    client: options.session.client,
+    fixtures: options.fixtures,
+    manifest: options.manifest,
+    provenance: options.session.provenance,
+    serverName,
+  });
+  return Object.freeze({
+    checks: options.session.observation.checks,
+    host: options.session.observation.host,
+    matrix,
+    metadata: options.session.observation.metadata,
+    proofLevel: options.session.observation.proofLevel,
+    sessionEvidence: options.session.observation.sessionEvidence,
+    status: 'passed',
+    versions: options.session.observation.versions,
   });
 };

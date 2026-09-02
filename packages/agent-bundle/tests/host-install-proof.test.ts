@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { afterAll, beforeAll, expect, it } from '@rstest/core';
 
@@ -6,6 +8,7 @@ import {
   buildHostInstallFixture,
   buildPortableHostInstallFixture,
   disposeHostInstallFixture,
+  runInstalledHostContractMatrixProof,
   runClaudeHostInstallProof,
   runCodexHostInstallProof,
   runCursorHostInstallProof,
@@ -13,6 +16,7 @@ import {
   type BuiltHostInstallFixture,
   type BuiltPortableHostInstallFixture,
 } from './support/host-install.ts';
+import { AgentTestError } from '../src/test/errors.ts';
 import {
   HOST_INSTALL_PROOF_LEVEL,
   proofLevelLabel,
@@ -69,6 +73,96 @@ const expectHygienicReport = (report: unknown): void => {
   );
 };
 
+it('stages a clean adapter-simulated host and runs the shared matrix from its installed layout', async () => {
+  const report = await runInstalledHostContractMatrixProof(builtFixture(), {
+    environment: process.env,
+    fixtures: {
+      'tool:probe/echo': { input: { message: 'installed host' }, resultCompat: 'additive' },
+    },
+    host: 'claude',
+    mode: 'adapter-simulator',
+  });
+
+  expect(report, proofLabel).toMatchObject({
+    checks: {
+      'component-paths': { status: 'passed' },
+      'hook-commands': { status: 'passed' },
+      'manifest-schema': { status: 'passed' },
+      'mcp-command': { status: 'passed' },
+      resources: { status: 'passed' },
+      'version-digests': { status: 'passed' },
+      'version-quadruple': { status: 'passed' },
+    },
+    host: 'claude',
+    matrix: {
+      provenance: { host: 'claude', proofLevel: 'host-install' },
+      routes: {
+        'tool:probe/echo': {
+          checks: {
+            'compat-probe': {
+              reason: expect.stringContaining('installed-host sessions cannot load project route modules'),
+              status: 'not-applicable',
+            },
+            'serialized-round-trip': {
+              reason: expect.stringContaining('installed-host sessions cannot load project route modules'),
+              status: 'not-applicable',
+            },
+            sweep: { status: 'passed' },
+            'version-skew': {
+              reason: expect.stringContaining('installed-host sessions cannot load project route modules'),
+              status: 'not-applicable',
+            },
+          },
+        },
+      },
+    },
+    metadata: {
+      adapterRevision: expect.any(String),
+      frameworkVersion: expect.stringMatching(/^\d+\.\d+\.\d+$/u),
+      hostBinaryVersion: {
+        reason: 'adapter simulator does not invoke a host binary',
+        status: 'unavailable',
+      },
+      manifestSchemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    },
+    proofLevel: proofLabel,
+    sessionEvidence: 'adapter-simulated discovery and stdio spawn from an isolated installed root',
+    status: 'passed',
+    versions: {
+      builtArtifact: '1.0.0',
+      installedArtifact: '1.0.0',
+      runningProcess: '1.0.0',
+      source: '1.0.0',
+    },
+  });
+  expect(report.matrix.provenance, proofLabel).toMatchObject({
+    entry: expect.not.stringMatching(/^\//u),
+  });
+  expectHygienicReport(report);
+}, 180_000);
+
+it('fails closed when an installed manifest drifts from source, artifact, and running process', async () => {
+  const error = await runInstalledHostContractMatrixProof(builtFixture(), {
+    environment: process.env,
+    fixtures: {
+      'tool:probe/echo': { input: { message: 'installed host' }, resultCompat: 'additive' },
+    },
+    host: 'claude',
+    mode: 'adapter-simulator',
+    mutateInstalled: async (installedRoot) => {
+      const manifestPath = join(installedRoot, '.claude-plugin', 'plugin.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+      await writeFile(manifestPath, `${JSON.stringify({ ...manifest, version: '9.0.0' })}\n`);
+    },
+  }).catch((thrown: unknown) => thrown);
+
+  expect(error).toBeInstanceOf(AgentTestError);
+  expect((error as AgentTestError).code).toBe('contract-violation');
+  expect((error as AgentTestError).message).toContain('version-digests');
+  expect((error as AgentTestError).message).toContain('version-quadruple');
+  expect((error as AgentTestError).message).toContain(proofLabel);
+}, 180_000);
+
 claudePluginIt(
   claudeAvailable
     ? 'installs through Claude and observes the host-owned component inventory'
@@ -93,6 +187,26 @@ claudePluginIt(
       status: 'passed',
     });
     expectHygienicReport(report);
+
+    const matrix = await runInstalledHostContractMatrixProof(builtFixture(), {
+      environment: process.env,
+      fixtures: {
+        'tool:probe/echo': { input: { message: 'claude installed host' }, resultCompat: 'additive' },
+      },
+      host: 'claude',
+      mode: 'native-host',
+    });
+    expect(matrix.versions, proofLabel).toEqual({
+      builtArtifact: '1.0.0',
+      installedArtifact: '1.0.0',
+      runningProcess: '1.0.0',
+      source: '1.0.0',
+    });
+    expect(matrix.metadata.hostBinaryVersion, proofLabel).toEqual({
+      status: 'observed',
+      value: expect.stringMatching(/^\d+\.\d+\.\d+$/u),
+    });
+    expectHygienicReport(matrix);
   },
   180_000,
 );
@@ -136,6 +250,26 @@ codexPluginIt(
       status: 'passed',
     });
     expectHygienicReport(report);
+
+    const matrix = await runInstalledHostContractMatrixProof(builtFixture(), {
+      environment: process.env,
+      fixtures: {
+        'tool:probe/echo': { input: { message: 'codex installed host' }, resultCompat: 'additive' },
+      },
+      host: 'codex',
+      mode: 'native-host',
+    });
+    expect(matrix.versions, proofLabel).toEqual({
+      builtArtifact: '1.0.0',
+      installedArtifact: '1.0.0',
+      runningProcess: '1.0.0',
+      source: '1.0.0',
+    });
+    expect(matrix.metadata.hostBinaryVersion, proofLabel).toEqual({
+      status: 'observed',
+      value: expect.stringMatching(/^\d+\.\d+\.\d+$/u),
+    });
+    expectHygienicReport(matrix);
   },
   180_000,
 );
@@ -171,6 +305,25 @@ it('installs into an isolated Cursor home, validates schemas, and is idempotent'
     status: 'passed',
   });
   expectHygienicReport(report);
+
+  const matrix = await runInstalledHostContractMatrixProof(builtFixture(), {
+    environment: process.env,
+    fixtures: {
+      'tool:probe/echo': { input: { message: 'cursor installed host' }, resultCompat: 'additive' },
+    },
+    host: 'cursor',
+    mode: 'native-host',
+  });
+  expect(matrix.versions, proofLabel).toEqual({
+    builtArtifact: '1.0.0',
+    installedArtifact: '1.0.0',
+    runningProcess: '1.0.0',
+    source: '1.0.0',
+  });
+  expect(matrix.sessionEvidence, proofLabel).toBe(
+    'unavailable: Cursor exposes no non-interactive plugin-loading session surface; adapter-simulated stdio spawn from isolated installed root',
+  );
+  expectHygienicReport(matrix);
 }, 180_000);
 
 it(

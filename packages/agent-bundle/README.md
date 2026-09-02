@@ -287,7 +287,7 @@ is never a receipt for another.
 | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a plain or rendered argv vector resolved and run through the routed CLI's own shell, including rendered Markdown, explicit TTY, JSON, and NDJSON modes, in-process |
 | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio |
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent |
-| `host-install` | repository real-host install proof | a built bundle installed into an isolated real host home through the public install path, with registration observed through the host's own CLI |
+| `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | a built bundle staged into an isolated host root, discovered in the emitted host format, and spawned from the installed layout |
 
 ```ts
 import { cliJson, cliNdjson, expectEvents, invokeCli, invokeMcpTool } from 'agent-bundle/test';
@@ -322,14 +322,15 @@ once, build once, remove and verify source once, spawn once, and iterate every
 per-route assertion inside that one session. The deleted-source journey also
 reads the embedded MCP App resource from the generated server; it does not
 prove native-host install or dispatch, or an install mode that copies the
-artifact elsewhere. `host-install` is separate real-host process evidence for
-built-bundle acceptance and registration, not packed provenance or session
-behavior.
+artifact elsewhere. `host-install` is separate installed-layout process
+evidence: its deterministic adapter-simulator lane is unconditional, available
+Claude and Codex binaries also prove their public install paths, and Cursor
+records its unavailable non-interactive host-session surface explicitly.
 
-### Contract matrix (`runContractMatrix` / `runPackedContractMatrix`)
+### Contract matrix (`runContractMatrix` / `runPackedContractMatrix` / `runInstalledHostContractMatrix`)
 
 The contract matrix is the framework-owned generated-plugin wire-contract suite.
-Two entry points share one implementation; boundary differences are explicit
+Three entry points share one implementation; boundary differences are explicit
 capability flags, not forked check logic. The project supplies only fixtures —
 valid inputs, a declared `resultCompat` policy for every in-memory tool route,
 optional `previousResults` payloads, optional `cancellation` cases, and an
@@ -372,8 +373,22 @@ without one the check is honestly `not-applicable`. Packed callers should wire
 that callback into the existing packed journey's restart rather than creating
 a second pack/build/install path.
 
-**Neither boundary proves:** host install, browser App HTML, artifact-rebuild
-replay, or state-lifetime catalog identity.
+**`runInstalledHostContractMatrix` (`host-install`)** runs against an
+already-open session from `openInstalledHostMcpServer`. The opener reads the
+host's emitted MCP document from the installed root, verifies the manifest,
+component/resource/hook paths and artifact file digests, spawns that installed
+command, and observes the running version from the live MCP `initialize`
+result. Its report records source, built-artifact, installed-artifact, and
+running-process versions separately and fails closed when any value is missing
+or differs. Metadata records the host binary version when observed, adapter
+revision, manifest/schema digest, and framework version. Module-backed checks
+remain honestly not-applicable because loading project modules would cross back
+into the source/build tree.
+
+No matrix boundary proves browser App HTML, artifact-rebuild replay,
+state-lifetime catalog identity, or running-process identity beyond what the
+live MCP session reports; deeper runtime-instance introspection depends on
+#269.
 
 When the advertised input schema declares `additionalProperties: false`, plain
 `z.object` tool routes may still strip unknown keys without a protocol failure.
@@ -381,7 +396,12 @@ The negative-inputs check records that tolerance when other generated negatives
 still prove rejection paths.
 
 ```ts
-import { runContractMatrix, runPackedContractMatrix } from 'agent-bundle/test';
+import {
+  openInstalledHostMcpServer,
+  runContractMatrix,
+  runInstalledHostContractMatrix,
+  runPackedContractMatrix,
+} from 'agent-bundle/test';
 
 await runContractMatrix({
   fixtures: {
@@ -398,6 +418,19 @@ await runPackedContractMatrix({
   session: packedSession,
   manifest: compiledManifest,
   fixtures: { /* same shape */ },
+});
+
+await using installedSession = await openInstalledHostMcpServer({
+  artifactRoot,
+  host: 'claude',
+  installedRoot,
+  manifest: compiledManifest,
+  server: 'library',
+});
+await runInstalledHostContractMatrix({
+  fixtures: { /* same shape */ },
+  manifest: compiledManifest,
+  session: installedSession,
 });
 ```
 

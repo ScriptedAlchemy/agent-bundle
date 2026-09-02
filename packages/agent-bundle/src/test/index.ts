@@ -1,7 +1,7 @@
 /**
  * `agent-bundle/test` — the consumer test harness helpers.
  *
- * Six Node proof levels ship here, and the browser-safe seventh level ships
+ * Seven Node proof levels ship here, and the browser-safe eighth level ships
  * from `agent-bundle/test/browser`. The repository's real-host install proof
  * uses the same level convention. Each helper names the level it supplies,
  * stamps it into its provenance, and prints it in every failure:
@@ -14,7 +14,7 @@
  * | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio |
  * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent |
  * | `browser-app` | `mountBrowserApp` (`agent-bundle/test/browser`) | production-compiled MCP App HTML mounted over the product bridge in a real browser page |
- * | `host-install` | repository real-host install proof | a built bundle accepted through a real host's public install path in an isolated home, with registration observed by that host |
+ * | `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | a built bundle staged into an isolated host root, discovered in the host's emitted format, and spawned from the installed layout |
  *
  * A pass at one level is never a receipt for another. The `deletedSource`
  * option upgrades `openPackedMcpServer` provenance only after every path in a
@@ -84,6 +84,7 @@ export {
 export {
   negativeInputsFromJsonSchema,
   runContractMatrix,
+  runInstalledHostContractMatrix,
   runPackedContractMatrix,
 } from './contract.ts';
 export type {
@@ -98,6 +99,8 @@ export type {
   ContractMatrixRestartSession,
   ContractRouteFixture,
   ContractRouteReport,
+  InstalledHostContractMatrixOptions,
+  InstalledHostContractMatrixReport,
   PackedContractMatrixOptions,
   ResultCompatPolicy,
 } from './contract.ts';
@@ -121,6 +124,18 @@ export type {
   PackedMcpSession,
   PackedMcpSessionOptions,
 } from './packed.ts';
+export { openInstalledHostMcpServer } from './installed.ts';
+export type {
+  InstalledHostBinaryVersion,
+  InstalledHostCheckName,
+  InstalledHostCheckOutcome,
+  InstalledHostEvidenceMetadata,
+  InstalledHostMcpProvenance,
+  InstalledHostMcpSession,
+  InstalledHostObservation,
+  InstalledHostVersionQuadruple,
+  OpenInstalledHostMcpServerOptions,
+} from './installed.ts';
 export type {
   AgentRouteModule,
   AgentRouteModuleLoader,
