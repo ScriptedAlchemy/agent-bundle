@@ -13,7 +13,8 @@ import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
-import { generatedMetaModulePath, metaModuleSpecifier } from '../src/build/meta.ts';
+import { compileHooks } from '../src/build/entries.ts';
+import { generatedMetaModulePath, metaModuleSpecifier, projectMeta } from '../src/build/meta.ts';
 import { buildWithRslib } from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
@@ -1035,10 +1036,13 @@ it('runs the embedded Codex and Claude native codecs through their published wra
 }, 15_000);
 
 it('runs the Cursor workspace/open lifecycle starter through a generated wrapper with empty stdout', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cursor-workspace-open-'));
+  const buildRoot = join(process.cwd(), 'examples', 'audiobook-curator');
+  const fixtureParent = join(buildRoot, 'node_modules', '.cache');
+  await mkdir(fixtureParent, { recursive: true });
+  const root = await mkdtemp(join(fixtureParent, 'agent-bundle-cursor-workspace-open-'));
   const sourceRoot = join(root, 'src', 'events', 'workspace');
-  const packageRoot = join(root, 'node_modules', 'agent-bundle');
-  const wrapper = join(root, 'event-route-workspace-open.mjs');
+  const outputRoot = join(root, 'dist', 'cursor');
+  const wrapper = join(outputRoot, 'hooks', 'event-route-workspace-open.mjs');
   const base = hookModel(root);
   const model: NormalizedPlugin = {
     ...base,
@@ -1060,38 +1064,16 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
   };
 
   try {
-    await Promise.all([
-      mkdir(sourceRoot, { recursive: true }),
-      mkdir(packageRoot, { recursive: true }),
-    ]);
-    await Promise.all([
-      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
-      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
-      writeFile(join(packageRoot, 'package.json'), JSON.stringify({
-        exports: {
-          './event-ipc': './event-ipc.mjs',
-          './event-project': './event-project.mjs',
-        },
-        type: 'module',
-      })),
-      writeFile(
-        join(packageRoot, 'event-ipc.mjs'),
-        `export * from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/agent-bundle/dist/event-ipc.js')).href)};\n`,
-      ),
-      writeFile(
-        join(packageRoot, 'event-project.mjs'),
-        `export * from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/agent-bundle/dist/event-project.js')).href)};\n`,
-      ),
-      writeFile(join(sourceRoot, 'open.mjs'), [
-        `import { Agent } from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/rsc-runtime/dist/index.js')).href)};`,
-        `import { createElement } from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/agent-bundle/node_modules/react/index.js')).href)};`,
-        '',
-        'export default async function WorkspaceOpen() {',
-        '  return createElement(Agent.Result);',
-        '}',
-        '',
-      ].join('\n')),
-    ]);
+    await mkdir(sourceRoot, { recursive: true });
+    await writeFile(join(sourceRoot, 'open.mjs'), [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      '',
+      'export default async function WorkspaceOpen() {',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n'));
     const targetRegistry = createDefaultRegistry();
     const plan = targetRegistry.get('cursor').plan(model);
     const generated = plan.hookEntries?.find((entry) => entry.relativePath === 'hooks/event-route-workspace-open.mjs');
@@ -1099,7 +1081,13 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
 
     expect(plan.diagnostics).toEqual([]);
     expect(generated).toBeDefined();
-    await writeFile(wrapper, generated!.virtualSource);
+    await compileHooks(plan.hookEntries ?? [], {
+      artifactEpoch: 'cursor-workspace-open-test',
+      cwd: buildRoot,
+      meta: projectMeta(model.metadata),
+      outDir: outputRoot,
+      plugin: { name: model.metadata.name, version: model.metadata.version },
+    });
     expect(starter).toEqual({
       cursor_version: 'lifecycle-replay',
       hook_event_name: 'workspaceOpen',
