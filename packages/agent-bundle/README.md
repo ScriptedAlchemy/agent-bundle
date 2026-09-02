@@ -274,22 +274,30 @@ is never a receipt for another.
 | --- | --- | --- |
 | `route-unit` | `renderRoute`, `renderRouteEvents` | a route module renders to the document (and render-event stream) it claims |
 | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
-| `cli-dispatch` | `invokeCli`, `cliJson` | an argv vector resolved and run through the routed CLI's own shell, in-process |
+| `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a plain or rendered argv vector resolved and run through the routed CLI's own shell, including rendered Markdown, explicit TTY, JSON, and NDJSON modes, in-process |
 | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })` | the packed stdio process still runs after project source and configuration are removed and verified absent |
 | `host-install` | repository real-host install proof | a built bundle installed into an isolated real host home through the public install path, with registration observed through the host's own CLI |
 
 ```ts
-import { cliJson, expectEvents, invokeCli, invokeMcpTool } from 'agent-bundle/test';
+import { cliJson, cliNdjson, expectEvents, invokeCli, invokeMcpTool } from 'agent-bundle/test';
 
 // mcp-in-memory: the generated server projects the document to protocol content.
 const call = await invokeMcpTool('summarize', { input: { title: 'Dune' } });
 expect(call.structuredContent).toEqual({ chapters: 24 });
 
-// cli-dispatch: the routed CLI resolves the command, parses argv, and maps the exit code.
+// cli-dispatch, plain .ts route: resolve argv, execute, and map the exit code.
 const run = await invokeCli(['library', 'audit', './books', '--max-files', '8']);
 expect(run.exitCode).toBe(0);
 expect(cliJson(run)).toMatchObject({ scanned: 8 });
+
+// cli-dispatch, rendered .tsx route: exercise the shell's rendered output modes.
+const rendered = await invokeCli(['library', 'report', './books', '--ndjson']);
+const events = cliNdjson(rendered);
+expect(events.at(-1)?.type).toBe('complete');
+
+const tty = await invokeCli(['library', 'report', './books'], { tty: true });
+expect(tty.stdout).toContain('\r\u001B[2K');
 ```
 
 `expectEvents` asserts over a render-event stream. `toContainSequence` is

@@ -10,7 +10,7 @@
  * | --- | --- | --- |
  * | `route-unit` | `renderRoute`, `renderRouteEvents`, `createTargetCapabilityFixture`, `projectTargetCapabilities` | the route component and its document through the real Agent renderer; explicit target-capability projection through the real MCP projector, without transport or host proof |
  * | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
- * | `cli-dispatch` | `invokeCli`, `cliJson` | a compiled CLI command dispatched through the routed CLI's own shell, in this process |
+ * | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a compiled plain or rendered CLI command dispatched through the routed CLI's own shell, including rendered output modes, in this process |
  * | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
  * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer` | the packed stdio process still runs after project source and configuration are removed and verified absent |
  * | `browser-app` | `mountBrowserApp` (`agent-bundle/test/browser`) | production-compiled MCP App HTML mounted over the product bridge in a real browser page |
@@ -92,8 +92,8 @@ export type {
   McpSurfaceListing,
   McpToolInvocation,
 } from './mcp.ts';
-export { cliJson, invokeCli } from './cli.ts';
-export type { CliDispatchProvenance, CliInvocation, InvokeCliOptions } from './cli.ts';
+export { cliJson, cliNdjson, invokeCli } from './cli.ts';
+export type { CliDispatchProvenance, CliInvocation, CliRenderedEvent, InvokeCliOptions } from './cli.ts';
 export { openPackedMcpServer, removeProjectSource } from './packed.ts';
 export type {
   DeletedSourceReceipt,

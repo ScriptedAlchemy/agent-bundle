@@ -43,8 +43,13 @@ vacuous pass is worse than no pool.
 
 Adopt the harness when the project grows a routed surface:
 
-- `src/cli/**` command routes make `invokeCli` / `cliJson` (the `cli-dispatch`
-  level) meaningful — argv resolved and run through the routed CLI's own shell.
+- Plain `src/cli/**/*.ts` and rendered `src/cli/**/*.tsx` command routes make
+  `invokeCli` / `cliJson` (the `cli-dispatch` level) meaningful — argv resolves
+  and runs through the routed CLI's own shell. Rendered routes can additionally
+  assert Markdown, explicit TTY, JSON, and NDJSON output; use `cliNdjson` for
+  the ordered render-event stream. This level remains in-process, so use the
+  packed CLI route suite for worker-thread, process-framing, executable, and
+  chunk-by-chunk Flight streaming evidence.
   This template ships the conventional `src/cli.ts` entry (and a matching
   `scripts` entry in `agent-bundle.config.ts`). Adding command routes while
   that file remains triggers `AB4801`. Before creating `src/cli/**` modules,

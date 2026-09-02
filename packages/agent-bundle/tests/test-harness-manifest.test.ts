@@ -66,6 +66,7 @@ describe('the compiled test manifest', () => {
       'app:harness/panel',
       'cli:db/migrate',
       'cli:inventory',
+      'cli:report',
       'event:tool/after',
       'prompt:harness/summarize',
       'resource:harness/notes',
@@ -132,6 +133,22 @@ describe('the compiled test manifest', () => {
         path: ['inventory'],
         rendered: false,
         routeId: 'cli:inventory',
+      },
+      {
+        aliases: [],
+        description: 'Renders a harness report.',
+        exitCode: 'zero',
+        options: [
+          expect.objectContaining({
+            choices: ['success', 'render-error', 'invalid-result', 'wait-for-abort'],
+            defaultValue: 'success',
+            key: 'mode',
+          }),
+          expect.objectContaining({ key: 'topic', positional: 0, required: true }),
+        ],
+        path: ['report'],
+        rendered: true,
+        routeId: 'cli:report',
       },
     ]);
   });

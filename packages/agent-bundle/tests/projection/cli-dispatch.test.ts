@@ -11,8 +11,8 @@ import { cliJson, invokeCli } from '../../src/test/cli.ts';
  *
  * What this level does prove is that the product's dispatcher, argv
  * projection, and exit-code policy agree with the compiled commands: the
- * harness contributes only the `execute` bridge, and that mirrors the one the
- * generated executable inlines.
+ * harness supplies the same plain-command execute bridge and rendered-command
+ * session contract that the generated executable wires around the shell.
  */
 describe('the CLI dispatch level', () => {
   it('resolves an argv vector to the compiled command and returns its canonical JSON line', async () => {
@@ -24,7 +24,10 @@ describe('the CLI dispatch level', () => {
     expect(run.stderr).toBe('');
     expect(cliJson(run)).toEqual({ format: 'json', shelf: 'fiction', titles: ['Piranesi', 'Solaris'] });
     expect(run.value).toEqual({ format: 'json', shelf: 'fiction', titles: ['Piranesi', 'Solaris'] });
-    expect(run.provenance).toMatchObject({ commands: ['db migrate', 'inventory'], proofLevel: 'cli-dispatch' });
+    expect(run.provenance).toMatchObject({
+      commands: ['db migrate', 'inventory', 'report'],
+      proofLevel: 'cli-dispatch',
+    });
   });
 
   it('dispatches a nested command through its compiled path', async () => {
