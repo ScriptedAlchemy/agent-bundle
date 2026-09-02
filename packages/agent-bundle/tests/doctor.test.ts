@@ -1,4 +1,5 @@
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -558,16 +559,16 @@ const close = (server: Server): Promise<void> => new Promise((resolvePromise, re
   });
 });
 
-const findDeadPid = (): number => {
-  for (let pid = 4_194_000; pid > 0; pid -= 1) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return pid;
-    }
+const findDeadPid = (): Promise<number> => new Promise((resolvePromise, reject) => {
+  const child: ChildProcess = spawn(process.execPath, ['--input-type=module', '-e', ''], { stdio: 'ignore' });
+  const { pid } = child;
+  if (pid === undefined) {
+    reject(new Error('Unable to spawn a child process for a dead pid fixture.'));
+    return;
   }
-  throw new Error('No dead pid found.');
-};
+  child.once('error', reject);
+  child.once('exit', () => { resolvePromise(pid); });
+});
 
 it('scans live sockets and a lock with a live sibling without warnings', async () => {
   const fixture = await temporaryDoctor();
@@ -595,11 +596,12 @@ it('reports stale sockets and stale locks as warnings', async () => {
   const fixture = await temporaryDoctor();
   const staleSocket = join(fixture.endpointDirectory, 'event-stale.sock');
   const staleLock = join(fixture.endpointDirectory, 'event-claimed.sock.lock');
-  const staleServer = await listen(staleSocket);
-  await close(staleServer);
-  await writeFile(staleSocket, '');
-  await writeFile(staleLock, '');
   try {
+    await mkdir(fixture.endpointDirectory, { recursive: true });
+    // Match event-ipc stale-endpoint fixtures: a regular file at the socket
+    // path refuses connections and is classified as stale by Doctor.
+    await writeFile(staleSocket, 'stale socket');
+    await writeFile(staleLock, '');
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
       home: fixture.home,
@@ -610,6 +612,7 @@ it('reports stale sockets and stale locks as warnings', async () => {
       expect.objectContaining({ path: staleLock, state: 'stale-lock' }),
     ]));
     expect(report.endpoints.summary.staleLocks).toBe(1);
+    expect(report.endpoints.summary.staleSockets).toBe(1);
     expect(report.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'AB7314',
@@ -630,7 +633,7 @@ it('reports stale sockets and stale locks as warnings', async () => {
 it('reports a lock with a provably dead owner as a stale lock warning', async () => {
   const fixture = await temporaryDoctor();
   const staleLock = join(fixture.endpointDirectory, 'event-dead-claim.sock.lock');
-  const deadPid = findDeadPid();
+  const deadPid = await findDeadPid();
   try {
     await mkdir(fixture.endpointDirectory, { recursive: true });
     await writeFile(staleLock, `${JSON.stringify({ pid: deadPid })}\n`);

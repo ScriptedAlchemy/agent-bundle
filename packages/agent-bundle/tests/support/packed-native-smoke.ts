@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 
 // The native smoke installs the production closure a real consumer would get,
 // so it stays on npm's default metadata staleness checks.
-import { npmInstallArguments, sharedPackedTarball } from './shared-pack.ts';
+import { npmInstallArguments, packOutputFromJson, sharedPackedTarball } from './shared-pack.ts';
 import { deepFreeze } from '../../src/core/freeze.ts';
 
 
@@ -356,15 +356,15 @@ export const runPackedNativeSmoke = async (options: {
       cwd: packageRoot,
       environment,
     });
-    const listing = JSON.parse(packed.stdout) as readonly { readonly filename: string }[];
-    if (packed.exitCode !== 0 || listing.length !== 1 || listing[0] === undefined) {
+    const packOutput = packOutputFromJson(packed.stdout);
+    if (packed.exitCode !== 0) {
       throw new Error('Packed native smoke could not create exactly one release tarball.');
     }
     const installed = await runNodeEntrypoint(npmEntrypoint, [
       'install',
       '--omit=dev',
       ...npmInstallArguments,
-      join(tarballs, listing[0].filename),
+      join(tarballs, packOutput.filename),
     ], { cwd: consumer, environment });
     if (installed.exitCode !== 0) throw new Error('Packed native smoke could not install the release tarball.');
 
