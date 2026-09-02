@@ -107,8 +107,10 @@ such paths as JavaScript, CSS, and SVG subdirectories.
 are also deliberately deferred: host packs have a framework-owned
 `<target>/skills|mcp|scripts|assets/...` layout content-addressed by the
 artifact manifest. Unlike machine-local Rsbuild config, the hashed, portable
-release-identity config rejects absolute paths; use the per-invocation CLI
-flag when an absolute path is required.
+release-identity config rejects absolute paths. The per-invocation CLI
+`--output` flag can override the configured relative artifact root, but it is
+subject to the same project-root containment check; absolute and external
+output roots are unsupported.
 
 ## Distribution
 
