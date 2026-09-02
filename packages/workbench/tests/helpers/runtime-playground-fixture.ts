@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { createWorkbenchAssetSource } from '../../../agent-bundle/src/dev/workbench-assets.ts';
 import type { ProjectEventHub } from '../../../agent-bundle/src/dev/events.ts';
 import { startForegroundServer, type ForegroundProjectEventStreamHandle } from '../../../agent-bundle/src/dev/foreground-server.ts';
+import type { HostDiscoveryServiceOptions } from '../../../agent-bundle/src/dev/playground/host-discovery-service.ts';
 import type { DevRuntimeClientSurfaceProxyBinding } from '../../../agent-bundle/src/dev/runtime-provider.ts';
 import { startDevServer } from '../../../agent-bundle/src/dev/workbench-server.ts';
 import { ensureRuntimeExamplePayload, runtimeExamplePayloads } from './runtime-example-payload.ts';
@@ -33,6 +34,8 @@ export interface RuntimePlaygroundFixture {
 
 /** A narrow pre-start hook for a copied example configuration in real-browser tests. */
 export interface RuntimePlaygroundFixtureOptions {
+  /** Deterministic Doctor execution for host-discovery browser tests; prepared identity remains real. */
+  readonly hostDiscoveryOptions?: Pick<HostDiscoveryServiceOptions, 'doctor' | 'doctorOptions' | 'now'>;
   readonly prepare?: (fixture: Readonly<{ readonly configSource: string; readonly root: string }>) => Promise<void> | void;
 }
 
@@ -84,6 +87,9 @@ export const startRuntimePlaygroundFixture = async (
       port: 0,
       root,
       testing: {
+        ...(options.hostDiscoveryOptions === undefined
+          ? {}
+          : { hostDiscoveryOptions: options.hostDiscoveryOptions }),
         startForegroundServer: async (options) => {
           eventHub = options.eventHub;
           return startForegroundServer({

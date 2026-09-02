@@ -1485,7 +1485,7 @@ const Workbench = () => {
       return withConnectionGate(<HostsScreen
         connectionError={connectionError}
         discoveryClient={discoveryClient.current}
-        manifestDigest={capabilities?.routes.digest}
+        manifestDigest={capabilities?.routes.sourceRevision}
         onNavigate={navigate}
         pages={pages}
         runtimeDiagnostic={runtimeError}
