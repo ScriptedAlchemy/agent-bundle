@@ -1,25 +1,33 @@
 /**
- * The generated-plugin contract matrix at the `mcp-in-memory` proof level.
+ * The generated-plugin contract matrix — framework-owned wire-contract checks
+ * at two proof boundaries today (`mcp-in-memory` and packed stdio).
  *
- * A matrix run opens one real MCP client against the real generated server
- * (same registration and projection as a built artifact) and executes a fixed
- * suite of framework-owned checks per compiled route. The project supplies
- * only fixtures — valid inputs, declared result-compat policy, version-skew
- * payloads, and optional cancellation cases — not the check logic itself.
+ * Both entry points share one implementation. Boundary differences are explicit
+ * capability flags, not forked check logic. The project supplies only fixtures
+ * — valid inputs, declared result-compat policy, version-skew payloads, and
+ * optional cancellation cases — not the check logic itself.
  *
- * What this level proves: wire surface completeness against the compiler
- * manifest, fixture coverage, successful invocation sweeps, JSON serialized
- * round-trip through the route's own `resultSchema`, declared additive/closed
- * compat behavior, previous-server payload acceptance, advertised input-schema
- * rejection, and mid-flight cancellation hygiene — all over the SDK's
- * in-memory transport with a real MCP client.
+ * **`runContractMatrix` (`mcp-in-memory`)** opens one real MCP client against
+ * the real generated server over the SDK's in-memory transport and runs the
+ * full matrix including module-backed validation: JSON serialized round-trip
+ * through each tool route's own `resultSchema`, declared additive/closed compat
+ * behavior, and previous-server payload acceptance. In-memory transport may
+ * pass structured values without serialization; the explicit
+ * `JSON.parse(JSON.stringify(...))` round-trip closes that gap. MCP Apps are
+ * not registered at this level.
  *
- * What it deliberately does NOT prove: process spawn, stdio framing, packed
- * tarball contents, host install, or browser App HTML. Those belong to
- * `packed-stdio`, `host-install`, and `browser-app` respectively. In-memory
- * transport may pass structured values without JSON serialization; the
- * explicit `JSON.parse(JSON.stringify(...))` round-trip in the serialized
- * round-trip check closes that gap.
+ * **`runPackedContractMatrix` (`packed-stdio` / `packed-deleted-source`)** runs
+ * against an already-open packed session. It proves process stdio evidence for
+ * surface completeness (including compiled MCP App resource URIs), fixture
+ * coverage, successful-path sweeps, advertised input-schema rejection, and
+ * client-side cancellation hygiene. It cannot load project route modules — source
+ * may be deleted and verified absent — so serialized-round-trip, compat-probe,
+ * and version-skew are reported `not-applicable`. The packed server validates
+ * every tool result through its bundled `resultSchema` before returning; a
+ * successful sweep invocation is that evidence.
+ *
+ * **Neither boundary proves:** host install, browser App HTML, or lifecycle
+ * replay across artifact rebuilds (stage 2+).
  */
 import type { Client } from '@modelcontextprotocol/client';
 
@@ -28,12 +36,14 @@ import {
   MCP_IN_MEMORY_PROOF_LEVEL,
   proofLevelLabel,
   type AgentBundleTestManifest,
+  type AgentTestProofLevel,
 } from './manifest.ts';
 import {
   openInMemoryMcpServer,
   type InMemoryMcpSessionOptions,
   type McpProjectionProvenance,
 } from './mcp.ts';
+import type { PackedMcpProvenance, PackedMcpSession } from './packed.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import type { AgentRouteModule, TestableRouteDescriptor } from './types.ts';
 
@@ -77,10 +87,45 @@ export interface ContractRouteReport {
   readonly checks: Readonly<Record<string, ContractCheckOutcome>>;
 }
 
+export type ContractMatrixProvenance = McpProjectionProvenance | PackedMcpProvenance;
+
 export interface ContractMatrixReport {
-  readonly provenance: McpProjectionProvenance;
+  readonly provenance: ContractMatrixProvenance;
   readonly routes: Readonly<Record<string, ContractRouteReport>>;
 }
+
+export interface PackedContractMatrixOptions {
+  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  readonly manifest: AgentBundleTestManifest;
+  readonly server?: string;
+  /** An already-open packed session; this entry point never opens or closes it. */
+  readonly session: PackedMcpSession;
+}
+
+interface MatrixBoundaryCapabilities {
+  readonly canLoadRouteModules: boolean;
+  readonly moduleSchemaNotApplicableReason: string;
+  readonly proofLevel: AgentTestProofLevel;
+  readonly registersAppResources: boolean;
+}
+
+const PACKED_MODULE_SCHEMA_NOT_APPLICABLE_REASON =
+  'packed sessions cannot load project route modules (source may be deleted and verified absent); loading a module would silently break deleted-source proof. The packed server validates every tool result through its bundled resultSchema before returning — a successful sweep invocation is that evidence.';
+
+const IN_MEMORY_BOUNDARY: MatrixBoundaryCapabilities = Object.freeze({
+  canLoadRouteModules: true,
+  moduleSchemaNotApplicableReason: '',
+  proofLevel: MCP_IN_MEMORY_PROOF_LEVEL,
+  registersAppResources: false,
+});
+
+const packedBoundaryFromSession = (session: PackedMcpSession): MatrixBoundaryCapabilities =>
+  Object.freeze({
+    canLoadRouteModules: false,
+    moduleSchemaNotApplicableReason: PACKED_MODULE_SCHEMA_NOT_APPLICABLE_REASON,
+    proofLevel: session.provenance.proofLevel,
+    registersAppResources: true,
+  });
 
 const COMPAT_PROBE_KEY = '__agentBundleContractProbe';
 
@@ -117,6 +162,23 @@ const routeResourceUri = (descriptor: TestableRouteDescriptor): string | undefin
   const uri = descriptor.config.uri;
   return typeof uri === 'string' ? uri : undefined;
 };
+
+const routeAppResourceUri = (
+  descriptor: TestableRouteDescriptor,
+  manifest: AgentBundleTestManifest,
+): string | undefined => {
+  const fromConfig = descriptor.config.resourceUri;
+  if (typeof fromConfig === 'string') return fromConfig;
+  const app = Object.values(manifest.apps).find((entry) => entry.id === descriptor.id);
+  return app?.resourceUri;
+};
+
+const routeWireUri = (
+  descriptor: TestableRouteDescriptor,
+  manifest: AgentBundleTestManifest,
+): string | undefined => (descriptor.kind === 'app'
+  ? routeAppResourceUri(descriptor, manifest)
+  : routeResourceUri(descriptor));
 
 const serverRoutes = (
   manifest: AgentBundleTestManifest,
@@ -171,6 +233,7 @@ const resolveServerName = (
 };
 
 const passed = (): ContractCheckOutcome => ({ status: 'passed' });
+const passedWithReason = (reason: string): ContractCheckOutcome => ({ reason, status: 'passed' });
 const failed = (reason: string): ContractCheckOutcome => ({ reason, status: 'failed' });
 const notApplicable = (reason: string): ContractCheckOutcome => ({ reason, status: 'not-applicable' });
 
@@ -337,6 +400,11 @@ const wrongJsonType = (schemaType: unknown): unknown => {
  * - one missing-required-property case per required field
  * - one wrong-JSON-type case per typed top-level property
  *
+ * **Unknown-extra-key tolerance:** when the advertised schema declares
+ * `additionalProperties: false`, plain `z.object` tool routes may still strip
+ * unknown keys without a protocol failure. The negative-inputs check records
+ * that acceptance when other generated negatives still prove rejection paths.
+ *
  * Does NOT prove deep nested validation, format constraints, or enum exhaustiveness
  * beyond the top-level object shape the MCP SDK advertises.
  */
@@ -403,6 +471,8 @@ const defaultValueForType = (type: string): unknown => {
 const checkSurfaceCompleteness = (
   descriptor: TestableRouteDescriptor,
   surface: LiveSurface,
+  manifest: AgentBundleTestManifest,
+  boundary: MatrixBoundaryCapabilities,
 ): ContractCheckOutcome => {
   switch (descriptor.kind) {
     case 'tool': {
@@ -426,8 +496,18 @@ const checkSurfaceCompleteness = (
         ? passed()
         : failed(`prompt ${JSON.stringify(name)} is missing from listPrompts`);
     }
-    case 'app':
-      return notApplicable('MCP Apps are not registered by the in-memory projection level.');
+    case 'app': {
+      if (!boundary.registersAppResources) {
+        return notApplicable('MCP Apps are not registered by the in-memory projection level.');
+      }
+      const uri = routeAppResourceUri(descriptor, manifest);
+      if (uri === undefined) {
+        return failed('app route config exports no resourceUri to compare against listResources');
+      }
+      return surface.resources.includes(uri)
+        ? passed()
+        : failed(`MCP App resource URI ${JSON.stringify(uri)} is missing from listResources`);
+    }
     case 'cli':
     case 'event-route':
     case 'script':
@@ -443,6 +523,7 @@ const runSweep = async (
   client: Client,
   descriptor: TestableRouteDescriptor,
   fixture: ContractRouteFixture,
+  manifest: AgentBundleTestManifest,
   cache: Map<string, ToolInvocationResult>,
 ): Promise<ContractCheckOutcome> => {
   switch (descriptor.kind) {
@@ -452,21 +533,22 @@ const runSweep = async (
         if (result.threw) {
           return failed(`callTool threw: ${result.error instanceof Error ? result.error.message : captured(result.error)}`);
         }
-        if (result.structuredContent === undefined) {
-          return failed(`callTool returned no structuredContent for input ${captured(input)}`);
-        }
         if (result.isError) {
           return notApplicable(
             'Invocation returned isError; sweep proves successful invocation paths only.',
           );
         }
+        if (result.structuredContent === undefined) {
+          return failed(`callTool returned no structuredContent for input ${captured(input)}`);
+        }
       }
       return passed();
     }
-    case 'resource': {
-      const uri = routeResourceUri(descriptor);
+    case 'resource':
+    case 'app': {
+      const uri = routeWireUri(descriptor, manifest);
       if (uri === undefined) {
-        return failed('resource route config exports no uri to read');
+        return failed(`${descriptor.kind} route config exports no uri to read`);
       }
       const read = await client.readResource({ uri }) as { contents?: unknown };
       const contents = Array.isArray(read.contents) ? read.contents : [];
@@ -504,11 +586,11 @@ const runSerializedRoundTrip = async (
     if (result.threw) {
       return failed(`callTool threw before round-trip: ${result.error instanceof Error ? result.error.message : captured(result.error)}`);
     }
-    if (result.structuredContent === undefined) {
-      return failed(`callTool returned no structuredContent for input ${captured(input)}`);
-    }
     if (result.isError) {
       return notApplicable('serialized round-trip requires a successful tool result.');
+    }
+    if (result.structuredContent === undefined) {
+      return failed(`callTool returned no structuredContent for input ${captured(input)}`);
     }
     try {
       module.resultSchema.parse(serializedRoundTrip(result.structuredContent));
@@ -591,6 +673,7 @@ const runNegativeInputs = async (
     return notApplicable('advertised inputSchema has no top-level object structure to derive negative cases from.');
   }
   let anyRejected = false;
+  let unknownExtraKeyAccepted = false;
   for (const negative of negatives) {
     const result = await callToolResult(client, routeProtocolName(descriptor), negative.input);
     if (result.threw || result.isError || result.structuredContent === undefined) {
@@ -598,16 +681,19 @@ const runNegativeInputs = async (
       continue;
     }
     if (negative.label === 'unknown-extra-key') {
-      // Advertised JSON Schema declares additionalProperties: false, but plain
-      // z.object routes may strip unknown keys without failing the protocol
-      // call. Other generated negatives still prove rejection paths.
+      unknownExtraKeyAccepted = true;
       continue;
     }
     return failed(`negative input ${negative.label} produced a successful tool result: ${captured(negative.input)}`);
   }
-  return anyRejected
-    ? passed()
-    : failed('no generated negative input caused callTool to fail or return isError');
+  if (!anyRejected) {
+    return failed('no generated negative input caused callTool to fail or return isError');
+  }
+  return unknownExtraKeyAccepted
+    ? passedWithReason(
+      'unknown-extra-key input was accepted (advertised additionalProperties: false, but plain z.object routes may strip unknown keys without protocol failure); other generated negatives still proved rejection paths.',
+    )
+    : passed();
 };
 
 const runCancellation = async (
@@ -644,7 +730,8 @@ const runCancellation = async (
   if (!result.settled.threw) {
     return failed('aborted callTool settled without throwing or rejecting.');
   }
-  const healthy = await callToolResult(client, routeProtocolName(descriptor), { holdMs: 1 }, { cache });
+  const recoveryInput = fixtureInputs(fixture)[0] ?? {};
+  const healthy = await callToolResult(client, routeProtocolName(descriptor), recoveryInput, { cache });
   if (healthy.threw) {
     return failed(`session did not recover: subsequent callTool threw: ${healthy.error instanceof Error ? healthy.error.message : captured(healthy.error)}`);
   }
@@ -654,23 +741,56 @@ const runCancellation = async (
   return passed();
 };
 
-/**
- * Runs the contract matrix against one compiled MCP server at the
- * `mcp-in-memory` proof level. Returns a per-route report; throws one
- * aggregated `AgentTestError` with code `contract-violation` when any check
- * failed (never first-failure-only).
- */
-export const runContractMatrix = async (
-  options: ContractMatrixOptions,
-): Promise<ContractMatrixReport> => {
-  const manifest = options.manifest ?? testManifest();
-  const serverName = resolveServerName(manifest, options.server);
-  const routes = serverRoutes(manifest, serverName);
-  const appRoutes = serverAppRoutes(manifest, serverName);
+const matrixRouteDescriptors = (
+  manifest: AgentBundleTestManifest,
+  serverName: string,
+): readonly TestableRouteDescriptor[] => [
+  ...serverRoutes(manifest, serverName),
+  ...serverAppRoutes(manifest, serverName),
+].sort((left, right) => left.id.localeCompare(right.id));
+
+const finalizeContractMatrixReport = (
+  failures: MatrixFailure[],
+  boundary: MatrixBoundaryCapabilities,
+  provenance: ContractMatrixProvenance,
+  routeReports: Record<string, ContractRouteReport>,
+): ContractMatrixReport => {
+  const report: ContractMatrixReport = Object.freeze({
+    provenance,
+    routes: Object.freeze(routeReports),
+  });
+  if (failures.length === 0) return report;
+
+  const proofLabel = proofLevelLabel(boundary.proofLevel);
+  const details = failures.map((entry) =>
+    `- ${entry.routeId} / ${entry.check}: ${entry.reason} (${proofLabel})`);
+  throw new AgentTestError(
+    'contract-violation',
+    `Contract matrix reported ${String(failures.length)} violation(s) at the ${boundary.proofLevel} proof level.`,
+    {
+      details,
+      recovery: boundary.canLoadRouteModules
+        ? 'Fix the failing route, fixture, or declared resultCompat policy; re-run runContractMatrix.'
+        : 'Fix the failing route or fixture; re-run runPackedContractMatrix.',
+    },
+  );
+};
+
+const executeContractMatrix = async (options: {
+  readonly boundary: MatrixBoundaryCapabilities;
+  readonly client: Client;
+  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  readonly manifest: AgentBundleTestManifest;
+  readonly provenance: ContractMatrixProvenance;
+  readonly serverName: string;
+}): Promise<ContractMatrixReport> => {
+  const { boundary, client, fixtures, manifest, provenance, serverName } = options;
   const failures: MatrixFailure[] = [];
   const routeReports: Record<string, ContractRouteReport> = {};
+  const moduleSchemaNotApplicable = (): ContractCheckOutcome =>
+    notApplicable(boundary.moduleSchemaNotApplicableReason);
 
-  const unknownFixtureKeys = Object.keys(options.fixtures).filter(
+  const unknownFixtureKeys = Object.keys(fixtures).filter(
     (routeId) => manifest.routes[routeId] === undefined,
   );
   if (unknownFixtureKeys.length > 0) {
@@ -689,14 +809,21 @@ export const runContractMatrix = async (
     }
   }
 
-  await using session = await openInMemoryMcpServer(options);
-  const surface = await listLiveSurface(session.client);
-  const proofLabel = proofLevelLabel(MCP_IN_MEMORY_PROOF_LEVEL);
+  const surface = await listLiveSurface(client);
   const invocationCache = new Map<string, ToolInvocationResult>();
 
-  for (const descriptor of routes) {
+  for (const descriptor of matrixRouteDescriptors(manifest, serverName)) {
+    if (descriptor.kind === 'app' && !boundary.registersAppResources) {
+      routeReports[descriptor.id] = {
+        checks: {
+          [CHECK_SURFACE]: notApplicable('MCP Apps are not registered by the in-memory projection level.'),
+        },
+      };
+      continue;
+    }
+
     const checks: Record<string, ContractCheckOutcome> = {};
-    const fixture = options.fixtures[descriptor.id];
+    const fixture = fixtures[descriptor.id];
 
     checks[CHECK_COVERAGE] = outcomeFromCheck(
       failures,
@@ -711,7 +838,7 @@ export const runContractMatrix = async (
       failures,
       descriptor.id,
       CHECK_SURFACE,
-      checkSurfaceCompleteness(descriptor, surface),
+      checkSurfaceCompleteness(descriptor, surface, manifest, boundary),
     );
 
     if (fixture === undefined) {
@@ -719,47 +846,65 @@ export const runContractMatrix = async (
       continue;
     }
 
-    const module = descriptor.kind === 'tool'
-      ? await loadRouteModule(manifest, descriptor)
-      : undefined;
-
     checks[CHECK_SWEEP] = outcomeFromCheck(
       failures,
       descriptor.id,
       CHECK_SWEEP,
-      await runSweep(session.client, descriptor, fixture, invocationCache),
+      await runSweep(client, descriptor, fixture, manifest, invocationCache),
     );
 
-    if (module !== undefined) {
-      checks[CHECK_SERIALIZED_ROUND_TRIP] = outcomeFromCheck(
-        failures,
-        descriptor.id,
-        CHECK_SERIALIZED_ROUND_TRIP,
-        await runSerializedRoundTrip(session.client, descriptor, fixture, module, invocationCache),
-      );
-      checks[CHECK_COMPAT_PROBE] = outcomeFromCheck(
-        failures,
-        descriptor.id,
-        CHECK_COMPAT_PROBE,
-        await runCompatProbe(session.client, descriptor, fixture, module, invocationCache),
-      );
-      checks[CHECK_VERSION_SKEW] = outcomeFromCheck(
-        failures,
-        descriptor.id,
-        CHECK_VERSION_SKEW,
-        runVersionSkew(descriptor, fixture, module),
-      );
+    if (descriptor.kind === 'tool') {
+      if (boundary.canLoadRouteModules) {
+        const module = await loadRouteModule(manifest, descriptor);
+        checks[CHECK_SERIALIZED_ROUND_TRIP] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_SERIALIZED_ROUND_TRIP,
+          await runSerializedRoundTrip(client, descriptor, fixture, module, invocationCache),
+        );
+        checks[CHECK_COMPAT_PROBE] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_COMPAT_PROBE,
+          await runCompatProbe(client, descriptor, fixture, module, invocationCache),
+        );
+        checks[CHECK_VERSION_SKEW] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_VERSION_SKEW,
+          runVersionSkew(descriptor, fixture, module),
+        );
+      } else {
+        checks[CHECK_SERIALIZED_ROUND_TRIP] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_SERIALIZED_ROUND_TRIP,
+          moduleSchemaNotApplicable(),
+        );
+        checks[CHECK_COMPAT_PROBE] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_COMPAT_PROBE,
+          moduleSchemaNotApplicable(),
+        );
+        checks[CHECK_VERSION_SKEW] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_VERSION_SKEW,
+          moduleSchemaNotApplicable(),
+        );
+      }
       checks[CHECK_NEGATIVE_INPUTS] = outcomeFromCheck(
         failures,
         descriptor.id,
         CHECK_NEGATIVE_INPUTS,
-        await runNegativeInputs(session.client, descriptor, surface),
+        await runNegativeInputs(client, descriptor, surface),
       );
       checks[CHECK_CANCELLATION] = outcomeFromCheck(
         failures,
         descriptor.id,
         CHECK_CANCELLATION,
-        await runCancellation(session.client, descriptor, fixture, invocationCache),
+        await runCancellation(client, descriptor, fixture, invocationCache),
       );
     } else {
       checks[CHECK_SERIALIZED_ROUND_TRIP] = notApplicable('applies to tool routes only.');
@@ -772,31 +917,45 @@ export const runContractMatrix = async (
     routeReports[descriptor.id] = { checks };
   }
 
-  for (const descriptor of appRoutes) {
-    routeReports[descriptor.id] = {
-      checks: {
-        [CHECK_SURFACE]: notApplicable('MCP Apps are not registered by the in-memory projection level.'),
-      },
-    };
-  }
+  return finalizeContractMatrixReport(failures, boundary, provenance, routeReports);
+};
 
-  const report: ContractMatrixReport = Object.freeze({
+/**
+ * Runs the contract matrix against one compiled MCP server at the
+ * `mcp-in-memory` proof level. Returns a per-route report; throws one
+ * aggregated `AgentTestError` with code `contract-violation` when any check
+ * failed (never first-failure-only).
+ */
+export const runContractMatrix = async (
+  options: ContractMatrixOptions,
+): Promise<ContractMatrixReport> => {
+  const manifest = options.manifest ?? testManifest();
+  const serverName = resolveServerName(manifest, options.server);
+  await using session = await openInMemoryMcpServer(options);
+  return await executeContractMatrix({
+    boundary: IN_MEMORY_BOUNDARY,
+    client: session.client,
+    fixtures: options.fixtures,
+    manifest,
     provenance: session.provenance,
-    routes: Object.freeze(routeReports),
+    serverName,
   });
+};
 
-  if (failures.length > 0) {
-    const details = failures.map((entry) =>
-      `- ${entry.routeId} / ${entry.check}: ${entry.reason} (${proofLabel})`);
-    throw new AgentTestError(
-      'contract-violation',
-      `Contract matrix reported ${String(failures.length)} violation(s) at the ${MCP_IN_MEMORY_PROOF_LEVEL} proof level.`,
-      {
-        details,
-        recovery: 'Fix the failing route, fixture, or declared resultCompat policy; re-run runContractMatrix.',
-      },
-    );
-  }
-
-  return report;
+/**
+ * Runs the contract matrix against an already-open packed stdio session.
+ * Never opens or closes the session; stamps the session's own proof level.
+ */
+export const runPackedContractMatrix = async (
+  options: PackedContractMatrixOptions,
+): Promise<ContractMatrixReport> => {
+  const serverName = resolveServerName(options.manifest, options.server);
+  return executeContractMatrix({
+    boundary: packedBoundaryFromSession(options.session),
+    client: options.session.client,
+    fixtures: options.fixtures,
+    manifest: options.manifest,
+    provenance: options.session.provenance,
+    serverName,
+  });
 };

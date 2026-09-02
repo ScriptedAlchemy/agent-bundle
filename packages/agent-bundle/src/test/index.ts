@@ -11,8 +11,8 @@
  * | `route-unit` | `renderRoute`, `renderRouteEvents`, `createTargetCapabilityFixture`, `projectTargetCapabilities` | the route component and its document through the real Agent renderer; explicit target-capability projection through the real MCP projector, without transport or host proof |
  * | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
  * | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a compiled plain or rendered CLI command dispatched through the routed CLI's own shell, including rendered output modes, in this process |
- * | `packed-stdio` | `openPackedMcpServer` | a built artifact's generated entry running as a real process over stdio |
- * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer` | the packed stdio process still runs after project source and configuration are removed and verified absent |
+ * | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio |
+ * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent |
  * | `browser-app` | `mountBrowserApp` (`agent-bundle/test/browser`) | production-compiled MCP App HTML mounted over the product bridge in a real browser page |
  * | `host-install` | repository real-host install proof | a built bundle accepted through a real host's public install path in an isolated home, with registration observed by that host |
  *
@@ -84,14 +84,17 @@ export {
 export {
   negativeInputsFromJsonSchema,
   runContractMatrix,
+  runPackedContractMatrix,
 } from './contract.ts';
 export type {
   ContractCheckOutcome,
   ContractCheckStatus,
   ContractMatrixOptions,
+  ContractMatrixProvenance,
   ContractMatrixReport,
   ContractRouteFixture,
   ContractRouteReport,
+  PackedContractMatrixOptions,
   ResultCompatPolicy,
 } from './contract.ts';
 export type {
