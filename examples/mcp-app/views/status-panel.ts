@@ -1,6 +1,7 @@
 import { App, PostMessageTransport } from '@modelcontextprotocol/ext-apps';
+import { name, version } from 'agent-bundle/meta';
 
-const app = new App({ name: 'mcp-app-status-panel', version: '1.0.0' }, {});
+const app = new App({ name, version }, {});
 const serviceHeading = document.querySelector<HTMLHeadingElement>('#service')!;
 const statusIndicator = document.querySelector<HTMLElement>('#status-indicator')!;
 const status = document.querySelector<HTMLElement>('#status')!;

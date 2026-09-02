@@ -17,6 +17,7 @@ import {
   agentRenderEventSchema,
 } from '../runtime/agent-document-client.ts';
 import { deeplyFrozenHookValue } from '../hooks/hook-client.ts';
+import { requestContextProvenanceSchema } from '../request-provenance.ts';
 
 export type {
   Lifecycle,
@@ -116,13 +117,6 @@ const canonicalSchema = z.strictObject({
   }),
   sequence: z.number().int().nonnegative(),
 });
-const requestContextSchema = z.strictObject({
-  hostContractRevision: textSchema,
-  invocationKind: z.literal('event'),
-  nativeEvent: textSchema,
-  routeId: textSchema,
-  target: textSchema,
-});
 const replaySchema = z.strictObject({
   binding: bindingSchema,
   canonical: canonicalSchema,
@@ -131,7 +125,7 @@ const replaySchema = z.strictObject({
   nativeInput: jsonRecordSchema,
   nativeResponse: jsonRecordSchema.optional(),
   projectionDiagnostic: z.strictObject({ code: textSchema, message: textSchema }).optional(),
-  requestContext: requestContextSchema,
+  requestContext: requestContextProvenanceSchema,
   source: z.enum(['fixture', 'observed']),
 });
 const replayDiagnosticSchema = z.strictObject({

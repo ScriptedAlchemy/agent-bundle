@@ -69,6 +69,8 @@ const listing = (manifestDigest = 'manifest-a'): LifecycleListResponse => ({
 
 const replayFor = (request: LifecycleReplayRequest): LifecycleReplay => {
   const target = listing().lifecycles[0]!.targets.find((candidate) => candidate.target === request.binding.target)!;
+  const sessionId = typeof request.native.session_id === 'string' ? request.native.session_id : undefined;
+  const workspaceRoot = typeof request.native.cwd === 'string' ? request.native.cwd : undefined;
   return {
     binding: request.binding,
     canonical: {
@@ -93,11 +95,20 @@ const replayFor = (request: LifecycleReplayRequest): LifecycleReplay => {
       ? { hookSpecificOutput: { additionalContext: 'Recorded browser.txt' } }
       : { output: { context: 'Recorded browser.txt' } },
     requestContext: {
-      hostContractRevision: target.hostContractRevision,
-      invocationKind: 'event',
-      nativeEvent: target.nativeEvent,
-      routeId: request.binding.routeId,
-      target: request.binding.target,
+      actor: { reason: 'not-provided', state: 'unavailable' },
+      host: { source: 'receipt', state: 'available', value: { name: request.binding.target } },
+      invocation: {
+        hostContractRevision: target.hostContractRevision,
+        kind: 'event',
+        operationId: request.binding.routeId,
+        surface: 'tool/after',
+      },
+      session: sessionId === undefined
+        ? { reason: 'not-provided', state: 'unavailable' }
+        : { source: 'receipt', state: 'available', value: { sessionId } },
+      workspace: workspaceRoot === undefined
+        ? { reason: 'not-provided', state: 'unavailable' }
+        : { source: 'receipt', state: 'available', value: { root: workspaceRoot } },
     },
     source: request.source,
   };

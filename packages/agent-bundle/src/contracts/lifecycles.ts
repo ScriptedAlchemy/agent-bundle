@@ -4,6 +4,7 @@ import type {
   AgentEventCanonicalIdentity,
   CanonicalAgentEvent,
 } from '../routes/public.ts';
+import type { RequestContextProvenance } from './request-provenance.ts';
 
 export interface LifecycleBinding {
   readonly manifestDigest: string;
@@ -62,13 +63,7 @@ export interface LifecycleReplay {
   readonly nativeInput: Readonly<Record<string, unknown>>;
   readonly nativeResponse?: Readonly<Record<string, unknown>>;
   readonly projectionDiagnostic?: Readonly<{ readonly code: string; readonly message: string }>;
-  readonly requestContext: Readonly<{
-    readonly hostContractRevision: string;
-    readonly invocationKind: 'event';
-    readonly nativeEvent: string;
-    readonly routeId: string;
-    readonly target: string;
-  }>;
+  readonly requestContext: RequestContextProvenance;
   readonly source: LifecycleReplaySource;
 }
 

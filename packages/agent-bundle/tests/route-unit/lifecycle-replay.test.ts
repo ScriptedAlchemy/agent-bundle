@@ -99,10 +99,13 @@ it('replays Claude and Codex PostToolUse through decode, route execution, render
     });
     expect(replay.nativeInput).toEqual(fixture.native);
     expect(replay.requestContext).toMatchObject({
-      invocationKind: 'event',
-      nativeEvent: 'PostToolUse',
-      routeId: 'event:tool/after',
-      target: fixture.target,
+      actor: { reason: 'not-provided', state: 'unavailable' },
+      host: { source: 'receipt', state: 'available', value: { name: fixture.target } },
+      invocation: {
+        kind: 'event',
+        operationId: 'event:tool/after',
+        surface: 'tool/after',
+      },
     });
     expect(replay.events[0]?.type).toBe('shell');
     expect(replay.events.at(-1)?.type).toBe('complete');
