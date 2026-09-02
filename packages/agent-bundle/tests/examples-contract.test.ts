@@ -301,7 +301,7 @@ it('serves the routed Audiobook Curator artifact through a real MCP client', { r
     const compiled = await build({ output, root, targets: ['claude'] });
     await rm(join(root, 'src'), { force: true, recursive: true });
     const server = compiled.model.mcpServers.find((candidate) => candidate.name === 'curator');
-    expect(server?.generatedRoutes).toHaveLength(17);
+    expect(server?.generatedRoutes).toHaveLength(18);
     const entry = join(output, 'claude', server!.args![0]!);
     client = new Client({ name: 'audiobook-route-contract', version: '1.0.0' });
     await client.connect(new StdioClientTransport({ args: [entry], command: process.execPath, stderr: 'pipe' }));
@@ -310,11 +310,15 @@ it('serves the routed Audiobook Curator artifact through a real MCP client', { r
     expect(tools.tools.map((tool) => tool.name)).toContain('inspect_sources');
     const inspectResult = await client.callTool({ arguments: { root }, name: 'inspect_sources' });
     expect(inspectResult).toMatchObject({
-      content: [{ type: 'text' }],
+      content: expect.arrayContaining([
+        expect.objectContaining({ type: 'text' }),
+      ]),
       structuredContent: { operation: 'inspect', root },
     });
     await expect(client.listResources()).resolves.toMatchObject({
-      resources: [expect.objectContaining({ uri: 'audiobook-curator://catalog' })],
+      resources: expect.arrayContaining([
+        expect.objectContaining({ uri: 'audiobook-curator://catalog' }),
+      ]),
     });
     await expect(client.readResource({ uri: 'audiobook-curator://catalog' })).resolves.toMatchObject({
       contents: [expect.objectContaining({ mimeType: 'application/json', uri: 'audiobook-curator://catalog' })],

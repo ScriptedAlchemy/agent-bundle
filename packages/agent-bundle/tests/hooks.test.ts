@@ -1,4 +1,4 @@
-import { cp, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -1037,8 +1037,7 @@ it('runs the embedded Codex and Claude native codecs through their published wra
 it('runs the Cursor workspace/open lifecycle starter through a generated wrapper with empty stdout', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cursor-workspace-open-'));
   const sourceRoot = join(root, 'src', 'events', 'workspace');
-  const packageRoot = join(root, 'node_modules', 'agent-bundle');
-  const wrapper = join(root, 'event-route-workspace-open.mjs');
+  const outputRoot = join(root, 'artifact');
   const base = hookModel(root);
   const model: NormalizedPlugin = {
     ...base,
@@ -1047,8 +1046,8 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
       eventRoute: { event: 'workspace/open', fallback: 'none', runtime: 'standalone' },
       id: 'hook:event-route:workspace-open',
       name: 'event-route-workspace-open',
-      provenance: { kind: 'conventional', sourcePath: join(sourceRoot, 'open.mjs') },
-      source: join(sourceRoot, 'open.mjs'),
+      provenance: { kind: 'conventional', sourcePath: join(sourceRoot, 'open.tsx') },
+      source: join(sourceRoot, 'open.tsx'),
       targets: ['cursor'],
       tools: [],
     }],
@@ -1060,31 +1059,20 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
   };
 
   try {
+    await mkdir(sourceRoot, { recursive: true });
     await Promise.all([
-      mkdir(sourceRoot, { recursive: true }),
-      mkdir(packageRoot, { recursive: true }),
-    ]);
-    await Promise.all([
+      symlink(join(process.cwd(), 'packages', 'agent-bundle', 'node_modules'), join(root, 'node_modules'), 'dir'),
       writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
-      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
-      writeFile(join(packageRoot, 'package.json'), JSON.stringify({
-        exports: {
-          './event-ipc': './event-ipc.mjs',
-          './event-project': './event-project.mjs',
+      writeFile(join(root, 'package.json'), JSON.stringify({
+        dependencies: {
+          '@agent-bundle/runtime': 'workspace:*',
+          react: '19.2.8',
         },
         type: 'module',
       })),
-      writeFile(
-        join(packageRoot, 'event-ipc.mjs'),
-        `export * from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/agent-bundle/dist/event-ipc.js')).href)};\n`,
-      ),
-      writeFile(
-        join(packageRoot, 'event-project.mjs'),
-        `export * from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/agent-bundle/dist/event-project.js')).href)};\n`,
-      ),
-      writeFile(join(sourceRoot, 'open.mjs'), [
-        `import { Agent } from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/rsc-runtime/dist/index.js')).href)};`,
-        `import { createElement } from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/agent-bundle/node_modules/react/index.js')).href)};`,
+      writeFile(join(sourceRoot, 'open.tsx'), [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
         '',
         'export default async function WorkspaceOpen() {',
         '  return createElement(Agent.Result);',
@@ -1099,7 +1087,8 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
 
     expect(plan.diagnostics).toEqual([]);
     expect(generated).toBeDefined();
-    await writeFile(wrapper, generated!.virtualSource);
+    await build({ model, outputRoot, projectRoot: root, registry: targetRegistry });
+    const wrapper = join(outputRoot, 'cursor', generated!.relativePath);
     expect(starter).toEqual({
       cursor_version: 'lifecycle-replay',
       hook_event_name: 'workspaceOpen',
