@@ -117,10 +117,11 @@ export const generatedInstallBinEntrySource = (options: {
   readonly hosts: readonly ('claude' | 'codex' | 'cursor')[];
   readonly name: string;
 }): string => [
+  "import { fileURLToPath } from 'node:url';",
   `import { runGeneratedInstallProcess } from ${JSON.stringify(installEntryRuntimeSpecifier)};`,
   '',
   'process.exitCode = await runGeneratedInstallProcess(process.argv.slice(2), Object.freeze({',
-  `  artifactRelativeUrl: ${JSON.stringify(options.artifactRelativeUrl)},`,
+  `  artifactRoot: fileURLToPath(new URL(${JSON.stringify(options.artifactRelativeUrl)}, import.meta.url)),`,
   `  hosts: Object.freeze(${stableJson(options.hosts)}),`,
   `  name: ${JSON.stringify(options.name)},`,
   '}));',
