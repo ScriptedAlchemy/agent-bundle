@@ -51,6 +51,8 @@ export interface CreateWarmFlightHostOptions {
   readonly close?: () => Promise<void>;
   readonly host: AgentFlightExecutionHost;
   readonly instanceId?: string;
+  /** Optional generated state owner whose lifetime is the warm host lifetime. */
+  readonly runtimeState?: { close(): Promise<void> };
 }
 
 const unavailableError = (
@@ -83,7 +85,11 @@ export const createWarmFlightHost = (options: CreateWarmFlightHostOptions): Warm
       unavailable ??= unavailableError(code);
     },
     async close() {
-      await options.close?.();
+      try {
+        await options.close?.();
+      } finally {
+        await options.runtimeState?.close();
+      }
     },
     async execute(request: AgentRenderDispatch) {
       if (unavailable !== undefined) throw unavailable;

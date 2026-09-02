@@ -3,7 +3,7 @@ import { relative, resolve, sep } from 'node:path';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import type { NormalizedMcpApp } from '../core/types.ts';
+import type { NormalizedMcpApp, NormalizedStateDefinition } from '../core/types.ts';
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
@@ -105,6 +105,14 @@ export interface TestManifestPluginIdentity {
   readonly version: string;
 }
 
+/** The conventional state module the generated route-unit registry can load. */
+export interface TestableStateDescriptor {
+  readonly id: string;
+  readonly lifetime: NormalizedStateDefinition['lifetime'];
+  readonly relativePath: string;
+  readonly source: string;
+}
+
 /** One normalized MCP App declaration addressable by the browser proof level. */
 export interface TestableAppDescriptor {
   readonly _meta?: Readonly<Record<string, unknown>>;
@@ -151,6 +159,8 @@ export interface AgentBundleTestManifest {
   /** The level the manifest and its registered loaders alone supply; every other level stamps its own. */
   readonly proofLevel: AgentTestProofLevel;
   readonly routes: Readonly<Record<string, TestableRouteDescriptor>>;
+  /** Conventional project state mounted automatically for manifest route renders. */
+  readonly state?: TestableStateDescriptor;
   /** Host targets the project selected. Route-unit rendering is target-neutral; these name the projection surfaces a later proof level owns. */
   readonly targets: readonly string[];
 }
@@ -233,6 +243,7 @@ export const testManifestFromRouteGraph = (input: {
   readonly graph: CompiledRouteGraph;
   readonly plugin?: TestManifestPluginIdentity;
   readonly projectRoot: string;
+  readonly state?: NormalizedStateDefinition;
   readonly targets?: readonly string[];
 }): AgentBundleTestManifest => {
   const routes: Record<string, TestableRouteDescriptor> = {};
@@ -247,6 +258,16 @@ export const testManifestFromRouteGraph = (input: {
     projectRoot: input.projectRoot,
     proofLevel: ROUTE_UNIT_PROOF_LEVEL,
     routes,
+    ...(input.state === undefined
+      ? {}
+      : {
+          state: {
+            id: input.state.id,
+            lifetime: input.state.lifetime,
+            relativePath: relative(input.projectRoot, input.state.source).split(sep).join('/'),
+            source: input.state.source,
+          },
+        }),
     targets: [...(input.targets ?? [])],
   });
 };
@@ -282,6 +303,7 @@ export const compileTestManifest = async (
       ? {}
       : { plugin: { name: prepared.model.metadata.name, version: prepared.model.metadata.version } }),
     projectRoot: prepared.root,
+    ...(prepared.model?.state === undefined ? {} : { state: prepared.model.state }),
     targets: prepared.model?.targets.map((target) => target.name) ?? [],
   });
 };

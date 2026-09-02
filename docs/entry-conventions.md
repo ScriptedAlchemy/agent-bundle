@@ -62,8 +62,29 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
+| `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
 
-Conventions match `.ts` and `.tsx` files exactly.
+Route and package entry conventions match `.ts` and `.tsx` files exactly;
+the state convention is specifically `src/state.ts`.
+
+### Generated state mounting
+
+The compiler parses `src/state.ts` without executing it and requires one
+`export default defineState({ ... })` call whose `id` and `lifetime` are
+string literals. Generated mounting currently supports `request`, `process`,
+and `workspace-durable`; `external` remains embedder-owned driver wiring.
+Volatile lifetimes use the memory driver. Request lifetime opens and releases
+fresh project and notice stores per invocation; process lifetime shares them
+for the generated worker or executable process.
+
+Workspace-durable generated MCP workers store under
+`$AGENT_BUNDLE_PLUGIN_ROOT/state`. If that host-provided anchor is absent,
+the worker derives the artifact root from the parent of its own `mcp/`
+directory. Routed CLI bins and rendered scripts use
+`$AGENT_BUNDLE_PLUGIN_ROOT/state` when present and otherwise
+`$PWD/.agent-bundle/state`. Notice authorization is deliberately permissive
+in generated mounting v1 (`authorized`); recipient/principal matching remains
+enforced by the ledger, while application authorization policy is deferred.
 
 ### Migration nudges
 

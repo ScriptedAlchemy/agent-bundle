@@ -116,4 +116,8 @@ export const agentBundleRstest = async (
   };
 };
 
-export type { AgentBundleTestManifest, TestableRouteDescriptor } from '../test/manifest.ts';
+export type {
+  AgentBundleTestManifest,
+  TestableRouteDescriptor,
+  TestableStateDescriptor,
+} from '../test/manifest.ts';

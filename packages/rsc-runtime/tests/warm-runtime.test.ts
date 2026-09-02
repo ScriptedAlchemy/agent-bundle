@@ -89,4 +89,23 @@ describe('createWarmFlightHost', () => {
     await expect(host.execute(dispatch())).rejects.toBeInstanceOf(AgentRuntimeError);
     await expect(host.execute(dispatch())).rejects.toMatchObject({ code: 'runtime-unavailable' });
   });
+
+  it('closes runtime state with the warm host', async () => {
+    const closed: string[] = [];
+    const host = createWarmFlightHost({
+      artifactEpoch: 'epoch-a',
+      close: async () => {
+        closed.push('host');
+      },
+      host: { execute: async () => emptyFlight() },
+      runtimeState: {
+        close: async () => {
+          closed.push('state');
+        },
+      },
+    });
+
+    await host.close();
+    expect(closed).toEqual(['host', 'state']);
+  });
 });

@@ -53,6 +53,10 @@
     "./notices": {
       "types": "./dist/notices/index.d.ts",
       "import": "./dist/notices.js"
+    },
+    "./mount": {
+      "types": "./dist/mount/index.d.ts",
+      "import": "./dist/mount.js"
     }
   },
   "scripts": {

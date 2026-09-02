@@ -1,3 +1,5 @@
+import type { AgentStateDefinition, AgentStateEventSchemas } from '@agent-bundle/runtime/state';
+
 import { AgentTestError } from './errors.ts';
 import type { AgentBundleTestManifest } from './manifest.ts';
 import type { AgentRouteModuleLoader } from './types.ts';
@@ -14,12 +16,17 @@ export const AGENT_TEST_REGISTRY_SYMBOL_KEY = 'agent-bundle/test-route-registry'
 
 const REGISTRY_SYMBOL = Symbol.for(AGENT_TEST_REGISTRY_SYMBOL_KEY);
 
-export const AGENT_TEST_REGISTRY_VERSION = 2;
+export const AGENT_TEST_REGISTRY_VERSION = 3;
+
+export type AgentStateModuleLoader = () => Promise<{
+  readonly default: AgentStateDefinition<unknown, AgentStateEventSchemas>;
+}>;
 
 export interface AgentTestRouteRegistry {
   /** Lazy loaders keyed by compiled route id, so a test only compiles the routes it renders. */
   readonly loaders: Readonly<Record<string, AgentRouteModuleLoader>>;
   readonly manifest: AgentBundleTestManifest;
+  readonly stateLoader?: AgentStateModuleLoader;
   readonly version: number;
 }
 
@@ -96,6 +103,15 @@ export const registeredRouteLoader = (
   const registry = registered();
   if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
   return registry.loaders[routeId];
+};
+
+/** The state-module loader generated beside the registered manifest. */
+export const registeredStateLoader = (
+  manifest: AgentBundleTestManifest,
+): AgentStateModuleLoader | undefined => {
+  const registry = registered();
+  if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
+  return registry.stateLoader;
 };
 
 /** The registered manifest's identity, so a loader miss can name the mismatch that caused it. */

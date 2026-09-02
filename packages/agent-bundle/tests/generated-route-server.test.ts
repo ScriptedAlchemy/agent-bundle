@@ -134,6 +134,19 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
   const server = compiled.model.mcpServers[0];
   expect(server).toMatchObject({ id: 'mcp:curator', name: 'curator' });
   const entry = join(output, 'portable', server!.args![0]!);
+  const worker = entry.replace(/\.mjs$/u, '-flight.mjs');
+  const statelessSources = await Promise.all([entry, worker].map((path) => readFile(path, 'utf8')));
+  for (const source of statelessSources) {
+    for (const forbidden of [
+      '@agent-bundle/runtime/mount',
+      'createGeneratedRuntimeState',
+      'node:sqlite',
+      'createSqliteStateDriver',
+      'noticeLedger: bindings.noticeLedger',
+    ]) {
+      expect(source).not.toContain(forbidden);
+    }
+  }
   const client = new Client({ name: 'generated-route-test', version: '0.0.0' });
   const transport = new StdioClientTransport({ args: [entry], command: process.execPath, stderr: 'pipe' });
   let diagnostics = '';

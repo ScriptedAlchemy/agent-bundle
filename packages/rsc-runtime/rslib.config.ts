@@ -35,6 +35,21 @@ export default defineConfig({
     },
     {
       ...sharedLib,
+      // Generated mounting composes the optional state and notice entries but
+      // never imports the sqlite driver; durable callers inject that driver.
+      output: {
+        cleanDistPath: false,
+        externals: {
+          '../notices/index.js': './notices.js',
+          '../state/index.js': './state.js',
+        },
+      },
+      source: {
+        entry: { mount: './src/mount/index.ts' },
+      },
+    },
+    {
+      ...sharedLib,
       // The sqlite driver is its own entry so `node:sqlite` (and its
       // ExperimentalWarning) never loads for volatile-state or stateless
       // consumers. It imports the state entry's runtime instead of

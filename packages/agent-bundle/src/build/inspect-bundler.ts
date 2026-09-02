@@ -173,6 +173,7 @@ const mcpEntryEntries = async (
         plugin: { name: model.metadata.name, version: model.metadata.version },
         routes: generatedRoutes,
         serverName,
+        ...(model.state === undefined ? {} : { state: model.state }),
         workerFile,
       });
     entries.push(rslibInspectionEntry({
@@ -223,6 +224,7 @@ const mcpEntryEntries = async (
             artifactEpoch: generatedRouteArtifactEpoch({ name: model.metadata.name, version: model.metadata.version }),
             routes: generatedRoutes,
             serverName,
+            ...(model.state === undefined ? {} : { state: model.state }),
           }),
         },
         kind: 'mcp-entry',

@@ -1,5 +1,13 @@
-import { describe, expect, it } from '@rstest/core';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
+import { describe, expect, it } from '@rstest/core';
+import { createMemoryStateDriver, defineState, type AgentStateDriver } from '@agent-bundle/runtime/state';
+import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
+import { z } from 'zod';
+
+import stateDefinition from '../../fixtures/route-harness/src/state.ts';
 import { AgentTestError } from '../../src/test/errors.ts';
 import {
   getMcpPrompt,
@@ -22,7 +30,7 @@ describe('the in-memory MCP projection level', () => {
   it('registers every compiled route kind on the real generated server', async () => {
     const surface = await listMcpSurface();
 
-    expect(surface.tools).toEqual(['catalog', 'echo', 'unavailable']);
+    expect(surface.tools).toEqual(['catalog', 'echo', 'journal', 'publish-notice', 'unavailable']);
     expect(surface.prompts).toEqual(['summarize']);
     expect(surface.resources).toEqual(['harness://notes']);
     expect(surface.provenance).toMatchObject({
@@ -32,6 +40,8 @@ describe('the in-memory MCP projection level', () => {
         'resource:harness/notes',
         'tool:harness/catalog',
         'tool:harness/echo',
+        'tool:harness/journal',
+        'tool:harness/publish-notice',
         'tool:harness/unavailable',
       ],
       serverName: 'harness',
@@ -102,6 +112,81 @@ describe('the in-memory MCP projection level', () => {
 
     expect(first).toMatchObject({ structuredContent: { message: 'first' } });
     expect(second).toMatchObject({ structuredContent: { message: 'second' } });
+  });
+
+  it('mounts and tears down optional state with the in-memory warm host', async () => {
+    const inner = createMemoryStateDriver({ lifetime: 'process' });
+    let opens = 0;
+    let closes = 0;
+    const driver: AgentStateDriver = {
+      ...inner,
+      close: async () => {
+        closes += 1;
+        await inner.close();
+      },
+      open: async (definition) => {
+        opens += 1;
+        return inner.open(definition);
+      },
+    };
+    const definition = defineState({
+      events: { changed: z.object({ value: z.string() }).strict() },
+      id: 'mcp-in-memory/state',
+      initial: { value: '' },
+      lifetime: 'process',
+      reduce: (_state, event) => ({ value: event.payload.value }),
+      schema: z.object({ value: z.string() }).strict(),
+    });
+    const session = await openInMemoryMcpServer({ state: { definition, driver } });
+    try {
+      await session.client.callTool({ arguments: { message: 'stateful' }, name: 'echo' });
+      expect(opens).toBe(2);
+    } finally {
+      await session.close();
+    }
+    expect(closes).toBe(1);
+  });
+
+  it('persists journal state and publishes a pending notice through one mounted session', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-state-'));
+    const session = await openInMemoryMcpServer({
+      state: {
+        definition: stateDefinition,
+        driver: createSqliteStateDriver({ root }),
+      },
+    });
+    try {
+      await expect(session.client.callTool({
+        arguments: { note: 'protocol proof' },
+        name: 'journal',
+      })).resolves.toMatchObject({
+        structuredContent: {
+          entries: [{ note: 'protocol proof' }],
+          revision: 1,
+        },
+      });
+      await expect(session.client.callTool({
+        arguments: {},
+        name: 'journal',
+      })).resolves.toMatchObject({
+        structuredContent: {
+          entries: [{ note: 'protocol proof' }],
+          revision: 1,
+        },
+      });
+      await expect(session.client.callTool({
+        arguments: { message: 'next event', recipientSession: 'proof-session' },
+        name: 'publish-notice',
+      })).resolves.toMatchObject({
+        structuredContent: {
+          noticeId: expect.any(String),
+          state: 'pending',
+        },
+      });
+    } finally {
+      await session.close();
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it('leaves the browser App surface off the in-memory server', async () => {

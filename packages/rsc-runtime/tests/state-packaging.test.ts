@@ -58,6 +58,13 @@ describe.sequential('state kernel packaging boundaries', () => {
     expect(source).not.toContain('DatabaseSync');
   });
 
+  it('keeps sqlite out of the generated mount entry', async () => {
+    const source = await distFile('mount.js');
+    expect(source).toContain('createGeneratedRuntimeState');
+    expect(source).not.toContain('node:sqlite');
+    expect(source).not.toContain('DatabaseSync');
+  });
+
   it('gives the sqlite entry its own subpath that shares the state runtime', async () => {
     const source = await distFile('state', 'sqlite.js');
     expect(source).toContain('node:sqlite');
@@ -72,6 +79,7 @@ describe.sequential('state kernel packaging boundaries', () => {
       './state',
       './state/sqlite',
       './notices',
+      './mount',
     ]);
     for (const subpath of Object.keys(packageJson.exports)) {
       const target = packageJson.exports[subpath]!;

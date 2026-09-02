@@ -288,6 +288,7 @@ const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
       ])),
   ]),
   ...model.scripts.flatMap((script) => [script.provenance.sourcePath, script.source]),
+  ...(model.state === undefined ? [] : [model.state.provenance.sourcePath, model.state.source]),
   ...model.mcpServers.flatMap((server) => [
     server.provenance.sourcePath,
     ...(server.source === undefined ? [] : [server.source]),

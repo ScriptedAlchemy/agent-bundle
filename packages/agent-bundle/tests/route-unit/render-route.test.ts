@@ -66,6 +66,41 @@ describe('renderRoute through the real renderer', () => {
     });
   });
 
+  it('auto-mounts isolated declared state into each route-unit render', async () => {
+    const first = await renderRoute('tool:harness/journal', { input: { note: 'route-unit proof' } });
+    const second = await renderRoute('tool:harness/journal');
+
+    expectDocument(first)
+      .toHaveStatus('success')
+      .toContainMarkdown('route-unit proof')
+      .toHaveValue({ entries: [{ note: 'route-unit proof' }], revision: 1 });
+    expectDocument(second)
+      .toHaveStatus('success')
+      .toHaveValue({ entries: [], revision: 0 });
+  });
+
+  it('preserves caller-supplied state instead of auto-mounting the manifest definition', async () => {
+    const entries: Array<{ readonly note: string }> = [];
+    const state = {
+      lifetime: 'workspace-durable',
+      changes: async function*() {},
+      dispatch: async (_name: string, payload: { readonly note: string }) => {
+        entries.push(payload);
+        return { replayed: false, revision: 41, state: { entries } };
+      },
+      read: async () => ({ revision: 41, state: { entries } }),
+    } as never;
+    const rendered = await renderRoute('tool:harness/journal', {
+      context: { state },
+      input: { note: 'caller-owned' },
+    });
+
+    expectDocument(rendered).toHaveValue({
+      entries: [{ note: 'caller-owned' }],
+      revision: 41,
+    });
+  });
+
   it('records progress even when the caller supplies its own reporter', async () => {
     const delegated: unknown[] = [];
     const rendered = await renderRoute('tool:harness/echo', {
@@ -138,7 +173,7 @@ describe('renderRoute through the real renderer', () => {
     expectDocument(rendered)
       .toHaveStatus('success')
       .toContainMarkdown('Observed tool/after from claude.')
-      .toHaveValue({ event: 'tool/after', invocationKind: 'event', tool: 'Write' });
+      .toHaveValue(undefined);
   });
 
   it('renders a route module handed in directly, without the compiled manifest', async () => {

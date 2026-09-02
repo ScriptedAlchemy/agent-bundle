@@ -120,7 +120,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
-## Route graph (`AB4800`–`AB4817`)
+## Route graph and state convention (`AB4800`–`AB4820`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -230,6 +230,9 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4815` | error | A CLI route does not satisfy the routed command contract: missing named `inputSchema`/`resultSchema` exports, a default export that is not an async function, or malformed `config.description`/`aliases`/`exitCode` fields. |
 | `AB4816` | retired | The stage-2 rendered-command gate. Rendered command routes render through the dispatcher since #102 stage 3; the code is never reused. |
 | `AB4817` | error | An event route requires the shared runtime for a target, but no generated MCP entry hosts that runtime and the route does not allow standalone fallback. |
+| `AB4818` | error | `src/state.ts` is present but does not default-export one direct `defineState({ ... })` call, or `state` config is not the supported `false` opt-out. |
+| `AB4819` | error | The state definition's `id` or `lifetime` is missing, non-literal, empty, duplicated, or outside the state lifetime vocabulary. |
+| `AB4820` | error | A generated project selects `external` state lifetime; v1 generated mounting supports only `request`, `process`, and `workspace-durable` because external drivers require embedder wiring. |
 
 ## Development package build (`AB7103`)
 
