@@ -78,7 +78,7 @@
     "@modelcontextprotocol/server": "2.0.0",
     "effect": "4.0.0-rc.112",
     "react-server-dom-rspack": "0.1.0",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",

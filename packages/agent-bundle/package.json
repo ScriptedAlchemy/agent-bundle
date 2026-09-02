@@ -112,7 +112,7 @@
     "@types/ws": "8.18.1",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f",
     "react": "19.2.8",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "peerDependencies": {
     "@agent-bundle/runtime": "*",
