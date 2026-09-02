@@ -26,12 +26,14 @@ afterEach(async () => {
  * one-line JSON receipts.
  */
 describe('audiobook-curator routed CLI', () => {
-  it('compiles the fifteen migrated commands with the pre-migration argv surface', async () => {
+  it('compiles the migrated commands and projected MCP toolset in one graph', async () => {
     const graph = await compileRouteGraph(root, config);
     expect(graph.diagnostics).toEqual([]);
     expect(graph.cli?.mode).toBe('generated');
     const commands = graph.cli!.commands!;
-    const byName = new Map(commands.map((command) => [command.path.join(' '), command]));
+    const customCommands = commands.filter((command) => command.mcp === undefined);
+    const projectedCommands = commands.filter((command) => command.mcp !== undefined);
+    const byName = new Map(customCommands.map((command) => [command.path.join(' '), command]));
 
     expect([...byName.keys()].sort()).toEqual([
       'acoustic-identify',
@@ -50,6 +52,9 @@ describe('audiobook-curator routed CLI', () => {
       'select',
       'whisper-verify',
     ]);
+    expect(projectedCommands).toHaveLength(15);
+    expect(projectedCommands.every((command) =>
+      command.path[0] === 'curator' && command.rendered)).toBe(true);
 
     // inspect [--max-files N] <root>
     const inspect = byName.get('inspect')!;
@@ -111,7 +116,7 @@ describe('audiobook-curator routed CLI', () => {
     expect(byName.get('audible-cache')!.options.some((option) => option.option === 'cache-dir')).toBe(true);
 
     // The result exit-code policy rides exactly the commands that declared it.
-    expect(commands.filter((command) => command.exitCode === 'result').map((command) => command.path.join(' ')).sort()).toEqual([
+    expect(customCommands.filter((command) => command.exitCode === 'result').map((command) => command.path.join(' ')).sort()).toEqual([
       'acoustic-identify', 'acoustic-verify', 'audible-search', 'audit', 'inventory', 'library-audit', 'whisper-verify',
     ]);
   });

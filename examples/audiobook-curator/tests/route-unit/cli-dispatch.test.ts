@@ -11,6 +11,8 @@ import inspectRoute, {
 } from '../../src/cli/inspect.ts';
 import { resultSchema as inventoryResultSchema } from '../../src/cli/inventory.ts';
 import { resultSchema as libraryAuditResultSchema } from '../../src/cli/library-audit.tsx';
+import { inputSchema as convertAudiobookInputSchema } from '../../src/mcp/curator/tools/convert_audiobook.tsx';
+import { resultSchema as inspectSourcesResultSchema } from '../../src/mcp/curator/tools/inspect_sources.tsx';
 
 const directories: string[] = [];
 
@@ -191,6 +193,98 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       expect(run.stderr).toContain('maxFiles');
       expect(run.stderr).toContain('expected number to be >=1');
       expect(run.stderr).toContain("Run 'audiobook-curator inspect --help' for usage.");
+    });
+  });
+
+  describe('projected MCP commands', () => {
+    it('runs read-only inspect_sources without --yes and emits its schema-validated JSON receipt', async () => {
+      const { library } = await temporaryLibrary();
+      const run = await invokeCli([
+        'curator',
+        'inspect_sources',
+        '--input',
+        JSON.stringify({ root: library }),
+        '--json',
+      ]);
+      const receipt = inspectSourcesResultSchema.parse(cliJson(run));
+
+      expect(run.exitCode).toBe(0);
+      expect(run.stderr).toBe('');
+      expect(run.routeId).toBe('tool:curator/inspect_sources');
+      expect(receipt).toMatchObject({
+        files: [],
+        operation: 'inspect',
+        root: library,
+        totalBytes: 0,
+      });
+      expect(run.value).toEqual(receipt);
+    });
+
+    it('fails convert_audiobook closed without --yes and reaches domain validation with it', async () => {
+      const { directory } = await temporaryLibrary();
+      const selection = join(directory, 'selection.json');
+      await writeFile(selection, JSON.stringify({ selections: [] }));
+      const input = convertAudiobookInputSchema.parse({
+        author: 'Example Author',
+        output: join(directory, 'output'),
+        selection,
+        title: 'Example Title',
+      });
+      const argv = ['curator', 'convert_audiobook', '--input', JSON.stringify(input)];
+
+      const denied = await invokeCli(argv);
+      expect(denied.exitCode).toBe(2);
+      expect(denied.stdout).toBe('');
+      expect(denied.stderr).toContain('--yes');
+      expect(denied.value).toBeUndefined();
+
+      // An empty selection reaches domain validation before any media probe or binary.
+      const allowed = await invokeCli([...argv, '--yes', '--json']);
+      expect(allowed.exitCode).toBe(1);
+      expect(allowed.stdout).toBe('');
+      expect(allowed.stderr).toContain('Selection contains no audio files.');
+      expect(allowed.stderr).not.toContain('requires --yes');
+      expect(allowed.value).toBeUndefined();
+    });
+
+    it('maps invalid JSON and tool inputSchema rejection to usage exit 2', async () => {
+      const invalidJson = await invokeCli(['curator', 'inspect_sources', '--input', '{']);
+      expect(invalidJson.exitCode).toBe(2);
+      expect(invalidJson.stdout).toBe('');
+      expect(invalidJson.stderr).toContain('valid JSON object');
+      expect(invalidJson.value).toBeUndefined();
+
+      const rejected = await invokeCli([
+        'curator',
+        'inspect_sources',
+        '--input',
+        '{"root":""}',
+      ]);
+      expect(rejected.exitCode).toBe(2);
+      expect(rejected.stdout).toBe('');
+      expect(rejected.stderr).toContain('root');
+      expect(rejected.stderr).toContain("Run 'audiobook-curator curator inspect_sources --help' for usage.");
+      expect(rejected.value).toBeUndefined();
+    });
+
+    it('merges the curator group with custom commands and explains projected provenance', async () => {
+      const [rootHelp, curatorHelp, mutationHelp] = await Promise.all([
+        invokeCli(['--help']),
+        invokeCli(['curator', '--help']),
+        invokeCli(['curator', 'convert_audiobook', '--help']),
+      ]);
+
+      expect(rootHelp.exitCode).toBe(0);
+      expect(rootHelp.stderr).toBe('');
+      expect(rootHelp.stdout).toMatch(/^ {2}curator <command>(?: |$)/mu);
+      expect(rootHelp.stdout).toMatch(/^ {2}inspect(?: |$)/mu);
+      expect(curatorHelp.exitCode).toBe(0);
+      expect(curatorHelp.stderr).toBe('');
+      expect(curatorHelp.stdout).toMatch(/^ {2}inspect_sources(?: |$)/mu);
+      expect(mutationHelp.exitCode).toBe(0);
+      expect(mutationHelp.stderr).toBe('');
+      expect(mutationHelp.stdout).toContain('MCP tool: curator:convert_audiobook');
+      expect(mutationHelp.stdout).toContain('Mutation-capable; requires --yes.');
     });
   });
 

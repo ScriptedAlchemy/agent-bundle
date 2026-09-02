@@ -14,6 +14,8 @@ export default defineConfig({
     // status, and the `agent-bundle/meta` constant this plugin imports.
   },
   runtime: { node: '22.19.0' },
+  // #102 stage 4 adopts the in-house G7 projection for every curator tool.
+  routes: { mcpCommands: true },
   // No `scripts` or `bin` fields needed: the routed `src/cli/` commands
   // compile into the package executable (dist/bin/audiobook-curator.js) by
   // convention (#102 stages 2-3).
