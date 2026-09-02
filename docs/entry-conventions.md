@@ -63,6 +63,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
+| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes. | Prefix the file with `_` |
 
 Route and package entry conventions match `.ts` and `.tsx` files exactly;
 the state convention is specifically `src/state.ts`.
@@ -85,6 +86,23 @@ directory. Routed CLI bins and rendered scripts use
 `$PWD/.agent-bundle/state`. Notice authorization is deliberately permissive
 in generated mounting v1 (`authorized`); recipient/principal matching remains
 enforced by the ledger, while application authorization policy is deferred.
+
+### Request context providers (power tier)
+
+Each direct child of `src/providers/` derives its key by camel-casing the file
+stem: for example, `src/providers/project-auth.ts` mounts at
+`(await agent()).providers.projectAuth`. Every module default-exports a factory
+with the contract `(context: { invocation, signal }) => value |
+Promise<value>`, where `invocation` is the current route invocation and
+`signal` is its request abort signal.
+
+The generated shared Flight worker executes providers once per request,
+sequentially in deterministic key order, before entering `runAgentRequest`.
+The returned values join the request's provider map. A thrown or rejected
+factory fails the request closed; expected degradation should return an honest
+unavailable-shaped value instead of throwing. `processLifetime` is reserved
+for the framework-owned process identity and hit counter, so provider filenames
+must not derive that key.
 
 ### Migration nudges
 

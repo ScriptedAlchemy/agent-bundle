@@ -7,8 +7,13 @@ import fastGlob from 'fast-glob';
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
 import { compileCliCommands } from './cli-commands.ts';
 import { extractRouteConfig } from './config-extract.ts';
-import { validateEventRouteModuleContract, validateRouteModuleContract } from './contract.ts';
+import {
+  validateEventRouteModuleContract,
+  validateProviderModuleContract,
+  validateRouteModuleContract,
+} from './contract.ts';
 import { extractInputSchema } from './input-schema.ts';
+import { providerKeyFromName } from './providers.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -408,6 +413,7 @@ export const compileRouteGraph = async (
   const claimed = configClaimedSources(projectRoot, config);
   const modules: DiscoveredModule[] = [];
   const modulesById = new Map<string, DiscoveredModule>();
+  const providerModulesByKey = new Map<string, DiscoveredProviderModule>();
   for (const source of sources) {
     if (claimed.has(source)) continue;
     const relativePath = toPosixPath(relative(projectRoot, source));
@@ -436,6 +442,29 @@ export const compileRouteGraph = async (
       ));
       continue;
     }
+    if (module.surface === 'provider') {
+      const key = providerKeyFromName(module.name);
+      if (key === 'processLifetime') {
+        diagnostics.push(routeError(
+          'AB4942',
+          `Provider module ${relativePath} derives the reserved framework provider key "processLifetime".`,
+          'Rename the provider file so its camel-cased key is not processLifetime.',
+          source,
+        ));
+        continue;
+      }
+      const existingProvider = providerModulesByKey.get(key);
+      if (existingProvider !== undefined) {
+        diagnostics.push(routeError(
+          'AB4941',
+          `Provider key ${JSON.stringify(key)} is declared by both ${existingProvider.relativePath} and ${relativePath}.`,
+          'Rename one provider file so every camel-cased provider key is unique.',
+          source,
+        ));
+        continue;
+      }
+      providerModulesByKey.set(key, module);
+    }
     const existing = modulesById.get(module.id);
     if (existing !== undefined) {
       diagnostics.push(routeError(
@@ -463,6 +492,15 @@ export const compileRouteGraph = async (
         provenance: { kind: 'conventional', relativePath: module.relativePath },
         source: module.source,
       });
+      try {
+        diagnostics.push(...validateProviderModuleContract(
+          await readFile(module.source, 'utf8'),
+          module.relativePath,
+          module.source,
+        ));
+      } catch {
+        // Racing deletion is handled by the next source snapshot.
+      }
       continue;
     }
     const metadata = await extractedModuleMetadata(module, diagnostics);

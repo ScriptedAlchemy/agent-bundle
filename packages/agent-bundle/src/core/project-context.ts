@@ -255,6 +255,7 @@ const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   model.metadata.provenance.sourcePath,
   ...(model.assets ?? []).flatMap((asset) => [asset.provenance.sourcePath, asset.source]),
   ...(model.commands ?? []).flatMap((command) => [command.provenance.sourcePath, command.source]),
+  ...(model.providers ?? []).map((provider) => provider.source),
   ...(model.rules ?? []).flatMap((rule) => [rule.provenance.sourcePath, rule.source]),
   ...Object.values(model.extensions).map((extension) => extension.provenance.sourcePath),
   ...model.targets.map((target) => target.provenance.sourcePath),
@@ -347,6 +348,14 @@ export const canonicalizeNormalizedModel = (
           ...command,
           provenance: canonicalProvenance(root, command.provenance),
           source: canonicalCompilerPath(root, command.source, 'Command source path'),
+        })),
+      }),
+    ...(detached.providers === undefined
+      ? {}
+      : {
+        providers: detached.providers.map((provider) => ({
+          ...provider,
+          source: canonicalCompilerPath(root, provider.source, 'Provider source path'),
         })),
       }),
     extensions: Object.fromEntries(Object.entries(detached.extensions)

@@ -383,6 +383,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           .map((entry) => entry.hook),
         outDir: target.root,
         plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
+        providers: options.model.providers ?? [],
         ...(options.model.state === undefined ? {} : { state: options.model.state }),
         target: target.name,
         ...tools,

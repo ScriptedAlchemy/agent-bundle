@@ -448,14 +448,45 @@ it('renders one tool/after event route through two native thin clients', { retry
       '',
     ].join('\n')),
     writeProjectFile(root, 'src/mcp/runtime/tools/status.tsx', [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      'export const inputSchema = z.object({}).strict();',
+      "export const resultSchema = z.object({ providerKind: z.literal('tool'), providersFrozen: z.literal(true) }).strict();",
+      'export default async function Status() {',
+      '  const context = await agent();',
+      '  const requestValue = context.providers.requestValue as { kind: string };',
+      '  const value = { providerKind: requestValue.kind, providersFrozen: Object.isFrozen(context.providers) };',
+      "  return createElement(Agent.Result, { value }, createElement(Agent.Text, null, `provider:${requestValue.kind}`));",
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/mcp/runtime/tools/explode.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
       "import { z } from 'zod';",
       'export const inputSchema = z.object({}).strict();',
-      'export const resultSchema = z.object({ ready: z.literal(true) }).strict();',
-      'export default async function Status() {',
-      "  return createElement(Agent.Result, { value: { ready: true } }, createElement(Agent.Text, null, 'ready'));",
+      'export const resultSchema = z.object({ ok: z.literal(true) }).strict();',
+      'export default async function Explode() {',
+      "  return createElement(Agent.Result, { value: { ok: true } }, createElement(Agent.Text, null, 'unreachable'));",
       '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/providers/request-value.ts', [
+      "import type { AgentProviderFactory } from 'agent-bundle';",
+      'const provideRequest: AgentProviderFactory = ({ invocation }) => Object.freeze({ kind: invocation.kind });',
+      'export default provideRequest;',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/providers/throwing.ts', [
+      "import type { AgentProviderFactory } from 'agent-bundle';",
+      'const provideFailure: AgentProviderFactory = ({ invocation }) => {',
+      "  if (invocation.kind === 'tool' && invocation.props.operationId.endsWith('/explode')) {",
+      "    throw new Error('provider exploded');",
+      '  }',
+      "  return 'ready';",
+      '};',
+      'export default provideFailure;',
       '',
     ].join('\n')),
     writeProjectFile(root, 'src/events/tool/after.tsx', [
@@ -464,8 +495,9 @@ it('renders one tool/after event route through two native thin clients', { retry
       "export const config = { targets: ['claude', 'cursor'], tools: ['file.write'], timeoutMs: 5000 };",
       'export default async function AfterTool({ canonical, native }) {',
       '  const context = await agent();',
+      '  const requestValue = context.providers.requestValue as { kind: string };',
       '  const tool = typeof native.tool_name === "string" ? native.tool_name : "unknown";',
-      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${canonical.provenance.host}:${tool}:${context.invocation.kind}`));',
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${canonical.provenance.host}:${tool}:${requestValue.kind}:${String(Object.isFrozen(context.providers))}`));',
       '}',
       '',
     ].join('\n')),
@@ -484,6 +516,13 @@ it('renders one tool/after event route through two native thin clients', { retry
     const transport = new StdioClientTransport({ args: [mcp.output], command: process.execPath, stderr: 'pipe' });
     await client.connect(transport);
     try {
+      await expect(client.callTool({ arguments: {}, name: 'status' }, { signal: AbortSignal.timeout(10_000) })).resolves.toMatchObject({
+        content: [{ text: 'provider:tool', type: 'text' }],
+        structuredContent: { providerKind: 'tool', providersFrozen: true },
+      });
+      const exploded = await callGeneratedTool(client, 'explode');
+      expectFailClosed(exploded, /throwing.*src[/\\]providers[/\\]throwing\.ts.*provider exploded/iu);
+
       const endpointId = `${compiled.build.manifest.project.revision}:${target}:${dirname(dirname(resolve(mcp.output)))}`;
       const expectedEndpoint = eventRuntimeEndpoint(endpointId);
       await expect(stat(expectedEndpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
@@ -510,10 +549,10 @@ it('renders one tool/after event route through two native thin clients', { retry
           };
       const response = await runHook(hook.output, native);
       expect(response).toEqual(target === 'cursor'
-        ? { additional_context: 'cursor:Write:event' }
+        ? { additional_context: 'cursor:Write:event:true' }
         : {
             hookSpecificOutput: {
-              additionalContext: 'claude:Write:event',
+              additionalContext: 'claude:Write:event:true',
               hookEventName: 'PostToolUse',
             },
           });

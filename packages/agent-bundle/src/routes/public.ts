@@ -1,3 +1,5 @@
+import type { AgentRenderInvocation } from '@agent-bundle/runtime';
+
 /** The structural schema surface route props infer without coupling to one schema library. */
 export interface RouteSchema<Output = unknown> {
   readonly _output: Output;
@@ -43,6 +45,15 @@ export interface AgentEventRouteProps {
   readonly native: AgentEventNativePayload;
   readonly signal: AbortSignal;
 }
+
+/** Request-scoped inputs supplied to a conventional context provider factory. */
+export interface AgentProviderContext {
+  readonly invocation: AgentRenderInvocation;
+  readonly signal: AbortSignal;
+}
+
+/** Default export contract for one `src/providers/<name>.{ts,tsx}` module. */
+export type AgentProviderFactory = (context: AgentProviderContext) => unknown | Promise<unknown>;
 
 export type AgentEventDelivery = 'immediate';
 export type AgentEventRuntimeMode = 'shared' | 'standalone';

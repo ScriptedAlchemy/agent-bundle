@@ -24,7 +24,12 @@ export type {
   RouteProvenance,
 } from './types.ts';
 export { generateRouteTypes, routeTypesRelativePath, writeRouteTypes } from './typegen.ts';
-export { scanRouteModuleExports, validateEventRouteModuleContract, validateRouteModuleContract } from './contract.ts';
+export {
+  scanRouteModuleExports,
+  validateEventRouteModuleContract,
+  validateProviderModuleContract,
+  validateRouteModuleContract,
+} from './contract.ts';
 export type { RouteModuleExports } from './contract.ts';
 export { canonicalAgentEvents } from './public.ts';
 export type {
@@ -36,6 +41,8 @@ export type {
   AgentEventRouteConfig,
   AgentEventRouteProps,
   AgentEventRuntimeMode,
+  AgentProviderContext,
+  AgentProviderFactory,
   AppRouteConfig,
   CanonicalAgentEvent,
   CliRouteConfig,

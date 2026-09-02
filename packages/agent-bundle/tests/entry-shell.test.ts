@@ -1,4 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { access, readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
@@ -303,6 +304,69 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain('/project/src/mcp/curator/tools/inspect.tsx');
   expect(source).toContain('/project/src/events/tool/after.tsx');
   expect(source).toContain("message.invocation.kind === 'event'");
+  expect(createHash('sha256').update(source).digest('hex')).toBe(
+    '2b9feba295b3a77cd14bdee6527379837a9a21712e649c545d35d1fed107245d',
+  );
+  expect(generate({
+    artifactEpoch: 'route-fixture@1.2.3',
+    eventRoutes: [{
+      event: 'afterTool',
+      eventRoute: { event: 'tool/after', fallback: 'none', runtime: 'shared' },
+      id: 'hook:event-route:tool-after',
+      name: 'event-route-tool-after',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/after.tsx' },
+      source: '/project/src/events/tool/after.tsx',
+      targets: ['claude'],
+      tools: [],
+    }],
+    providers: [],
+    routes: [{
+      config: {},
+      id: 'tool:curator/inspect',
+      kind: 'tool',
+      source: '/project/src/mcp/curator/tools/inspect.tsx',
+    }],
+    serverName: 'curator',
+  })).toBe(source);
+});
+
+it('generates deterministic per-request provider execution in the shared Flight worker', () => {
+  const source = entryShellModule.generatedRouteFlightWorkerSource({
+    artifactEpoch: 'route-fixture@1.2.3',
+    providers: [
+      {
+        id: 'provider:zeta',
+        name: 'zeta',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/zeta.ts' },
+        source: '/project/src/providers/zeta.ts',
+      },
+      {
+        id: 'provider:alpha-value',
+        name: 'alpha-value',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/alpha-value.ts' },
+        source: '/project/src/providers/alpha-value.ts',
+      },
+    ],
+    routes: [{
+      config: {},
+      id: 'tool:curator/inspect',
+      kind: 'tool',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      source: '/project/src/mcp/curator/tools/inspect.tsx',
+    }],
+    serverName: 'curator',
+  });
+
+  expect(source).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
+  expect(source).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
+  expect(source.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
+    source.indexOf('/project/src/providers/zeta.ts'),
+  );
+  expect(source).toContain('key: "alphaValue"');
+  expect(source).toContain('await provider.module.default({ invocation: message.invocation, signal: controller.signal })');
+  expect(source).toContain('Context provider "');
+  expect(source).toContain('provider.source');
+  expect(source).toContain('providers: providerValues');
 });
 
 it('conditionally emits generated state mounting without leaking sqlite into volatile or stateless entries', () => {

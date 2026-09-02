@@ -673,6 +673,49 @@ it('validates the single async route-module authoring contract statically', asyn
   ]);
 });
 
+it('validates provider default factories with AB4940', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/providers/missing.ts': 'export const value = 1;\n',
+    'src/providers/not-a-function.ts': 'export default { value: 1 };\n',
+    'src/providers/valid.ts': 'export default ({ invocation }) => invocation.kind;\n',
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.diagnostics.map(({ code, sourcePath }) => ({
+    code,
+    source: sourcePath?.slice(root.length + 1).replaceAll('\\', '/'),
+  }))).toEqual([
+    { code: 'AB4940', source: 'src/providers/missing.ts' },
+    { code: 'AB4940', source: 'src/providers/not-a-function.ts' },
+  ]);
+});
+
+it('rejects provider key collisions and the reserved processLifetime key', async () => {
+  const root = await createRoot();
+  const provider = 'export default () => undefined;\n';
+  await writeTree(root, {
+    'src/providers/foo-bar.ts': provider,
+    'src/providers/foo_bar.ts': provider,
+    'src/providers/process-lifetime.ts': provider,
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4941', 'AB4942']);
+  expect(graph.diagnostics[0]).toMatchObject({
+    message: expect.stringMatching(/fooBar/u),
+    sourcePath: expect.stringMatching(/src[/\\]providers[/\\]foo[-_]bar\.ts$/u),
+  });
+  expect(graph.diagnostics[0]!.message).toContain('foo-bar.ts');
+  expect(graph.diagnostics[0]!.message).toContain('foo_bar.ts');
+  expect(graph.diagnostics[1]).toMatchObject({
+    message: expect.stringMatching(/processLifetime/u),
+    sourcePath: join(root, 'src/providers/process-lifetime.ts'),
+  });
+});
+
 it('discovers only the seven v1 event families and validates their component contract', async () => {
   const root = await createRoot();
   const eventSource = 'export default async function EventRoute() { return undefined; }\n';
