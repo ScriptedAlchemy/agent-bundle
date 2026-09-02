@@ -327,7 +327,7 @@ it('uses only an installed tarball after source deletion', async () => {
         'export default {',
         '  mcp: { servers: { greeter: {} } },',
         "  plugin: { name: 'framework-build-fixture', version: '1.0.0' },",
-        "  targets: ['portable'],",
+        "  targets: ['claude', 'codex', 'portable'],",
         '};',
         '',
       ].join('\n')),
@@ -371,7 +371,9 @@ it('uses only an installed tarball after source deletion', async () => {
     await runInstalled(frameworkCli, frameworkRoot, ['build', '--root', frameworkRoot, '--output', frameworkArtifact]);
 
     const packedBin = join(frameworkRoot, 'dist', 'bin', 'framework-build-fixture.js');
+    const packedInstallerBin = join(frameworkRoot, 'dist', 'bin', 'framework-build-fixture-install.js');
     expect((await stat(packedBin)).mode & 0o111).not.toBe(0);
+    expect((await stat(packedInstallerBin)).mode & 0o111).not.toBe(0);
     expect((await readFile(packedBin, 'utf8')).startsWith('#!/usr/bin/env node\n')).toBe(true);
     await expect(execFile(packedBin, ['alpha'], { cwd: frameworkRoot, env: installedEnvironment() }))
       .resolves.toMatchObject({ stdout: 'packed bin ran:alpha\n' });

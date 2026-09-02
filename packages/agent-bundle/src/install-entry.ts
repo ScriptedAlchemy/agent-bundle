@@ -1,5 +1,4 @@
 import { lstat } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 
 import { stableJson } from './core/digest.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
@@ -11,7 +10,7 @@ import {
 } from './install/install.ts';
 
 export interface GeneratedInstallProcessOptions {
-  readonly artifactRelativeUrl: string;
+  readonly artifactRoot: string;
   readonly hosts: readonly InstallHost[];
   readonly name: string;
 }
@@ -98,16 +97,15 @@ export const runGeneratedInstallProcess = async (
   let parsed: ParsedInstallArguments | undefined;
   try {
     parsed = parseArguments(argv, options);
-    const artifactRoot = fileURLToPath(new URL(options.artifactRelativeUrl, import.meta.url));
-    const metadata = await lstat(artifactRoot).catch(() => undefined);
+    const metadata = await lstat(options.artifactRoot).catch(() => undefined);
     if (metadata === undefined || !metadata.isDirectory()) {
       throw new Error(
-        `Package artifact root is missing at ${JSON.stringify(artifactRoot)}; ` +
+        `Package artifact root is missing at ${JSON.stringify(options.artifactRoot)}; ` +
         'the package must ship its generated artifact directory.',
       );
     }
     const result = await installBundle({
-      from: artifactRoot,
+      from: options.artifactRoot,
       host: parsed.host,
       scope: parsed.scope,
     });
