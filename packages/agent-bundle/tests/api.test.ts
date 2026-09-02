@@ -26,7 +26,7 @@ import { createMcpPathTokenResolver, standardMcpPathTokens } from '../src/servic
 const createProject = async (): Promise<string> => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-api-parent-'));
   const root = join(parent, 'project with spaces');
-  await mkdir(join(root, 'skills', 'review'), { recursive: true });
+  await mkdir(join(root, 'src', 'skills', 'review'), { recursive: true });
   await mkdir(join(root, 'src'), { recursive: true });
   await Promise.all([
     writeFile(
@@ -42,7 +42,7 @@ const createProject = async (): Promise<string> => {
       ].join('\n'),
     ),
     writeFile(
-      join(root, 'skills', 'review', 'SKILL.md'),
+      join(root, 'src', 'skills', 'review', 'SKILL.md'),
       '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
     ),
     writeFile(join(root, 'src', 'hook.ts'), 'export default () => undefined;\n'),
@@ -652,19 +652,19 @@ it('reports skipped target/component pairs against each target emission surface'
   const root = await createProject();
   try {
     await Promise.all([
-      mkdir(join(root, 'commands')),
-      mkdir(join(root, 'rules')),
+      mkdir(join(root, 'src', 'commands'), { recursive: true }),
+      mkdir(join(root, 'src', 'rules'), { recursive: true }),
     ]);
     await Promise.all([
-      writeFile(join(root, 'commands', 'shared.md'), '---\ndescription: Shared command\n---\nShared command prompt.\n'),
+      writeFile(join(root, 'src', 'commands', 'shared.md'), '---\ndescription: Shared command\n---\nShared command prompt.\n'),
       writeFile(
-        join(root, 'commands', 'cursor-only.md'),
+        join(root, 'src', 'commands', 'cursor-only.md'),
         '---\ndescription: Cursor-only command\ntargets:\n  - cursor\n---\nCursor command prompt.\n',
       ),
       writeFile(join(root, 'src', 'report.ts'), 'export const report = true;\n'),
-      writeFile(join(root, 'rules', 'shared.mdc'), '---\ndescription: Shared rule\n---\nShared guidance.\n'),
+      writeFile(join(root, 'src', 'rules', 'shared.mdc'), '---\ndescription: Shared rule\n---\nShared guidance.\n'),
       writeFile(
-        join(root, 'rules', 'cursor-only.mdc'),
+        join(root, 'src', 'rules', 'cursor-only.mdc'),
         '---\ndescription: Cursor-only rule\ntargets:\n  - cursor\n---\nCursor guidance.\n',
       ),
       writeFile(join(root, 'agent-bundle.config.ts'), [
@@ -961,22 +961,22 @@ it('keeps rule and command model digests root-independent and sensitive to conte
   const sharedCommand = '---\ndescription: Shared command\n---\nShared command body.\n';
   try {
     await Promise.all([
-      mkdir(join(leftRoot, 'commands')),
-      mkdir(join(rightRoot, 'commands')),
-      mkdir(join(leftRoot, 'rules')),
-      mkdir(join(rightRoot, 'rules')),
+      mkdir(join(leftRoot, 'src', 'commands'), { recursive: true }),
+      mkdir(join(rightRoot, 'src', 'commands'), { recursive: true }),
+      mkdir(join(leftRoot, 'src', 'rules'), { recursive: true }),
+      mkdir(join(rightRoot, 'src', 'rules'), { recursive: true }),
     ]);
     await Promise.all([
       writeFile(join(leftRoot, 'agent-bundle.config.ts'), config),
       writeFile(join(rightRoot, 'agent-bundle.config.ts'), config),
-      writeFile(join(leftRoot, 'commands', 'cursor-only.md'), targetedCommand),
-      writeFile(join(rightRoot, 'commands', 'cursor-only.md'), targetedCommand),
-      writeFile(join(leftRoot, 'commands', 'shared.md'), sharedCommand),
-      writeFile(join(rightRoot, 'commands', 'shared.md'), sharedCommand),
-      writeFile(join(leftRoot, 'rules', 'cursor-only.mdc'), targetedRule),
-      writeFile(join(rightRoot, 'rules', 'cursor-only.mdc'), targetedRule),
-      writeFile(join(leftRoot, 'rules', 'shared.mdc'), sharedRule),
-      writeFile(join(rightRoot, 'rules', 'shared.mdc'), sharedRule),
+      writeFile(join(leftRoot, 'src', 'commands', 'cursor-only.md'), targetedCommand),
+      writeFile(join(rightRoot, 'src', 'commands', 'cursor-only.md'), targetedCommand),
+      writeFile(join(leftRoot, 'src', 'commands', 'shared.md'), sharedCommand),
+      writeFile(join(rightRoot, 'src', 'commands', 'shared.md'), sharedCommand),
+      writeFile(join(leftRoot, 'src', 'rules', 'cursor-only.mdc'), targetedRule),
+      writeFile(join(rightRoot, 'src', 'rules', 'cursor-only.mdc'), targetedRule),
+      writeFile(join(leftRoot, 'src', 'rules', 'shared.mdc'), sharedRule),
+      writeFile(join(rightRoot, 'src', 'rules', 'shared.mdc'), sharedRule),
     ]);
 
     const [left, right] = await Promise.all([
@@ -985,20 +985,20 @@ it('keeps rule and command model digests root-independent and sensitive to conte
     ]);
     expect(left.projectContext.modelDigest).toBe(right.projectContext.modelDigest);
     expect(left.projectContext.sourceInputs.map((input) => input.path)).toEqual(expect.arrayContaining([
-      'commands/cursor-only.md',
-      'commands/shared.md',
-      'rules/cursor-only.mdc',
-      'rules/shared.mdc',
+      'src/commands/cursor-only.md',
+      'src/commands/shared.md',
+      'src/rules/cursor-only.mdc',
+      'src/rules/shared.mdc',
     ]));
 
-    await writeFile(join(rightRoot, 'rules', 'shared.mdc'), sharedRule.replace('Shared body.', 'Changed body.'));
+    await writeFile(join(rightRoot, 'src', 'rules', 'shared.mdc'), sharedRule.replace('Shared body.', 'Changed body.'));
     const changedRule = await readyInspection({ root: rightRoot });
     expect(changedRule.projectContext.modelDigest).not.toBe(left.projectContext.modelDigest);
 
     await Promise.all([
-      writeFile(join(rightRoot, 'rules', 'shared.mdc'), sharedRule),
+      writeFile(join(rightRoot, 'src', 'rules', 'shared.mdc'), sharedRule),
       writeFile(
-        join(rightRoot, 'commands', 'shared.md'),
+        join(rightRoot, 'src', 'commands', 'shared.md'),
         sharedCommand.replace('Shared command body.', 'Changed command body.'),
       ),
     ]);

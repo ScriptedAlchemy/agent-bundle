@@ -35,7 +35,7 @@ export const createProjectFixture = async (
   options: ProjectFixtureOptions = {},
 ): Promise<ProjectFixture> => {
   const root = await mkdtemp(join(rstestWorkerRoot(), options.prefix ?? 'agent-bundle-config-'));
-  const skillDir = join(root, 'skills/review');
+  const skillDir = join(root, 'src/skills/review');
   const skillSource = join(skillDir, 'SKILL.md');
   const imagePath = join(skillDir, 'assets/diagram.png');
   const configPath = join(root, 'agent-bundle.config.ts');
@@ -48,7 +48,7 @@ export const createProjectFixture = async (
       ...(options.config === undefined ? [] : [writeFile(configPath, options.config)]),
       ...Object.entries(files).map(([relativePath, contents]) => writeFile(join(root, relativePath), contents)),
     ]);
-    const skillMarkdown = files['skills/review/SKILL.md'];
+    const skillMarkdown = files['src/skills/review/SKILL.md'];
     return {
       configPath,
       imagePath,

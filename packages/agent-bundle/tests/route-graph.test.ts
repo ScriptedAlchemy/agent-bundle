@@ -375,7 +375,7 @@ it('errors with AB4804 on invalid routes mode overrides', async () => {
 it('attaches no routeGraph key to a route-free discovered project', async () => {
   const root = await createRoot();
   await writeTree(root, {
-    'skills/review/SKILL.md': '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
+    'src/skills/review/SKILL.md': '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
   });
   const discovered = await discoverProject(root, fixtureConfig());
 

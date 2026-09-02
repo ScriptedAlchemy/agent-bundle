@@ -108,15 +108,16 @@ development-only fallback can never produce a release artifact, so
 | `AB4011` | warning | `package.json` is unusable — unparsable, not a JSON object, or symlinked outside the project root. |
 | `AB4013` | error (build) | `agent-bundle build` refuses a project with no release version: `plugin.version` is omitted and `package.json` declares no valid semantic version. |
 
-## Migration nudges (`AB4730`–`AB4735`)
+## Migration nudges (`AB4730`–`AB4736`)
 
 The entry conventions and the framework-owned stdio lifecycle shell (RFC #50)
 replaced patterns consumers previously wrote by hand. When `validate`,
 `inspect`, `build`, or `dev` prepares project source and finds one of those
-pre-convention patterns, it reports an **informational** nudge. Nudges are
-never errors and never block anything — migrations stay optional, per the
-RFC's additive-first principle. The CLI prints them in human `validate`
-output and includes them in every `--json` diagnostics array.
+pre-convention patterns, it reports a migration diagnostic. `AB4730`–`AB4735`
+are **informational** nudges and never block anything. `AB4736` is an error:
+the removed top-level authored-document locations are no longer discovered,
+so the compiler refuses to omit them silently. The CLI prints these in human
+`validate` output and includes them in every `--json` diagnostics array.
 
 ### `AB4730` — self-connecting stdio MCP entry
 
@@ -158,10 +159,10 @@ Silence: remove the shadowed file.
 
 ### `AB4734` — conventional skill shadowed by explicit `skills` config
 
-A `skills/<name>/SKILL.md` (or rendered `SKILL.tsx`/`SKILL.ts`) directory
+A `src/skills/<name>/SKILL.md` (or rendered `SKILL.tsx`/`SKILL.ts`) directory
 exists, but the explicit `skills` configuration does not cover it — the
 conventional skill is silently shadowed. When config is silent, every
-`skills/<name>/` directory ships by convention and this nudge never fires.
+`src/skills/<name>/` directory ships by convention and this nudge never fires.
 
 Adopt: remove the explicit `skills` configuration so the convention applies,
 or add the directory to `skills`. Silence: remove the directory.
@@ -174,6 +175,19 @@ document beats a generated one — so the component module never compiles.
 
 Adopt: remove `SKILL.md` so the rendered skill compiles at build. Silence:
 remove the component module.
+
+### `AB4736` — legacy top-level authored document location
+
+A document still matches a removed top-level convention:
+`skills/<name>/SKILL.md` (or rendered `SKILL.tsx`/`SKILL.ts`),
+`commands/*.md`, or `rules/*.mdc`. These locations are no longer discovered,
+and every unignored legacy document is reported as an error. A top-level
+skill covered by explicit `skills` configuration is claimed and stays valid;
+commands and rules have no equivalent override.
+
+Recover: move the document under `src/skills/`, `src/commands/`, or
+`src/rules/`. Explicit `skills` paths remain valid anywhere. Published
+artifact paths remain `skills/`, `commands/`, and `rules/`.
 
 ## Prebuilt payloads (`AB4740`–`AB4750`)
 
