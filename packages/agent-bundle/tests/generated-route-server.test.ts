@@ -208,6 +208,7 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
 const writeGeneratedProject = async (
   root: string,
   files: Readonly<Record<string, string>>,
+  target: 'cursor' | 'portable' = 'portable',
 ): Promise<void> => {
   await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
   await Promise.all([
@@ -224,24 +225,28 @@ const writeGeneratedProject = async (
     })),
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
-      "export default defineConfig({ plugin: { name: 'generated-routes-fixture', version: '1.0.0' }, targets: ['portable'] });",
+      `export default defineConfig({ plugin: { name: 'generated-routes-fixture', version: '1.0.0' }, targets: ['${target}'] });`,
       '',
     ].join('\n')),
     ...Object.entries(files).map(([path, contents]) => writeProjectFile(root, path, contents)),
   ]);
 };
 
-const connectGeneratedServer = async (root: string): Promise<{
+const connectGeneratedServer = async (
+  root: string,
+  target: 'cursor' | 'portable' = 'portable',
+): Promise<{
   readonly client: Client;
   readonly close: () => Promise<void>;
+  readonly endpointId: string;
 }> => {
   const output = join(root, 'artifact');
-  const compiled = await build({ output, root, targets: ['portable'] });
+  const compiled = await build({ output, root, targets: [target] });
   const server = compiled.model.mcpServers[0];
   if (server?.args?.[0] === undefined) throw new Error('expected a generated MCP entry');
   const client = new Client({ name: 'generated-route-test', version: '0.0.0' });
   const transport = new StdioClientTransport({
-    args: [join(output, 'portable', server.args[0])],
+    args: [join(output, target, server.args[0])],
     command: process.execPath,
     stderr: 'pipe',
   });
@@ -257,6 +262,7 @@ const connectGeneratedServer = async (root: string): Promise<{
     close: async () => {
       await client.close();
     },
+    endpointId: `${compiled.build.manifest.project.revision}:${target}:${dirname(dirname(resolve(join(output, target, server.args[0]))))}`,
   };
 };
 
@@ -456,14 +462,28 @@ it('fails closed when the generated runtime worker restarts', { retry: 2, timeou
       '}',
       '',
     ].join('\n'),
-  });
-  const session = await connectGeneratedServer(root);
+    'src/events/session/start.tsx': [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { targets: ['cursor'] };",
+      "export default async function SessionStart() { return createElement(Agent.Text, null, 'ready'); }",
+      '',
+    ].join('\n'),
+  }, 'cursor');
+  const session = await connectGeneratedServer(root, 'cursor');
   try {
     await expect(session.client.callTool({ arguments: {}, name: 'warmth' }, { signal: AbortSignal.timeout(10_000) })).resolves.toMatchObject({
       structuredContent: { hits: 1 },
     });
+    const beforeRestart = await requestEventRuntimeStatus({ endpointId: session.endpointId, timeoutMs: 1_000 });
+    expect(beforeRestart).toMatchObject({ availability: 'available', status: 'available' });
     const halted = await callGeneratedTool(session.client, 'halt');
     expectFailClosed(halted, /unavailable|restarted|exited/i);
+    await expect(requestEventRuntimeStatus({ endpointId: session.endpointId, timeoutMs: 1_000 })).resolves.toMatchObject({
+      availability: 'runtime-restarted',
+      instanceId: beforeRestart.status === 'available' ? beforeRestart.instanceId : undefined,
+      status: 'available',
+    });
     const afterRestart = await callGeneratedTool(session.client, 'warmth');
     expectFailClosed(afterRestart, /unavailable|restarted|exited|connection closed/i);
     expect(afterRestart).not.toMatchObject({ structuredContent: { hits: 2 } });
