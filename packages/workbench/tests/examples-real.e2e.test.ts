@@ -629,18 +629,43 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await expect(page.getByRole('region', { name: 'curator · Prompts' })).toContainText('prompt:curator/curate', { timeout: browserTimeout });
     await expect(page.locator('.route-provenance').first()).toHaveText('conventional', { timeout: browserTimeout });
 
-    // The generated CLI is a project surface rather than a server one, and each
-    // command carries the argv projection compiled from its input schema.
+    // The generated CLI is a project surface rather than a server one. It
+    // contains the 15 authored CLI routes plus one projected command for each
+    // MCP tool, preserving the tool route IDs rather than duplicating either
+    // category. Each command carries the argv projection compiled from its
+    // input schema.
     const cli = page.getByRole('region', { name: 'CLI commands' });
-    await expect(cli.locator('tbody tr')).toHaveCount(15, { timeout: browserTimeout });
+    const cliRouteIds = await cli.locator('.route-id').allTextContents();
+    const authoredCliRouteIds = cliRouteIds.filter((routeId) => routeId.startsWith('cli:'));
+    const projectedMcpRouteIds = cliRouteIds.filter((routeId) => routeId.startsWith('tool:'));
+    expect(authoredCliRouteIds).toEqual([
+      'cli:acoustic-identify',
+      'cli:acoustic-verify',
+      'cli:apply-chapters',
+      'cli:apply-metadata',
+      'cli:audible-cache',
+      'cli:audible-search',
+      'cli:audible-select',
+      'cli:audit',
+      'cli:convert',
+      'cli:inspect',
+      'cli:inventory',
+      'cli:library-audit',
+      'cli:prepare',
+      'cli:select',
+      'cli:whisper-verify',
+    ]);
+    expect(projectedMcpRouteIds).toEqual(await tools.locator('.route-id').allTextContents());
+    expect(new Set(cliRouteIds).size).toBe(cliRouteIds.length);
+    expect(cliRouteIds).toHaveLength(authoredCliRouteIds.length + projectedMcpRouteIds.length);
     await expect(cli).toContainText('cli:library-audit', { timeout: browserTimeout });
     await expect(cli).toContainText('src/cli/library-audit.tsx', { timeout: browserTimeout });
     await expect(cli.locator('.route-command').filter({ hasText: 'library-audit' }))
       .toHaveText('library-audit <sources...> [--concurrency <number>] --report <string> [--strict]', { timeout: browserTimeout });
-    await expect(cli.locator('.route-command').filter({ hasText: 'inspect' }))
+    const inspectCli = cli.getByRole('row').filter({ hasText: 'cli:inspect' });
+    await expect(inspectCli.locator('.route-command'))
       .toHaveText('inspect <root> [--max-files <number>]', { timeout: browserTimeout });
 
-    const inspectCli = cli.getByRole('row').filter({ hasText: 'cli:inspect' });
     await inspectCli.getByLabel('Root (required)').fill('/library');
     await inspectCli.getByLabel('Max files').fill('10');
     await inspectCli.getByRole('button', { name: 'Validate input' }).click();
@@ -649,9 +674,11 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
       { timeout: browserTimeout },
     );
 
-    // 17 MCP routes plus 15 CLI routes, and nothing invented: the curator
-    // declares no conventional event routes, scripts, or context providers.
-    await expect(page.locator('.route-identity')).toContainText('32', { timeout: browserTimeout });
+    // 17 MCP routes plus 15 authored and 15 projected CLI routes, and nothing
+    // invented: the curator declares no conventional event routes, scripts,
+    // or context providers.
+    await expect(page.getByRole('region', { name: 'Route graph identity' }).locator('dd').first())
+      .toHaveText('47', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Event routes', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Scripts', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Context providers', exact: true })).toHaveCount(0);
