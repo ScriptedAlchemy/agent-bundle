@@ -792,7 +792,7 @@ it('discovers only the seven v1 event families and validates their component con
     'tool/before',
     'workspace/open',
   ]);
-  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4813', 'AB4810']);
+  expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4823', 'AB4810']);
   expect(graph.diagnostics[0]?.sourcePath).toBe(join(root, 'src/events/prompt/submit.tsx'));
   expect(graph.diagnostics[1]?.sourcePath).toBe(join(root, 'src/events/tool/before.tsx'));
 });
@@ -816,11 +816,11 @@ it('fails unavailable event routes before packaging for every selected target', 
   const unrestricted = await inspect({ root: unrestrictedRoot });
   expect(unrestricted.state).toBe('invalid');
   expect(unrestricted.diagnostics).toContainEqual(expect.objectContaining({
-    code: 'AB4814',
+    code: 'AB4824',
     target: 'claude',
   }));
   expect(unrestricted.diagnostics).toContainEqual(expect.objectContaining({
-    code: 'AB4814',
+    code: 'AB4824',
     target: 'cursor',
   }));
 
@@ -837,8 +837,34 @@ it('fails unavailable event routes before packaging for every selected target', 
   const restricted = await inspect({ root: restrictedRoot });
   expect(restricted.state).toBe('invalid');
   expect(restricted.diagnostics).toContainEqual(expect.objectContaining({
-    code: 'AB4814',
+    code: 'AB4824',
     target: 'cursor',
+  }));
+});
+
+it('rejects malformed event route targets with AB4825', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  plugin: { name: 'event-targets-fixture', version: '1.0.0' },",
+      "  targets: ['cursor'],",
+      '};',
+      '',
+    ].join('\n'),
+    'package.json': '{"type":"module"}\n',
+    'src/events/session/start.tsx': [
+      "export const config = { targets: [] };",
+      'export default async function SessionStart() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const result = await inspect({ root });
+  expect(result.state).toBe('invalid');
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'AB4825',
+    sourcePath: join(root, 'src/events/session/start.tsx'),
   }));
 });
 

@@ -1137,7 +1137,7 @@ const validateEventRoutes = (
         declaredTargets.some((target) => typeof target !== 'string' || target.trim().length === 0))
     ) {
       diagnostics.push(sourceDiagnostic(
-        'AB4815',
+        'AB4825',
         `Event route ${route.provenance.relativePath} config.targets must be a nonempty array of target names.`,
         route.source,
       ));
@@ -1149,7 +1149,7 @@ const validateEventRoutes = (
     for (const target of targets) {
       if (!registry.has(target)) {
         diagnostics.push({
-          code: 'AB4814',
+          code: 'AB4824',
           message: `Event route ${route.provenance.relativePath} selects unknown target ${JSON.stringify(target)}.`,
           severity: 'error',
           sourcePath: route.source,
@@ -1162,7 +1162,7 @@ const validateEventRoutes = (
       if (capability === undefined) {
         if (registry.supports(target, capabilityName)) continue;
         diagnostics.push({
-          code: 'AB4814',
+          code: 'AB4824',
           message: `Event route ${route.provenance.relativePath} requires ${capabilityName}, unavailable on ${target}.`,
           severity: 'error',
           sourcePath: route.source,
@@ -1177,7 +1177,7 @@ const validateEventRoutes = (
         case 'unavailable':
         case 'prohibited':
           diagnostics.push({
-            code: 'AB4814',
+            code: 'AB4824',
             message: `Event route ${route.provenance.relativePath} requires ${capabilityName}, ${capability.state} on ${target}: ${capability.reason}`,
             severity: 'error',
             sourcePath: route.source,
