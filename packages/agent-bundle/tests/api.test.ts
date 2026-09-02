@@ -262,7 +262,7 @@ it('accepts the public claude.dependencies config surface and plans its manifest
       "  plugin: { name: 'api-fixture', version: '1.0.0' },",
       "  targets: ['claude'],",
       '  claude: {',
-      "    dependencies: ['audit-logger', { name: 'policy-kit', version: '^2.0', marketplace: 'acme-shared' }],",
+      "    dependencies: [{ name: 'audit-logger', marketplace: 'acme-shared' }, { name: 'policy-kit', version: '^2.0', marketplace: 'acme-shared' }],",
       '  },',
       '};',
       '',
@@ -276,7 +276,7 @@ it('accepts the public claude.dependencies config surface and plans its manifest
     expect(manifest?.kind).toBe('write');
     if (manifest?.kind !== 'write') throw new Error('Expected an emitted Claude plugin manifest.');
     expect(JSON.parse(manifest.content).dependencies).toEqual([
-      'audit-logger',
+      { marketplace: 'acme-shared', name: 'audit-logger' },
       { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0' },
     ]);
   } finally {

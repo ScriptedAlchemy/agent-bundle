@@ -343,16 +343,27 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     const artifactValidation = await runCli(project.root, [
       'validate', '--root', project.root, '--artifact', project.output, '--json',
     ]);
-    expect(artifactValidation).toEqual({
-      code: 0,
-      stderr: '',
-      stdout: '{"diagnostics":[]}\n',
-    });
+    expect(artifactValidation).toMatchObject({ code: 0, stderr: '' });
+    const validationDocument = JSON.parse(artifactValidation.stdout) as {
+      readonly diagnostics: readonly { readonly severity: string }[];
+      readonly hostValidation: readonly {
+        readonly diagnostics: readonly { readonly severity: string }[];
+        readonly host: string;
+        readonly status: string;
+        readonly target: string;
+      }[];
+    };
+    expect(validationDocument.hostValidation).toHaveLength(1);
+    expect(validationDocument.hostValidation[0]).toMatchObject({ host: 'codex', target: 'codex' });
+    expect(['passed', 'unavailable', 'warnings']).toContain(validationDocument.hostValidation[0]!.status);
+    expect(validationDocument.diagnostics.every((diagnostic) => diagnostic.severity !== 'error')).toBe(true);
+    expect(validationDocument.diagnostics).toEqual(validationDocument.hostValidation[0]!.diagnostics);
 
     const humanValidation = await runCli(project.root, [
       'validate', '--root', project.root, '--artifact', project.output,
     ]);
-    expect(humanValidation).toEqual({ code: 0, stderr: '', stdout: 'Validation succeeded\n' });
+    expect(humanValidation).toMatchObject({ code: 0, stderr: '' });
+    expect(humanValidation.stdout).toContain('Validation succeeded');
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
