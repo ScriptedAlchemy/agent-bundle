@@ -11,6 +11,7 @@ import type {
   AgentInvocationInput,
   AgentProgressReporter,
   AgentProgressUpdate,
+  AgentRenderDispatch,
   AgentRenderEvent,
   AgentRenderInvocation,
   AgentRenderLimits,
@@ -18,6 +19,13 @@ import type {
 } from '@agent-bundle/runtime';
 import type * as React from 'react';
 
+import { CliInputError } from '../cli-entry.ts';
+import type {
+  CliRenderedEvent,
+  GeneratedCliRenderContext,
+  GeneratedCliRenderSession,
+} from '../cli-entry.ts';
+import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import {
@@ -69,12 +77,14 @@ export interface RenderedRoute {
 export type RenderRouteTarget = AgentRouteModule | string;
 
 interface Renderer {
+  readonly available: typeof AgentRuntime.available;
   readonly createAgentRenderDispatcher: typeof AgentRuntime.createAgentRenderDispatcher;
   readonly createElement: typeof React.createElement;
   readonly createGeneratedRuntimeState: typeof AgentMount.createGeneratedRuntimeState;
   readonly createMemoryStateDriver: typeof AgentState.createMemoryStateDriver;
   readonly renderAgentFlight: typeof AgentFlightServer.renderAgentFlight;
   readonly runAgentRequest: typeof AgentRuntime.runAgentRequest;
+  readonly unavailable: typeof AgentRuntime.unavailable;
 }
 
 let rendererPromise: Promise<Renderer> | undefined;
@@ -97,22 +107,24 @@ const loadRenderer = async (): Promise<Renderer> => {
       import('react'),
     ]);
     return {
+      available: runtime.available,
       createAgentRenderDispatcher: runtime.createAgentRenderDispatcher,
       createElement: react.createElement,
       createGeneratedRuntimeState: mount.createGeneratedRuntimeState,
       createMemoryStateDriver: state.createMemoryStateDriver,
       renderAgentFlight: flight.renderAgentFlight,
       runAgentRequest: runtime.runAgentRequest,
+      unavailable: runtime.unavailable,
     };
   })().catch((error: unknown) => {
     rendererPromise = undefined;
     throw new AgentTestError(
       'render-failed',
-      'Unable to load the Agent renderer for a route-unit render.',
+      'Unable to load the Agent renderer for an in-process test render.',
       {
         cause: error,
         details: [`cause:        ${error instanceof Error ? error.message : String(error)}`],
-        recovery: 'Install react and @agent-bundle/runtime, and run the route-unit pool with the react-server condition — agentBundleRstest() from agent-bundle/rstest configures both.',
+        recovery: 'Install react and @agent-bundle/runtime, and run the cli-dispatch or route-unit pool with the react-server condition — agentBundleRstest() from agent-bundle/rstest configures both.',
       },
     );
   });
@@ -434,12 +446,12 @@ const noMountedState: AutoMountedState = Object.freeze({
  * a disposable sqlite root so repeated route-unit renders are deterministic.
  */
 const mountManifestState = async (
-  resolved: ResolvedTarget,
+  manifest: AgentBundleTestManifest | undefined,
+  provenance: RenderedRouteProvenance,
   context: RenderRouteContext,
   renderer: Renderer,
   signal: AbortSignal,
 ): Promise<AutoMountedState> => {
-  const manifest = resolved.manifest;
   const descriptor = manifest?.state;
   if (
     manifest === undefined
@@ -452,7 +464,7 @@ const mountManifestState = async (
       'manifest-unavailable',
       `State ${descriptor.id} is declared but no test-time state module loader is registered for it.`,
       {
-        provenance: resolved.provenance,
+        provenance,
         recovery: 'Build the Rstest configuration with agentBundleRstest() so the generated setup registers the state loader.',
       },
     );
@@ -504,6 +516,162 @@ const mountManifestState = async (
   }
 };
 
+const progressFor = (
+  collected: AgentProgressUpdate[],
+  delegated: AgentProgressReporter | undefined,
+  dispatcher: AgentProgressReporter | undefined,
+): AgentProgressReporter => ({
+  report: async (update) => {
+    collected.push(update);
+    await delegated?.report(update);
+    await dispatcher?.report(update);
+  },
+});
+
+interface FlightDispatcherOptions {
+  readonly collected: AgentProgressUpdate[];
+  readonly component: (props: never) => unknown;
+  readonly componentProps: (request: AgentRenderDispatch) => Readonly<Record<string, unknown>>;
+  readonly contextProgress?: AgentProgressReporter;
+  readonly limits?: Partial<AgentRenderLimits>;
+  readonly renderer: Renderer;
+  readonly requestInit: (request: AgentRenderDispatch) => AgentRequestInit;
+}
+
+const createFlightDispatcher = (options: FlightDispatcherOptions): AgentRuntime.AgentRenderDispatcher =>
+  options.renderer.createAgentRenderDispatcher({
+    execute: async (request) => streamOf(await options.renderer.runAgentRequest({
+      ...options.requestInit(request),
+      progress: progressFor(options.collected, options.contextProgress, request.progress),
+      signal: request.signal,
+    }, async () => drain(options.renderer.renderAgentFlight(
+      options.renderer.createElement(
+        options.component as never,
+        options.componentProps(request) as never,
+      ),
+      { signal: request.signal },
+    )))),
+  }, options.limits === undefined ? {} : { limits: options.limits });
+
+export interface PrepareCliRenderHostOptions {
+  readonly context?: RenderRouteContext;
+  readonly manifest: AgentBundleTestManifest;
+  readonly modules: ReadonlyMap<string, AgentRouteModule>;
+  readonly onValidated: (value: unknown) => void;
+  readonly provenance: RenderedRouteProvenance;
+  readonly signal: AbortSignal;
+}
+
+export interface PreparedCliRenderHost {
+  readonly close: () => Promise<void>;
+  readonly render: (
+    command: CompiledCliCommand,
+    input: Readonly<Record<string, unknown>>,
+    context: GeneratedCliRenderContext,
+  ) => GeneratedCliRenderSession;
+}
+
+/**
+ * Accepts preloaded route modules and prepares the renderer and manifest
+ * state before the synchronous generated-shell render factory is installed.
+ */
+export const prepareCliRenderHost = async (
+  options: PrepareCliRenderHostOptions,
+): Promise<PreparedCliRenderHost> => {
+  const renderer = await loadRenderer();
+  const context = options.context ?? {};
+  const mounted = await mountManifestState(
+    options.manifest,
+    options.provenance,
+    context,
+    renderer,
+    options.signal,
+  );
+  return Object.freeze({
+    close: mounted.close,
+    render: (
+      command: CompiledCliCommand,
+      input: Readonly<Record<string, unknown>>,
+      execution: GeneratedCliRenderContext,
+    ): GeneratedCliRenderSession => {
+      const module = options.modules.get(command.routeId);
+      if (module === undefined) {
+        throw new AgentTestError(
+          'manifest-unavailable',
+          `Rendered command route ${command.routeId} was not preloaded for CLI dispatch.`,
+          {
+            provenance: { ...options.provenance, routeId: command.routeId },
+            recovery: 'Build the Rstest configuration with agentBundleRstest() so every rendered command loader is registered.',
+          },
+        );
+      }
+      if (module.inputSchema === undefined || module.resultSchema === undefined) {
+        throw new AgentTestError(
+          'invalid-route-module',
+          `Rendered command route ${command.routeId} must export inputSchema and resultSchema.`,
+          {
+            provenance: { ...options.provenance, routeId: command.routeId },
+            recovery: 'Export both zod schemas from the rendered command module.',
+          },
+        );
+      }
+      let parsed: unknown;
+      try {
+        parsed = module.inputSchema.parse(input);
+      } catch (error) {
+        throw new CliInputError(error instanceof Error ? error.message : String(error));
+      }
+      const commandName = command.path.join(' ');
+      const invocation = {
+        kind: 'cli' as const,
+        props: { args: execution.args, command: commandName },
+      };
+      const collected: AgentProgressUpdate[] = [];
+      const dispatcher = createFlightDispatcher({
+        collected,
+        component: componentOf(module, { ...options.provenance, routeId: command.routeId }),
+        componentProps: (request) => ({ input: parsed, signal: request.signal }),
+        contextProgress: context.progress,
+        renderer,
+        requestInit: (request) => {
+          const root = process.cwd();
+          return {
+            capabilities: {
+              command: renderer.unavailable(),
+              filesystem: renderer.unavailable(),
+              network: renderer.unavailable(),
+              projectRoot: renderer.available({ root }, 'derived'),
+            },
+            host: renderer.unavailable('unsupported-surface'),
+            workspace: renderer.available({ root }, 'derived'),
+            ...context,
+            ...mounted.context,
+            invocation: {
+              kind: 'cli',
+              operationId: command.routeId,
+              surface: commandName,
+              ...context.invocation,
+            },
+            signal: request.signal,
+          };
+        },
+      });
+      return Object.freeze({
+        close: mounted.close,
+        events: (): ReadableStream<CliRenderedEvent> => dispatcher.stream({
+          invocation,
+          signal: execution.signal,
+        }),
+        validate: (value: unknown) => {
+          const validated = module.resultSchema!.parse(value);
+          options.onValidated(validated);
+          return validated;
+        },
+      });
+    },
+  });
+};
+
 interface PreparedRender {
   readonly close: () => Promise<void>;
   readonly collected: readonly AgentProgressUpdate[];
@@ -529,23 +697,15 @@ const prepareRender = async (
   const collected: AgentProgressUpdate[] = [];
   const context = options.context ?? {};
   const signal = options.signal ?? new AbortController().signal;
-  const mounted = await mountManifestState(resolved, context, renderer, signal);
-  /**
-   * Every render collects progress for {@link RenderedRoute.progress}, then
-   * forwards it to the caller's reporter and to the dispatcher's, which is
-   * what turns an update into a `progress` render event. The collector cannot
-   * be an either/or fallback: the event-stream entry point always supplies a
-   * dispatcher reporter, and that would leave the array empty.
-   */
-  const progressFor = (reporter: AgentProgressReporter | undefined): AgentProgressReporter => ({
-    report: async (update) => {
-      collected.push(update);
-      await context.progress?.report(update);
-      await reporter?.report(update);
-    },
-  });
-  const dispatcher = renderer.createAgentRenderDispatcher({
-    execute: async (request) => streamOf(await renderer.runAgentRequest({
+  const mounted = await mountManifestState(resolved.manifest, resolved.provenance, context, renderer, signal);
+  const dispatcher = createFlightDispatcher({
+    collected,
+    component: resolved.component,
+    componentProps: (request) => componentProps(request.invocation, resolved.kind, options, request.signal),
+    contextProgress: context.progress,
+    limits: options.limits,
+    renderer,
+    requestInit: (request) => ({
       ...context,
       ...mounted.context,
       invocation: {
@@ -553,16 +713,9 @@ const prepareRender = async (
         ...context.invocation,
         kind: request.invocation.kind,
       },
-      progress: progressFor(request.progress),
       signal: request.signal,
-    }, async () => drain(renderer.renderAgentFlight(
-      renderer.createElement(
-        resolved.component as never,
-        componentProps(request.invocation, resolved.kind, options, request.signal) as never,
-      ),
-      { signal: request.signal },
-    )))),
-  }, options.limits === undefined ? {} : { limits: options.limits });
+    }),
+  });
   return {
     close: mounted.close,
     collected,

@@ -4,33 +4,38 @@
  * `invokeCli` runs one argv vector through the routed CLI's own shell
  * (`runGeneratedCliEntry`, #102 stage 2) over the compiled command graph the
  * manifest carries, in this process. Command resolution, the argv projection,
- * help, `--version`, and the exit-code mapping are the product's; the only
- * thing the harness supplies is the `execute` bridge that runs the matched
- * route module — and that mirrors the generated executable's, so a command
- * that passes here fails in the same place a shipped binary would.
+ * help, output-mode selection, and exit-code mapping are the product's. Plain
+ * commands run through an in-process `execute` bridge; rendered commands run
+ * through an in-process render session that shares the route-unit harness's
+ * dispatcher and Flight renderer.
  *
  * It does **not** spawn the generated binary: no shebang, no executable bit,
- * no process framing. That is the `packed-stdio` level's business.
- *
- * Rendered (`.tsx`) command routes compile no command until #102 stage 3, so
- * this level dispatches plain command routes only; a rendered command is a
- * compiler error (`AB4816`) long before it reaches a test.
+ * worker thread, process framing, or chunk-by-chunk Flight streaming timing.
+ * The packed CLI route suite owns that evidence.
  */
 import type * as AgentRuntime from '@agent-bundle/runtime';
 
 import { CliInputError, runGeneratedCliEntry } from '../cli-entry.ts';
+import type { CliRenderedEvent } from '../cli-entry.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
-import type { RenderRouteContext } from './render.ts';
+import { prepareCliRenderHost, type RenderRouteContext } from './render.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
+
+export type { CliRenderedEvent };
 
 export interface InvokeCliOptions {
   /** Request-scope overrides for the dispatched command, over the runtime's request contract. */
   readonly context?: RenderRouteContext;
   readonly manifest?: AgentBundleTestManifest;
   readonly signal?: AbortSignal;
+  /**
+   * Selects interactive rendered output explicitly. Generated binaries use
+   * `process.stdout.isTTY`; the in-process harness defaults to piped output.
+   */
+  readonly tty?: boolean;
 }
 
 export interface CliInvocation {
@@ -48,9 +53,9 @@ export interface CliInvocation {
   readonly routeId?: string;
   /** Everything the shell wrote to its diagnostic stream. */
   readonly stderr: string;
-  /** Everything the shell wrote to its output stream: one canonical JSON line, or help text. */
+  /** Everything the shell wrote to stdout, including rendered Markdown, TTY, JSON, or NDJSON output. */
   readonly stdout: string;
-  /** The validated result the command returned; absent unless a command executed. */
+  /** The validated plain result or rendered document value; absent unless a command completed validation. */
   readonly value?: unknown;
 }
 
@@ -79,7 +84,7 @@ const noCommands = (manifest: AgentBundleTestManifest): AgentTestError => new Ag
         ? []
         : [`compiler:     ${String(manifest.diagnostics.length)} diagnostic(s), first ${manifest.diagnostics[0]!.code}: ${manifest.diagnostics[0]!.message}`]),
     ],
-    recovery: 'Add a plain command route under src/cli/ exporting inputSchema, resultSchema, and an async default function.',
+    recovery: 'Add a command route under src/cli/ exporting inputSchema, resultSchema, and an async default function or component.',
   },
 );
 
@@ -148,71 +153,115 @@ export const invokeCli = async (
   const provenance = provenanceOf(manifest);
   const runtime = await loadRuntime();
   const context = options.context ?? {};
+  const signal = options.signal ?? new AbortController().signal;
+  const renderedCommands = manifest.cliCommands.filter((command) => command.rendered);
 
   let executed: CompiledCliCommand | undefined;
   let value: unknown;
   let out = '';
   let err = '';
 
-  const exitCode = await runGeneratedCliEntry({
-    argv,
-    commands: manifest.cliCommands,
-    // The bridge the generated executable inlines: the module's own schemas
-    // stay the validation boundary, an input rejection is a usage failure,
-    // and the command body runs inside the typed request scope.
-    execute: async (command, input, execution) => {
-      executed = command;
-      const module = await moduleFor(manifest, command.routeId, provenance);
-      const component = (module as { default?: unknown }).default;
-      if (typeof component !== 'function') {
-        throw new AgentTestError('invalid-route-module', `Command route ${command.routeId} must default-export an async function.`, {
-          details: [`received:     default export of type ${typeof component}`],
-          recovery: 'Export the command function as the module default.',
-        });
-      }
-      if (module.inputSchema === undefined || module.resultSchema === undefined) {
-        throw new AgentTestError('invalid-route-module', `Command route ${command.routeId} must export inputSchema and resultSchema.`, {
-          recovery: 'Export both zod schemas from the command module; the routed CLI validates argv through them.',
-        });
-      }
-      let parsed: unknown;
-      try {
-        parsed = module.inputSchema.parse(input);
-      } catch (error) {
-        throw new CliInputError(error instanceof Error ? error.message : String(error));
-      }
-      const root = process.cwd();
-      const result = await runtime.runAgentRequest({
-        capabilities: {
-          command: runtime.unavailable(),
-          filesystem: runtime.unavailable(),
-          network: runtime.unavailable(),
-          projectRoot: runtime.available({ root }, 'derived'),
-        },
-        host: runtime.unavailable('unsupported-surface'),
-        workspace: runtime.available({ root }, 'derived'),
-        ...context,
-        invocation: {
-          kind: 'cli',
-          operationId: command.routeId,
-          surface: commandPath(command),
-          ...context.invocation,
-        },
-        ...(context.progress === undefined ? {} : { progress: context.progress }),
-        signal: execution.signal,
-      }, async () => (component as (props: unknown) => Promise<unknown>)({
-        input: parsed,
-        signal: execution.signal,
-      }));
-      value = module.resultSchema.parse(result);
-      return value;
-    },
-    name: manifest.plugin.name,
-    version: manifest.plugin.version,
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-    writeErr: (text) => { err += text; },
-    writeOut: (text) => { out += text; },
-  });
+  const renderedModules = new Map<string, AgentRouteModule>();
+  for (const command of renderedCommands) {
+    renderedModules.set(command.routeId, await moduleFor(manifest, command.routeId, provenance));
+  }
+  const firstRendered = renderedCommands[0];
+  const firstDescriptor = firstRendered === undefined ? undefined : manifest.routes[firstRendered.routeId];
+  const renderHost = firstRendered === undefined
+    ? undefined
+    : await prepareCliRenderHost({
+      context,
+      manifest,
+      modules: renderedModules,
+      onValidated: (validated) => { value = validated; },
+      provenance: {
+        kind: 'cli',
+        manifestDigest: manifest.digest,
+        ...(firstDescriptor === undefined
+          ? {}
+          : {
+              modulePath: firstDescriptor.source,
+              relativePath: firstDescriptor.relativePath,
+            }),
+        projectRoot: manifest.projectRoot,
+        proofLevel: CLI_DISPATCH_PROOF_LEVEL,
+        routeId: firstRendered.routeId,
+        source: 'manifest',
+        targets: manifest.targets,
+      },
+      signal,
+    });
+
+  let exitCode: number;
+  try {
+    exitCode = await runGeneratedCliEntry({
+      argv,
+      commands: manifest.cliCommands,
+      execute: async (command, input, execution) => {
+        executed = command;
+        const module = await moduleFor(manifest, command.routeId, provenance);
+        const component = (module as { default?: unknown }).default;
+        if (typeof component !== 'function') {
+          throw new AgentTestError('invalid-route-module', `Command route ${command.routeId} must default-export an async function.`, {
+            details: [`received:     default export of type ${typeof component}`],
+            recovery: 'Export the command function as the module default.',
+          });
+        }
+        if (module.inputSchema === undefined || module.resultSchema === undefined) {
+          throw new AgentTestError('invalid-route-module', `Command route ${command.routeId} must export inputSchema and resultSchema.`, {
+            recovery: 'Export both zod schemas from the command module; the routed CLI validates argv through them.',
+          });
+        }
+        let parsed: unknown;
+        try {
+          parsed = module.inputSchema.parse(input);
+        } catch (error) {
+          throw new CliInputError(error instanceof Error ? error.message : String(error));
+        }
+        const root = process.cwd();
+        const result = await runtime.runAgentRequest({
+          capabilities: {
+            command: runtime.unavailable(),
+            filesystem: runtime.unavailable(),
+            network: runtime.unavailable(),
+            projectRoot: runtime.available({ root }, 'derived'),
+          },
+          host: runtime.unavailable('unsupported-surface'),
+          workspace: runtime.available({ root }, 'derived'),
+          ...context,
+          invocation: {
+            kind: 'cli',
+            operationId: command.routeId,
+            surface: commandPath(command),
+            ...context.invocation,
+          },
+          ...(context.progress === undefined ? {} : { progress: context.progress }),
+          signal: execution.signal,
+        }, async () => (component as (props: unknown) => Promise<unknown>)({
+          input: parsed,
+          signal: execution.signal,
+        }));
+        value = module.resultSchema.parse(result);
+        return value;
+      },
+      isTty: () => options.tty === true,
+      name: manifest.plugin.name,
+      ...(renderHost === undefined
+        ? {}
+        : {
+            render: (command, input, execution) => {
+              executed = command;
+              return renderHost.render(command, input, execution);
+            },
+          }),
+      signal,
+      version: manifest.plugin.version,
+      writeErr: (text) => { err += text; },
+      writeOut: (text) => { out += text; },
+    });
+  } finally {
+    await renderHost?.close();
+  }
 
   return Object.freeze({
     argv: Object.freeze([...argv]),
@@ -245,6 +294,56 @@ export const cliJson = (invocation: CliInvocation): unknown => {
         targets: [],
       },
       recovery: 'Assert stdout only for an invocation that executed a command; help and usage failures write text.',
+    });
+  }
+};
+
+/** The ordered render events a successful `--ndjson` invocation wrote to stdout. */
+export const cliNdjson = (invocation: CliInvocation): readonly CliRenderedEvent[] => {
+  try {
+    const lines = invocation.stdout.endsWith('\n')
+      ? invocation.stdout.slice(0, -1).split('\n')
+      : invocation.stdout.split('\n');
+    if (lines.length === 0 || lines.some((line) => line.trim() === '')) {
+      throw new SyntaxError('NDJSON output must contain one non-empty JSON object per line.');
+    }
+    return Object.freeze(lines.map((line) => {
+      const event = JSON.parse(line) as unknown;
+      if (typeof event !== 'object' || event === null || Array.isArray(event)) {
+        throw new SyntaxError('NDJSON output lines must be JSON objects.');
+      }
+      const record = event as Record<string, unknown>;
+      if (!Number.isInteger(record['sequence'])) {
+        throw new SyntaxError('NDJSON render events must carry an integer sequence.');
+      }
+      switch (record['type']) {
+        case 'shell':
+        case 'progress':
+        case 'replace':
+        case 'error':
+        case 'complete':
+          break;
+        default:
+          throw new SyntaxError('NDJSON output contains an unknown render-event type.');
+      }
+      return event as CliRenderedEvent;
+    }));
+  } catch (error) {
+    throw new AgentTestError('projection-failed', 'The dispatched command did not write one JSON object per line to stdout.', {
+      cause: error,
+      details: [
+        `exit code:    ${String(invocation.exitCode)}`,
+        `stdout:       ${captured(invocation.stdout)}`,
+        ...(invocation.stderr === '' ? [] : [`stderr:       ${captured(invocation.stderr)}`]),
+      ],
+      provenance: {
+        ...invocation.provenance,
+        kind: 'cli',
+        routeId: invocation.routeId ?? '(no command executed)',
+        source: 'manifest',
+        targets: [],
+      },
+      recovery: 'Call cliNdjson() only for a rendered invocation that passed --ndjson and wrote a complete event stream.',
     });
   }
 };
