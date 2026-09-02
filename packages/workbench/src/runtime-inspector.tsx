@@ -1,8 +1,11 @@
-import React, { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useAtomValue } from '@effect/atom-react';
+import { AsyncResult } from 'effect/unstable/reactivity';
+import React, { useRef, useState, type KeyboardEvent } from 'react';
 
 import type { DevRuntimeDiagnostic, DevRuntimeRun, DevRuntimeStatus, DevRuntimeSurface, DevRuntimeTreeNode } from '../../agent-bundle/src/contracts/runtime.ts';
 import { RuntimeEvidence } from './runtime-evidence.tsx';
 import type { RuntimeInspectorTab } from './runtime-model.ts';
+import { agentDocumentEventsAtom, useAgentDocumentLoader } from './runtime/agent-document-atoms.ts';
 import type { AgentRenderEvent } from './runtime/agent-document-client.ts';
 import { AgentDocumentStage } from './runtime/agent-document-stage.tsx';
 
@@ -55,48 +58,26 @@ const resultDiagnostics = (run: DevRuntimeRun | undefined, status: DevRuntimeSta
   ...(run?.status === 'failed' ? run.diagnostics : []),
 ];
 
-type RuntimeDocumentState =
-  | Readonly<{ readonly phase: 'idle' }>
-  | Readonly<{ readonly phase: 'loading'; readonly runId: string }>
-  | Readonly<{ readonly events: readonly AgentRenderEvent[]; readonly phase: 'ready'; readonly runId: string }>
-  | Readonly<{ readonly message: string; readonly phase: 'error'; readonly runId: string }>;
+const RuntimeDocumentResult = ({ runId }: Readonly<{ readonly runId: string }>): React.ReactNode => {
+  const result = useAtomValue(agentDocumentEventsAtom(runId));
+  return AsyncResult.matchWithWaiting(result, {
+    onDefect: (error) => <p role="alert">{error instanceof Error ? error.message : 'Agent Document request could not be completed.'}</p>,
+    onError: (message) => <p role="alert">{message}</p>,
+    onSuccess: ({ value: events }) => <AgentDocumentStage events={events} />,
+    onWaiting: () => <p role="status">Loading Agent Document…</p>,
+  });
+};
 
 const RuntimeDocumentPanel = ({ loadDocumentEvents, run }: Pick<RuntimeInspectorProps, 'loadDocumentEvents' | 'run'>): React.ReactNode => {
-  const [state, setState] = useState<RuntimeDocumentState>({ phase: 'idle' });
+  const loaderReady = useAgentDocumentLoader(loadDocumentEvents);
   const selected = run?.status === 'succeeded' ? run.result : undefined;
-  const canLoad = run?.status === 'succeeded' && selected?.flight !== undefined && loadDocumentEvents !== undefined;
-
-  useEffect(() => {
-    if (!canLoad || run === undefined || loadDocumentEvents === undefined) {
-      setState({ phase: 'idle' });
-      return;
-    }
-    const controller = new AbortController();
-    setState({ phase: 'loading', runId: run.id });
-    void loadDocumentEvents(run.id, controller.signal).then(
-      (events) => {
-        if (!controller.signal.aborted) setState({ events, phase: 'ready', runId: run.id });
-      },
-      (error: unknown) => {
-        if (!controller.signal.aborted) {
-          setState({
-            message: error instanceof Error ? error.message : 'Agent Document request could not be completed.',
-            phase: 'error',
-            runId: run.id,
-          });
-        }
-      },
-    );
-    return () => controller.abort();
-  }, [canLoad, loadDocumentEvents, run]);
 
   if (run === undefined) return <p>Select a runtime run to inspect its Agent Document.</p>;
   if (run.status !== 'succeeded') return <p role="alert">This run did not succeed, so it has no decodable Agent Document.</p>;
   if (selected?.flight === undefined) return <p role="alert">This run has no stored Flight payload to decode as an Agent Document.</p>;
   if (loadDocumentEvents === undefined) return <p role="alert">Agent Document loading is not available in this Workbench session.</p>;
-  if (state.phase === 'idle' || state.runId !== run.id || state.phase === 'loading') return <p role="status">Loading Agent Document…</p>;
-  if (state.phase === 'error') return <p role="alert">{state.message}</p>;
-  return <AgentDocumentStage events={state.events} />;
+  if (!loaderReady) return <p role="status">Loading Agent Document…</p>;
+  return <RuntimeDocumentResult runId={run.id} />;
 };
 
 export const RuntimeInspector = ({ loadDocumentEvents, onDownloadFlight, onTabChange, run, status, surface, tab, traceExpansion }: RuntimeInspectorProps): React.ReactNode => {

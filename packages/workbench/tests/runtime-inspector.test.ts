@@ -35,6 +35,7 @@ const startStaticServer = async (root: string) => {
 };
 
 const fixtureSource = (root: string): string => `
+  import { RegistryProvider } from '@effect/atom-react';
   import React from 'react';
   import { createRoot } from 'react-dom/client';
   import { RuntimeInspector } from ${JSON.stringify(join(root, 'packages/workbench/src/runtime-inspector.tsx'))};
@@ -59,15 +60,19 @@ const fixtureSource = (root: string): string => `
     root: { children: [{ kind: 'markdown', text: '# Customer document' }], kind: 'result' },
     status: 'success', version: 1,
   } as const;
-  createRoot(document.getElementById('root')!).render(<RuntimeInspector
-    loadDocumentEvents={async () => [
-      { document: agentDocument, sequence: 0, type: 'shell' },
-      { completed: 1, message: 'Loaded', sequence: 1, total: 1, type: 'progress' },
-      { document: agentDocument, sequence: 2, type: 'complete' },
-    ]}
-    run={run}
-    surface={surface}
-  />);
+  createRoot(document.getElementById('root')!).render(
+    <RegistryProvider>
+      <RuntimeInspector
+        loadDocumentEvents={async () => [
+          { document: agentDocument, sequence: 0, type: 'shell' },
+          { completed: 1, message: 'Loaded', sequence: 1, total: 1, type: 'progress' },
+          { document: agentDocument, sequence: 2, type: 'complete' },
+        ]}
+        run={run}
+        surface={surface}
+      />
+    </RegistryProvider>,
+  );
 `;
 
 describe('Runtime inspector', () => {
