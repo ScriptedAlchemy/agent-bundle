@@ -119,6 +119,11 @@ it('drops delayed source events until the path signature changes', async () => {
   signature = undefined;
   fake.emit('unlink', source);
   await watcher.flush();
+  fake.emit('unlink', source);
+  await watcher.flush();
+
+  expect(invalidations).toHaveLength(3);
+
   signature = 'revision-1';
   fake.emit('add', source);
   await watcher.flush();

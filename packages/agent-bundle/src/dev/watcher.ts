@@ -26,6 +26,7 @@ export interface ProjectWatcherOptions {
 
 const sourceEvents: readonly SourceWatchEvent[] = ['add', 'addDir', 'change', 'unlink', 'unlinkDir'];
 const excludedDirectoryNames = new Set(['.agent-bundle', '.git', 'node_modules']);
+const deletedPathSignature = 'deleted';
 
 const relativePath = (root: string, path: string): string | undefined => {
   const value = relative(root, resolve(root, path)).replaceAll('\\', '/');
@@ -145,13 +146,10 @@ export class ProjectWatcher {
     })));
     const changedPaths: string[] = [];
     for (const { path, signature } of signatures) {
-      if (this.#signatures.has(path) && this.#signatures.get(path) === signature) continue;
+      const normalizedSignature = signature ?? deletedPathSignature;
+      if (this.#signatures.has(path) && this.#signatures.get(path) === normalizedSignature) continue;
       changedPaths.push(path);
-      if (signature === undefined) {
-        this.#signatures.delete(path);
-      } else {
-        this.#signatures.set(path, signature);
-      }
+      this.#signatures.set(path, normalizedSignature);
     }
     if (changedPaths.length === 0) return;
     const invalidation = freezeInvalidation({
