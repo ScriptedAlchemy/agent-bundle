@@ -1,4 +1,4 @@
-import { Agent } from '@agent-bundle/runtime';
+import { Agent, type JsonValue } from '@agent-bundle/runtime';
 import { expect, it } from '@rstest/core';
 import { createElement, Suspense } from 'react';
 
@@ -172,10 +172,11 @@ it('projects workspace/open as a fire-and-forget observation only', async () => 
   }, routeInput);
   expect(projectEventDocument(observation.document, 'workspace/open', 'cursor', 'workspaceOpen')).toBeUndefined();
 
-  for (const value of [
+  const rejectedValues: readonly JsonValue[] = [
     { outcome: 'deny', reason: 'Do not open.' },
     { updatedInput: { workspace_roots: ['/replacement'] } },
-  ]) {
+  ];
+  for (const value of rejectedValues) {
     const rejected = await renderRoute({
       default: async () => createElement(Agent.Result, { value }),
     }, routeInput);
