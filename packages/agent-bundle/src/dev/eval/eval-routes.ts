@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 
-import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
+import { hasOnlyOwnKeys, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import {
   EvalConfigError,
   EvalDefinitionError,
@@ -243,8 +243,7 @@ const route = (requestTarget: string | undefined): Route | undefined => {
 const isRecord = (value: unknown): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const hasOnly = (value: JsonObject, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
+const hasOnly: (value: JsonObject, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
 
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');

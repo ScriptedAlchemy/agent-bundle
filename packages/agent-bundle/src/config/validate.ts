@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 import { scanEntryExportsSource } from '../build/entry-exports.ts';
+import { toPosixRelative } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
@@ -601,8 +602,7 @@ const validateMcpApps = (
   return diagnostics;
 };
 
-const relativePosix = (root: string, path: string): string =>
-  relative(root, path).replaceAll('\\', '/');
+const relativePosix = toPosixRelative;
 
 /**
  * AB4730: a local stdio entry whose module never default-exports a factory

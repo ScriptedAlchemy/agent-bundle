@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
-import { assertInside } from '../core/paths.ts';
+import { assertInside, toPosixRelative } from '../core/paths.ts';
 import { declarationBuildDiagnostics, replayDeclarationEmit } from './declaration-diagnostics.ts';
 import { listArtifactFiles, publishArtifact, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
@@ -52,9 +52,6 @@ export interface PackageBuildResult {
   readonly files: readonly PackageOutputFile[];
   readonly outputRoot: string;
 }
-
-const toPosixRelative = (root: string, path: string): string =>
-  relative(resolve(root), path).replaceAll('\\', '/');
 
 const relativeSourceInputs = (projectRoot: string, inputs: readonly string[]): readonly string[] =>
   Object.freeze([...new Set(inputs.map((input) => toPosixRelative(projectRoot, assertInside(projectRoot, input))))]

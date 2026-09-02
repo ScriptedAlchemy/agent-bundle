@@ -10,7 +10,7 @@ import {
   type AudibleRegion,
   type CuratorHttpClient,
 } from './audible.ts';
-import { CuratorError, asRecord, audibleHosts, contributorNames, readJson, utcNow, writeReceipt } from './foundation.ts';
+import { CuratorError, asRecord, audibleHosts, contributorNames, errorMessage, readJson, utcNow, writeReceipt } from './foundation.ts';
 import { probeMediaRecord, type LibraryDependencies } from './library.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
@@ -152,7 +152,7 @@ const pythonMatcher = (python: string, process: MediaProcess): AcousticMatcher =
     asRecord(parsed);
     return Object.freeze(parsed);
   } catch (error) {
-    throw new CuratorError(`Audiolocate is optional; install it for ${python}, or inject an acoustic matcher. ${error instanceof Error ? error.message : ''}`.trim());
+    throw new CuratorError(`Audiolocate is optional; install it for ${python}, or inject an acoustic matcher. ${errorMessage(error, '')}`.trim());
   }
 };
 
@@ -282,7 +282,7 @@ export const identifyAudibleSample = async (
         if (input.all !== true) break;
       }
     } catch (error) {
-      const reason = error instanceof Error ? error.message : 'Acoustic comparison failed.';
+      const reason = errorMessage(error, 'Acoustic comparison failed.');
       attempts.push({ ...base, reason, status: reason.includes('no sample URL') ? 'skipped' : 'error' });
     }
   }

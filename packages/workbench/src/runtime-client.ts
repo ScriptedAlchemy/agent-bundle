@@ -19,7 +19,7 @@ import type {
   RuntimeVector,
 } from '../../agent-bundle/src/contracts/runtime.ts';
 import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp/mcp-route-client.ts';
-import { isPlainRecord } from './strict-json.ts';
+import { hasOnlyOwnKeys, isPlainRecord } from './strict-json.ts';
 import {
   AgentDocumentClient,
   AgentDocumentClientError,
@@ -57,8 +57,7 @@ const diagnosticPhases = new Set([
 
 const isRecord = isPlainRecord;
 
-const hasOnly = (value: Readonly<Record<string, unknown>>, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
+const hasOnly: (value: Readonly<Record<string, unknown>>, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
 
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= 4_096 && !value.includes('\0');

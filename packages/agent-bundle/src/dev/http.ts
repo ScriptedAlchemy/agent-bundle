@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { hasOnlyOwnKeys, isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export interface RequestDiagnostic {
   readonly code: string;
@@ -169,8 +169,8 @@ export const decodedOpaqueSegment = (segment: string, options: OpaqueSegmentOpti
   return decoded;
 };
 
-export const hasOnly = (value: Readonly<Record<string, unknown>>, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
+export const hasOnly: (value: Readonly<Record<string, unknown>>, fields: readonly string[]) => boolean =
+  hasOnlyOwnKeys;
 
 export const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');

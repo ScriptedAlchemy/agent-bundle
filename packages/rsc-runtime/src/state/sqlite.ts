@@ -56,6 +56,7 @@ import {
   resolveResetState,
   runStateMigrations,
 } from './index.js';
+import { expectOperable, expectRevisionShape } from './contract.js';
 import { createPendingOpenTracker } from './pending-opens.js';
 
 /**
@@ -169,21 +170,6 @@ const sqliteEffect = <A>(
         : Effect.fail(mapped);
     }),
   );
-
-const expectRevisionShape = (revision: number | undefined, label: string): void => {
-  if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) {
-    throw new AgentStateError('invalid-input', `${label} must be an integer >= 0`);
-  }
-};
-
-const expectOperable = (closed: boolean, definitionId: string, signal: AbortSignal | undefined): void => {
-  if (closed) {
-    throw new AgentStateError('store-closed', `State '${definitionId}' store is closed`);
-  }
-  if (signal?.aborted === true) {
-    throw new AgentStateError('aborted', `State '${definitionId}' operation was aborted`, { cause: signal.reason });
-  }
-};
 
 const parseStoredJson = (definitionId: string, column: string, revision: number, text: string): unknown => {
   try {
@@ -446,16 +432,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     options: AgentStateDispatchOptions | AgentStateResetOptions<TState>,
   ): Effect.Effect<AgentStateCommitResult<TState>, AgentStateError, SqliteConnection> {
     const definition = this.#definition;
-    const appendRecord = (db: DatabaseSync, record: AgentStateJournalRecord, state: TState, stateText: string) =>
-      this.#appendRecord(db, record, state, stateText);
-    const committedByKey = (db: DatabaseSync, key: string) => this.#committedByKey(db, key);
-    const committedState = (
-      db: DatabaseSync,
-      committed: { readonly record: AgentStateJournalRecord; readonly resultStateText: string | null },
-    ) => this.#committedState(db, committed);
-    const headState = (db: DatabaseSync) => this.#headState(db, 'commit');
     const now = this.#now;
-    const transaction = this.#transaction.bind(this);
     // Validation and canonicalization happen before the reducer and before
     // any storage access: a committed key must replay its stored result even
     // when the reducer would fail against the current head.
@@ -493,10 +470,10 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         return { key, prepared: { canonicalInput, kind: 'reset', state }, startedAtMs };
       },
     );
-    return Effect.gen(function*() {
+    return Effect.gen({ self: this }, function* (this: SqliteStore<TState, TEvents>) {
       const { key, prepared, startedAtMs } = yield* validate;
-      return yield* transaction('write', input.kind === 'event' ? `dispatch '${input.name}'` : 'reset', (db) => {
-        const committed = committedByKey(db, key);
+      return yield* this.#transaction('write', input.kind === 'event' ? `dispatch '${input.name}'` : 'reset', (db) => {
+        const committed = this.#committedByKey(db, key);
         if (committed !== undefined) {
           if (canonicalCommitInput(committed.record) !== prepared.canonicalInput) {
             throw new AgentStateError(
@@ -507,10 +484,10 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
           return Object.freeze({
             replayed: true,
             revision: committed.record.revision,
-            state: committedState(db, committed),
+            state: this.#committedState(db, committed),
           });
         }
-        const head = headState(db);
+        const head = this.#headState(db, 'commit');
         if (options.expectedRevision !== undefined && options.expectedRevision !== head.revision) {
           throw new AgentStateError(
             'revision-conflict',
@@ -529,7 +506,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
               startedAtMs,
               stateText,
             });
-            return appendRecord(
+            return this.#appendRecord(
               db,
               {
                 committedAt: committedAt.toISOString(),
@@ -553,7 +530,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
               startedAtMs,
               stateText,
             });
-            return appendRecord(
+            return this.#appendRecord(
               db,
               {
                 committedAt: committedAt.toISOString(),

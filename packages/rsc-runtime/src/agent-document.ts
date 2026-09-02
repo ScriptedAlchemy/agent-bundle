@@ -4,6 +4,10 @@ import { snapshotJsonValue, type JsonSnapshotBudget, type JsonValue } from './lo
 
 export const AGENT_DOCUMENT_VERSION = 1 as const;
 
+/** Host-visible cancellation error shared by the render pipeline. */
+export const agentRenderAbortError = (): DOMException =>
+  new DOMException('Agent render was aborted', 'AbortError');
+
 export type AgentDocumentStatus = 'success' | 'represented-error' | 'failed';
 
 export interface AgentResultNode {

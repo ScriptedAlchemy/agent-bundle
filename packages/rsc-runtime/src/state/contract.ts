@@ -464,3 +464,18 @@ export const expectCanonicalPayload = (value: unknown, label: string): string =>
   }
   return canonicalJson(value);
 };
+
+export const expectRevisionShape = (revision: number | undefined, label: string): void => {
+  if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) {
+    throw new AgentStateError('invalid-input', `${label} must be an integer >= 0`);
+  }
+};
+
+export const expectOperable = (closed: boolean, definitionId: string, signal: AbortSignal | undefined): void => {
+  if (closed) {
+    throw new AgentStateError('store-closed', `State '${definitionId}' store is closed`);
+  }
+  if (signal?.aborted === true) {
+    throw new AgentStateError('aborted', `State '${definitionId}' operation was aborted`, { cause: signal.reason });
+  }
+};

@@ -3,6 +3,7 @@
  * snapshotting. The workbench must import from here, never from core/.
  */
 export {
+  hasOnlyOwnKeys,
   isPlainRecord,
   mapStrictJsonReason,
   parseJsonWithoutDuplicateKeys,

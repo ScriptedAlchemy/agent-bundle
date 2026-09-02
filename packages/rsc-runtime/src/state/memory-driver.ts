@@ -18,7 +18,7 @@ import type {
   AgentStateSnapshot,
   AgentStateStore,
 } from './contract.js';
-import { AgentStateError, expectIdempotencyKey } from './contract.js';
+import { AgentStateError, expectIdempotencyKey, expectOperable, expectRevisionShape } from './contract.js';
 import type { AgentStateJournalRecord } from './journal.js';
 import {
   canonicalCommitInput,
@@ -101,21 +101,6 @@ interface MemoryStoreEntry<TState, TEvents extends AgentStateEventSchemas> {
   readonly internals: MemoryStoreInternals<TState, TEvents>;
   readonly store: AgentStateStore<TState, TEvents>;
 }
-
-const expectRevisionShape = (revision: number | undefined, label: string): void => {
-  if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) {
-    throw new AgentStateError('invalid-input', `${label} must be an integer >= 0`);
-  }
-};
-
-const expectOperable = (closed: boolean, definitionId: string, signal: AbortSignal | undefined): void => {
-  if (closed) {
-    throw new AgentStateError('store-closed', `State '${definitionId}' store is closed`);
-  }
-  if (signal?.aborted === true) {
-    throw new AgentStateError('aborted', `State '${definitionId}' operation was aborted`, { cause: signal.reason });
-  }
-};
 
 const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
   definition: AgentStateDefinition<TState, TEvents>,

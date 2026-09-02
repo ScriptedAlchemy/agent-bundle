@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { NATIVE_HOSTS } from '../../../agent-bundle/src/contracts/playground.ts';
-import { isRecord } from '../client-helpers.ts';
+import { exactKeys, isRecord } from '../client-helpers.ts';
 import type {
   DraftEvalCase,
   PlaygroundExport,
@@ -109,11 +109,6 @@ const detachedJson = (
   }
 };
 
-const exactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-};
 
 const optionalKeys = (value: Readonly<Record<string, unknown>>, required: readonly string[], optional: readonly string[]): boolean =>
   optional.some((key) => exactKeys(value, [...required, key])) || exactKeys(value, required) ||

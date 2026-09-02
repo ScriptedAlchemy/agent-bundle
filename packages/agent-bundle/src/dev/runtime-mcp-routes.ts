@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { isPlainRecord } from '../core/strict-json.ts';
+import { hasOnlyOwnKeys, isPlainRecord } from '../core/strict-json.ts';
 
 import type { DevRuntimeSession } from './runtime-provider.ts';
 import type {
@@ -38,7 +38,7 @@ const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic):
 const isRecord = isPlainRecord;
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 4_096 && !value.includes('\0');
 const positive = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
-const hasOnly = (value: Record<string, unknown>, fields: readonly string[]): boolean => Object.keys(value).every((key) => fields.includes(key));
+const hasOnly: (value: Record<string, unknown>, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
 
 const readBody = async (request: IncomingMessage): Promise<Record<string, unknown>> => {
   const contentType = request.headers['content-type'];

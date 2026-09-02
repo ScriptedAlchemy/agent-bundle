@@ -17,6 +17,7 @@ import { Effect, Predicate } from 'effect';
 
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
+import { exists } from '../core/paths.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 
@@ -72,16 +73,6 @@ const failure = (
   severity: 'error',
   target,
 }]);
-
-const exists = async (path: string): Promise<boolean> => {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return false;
-    throw error;
-  }
-};
 
 const hostManifestPath = (host: InstallHost): string => {
   switch (host) {

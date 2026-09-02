@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { serialQueue, type SerialQueue } from '../../core/async.ts';
 import { isErrno } from '../../core/errors.ts';
 import { isInsideOrEqual } from '../../core/paths.ts';
-import { isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
+import { hasExactOwnKeys, isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import type { DevLogSink } from '../logs/dev-log-service.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 
@@ -351,12 +351,6 @@ const sensitiveKey = (key: string): boolean => {
   const compact = segments.join('');
   return segments.some((segment) => ['authorization', 'credential', 'credentials', 'password', 'secret', 'token'].includes(segment))
     || /(?:apikey|apitoken|authtoken|accesstoken)$/u.test(compact);
-};
-
-const hasExactOwnKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 };
 
 const hasOptionalOwnKey = (value: Record<string, unknown>, required: readonly string[], optional: string): boolean =>

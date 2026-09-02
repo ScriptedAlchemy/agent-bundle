@@ -262,10 +262,14 @@ interface FrozenValues {
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
 
-interface Lease {
-  closed: boolean;
-  handle: AgentRequestContext;
-  readonly values: FrozenValues;
+/** A class so the lease/handle reference cycle closes in the constructor without casts. */
+class Lease {
+  closed = false;
+  readonly handle: AgentRequestContext;
+
+  constructor(readonly values: FrozenValues) {
+    this.handle = createHandle(this);
+  }
 }
 
 interface RealmStore {
@@ -392,12 +396,7 @@ export const runAgentRequest = async <T>(
     state: init.state,
     workspace,
   });
-  const lease: Lease = {
-    closed: false,
-    handle: undefined as unknown as AgentRequestContext,
-    values,
-  };
-  lease.handle = createHandle(lease);
+  const lease = new Lease(values);
 
   try {
     return await getStore().storage.run(lease, operation);

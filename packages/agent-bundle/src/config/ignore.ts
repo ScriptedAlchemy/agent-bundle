@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import { join, relative, sep } from 'node:path';
+import { join } from 'node:path';
 
 import ignore, { type Ignore } from 'ignore';
 
 import { isErrno } from '../core/errors.ts';
+import { toPosixRelative } from '../core/paths.ts';
 
 const mandatoryDirectoryNames = new Set([
   '.agent-bundle',
@@ -12,7 +13,7 @@ const mandatoryDirectoryNames = new Set([
   'node_modules',
 ]);
 
-export const toPosixPath = (path: string): string => path.split(sep).join('/');
+export { toPosixPath } from '../core/paths.ts';
 
 const isMandatoryIgnored = (relativePath: string): boolean =>
   relativePath.split('/').some((part) => mandatoryDirectoryNames.has(part));
@@ -36,7 +37,7 @@ export const isProjectPathIgnored = (
   root: string,
   source: string,
 ): boolean => {
-  const relativePath = toPosixPath(relative(root, source));
+  const relativePath = toPosixRelative(root, source);
 
   return (
     relativePath.length > 0 &&

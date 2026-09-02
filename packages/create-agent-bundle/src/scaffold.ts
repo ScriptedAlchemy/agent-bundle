@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { UsageError, type TargetName } from './options.ts';
+import { defaultTargets, UsageError, type TargetName } from './options.ts';
 import { assertLocalFrameworkTarball, validatedRuntimeSpecForFramework } from './framework.ts';
 
 /**
@@ -24,7 +24,11 @@ const renamedEntries: Readonly<Record<string, string>> = {
   package_json: 'package.json',
 };
 
-const defaultTargetsLiteral = "targets: ['portable', 'codex', 'claude']";
+const renderTargets = (targets: readonly TargetName[]): string =>
+  targets.map((target) => `'${target}'`).join(', ');
+
+/** Derived from the shared default list so a change there cannot silently break the drift check. */
+const defaultTargetsLiteral = `targets: [${renderTargets(defaultTargets)}]`;
 const installerTargetNames: readonly TargetName[] = ['claude', 'codex', 'cursor', 'plugin'];
 
 export interface ScaffoldRequest {
@@ -92,7 +96,7 @@ const rewriteConfigTargets = (contents: string, targets: readonly TargetName[]):
   if (!contents.includes(defaultTargetsLiteral)) {
     throw new Error(`Template drift: agent-bundle.config.ts no longer contains \`${defaultTargetsLiteral}\`.`);
   }
-  return contents.replace(defaultTargetsLiteral, `targets: [${targets.map((target) => `'${target}'`).join(', ')}]`);
+  return contents.replace(defaultTargetsLiteral, `targets: [${renderTargets(targets)}]`);
 };
 
 /**

@@ -9,7 +9,8 @@ import type {
 } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isMcpSessionTarget, type McpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
-import { isRecord } from '../client-helpers.ts';
+import { exactKeys, isRecord } from '../client-helpers.ts';
+import { hasOnlyOwnKeys } from '../strict-json.ts';
 
 export type McpRouteTarget = McpSessionTarget;
 
@@ -167,9 +168,9 @@ const asArray = (value: unknown): readonly unknown[] => {
   return detachedJson(value) as readonly unknown[];
 };
 
-const hasOnlyKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => Object.keys(value).every((key) => keys.includes(key));
+const hasOnlyKeys: (value: Readonly<Record<string, unknown>>, keys: readonly string[]) => boolean = hasOnlyOwnKeys;
 
-const hasExactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => Object.keys(value).length === keys.length && hasOnlyKeys(value, keys);
+const hasExactKeys: (value: Readonly<Record<string, unknown>>, keys: readonly string[]) => boolean = exactKeys;
 
 const diagnostic = (value: unknown, status: number): Diagnostic => {
   if (isRecord(value) && isRecord(value.diagnostic) && typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {

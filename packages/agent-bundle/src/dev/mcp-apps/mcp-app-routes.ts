@@ -10,6 +10,7 @@ import type {
   McpAppBindingOperation,
   McpAppRuntimeRoutePreviewService,
 } from '../mcp-app-runtime-preview-service.ts';
+import { hasOnlyOwnKeys } from '../../core/strict-json.ts';
 import { isMcpAppConsentCapability } from './mcp-app-sandbox.ts';
 import type { McpAppConsentChallenge } from './mcp-app-sandbox.ts';
 import type { McpAppConsentRequest } from './mcp-app-sandbox.ts';
@@ -253,8 +254,7 @@ const isRuntimeRoute = (value: Route): value is RuntimeRoute => value.kind.start
 const isRecord = (value: unknown): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
-const hasOnly = (value: JsonObject, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
+const hasOnly: (value: JsonObject, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
 
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');

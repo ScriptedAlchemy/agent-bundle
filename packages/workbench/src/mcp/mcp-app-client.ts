@@ -20,7 +20,8 @@ import type {
 } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { McpAppConsentRequest, McpAppDocumentPolicySnapshot } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 
-import { isRecord } from '../client-helpers.ts';
+import { exactKeys, isRecord } from '../client-helpers.ts';
+import { hasOnlyOwnKeys } from '../strict-json.ts';
 import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
 import { ForegroundRouteClient, ForegroundRouteClientError, sameRuntimeBinding, type McpRuntimeBindingIdentity } from './mcp-route-client.ts';
 
@@ -262,13 +263,9 @@ const runtimeInputInvalid = (message = 'Runtime MCP App request is not valid.'):
   throw new McpAppClientError('AB8016', message);
 };
 
-const hasExactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every((key) => keys.includes(key));
-};
+const hasExactKeys: (value: Readonly<Record<string, unknown>>, keys: readonly string[]) => boolean = exactKeys;
 
-const hasOnlyKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean =>
-  Object.keys(value).every((key) => keys.includes(key));
+const hasOnlyKeys: (value: Readonly<Record<string, unknown>>, keys: readonly string[]) => boolean = hasOnlyOwnKeys;
 
 const runtimeRecord = (value: unknown, keys: readonly string[], message?: string): Readonly<Record<string, McpAppJsonValue>> => {
   const record = asRecord(value);
