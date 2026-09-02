@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { defineConfig, type RsbuildConfig, type RsbuildDevServer, type RsbuildPlugin } from '@rsbuild/core';
+import {
+  defineConfig,
+  type RsbuildConfig,
+  type RsbuildDevServer,
+  type RsbuildPlugin,
+  type Rspack,
+} from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { Layers, pluginRSC } from 'rsbuild-plugin-rsc';
 
@@ -76,11 +82,31 @@ export interface RscRuntimeRsbuildConfigOptions {
   }>;
 }
 
+const appOutputContentHash = (stats: Rspack.Stats): string | undefined => {
+  try {
+    const assets = [...stats.compilation.getAssets()].sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    const hash = createHash('sha256');
+    hash.update(`${assets.length}:`);
+    for (const asset of assets) {
+      const name = Buffer.from(asset.name);
+      const content = asset.source.buffer();
+      hash.update(`${name.byteLength}:`);
+      hash.update(name);
+      hash.update(`${content.byteLength}:`);
+      hash.update(content);
+    }
+    return hash.digest('hex');
+  } catch {
+    return undefined;
+  }
+};
+
 const runtimeAppReloadPlugin = (
   onAppReload: NonNullable<RscRuntimeRsbuildConfigOptions['onAppReload']>,
 ): RsbuildPlugin => {
   let devServer: RsbuildDevServer | undefined;
-  let lastAppCompilation: string | undefined;
+  let lastAppOutput: string | undefined;
   return {
     name: 'agent-bundle:rsc-runtime-app-reload',
     setup(api) {
@@ -91,24 +117,22 @@ const runtimeAppReloadPlugin = (
       });
       api.onBeforeStartDevServer(({ server }) => {
         devServer = server;
-        lastAppCompilation = undefined;
+        lastAppOutput = undefined;
       });
       api.onCloseDevServer(() => {
         devServer = undefined;
-        lastAppCompilation = undefined;
+        lastAppOutput = undefined;
       });
       api.onAfterEnvironmentCompile(({ environment, isFirstCompile, stats }) => {
         if (devServer === undefined || environment.name !== 'app' || stats === undefined || stats.hasErrors()) return;
-        // Hashed completions dedupe by hash. A hashless success is
-        // unidentifiable, not proven unchanged, so it still reloads
-        // (at-least-once; consumers dedupe by generation ordinal) - but it
-        // must neither dedupe by stats object identity (every completion
-        // looks unique) nor clobber the retained hash, which would mint a
-        // spurious frame for the next unchanged hashed completion.
-        const hash = stats.hash;
-        if (typeof hash === 'string' && hash.length > 0) {
-          if (lastAppCompilation === hash) return;
-          lastAppCompilation = hash;
+        // Rspack stats hashes can change across watch completions whose
+        // emitted App bytes are identical. The complete asset set is the
+        // browser-visible identity; an unreadable set remains unidentifiable
+        // and reloads at least once without clobbering the retained identity.
+        const output = appOutputContentHash(stats);
+        if (output !== undefined) {
+          if (lastAppOutput === output) return;
+          lastAppOutput = output;
         }
         if (isFirstCompile) return;
         onAppReload();

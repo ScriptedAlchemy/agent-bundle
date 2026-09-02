@@ -449,7 +449,7 @@ const eventRouteHookWrapperSource = (
     ...(standalone
       ? [
           'const renderStandalone = async (invocation, signal) => {',
-          '  const worker = new Worker(new URL("./hooks-flight.mjs", import.meta.url), { stderr: true, stdout: true });',
+          '  const worker = new Worker(new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url), { stderr: true, stdout: true });',
           "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
           "  worker.stderr?.on('data', (chunk) => process.stderr.write(chunk));",
           '  let sequence = 0;',

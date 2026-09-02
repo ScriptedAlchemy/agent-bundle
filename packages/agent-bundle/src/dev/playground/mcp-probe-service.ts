@@ -45,6 +45,7 @@ export const mcpProbeFailureTextLimit = 2_048;
 
 const mcpProbeCapabilityLimit = 32;
 const mcpProbeNameTextLimit = 256;
+const mcpProbeTeardownWaitMs = 50;
 const safeCapabilityName = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
 const connectionErrorCodes = new Set([
   'EACCES',
@@ -126,7 +127,7 @@ const bundlePathPattern = (bundleRoot: string): RegExp => {
 };
 
 const hasAbsolutePath = (value: string): boolean =>
-  /(?:file:|(?:^|[\s"'([{])\/[^\s,;{}()[\]<>"']+|(?:^|[\s"'([{])[A-Za-z]:[\\/]|\\\\)/u.test(value);
+  /(?:file:|(?:^|[\s"'([{=,:])\/[^\s,;{}()[\]<>"']+|(?:^|[\s"'([{=,:])[A-Za-z]:[\\/]|\\\\)/u.test(value);
 
 /**
  * Probe text follows the Dev Log browser-wire precedent without coupling this
@@ -465,7 +466,19 @@ export class McpProbeService {
       });
       return report;
     } finally {
-      await Promise.allSettled([client.close(), transport.close()]);
+      let timer: NodeJS.Timeout | undefined;
+      // Keep transport teardown running through its TERM/KILL path without
+      // allowing a stalled close to extend the probe's total time budget.
+      const teardown = Promise.allSettled([client.close(), transport.close()]);
+      const teardownWait = new Promise<void>((resolvePromise) => {
+        timer = setTimeout(resolvePromise, mcpProbeTeardownWaitMs);
+        timer.unref();
+      });
+      try {
+        await Promise.race([teardown, teardownWait]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
     }
   }
 

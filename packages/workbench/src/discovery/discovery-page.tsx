@@ -425,6 +425,30 @@ const HostCard = ({ refreshKey, view }: Readonly<{
   <BundleCheck bundle={view.bundle} host={view.host} refreshKey={refreshKey} />
 </section>;
 
+const RuntimeIdentity = ({ finding }: Readonly<{ readonly finding: DiscoveryFinding }>) => {
+  const runtime = finding.runtime;
+  if (runtime === undefined) return <p className="discovery-honest-state">Runtime identity not reported.</p>;
+  switch (runtime.status) {
+    case 'available':
+      return <dl className="discovery-facts">
+        <div><dt>Instance ID</dt><dd><code>{runtime.instanceId}</code></dd></div>
+        <div><dt>Artifact epoch</dt><dd><code>{runtime.artifactEpoch}</code></dd></div>
+        <div><dt>Availability</dt><dd>{runtime.availability}</dd></div>
+        <div><dt>PID</dt><dd>{String(runtime.pid)}</dd></div>
+      </dl>;
+    case 'unsupported':
+      return <p className="discovery-honest-state">Runtime identity is unsupported by this endpoint.</p>;
+    case 'unavailable':
+      return <p className="discovery-honest-state">Runtime identity became unavailable during discovery.</p>;
+    case 'failed':
+      return <p className="discovery-honest-state">Runtime identity probe failed.</p>;
+    default: {
+      const exhaustive: never = runtime;
+      return exhaustive;
+    }
+  }
+};
+
 const EndpointFindings = ({ findings }: Readonly<{
   readonly findings: readonly DiscoveryFindingView[];
 }>) => findings.length === 0
@@ -433,6 +457,7 @@ const EndpointFindings = ({ findings }: Readonly<{
       {findings.map(({ finding, presentation }, index) => <li key={`${finding.path ?? 'endpoint'}-${String(index)}`}>
         <StatusBadge presentation={presentation} />
         <code>{valueOrDash(finding.path)}</code>
+        <RuntimeIdentity finding={finding} />
       </li>)}
     </ul>;
 

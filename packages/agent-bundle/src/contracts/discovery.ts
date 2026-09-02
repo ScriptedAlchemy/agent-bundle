@@ -49,9 +49,21 @@ export interface DiscoveryFinding {
   readonly manifest?: string;
   readonly name?: string;
   readonly path?: string;
+  readonly runtime?: DiscoveryRuntimeStatus;
   readonly state: DiscoveryFindingState;
   readonly version?: string;
 }
+
+export type DiscoveryRuntimeStatus =
+  | Readonly<{
+    readonly artifactEpoch: string;
+    readonly availability: 'available' | 'runtime-restarted' | 'runtime-unavailable';
+    readonly instanceId: string;
+    readonly pid: number;
+    readonly startedAt?: string;
+    readonly status: 'available';
+  }>
+  | Readonly<{ readonly status: 'failed' | 'unavailable' | 'unsupported' }>;
 
 export interface DiscoveryMcpServer {
   readonly name: string;

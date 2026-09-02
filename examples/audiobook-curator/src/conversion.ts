@@ -36,12 +36,12 @@ import {
 } from './library.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
-export interface ChapterRow {
+export type ChapterRow = {
   readonly endSeconds: number;
   readonly number: number;
   readonly startSeconds: number;
   readonly title: string;
-}
+};
 
 export interface ConvertInput {
   readonly apply?: boolean;
@@ -63,12 +63,12 @@ export interface ConvertInput {
   readonly year?: string;
 }
 
-export interface ConvertReceipt {
+export type ConvertReceipt = {
   readonly apply: boolean;
   readonly audioMode: string;
   readonly audioSha256?: string;
   readonly durationDeltaSeconds?: number;
-  readonly embeddedMetadata: Readonly<Record<string, string | undefined>>;
+  readonly embeddedMetadata: Readonly<Record<string, string>>;
   readonly engine: 'audiobook-forge' | 'ffmpeg';
   readonly expectedChapterCount: number;
   readonly expectedChapters: readonly ChapterRow[];
@@ -85,7 +85,7 @@ export interface ConvertReceipt {
   readonly probe?: MediaRecord;
   readonly sourcesPreserved: true;
   readonly status: 'converted-verified' | 'planned';
-}
+};
 
 export interface ConversionDependencies extends LibraryDependencies {
   readonly cpuCount?: number;

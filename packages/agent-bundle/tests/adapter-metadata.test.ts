@@ -205,7 +205,7 @@ it('records observed capability versions and rehashes schema snapshots against p
     }
 
     if (target === 'cursor') {
-      expect(sha256Hex(capability)).toBe('46f47e4daa8d072b8319440f912a72ea488b22893803d89382cec18998fb13eb');
+      expect(sha256Hex(capability)).toBe('d42dc98d3c7f1f91dd6ef733d6727618c30a7d8d41fdf030165e06ce46345223');
       const pluginSchema = JSON.parse(await readFile(
         new URL('../src/adapters/schemas/cursor/plugin.schema.json', import.meta.url),
         'utf8',

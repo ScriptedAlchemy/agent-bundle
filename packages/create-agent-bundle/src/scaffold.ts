@@ -25,6 +25,7 @@ const renamedEntries: Readonly<Record<string, string>> = {
 };
 
 const defaultTargetsLiteral = "targets: ['portable', 'codex', 'claude']";
+const installerTargetNames: readonly TargetName[] = ['claude', 'codex', 'cursor', 'plugin'];
 
 export interface ScaffoldRequest {
   readonly frameworkSpec: string;
@@ -50,6 +51,7 @@ export const assertScaffoldTarget = async (targetDirectory: string, displayName:
 };
 
 interface TemplateManifest {
+  bin?: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   name?: string;
@@ -72,6 +74,17 @@ const rewriteManifest = (contents: string, request: ScaffoldRequest, runtimeSpec
       }
     }
   }
+  if (
+    manifest.bin !== undefined &&
+    !request.targets.some((target) => installerTargetNames.includes(target))
+  ) {
+    const suffixedInstallerName = `${request.pluginName}-install`;
+    const installerName = Object.hasOwn(manifest.bin, suffixedInstallerName)
+      ? suffixedInstallerName
+      : request.pluginName;
+    delete manifest.bin[installerName];
+    if (Object.keys(manifest.bin).length === 0) delete manifest.bin;
+  }
   return `${JSON.stringify(manifest, null, 2)}\n`;
 };
 
@@ -85,8 +98,9 @@ const rewriteConfigTargets = (contents: string, targets: readonly TargetName[]):
 /**
  * Copy one template directory into the target, substituting the placeholder
  * project name in every file, rewriting `package.json` (real package name,
- * `workspace:*` framework placeholder pinned to the resolved spec) and the
- * config's target list. Returns the emitted project-relative paths, sorted.
+ * `workspace:*` framework placeholder pinned to the resolved spec, installer
+ * bins omitted when no installable host is selected) and the config's target
+ * list. Returns the emitted project-relative paths, sorted.
  */
 export const scaffold = async (request: ScaffoldRequest): Promise<readonly string[]> => {
   const templateManifest = JSON.parse(

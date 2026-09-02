@@ -908,11 +908,30 @@ it.each([
   }
 });
 
+it('rejects emitted Skill Markdown without instruction body content', async () => {
+  const root = await writeArtifact(customSkillFiles(''), true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'AB6034',
+          generatedPath: 'custom/skills/artifact-skill/SKILL.md',
+          recovery: artifactDiagnosticRecoveries.AB6034,
+          target: customTarget,
+        }),
+      ]),
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('validates emitted Skill frontmatter against the pinned contract and directory name', async () => {
   const files = [
     { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
     {
-      contents: skillMarkdown('wrong-name', ''),
+      contents: skillMarkdown('wrong-name', '# Wrong-name instructions'),
       kind: 'copy' as const,
       path: 'custom/skills/artifact-skill/SKILL.md',
     },
@@ -962,7 +981,7 @@ it('rejects noncanonical and duplicate-key manifests as strict parse failures', 
 it('matches a canonical nested manifest file table by path instead of directory traversal position', async () => {
   const root = await writeArtifact([
     { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: skillMarkdown('table', ''), kind: 'copy', path: 'custom/skills/table/SKILL.md' },
+    { contents: skillMarkdown('table', '# Table instructions'), kind: 'copy', path: 'custom/skills/table/SKILL.md' },
     { contents: '{}\n', kind: 'copy', path: 'custom/skills/table/resources/entry.json' },
   ], true, [customManifestTarget]);
 
@@ -2096,7 +2115,7 @@ it('documents recovery for every stable artifact diagnostic code', async () => {
       'AB6000', 'AB6001', 'AB6002', 'AB6003', 'AB6004', 'AB6005', 'AB6006',
       'AB6007', 'AB6008', 'AB6009', 'AB6010', 'AB6011', 'AB6012', 'AB6013',
       'AB6014', 'AB6015', 'AB6016', 'AB6017', 'AB6018', 'AB6019', 'AB6020',
-      'AB6021', 'AB6022', 'AB6023', 'AB6024', 'AB6025',
+      'AB6021', 'AB6022', 'AB6023', 'AB6024', 'AB6025', 'AB6034',
     ]);
     expect(Object.values(artifactDiagnosticRecoveries).every((recovery) => recovery.trim().length > 0)).toBe(true);
     expect(artifactDiagnosticRecoveries.AB6015).not.toBe(artifactDiagnosticRecoveries.AB6016);

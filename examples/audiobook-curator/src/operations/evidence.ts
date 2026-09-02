@@ -2,6 +2,8 @@
  * Acoustic and transcript identity-evidence operations: `acoustic-verify`,
  * `acoustic-identify`, and `whisper-verify`, backed by `../evidence.ts`.
  */
+import type { JsonObject } from '@agent-bundle/runtime';
+
 import { defineCliCommand, type CliCommandContext } from '../cli-command.js';
 import { z } from 'zod';
 
@@ -30,7 +32,8 @@ export interface EvidenceOperations {
 export const defaultEvidenceOperations: Required<EvidenceOperations> = {
   acousticIdentify: async (input, options) => {
     const payload = await readJson(input.candidates);
-    const rows = z.object({ candidates: z.array(z.record(z.string(), z.unknown())).max(500) }).passthrough().parse(payload).candidates;
+    const rows = z.object({ candidates: z.array(z.record(z.string(), z.unknown())).max(500) })
+      .passthrough().parse(payload).candidates as JsonObject[];
     return identifyAudibleSample({
       ...input,
       candidates: rows,

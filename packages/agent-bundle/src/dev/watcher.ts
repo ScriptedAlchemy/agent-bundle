@@ -1,4 +1,5 @@
 import chokidar from 'chokidar';
+import { stat } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 
 import { freezeInvalidation, type Invalidation } from './types.ts';
@@ -19,15 +20,27 @@ export interface ProjectWatcherOptions {
   readonly onError?: (error: unknown) => void;
   readonly onInvalidation: (invalidation: Invalidation) => Promise<unknown>;
   readonly outputPaths?: readonly string[];
+  readonly readPathSignature?: (path: string) => Promise<string | undefined>;
   readonly root: string;
 }
 
 const sourceEvents: readonly SourceWatchEvent[] = ['add', 'addDir', 'change', 'unlink', 'unlinkDir'];
 const excludedDirectoryNames = new Set(['.agent-bundle', '.git', 'node_modules']);
+const deletedPathSignature = 'deleted';
 
 const relativePath = (root: string, path: string): string | undefined => {
   const value = relative(root, resolve(root, path)).replaceAll('\\', '/');
   return value === '..' || value.startsWith('../') ? undefined : value;
+};
+
+const defaultPathSignature = async (path: string): Promise<string | undefined> => {
+  try {
+    const source = await stat(path, { bigint: true });
+    return `${source.dev}:${source.ino}:${source.size}:${source.mtimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
 };
 
 const defaultWatcher = (
@@ -62,12 +75,15 @@ export class ProjectWatcher {
   readonly #onInvalidation: (invalidation: Invalidation) => Promise<unknown>;
   readonly #outputPaths = new Set<string>();
   readonly #paths = new Set<string>();
+  readonly #readPathSignature: (path: string) => Promise<string | undefined>;
   readonly #ready: Promise<void>;
   readonly #root: string;
+  readonly #signatures = new Map<string, string>();
   readonly #watcher: SourceWatcher;
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #delivery: Promise<unknown> = Promise.resolve();
+  #flushTail: Promise<void> = Promise.resolve();
   #timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: ProjectWatcherOptions) {
@@ -79,6 +95,7 @@ export class ProjectWatcher {
     this.#now = options.now ?? (() => new Date());
     this.#onError = options.onError;
     this.#onInvalidation = options.onInvalidation;
+    this.#readPathSignature = options.readPathSignature ?? defaultPathSignature;
     this.addOutputPaths([...(options.ignoredPaths ?? []), ...(options.outputPaths ?? ['dist'])]);
     this.#ignored = (path) => {
       const source = relativePath(this.#root, path);
@@ -111,16 +128,35 @@ export class ProjectWatcher {
     }
   }
 
-  async flush(): Promise<void> {
-    if (this.#closed) return;
+  flush(): Promise<void> {
+    if (this.#closed) return Promise.resolve();
     this.#clearTimer();
-    if (this.#paths.size === 0) return;
+    if (this.#paths.size === 0) return this.#flushTail;
+    const paths = [...this.#paths].sort((left, right) => left.localeCompare(right));
+    this.#paths.clear();
+    const flush = this.#flushTail.then(async () => this.#flushPaths(paths));
+    this.#flushTail = flush.catch(() => undefined);
+    return flush;
+  }
+
+  async #flushPaths(paths: readonly string[]): Promise<void> {
+    const signatures = await Promise.all(paths.map(async (path) => Object.freeze({
+      path,
+      signature: await this.#readPathSignature(resolve(this.#root, path)),
+    })));
+    const changedPaths: string[] = [];
+    for (const { path, signature } of signatures) {
+      const normalizedSignature = signature ?? deletedPathSignature;
+      if (this.#signatures.has(path) && this.#signatures.get(path) === normalizedSignature) continue;
+      changedPaths.push(path);
+      this.#signatures.set(path, normalizedSignature);
+    }
+    if (changedPaths.length === 0) return;
     const invalidation = freezeInvalidation({
       occurredAt: this.#now().toISOString(),
-      paths: Object.freeze([...this.#paths].sort((left, right) => left.localeCompare(right))),
+      paths: Object.freeze(changedPaths),
       reason: 'source-change',
     });
-    this.#paths.clear();
     this.#delivery = Promise.resolve(this.#onInvalidation(invalidation));
     await this.#delivery;
   }
@@ -152,6 +188,7 @@ export class ProjectWatcher {
   }
 
   async #close(): Promise<void> {
+    await this.#flushTail;
     await this.#delivery;
     await this.#watcher.close();
   }
