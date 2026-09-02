@@ -139,6 +139,39 @@ const createPackedConsumer = async (): Promise<{ readonly cli: string; readonly 
   return { cli: join(root, 'node_modules', '.bin', 'agent-bundle'), root };
 };
 
+it('parses the nested development proxy command', async () => {
+  let received: Parameters<NonNullable<CliDependencies['runHostMcpProxy']>>[0] | undefined;
+  const result = await runSourceCliWithOutput([
+    'dev',
+    'proxy',
+    '--root',
+    '/tmp/plugin project',
+    '--server',
+    'fixture',
+    '--url',
+    'http://127.0.0.1:4312',
+  ], {
+    runHostMcpProxy: async (options) => {
+      received = options;
+      return 0;
+    },
+  });
+
+  expect(result).toMatchObject({ code: 0, stderr: '', stdout: '' });
+  expect(received).toMatchObject({
+    projectRoot: '/tmp/plugin project',
+    serverName: 'fixture',
+    url: 'http://127.0.0.1:4312',
+  });
+});
+
+it('requires a server name for the nested development proxy command', async () => {
+  const result = await runSourceCliWithOutput(['dev', 'proxy', '--root', '/tmp/plugin']);
+
+  expect(result.code).toBe(2);
+  expect(result.stderr).toContain("required option '--server <server>' not specified");
+});
+
 it('builds a selected target through the built executable from a path containing spaces', async () => {
   await buildCliPackage();
   const project = await createCliProject();

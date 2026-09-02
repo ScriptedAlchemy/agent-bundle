@@ -4,10 +4,26 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { acquireDevLock, type DevLockStorage } from '../src/dev/dev-lock.ts';
+import { acquireDevLock, discoverDevServerUrl, type DevLockStorage } from '../src/dev/dev-lock.ts';
 
 const lockPathFor = (root: string): string => join(root, '.agent-bundle', 'dev.lock');
 const recoveryPathFor = (root: string): string => `${lockPathFor(root)}.recovery`;
+
+it('discovers only a URL published by a live development lock owner', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle dev discovery '));
+  const lock = await acquireDevLock({ projectRoot: root });
+  try {
+    await lock.publishServerUrl('http://127.0.0.1:48721');
+    await expect(discoverDevServerUrl({ projectRoot: root })).resolves.toBe('http://127.0.0.1:48721');
+    await expect(discoverDevServerUrl({
+      probeProcess: () => false,
+      projectRoot: root,
+    })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
+  } finally {
+    await lock.close();
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 it('rejects a second writer with the live owning process URL', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle dev lock with spaces '));

@@ -22,6 +22,12 @@ export interface DevLockOptions {
   readonly storage?: DevLockStorage;
 }
 
+export interface DiscoverDevServerOptions {
+  readonly probeProcess?: (pid: number) => boolean;
+  readonly projectRoot: string;
+  readonly storage?: Pick<DevLockStorage, 'readFile'>;
+}
+
 export interface DevLockStorage {
   readonly link: typeof link;
   readonly lstat: typeof lstat;
@@ -137,7 +143,7 @@ const parseServerUrl = (contents: string, owner: DevLockOwner): string | undefin
 };
 
 const readServerUrl = async (
-  storage: DevLockStorage,
+  storage: Pick<DevLockStorage, 'readFile'>,
   path: string,
   owner: DevLockOwner,
 ): Promise<string | undefined> => {
@@ -488,4 +494,32 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
       return undefined;
     },
   });
+};
+
+/** Resolves the loopback foreground origin published by the live owner of one project lock. */
+export const discoverDevServerUrl = async (options: DiscoverDevServerOptions): Promise<string> => {
+  const projectRoot = resolve(options.projectRoot);
+  const path = join(projectRoot, '.agent-bundle', devLockName);
+  const storage = options.storage ?? defaultStorage;
+  let contents: string;
+  try {
+    contents = await storage.readFile(path, 'utf8');
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) {
+      throw new DevLockError('DEV_LOCK_INVALID', 'No agent-bundle dev process is running for this project.');
+    }
+    throw error;
+  }
+  const owner = parseOwner(contents, projectRoot);
+  if (owner === undefined) {
+    throw new DevLockError('DEV_LOCK_INVALID', 'The development lock does not contain valid owner metadata.');
+  }
+  if (!(options.probeProcess ?? isProcessAlive)(owner.pid)) {
+    throw new DevLockError('DEV_LOCK_INVALID', 'The agent-bundle dev process recorded for this project is no longer running.');
+  }
+  const url = await readServerUrl(storage, path, owner);
+  if (url === undefined) {
+    throw new DevLockError('DEV_LOCK_INVALID', 'The running agent-bundle dev process has not published its server URL.');
+  }
+  return url;
 };
