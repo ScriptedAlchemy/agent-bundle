@@ -10,6 +10,7 @@ import type {
   RouteManifestProvider,
   RouteManifestRoute,
   RouteManifestServer,
+  RouteManifestState,
   RouteInputArrayItemSchema,
   RouteInputPropertySchema,
   RouteInputSchema,
@@ -150,6 +151,31 @@ const providerSchema: z.ZodType<RouteManifestProvider> = z.strictObject({
   source: z.string(),
 });
 
+const stateBudgetsSchema = z.strictObject({
+  maxCommitMs: z.number().finite(),
+  maxEventBytes: z.number().finite(),
+  maxRevisions: z.number().finite(),
+  maxStateBytes: z.number().finite(),
+});
+
+const stateSchema: z.ZodType<RouteManifestState> = z.strictObject({
+  budgets: z.union([
+    z.strictObject({
+      resolved: stateBudgetsSchema,
+      source: z.enum(['declared', 'defaults']),
+    }),
+    z.strictObject({
+      source: z.literal('dynamic'),
+    }),
+  ]),
+  driver: z.enum(['memory', 'sqlite']),
+  durableLocation: z.string().optional(),
+  id: z.string(),
+  lifetime: z.enum(['process', 'request', 'workspace-durable']),
+  notices: z.array(z.string()),
+  source: z.string(),
+});
+
 const manifestSchema: z.ZodType<RouteManifest> = z.strictObject({
   cli: cliSchema.optional(),
   diagnostics: z.array(diagnosticSchema),
@@ -158,6 +184,7 @@ const manifestSchema: z.ZodType<RouteManifest> = z.strictObject({
   providers: z.array(providerSchema),
   scripts: z.array(routeSchema),
   servers: z.array(serverSchema),
+  state: stateSchema.optional(),
   sourceRevision: z.string(),
 });
 

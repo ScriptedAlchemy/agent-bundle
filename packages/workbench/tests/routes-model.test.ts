@@ -116,6 +116,23 @@ const manifest: RouteManifest = {
       ],
     },
   ],
+  state: {
+    budgets: {
+      resolved: {
+        maxCommitMs: 5_000,
+        maxEventBytes: 262_144,
+        maxRevisions: 100_000,
+        maxStateBytes: 1_048_576,
+      },
+      source: 'defaults',
+    },
+    driver: 'sqlite',
+    durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state',
+    id: 'library/catalog',
+    lifetime: 'workspace-durable',
+    notices: ['The notice ledger is co-mounted at the same lifetime.'],
+    source: 'src/state.ts',
+  },
   sourceRevision: 'r'.repeat(64),
 };
 
@@ -133,6 +150,19 @@ it('groups the compiled graph by server then by project surface', () => {
   expect(catalog.state).toBe('current');
   expect(catalog.routeCount).toBe(7);
   expect(routeCatalogServerCount(catalog)).toBe(2);
+});
+
+it('carries the declared state catalog without deriving durability from MCP servers', () => {
+  const catalog = routeCatalogFor(manifest);
+
+  expect(catalog.stateDefinition).toEqual(manifest.state);
+});
+
+it('keeps state honestly absent when the project declares no state module', () => {
+  const { state: _state, ...statelessManifest } = manifest;
+  const catalog = routeCatalogFor(statelessManifest);
+
+  expect(catalog.stateDefinition).toBeUndefined();
 });
 
 it('orders routes within a group by compiled id', () => {

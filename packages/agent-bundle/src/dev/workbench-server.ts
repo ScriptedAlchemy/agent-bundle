@@ -773,10 +773,18 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const routeManifest: RouteManifestRouteService = {
     manifest: () => {
       const prepared = latestValidPreparedProject;
-      if (prepared === undefined || prepared.source.revision === undefined) {
+      if (
+        prepared === undefined ||
+        prepared.model === undefined ||
+        prepared.source.revision === undefined
+      ) {
         throw new Error('No valid prepared project is available for the route manifest.');
       }
-      return routeManifestFor(prepared.routeGraph ?? emptyCompiledRouteGraph, prepared.source.revision);
+      return routeManifestFor(
+        prepared.routeGraph ?? emptyCompiledRouteGraph,
+        prepared.source.revision,
+        prepared.model.state,
+      );
     },
   };
   const agentApi = agentApiEnabled

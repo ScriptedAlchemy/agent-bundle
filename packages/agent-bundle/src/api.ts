@@ -15,6 +15,11 @@ import {
 } from './build/pack-inventory.ts';
 import type { CapabilityState } from './core/capabilities.ts';
 import { isInsideOrEqual } from './core/paths.ts';
+import {
+  stateDefinitionProjection,
+  type StateProjectionBudgets,
+  type StateProjectionDriver,
+} from './core/state-inspection.ts';
 import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
@@ -264,14 +269,9 @@ export interface InspectOptions extends ProjectOptions {
   readonly target?: string;
 }
 
-export type StateInspectionDriver = 'memory' | 'sqlite';
+export type StateInspectionDriver = StateProjectionDriver;
 
-export interface StateInspectionBudgets {
-  readonly maxCommitMs: number;
-  readonly maxEventBytes: number;
-  readonly maxRevisions: number;
-  readonly maxStateBytes: number;
-}
+export type StateInspectionBudgets = StateProjectionBudgets;
 
 export type StateInspection =
   | {
@@ -539,61 +539,14 @@ const skippedComponentsFor = (
       : 'unsupported-capability') satisfies InspectionSkipReason,
   })));
 
-const durableStateLocation =
-  '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)';
-
-const noticeLedgerInspection =
-  'Generated runtimes co-mount the notice ledger store at the same lifetime under reserved id @agent-bundle/runtime/agent-notice-ledger/v1.';
-
-// Keep static inspection independent of the optional runtime peer. The
-// cross-package inspection test compares these policy defaults with the
-// runtime export so the two package boundaries cannot drift silently.
-const agentStateDefaultBudgets: StateInspectionBudgets = Object.freeze({
-  maxCommitMs: 5_000,
-  maxEventBytes: 262_144,
-  maxRevisions: 100_000,
-  maxStateBytes: 1_048_576,
-});
-
-const stateDriver = (
-  lifetime: NonNullable<NormalizedPlugin['state']>['lifetime'],
-): StateInspectionDriver => {
-  switch (lifetime) {
-    case 'request':
-    case 'process':
-      return 'memory';
-    case 'workspace-durable':
-      return 'sqlite';
-    default: {
-      const unreachable: never = lifetime;
-      throw new TypeError(`Unknown normalized state lifetime ${String(unreachable)}.`);
-    }
-  }
-};
-
 const inspectState = (model: NormalizedPlugin): StateInspection => {
   const definition = model.state;
   if (definition === undefined) return Object.freeze({ declared: false });
-  const budgets: Extract<StateInspection, { readonly declared: true }>['budgets'] =
-    definition.budgets === 'dynamic'
-      ? Object.freeze({ source: 'dynamic' })
-      : Object.freeze({
-        resolved: Object.freeze({
-          ...agentStateDefaultBudgets,
-          ...(definition.budgets?.declared ?? {}),
-        }),
-        source: definition.budgets === undefined ? 'defaults' : 'declared',
-      });
+  const projection = stateDefinitionProjection(definition);
   return deepFreeze({
-    budgets,
     declared: true,
-    driver: stateDriver(definition.lifetime),
-    ...(definition.lifetime === 'workspace-durable' ? { durableLocation: durableStateLocation } : {}),
-    id: definition.id,
-    lifetime: definition.lifetime,
-    notices: [noticeLedgerInspection],
+    ...projection,
     provenance: definition.provenance,
-    source: definition.source,
   });
 };
 

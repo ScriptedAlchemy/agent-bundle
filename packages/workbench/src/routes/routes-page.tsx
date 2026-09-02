@@ -1,7 +1,10 @@
 import { useAtom } from '@effect/atom-react';
 import React from 'react';
 
-import type { RouteInputPropertySchema } from '../../../agent-bundle/src/contracts/routes.ts';
+import type {
+  RouteInputPropertySchema,
+  RouteManifestState,
+} from '../../../agent-bundle/src/contracts/routes.ts';
 import { routeEditorKey, routeEditorStateAtom } from './route-editor-atoms.ts';
 import {
   cliCommandUsage,
@@ -68,6 +71,42 @@ const EmptyServerSurface = ({ server }: { readonly server: RouteCatalogServer })
     <p>{server.mode} mode</p>
   </div>
   <p className="route-server-summary">{emptyServerSummary(server)}</p>
+</section>;
+
+const StatePanel = ({ state }: { readonly state?: RouteManifestState }) => <section
+  aria-label="State"
+  className="route-group route-state-panel"
+>
+  <div className="route-group-heading"><h2>State</h2><p>read-only catalog</p></div>
+  {state === undefined
+    ? <p className="empty-row">This project declares no state module.</p>
+    : <>
+      <dl className="route-state-facts">
+        <div><dt>ID</dt><dd>{state.id}</dd></div>
+        <div><dt>Effective lifetime</dt><dd>{state.lifetime}</dd></div>
+        <div><dt>Driver</dt><dd>{state.driver}</dd></div>
+        <div><dt>Source</dt><dd>{state.source}</dd></div>
+      </dl>
+      <div className="route-state-detail">
+        <h3>Budgets</h3>
+        {state.budgets.source === 'dynamic'
+          ? <p>dynamic — statically unreadable</p>
+          : <>
+            <p className="route-state-source">{state.budgets.source}</p>
+            <dl className="route-state-budgets">
+              <div><dt>maxCommitMs</dt><dd>{state.budgets.resolved.maxCommitMs}</dd></div>
+              <div><dt>maxEventBytes</dt><dd>{state.budgets.resolved.maxEventBytes}</dd></div>
+              <div><dt>maxRevisions</dt><dd>{state.budgets.resolved.maxRevisions}</dd></div>
+              <div><dt>maxStateBytes</dt><dd>{state.budgets.resolved.maxStateBytes}</dd></div>
+            </dl>
+          </>}
+      </div>
+      {state.durableLocation === undefined ? undefined : <div className="route-state-detail">
+        <h3>Durable location</h3>
+        <p>{state.durableLocation}</p>
+      </div>}
+      {state.notices.map((notice) => <p className="route-state-notice" key={notice}>{notice}</p>)}
+    </>}
 </section>;
 
 const editorId = (routeId: string, key: string): string =>
@@ -273,6 +312,7 @@ export const RoutesPage = ({ catalog, onOpenMcp }: RoutesPageProps) => <div clas
           <div><dt>State</dt><dd className={`route-state route-state--${catalog.state}`}>{catalog.state}</dd></div>
         </dl>
       </section>
+      <StatePanel state={catalog.stateDefinition} />
       {catalog.diagnostics.length === 0 ? undefined : <section aria-label="Route graph diagnostics" className="route-diagnostics">
         <h2>Route diagnostics ({catalog.diagnostics.length})</h2>
         {catalog.diagnostics.map((diagnostic, index) => <p key={`${diagnostic.code}-${String(index)}`}>

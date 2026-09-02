@@ -84,6 +84,23 @@ const manifest = {
       source: 'src/mcp/library/tools/echo.ts',
     }],
   }],
+  state: {
+    budgets: {
+      resolved: {
+        maxCommitMs: 5_000,
+        maxEventBytes: 262_144,
+        maxRevisions: 100_000,
+        maxStateBytes: 1_048_576,
+      },
+      source: 'defaults',
+    },
+    driver: 'sqlite',
+    durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)',
+    id: 'library/catalog',
+    lifetime: 'workspace-durable',
+    notices: ['Generated runtimes co-mount the notice ledger store at the same lifetime.'],
+    source: 'src/state.ts',
+  },
   sourceRevision: 'r'.repeat(64),
 };
 
@@ -122,6 +139,7 @@ it('reads the compiled manifest over the shared foreground session', async () =>
     type: 'string',
   });
   expect(decoded.cli?.commands?.[0]?.path).toEqual(['library', 'audit']);
+  expect(decoded.state).toEqual(manifest.state);
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/routes/manifest' }]);
 });
 
@@ -167,6 +185,17 @@ it('rejects an unknown field on a compiled route', async () => {
   }));
 
   await expect(client.manifest()).rejects.toMatchObject({ code: 'AB8123' });
+});
+
+it('rejects an unknown field inside the state catalog', async () => {
+  const client = clientFor(() => response({
+    manifest: { ...manifest, state: { ...manifest.state, mutable: true } },
+  }));
+
+  await expect(client.manifest()).rejects.toMatchObject({
+    code: 'AB8123',
+    message: 'Route manifest route returned an invalid response.',
+  });
 });
 
 it('rejects unknown fields at every input-schema level', async () => {

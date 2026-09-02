@@ -66,6 +66,23 @@ const manifest: RouteManifest = {
       source: 'src/mcp/library/tools/echo.ts',
     }],
   }],
+  state: {
+    budgets: {
+      resolved: {
+        maxCommitMs: 5_000,
+        maxEventBytes: 262_144,
+        maxRevisions: 100_000,
+        maxStateBytes: 1_048_576,
+      },
+      source: 'declared',
+    },
+    driver: 'sqlite',
+    durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state',
+    id: 'library/catalog',
+    lifetime: 'workspace-durable',
+    notices: ['The notice ledger is co-mounted at the same lifetime.'],
+    source: 'src/state.ts',
+  },
   sourceRevision: 'r'.repeat(64),
 };
 
@@ -84,6 +101,30 @@ it('renders the compiled catalog grouped by server and project surface', () => {
   expect(markup).toContain('Echo the request back');
   expect(markup).toContain('>Context providers<');
   expect(markup).toContain('provider:library');
+});
+
+it('renders the declared state catalog as read-only facts', () => {
+  const markup = render(routeCatalogFor(manifest));
+  const statePanel = markup.match(/<section[^>]*aria-label="State"[^>]*>(.*?)<\/section>/u)?.[1] ?? '';
+
+  expect(statePanel).toContain('library/catalog');
+  expect(statePanel).toContain('workspace-durable');
+  expect(statePanel).toContain('sqlite');
+  expect(statePanel).toContain('declared');
+  expect(statePanel).toContain('maxCommitMs');
+  expect(statePanel).toContain('5000');
+  expect(statePanel).toContain('$AGENT_BUNDLE_PLUGIN_ROOT/state');
+  expect(statePanel).toContain('notice ledger is co-mounted');
+  expect(statePanel).toContain('src/state.ts');
+  expect(statePanel).not.toMatch(/<(?:button|input|select|textarea)\b/u);
+});
+
+it('renders honest state absence without an alert', () => {
+  const { state: _state, ...statelessManifest } = manifest;
+  const markup = render(routeCatalogFor(statelessManifest));
+
+  expect(markup).toContain('This project declares no state module.');
+  expect(markup.match(/This project declares no state module\.<\/p>/u)?.[0]).not.toContain('role="alert"');
 });
 
 it('shows the argv projection of a compiled CLI command', () => {

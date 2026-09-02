@@ -368,6 +368,7 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await expect(page.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible({ timeout: browserTimeout });
     // Every capability here is configured rather than routed: the compiled
     // catalog reports an empty graph while all nine pages stay navigable.
+    await expect(page.getByText('This project declares no state module.', { exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('This project declares no conventional route modules.', { exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.route-table')).toHaveCount(0);
     for (const preserved of ['Overview', 'Skills', 'Hooks', 'MCP playground', 'Artifacts', 'Playground', 'Logs', 'Evals', 'Comparisons']) {
@@ -587,6 +588,12 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.route-state')).toHaveText('current', { timeout: browserTimeout });
+    const state = page.getByRole('region', { name: 'State' });
+    await expect(state).toContainText('audiobook-curator/shelf', { timeout: browserTimeout });
+    await expect(state).toContainText('workspace-durable', { timeout: browserTimeout });
+    await expect(state).toContainText('sqlite', { timeout: browserTimeout });
+    await expect(state).toContainText('src/state.ts', { timeout: browserTimeout });
+    await expect(state.locator('button, input, select, textarea')).toHaveCount(0);
 
     // One generated server owns every MCP kind the curator declares, so each
     // kind must appear as its own server-scoped group rather than a flat list.
