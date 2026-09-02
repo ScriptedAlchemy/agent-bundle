@@ -15,6 +15,18 @@ import type {
   DiscoveryProbeStatus,
   HostDiscoveryReport,
 } from '../../../agent-bundle/src/contracts/discovery.ts';
+import type {
+  McpProbeFailure,
+  McpProbeFailureKind,
+  McpProbeHost,
+  McpProbeLaunch,
+  McpProbeLaunchRemote,
+  McpProbeLaunchStdio,
+  McpProbeReport,
+  McpProbeSnapshot,
+  McpProbeStatus,
+  McpProbeTool,
+} from '../../../agent-bundle/src/contracts/mcp-probe.ts';
 import { deeplyFrozenHookValue } from '../hooks/hook-client.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 
@@ -32,6 +44,16 @@ export type {
   DiscoveryProbe,
   DiscoveryProbeStatus,
   HostDiscoveryReport,
+  McpProbeFailure,
+  McpProbeFailureKind,
+  McpProbeHost,
+  McpProbeLaunch,
+  McpProbeLaunchRemote,
+  McpProbeLaunchStdio,
+  McpProbeReport,
+  McpProbeSnapshot,
+  McpProbeStatus,
+  McpProbeTool,
 };
 
 export interface DiscoveryClientOptions {
@@ -52,6 +74,9 @@ export class DiscoveryClientError extends Error {
 
 const invalidResponse = (): DiscoveryClientError =>
   new DiscoveryClientError('AB8234', 'Host discovery route returned an invalid response.');
+
+const invalidProbeResponse = (): DiscoveryClientError =>
+  new DiscoveryClientError('AB8235', 'MCP probe route returned an invalid response.');
 
 const textSchema = z.string();
 const diagnosticSchema = z.strictObject({
@@ -107,6 +132,10 @@ const bundleFindingSchema = z.strictObject({
   ...findingShape,
   bundleRoot: textSchema.optional(),
   marketplace: textSchema.optional(),
+  mcpServers: z.array(z.strictObject({
+    name: textSchema,
+    transport: z.enum(['stdio', 'streamable-http']),
+  })).optional(),
 });
 const probeSchema = z.strictObject({
   evidence: z.literal('directory').optional(),
@@ -154,11 +183,68 @@ const errorResponseSchema = z.strictObject({
   }),
 });
 
-const frozenInput = (value: unknown): unknown => {
+const mcpProbeLaunchSchema = z.union([
+  z.strictObject({
+    args: z.array(textSchema),
+    command: textSchema,
+    cwd: textSchema.optional(),
+    env: z.record(textSchema, textSchema),
+    kind: z.literal('stdio'),
+  }),
+  z.strictObject({
+    kind: z.literal('streamable-http'),
+    url: textSchema,
+  }),
+]);
+const mcpProbeToolSchema = z.strictObject({
+  description: textSchema.optional(),
+  name: textSchema,
+  title: textSchema.optional(),
+});
+const mcpProbeSnapshotSchema = z.strictObject({
+  capabilities: z.record(textSchema, z.boolean()),
+  instructions: textSchema.optional(),
+  protocolVersion: textSchema,
+  serverInfo: z.strictObject({
+    name: textSchema,
+    title: textSchema.optional(),
+    version: textSchema,
+  }),
+  tools: z.array(mcpProbeToolSchema),
+  toolsTruncated: z.boolean(),
+});
+const mcpProbeFailureSchema = z.strictObject({
+  detail: textSchema,
+  kind: z.enum(['connect', 'handshake', 'protocol']),
+});
+const mcpProbeReportShape = {
+  durationMs: z.number(),
+  generatedAt: textSchema,
+  host: z.enum(['claude', 'codex', 'cursor']),
+  launch: mcpProbeLaunchSchema,
+  serverName: textSchema,
+} as const;
+const mcpProbeReportSchema = z.union([
+  z.strictObject({
+    ...mcpProbeReportShape,
+    snapshot: mcpProbeSnapshotSchema,
+    status: z.literal('ok'),
+  }),
+  z.strictObject({
+    ...mcpProbeReportShape,
+    failure: mcpProbeFailureSchema,
+    status: z.enum(['timed-out', 'unreachable']),
+  }),
+]);
+
+const frozenInput = (
+  value: unknown,
+  invalid: () => DiscoveryClientError = invalidResponse,
+): unknown => {
   try {
     return deeplyFrozenHookValue(value);
   } catch {
-    throw invalidResponse();
+    throw invalid();
   }
 };
 
@@ -168,23 +254,47 @@ const decode = (value: unknown): HostDiscoveryReport => {
   return frozenInput(parsed.data) as HostDiscoveryReport;
 };
 
-const failureFor = (value: unknown, status: number): DiscoveryClientError => {
+const decodeProbe = (value: unknown): McpProbeReport => {
+  const parsed = mcpProbeReportSchema.safeParse(frozenInput(value, invalidProbeResponse));
+  if (!parsed.success) throw invalidProbeResponse();
+  return frozenInput(parsed.data, invalidProbeResponse) as McpProbeReport;
+};
+
+const diagnosticFailureFor = (
+  value: unknown,
+  status: number,
+  fallbackCode: string,
+  fallbackMessage: string,
+  invalid: () => DiscoveryClientError,
+): DiscoveryClientError => {
   let parsed: z.infer<typeof errorResponseSchema> | undefined;
   try {
-    const result = errorResponseSchema.safeParse(frozenInput(value));
+    const result = errorResponseSchema.safeParse(frozenInput(value, invalid));
     if (result.success) parsed = result.data;
   } catch {
     // Invalid failure bodies fall through to the status-only diagnostic.
   }
   if (parsed === undefined) {
-    return new DiscoveryClientError(
-      'AB8234',
-      `Host discovery request failed with HTTP ${String(status)}.`,
-      status,
-    );
+    return new DiscoveryClientError(fallbackCode, fallbackMessage, status);
   }
   return new DiscoveryClientError(parsed.diagnostic.code, parsed.diagnostic.message, status);
 };
+
+const failureFor = (value: unknown, status: number): DiscoveryClientError => diagnosticFailureFor(
+  value,
+  status,
+  'AB8234',
+  `Host discovery request failed with HTTP ${String(status)}.`,
+  invalidResponse,
+);
+
+const probeFailureFor = (value: unknown, status: number): DiscoveryClientError => diagnosticFailureFor(
+  value,
+  status,
+  'AB8235',
+  `MCP probe request failed with HTTP ${String(status)}.`,
+  invalidProbeResponse,
+);
 
 /** Strict browser client for read-only local host discovery. */
 export class DiscoveryClient {
@@ -202,5 +312,20 @@ export class DiscoveryClient {
     const body: unknown = await response.json().catch(() => undefined);
     if (!response.ok) throw failureFor(body, response.status);
     return decode(body);
+  }
+
+  async probe(
+    request: Readonly<{ readonly host: McpProbeHost; readonly serverName: string }>,
+    signal?: AbortSignal,
+  ): Promise<McpProbeReport> {
+    const response = await this.#foreground.protectedRequest('/api/discovery/probes', {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+      ...(signal === undefined ? {} : { signal }),
+    });
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw probeFailureFor(body, response.status);
+    return decodeProbe(body);
   }
 }

@@ -1,3 +1,7 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type {
   DiscoveryBundleFinding,
   DiscoveryDiagnostic,
@@ -6,9 +10,11 @@ import type {
   DiscoveryEndpointReport,
   DiscoveryFinding,
   DiscoveryHostReport,
+  DiscoveryMcpServer,
   DiscoveryProbe,
   HostDiscoveryReport,
 } from '../../contracts/discovery.ts';
+import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import {
   runDoctor,
   type DoctorDurableStateReport,
@@ -20,6 +26,10 @@ import {
   type DoctorOptions,
   type DoctorReport,
 } from '../../install/doctor.ts';
+import {
+  readTargetMcpServers,
+  type ModernMcpServerEntry,
+} from '../../services/mcp-runtime.ts';
 import type { HostDiscoveryRouteService } from './host-discovery-routes.ts';
 
 export interface HostDiscoveryServiceOptions {
@@ -30,6 +40,7 @@ export interface HostDiscoveryServiceOptions {
     readonly bundleSource: string;
     readonly manifestDigest?: string;
   }> | undefined;
+  readonly registry?: TargetRegistry;
 }
 
 const discoveryDiagnostic = (
@@ -81,10 +92,12 @@ const findingFields = (value: DoctorFinding): DiscoveryFinding => Object.freeze(
 
 const bundleFinding = (
   value: NonNullable<DoctorHostReport['bundle']>,
+  mcpServers: readonly DiscoveryMcpServer[] | undefined,
 ): DiscoveryBundleFinding => Object.freeze({
   ...findingFields(value),
   ...(value.bundleRoot === undefined ? {} : { bundleRoot: value.bundleRoot }),
   ...(value.marketplace === undefined ? {} : { marketplace: value.marketplace }),
+  ...(mcpServers === undefined ? {} : { mcpServers }),
 });
 
 const discoveryProbe = (value: DoctorHostProbe): DiscoveryProbe => Object.freeze({
@@ -93,8 +106,38 @@ const discoveryProbe = (value: DoctorHostProbe): DiscoveryProbe => Object.freeze
   ...(value.version === undefined ? {} : { version: value.version }),
 });
 
-const hostReport = (value: DoctorHostReport): DiscoveryHostReport => Object.freeze({
-  ...(value.bundle === undefined ? {} : { bundle: bundleFinding(value.bundle) }),
+const discoveryMcpServer = (value: ModernMcpServerEntry): DiscoveryMcpServer => Object.freeze({
+  name: value.name,
+  transport: value.server.kind,
+});
+
+const enumerateMcpServers = async (
+  value: DoctorHostReport,
+  registry: TargetRegistry,
+): Promise<readonly DiscoveryMcpServer[] | undefined> => {
+  const bundleRoot = value.bundle?.bundleRoot;
+  if (bundleRoot === undefined) return undefined;
+  try {
+    const runtime = registry.mcpRuntime(value.host);
+    if (runtime === undefined) return undefined;
+    const document = parseJsonWithoutDuplicateKeys(
+      await readFile(join(bundleRoot, runtime.manifestPath), 'utf8'),
+    );
+    const result = readTargetMcpServers(runtime, document);
+    if (result.status === 'invalid') return undefined;
+    return Object.freeze(result.servers.map(discoveryMcpServer));
+  } catch {
+    return undefined;
+  }
+};
+
+const hostReport = async (
+  value: DoctorHostReport,
+  registry: TargetRegistry,
+): Promise<DiscoveryHostReport> => Object.freeze({
+  ...(value.bundle === undefined
+    ? {}
+    : { bundle: bundleFinding(value.bundle, await enumerateMcpServers(value, registry)) }),
   diagnostics: Object.freeze(value.diagnostics.map(discoveryDiagnostic)),
   host: value.host,
   inventory: Object.freeze({
@@ -121,6 +164,7 @@ export class HostDiscoveryService implements HostDiscoveryRouteService {
   readonly #doctorOptions: DoctorOptions;
   readonly #now: () => Date;
   readonly #prepared: NonNullable<HostDiscoveryServiceOptions['prepared']>;
+  readonly #registry: TargetRegistry;
   #inFlight: Promise<HostDiscoveryReport> | undefined;
 
   constructor(options: HostDiscoveryServiceOptions = {}) {
@@ -128,6 +172,7 @@ export class HostDiscoveryService implements HostDiscoveryRouteService {
     this.#doctorOptions = options.doctorOptions ?? Object.freeze({});
     this.#now = options.now ?? (() => new Date());
     this.#prepared = options.prepared ?? (() => undefined);
+    this.#registry = options.registry ?? createDefaultRegistry();
   }
 
   discover(): Promise<HostDiscoveryReport> {
@@ -149,7 +194,9 @@ export class HostDiscoveryService implements HostDiscoveryRouteService {
       ...this.#doctorOptions,
       ...(bundleSource ? { from: bundleSource } : {}),
     });
-    const hosts: readonly DiscoveryHostReport[] = Object.freeze(report.hosts.map(hostReport));
+    const hosts: readonly DiscoveryHostReport[] = Object.freeze(
+      await Promise.all(report.hosts.map((value) => hostReport(value, this.#registry))),
+    );
     const endpoints: DiscoveryEndpointReport = endpointReport(report.endpoints);
     const diagnostics: readonly DiscoveryDiagnostic[] = Object.freeze(
       report.diagnostics.map(discoveryDiagnostic),

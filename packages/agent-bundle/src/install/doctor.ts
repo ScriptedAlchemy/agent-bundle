@@ -219,7 +219,7 @@ const readString = (
   return value;
 };
 
-const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> => {
+export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> => {
   const root = resolve(from);
   const manifest = manifestPath(host);
   if (await exists(join(root, manifest))) return root;

@@ -19,6 +19,10 @@ import {
 } from './playground/host-discovery-service.ts';
 import { LifecycleReplayService } from './playground/lifecycle-replay-service.ts';
 import {
+  McpProbeService,
+  type McpProbeServiceOptions,
+} from './playground/mcp-probe-service.ts';
+import {
   startForegroundServer,
   type ForegroundCoordinator,
   type ForegroundServerOptions,
@@ -119,6 +123,17 @@ interface DevServerTesting {
   readonly createSandboxProxy?: (options: CreateMcpAppSandboxProxyOptions) => Promise<McpAppSandboxProxy>;
   /** Overrides only Doctor execution and time; prepared build identity always comes from this dev server. */
   readonly hostDiscoveryOptions?: Pick<HostDiscoveryServiceOptions, 'doctor' | 'doctorOptions' | 'now'>;
+  readonly mcpProbeOptions?: Pick<
+    McpProbeServiceOptions,
+    | 'clock'
+    | 'createClient'
+    | 'createPluginData'
+    | 'createStdioTransport'
+    | 'createStreamableHttpTransport'
+    | 'now'
+    | 'registry'
+    | 'timeoutMs'
+  >;
   readonly openRuntimeClientSurface?: (
     endpoint: DevRuntimeClientSurfaceEndpoint,
     listener: Parameters<typeof RuntimeClientSurfaceProxy.open>[1],
@@ -696,18 +711,26 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     traceSink: createMcpDevLogTraceSink(logs),
   });
   const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry });
+  const preparedBundle = () => {
+    const prepared = latestValidPreparedProject;
+    if (prepared?.model === undefined) return undefined;
+    return Object.freeze({
+      bundleSource: join(root, prepared.artifactDistPath),
+      ...(prepared.source.revision === undefined
+        ? {}
+        : { manifestDigest: prepared.source.revision }),
+    });
+  };
   const hostDiscovery = new HostDiscoveryService({
     ...options.testing?.hostDiscoveryOptions,
-    prepared: () => {
-      const prepared = latestValidPreparedProject;
-      if (prepared?.model === undefined) return undefined;
-      return Object.freeze({
-        bundleSource: join(root, prepared.artifactDistPath),
-        ...(prepared.source.revision === undefined
-          ? {}
-          : { manifestDigest: prepared.source.revision }),
-      });
-    },
+    prepared: preparedBundle,
+    registry,
+  });
+  const mcpProbe = new McpProbeService({
+    prepared: preparedBundle,
+    projectRoot: root,
+    registry,
+    ...options.testing?.mcpProbeOptions,
   });
   const lifecycleReplay = new LifecycleReplayService({
     logger: logs,
@@ -799,6 +822,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     lifecycleReplay,
     logs,
     mcpAppPreviews: appPreviews,
+    mcpProbe,
     mcpSessions,
     playground,
     port: options.port,

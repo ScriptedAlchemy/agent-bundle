@@ -9,9 +9,11 @@ import type {
   DiscoveryInventoryStatus,
   DiscoveryProbe,
   HostDiscoveryReport,
+  McpProbeReport,
+  McpProbeStatus,
 } from './discovery-client.ts';
 
-export type DiscoveryPresentationTone = 'error' | 'info' | 'neutral' | 'warning';
+export type DiscoveryPresentationTone = 'error' | 'info' | 'neutral' | 'positive' | 'warning';
 
 export interface DiscoveryPresentation {
   readonly label: string;
@@ -58,6 +60,12 @@ export interface HostDiscoveryView {
   readonly report: HostDiscoveryReport;
 }
 
+export interface McpProbeView {
+  readonly capabilityNames: readonly string[];
+  readonly presentation: DiscoveryPresentation;
+  readonly report: McpProbeReport;
+}
+
 const presentation = (
   label: string,
   tone: DiscoveryPresentationTone,
@@ -77,6 +85,29 @@ export const probePresentationFor = (probe: DiscoveryProbe): DiscoveryPresentati
     }
   }
 };
+
+export const mcpProbePresentationFor = (status: McpProbeStatus): DiscoveryPresentation => {
+  switch (status) {
+    case 'ok':
+      return presentation('Connected', 'positive');
+    case 'timed-out':
+      return presentation('Timed out', 'neutral');
+    case 'unreachable':
+      return presentation('Unreachable', 'neutral');
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+};
+
+export const mcpProbeViewFor = (report: McpProbeReport): McpProbeView => Object.freeze({
+  capabilityNames: Object.freeze(
+    report.status === 'ok' ? Object.keys(report.snapshot?.capabilities ?? {}) : [],
+  ),
+  presentation: mcpProbePresentationFor(report.status),
+  report,
+});
 
 export const inventoryPresentationFor = (
   host: DiscoveryHost,

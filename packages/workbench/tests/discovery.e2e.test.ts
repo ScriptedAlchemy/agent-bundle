@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
+import { build } from '../../agent-bundle/src/api.ts';
 import type {
   DoctorCommandRunner,
   DoctorCommandResult,
@@ -65,7 +66,13 @@ e2e(
         : '[{"id":"rsc-agent-runtime-demo@inline"}]\n');
     };
     const pageErrors: Error[] = [];
+    const probeRequests: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === '/api/discovery/probes') {
+        probeRequests.push(request.method());
+      }
+    });
 
     await Promise.all([
       mkdir(cursorPluginRoot, { recursive: true }),
@@ -90,6 +97,26 @@ e2e(
           },
           now: () => new Date(Date.UTC(2026, 8, 2, 5, 0, generatedAtTick++)),
         },
+        prepare: async ({ configSource, root }) => {
+          const source = await readFile(configSource, 'utf8');
+          const anchor = '    servers: {\n      timeline: {';
+          if (!source.includes(anchor)) throw new Error('Discovery probe fixture config anchor is missing.');
+          await writeFile(configSource, source.replace(anchor, `    servers: {
+      'probe-down': {
+        args: ['-e', 'process.exit(0)'],
+        command: 'node',
+        targets: ['portable', 'claude', 'codex'],
+        transport: 'stdio',
+      },
+      timeline: {`));
+          const output = join(root, 'dist', 'plugins');
+          const result = await build({ output, root });
+          const errors = result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+          if (errors.length > 0) {
+            throw new Error(`Discovery probe fixture build failed: ${JSON.stringify(errors)}`);
+          }
+          await cp(join(output, 'claude'), join(root, 'dist', 'claude'), { recursive: true });
+        },
       });
       await page.goto(workbenchUrl(fixture.url, 'hosts'));
       try {
@@ -108,6 +135,57 @@ e2e(
       const claude = page.getByRole('group', { name: 'Claude' });
       await expect(claude.locator('.discovery-badge').first()).toHaveText('Available');
       await expect(claude.getByText('1.2.3', { exact: true })).toBeVisible();
+      const claudeMcp = claude.getByLabel('Claude MCP servers');
+      try {
+        await expect(claudeMcp.getByRole('heading', { name: 'MCP servers' })).toBeVisible();
+      } catch (reason) {
+        throw new Error(`Claude MCP discovery was not populated:\n${await claude.innerText()}`, {
+          cause: reason,
+        });
+      }
+      await expect(claudeMcp.getByText('timeline', { exact: true })).toBeVisible();
+      await expect(claudeMcp.getByText('stdio', { exact: true }).first()).toBeVisible();
+      expect(probeRequests).toEqual([]);
+
+      await claudeMcp.getByRole('button', { name: 'Probe timeline' }).click();
+      await expect(claudeMcp.getByRole('heading', { name: 'Consent required' })).toBeVisible();
+      await expect(claudeMcp).toContainText('read-only live probe');
+      await expect(claudeMcp).toContainText('Nothing is stored');
+      await claudeMcp.getByRole('button', { name: 'Cancel' }).click();
+      expect(probeRequests).toEqual([]);
+
+      await claudeMcp.getByRole('button', { name: 'Probe timeline' }).click();
+      await claudeMcp.getByRole('button', { name: 'Run live probe' }).click();
+      await expect.poll(() => probeRequests).toEqual(['POST']);
+      await expect(claudeMcp.getByText('Connected', { exact: true })).toBeVisible({
+        timeout: browserTimeout,
+      });
+      const protocol = claudeMcp.locator('.discovery-mcp-server-facts > div')
+        .filter({ hasText: 'Protocol' })
+        .locator('dd');
+      await expect(protocol).not.toHaveText('');
+      await expect.poll(() => claudeMcp.getByLabel('timeline tools').getByRole('row').count())
+        .toBeGreaterThan(1);
+      await expect(claudeMcp.getByLabel('Redacted launch summary')).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+
+      const downServer = claudeMcp.locator(':scope > ul > li').filter({ hasText: 'probe-down' });
+      await claudeMcp.getByRole('button', { name: 'Probe probe-down' }).click();
+      await downServer.getByRole('button', { name: 'Run live probe' }).click();
+      await expect.poll(() => probeRequests).toEqual(['POST', 'POST']);
+      const downBadge = downServer.getByText(/^(?:Timed out|Unreachable)$/u);
+      await expect(downBadge).toBeVisible({ timeout: browserTimeout });
+      await expect(downBadge).toHaveClass(/(?:^|\s)discovery-badge--neutral(?:\s|$)/u);
+      await expect(downServer).toContainText(/connect|handshake|protocol/u);
+      await expect(page.getByRole('alert')).toHaveCount(0);
+
+      await page.getByRole('button', { name: 'Re-run discovery' }).first().click();
+      await expect(page.getByText('Loading host discovery', { exact: true })).toHaveCount(0, {
+        timeout: browserTimeout,
+      });
+      await expect(claudeMcp.getByText('Connected', { exact: true })).toHaveCount(0);
+      await expect(claudeMcp.getByText(/^(?:Timed out|Unreachable)$/u)).toHaveCount(0);
+      await expect(claudeMcp.getByRole('button', { name: 'Probe timeline' })).toBeVisible();
 
       const codex = page.getByRole('group', { name: 'Codex' });
       const absentBadge = codex.getByText('Not installed', { exact: true });

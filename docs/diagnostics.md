@@ -30,6 +30,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB7xxx` | Project preparation and development rebuilds. |
 | `AB7300`–`AB7316` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health, and durable-state inventory. |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
+| `AB8219`–`AB8223` | Workbench live MCP probe route (user-initiated, read-only initialize + tools/list): `AB8219` invalid path, `AB8220` invalid request/method, `AB8221` probe target not found, `AB8222` response over the 16 MiB budget, `AB8223` probe unavailable. |
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
 

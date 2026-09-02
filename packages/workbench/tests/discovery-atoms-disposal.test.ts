@@ -11,10 +11,12 @@ import { createWorkbenchConfig } from '../rsbuild.config.ts';
 declare global {
   interface Window {
     __discoveryAtoms: {
-      mount(mode: 'never' | 'resolving'): void;
+      mount(mode: 'never' | 'probe-never' | 'resolving'): void;
       readonly stats: {
         neverAborted: number;
         neverCalls: number;
+        probeAborted: number;
+        probeCalls: number;
         resolvingCalls: number;
         unmounts: number;
       };
@@ -68,11 +70,44 @@ const fixtureSource = (root: string): string => `
       summary: { live: 0, staleLocks: 0, staleSockets: 0 },
     },
     generatedAt: '2026-09-01T12:00:00.000Z',
-    hosts: [],
+    hosts: [{
+      bundle: {
+        bundleRoot: '/workspace/dist',
+        mcpServers: [{ name: 'timeline', transport: 'stdio' }],
+        name: 'agent-bundle',
+        state: 'installed',
+      },
+      diagnostics: [],
+      host: 'claude',
+      inventory: { findings: [], status: 'known' },
+      probe: { status: 'available', version: '1.2.3' },
+    }],
     manifestDigest: 'manifest-current',
     summary: { errors: 0, infos: 0, warnings: 0 },
   } as const;
-  const stats = { neverAborted: 0, neverCalls: 0, resolvingCalls: 0, unmounts: 0 };
+  const probeReport = {
+    durationMs: 12,
+    generatedAt: '2026-09-01T12:00:01.000Z',
+    host: 'claude',
+    launch: { args: ['dist/timeline.js'], command: 'node', env: {}, kind: 'stdio' },
+    serverName: 'timeline',
+    snapshot: {
+      capabilities: { tools: true },
+      protocolVersion: '2025-06-18',
+      serverInfo: { name: 'timeline-server', version: '1.0.0' },
+      tools: [{ description: 'Lists entries.', name: 'timeline_list', title: 'List timeline' }],
+      toolsTruncated: false,
+    },
+    status: 'ok',
+  } as const;
+  const stats = {
+    neverAborted: 0,
+    neverCalls: 0,
+    probeAborted: 0,
+    probeCalls: 0,
+    resolvingCalls: 0,
+    unmounts: 0,
+  };
   const neverClient = {
     discover: (signal?: AbortSignal) => {
       stats.neverCalls += 1;
@@ -80,21 +115,43 @@ const fixtureSource = (root: string): string => `
         signal?.addEventListener('abort', () => { stats.neverAborted += 1; }, { once: true });
       });
     },
+    probe: async () => probeReport,
   };
   const resolvingClient = {
     discover: async () => {
       stats.resolvingCalls += 1;
       return report;
     },
+    probe: async () => {
+      stats.probeCalls += 1;
+      return probeReport;
+    },
+  };
+  const probeNeverClient = {
+    discover: async () => {
+      stats.resolvingCalls += 1;
+      return report;
+    },
+    probe: (_request: unknown, signal?: AbortSignal) => {
+      stats.probeCalls += 1;
+      return new Promise<never>(() => {
+        signal?.addEventListener('abort', () => { stats.probeAborted += 1; }, { once: true });
+      });
+    },
   };
 
   const Fixture = () => {
-    const [state, setState] = useState<{ mounted: boolean; mode: 'never' | 'resolving' }>({
+    const [state, setState] = useState<{
+      mounted: boolean;
+      mode: 'never' | 'probe-never' | 'resolving';
+    }>({
       mode: 'never',
       mounted: false,
     });
     window.__discoveryAtoms = {
-      mount: (mode: 'never' | 'resolving') => { setState({ mode, mounted: true }); },
+      mount: (mode: 'never' | 'probe-never' | 'resolving') => {
+        setState({ mode, mounted: true });
+      },
       stats,
       unmount: () => {
         stats.unmounts += 1;
@@ -103,7 +160,11 @@ const fixtureSource = (root: string): string => `
     };
     return state.mounted
       ? <DiscoveryPage
-          client={state.mode === 'never' ? neverClient : resolvingClient}
+          client={state.mode === 'never'
+            ? neverClient
+            : state.mode === 'probe-never'
+              ? probeNeverClient
+              : resolvingClient}
           manifestDigest="manifest-current"
         />
       : <p>Discovery unmounted</p>;
@@ -163,6 +224,32 @@ describe('Discovery atoms', () => {
       const callsBeforeRerun = await page.evaluate(() => window.__discoveryAtoms.stats.resolvingCalls);
       await page.getByRole('button', { name: 'Re-run discovery' }).first().click();
       await expect.poll(() => page.evaluate(() => window.__discoveryAtoms.stats.resolvingCalls)).toBe(callsBeforeRerun + 1);
+
+      expect(await page.evaluate(() => window.__discoveryAtoms.stats.probeCalls)).toBe(0);
+      await page.getByRole('button', { name: 'Probe timeline' }).click();
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      expect(await page.evaluate(() => window.__discoveryAtoms.stats.probeCalls)).toBe(0);
+      await page.getByRole('button', { name: 'Probe timeline' }).click();
+      await page.getByRole('button', { name: 'Run live probe' }).click();
+      await page.getByText('Connected', { exact: true }).waitFor({ timeout: 5_000 });
+      expect(await page.evaluate(() => window.__discoveryAtoms.stats.probeCalls)).toBe(1);
+
+      await page.evaluate(() => window.__discoveryAtoms.unmount());
+      await page.getByText('Discovery unmounted', { exact: true }).waitFor({ timeout: 5_000 });
+      await page.evaluate(() => window.__discoveryAtoms.mount('resolving'));
+      await page.getByRole('button', { name: 'Probe timeline' }).waitFor({ timeout: 5_000 });
+      await expect.poll(() => page.getByText('Connected', { exact: true }).count()).toBe(0);
+
+      await page.evaluate(() => window.__discoveryAtoms.unmount());
+      await page.evaluate(() => window.__discoveryAtoms.mount('probe-never'));
+      await page.getByRole('button', { name: 'Probe timeline' }).click();
+      await page.getByRole('button', { name: 'Run live probe' }).click();
+      await expect.poll(() => page.evaluate(() => window.__discoveryAtoms.stats.probeCalls)).toBe(2);
+      await page.evaluate(() => window.__discoveryAtoms.unmount());
+      await expect.poll(() => page.evaluate(() => window.__discoveryAtoms.stats.probeAborted)).toBe(1);
+      await page.evaluate(() => window.__discoveryAtoms.mount('resolving'));
+      await page.getByRole('button', { name: 'Probe timeline' }).waitFor({ timeout: 5_000 });
+      await expect.poll(() => page.getByText('Connected', { exact: true }).count()).toBe(0);
       expect(errors).toEqual([]);
     } finally {
       await browser.close();

@@ -15,6 +15,7 @@ import { InspectorRoutes, type InspectorRouteService } from './inspector-routes.
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playground/hook-playground-routes.ts';
 import { HostDiscoveryRoutes, type HostDiscoveryRouteService } from './playground/host-discovery-routes.ts';
 import { LifecycleReplayRoutes, type LifecycleReplayRouteService } from './playground/lifecycle-replay-routes.ts';
+import { McpProbeRoutes, type McpProbeRouteService } from './playground/mcp-probe-routes.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session/mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session/mcp-session-service.ts';
@@ -135,6 +136,8 @@ export interface ForegroundServerOptions {
   readonly hookPlayground?: HookPlaygroundRouteService;
   /** Read-only host probes, install inventory, bundle drift, and runtime endpoint health. */
   readonly hostDiscovery?: HostDiscoveryRouteService;
+  /** User-initiated read-only initialize and tools/list probing over trusted artifact servers. */
+  readonly mcpProbe?: McpProbeRouteService;
   /** Read-only semantic lifecycle replay over the latest valid prepared graph. */
   readonly lifecycleReplay?: LifecycleReplayRouteService;
   /** Opt-in standalone MCP Inspector child; never auto-started. */
@@ -444,6 +447,7 @@ export class ForegroundServer {
   readonly #lifecycleReplayRoutes: LifecycleReplayRoutes;
   readonly #mcpAppPreviews: McpAppRoutePreviewService | undefined;
   readonly #mcpAppRoutes: McpAppRoutes;
+  readonly #mcpProbeRoutes: McpProbeRoutes;
   readonly #runtimeMcpRoutes: RuntimeMcpRoutes;
   readonly #mcpSessionRoutes: McpSessionRoutes;
   readonly #runtimeRoutes: RuntimeRoutes;
@@ -524,6 +528,10 @@ export class ForegroundServer {
     this.#hostDiscoveryRoutes = new HostDiscoveryRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.hostDiscovery === undefined ? {} : { service: options.hostDiscovery }),
+    });
+    this.#mcpProbeRoutes = new McpProbeRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.mcpProbe === undefined ? {} : { service: options.mcpProbe }),
     });
     this.#lifecycleReplayRoutes = new LifecycleReplayRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -681,6 +689,7 @@ export class ForegroundServer {
     // abort callbacks may synchronously re-enter foreground shutdown, and
     // must observe the already-published close outcome.
     const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
+    this.#mcpProbeRoutes.close();
     this.#hostDiscoveryRoutes.close();
     // App tombstone publication below deliberately yields once before joining
     // resource drains. Observe this promise now so a fast drain failure cannot
@@ -774,6 +783,7 @@ export class ForegroundServer {
     if (await this.#runtimeMcpRoutes.handle(request, response)) return;
     if (await this.#runtimeRoutes.handle(request, response)) return;
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
+    if (await this.#mcpProbeRoutes.handle(request, response)) return;
     if (await this.#hostDiscoveryRoutes.handle(request, response)) return;
     if (await this.#lifecycleReplayRoutes.handle(request, response)) return;
     if (await this.#playgroundRoutes.handle(request, response)) return;

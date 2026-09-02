@@ -53,9 +53,15 @@ export interface DiscoveryFinding {
   readonly version?: string;
 }
 
+export interface DiscoveryMcpServer {
+  readonly name: string;
+  readonly transport: 'stdio' | 'streamable-http';
+}
+
 export interface DiscoveryBundleFinding extends DiscoveryFinding {
   readonly bundleRoot?: string;
   readonly marketplace?: string;
+  readonly mcpServers?: readonly DiscoveryMcpServer[];
 }
 
 export interface DiscoveryProbe {

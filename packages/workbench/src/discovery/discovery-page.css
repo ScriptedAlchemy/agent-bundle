@@ -26,6 +26,7 @@
 .discovery-badge { border: 1px solid currentColor; border-radius: 999px; display: inline-block; flex: 0 0 auto; font-size: 10px; font-weight: 800; letter-spacing: .04em; max-width: 100%; padding: 4px 8px; text-align: center; text-transform: uppercase; }
 .discovery-badge--neutral { background: #f1f4f7; color: #475569; }
 .discovery-badge--info { background: #eef5ff; color: #0759c7; }
+.discovery-badge--positive { background: #ecf8f0; color: #18733b; }
 .discovery-badge--warning { background: #fff8df; color: #8a6200; }
 .discovery-badge--error { background: #fff0f0; color: #b31b23; }
 .discovery-facts { display: grid; margin: 0; }
@@ -66,3 +67,47 @@
 .discovery-diagnostic > div span { font-size: 10px; font-weight: 800; text-transform: uppercase; }
 .discovery-diagnostic p { color: #374151; font-size: 12px; margin: 6px 0 0; }
 .discovery-diagnostic small { color: #687386; display: block; font-size: 10px; margin-top: 6px; }
+.discovery-mcp-servers { border-top: 1px solid #d9dee7; margin-top: 14px; padding-top: 13px; }
+.discovery-mcp-servers > .discovery-section-heading > span { color: #687386; font-size: 10px; font-weight: 700; }
+.discovery-mcp-servers > ul { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.discovery-mcp-servers > ul > li { background: #f7f9fc; border: 1px solid #d4dce7; padding: 10px; }
+.discovery-mcp-server-heading { align-items: center; display: flex; justify-content: space-between; }
+.discovery-mcp-server-heading > div { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; min-width: 0; }
+.discovery-mcp-server-heading strong { color: #24364e; font-size: 12px; overflow-wrap: anywhere; }
+.discovery-mcp-probe-button, .discovery-mcp-consent button { border: 1px solid #8794a6; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 750; min-height: 31px; padding: 0 11px; }
+.discovery-mcp-probe-button { background: #fff; color: #23466f; margin-top: 9px; }
+.discovery-mcp-probe-button:hover, .discovery-mcp-consent button:first-child:hover { background: #edf2f7; }
+.discovery-mcp-consent { background: #fffbea; border: 1px solid #ddc977; border-left: 3px solid #a87500; margin-top: 9px; padding: 10px; }
+.discovery-mcp-consent h4, .discovery-mcp-consent p { margin: 0; }
+.discovery-mcp-consent h4 { color: #654d00; font-size: 12px; }
+.discovery-mcp-consent p { color: #514b32; font-size: 11px; line-height: 1.5; margin-top: 6px; }
+.discovery-mcp-consent > div { display: flex; gap: 7px; margin-top: 9px; }
+.discovery-mcp-consent button { background: #fff; color: #334155; }
+.discovery-mcp-consent button:last-child { background: #0b5bd3; border-color: #06459e; color: #fff; }
+.discovery-mcp-consent button:last-child:hover { background: #084eb9; }
+.discovery-mcp-consent button:disabled { cursor: wait; opacity: .55; }
+.discovery-mcp-probing { background: #eef5ff; border-left: 3px solid #0b5bd3; color: #23466f; font-size: 11px; margin: 9px 0 0; padding: 9px; }
+.discovery-mcp-result { background: #fff; border: 1px solid #b8d8c3; border-left: 3px solid #2d8650; margin-top: 9px; padding: 10px; }
+.discovery-mcp-result--down { background: #f8fafc; border-color: #cbd4e0; border-left-color: #64748b; }
+.discovery-mcp-result-heading { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
+.discovery-mcp-result-heading h4, .discovery-mcp-result h5, .discovery-mcp-launch h5 { color: #334155; font-size: 10px; font-weight: 800; letter-spacing: .05em; margin: 0; text-transform: uppercase; }
+.discovery-mcp-result > p { color: #4b5563; font-size: 11px; line-height: 1.45; margin: 8px 0 0; }
+.discovery-mcp-server-facts { border-bottom: 1px solid #d9dee7; border-top: 1px solid #d9dee7; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }
+.discovery-mcp-server-facts > div:nth-child(3) { border-left: 0; border-top: 1px solid #d9dee7; }
+.discovery-mcp-server-facts > div:nth-child(4) { border-top: 1px solid #d9dee7; }
+.discovery-mcp-capabilities, .discovery-mcp-instructions, .discovery-mcp-tools, .discovery-mcp-launch { margin-top: 11px; }
+.discovery-mcp-capabilities > div { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.discovery-mcp-instructions p { color: #4b5563; display: -webkit-box; font-size: 11px; line-height: 1.45; margin: 6px 0 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+.discovery-mcp-tools-table { margin-top: 6px; }
+.discovery-mcp-tools-table th:nth-child(1), .discovery-mcp-tools-table td:nth-child(1) { width: 30%; }
+.discovery-mcp-tools-table th:nth-child(2), .discovery-mcp-tools-table td:nth-child(2) { width: 25%; }
+.discovery-mcp-tools-table th:nth-child(3), .discovery-mcp-tools-table td:nth-child(3) { width: 45%; }
+.discovery-mcp-launch { border-top: 1px solid #d9dee7; padding-top: 10px; }
+.discovery-mcp-launch > code { display: block; font: 10px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; margin-top: 6px; overflow-wrap: anywhere; }
+.discovery-mcp-launch p { color: #687386; font-size: 10px; margin: 6px 0 0; }
+.discovery-mcp-launch ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.discovery-mcp-launch li { font-size: 10px; overflow-wrap: anywhere; }
+.discovery-mcp-probe-metadata { border-top: 1px solid #d9dee7; grid-template-columns: 1fr 2fr; margin-top: 10px; }
+.discovery-mcp-request-error { background: #fff5f5; border-left: 3px solid #c01d26; color: #78242a; margin-top: 9px; padding: 9px; }
+.discovery-mcp-request-error h4, .discovery-mcp-request-error p { font-size: 11px; margin: 0; }
+.discovery-mcp-request-error p { line-height: 1.45; margin-top: 5px; }
