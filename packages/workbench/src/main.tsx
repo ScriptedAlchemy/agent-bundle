@@ -18,6 +18,8 @@ import { EvalsPage } from './evals/evals-page.tsx';
 import { ArtifactsPage } from './artifacts/artifacts-page.tsx';
 import { HookClient } from './hooks/hook-client.ts';
 import { HooksPage } from './hooks/hooks-page.tsx';
+import { LifecycleClient } from './lifecycles/lifecycle-client.ts';
+import { LifecyclesPage } from './lifecycles/lifecycles-page.tsx';
 import {
   createRuntimeAppBridgeFactory,
   type RuntimeAppBridgeFactory,
@@ -339,6 +341,7 @@ const navigationItems: readonly Readonly<{ glyph: string; label: string; page: W
   { glyph: '⌸', label: 'Routes', page: 'routes' },
   { glyph: '⌘', label: 'Skills', page: 'skills' },
   { glyph: '⌥', label: 'Hooks', page: 'hooks' },
+  { glyph: '↻', label: 'Lifecycles', page: 'lifecycles' },
   { glyph: '⌁', label: 'MCP playground', page: 'mcp' },
   { glyph: '◫', label: 'Runtime', page: 'runtime' },
   { glyph: '▤', label: 'Artifacts', page: 'artifacts' },
@@ -667,6 +670,17 @@ const HooksScreen = ({ connectionError, hookClient, onNavigate, pages, runtimeDi
   <HooksPage client={hookClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
+const LifecyclesScreen = ({ connectionError, lifecycleClient, manifestDigest, onNavigate, pages, runtimeDiagnostic }: {
+  readonly connectionError?: string;
+  readonly lifecycleClient: LifecycleClient;
+  readonly manifestDigest: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly pages: ReadonlySet<WorkbenchPage>;
+  readonly runtimeDiagnostic: string | undefined;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="lifecycles" pages={pages} runtimeDiagnostic={runtimeDiagnostic}>
+  <LifecyclesPage client={lifecycleClient} manifestDigest={manifestDigest} />
+</WorkbenchScreen>;
+
 const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, initialToolPrefill, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, pages, registerPreviewClose, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly artifactClient: ArtifactClient;
@@ -800,6 +814,7 @@ const Workbench = () => {
   const comparisonClient = useRef<ComparisonClient | undefined>(undefined);
   const evalClient = useRef<EvalClient | undefined>(undefined);
   const hookClient = useRef<HookClient | undefined>(undefined);
+  const lifecycleClient = useRef<LifecycleClient | undefined>(undefined);
   const logClient = useRef<LogClient | undefined>(undefined);
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const routeManifestClient = useRef<RouteManifestClient | undefined>(undefined);
@@ -877,6 +892,7 @@ const Workbench = () => {
   if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient({ foreground: foregroundClient });
   if (evalClient.current === undefined) evalClient.current = new EvalClient({ foreground: foregroundClient });
   if (hookClient.current === undefined) hookClient.current = new HookClient({ foreground: foregroundClient });
+  if (lifecycleClient.current === undefined) lifecycleClient.current = new LifecycleClient({ foreground: foregroundClient });
   if (logClient.current === undefined) logClient.current = new LogClient({ foreground: foregroundClient });
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ foreground: foregroundClient });
   if (routeManifestClient.current === undefined) routeManifestClient.current = new RouteManifestClient({ foreground: foregroundClient });
@@ -1436,6 +1452,16 @@ const Workbench = () => {
         pages={pages}
         runtimeDiagnostic={runtimeError}
         status={status}
+      />);
+    }
+    if (page === 'lifecycles') {
+      return withConnectionGate(<LifecyclesScreen
+        connectionError={connectionError}
+        lifecycleClient={lifecycleClient.current}
+        manifestDigest={capabilities!.routes.digest}
+        onNavigate={navigate}
+        pages={pages}
+        runtimeDiagnostic={runtimeError}
       />);
     }
     return withConnectionGate(page === 'skills'

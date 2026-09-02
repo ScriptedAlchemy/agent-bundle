@@ -74,10 +74,93 @@ export interface TargetHookContract {
   readonly indexedWrappers?: false;
   readonly manifestPath: string;
   readonly matchers: Readonly<Partial<Record<CanonicalHookTool, string>>>;
+  /** Minimal checked-in host envelope for semantic lifecycle replay. */
+  readonly nativeEventStarter?: (
+    canonicalEvent: CanonicalAgentEvent,
+  ) => Readonly<Record<string, unknown>> | undefined;
   readonly readNativeCommands?: (document: unknown) => TargetNativeHookCommandsReadResult;
   readonly wrapperPath: (hook: NormalizedHook) => string;
   readonly wrapperSource: (entry: TargetHookWrapper) => string;
 }
+
+export type NativeEventStarterTarget = 'claude' | 'codex' | 'cursor';
+
+/** Creates only fields required by the shared native event envelope validator. */
+export const createNativeEventStarter = (
+  target: NativeEventStarterTarget,
+  canonicalEvent: CanonicalAgentEvent,
+  nativeEvent: string,
+): Readonly<Record<string, unknown>> => {
+  const base = target === 'cursor'
+    ? {
+        hook_event_name: nativeEvent,
+        session_id: 'lifecycle-replay',
+      }
+    : {
+        cwd: '/tmp',
+        hook_event_name: nativeEvent,
+        session_id: 'lifecycle-replay',
+        transcript_path: target === 'codex' ? null : '/tmp/agent-bundle-lifecycle-replay-transcript.jsonl',
+      };
+  const toolInput = target === 'codex'
+    ? { command: '*** Begin Patch\n*** Add File: lifecycle-replay.txt\n+Lifecycle replay\n*** End Patch' }
+    : { file_path: 'lifecycle-replay.txt' };
+  const toolName = target === 'codex' ? 'apply_patch' : 'Write';
+  switch (canonicalEvent) {
+    case 'session/start':
+      return deepFreeze(target === 'cursor' ? base : { ...base, source: 'startup' });
+    case 'tool/before':
+      return deepFreeze({
+        ...base,
+        tool_input: toolInput,
+        tool_name: toolName,
+        tool_use_id: 'lifecycle-replay-tool',
+      });
+    case 'tool/after':
+      return deepFreeze({
+        ...base,
+        tool_input: toolInput,
+        tool_name: toolName,
+        ...(target === 'cursor' ? { tool_output: '{}' } : { tool_response: {} }),
+        tool_use_id: 'lifecycle-replay-tool',
+      });
+    case 'stop':
+      return deepFreeze(target === 'cursor'
+        ? { ...base, loop_count: 0 }
+        : { ...base, last_assistant_message: 'Lifecycle replay stopped.', stop_hook_active: false });
+    case 'agent/start':
+      return deepFreeze(target === 'cursor'
+        ? base
+        : {
+            ...base,
+            agent_id: 'lifecycle-replay-agent',
+            agent_type: 'general-purpose',
+            ...(target === 'codex'
+              ? { model: 'default', permission_mode: 'default', turn_id: 'lifecycle-replay-turn' }
+              : {}),
+          });
+    case 'agent/stop':
+      return deepFreeze(target === 'cursor'
+        ? base
+        : {
+            ...base,
+            agent_id: 'lifecycle-replay-agent',
+            agent_transcript_path: null,
+            agent_type: 'general-purpose',
+            last_assistant_message: null,
+            ...(target === 'codex'
+              ? { model: 'default', permission_mode: 'default', turn_id: 'lifecycle-replay-turn' }
+              : {}),
+            stop_hook_active: false,
+          });
+    case 'workspace/open':
+      return deepFreeze(base);
+    default: {
+      const exhaustive: never = canonicalEvent;
+      return exhaustive;
+    }
+  }
+};
 
 const snapshotNativeHookCommands = (value: unknown): readonly TargetNativeHookCommand[] | undefined => {
   const candidates = dataArrayValues(value);
@@ -333,9 +416,9 @@ const eventRouteHookWrapperSource = (
   return [
     "import { dirname, resolve } from 'node:path';",
     `import { EventRuntimeTransportError, requestEventRuntime } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
+    `import { ${standalone ? 'createCanonicalEventProps, projectEventDocument, renderStandaloneEventRoute, ' : ''}validateNativeEventEnvelope } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
     ...(standalone
       ? [
-          `import { createCanonicalEventProps, projectEventDocument, renderStandaloneEventRoute } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
           `import * as routeModule from ${JSON.stringify(entry.hook.source)};`,
         ]
       : []),
@@ -351,58 +434,7 @@ const eventRouteHookWrapperSource = (
     `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
     "const endpointId = `${artifactEpoch}:${artifactTarget}:${dirname(dirname(resolve(process.argv[1])))}`;",
     '',
-    'const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);',
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
-    'const requireString = (input, field) => { if (typeof input[field] !== "string" || input[field].trim() === "") fail(`native ${field} must be a nonempty string`); };',
-    'const validateNative = (input) => {',
-    '  if (!isRecord(input)) fail("stdin JSON value must be an object");',
-    '  if (input.hook_event_name !== nativeEvent) fail(`native hook_event_name must equal ${nativeEvent}`);',
-    '  if (target === "cursor") {',
-    '    if (typeof input.session_id !== "string" && typeof input.conversation_id !== "string") fail("native session_id or conversation_id must be a string");',
-    '    if (canonicalEvent === "tool/before" || canonicalEvent === "tool/after") {',
-    '      requireString(input, "tool_name");',
-    '      if (!isRecord(input.tool_input)) fail("native tool_input must be an object");',
-    '      requireString(input, "tool_use_id");',
-    '      if (canonicalEvent === "tool/after") requireString(input, "tool_output");',
-    '    }',
-    '    if (canonicalEvent === "stop" && typeof input.loop_count !== "number") fail("native loop_count must be a number");',
-    '    return input;',
-    '  }',
-    '  requireString(input, "session_id");',
-    '  if (target === "codex") {',
-    '    if (input.transcript_path !== null && typeof input.transcript_path !== "string") fail("native transcript_path must be a string or null");',
-    '  } else {',
-    '    requireString(input, "transcript_path");',
-    '  }',
-    '  requireString(input, "cwd");',
-    '  if (canonicalEvent === "session/start") requireString(input, "source");',
-    '  if (canonicalEvent === "tool/before" || canonicalEvent === "tool/after") {',
-    '    requireString(input, "tool_name");',
-    '    if (!isRecord(input.tool_input)) fail("native tool_input must be an object");',
-    '    requireString(input, "tool_use_id");',
-    '    if (canonicalEvent === "tool/after" && !isRecord(input.tool_response)) fail("native tool_response must be an object");',
-    '  }',
-    '  if (canonicalEvent === "agent/start" || canonicalEvent === "agent/stop") {',
-    '    requireString(input, "agent_id");',
-    '    requireString(input, "agent_type");',
-    '    if (target === "codex") {',
-    '      requireString(input, "turn_id");',
-    '      requireString(input, "model");',
-    '      requireString(input, "permission_mode");',
-    '      if (!["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"].includes(input.permission_mode)) fail("native permission_mode is invalid");',
-    '    }',
-    '    if (canonicalEvent === "agent/stop") {',
-    '      if (typeof input.stop_hook_active !== "boolean") fail("native stop_hook_active must be a boolean");',
-    '      if (input.agent_transcript_path !== null && typeof input.agent_transcript_path !== "string") fail("native agent_transcript_path must be a string or null");',
-    '      if (input.last_assistant_message !== null && typeof input.last_assistant_message !== "string") fail("native last_assistant_message must be a string or null");',
-    '    }',
-    '  }',
-    '  if (canonicalEvent === "stop") {',
-    '    if (typeof input.stop_hook_active !== "boolean") fail("native stop_hook_active must be a boolean");',
-    '    requireString(input, "last_assistant_message");',
-    '  }',
-    '  return input;',
-    '};',
     ...(standalone
       ? [
           'const runStandalone = async (native, signal) => {',
@@ -423,7 +455,7 @@ const eventRouteHookWrapperSource = (
     '  }',
     '  let parsed;',
     '  try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { fail("stdin must contain exactly one JSON value"); }',
-    '  const native = validateNative(parsed);',
+    '  const native = validateNativeEventEnvelope(parsed, { canonicalEvent, nativeEvent, target });',
     '  const controller = new AbortController();',
     '  let output;',
     '  if (runtimeMode === "standalone") {',

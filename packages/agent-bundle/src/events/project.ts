@@ -23,6 +23,111 @@ let eventSequence = 0;
 const snapshotNative = (native: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> =>
   Object.freeze(structuredClone(native));
 
+export interface NativeEventEnvelopeValidation {
+  readonly canonicalEvent: CanonicalAgentEvent;
+  readonly nativeEvent: string;
+  readonly target: string;
+}
+
+const nativeEventError = (message: string): never => {
+  throw new Error(`Agent Bundle event route error: ${message}`);
+};
+
+const requireNativeString = (input: Readonly<Record<string, unknown>>, field: string): void => {
+  const value = input[field];
+  if (typeof value !== 'string' || value.trim() === '') {
+    nativeEventError(`native ${field} must be a nonempty string`);
+  }
+};
+
+/**
+ * Validates the host envelope shared by generated event wrappers and semantic
+ * lifecycle replay. The process-edge stdin byte limit remains wrapper-owned.
+ */
+export const validateNativeEventEnvelope = (
+  input: unknown,
+  validation: NativeEventEnvelopeValidation,
+): Readonly<Record<string, unknown>> => {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return nativeEventError('stdin JSON value must be an object');
+  }
+  const native = input as Readonly<Record<string, unknown>>;
+  const { canonicalEvent, nativeEvent, target } = validation;
+  if (native.hook_event_name !== nativeEvent) {
+    return nativeEventError(`native hook_event_name must equal ${nativeEvent}`);
+  }
+  if (target === 'cursor') {
+    if (typeof native.session_id !== 'string' && typeof native.conversation_id !== 'string') {
+      return nativeEventError('native session_id or conversation_id must be a string');
+    }
+    if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
+      requireNativeString(native, 'tool_name');
+      if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+        return nativeEventError('native tool_input must be an object');
+      }
+      requireNativeString(native, 'tool_use_id');
+      if (canonicalEvent === 'tool/after') requireNativeString(native, 'tool_output');
+    }
+    if (canonicalEvent === 'stop' && typeof native.loop_count !== 'number') {
+      return nativeEventError('native loop_count must be a number');
+    }
+    return native;
+  }
+  requireNativeString(native, 'session_id');
+  if (target === 'codex') {
+    if (native.transcript_path !== null && typeof native.transcript_path !== 'string') {
+      return nativeEventError('native transcript_path must be a string or null');
+    }
+  } else {
+    requireNativeString(native, 'transcript_path');
+  }
+  requireNativeString(native, 'cwd');
+  if (canonicalEvent === 'session/start') requireNativeString(native, 'source');
+  if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
+    requireNativeString(native, 'tool_name');
+    if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+      return nativeEventError('native tool_input must be an object');
+    }
+    requireNativeString(native, 'tool_use_id');
+    if (
+      canonicalEvent === 'tool/after'
+      && (typeof native.tool_response !== 'object' || native.tool_response === null || Array.isArray(native.tool_response))
+    ) {
+      return nativeEventError('native tool_response must be an object');
+    }
+  }
+  if (canonicalEvent === 'agent/start' || canonicalEvent === 'agent/stop') {
+    requireNativeString(native, 'agent_id');
+    requireNativeString(native, 'agent_type');
+    if (target === 'codex') {
+      requireNativeString(native, 'turn_id');
+      requireNativeString(native, 'model');
+      requireNativeString(native, 'permission_mode');
+      if (!['default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions'].includes(String(native.permission_mode))) {
+        return nativeEventError('native permission_mode is invalid');
+      }
+    }
+    if (canonicalEvent === 'agent/stop') {
+      if (typeof native.stop_hook_active !== 'boolean') {
+        return nativeEventError('native stop_hook_active must be a boolean');
+      }
+      if (native.agent_transcript_path !== null && typeof native.agent_transcript_path !== 'string') {
+        return nativeEventError('native agent_transcript_path must be a string or null');
+      }
+      if (native.last_assistant_message !== null && typeof native.last_assistant_message !== 'string') {
+        return nativeEventError('native last_assistant_message must be a string or null');
+      }
+    }
+  }
+  if (canonicalEvent === 'stop') {
+    if (typeof native.stop_hook_active !== 'boolean') {
+      return nativeEventError('native stop_hook_active must be a boolean');
+    }
+    requireNativeString(native, 'last_assistant_message');
+  }
+  return native;
+};
+
 const resolveServerNode = async (node: ReactNode): Promise<ReactNode> => {
   if (Array.isArray(node)) return Promise.all(node.map(resolveServerNode));
   if (!isValidElement<Record<string, unknown>>(node)) return node;

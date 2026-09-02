@@ -24,6 +24,7 @@ import {
 } from './capability-state.ts';
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import {
+  createNativeEventStarter,
   mergeHookDocuments,
   encodeNativeHookPlaygroundInput,
   encodeNativeHookPlaygroundOutput,
@@ -107,6 +108,7 @@ const pluginValidatorFor = (mcpRelativePath: string): ValidateFunction => {
 export const codexPluginDocumentValidator = (mcpRelativePath: string): TargetArtifactDocumentValidator =>
   validateJsonSchemaDocument(pluginValidatorFor(mcpRelativePath));
 const validateHooks = validator.compile(hooksSchema);
+const eventRouteNames = supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes);
 const hookContract = Object.freeze({
   hostContractRevision: capabilityTable.observedCliVersion,
   commandRoot: '${PLUGIN_ROOT}',
@@ -114,9 +116,13 @@ const hookContract = Object.freeze({
   encodePlaygroundOutput: (result, event, nativeEvent) =>
     encodeNativeHookPlaygroundOutput(result, event, nativeEvent, 'codex'),
   eventNames: capabilityTable.hooks.events,
-  eventRouteNames: supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes),
+  eventRouteNames,
   manifestPath: 'hooks/hooks.json',
   matchers: capabilityTable.hooks.matchers,
+  nativeEventStarter: (event) => {
+    const nativeEvent = eventRouteNames[event];
+    return nativeEvent === undefined ? undefined : createNativeEventStarter('codex', event, nativeEvent);
+  },
   readNativeCommands: readStandardNativeHookCommands,
   wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),

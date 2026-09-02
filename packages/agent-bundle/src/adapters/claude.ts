@@ -24,6 +24,7 @@ import {
 } from './capability-state.ts';
 import capabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
 import {
+  createNativeEventStarter,
   mergeHookDocuments,
   encodeNativeHookPlaygroundInput,
   encodeNativeHookPlaygroundOutput,
@@ -125,6 +126,7 @@ const validateLsp = validator.compile(lspSchema);
 
 /** The pinned Claude hooks validator, shared with the unified bundle adapter. */
 export const claudeHooksValidator = validateHooks;
+const eventRouteNames = supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes);
 const hookContract = Object.freeze({
   hostContractRevision: capabilityTable.observedCliVersion,
   commandRoot: '${CLAUDE_PLUGIN_ROOT}',
@@ -132,9 +134,13 @@ const hookContract = Object.freeze({
   encodePlaygroundOutput: (result, event, nativeEvent) =>
     encodeNativeHookPlaygroundOutput(result, event, nativeEvent, 'claude'),
   eventNames: capabilityTable.hooks.events,
-  eventRouteNames: supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes),
+  eventRouteNames,
   manifestPath: 'hooks/hooks.json',
   matchers: capabilityTable.hooks.matchers,
+  nativeEventStarter: (event) => {
+    const nativeEvent = eventRouteNames[event];
+    return nativeEvent === undefined ? undefined : createNativeEventStarter('claude', event, nativeEvent);
+  },
   readNativeCommands: readStandardNativeHookCommands,
   wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),

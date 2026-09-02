@@ -13,6 +13,7 @@ import { EvalService } from './eval/eval-service.ts';
 import { ProjectEventHub } from './events.ts';
 import { createInspectorLauncher } from './inspector-launcher.ts';
 import { HookPlaygroundService } from './playground/hook-playground-service.ts';
+import { LifecycleReplayService } from './playground/lifecycle-replay-service.ts';
 import {
   startForegroundServer,
   type ForegroundCoordinator,
@@ -684,6 +685,21 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     traceSink: createMcpDevLogTraceSink(logs),
   });
   const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry });
+  const lifecycleReplay = new LifecycleReplayService({
+    logger: logs,
+    prepared: () => {
+      const prepared = latestValidPreparedProject;
+      if (prepared?.model === undefined) {
+        throw new Error('No valid prepared project is available for lifecycle replay.');
+      }
+      return Object.freeze({
+        graph: prepared.routeGraph ?? emptyCompiledRouteGraph,
+        ...(prepared.source.revision === undefined ? {} : { sourceRevision: prepared.source.revision }),
+        targets: Object.freeze(prepared.model.targets.map((target) => target.name)),
+      });
+    },
+    registry,
+  });
   const skillDocuments = new SkillDocumentService({ epochStore, projectService, root });
   const artifacts = new ArtifactInspectionService(epochStore, registry);
   const evals = new EvalService({ logger: logs, projectRoot: root, registry });
@@ -755,6 +771,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     eventHub,
     hookPlayground,
     inspector,
+    lifecycleReplay,
     logs,
     mcpAppPreviews: appPreviews,
     mcpSessions,

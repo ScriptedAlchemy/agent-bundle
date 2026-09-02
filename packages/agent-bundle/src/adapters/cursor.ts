@@ -22,6 +22,7 @@ import {
 } from './capability-state.ts';
 import capabilityTable from './capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import {
+  createNativeEventStarter,
   cursorHookWrapperSource,
   encodeCursorPlaygroundInput,
   encodeCursorPlaygroundOutput,
@@ -121,6 +122,7 @@ export const emptyCursorHooksDocument = Object.freeze({ hooks: {}, version: 1 })
 const cursorHookDocumentEntry = (input: TargetHookDocumentEntryInput): Record<string, unknown> => ({ ...input });
 
 const cursorHookDocumentEnvelope = (hooks: Record<string, unknown[]>): Record<string, unknown> => ({ hooks, version: 1 });
+const eventRouteNames = supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes);
 
 export interface CursorHookContractOptions {
   /** See TargetHookContract.indexedWrappers; the bundle's Cursor wrappers are document variants. */
@@ -144,10 +146,14 @@ export const createCursorHookContract = (options: CursorHookContractOptions): Ta
   encodePlaygroundInput: encodeCursorPlaygroundInput,
   encodePlaygroundOutput: (result, canonicalEvent) => encodeCursorPlaygroundOutput(result, canonicalEvent),
   eventNames: capabilityTable.hooks.events,
-  eventRouteNames: supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes),
+  eventRouteNames,
   ...(options.indexedWrappers === false ? { indexedWrappers: false as const } : {}),
   manifestPath: options.manifestPath,
   matchers: capabilityTable.hooks.matchers,
+  nativeEventStarter: (event) => {
+    const nativeEvent = eventRouteNames[event];
+    return nativeEvent === undefined ? undefined : createNativeEventStarter('cursor', event, nativeEvent);
+  },
   readNativeCommands: readCursorNativeHookCommands,
   wrapperPath: options.wrapperPath,
   wrapperSource: cursorHookWrapperSource,

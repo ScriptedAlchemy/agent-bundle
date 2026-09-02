@@ -497,10 +497,7 @@ export const compileHooks = async (
   const compiled = planCompiledHooks(entries, options);
   const routeEntries = entries.filter((entry) => entry.hook.eventRoute !== undefined);
   const eventIpcRuntime = routeEntries.length === 0 ? undefined : eventRuntimeModulePath('ipc');
-  const eventProjectRuntime = routeEntries.some((entry) =>
-    entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone')
-    ? eventRuntimeModulePath('project')
-    : undefined;
+  const eventProjectRuntime = routeEntries.length === 0 ? undefined : eventRuntimeModulePath('project');
   const evidence = await buildWithRslib({
     cwd: options.cwd,
     entries: compiled.map((entry, index) => ({

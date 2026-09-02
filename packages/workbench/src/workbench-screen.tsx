@@ -1,6 +1,6 @@
 import React, { type ReactNode } from 'react';
 
-export type WorkbenchPage = 'artifacts' | 'comparisons' | 'evals' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'routes' | 'skills';
+export type WorkbenchPage = 'artifacts' | 'comparisons' | 'evals' | 'hooks' | 'lifecycles' | 'logs' | 'mcp' | 'overview' | 'playground' | 'routes' | 'skills';
 
 interface NavigationItem {
   readonly glyph: string;
@@ -25,6 +25,7 @@ const navigationGroups: readonly NavigationGroup[] = [
     items: [
       { glyph: '⌘', label: 'Skills', page: 'skills' },
       { glyph: '⌥', label: 'Hooks', page: 'hooks' },
+      { glyph: '↻', label: 'Lifecycles', page: 'lifecycles' },
       { glyph: '◇', label: 'Playground', page: 'playground' },
       { glyph: '⌁', label: 'MCP playground', page: 'mcp' },
     ],
