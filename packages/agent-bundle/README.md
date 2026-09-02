@@ -353,6 +353,18 @@ Skill Markdown are inert in the workbench renderer.
 
 Top-level `scripts` is a record of stable output names to an entry path or `{ entry, targets? }`. JavaScript/TypeScript entries bundle to `scripts/<name>.mjs`; `.sh`, `.bash`, and `.py` entries copy byte-for-byte while preserving source modes. The generated `agent-bundle.manifest.json` records file digests for stable artifact validation.
 
+### What gets hashed
+
+Hash pins cover vendored external content whose ground truth lives outside this repository and can
+drift: host document schemas under `src/adapters/schemas/*` (with upstream URL, commit, and SHA-256
+recorded in `PROVENANCE.json`), the Agent Skills specification-derived schema pin in the manifest
+`agentSkills` block, and emitted artifact files and source inputs for integrity.
+
+Repository-owned capability tables and evidence are not hashed. Capability evidence records the
+observed host version (`observedVersion`) and target, while adapters carry a monotonic
+`adapterRevision`. Git already versions repository-owned content; hashing it again inside the
+repository is self-referential and causes churn on every table edit.
+
 `AgentBundleConfig` merges bundled portable, Codex, and Claude declarations
 through `AgentBundleConfigExtensions`. `TargetRegistry` owns the unique
 extension descriptor and adapter for each target. Ordinary projects need no

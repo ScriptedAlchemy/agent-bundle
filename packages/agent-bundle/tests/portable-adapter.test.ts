@@ -56,8 +56,6 @@ const plugin = (): NormalizedPlugin => ({
 
 const testAdapterMetadata = Object.freeze({
   adapterRevision: 'test',
-  capabilityRevision: 'test',
-  capabilitySha256: '0'.repeat(64),
   observedVersion: 'test',
   schemas: Object.freeze([]),
 });

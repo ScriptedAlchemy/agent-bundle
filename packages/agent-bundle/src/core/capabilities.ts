@@ -2,8 +2,6 @@ import { CodedError } from './errors.ts';
 
 /** Evidence backing a supported or degraded capability judgment. */
 export interface CapabilityEvidence {
-  readonly capabilityRevision: string;
-  readonly capabilitySha256: string;
   readonly observedVersion: string;
   readonly target: string;
 }
@@ -39,9 +37,7 @@ const isCapabilityStateName = (value: unknown): value is CapabilityState['state'
 const isCapabilityEvidence = (value: unknown): value is CapabilityEvidence => {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Partial<Record<keyof CapabilityEvidence, unknown>>;
-  return typeof candidate.capabilityRevision === 'string' &&
-    typeof candidate.capabilitySha256 === 'string' &&
-    typeof candidate.observedVersion === 'string' &&
+  return typeof candidate.observedVersion === 'string' &&
     typeof candidate.target === 'string';
 };
 

@@ -52,8 +52,6 @@ const createProject = async (): Promise<string> => {
 
 const syntheticMetadata = Object.freeze({
   adapterRevision: 'test',
-  capabilityRevision: 'test',
-  capabilitySha256: '0'.repeat(64),
   observedVersion: 'test',
   schemas: Object.freeze([]),
 });

@@ -22,8 +22,6 @@ export const writeFixtureManifest = async (options: {
       const metadata = registry.metadata(name);
       return {
         adapterRevision: metadata.adapterRevision,
-        capabilityRevision: metadata.capabilityRevision,
-        capabilitySha256: metadata.capabilitySha256,
         name,
         observedVersion: metadata.observedVersion,
         schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),

@@ -20,8 +20,6 @@ import { build } from './support/build.ts';
 
 const metadata = Object.freeze({
   adapterRevision: 'test',
-  capabilityRevision: 'test',
-  capabilitySha256: '0'.repeat(64),
   observedVersion: 'test',
   schemas: Object.freeze([]),
 });
@@ -279,7 +277,7 @@ it('rejects missing and blank native event mappings before creating hook entries
 
 it('plans a thin epoch-bound event-route client and keeps standalone execution explicit', () => {
   const contract: TargetHookContract = {
-    capabilityRevision: 'synthetic-1',
+    hostContractRevision: 'synthetic-1',
     commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
     ...playgroundCodec,
     eventNames: {},

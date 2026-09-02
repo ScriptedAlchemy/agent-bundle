@@ -122,8 +122,6 @@ it('exposes advanced adapter registry and contract types only from the advanced 
     mcpRuntime,
     metadata: {
       adapterRevision: 'test',
-      capabilityRevision: 'test',
-      capabilitySha256: '0'.repeat(64),
       observedVersion: 'test',
       schemas: [],
     },
@@ -198,6 +196,11 @@ it('keeps bundled config extension types in emitted root declarations', async ()
     await symlink(
       join(agentBundleNodeModules, '@modelcontextprotocol'),
       join(consumerRoot, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await symlink(
+      join(agentBundleNodeModules, '@agent-bundle'),
+      join(consumerRoot, 'node_modules', '@agent-bundle'),
       'dir',
     );
     await symlink(

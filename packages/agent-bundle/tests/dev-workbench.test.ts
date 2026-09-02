@@ -256,8 +256,6 @@ const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
   configExtension: Object.freeze({ key: 'workbenchSynthetic' }),
   metadata: Object.freeze({
     adapterRevision: 'test',
-    capabilityRevision: 'test',
-    capabilitySha256: '0'.repeat(64),
     observedVersion: 'test',
     schemas: Object.freeze([]),
   }),

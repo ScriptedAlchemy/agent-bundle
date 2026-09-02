@@ -274,8 +274,6 @@ const matchesTargetMetadata = (
   target: ArtifactManifest['targets'][number],
   metadata: ReturnType<TargetRegistry['metadata']>,
 ): boolean => target.adapterRevision === metadata.adapterRevision &&
-  target.capabilityRevision === metadata.capabilityRevision &&
-  target.capabilitySha256 === metadata.capabilitySha256 &&
   target.observedVersion === metadata.observedVersion &&
   sameSchemas(target.schemas, metadata.schemas);
 

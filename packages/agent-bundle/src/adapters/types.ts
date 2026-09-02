@@ -361,8 +361,6 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
 
 export interface TargetAdapterMetadata {
   readonly adapterRevision: string;
-  readonly capabilityRevision: string;
-  readonly capabilitySha256: string;
   readonly observedVersion: string;
   readonly schemas: readonly TargetSchemaDescriptor[];
 }
