@@ -55,8 +55,10 @@ Services: declare `class X extends Context.Service<X, Shape>()("pkg/path/X")`.
 ## Error mapping
 
 zod stays at every schema boundary (MCP SDK interop; recorded G-decisions).
-**Effect Schema is deferred** — do not introduce `Schema.TaggedError` on the
-public or MCP-facing contracts. Internals keep the existing classes.
+**Effect Schema is deferred** (re-evaluated 2026-09-01 for wire contracts; see
+[Effect Schema wire contracts](#effect-schema-wire-contracts-schema-projections))
+— do not introduce `Schema.TaggedError` on the public or MCP-facing contracts.
+Internals keep the existing classes.
 
 | Effect channel | Runtime contract |
 | --- | --- |
@@ -227,6 +229,53 @@ tests already Effect-native; do not convert Promise-contract tests solely for
 fixture cleanup. Treat `layerNoop` as a selective stub, not an in-memory
 filesystem.
 
+## Effect Schema wire contracts (Schema projections)
+
+Evaluated 2026-09-01 against `effect@4.0.0-rc.112` for the wire-contract
+seams (dev-server DTO routes ↔ Workbench strict decoders, IPC #209, native
+event envelope #279); **decision = not adopted** this RC cycle. In rc.112,
+`Schema`, `SchemaAST`, and `SchemaParser` are stable top-level modules, not
+`effect/unstable/*`. The `Schema.toType` / `Schema.toEncoded` projections are
+present and match the current v4 docs: their signatures operate over
+`Schema.Constraint`, preserve checks, and use the same `decodeUnknown*` parse
+family. Revisit at Effect GA or the first time a wire contract genuinely
+diverges between its encoded and decoded sides.
+
+The projections currently have nothing to bridge. Every wire contract in
+`packages/agent-bundle/src/contracts/*` is JSON-plain: timestamps are strings,
+there are no `Date`, `bigint`, `Map`, `Set`, or transformations, and the
+encoded and type sides are structurally identical. `toType` / `toEncoded`
+would therefore be near-identity. The real dual maintenance — contract types
+plus separately hand-written Workbench decoders — is a single-source-of-truth
+problem that the pinned zod can already solve with `z.infer`; it does not
+require a second schema runtime.
+
+Strictness is also call-site-fragile. Effect Schema rejects unknown keys only
+through the per-decode `onExcessProperty: "error"` parse option, whose default
+is `"ignore"`, rather than carrying exact-key rejection on the schema value
+like `z.strictObject`. After the PR #121 exact-key regression, strictness must
+travel with the schema value instead of being re-asserted at every decode
+site.
+
+zod cannot leave: MCP SDK interop and the public authoring surface keep it
+pinned, so Schema would add a second schema runtime to the Workbench browser
+bundle. Measured on the Workbench toolchain (rsbuild/rspack all-in-one,
+minified, rc.112), a minimal strict `Struct` decode adds +46.5 kB minified /
++14.6 kB gzip on top of the already-shipped atoms runtime. Standalone
+fixtures measure Effect Schema at 101.5 kB / 33.4 kB gzip versus zod at
+62.4 kB / 16.8 kB gzip.
+
+The diagnostics do not fit these seams either. Workbench clients deliberately
+collapse decode failures into single AB-coded errors such as `AB8233` and
+`AB8063`, so `SchemaIssue` / `Formatter` trees add nothing there.
+`config/validate.ts` contains business-rule diagnostics — AB code, severity,
+and recovery per rule — rather than shape validation.
+
+zod stays at every wire/schema boundary under the existing G-decisions, and
+the hand-rolled exact-key guards stay. If a future contract needs real
+encoded/decoded divergence shared by server and client, pilot Schema plus
+projections on that single contract before any wider adoption.
+
 ## Banned modules and APIs
 
 - `Effect.runPromise` / `runSync` / `runFork` / `runCallback` (and `*With` /
@@ -247,12 +296,14 @@ needed only stable `Semaphore`, `Deferred`, `Scope`, and `Exit`.
 The #99 notice ledger also adopts none: it needs only stable `Effect` and
 `forEach` over the existing Promise-returning state authority. Declined rows
 record evaluated-and-rejected surfaces; see [Effect platform
-services](#effect-platform-services-effectplatform-node).
+services](#effect-platform-services-effectplatform-node) and [Effect Schema
+wire contracts](#effect-schema-wire-contracts-schema-projections).
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
 | `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
 | `@effect/platform-node` (`NodeFileSystem` / `NodePath`) | **declined** (2026-09-01) | revisit at Effect GA; re-pin re-evaluates lstat/O_NOFOLLOW/inode primitives + `runMain` 130/143 exit contract |
+| `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
 
 ## Language service
 
