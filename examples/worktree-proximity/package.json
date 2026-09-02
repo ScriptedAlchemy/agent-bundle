@@ -1,0 +1,33 @@
+{
+  "name": "@agent-bundle-example/worktree-proximity",
+  "version": "1.0.0",
+  "private": true,
+  "description": "An advanced worktree-proximity coordination reference for agent-bundle.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "artifact",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "agent-bundle build --output artifact",
+    "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test && pnpm test:routes",
+    "dev": "agent-bundle dev",
+    "test": "rstest tests --exclude 'tests/route-unit/**'",
+    "test:routes": "rstest --config rstest.route-unit.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "validate": "agent-bundle validate"
+  },
+  "dependencies": {
+    "@agent-bundle/runtime": "workspace:*",
+    "react": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@rstest/core": "0.11.10",
+    "@types/react": "19.2.18",
+    "agent-bundle": "workspace:*"
+  }
+}
