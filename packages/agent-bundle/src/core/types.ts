@@ -124,8 +124,8 @@ export interface AgentBundleOutputConfig {
   /**
    * The artifact output directory of `agent-bundle build`, relative to the
    * project root. Defaults to `dist`. The per-invocation CLI `--output` flag
-   * still wins, and remains the only way to target an absolute path outside
-   * the project.
+   * still wins, but remains subject to the same project-root containment
+   * check; absolute and external output paths are unsupported.
    */
   distPath?: string;
 }
