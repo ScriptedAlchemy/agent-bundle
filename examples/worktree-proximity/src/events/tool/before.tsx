@@ -78,7 +78,7 @@ export default async function BeforeTool({
         dedupeKey: `proximity:${resolution.actor.id}:${conflict.actorId}:${conflict.summary}`,
         priority: 'high',
         recipient: {
-          actor: { id: conflict.actorId },
+          workspace: { root: conflict.worktreeRoot },
         },
       }, {
         idempotencyKey: `${canonical.idempotencyKey}:notice:${String(index)}`,

@@ -23,6 +23,7 @@ export const resultSchema = z
     actors: z.array(ActorSchema),
     reason: z.string().optional(),
     refusals: z.number().int().nonnegative(),
+    revision: z.number().int().nonnegative(),
     state: z.enum(['available', 'unavailable']),
   })
   .strict();
@@ -32,7 +33,7 @@ type StatusResult = z.output<typeof resultSchema>;
 export default async function Status({
   input,
 }: ToolRouteProps<typeof inputSchema>) {
-  const topologyResult = await withTopology(async (store) => (await store.read()).state);
+  const topologyResult = await withTopology(async (store) => store.read());
   let result: StatusResult;
   if (topologyResult.state === 'unavailable') {
     result = {
@@ -40,10 +41,11 @@ export default async function Status({
       actors: [],
       reason: topologyResult.reason,
       refusals: 0,
+      revision: 0,
       state: 'unavailable',
     };
   } else {
-    const topology = topologyResult.value;
+    const { revision, state: topology } = topologyResult.value;
     const actors = input.actorId === undefined
       ? topology.actors
       : topology.actors.filter((actor) => actor.id === input.actorId);
@@ -56,6 +58,7 @@ export default async function Status({
       ).length,
       actors,
       refusals: topology.refusals.length,
+      revision,
       state: 'available',
     };
   }

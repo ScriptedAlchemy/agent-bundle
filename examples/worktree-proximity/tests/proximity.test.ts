@@ -63,6 +63,7 @@ describe('findProximity', () => {
       actorId: 'agent-b',
       summary:
         'Worktrees /repo/worktrees/a and /repo/worktrees/b both intend to change path src/shared.ts.',
+      worktreeRoot: '/repo/worktrees/b',
     }]);
   });
 
@@ -75,6 +76,7 @@ describe('findProximity', () => {
       actorId: 'agent-b',
       summary:
         'Worktrees /repo/worktrees/a and /repo/worktrees/b both depend on zod.',
+      worktreeRoot: '/repo/worktrees/b',
     }]);
   });
 
