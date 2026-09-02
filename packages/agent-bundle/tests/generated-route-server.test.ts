@@ -8,7 +8,11 @@ import { dirname, join, resolve } from 'node:path';
 import { afterEach, expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
-import { eventRuntimeEndpoint, requestEventRuntime } from '../src/events/ipc.ts';
+import {
+  eventRuntimeEndpoint,
+  requestEventRuntime,
+  requestEventRuntimeStatus,
+} from '../src/events/ipc.ts';
 
 const roots: string[] = [];
 
@@ -572,6 +576,17 @@ it('renders one tool/after event route through two native thin clients', { retry
       const endpointId = `${compiled.build.manifest.project.revision}:${target}:${dirname(dirname(resolve(mcp.output)))}`;
       const expectedEndpoint = eventRuntimeEndpoint(endpointId);
       await expect(stat(expectedEndpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
+      const firstStatus = await requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
+      const secondStatus = await requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
+      expect(firstStatus).toMatchObject({
+        artifactEpoch: 'generated-events-fixture@1.0.0',
+        availability: 'available',
+        status: 'available',
+      });
+      expect(secondStatus).toMatchObject({
+        instanceId: firstStatus.status === 'available' ? firstStatus.instanceId : undefined,
+        status: 'available',
+      });
       const native = target === 'cursor'
         ? {
             conversation_id: 'conversation-1',

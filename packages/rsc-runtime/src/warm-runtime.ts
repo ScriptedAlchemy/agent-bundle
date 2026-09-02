@@ -40,7 +40,13 @@ export interface WarmRuntimeIdentity {
   readonly instanceId: string;
 }
 
+export type WarmRuntimeAvailability =
+  | 'available'
+  | 'runtime-restarted'
+  | 'runtime-unavailable';
+
 export interface WarmFlightHost extends AgentFlightExecutionHost {
+  readonly availability: () => WarmRuntimeAvailability;
   readonly close: () => Promise<void>;
   readonly identity: WarmRuntimeIdentity;
   readonly markUnavailable: (code?: Exclude<AgentRuntimeErrorCode, 'artifact-epoch-mismatch'>) => void;
@@ -78,11 +84,16 @@ export const createWarmFlightHost = (options: CreateWarmFlightHostOptions): Warm
     artifactEpoch: options.artifactEpoch,
     instanceId: options.instanceId ?? crypto.randomUUID(),
   });
+  let availability: WarmRuntimeAvailability = 'available';
   let unavailable: AgentRuntimeError | undefined;
   return Object.freeze({
+    availability: (): WarmRuntimeAvailability => availability,
     identity,
     markUnavailable(code: Exclude<AgentRuntimeErrorCode, 'artifact-epoch-mismatch'> = 'runtime-unavailable') {
-      unavailable ??= unavailableError(code);
+      if (unavailable === undefined) {
+        availability = code;
+        unavailable = unavailableError(code);
+      }
     },
     async close() {
       try {

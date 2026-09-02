@@ -28,7 +28,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7xxx` | Project preparation and development rebuilds. |
-| `AB7300`–`AB7316` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health, and durable-state inventory. |
+| `AB7300`–`AB7318` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, and durable-state inventory. |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
 | `AB8219`–`AB8223` | Workbench live MCP probe route (user-initiated, read-only initialize + tools/list): `AB8219` invalid path, `AB8220` invalid request/method, `AB8221` probe target not found, `AB8222` response over the 16 MiB budget, `AB8223` probe unavailable. |
 | `AB8xxx` | Development server configuration. |
@@ -368,6 +368,13 @@ SQLite lock or shared-memory files.
 | Code | Severity | Trigger |
 | --- | --- | --- |
 | `AB7316` | warning | An installed bundle's `state/` directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Repair permissions and rerun Doctor; Doctor never repairs state. |
+
+## Read-only runtime identity introspection (`AB7317`–`AB7318`)
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB7317` | info | A live event runtime implements the older strict protocol and does not expose runtime identity. Restart it after upgrading Agent Bundle. |
+| `AB7318` | error | A live event runtime became unavailable, timed out, or returned an invalid status response during the bounded read-only identity probe. Inspect or restart the runtime, then rerun Doctor. |
 
 ## Development package build (`AB7103`)
 
