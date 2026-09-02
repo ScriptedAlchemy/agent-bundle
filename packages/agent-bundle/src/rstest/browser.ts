@@ -118,6 +118,12 @@ export const agentBundleBrowserRstest = async (
   await mkdir(outputRoot, { recursive: true });
   const compiled = await compileMcpApps(normalized, {
     cwd: root,
+    meta: {
+      name: manifest.plugin.name,
+      packageName: manifest.plugin.packageName,
+      packageVersion: manifest.plugin.packageVersion,
+      version: manifest.plugin.version,
+    },
     outDir: outputRoot,
     targets,
   });

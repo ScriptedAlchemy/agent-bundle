@@ -485,9 +485,10 @@ it('validates raw optional portable Skill fields before sanitizing the Skill IR'
 it('diagnoses a missing plugin object instead of throwing', () => {
   const loaded = loadedProject({} as AgentBundleConfig);
 
+  // Only the name is required: an omitted version is inferred from
+  // package.json, so AB4001 fires on a declared-but-invalid value alone.
   expect(validateSource(loaded, { skills: [] }, registry)).toMatchObject([
     { code: 'AB4000', sourcePath: loaded.configPath },
-    { code: 'AB4001', sourcePath: loaded.configPath },
   ]);
 });
 

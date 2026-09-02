@@ -14,9 +14,11 @@ import {
 } from './entry-shell.ts';
 import { planCompiledMcpEntries } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
+import { projectMeta } from './meta.ts';
 import { planPackageEntries } from './package-build.ts';
 import { composeEntryLibConfig, type RslibEntry } from './rslib.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import type { AgentBundleMeta } from '../meta.ts';
 
 
 /**
@@ -97,6 +99,7 @@ const renderConfigValue = (value: unknown, ancestors = new Set<object>()): unkno
 const rslibInspectionEntry = (options: {
   readonly entry: RslibEntry;
   readonly kind: BundlerInspectionEntry['kind'];
+  readonly meta: AgentBundleMeta;
   readonly name: string;
   readonly outputPath: string;
   readonly outputRoot: string;
@@ -106,6 +109,7 @@ const rslibInspectionEntry = (options: {
 }): BundlerInspectionEntry => Object.freeze({
   bundler: 'rslib',
   config: renderConfigValue(composeEntryLibConfig(options.entry, {
+    meta: options.meta,
     outputRoot: options.outputRoot,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   })),
@@ -122,6 +126,7 @@ const scriptEntries = async (
   target: string,
   tools: AgentBundleToolsConfig | undefined,
 ): Promise<readonly BundlerInspectionEntry[]> => {
+  const meta = projectMeta(model.metadata);
   const outputRoot = artifactOutputToken(target);
   const scripts = model.scripts.filter((script) =>
     script.mode === 'bundle' && script.targets.includes(target));
@@ -143,6 +148,7 @@ const scriptEntries = async (
           : {}),
       },
       kind: 'script',
+      meta,
       name: script.name,
       outputPath: `${target}/scripts/${script.name}.mjs`,
       outputRoot,
@@ -158,6 +164,7 @@ const mcpEntryEntries = async (
   target: string,
   tools: AgentBundleToolsConfig | undefined,
 ): Promise<readonly BundlerInspectionEntry[]> => {
+  const meta = projectMeta(model.metadata);
   const outputRoot = artifactOutputToken(target);
   const planned = planCompiledMcpEntries(model.mcpServers, { outDir: outputRoot, target });
   const entries: BundlerInspectionEntry[] = [];
@@ -204,6 +211,7 @@ const mcpEntryEntries = async (
         ],
       },
       kind: 'mcp-entry',
+      meta,
       name: serverName,
       outputPath: `${target}/mcp/${entry.name}.mjs`,
       outputRoot,
@@ -229,6 +237,7 @@ const mcpEntryEntries = async (
           }),
         },
         kind: 'mcp-entry',
+        meta,
         name: `${serverName}:flight`,
         outputPath: `${target}/mcp/${workerFile}`,
         outputRoot,
@@ -243,6 +252,7 @@ const mcpEntryEntries = async (
 
 const hookEntries = (
   entries: readonly TargetHookEntry[],
+  meta: AgentBundleMeta,
   target: string,
   tools: AgentBundleToolsConfig | undefined,
 ): readonly BundlerInspectionEntry[] => {
@@ -256,6 +266,7 @@ const hookEntries = (
       virtualSource: entry.virtualSource,
     },
     kind: 'hook',
+    meta,
     name: entry.hook.name,
     outputPath: `${target}/${entry.relativePath}`,
     outputRoot,
@@ -284,6 +295,7 @@ const mcpAppsEntry = (
   return [Object.freeze({
     bundler: 'rsbuild' as const,
     config: renderConfigValue(composeMcpAppsRsbuildConfig(sources, {
+      meta: projectMeta(model.metadata),
       outDir: outputRoot,
       ...(tools === undefined ? {} : { tools }),
     })),
@@ -302,11 +314,13 @@ const packageBuildEntries = async (
   if (packageBuild === undefined) return [];
   const dtsTsconfig = packageBuild.lib?.dts === true ? generatedDtsTsconfigToken : undefined;
   const planned = await planPackageEntries(model, dtsTsconfig);
+  const meta = projectMeta(model.metadata);
   return planned.map((entry) => {
     const bin = entry.executable;
     return rslibInspectionEntry({
       entry,
       kind: bin ? 'bin' : 'lib',
+      meta,
       name: bin ? entry.name.replace(/^bin-/u, '') : entry.name,
       outputPath: `${packageBuild.outputDir}/${entry.outputRelativePath}`,
       outputRoot: packageBuild.outputDir,
@@ -327,11 +341,12 @@ export const composeBundlerInspection = async (options: {
   readonly tools?: AgentBundleToolsConfig;
 }): Promise<BundlerInspection> => {
   const entries: BundlerInspectionEntry[] = [];
+  const meta = projectMeta(options.model.metadata);
   for (const target of options.targets) {
     entries.push(
       ...(await scriptEntries(options.model, target.name, options.tools)),
       ...(await mcpEntryEntries(options.model, target.name, options.tools)),
-      ...hookEntries(target.hookEntries, target.name, options.tools),
+      ...hookEntries(target.hookEntries, meta, target.name, options.tools),
       ...mcpAppsEntry(options.model, target.name, options.tools),
     );
   }

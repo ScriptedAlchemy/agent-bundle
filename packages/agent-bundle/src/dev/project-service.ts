@@ -774,9 +774,12 @@ export class ProjectService {
     let sourceDiagnostics: readonly Diagnostic[];
     try {
       // The AB4750 freshness nudge only surfaces through `validate`; other
-      // commands skip its full-project mtime walk.
+      // commands skip its full-project mtime walk. `build` is the one command
+      // that produces a release artifact, so it alone refuses a project with
+      // no release identity (AB4013).
       sourceDiagnostics = freezeDiagnostics(validateSource(preparedLoaded, discovered, registry, {
         payloadFreshness: command === 'validate',
+        release: command === 'build',
       }));
     } catch {
       return failedPreparation(

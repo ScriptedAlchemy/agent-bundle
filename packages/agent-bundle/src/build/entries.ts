@@ -16,6 +16,7 @@ import type {
   NormalizedScript,
   NormalizedStateDefinition,
 } from '../core/types.ts';
+import type { AgentBundleMeta } from '../meta.ts';
 import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
@@ -156,6 +157,7 @@ export const compileEntries = async (
   entries: readonly NormalizedScript[],
   options: {
     readonly cwd: string;
+    readonly meta: AgentBundleMeta;
     readonly outDir: string;
     readonly state?: NormalizedStateDefinition;
     readonly tools?: AgentBundleToolsConfig;
@@ -226,6 +228,7 @@ export const compileEntries = async (
       })()];
     })),
     ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(cliRuntimeShell)] }),
+    meta: options.meta,
     outputRoot: options.outDir,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   });
@@ -307,6 +310,7 @@ export const compileMcpEntries = async (
     readonly artifactEpoch: string;
     readonly cwd: string;
     readonly eventHooks: readonly NormalizedHook[];
+    readonly meta: AgentBundleMeta;
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
     readonly providers?: readonly CompiledProvider[];
@@ -450,6 +454,7 @@ export const compileMcpEntries = async (
         ],
       }),
     logLevel: 'error',
+    meta: options.meta,
     outputRoot: options.outDir,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   });
@@ -484,6 +489,7 @@ export const compileHooks = async (
   options: {
     readonly artifactEpoch: string;
     readonly cwd: string;
+    readonly meta: AgentBundleMeta;
     readonly outDir: string;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -520,6 +526,7 @@ export const compileHooks = async (
       : {
         ignoredSourcePaths: [runtimeIgnoredRoot(eventIpcRuntime)],
       }),
+    meta: options.meta,
     outputRoot: options.outDir,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   });

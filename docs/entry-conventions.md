@@ -268,6 +268,35 @@ Export detection is a static scan of the entry source (comment-, string-, and
 template-safe). The generated shells re-verify the export shape at runtime
 with a clear error.
 
+## `agent-bundle/meta` — build-time release identity
+
+Plugin code reads its own identity from the framework instead of maintaining
+a hand-written `src/lib/version.ts`:
+
+```ts
+import meta, { name, packageName, packageVersion, version } from 'agent-bundle/meta';
+```
+
+`version` is the resolved plugin version: the authored `plugin.version` when
+declared, otherwise the `package.json` version. `name` is the host-native
+plugin slug — never the npm package name. `packageName` and `packageVersion`
+are the validated npm axes, `undefined` for an unpackaged development
+project. Every value is exactly what artifact manifests, `inspect`, and dev
+status report for the same build.
+
+The compiler replaces the specifier in **every** compiled surface: artifact
+scripts, the routed CLI, MCP entries, hook wrappers, and the package build
+(all through Rslib), plus browser MCP App view bundles (through Rsbuild). The
+module is a reserved specifier, so the `tools` hatch cannot externalize it,
+and no emitted bundle can still carry an unresolved import of it.
+
+Types ship with the package export, so no generated declaration file is
+involved. Outside Agent Bundle compilation the published module throws rather
+than reporting a fabricated identity — a plugin slug exists only in the
+config, and a runtime guess at it would silently disagree with the artifact.
+A release build refuses a project with no release version at all (`AB4013`),
+so a compiled artifact never carries the development fallback.
+
 ## Prebuilt payloads — package what you compiled yourself
 
 Some projects legitimately own their compilation — a coordinated
@@ -359,8 +388,8 @@ A hatch value that breaks an artifact contract (async chunks, output roots,
 self-containment) fails the build with a hard diagnostic instead of silently
 overriding the contract. Reserved module specifiers are protected the same
 way: a hatch that externalizes `agent-bundle/mcp-entry` or a generated
-registry specifier (such as `agent-bundle/mcp-apps`) fails the build with a
-hard diagnostic — at config inspection for statically visible `externals`,
+module specifier (`agent-bundle/meta`, or a registry specifier such as
+`agent-bundle/mcp-apps`) fails the build with a hard diagnostic — at config inspection for statically visible `externals`,
 and through a post-build scan of the emitted bundle for function-form
 `externals` — because generated executables must stay self-contained. The
 hatch customizes *how code compiles*, never *what the artifact promises*.

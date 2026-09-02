@@ -21,6 +21,7 @@ import {
   type CompiledHookEntry,
   type CompiledMcpEntry,
 } from './entries.ts';
+import { projectMeta } from './meta.ts';
 import { compileMcpApps, planCompiledMcpApps, type CompiledMcpApp } from './mcp-apps.ts';
 import {
   assertUniqueArtifactDestinations,
@@ -346,9 +347,13 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     const compiledMcpApps: CompiledMcpApp[] = [];
     const compiledMcpEntries: CompiledMcpEntry[] = [];
     const tools = options.tools === undefined ? {} : { tools: options.tools };
+    // One identity feeds every compiled surface, exactly the identity the
+    // manifest, `inspect`, and dev status report (issue #237).
+    const meta = projectMeta(options.model.metadata);
     for (const target of stagedTargets) {
       const targetMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
         cwd: options.projectRoot,
+        meta,
         outDir: target.root,
         target: target.name,
         ...tools,
@@ -360,6 +365,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           options.model.scripts.filter((script) => script.targets.includes(target.name)),
           {
             cwd: options.projectRoot,
+            meta,
             outDir: target.root,
             ...(options.model.state === undefined ? {} : { state: options.model.state }),
             ...tools,
@@ -369,6 +375,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       compiledHooks.push(...(await compileHooks(target.hookEntries, {
         artifactEpoch: options.projectContext.revision,
         cwd: options.projectRoot,
+        meta,
         outDir: target.root,
         ...tools,
       })));
@@ -379,6 +386,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         eventHooks: target.hookEntries
           .filter((entry) => entry.hook.eventRoute !== undefined)
           .map((entry) => entry.hook),
+        meta,
         outDir: target.root,
         plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
         providers: options.model.providers ?? [],

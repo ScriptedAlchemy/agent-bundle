@@ -11,7 +11,7 @@ gate a build, a validation, or a dev rebuild.
 | Family | Area |
 | --- | --- |
 | `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter) and rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset). |
-| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: missing name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011`: package identity; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project). |
+| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011` and `AB4013`: release identity, see below; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project). |
 | `AB41xx` | Normalized model invariants (unknown targets, duplicate IDs and outputs). |
 | `AB42xx` | Hook configuration and native hook sources. |
 | `AB43xx` | MCP server and MCP App configuration. |
@@ -61,6 +61,38 @@ its module does not export) are invisible to `tsc --noEmit`, so a green
 `typecheck` script proves nothing about them. Reproduce them with
 `tsc --declaration --emitDeclarationOnly` over the lib entry source
 directory.
+
+## Release identity (`AB4001`, `AB4008`–`AB4011`, `AB4013`)
+
+`package.json` is authoritative for release identity (issue #94): its `name`
+and `version` become the `packageName` and `packageVersion` axes carried on
+the project context, artifact manifests, `inspect` output, and dev status.
+`plugin.name` stays the host-native slug and is never derived from the npm
+package name.
+
+`plugin.version` is **optional**. When it is omitted, the version every
+surface reports — manifests, host projections, dev status, and the
+`agent-bundle/meta` constant compiled into plugin code — is the `package.json`
+version. When it is declared, the declared value still wins so a legacy
+config never changes meaning mid-migration, and a disagreement reports the
+`AB4008` **warning**. Declaring it as anything but a nonempty string is an
+`AB4001` error.
+
+A project with neither an authored `plugin.version` nor a valid `package.json`
+version has no release identity. Development commands (`dev`, `inspect`,
+`validate`) keep running on the labeled `0.0.0-dev.<short-revision>` fallback,
+because an unpackaged scratch project is a normal development state. A
+development-only fallback can never produce a release artifact, so
+`agent-bundle build` alone refuses it with `AB4013`.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB4001` | error | `plugin.version` is declared as something other than a nonempty string. Omit the field to derive the version from `package.json`. |
+| `AB4008` | warning | A declared `plugin.version` differs from the `package.json` version. Align the two, or drop `plugin.version`. |
+| `AB4009` | warning | `package.json` `name` is not a valid npm package name; the `packageName` axis is withheld. |
+| `AB4010` | warning | `package.json` `version` is not a valid semantic version; the `packageVersion` axis is withheld. |
+| `AB4011` | warning | `package.json` is unusable — unparsable, not a JSON object, or symlinked outside the project root. |
+| `AB4013` | error (build) | `agent-bundle build` refuses a project with no release version: `plugin.version` is omitted and `package.json` declares no valid semantic version. |
 
 ## Migration nudges (`AB4730`–`AB4735`)
 

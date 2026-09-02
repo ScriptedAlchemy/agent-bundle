@@ -12,7 +12,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { snapshotPackageIdentity } from '../core/project-context.ts';
+import { developmentFallbackVersion, snapshotPackageIdentity } from '../core/project-context.ts';
 import { isRecord } from '../core/strict-json.ts';
 import {
   canonicalHookEvents,
@@ -964,6 +964,22 @@ const normalizeRules = (
   };
 });
 
+/**
+ * The one plugin version every surface agrees on (issue #94 stage 3): an
+ * authored `plugin.version` still wins so a legacy declaration never changes
+ * meaning mid-migration (a disagreement with package.json is the AB4008
+ * warning), an omitted one derives the release version from package.json,
+ * and a project with neither carries the development fallback that
+ * `agent-bundle build` refuses to package (AB4013).
+ */
+const resolvePluginVersion = (
+  authored: unknown,
+  packageVersion: string | undefined,
+): string =>
+  (typeof authored === 'string' && authored.trim().length > 0 ? authored : undefined)
+  ?? packageVersion
+  ?? developmentFallbackVersion;
+
 /** Selects the generated-executable floor; invalid raises fall back to the default the validator rejected. */
 const normalizeRuntime = (loaded: LoadedConfig): NormalizedRuntime => {
   const node = loaded.config.runtime?.node;
@@ -1021,6 +1037,7 @@ export const normalizeProject = async (
   // is authoritative for release identity (issue #94), while plugin.version
   // remains the host-facing declared version during the migration.
   const packageIdentity = snapshotPackageIdentity(loaded.context.projectRoot);
+  const version = resolvePluginVersion(loaded.config.plugin.version, packageIdentity.packageVersion);
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
   const payloads = normalizePayloads(loaded, discovered, targetNames);
   const mcpServers = normalizeMcpServers(loaded, discovered, targetNames, payloads);
@@ -1055,7 +1072,7 @@ export const normalizeProject = async (
       ...(packageIdentity.packageName === undefined ? {} : { packageName: packageIdentity.packageName }),
       ...(packageIdentity.packageVersion === undefined ? {} : { packageVersion: packageIdentity.packageVersion }),
       provenance: configProvenance,
-      version: loaded.config.plugin.version,
+      version,
     },
     mcpApps: normalizeMcpApps(loaded, discovered, mcpServers),
     mcpServers,
