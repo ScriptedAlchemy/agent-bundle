@@ -46,11 +46,16 @@ const replay = {
   nativeInput: { hook_event_name: 'PostToolUse', tool_name: 'Write' },
   nativeResponse: { hookSpecificOutput: { additionalContext: 'Recorded README.md' } },
   requestContext: {
-    hostContractRevision: 'claude-hooks@1',
-    invocationKind: 'event' as const,
-    nativeEvent: 'PostToolUse',
-    routeId: 'event:tool/after',
-    target: 'claude',
+    actor: { reason: 'not-provided' as const, state: 'unavailable' as const },
+    host: { source: 'receipt' as const, state: 'available' as const, value: { name: 'claude' } },
+    invocation: {
+      hostContractRevision: 'claude-hooks@1',
+      kind: 'event' as const,
+      operationId: 'event:tool/after',
+      surface: 'tool/after',
+    },
+    session: { reason: 'not-provided' as const, state: 'unavailable' as const },
+    workspace: { reason: 'not-provided' as const, state: 'unavailable' as const },
   },
   source: 'fixture' as const,
 };
@@ -128,6 +133,12 @@ it('posts the exact replay binding, native receipt, and honest source', async ()
     replay: {
       binding: request.binding,
       canonical: { provenance: { host: 'claude', nativeEvent: 'PostToolUse' } },
+      requestContext: {
+        actor: { reason: 'not-provided', state: 'unavailable' },
+        host: { source: 'receipt', state: 'available', value: { name: 'claude' } },
+        session: { reason: 'not-provided', state: 'unavailable' },
+        workspace: { reason: 'not-provided', state: 'unavailable' },
+      },
       source: 'fixture',
     },
   });
@@ -173,6 +184,16 @@ it('rejects surplus fields at every lifecycle response boundary', async () => {
     },
     { replay: { ...replay, version: 1 } },
     { replay: { ...replay, canonical: { ...replay.canonical, version: 1 } } },
+    { replay: { ...replay, requestContext: { ...replay.requestContext, version: 1 } } },
+    {
+      replay: {
+        ...replay,
+        requestContext: {
+          ...replay.requestContext,
+          host: { ...replay.requestContext.host, version: 1 },
+        },
+      },
+    },
     { replay: { ...replay, events: [{ ...replay.events[0], version: 1 }] } },
     { replay: { ...replay, document: { ...replay.document, version: 1, extra: true } } },
     {

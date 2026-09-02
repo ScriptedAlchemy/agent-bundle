@@ -64,11 +64,16 @@ const replay: LifecycleReplay = {
   nativeResponse: { hookSpecificOutput: { additionalContext: 'Recorded README.md' } },
   projectionDiagnostic: { code: 'projection.partial', message: 'Optional output was omitted.' },
   requestContext: {
-    hostContractRevision: 'claude-hooks@1',
-    invocationKind: 'event',
-    nativeEvent: 'PostToolUse',
-    routeId: 'event:tool/after',
-    target: 'claude',
+    actor: { reason: 'not-provided', state: 'unavailable' },
+    host: { source: 'receipt', state: 'available', value: { name: 'claude' } },
+    invocation: {
+      hostContractRevision: 'claude-hooks@1',
+      kind: 'event',
+      operationId: 'event:tool/after',
+      surface: 'tool/after',
+    },
+    session: { reason: 'not-provided', state: 'unavailable' },
+    workspace: { source: 'receipt', state: 'available', value: { root: '/workspace' } },
   },
   source: 'fixture',
 };
@@ -88,6 +93,9 @@ it('renders one honest correlated replay view around the shared Agent Document s
   expect(markup).toContain('not evidence that claude dispatched this event');
   expect(markup).toContain('Canonical identity');
   expect(markup).toContain('Request context');
+  expect(markup).toContain('claude · receipt');
+  expect(markup).toContain('Unavailable · not-provided');
+  expect(markup).toContain('/workspace · receipt');
   expect(markup).toContain('Native input');
   expect(markup).toContain('Agent Document');
   expect(markup).toContain('Recorded README.md from claude.');

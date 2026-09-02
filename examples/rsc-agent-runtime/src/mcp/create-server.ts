@@ -5,6 +5,7 @@ import { RESOURCE_MIME_TYPE, registerAppResource, registerAppTool } from '@model
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { runtimeDefinition } from '../definition.js';
+import { projectName, projectVersion } from '../project-identity.js';
 import { createMcpHandlers } from './handlers.js';
 import { resourceMetadata } from './host-metadata.js';
 import type { McpRequestExtra, ResolveStateOptions } from './resolve-state.js';
@@ -20,7 +21,7 @@ const defaultWidgetPath = (): string =>
 const defaultWidgetHtml = async (): Promise<string> => readFile(defaultWidgetPath(), 'utf8');
 
 export const createRuntimeMcpServer = (options: CreateRuntimeMcpServerOptions = {}): McpServer => {
-  const server = new McpServer({ name: 'rsc-agent-runtime-demo', version: '1.0.0' });
+  const server = new McpServer({ name: projectName, version: projectVersion });
   const handlers = createMcpHandlers(options);
 
   for (const tool of runtimeDefinition.tools) {

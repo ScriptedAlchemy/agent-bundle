@@ -53,6 +53,17 @@ const render = async (request: LifecycleRenderChildRequest): Promise<LifecycleRe
     );
     const module = await importRouteModule(request.routeSource);
     const rendered = await renderRouteEvents(module, {
+      context: {
+        actor: request.requestContext.actor,
+        host: request.requestContext.host,
+        invocation: {
+          ...(request.requestContext.invocation.hostContractRevision === undefined
+            ? {}
+            : { hostContractRevision: request.requestContext.invocation.hostContractRevision }),
+        },
+        session: request.requestContext.session,
+        workspace: request.requestContext.workspace,
+      },
       input: props,
       kind: 'event-route',
       routeId: request.routeId,

@@ -57,11 +57,20 @@ class RecordingService implements LifecycleReplayRouteService {
     events: Object.freeze([]),
     nativeInput: Object.freeze({}),
     requestContext: Object.freeze({
-      hostContractRevision: '2.1.250',
-      invocationKind: 'event',
-      nativeEvent: 'PostToolUse',
-      routeId: 'event:tool/after',
-      target: 'claude',
+      actor: Object.freeze({ reason: 'not-provided', state: 'unavailable' }),
+      host: Object.freeze({
+        source: 'receipt',
+        state: 'available',
+        value: Object.freeze({ name: 'claude' }),
+      }),
+      invocation: Object.freeze({
+        hostContractRevision: '2.1.250',
+        kind: 'event',
+        operationId: 'event:tool/after',
+        surface: 'tool/after',
+      }),
+      session: Object.freeze({ reason: 'not-provided', state: 'unavailable' }),
+      workspace: Object.freeze({ reason: 'not-provided', state: 'unavailable' }),
     }),
     source: 'observed',
   });

@@ -4,12 +4,14 @@ import type {
   AgentEventCanonicalIdentity,
   CanonicalAgentEvent,
 } from '../../routes/public.ts';
+import type { RequestContextProvenance } from '../../contracts/request-provenance.ts';
 
 export interface LifecycleRenderChildRequest {
   readonly event: CanonicalAgentEvent;
   readonly hostContractRevision: string;
   readonly nativeEvent: string;
   readonly nativeInput: Readonly<Record<string, unknown>>;
+  readonly requestContext: RequestContextProvenance;
   readonly routeId: string;
   readonly routeSource: string;
   readonly target: string;
