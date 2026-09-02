@@ -46,6 +46,22 @@ it('pins the schema and provenance to immutable upstream source artifacts', asyn
   ]);
   const provenance = JSON.parse(provenanceText) as {
     readonly derivedSchema: { readonly bytes: number; readonly sha256: string };
+    readonly ecosystemValidatorEvaluation: {
+      readonly evaluatedAt: string;
+      readonly npm: {
+        readonly distTags: Readonly<Record<string, string>>;
+        readonly maintainers: readonly string[];
+        readonly publishDates: Readonly<Record<string, string>>;
+        readonly repository: string;
+        readonly version: string;
+      };
+      readonly sourceInspection: {
+        readonly limitations: readonly string[];
+        readonly observedRuleIds: readonly string[];
+        readonly tarballSha1: string;
+      };
+      readonly verdict: string;
+    };
     readonly normativeTextWinsOnConflict: boolean;
     readonly referenceValidator: { readonly bytes: number; readonly path: string; readonly sha256: string; readonly url: string };
     readonly sourceRevision: string;
@@ -70,6 +86,33 @@ it('pins the schema and provenance to immutable upstream source artifacts', asyn
     sha256: 'b5ee3d8537c83c959c31c2cb080a5227646ede5aea545f1ac835ed3c4645f6c5',
     url: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/skills-ref/src/skills_ref/validator.py',
   });
+  expect(provenance.ecosystemValidatorEvaluation).toEqual(expect.objectContaining({
+    evaluatedAt: '2026-09-02',
+    npm: expect.objectContaining({
+      distTags: { latest: '0.2.2' },
+      maintainers: ['pyyush <pie.vyas@gmail.com>'],
+      publishDates: expect.objectContaining({
+        '0.2.2': '2026-02-13T16:45:41.555Z',
+      }),
+      repository: 'git+https://github.com/skill-tools/skill-tools.git',
+      version: '0.2.2',
+    }),
+    sourceInspection: expect.objectContaining({
+      limitations: expect.arrayContaining([
+        expect.stringContaining('description warning'),
+        expect.stringContaining('does not pin'),
+      ]),
+      observedRuleIds: expect.arrayContaining([
+        'body-required',
+        'description-length',
+        'file-reference-exists',
+        'name-matches-directory',
+        'token-budget',
+      ]),
+      tarballSha1: '880ec2053f2fd4fabb14da1d2ccd45b6d47dd140',
+    }),
+    verdict: 'not-integrated-lower-fidelity',
+  }));
   expect(schema.byteLength).toBe(provenance.derivedSchema.bytes);
   expect(sha256Hex(schema)).toBe(provenance.derivedSchema.sha256);
 });

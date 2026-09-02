@@ -24,7 +24,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB5000` | General CLI and adapter failures. |
-| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree). |
+| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body). |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7xxx` | Project preparation and development rebuilds. |
@@ -56,6 +56,20 @@ as a separate drift signal, never as a substitute plugin contract.
 | `AB6031` | info / warning (error in strict mode) | The app-server schema-generation verb is unavailable, or its live output is missing or differs from the pinned generated hook schemas. | Review the attributable host schema source and update the pinned revision only when Codex publishes the matching contract. |
 | `AB6032` | error | A required Codex bundle document is missing, unreadable, invalid JSON, or fails its vendored pinned schema. | Repair the named `.codex-plugin/plugin.json`, `hooks/hooks.json`, `.mcp.json`, or marketplace document and rebuild. |
 | `AB6033` | error | A bounded Codex version or schema-generation command could not start, failed, timed out, exceeded 1 MiB of output, or produced unreadable output. | Verify `codex --version` and `codex app-server generate-json-schema --out <dir>` complete successfully, then rerun validation. |
+
+## Agent Skills emitted spec lint (`AB6034`)
+
+Agent Bundle evaluated `@skill-tools/core@0.2.2` on 2026-09-02 and found a
+genuine Agent Skills utility whose lint is nevertheless lower fidelity than
+the pinned specification contract. Its parser does not pin a specification
+revision, misses closed-frontmatter rules already enforced here, and contains
+an internally inconsistent description-length warning. The package is not a
+runtime dependency; the one missing mandatory rule it identified is enforced
+locally against emitted bytes.
+
+| Code | Severity | Meaning | Recovery |
+| --- | --- | --- | --- |
+| `AB6034` | error | An emitted `SKILL.md` has valid YAML frontmatter but no Markdown instruction body after it. The pinned Agent Skills specification requires frontmatter followed by Markdown content. | Add Markdown instructions after the Skill frontmatter, then rebuild the artifact. |
 
 ## npm prepack gate (`AB7010`–`AB7013`)
 

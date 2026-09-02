@@ -4,6 +4,81 @@
     "path": "frontmatter.schema.json",
     "sha256": "6d06b61e423317421de2295ea1fd0c7b4491bfa36c5b7705c28616dfe76d4047"
   },
+  "ecosystemValidatorEvaluation": {
+    "evaluatedAt": "2026-09-02",
+    "npm": {
+      "createdAt": "2026-02-11T19:19:55.486Z",
+      "description": "Core parser, types, and utilities for Agent Skills (SKILL.md)",
+      "distTags": {
+        "latest": "0.2.2"
+      },
+      "homepage": "https://github.com/skill-tools/skill-tools/tree/main/packages/core",
+      "license": "Apache-2.0",
+      "maintainers": [
+        "pyyush <pie.vyas@gmail.com>"
+      ],
+      "modifiedAt": "2026-02-13T16:45:41.694Z",
+      "package": "@skill-tools/core",
+      "publishDates": {
+        "0.1.0": "2026-02-10T04:02:29.815Z",
+        "0.1.1": "2026-02-10T04:06:19.709Z",
+        "0.2.0": "2026-02-11T19:19:55.770Z",
+        "0.2.1": "2026-02-13T15:07:58.823Z",
+        "0.2.2": "2026-02-13T16:45:41.555Z"
+      },
+      "repository": "git+https://github.com/skill-tools/skill-tools.git",
+      "repositoryDirectory": "packages/core",
+      "version": "0.2.2"
+    },
+    "sourceInspection": {
+      "dependencies": {
+        "gray-matter": "^4.0.3",
+        "js-tiktoken": "^1.0.18"
+      },
+      "genuineAgentSkillsUtility": true,
+      "inspectedTarballFiles": [
+        "package/package.json",
+        "package/README.md",
+        "package/dist/index.js",
+        "package/dist/index.d.ts"
+      ],
+      "limitations": [
+        "The package does not pin an Agent Skills specification revision, so its claims cannot be tied to source revision 69ef37e9424c0a7ea9dd2293b559e43ec8176379.",
+        "Its description warning fires only below 10 characters while its message says descriptions should be at least 50 characters; neither threshold is mandated by the pinned specification.",
+        "It accepts unknown frontmatter extensions and does not enforce string metadata values or the allowed-tools string type required by the pinned specification.",
+        "It reports name-directory mismatch as a warning even though the pinned specification says the names must match.",
+        "Its token-budget warning uses the js-tiktoken gpt-4o encoding for a recommendation whose exact tokenizer is not defined by the pinned specification.",
+        "Its body-required check is consistent with the pinned requirement that SKILL.md contain frontmatter followed by Markdown content, but that check is small enough to enforce without the package's parser and tokenizer dependency tree."
+      ],
+      "observedRuleIds": [
+        "file-readable",
+        "file-not-empty",
+        "frontmatter-valid-yaml",
+        "frontmatter-required",
+        "name-type",
+        "name-required",
+        "name-format",
+        "description-type",
+        "description-required",
+        "description-length",
+        "name-matches-directory",
+        "compatibility-type",
+        "compatibility-length",
+        "license-type",
+        "body-required",
+        "file-reference-exists",
+        "token-budget"
+      ],
+      "registryGitHead": null,
+      "tarballFileCount": 9,
+      "tarballIntegrity": "sha512-PigvHiWTOJJCpNOjbUozfXp9WlUSdP+JvoR+p+CiVzh3vnHd1HFkJsLUdICVk7boO61JwVKDsxf3s3fR43ZahA==",
+      "tarballSha1": "880ec2053f2fd4fabb14da1d2ccd45b6d47dd140",
+      "tarballUrl": "https://registry.npmjs.org/@skill-tools/core/-/core-0.2.2.tgz",
+      "tarballUnpackedBytes": 130074
+    },
+    "verdict": "not-integrated-lower-fidelity",
+    "verdictRationale": "The package is related and not an npm naming squat, but its unpinned and internally inconsistent lint is lower fidelity than the pinned derived schema, reference-validator behavior, and emitted-artifact checks. Agent Bundle therefore adds no dependency and natively enforces only the missing nonempty Markdown body requirement from the pinned specification."
+  },
   "normativeTextWinsOnConflict": true,
   "referenceValidator": {
     "bytes": 5154,
