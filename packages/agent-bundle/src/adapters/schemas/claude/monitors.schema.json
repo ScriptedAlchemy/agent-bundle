@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/monitors.schema.json",
+  "items": {
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "minLength": 1,
+        "not": { "pattern": "\\$\\{user_config\\." },
+        "type": "string"
+      },
+      "description": { "minLength": 1, "type": "string" },
+      "name": { "minLength": 1, "type": "string" },
+      "when": {
+        "pattern": "^(?:always|on-skill-invoke:.+)$",
+        "type": "string"
+      }
+    },
+    "required": ["name", "command", "description"],
+    "type": "object"
+  },
+  "minItems": 1,
+  "type": "array"
+}

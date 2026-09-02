@@ -505,6 +505,56 @@ it('emits Claude-only plugin default settings at the shared composite root', () 
   expect(documents['AGENTS.md']).toContain('- `settings.json` — Claude Code default configuration');
 });
 
+it('emits Claude-only experimental themes and monitors at the shared composite root', () => {
+  const model = {
+    ...bundleModel,
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config' as const, sourcePath: configPath },
+        target: 'claude',
+        value: {
+          monitors: [{
+            command: 'node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs',
+            description: 'Watch the review queue.',
+            name: 'review-queue',
+            when: 'on-skill-invoke:review',
+          }],
+          themes: {
+            dracula: {
+              base: 'dark',
+              overrides: { claude: '#bd93f9', error: '#ff5555' },
+            },
+          },
+        },
+      },
+    },
+  } satisfies NormalizedPlugin;
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+
+  expect(plan.diagnostics).toEqual([expect.objectContaining({
+    code: 'claude.monitors.availability',
+    severity: 'warning',
+    target: 'claude',
+  })]);
+  expect(JSON.parse(documents['themes/dracula.json']!)).toEqual({
+    base: 'dark',
+    name: 'dracula',
+    overrides: { claude: '#bd93f9', error: '#ff5555' },
+  });
+  expect(JSON.parse(documents['monitors/monitors.json']!)).toEqual([{
+    command: 'node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs',
+    description: 'Watch the review queue.',
+    name: 'review-queue',
+    when: 'on-skill-invoke:review',
+  }]);
+  expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('experimental');
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('experimental');
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('experimental');
+});
+
 it('emits Claude-only dependencies from the unified plugin target', () => {
   const model = {
     ...bundleModel,

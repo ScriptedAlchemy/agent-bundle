@@ -93,7 +93,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.12.0',
+    adapterRevision: '1.13.0',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -117,6 +117,11 @@ it('records exact immutable metadata for every built-in target', () => {
         sha256: '76ccf02c7bfe2d57945ba18e84da8d655529bd68b4d692f72bce28238c99067e',
       },
       {
+        name: 'monitors',
+        revision: '2.1.250',
+        sha256: 'd45abdf7561e4316ba217ce9c2ac84f32e1049622b74abb081693b479a54b48d',
+      },
+      {
         name: 'plugin',
         revision: '2.1.250',
         sha256: '3c9943237da86fd08ae82f698cde36dbef2ecf742098c6961cedf481fe435c12',
@@ -125,6 +130,11 @@ it('records exact immutable metadata for every built-in target', () => {
         name: 'settings',
         revision: '2.1.250',
         sha256: '9e86d8c5e4053e8de0e468d349e2c3dde5834d22d6769372b88570e301700073',
+      },
+      {
+        name: 'theme',
+        revision: '2.1.250',
+        sha256: '1ee6c8485855bf90402a1c527830efeca0643be7037ca2ff3e178c51e5973089',
       },
     ],
   });
@@ -154,7 +164,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.11.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.12.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {

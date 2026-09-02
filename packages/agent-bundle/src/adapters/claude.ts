@@ -40,8 +40,10 @@ import hooksSchema from './schemas/claude/hooks.schema.json' with { type: 'json'
 import lspSchema from './schemas/claude/lsp.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
+import monitorsSchema from './schemas/claude/monitors.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
 import settingsSchema from './schemas/claude/settings.schema.json' with { type: 'json' };
+import themeSchema from './schemas/claude/theme.schema.json' with { type: 'json' };
 import { stringify as stringifyYaml } from 'yaml';
 import {
   commandWriteEntries,
@@ -163,6 +165,25 @@ export interface ClaudeSettingsConfig {
   readonly subagentStatusLine?: ClaudeSubagentStatusLineConfig;
 }
 
+/** One experimental Claude Code color theme emitted under the plugin-root `themes/` directory. */
+export interface ClaudeThemeConfig {
+  /** Built-in preset inherited before sparse token overrides are applied. */
+  readonly base: string;
+  /** Display name shown in `/theme`; defaults to the declaration key. */
+  readonly name?: string;
+  /** Sparse color-token overrides. Values stay host-defined strings rather than being narrowed to hex colors. */
+  readonly overrides?: Readonly<Record<string, string>>;
+}
+
+/** One experimental Claude Code background monitor emitted in `monitors/monitors.json`. */
+export interface ClaudeMonitorConfig {
+  readonly command: string;
+  readonly description: string;
+  /** Identifier unique within this plugin. */
+  readonly name: string;
+  readonly when?: string;
+}
+
 /**
  * One Claude Code plugin dependency. Without `marketplace`, Claude resolves
  * the name in the declaring plugin's marketplace. Cross-marketplace
@@ -206,9 +227,13 @@ export interface ClaudeHostConfig extends AgentBundleHostConfig {
   readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
   /** Free-form catalog or entitlement data that Claude Code preserves but does not interpret. */
   readonly metadata?: Readonly<Record<string, unknown>>;
+  /** Experimental session-lifetime background monitors discovered from `monitors/monitors.json`. */
+  readonly monitors?: readonly ClaudeMonitorConfig[];
   /** Project-authored Markdown files copied to the plugin-root `output-styles/` convention. */
   readonly outputStyles?: string;
   readonly settings?: ClaudeSettingsConfig;
+  /** Experimental color themes emitted one file per declaration key under `themes/`. */
+  readonly themes?: Readonly<Record<string, ClaudeThemeConfig>>;
   /** Enable-time options copied into `.claude-plugin/plugin.json`. */
   readonly userConfig?: Readonly<Record<string, ClaudeUserConfigOption>>;
   /** Project-authored script files copied to the plugin-root `workflows/` convention. */
@@ -233,8 +258,10 @@ export const claudeArtifactPaths = Object.freeze({
   lsp: '.lsp.json',
   marketplace: '.claude-plugin/marketplace.json',
   mcp: '.mcp.json',
+  monitors: 'monitors/monitors.json',
   plugin: '.claude-plugin/plugin.json',
   settings: 'settings.json',
+  themes: 'themes/*.json',
 });
 const validator = createAdapterValidator();
 const validatePlugin = validator.compile(pluginSchema);
@@ -242,7 +269,9 @@ const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 const validateHooks = validator.compile(hooksSchema);
 const validateLsp = validator.compile(lspSchema);
+const validateMonitors = validator.compile(monitorsSchema);
 const validateSettings = validator.compile(settingsSchema);
+const validateTheme = validator.compile(themeSchema);
 
 /** The pinned Claude hooks validator, shared with the unified bundle adapter. */
 export const claudeHooksValidator = validateHooks;
@@ -266,7 +295,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.12.0',
+  adapterRevision: '1.13.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -278,16 +307,20 @@ const artifactValidation = deepFreeze({
     Object.freeze({ path: claudeArtifactPaths.lsp, required: false, schema: 'lsp' }),
     Object.freeze({ path: '.claude-plugin/marketplace.json', required: false, schema: 'marketplace' }),
     Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
+    Object.freeze({ path: claudeArtifactPaths.monitors, required: false, schema: 'monitors' }),
     Object.freeze({ path: '.claude-plugin/plugin.json', required: true, schema: 'plugin' }),
     Object.freeze({ path: claudeArtifactPaths.settings, required: false, schema: 'settings' }),
+    Object.freeze({ path: claudeArtifactPaths.themes, required: false, schema: 'theme' }),
   ],
   schemas: [
     Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
     Object.freeze({ name: 'lsp', validate: validateJsonSchemaDocument(validateLsp) }),
     Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
     Object.freeze({ name: 'mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateMcp)) }),
+    Object.freeze({ name: 'monitors', validate: validateJsonSchemaDocument(validateMonitors) }),
     Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
     Object.freeze({ name: 'settings', validate: validateJsonSchemaDocument(validateSettings) }),
+    Object.freeze({ name: 'theme', validate: validateJsonSchemaDocument(validateTheme) }),
   ],
 });
 
@@ -1543,6 +1576,248 @@ export const planClaudeSettings = (model: NormalizedPlugin): ClaudeSettingsPlan 
   return { diagnostics, document, sourceInputs: inputs };
 };
 
+const themeFields: ReadonlySet<string> = new Set(['base', 'name', 'overrides']);
+const themeKeyPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+
+interface ClaudeThemeDocument {
+  readonly document: Record<string, unknown>;
+  readonly relativePath: string;
+}
+
+interface ClaudeThemesPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly documents: readonly ClaudeThemeDocument[];
+  readonly sourceInputs: readonly string[];
+}
+
+const noThemesPlan: ClaudeThemesPlan = deepFreeze({
+  diagnostics: [],
+  documents: [],
+  sourceInputs: [],
+});
+
+/** Lowers `claude.themes` to one closed JSON document per declaration key. */
+export const planClaudeThemes = (model: NormalizedPlugin): ClaudeThemesPlan => {
+  const extension = model.extensions[claudeName];
+  if (extension === undefined || !isDataRecord(extension.value)) return noThemesPlan;
+  const declared = extension.value['themes'];
+  if (declared === undefined) return noThemesPlan;
+  const diagnostics: Diagnostic[] = [];
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (!isDataRecord(declared) || Object.keys(declared).length === 0) {
+    diagnostics.push(errorDiagnostic(
+      'claude.themes.declaration.invalid',
+      'Claude themes must be a nonempty object mapping safe theme file stems to theme declarations.',
+    ));
+    return { diagnostics, documents: [], sourceInputs: inputs };
+  }
+
+  const documents: ClaudeThemeDocument[] = [];
+  for (const key of Object.keys(declared).sort()) {
+    if (!themeKeyPattern.test(key)) {
+      diagnostics.push(errorDiagnostic(
+        'claude.themes.key.invalid',
+        `Claude theme key "${key}" must be a safe file stem beginning with an ASCII letter or digit and containing only letters, digits, dots, underscores, or hyphens.`,
+      ));
+      continue;
+    }
+    const theme = declared[key];
+    if (!isDataRecord(theme)) {
+      diagnostics.push(errorDiagnostic(
+        'claude.themes.entry.invalid',
+        `Claude theme "${key}" must be an object declaring base and optional name and overrides fields.`,
+      ));
+      continue;
+    }
+    for (const field of Object.keys(theme).sort()) {
+      if (themeFields.has(field)) continue;
+      diagnostics.push(errorDiagnostic(
+        'claude.themes.field.unknown',
+        `Claude theme "${key}" declares unknown field "${field}"; the pinned experimental contract admits only base, name, and overrides.`,
+      ));
+    }
+
+    const document: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    const base = theme['base'];
+    if (typeof base !== 'string' || base.length === 0) {
+      diagnostics.push(errorDiagnostic(
+        'claude.themes.base.required',
+        `Claude theme "${key}" requires a nonempty base preset.`,
+      ));
+    } else {
+      document['base'] = base;
+    }
+    const name = theme['name'];
+    if (name !== undefined && (typeof name !== 'string' || name.length === 0)) {
+      diagnostics.push(errorDiagnostic(
+        'claude.themes.name.invalid',
+        `Claude theme "${key}" name must be a nonempty string when declared.`,
+      ));
+    } else {
+      document['name'] = name ?? key;
+    }
+    const overrides = theme['overrides'];
+    if (overrides !== undefined) {
+      if (!isDataRecord(overrides)) {
+        diagnostics.push(errorDiagnostic(
+          'claude.themes.overrides.invalid',
+          `Claude theme "${key}" overrides must be an object mapping color tokens to strings.`,
+        ));
+      } else {
+        const plannedOverrides: Record<string, string> = Object.create(null) as Record<string, string>;
+        for (const token of Object.keys(overrides).sort()) {
+          const value = overrides[token];
+          if (typeof value !== 'string' || value.length === 0) {
+            diagnostics.push(errorDiagnostic(
+              'claude.themes.overrides.value.invalid',
+              `Claude theme "${key}" override "${token}" must be a nonempty string; the host documentation does not restrict values to hexadecimal colors.`,
+            ));
+            continue;
+          }
+          plannedOverrides[token] = value;
+        }
+        document['overrides'] = plannedOverrides;
+      }
+    }
+    const valid = validateTheme(document);
+    diagnostics.push(...schemaDiagnostics('theme', valid, validateTheme.errors));
+    if (valid) documents.push({ document, relativePath: `themes/${key}.json` });
+  }
+  if (hasErrors(diagnostics)) return { diagnostics, documents: [], sourceInputs: inputs };
+  return { diagnostics, documents, sourceInputs: inputs };
+};
+
+const monitorFields: ReadonlySet<string> = new Set(['command', 'description', 'name', 'when']);
+const monitorSkillPrefix = 'on-skill-invoke:';
+
+interface ClaudeMonitorsPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: readonly Record<string, unknown>[];
+  readonly sourceInputs: readonly string[];
+}
+
+const noMonitorsPlan: ClaudeMonitorsPlan = deepFreeze({
+  diagnostics: [],
+  sourceInputs: [],
+});
+
+/** Lowers `claude.monitors` to the default plugin-root monitor array document. */
+export const planClaudeMonitors = (
+  model: NormalizedPlugin,
+  targetName: string,
+): ClaudeMonitorsPlan => {
+  const extension = model.extensions[claudeName];
+  if (extension === undefined || !isDataRecord(extension.value)) return noMonitorsPlan;
+  const declared = extension.value['monitors'];
+  if (declared === undefined) return noMonitorsPlan;
+  const diagnostics: Diagnostic[] = [];
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (!Array.isArray(declared) || declared.length === 0) {
+    diagnostics.push(errorDiagnostic(
+      'claude.monitors.declaration.invalid',
+      'Claude monitors must be a nonempty array of background monitor declarations.',
+    ));
+    return { diagnostics, sourceInputs: inputs };
+  }
+
+  const availableSkills = new Set(model.skills
+    .filter((skill) => skill.targets.includes(targetName))
+    .map((skill) => skill.name));
+  const names = new Set<string>();
+  const document: Record<string, unknown>[] = [];
+  for (const [index, monitor] of declared.entries()) {
+    if (!isDataRecord(monitor)) {
+      diagnostics.push(errorDiagnostic(
+        'claude.monitors.entry.invalid',
+        `Claude monitors[${index}] must be an object declaring name, command, and description.`,
+      ));
+      continue;
+    }
+    for (const field of Object.keys(monitor).sort()) {
+      if (monitorFields.has(field)) continue;
+      diagnostics.push(errorDiagnostic(
+        'claude.monitors.field.unknown',
+        `Claude monitors[${index}] declares unknown field "${field}"; the pinned experimental contract admits only name, command, description, and when.`,
+      ));
+    }
+
+    const planned: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    const name = monitor['name'];
+    if (typeof name !== 'string' || name.length === 0) {
+      diagnostics.push(errorDiagnostic(
+        'claude.monitors.name.required',
+        `Claude monitors[${index}] requires a nonempty name unique within the plugin.`,
+      ));
+    } else if (names.has(name)) {
+      diagnostics.push(errorDiagnostic(
+        'claude.monitors.name.duplicate',
+        `Claude monitor name "${name}" is declared more than once; names prevent duplicate processes when the plugin reloads or a skill is invoked again.`,
+      ));
+    } else {
+      names.add(name);
+      planned['name'] = name;
+    }
+
+    const command = monitor['command'];
+    if (typeof command !== 'string' || command.length === 0) {
+      diagnostics.push(errorDiagnostic(
+        'claude.monitors.command.required',
+        `Claude monitors[${index}] requires a nonempty persistent shell command.`,
+      ));
+    } else if (command.includes('${user_config.')) {
+      diagnostics.push(errorDiagnostic(
+        'claude.monitors.command.userConfig',
+        `Claude monitors[${index}] command cannot reference \`\${user_config.*}\`; Claude Code runs monitor commands through a shell and rejects them instead of substituting the value, and monitor processes do not receive CLAUDE_PLUGIN_OPTION_ environment variables.`,
+      ));
+    } else {
+      planned['command'] = command;
+    }
+
+    const description = monitor['description'];
+    if (typeof description !== 'string' || description.length === 0) {
+      diagnostics.push(errorDiagnostic(
+        'claude.monitors.description.required',
+        `Claude monitors[${index}] requires a nonempty description shown in the task panel and notification summaries.`,
+      ));
+    } else {
+      planned['description'] = description;
+    }
+
+    const when = monitor['when'];
+    if (when !== undefined) {
+      if (when === 'always') {
+        planned['when'] = when;
+      } else if (typeof when === 'string' && when.startsWith(monitorSkillPrefix)) {
+        const skill = when.slice(monitorSkillPrefix.length);
+        if (skill.length === 0 || !availableSkills.has(skill)) {
+          diagnostics.push(errorDiagnostic(
+            'claude.monitors.when.invalid',
+            `Claude monitors[${index}] when must name a skill emitted by this plugin after "${monitorSkillPrefix}"; no selected skill "${skill}" exists.`,
+          ));
+        } else {
+          planned['when'] = when;
+        }
+      } else {
+        diagnostics.push(errorDiagnostic(
+          'claude.monitors.when.invalid',
+          `Claude monitors[${index}] when must be "always" or "${monitorSkillPrefix}<skill>".`,
+        ));
+      }
+    }
+    document.push(planned);
+  }
+  if (hasErrors(diagnostics)) return { diagnostics, sourceInputs: inputs };
+
+  const valid = validateMonitors(document);
+  diagnostics.push(...schemaDiagnostics('monitors', valid, validateMonitors.errors));
+  if (!valid) return { diagnostics, sourceInputs: inputs };
+  diagnostics.push(warningDiagnostic(
+    'claude.monitors.availability',
+    'Claude plugin monitors run only in interactive CLI sessions, unsandboxed at the same trust level as hooks; hosts without the Monitor tool skip them, and project-scope skills-directory plugins do not load them. Disabling a plugin does not stop monitors already running, and plugin updates require a session restart before monitor changes apply.',
+  ));
+  return { diagnostics, document, sourceInputs: inputs };
+};
+
 export interface ClaudeArtifactPlanOptions {
   /** Target name used for selection and provenance; native hooks stay keyed to Claude. */
   readonly targetName?: string;
@@ -1593,6 +1868,10 @@ export const planClaudeArtifacts = (
   diagnostics.push(...workflows.diagnostics);
   const settings = planClaudeSettings(model);
   diagnostics.push(...settings.diagnostics);
+  const themes = planClaudeThemes(model);
+  diagnostics.push(...themes.diagnostics);
+  const monitors = planClaudeMonitors(model, targetName);
+  diagnostics.push(...monitors.diagnostics);
   const dependencies = planClaudeDependencies(model);
   diagnostics.push(...dependencies.diagnostics);
   const generatedHooks = planHooks(model, targetName, hookContract);
@@ -1645,6 +1924,20 @@ export const planClaudeArtifacts = (
       document: settings.document,
       relativePath: claudeArtifactPaths.settings,
       sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...settings.sourceInputs),
+    });
+  }
+  for (const theme of themes.documents) {
+    hostDocuments.push({
+      document: theme.document,
+      relativePath: theme.relativePath,
+      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...themes.sourceInputs),
+    });
+  }
+  if (monitors.document !== undefined) {
+    hostDocuments.push({
+      document: monitors.document,
+      relativePath: claudeArtifactPaths.monitors,
+      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...monitors.sourceInputs),
     });
   }
 
@@ -1764,6 +2057,22 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude contract does not support both required modern MCP transports.',
     ),
+    monitors: capabilityStateFromSupport(
+      capabilityTable.plugin.monitors.commandTokens.length === 4 &&
+        ['${CLAUDE_PLUGIN_ROOT}', '${CLAUDE_PLUGIN_DATA}', '${CLAUDE_PROJECT_DIR}', '${ENV_VAR}']
+          .every((token) => capabilityTable.plugin.monitors.commandTokens.includes(token)) &&
+        capabilityTable.plugin.monitors.config === claudeArtifactPaths.monitors &&
+        capabilityTable.plugin.monitors.defaultWhen === 'always' &&
+        capabilityTable.plugin.monitors.experimental &&
+        capabilityTable.plugin.monitors.interactiveCliOnly &&
+        capabilityTable.plugin.monitors.manifestField === 'experimental.monitors' &&
+        capabilityTable.plugin.monitors.monitorToolRequired &&
+        capabilityTable.plugin.monitors.projectScopeSkillsDirectoryPlugins === false &&
+        capabilityTable.plugin.monitors.userConfigSubstitution === false &&
+        capabilityTable.plugin.monitors.unsandboxed,
+      evidence,
+      'The pinned Claude plugin contract does not document experimental background monitors.',
+    ),
     outputStyles: capabilityStateFromSupport(
       capabilityTable.plugin.outputStyles.directory === 'output-styles' &&
         capabilityTable.plugin.outputStyles.manifestField === 'outputStyles' &&
@@ -1786,6 +2095,14 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       capabilityTable.plugin.skills,
       evidence,
       'The pinned Claude plugin contract does not support skills.',
+    ),
+    themes: capabilityStateFromSupport(
+      capabilityTable.plugin.experimentalThemes.defaultDirectory === 'themes' &&
+        capabilityTable.plugin.experimentalThemes.experimental &&
+        capabilityTable.plugin.experimentalThemes.manifestField === 'experimental.themes' &&
+        capabilityTable.plugin.experimentalThemes.readOnly,
+      evidence,
+      'The pinned Claude plugin contract does not document experimental themes.',
     ),
     userConfig: capabilityStateFromSupport(
       capabilityTable.plugin.userConfig.sensitiveStorage &&

@@ -195,6 +195,38 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
   plan: () => ({ diagnostics: [], entries: [] }),
 } satisfies TargetAdapter);
 
+const wildcardMetadata = Object.freeze({
+  ...customMetadata,
+  schemas: Object.freeze([
+    customMetadata.schemas[0]!,
+    Object.freeze({ name: 'theme', revision: 'custom-schema-v1', sha256: 'c'.repeat(64) }),
+  ]),
+});
+
+const wildcardRegistry = (): TargetRegistry => new TargetRegistry().register({
+  artifactValidation: {
+    documents: [
+      { path: 'document.json', required: true, schema: 'document' },
+      { path: 'themes/*.json', required: false, schema: 'theme' },
+    ],
+    schemas: [
+      { name: 'document', validate: validateCustomDocument },
+      {
+        name: 'theme',
+        validate: (document) =>
+          typeof document === 'object' && document !== null &&
+            typeof (document as { readonly base?: unknown }).base === 'string'
+            ? []
+            : [{ instancePath: '/base', message: 'must be string' }],
+      },
+    ],
+  },
+  capabilities: {},
+  metadata: wildcardMetadata,
+  name: customTarget,
+  plan: () => ({ diagnostics: [], entries: [] }),
+} satisfies TargetAdapter);
+
 const targetFromRegistry = (registry: TargetRegistry, name: string): ArtifactManifest['targets'][number] => {
   const metadata = registry.metadata(name);
   return {
@@ -203,6 +235,35 @@ const targetFromRegistry = (registry: TargetRegistry, name: string): ArtifactMan
     schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),
   };
 };
+
+it('validates and owns every concrete document matched by an optional schema family path', async () => {
+  const registry = wildcardRegistry();
+  const target = targetFromRegistry(registry, customTarget);
+  const validRoot = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"base":"dark"}\n', kind: 'generated', path: 'custom/themes/dracula.json' },
+  ], true, [target]);
+  const invalidRoot = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"name":"Missing base"}\n', kind: 'generated', path: 'custom/themes/invalid.json' },
+  ], true, [target]);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: validRoot, registry })).toEqual([]);
+    expect(await validateArtifact({ artifactRoot: invalidRoot, registry })).toContainEqual(
+      expect.objectContaining({
+        code: 'AB6012',
+        generatedPath: 'custom/themes/invalid.json',
+        target: customTarget,
+      }),
+    );
+  } finally {
+    await Promise.all([
+      rm(validRoot, { force: true, recursive: true }),
+      rm(invalidRoot, { force: true, recursive: true }),
+    ]);
+  }
+});
 
 const skillMarkdown = (name: string, body: string): string => [
   '---',

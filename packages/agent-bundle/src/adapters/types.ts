@@ -164,7 +164,7 @@ export const ruleWriteEntries = (
 
 /** One already-validated host-native document beyond the shared plugin set. */
 export interface StandardPluginHostDocument {
-  readonly document: Record<string, unknown>;
+  readonly document: unknown;
   readonly relativePath: string;
   readonly sourceInputs: readonly string[];
 }
