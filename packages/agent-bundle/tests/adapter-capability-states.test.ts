@@ -345,6 +345,31 @@ it('records dated unavailable Claude distribution and policy capability rows', (
 });
 
 it.each([
+  ['marketplaceManifest', 'completed marketplace manifest'],
+  ['allowCrossMarketplaceDependenciesOn', 'cross-marketplace dependency allowlist'],
+] as const)('reports Claude %s support and honest unavailable composite coverage', (capability, reason) => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('claude').capabilities[capability]).toMatchObject({
+    evidence: {
+      observedVersion: '2.1.250',
+      target: 'claude',
+    },
+    state: 'supported',
+  });
+  expect(registry.get('plugin').capabilities[capability]).toMatchObject({
+    reason: expect.stringContaining(reason),
+    state: 'unavailable',
+  });
+  for (const target of ['codex', 'cursor', 'portable'] as const) {
+    expect(registry.get(target).capabilities[capability]).toBeUndefined();
+    expect(registry.supports(target, capability)).toBe(false);
+  }
+  expect(registry.supports('claude', capability)).toBe(true);
+  expect(registry.supports('plugin', capability)).toBe(false);
+});
+
+it.each([
   ['manifestMetadata', 'manifest metadata fields'],
   ['manifestPaths', 'custom manifest path rules'],
 ] as const)('reports Claude %s support without inventing shared composite coverage', (capability, reason) => {

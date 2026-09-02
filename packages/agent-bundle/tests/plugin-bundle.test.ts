@@ -169,6 +169,52 @@ it('lays both host manifests over one shared bundle root', () => {
   });
 });
 
+it('keeps the Claude marketplace overlay host-specific in the unified bundle', () => {
+  const model: NormalizedPlugin = {
+    ...bundleModel,
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config', sourcePath: configPath },
+        target: 'claude',
+        value: {
+          marketplace: {
+            allowCrossMarketplaceDependenciesOn: ['acme-shared'],
+            owner: { email: 'plugins@example.test' },
+            plugin: {
+              relevance: { signals: { hosts: ['api.example.test'] } },
+              strict: true,
+            },
+            renames: { 'legacy-bundle-example': 'bundle-example' },
+          },
+        },
+      },
+    },
+  };
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(documents['.claude-plugin/marketplace.json']!)).toMatchObject({
+    allowCrossMarketplaceDependenciesOn: ['acme-shared'],
+    owner: { email: 'plugins@example.test', name: 'bundle-example' },
+    plugins: [{
+      name: 'bundle-example',
+      relevance: { signals: { hosts: ['api.example.test'] } },
+      source: './',
+      strict: true,
+    }],
+    renames: { 'legacy-bundle-example': 'bundle-example' },
+  });
+  expect(JSON.parse(documents['.cursor-plugin/marketplace.json']!)).not.toHaveProperty(
+    'allowCrossMarketplaceDependenciesOn',
+  );
+  expect(JSON.parse(documents['.agents/plugins/marketplace.json']!)).not.toHaveProperty(
+    'allowCrossMarketplaceDependenciesOn',
+  );
+});
+
 it('emits Cursor logo and omits it from Claude and Codex manifests', () => {
   const model: NormalizedPlugin = {
     ...bundleModel,

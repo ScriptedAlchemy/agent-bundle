@@ -186,7 +186,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.13.0',
+  adapterRevision: '1.14.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -656,6 +656,18 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
     marketplace: intersectCapabilityStates(
       intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
       cursorAdapter.capabilities.marketplace!,
+    ),
+    marketplaceManifest: intersectCapabilityStates(
+      claudeAdapter.capabilities.marketplaceManifest!,
+      unavailableCapability(
+        'The unified bundle emits the Claude marketplace overlay, but the pinned Codex and Cursor contracts do not share its completed marketplace manifest surface.',
+      ),
+    ),
+    allowCrossMarketplaceDependenciesOn: intersectCapabilityStates(
+      claudeAdapter.capabilities.allowCrossMarketplaceDependenciesOn!,
+      unavailableCapability(
+        'The unified bundle emits Claude allowCrossMarketplaceDependenciesOn, but the pinned Codex and Cursor contracts declare no shared cross-marketplace dependency allowlist.',
+      ),
     ),
     hooks: intersectCapabilityStates(
       intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),

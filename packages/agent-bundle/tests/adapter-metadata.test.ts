@@ -93,7 +93,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.14.0',
+    adapterRevision: '1.15.0',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -109,7 +109,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'marketplace',
         revision: '2.1.250',
-        sha256: '5a08f241f9e856bb59489a265d9bf4db9c905e874d720f46def59fdb6f3ca257',
+        sha256: '2d01f4965ed671d91e8bd2c26fff6f30d49373f4daf51465a98fc46179600cab',
       },
       {
         name: 'mcp',
@@ -164,7 +164,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.13.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.14.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {
@@ -185,7 +185,7 @@ it('records observed capability versions and rehashes schema snapshots against p
     const capabilityTable = JSON.parse(capability.toString()) as Record<string, unknown>;
     expect((capabilityTable.mcp as Record<string, unknown>).sse).toBeUndefined();
     const provenance = JSON.parse(provenanceText) as {
-      readonly schemas: Record<string, { readonly sha256: string }>;
+      readonly schemas: Record<string, { readonly bytes: number; readonly sha256: string }>;
       readonly [key: string]: unknown;
     };
 
@@ -200,6 +200,7 @@ it('records observed capability versions and rehashes schema snapshots against p
       const content = await readFile(new URL(`../src/adapters/schemas/${target}/${fileName}`, import.meta.url));
       expect(schema.sha256).toBe(sha256Hex(content));
       expect(schema.sha256).toBe(provenance.schemas[fileName]?.sha256);
+      expect(content.byteLength).toBe(provenance.schemas[fileName]?.bytes);
       expect(schema.revision).toBe(metadata.observedVersion);
     }
 

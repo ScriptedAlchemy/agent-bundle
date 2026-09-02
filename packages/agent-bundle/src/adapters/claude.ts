@@ -203,6 +203,78 @@ export interface ClaudeDependencyConfig {
   readonly version?: string;
 }
 
+export interface ClaudeMarketplaceContactConfig {
+  readonly email?: string;
+  readonly name?: string;
+  readonly url?: string;
+}
+
+export interface ClaudeMarketplaceMetadataConfig {
+  /** Backward-compatible marketplace description accepted by Claude Code. */
+  readonly description?: string;
+  /** Base directory for bare plugin sources; generated `./` sources ignore it. */
+  readonly pluginRoot?: string;
+  /** Backward-compatible marketplace version accepted by Claude Code. */
+  readonly version?: string;
+}
+
+export interface ClaudeMarketplaceManifestDependencySignal {
+  readonly file: string;
+  readonly pattern: string;
+}
+
+export interface ClaudeMarketplaceRelevanceSignals {
+  readonly cli?: readonly string[];
+  readonly cwd?: readonly string[];
+  readonly filesRead?: readonly string[];
+  readonly hosts?: readonly string[];
+  readonly manifestDeps?: readonly ClaudeMarketplaceManifestDependencySignal[];
+}
+
+export interface ClaudeMarketplaceRelevanceConfig {
+  readonly signals: ClaudeMarketplaceRelevanceSignals;
+  readonly topic?: string;
+}
+
+/**
+ * Authored fields that enrich the one generated marketplace plugin entry.
+ * Plugin identity, component paths, and the relative `./` source remain
+ * generator-owned; URL and command source variants are tracked separately.
+ */
+export interface ClaudeMarketplacePluginConfig {
+  readonly author?: ClaudeMarketplaceContactConfig & { readonly name: string };
+  readonly category?: string;
+  readonly defaultEnabled?: boolean;
+  readonly description?: string;
+  readonly displayName?: string;
+  /** Archive-download headers; rejected until URL-capable sources are emitted. */
+  readonly headers?: Readonly<Record<string, string>>;
+  /** Archive-download header command; rejected until URL-capable sources are emitted. */
+  readonly headersHelper?: string;
+  readonly homepage?: string;
+  readonly keywords?: readonly string[];
+  readonly license?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly relevance?: ClaudeMarketplaceRelevanceConfig;
+  readonly repository?: string;
+  readonly strict?: boolean;
+  readonly tags?: readonly string[];
+  readonly version?: string;
+}
+
+/** Authored overlay for the generated `.claude-plugin/marketplace.json`. */
+export interface ClaudeMarketplaceConfig {
+  readonly $schema?: string;
+  readonly allowCrossMarketplaceDependenciesOn?: readonly string[];
+  readonly description?: string;
+  readonly metadata?: ClaudeMarketplaceMetadataConfig;
+  readonly name?: string;
+  readonly owner?: ClaudeMarketplaceContactConfig;
+  readonly plugin?: ClaudeMarketplacePluginConfig;
+  readonly renames?: Readonly<Record<string, string | null>>;
+  readonly version?: string;
+}
+
 /**
  * Claude's host config. `lspServers` lives here rather than in a portable
  * top-level block because no other pinned host contract has an LSP surface;
@@ -225,6 +297,8 @@ export interface ClaudeHostConfig extends AgentBundleHostConfig {
   /** Human-readable plugin name shown in Claude Code UI surfaces. */
   readonly displayName?: string;
   readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
+  /** Enriches the generated marketplace and its single relative-source plugin entry. */
+  readonly marketplace?: ClaudeMarketplaceConfig;
   /** Free-form catalog or entitlement data that Claude Code preserves but does not interpret. */
   readonly metadata?: Readonly<Record<string, unknown>>;
   /** Experimental session-lifetime background monitors discovered from `monitors/monitors.json`. */
@@ -295,7 +369,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.14.0',
+  adapterRevision: '1.15.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -656,6 +730,593 @@ const planClaudeDependencies = (model: NormalizedPlugin): ClaudeDependenciesPlan
 
   if (hasErrors(diagnostics)) return { diagnostics, sourceInputs: inputs };
   return { diagnostics, document: Object.freeze(document), sourceInputs: inputs };
+};
+
+interface ClaudeMarketplacePlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Record<string, unknown>;
+  readonly sourceInputs: readonly string[];
+}
+
+const marketplaceFields: ReadonlySet<string> = new Set([
+  '$schema',
+  'allowCrossMarketplaceDependenciesOn',
+  'description',
+  'metadata',
+  'name',
+  'owner',
+  'plugin',
+  'renames',
+  'version',
+]);
+const marketplaceMetadataFields: ReadonlySet<string> = new Set(['description', 'pluginRoot', 'version']);
+const marketplacePluginFields: ReadonlySet<string> = new Set([
+  'author',
+  'category',
+  'defaultEnabled',
+  'description',
+  'displayName',
+  'headers',
+  'headersHelper',
+  'homepage',
+  'keywords',
+  'license',
+  'metadata',
+  'relevance',
+  'repository',
+  'strict',
+  'tags',
+  'version',
+]);
+const marketplaceContactFields: ReadonlySet<string> = new Set(['email', 'name', 'url']);
+const relevanceFields: ReadonlySet<string> = new Set(['signals', 'topic']);
+const relevanceSignalFields: ReadonlySet<string> = new Set(['cli', 'cwd', 'filesRead', 'hosts', 'manifestDeps']);
+const manifestDependencySignalFields: ReadonlySet<string> = new Set(['file', 'pattern']);
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+const hostnamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
+const reservedMarketplaceNames: ReadonlySet<string> = new Set([
+  'agent-skills',
+  'anthropic-agent-skills',
+  'anthropic-marketplace',
+  'anthropic-plugins',
+  'claude-code-marketplace',
+  'claude-code-plugins',
+  'claude-community',
+  'claude-for-financial-services',
+  'claude-for-legal',
+  'claude-plugins-community',
+  'claude-plugins-official',
+  'financial-services-plugins',
+  'first-party-plugins',
+  'healthcare',
+  'knowledge-work-plugins',
+  'life-sciences',
+]);
+
+const marketplaceDiagnostic = (code: string, message: string, recovery: string): Diagnostic => ({
+  ...errorDiagnostic(code, message),
+  recovery,
+});
+
+const isNonemptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+const isHttpUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const planMarketplaceContact = (
+  declared: unknown,
+  kind: 'author' | 'owner',
+): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, string> } => {
+  const diagnostics: Diagnostic[] = [];
+  const prefix = kind === 'owner' ? 'claude.marketplace.owner' : 'claude.marketplace.plugin.author';
+  const label = kind === 'owner' ? 'marketplace owner' : 'marketplace plugin author';
+  if (!isPlainDataRecord(declared)) {
+    return {
+      diagnostics: [marketplaceDiagnostic(
+        `${prefix}.invalid`,
+        `Claude ${label} must be a plain contact object.`,
+        `Set ${kind} to an object with ${kind === 'author' ? 'required ' : ''}name and optional email and url, then rebuild.`,
+      )],
+    };
+  }
+  for (const field of Object.keys(declared).sort()) {
+    if (marketplaceContactFields.has(field)) continue;
+    diagnostics.push(marketplaceDiagnostic(
+      `${prefix}.field.unknown`,
+      `Claude ${label} declares unknown field ${JSON.stringify(field)}.`,
+      `Remove ${kind}.${field}; contact objects support only name, email, and url, then rebuild.`,
+    ));
+  }
+  const name = declared['name'];
+  if (kind === 'author' && !isNonemptyString(name)) {
+    diagnostics.push(marketplaceDiagnostic(
+      `${prefix}.name.invalid`,
+      'Claude marketplace plugin author requires a nonempty name.',
+      'Set plugin.author.name to the author or team name, then rebuild.',
+    ));
+  } else if (name !== undefined && !isNonemptyString(name)) {
+    diagnostics.push(marketplaceDiagnostic(
+      `${prefix}.name.invalid`,
+      'Claude marketplace owner name must be nonempty when provided.',
+      'Set owner.name to the maintainer or team name, or remove it to use the generated owner, then rebuild.',
+    ));
+  }
+  const email = declared['email'];
+  if (email !== undefined && (typeof email !== 'string' || !emailPattern.test(email))) {
+    diagnostics.push(marketplaceDiagnostic(
+      `${prefix}.email.invalid`,
+      `Claude ${label} email must be a valid nonempty email address.`,
+      `Set ${kind}.email to a valid contact email or remove it, then rebuild.`,
+    ));
+  }
+  const url = declared['url'];
+  if (url !== undefined && (typeof url !== 'string' || !isHttpUrl(url))) {
+    diagnostics.push(marketplaceDiagnostic(
+      `${prefix}.url.invalid`,
+      `Claude ${label} url must be an absolute HTTP(S) URL.`,
+      `Set ${kind}.url to an absolute HTTP(S) URL or remove it, then rebuild.`,
+    ));
+  }
+  if (diagnostics.length > 0) return { diagnostics };
+  return {
+    diagnostics,
+    value: {
+      ...(typeof email === 'string' ? { email } : {}),
+      ...(typeof name === 'string' ? { name } : {}),
+      ...(typeof url === 'string' ? { url } : {}),
+    },
+  };
+};
+
+const validateStringList = (
+  value: unknown,
+  maximumItems: number | undefined,
+  maximumLength: number | undefined,
+): value is readonly string[] =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  (maximumItems === undefined || value.length <= maximumItems) &&
+  value.every((entry) =>
+    isNonemptyString(entry) && (maximumLength === undefined || entry.length <= maximumLength));
+
+const planMarketplaceRelevance = (
+  declared: unknown,
+): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
+  const diagnostics: Diagnostic[] = [];
+  if (!isPlainDataRecord(declared)) {
+    return {
+      diagnostics: [marketplaceDiagnostic(
+        'claude.marketplace.plugin.relevance.invalid',
+        'Claude marketplace plugin relevance must be a plain object with a nonempty signals object.',
+        'Set plugin.relevance to { topic?, signals } with at least one documented signal, then rebuild.',
+      )],
+    };
+  }
+  for (const field of Object.keys(declared).sort()) {
+    if (relevanceFields.has(field)) continue;
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.plugin.relevance.field.unknown',
+      `Claude marketplace plugin relevance declares unknown field ${JSON.stringify(field)}.`,
+      `Remove plugin.relevance.${field}; relevance supports only topic and signals, then rebuild.`,
+    ));
+  }
+  const topic = declared['topic'];
+  if (topic !== undefined && (!isNonemptyString(topic) || topic.length > 64)) {
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.plugin.relevance.topic.invalid',
+      'Claude marketplace plugin relevance topic must be a nonempty string of at most 64 characters.',
+      'Set plugin.relevance.topic to a concise phrase of at most 64 characters or remove it, then rebuild.',
+    ));
+  }
+  const signals = declared['signals'];
+  if (!isPlainDataRecord(signals) || Object.keys(signals).length === 0) {
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.plugin.relevance.invalid',
+      'Claude marketplace plugin relevance signals must be a nonempty plain object.',
+      'Declare at least one of cwd, cli, hosts, filesRead, or manifestDeps under plugin.relevance.signals, then rebuild.',
+    ));
+    return { diagnostics };
+  }
+  for (const field of Object.keys(signals).sort()) {
+    if (relevanceSignalFields.has(field)) continue;
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.plugin.relevance.signals.field.unknown',
+      `Claude marketplace plugin relevance signals declare unknown field ${JSON.stringify(field)}.`,
+      `Remove plugin.relevance.signals.${field}; use cwd, cli, hosts, filesRead, or manifestDeps, then rebuild.`,
+    ));
+  }
+  for (const field of ['cwd', 'filesRead'] as const) {
+    if (signals[field] === undefined || validateStringList(signals[field], 10, 256)) continue;
+    diagnostics.push(marketplaceDiagnostic(
+      `claude.marketplace.plugin.relevance.${field}.invalid`,
+      `Claude marketplace relevance ${field} must be a nonempty array of at most 10 nonempty glob patterns, each at most 256 characters.`,
+      `Correct plugin.relevance.signals.${field} or remove it, then rebuild.`,
+    ));
+  }
+  if (signals['cli'] !== undefined && !validateStringList(signals['cli'], 10, 64)) {
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.plugin.relevance.cli.invalid',
+      'Claude marketplace relevance cli must be a nonempty array of at most 10 nonempty command names, each at most 64 characters.',
+      'Correct plugin.relevance.signals.cli or remove it, then rebuild.',
+    ));
+  }
+  if (
+    signals['hosts'] !== undefined &&
+    (
+      !validateStringList(signals['hosts'], 20, 128) ||
+      !(signals['hosts'] as readonly string[]).every((host) =>
+        hostnamePattern.test(host) && !host.includes('..'))
+    )
+  ) {
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.plugin.relevance.hosts.invalid',
+      'Claude marketplace relevance hosts must contain at most 20 bare lowercase hostnames without schemes, ports, or paths.',
+      'Replace plugin.relevance.signals.hosts entries with bare lowercase hostnames, then rebuild.',
+    ));
+  }
+  const manifestDeps = signals['manifestDeps'];
+  if (manifestDeps !== undefined) {
+    if (!Array.isArray(manifestDeps) || manifestDeps.length === 0 || manifestDeps.length > 10) {
+      diagnostics.push(marketplaceDiagnostic(
+        'claude.marketplace.plugin.relevance.manifestDeps.invalid',
+        'Claude marketplace relevance manifestDeps must be a nonempty array of at most 10 matcher objects.',
+        'Set plugin.relevance.signals.manifestDeps to at most 10 { file, pattern } objects, then rebuild.',
+      ));
+    } else {
+      for (const [index, signal] of manifestDeps.entries()) {
+        let valid = isPlainDataRecord(signal);
+        if (valid) {
+          valid =
+            Object.keys(signal).every((field) => manifestDependencySignalFields.has(field)) &&
+            isNonemptyString(signal['file']) &&
+            signal['file'].length <= 256 &&
+            isNonemptyString(signal['pattern']) &&
+            signal['pattern'].length <= 256;
+          if (valid) {
+            try {
+              new RegExp(signal['file'] as string, 'iu');
+              new RegExp(signal['pattern'] as string, 'u');
+            } catch {
+              valid = false;
+            }
+          }
+        }
+        if (valid) continue;
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.relevance.manifestDeps.invalid',
+          `Claude marketplace relevance manifestDeps entry ${index} must be a closed { file, pattern } object containing valid JavaScript regular expressions of at most 256 characters.`,
+          `Correct plugin.relevance.signals.manifestDeps[${index}] or remove it, then rebuild.`,
+        ));
+      }
+    }
+  }
+  if (diagnostics.length > 0) return { diagnostics };
+  return {
+    diagnostics,
+    value: {
+      signals,
+      ...(typeof topic === 'string' ? { topic } : {}),
+    },
+  };
+};
+
+const planMarketplacePlugin = (
+  declared: unknown,
+): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
+  const diagnostics: Diagnostic[] = [];
+  if (!isPlainDataRecord(declared)) {
+    return {
+      diagnostics: [marketplaceDiagnostic(
+        'claude.marketplace.plugin.invalid',
+        'Claude marketplace plugin overlay must be a plain object.',
+        'Set claude.marketplace.plugin to an object of documented plugin-entry metadata fields, then rebuild.',
+      )],
+    };
+  }
+  for (const field of Object.keys(declared).sort()) {
+    if (marketplacePluginFields.has(field)) continue;
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.plugin.field.unknown',
+      `Claude marketplace plugin overlay declares unknown or generator-owned field ${JSON.stringify(field)}.`,
+      `Remove plugin.${field}; plugin identity, source, and component paths are generated separately, then rebuild.`,
+    ));
+  }
+  const value: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const field of ['category', 'description', 'displayName', 'license', 'version'] as const) {
+    const entry = declared[field];
+    if (entry === undefined) continue;
+    if (!isNonemptyString(entry)) {
+      diagnostics.push(marketplaceDiagnostic(
+        `claude.marketplace.plugin.${field}.invalid`,
+        `Claude marketplace plugin ${field} must be a nonempty string.`,
+        `Set plugin.${field} to a nonempty string or remove it, then rebuild.`,
+      ));
+    } else {
+      value[field] = entry;
+    }
+  }
+  for (const field of ['homepage', 'repository'] as const) {
+    const entry = declared[field];
+    if (entry === undefined) continue;
+    if (typeof entry !== 'string' || !isHttpUrl(entry)) {
+      diagnostics.push(marketplaceDiagnostic(
+        `claude.marketplace.plugin.${field}.invalid`,
+        `Claude marketplace plugin ${field} must be an absolute HTTP(S) URL.`,
+        `Set plugin.${field} to an absolute HTTP(S) URL or remove it, then rebuild.`,
+      ));
+    } else {
+      value[field] = entry;
+    }
+  }
+  for (const field of ['defaultEnabled', 'strict'] as const) {
+    const entry = declared[field];
+    if (entry === undefined) continue;
+    if (typeof entry !== 'boolean') {
+      diagnostics.push(marketplaceDiagnostic(
+        `claude.marketplace.plugin.${field}.invalid`,
+        `Claude marketplace plugin ${field} must be a boolean.`,
+        `Set plugin.${field} to true or false or remove it, then rebuild.`,
+      ));
+    } else {
+      value[field] = entry;
+    }
+  }
+  for (const field of ['keywords', 'tags'] as const) {
+    const entry = declared[field];
+    if (entry === undefined) continue;
+    if (!validateStringList(entry, undefined, undefined)) {
+      diagnostics.push(marketplaceDiagnostic(
+        `claude.marketplace.plugin.${field}.invalid`,
+        `Claude marketplace plugin ${field} must be a nonempty array of nonempty strings.`,
+        `Set plugin.${field} to nonempty discovery labels or remove it, then rebuild.`,
+      ));
+    } else {
+      value[field] = entry;
+    }
+  }
+  const metadataValue = declared['metadata'];
+  if (metadataValue !== undefined) {
+    if (!isPlainDataRecord(metadataValue)) {
+      diagnostics.push(marketplaceDiagnostic(
+        'claude.marketplace.plugin.metadata.invalid',
+        'Claude marketplace plugin metadata must be a plain JSON object.',
+        'Set plugin.metadata to a plain JSON object or remove it, then rebuild.',
+      ));
+    } else {
+      value['metadata'] = metadataValue;
+    }
+  }
+  // Claude Code 2.1.257 warns that headers/headersHelper only apply to
+  // archive sources and --strict promotes that warning to failure, so the
+  // authored overlay rejects them until URL-capable sources are emitted.
+  for (const field of ['headers', 'headersHelper'] as const) {
+    if (declared[field] === undefined) continue;
+    diagnostics.push(marketplaceDiagnostic(
+      `claude.marketplace.plugin.${field}.inapplicable`,
+      `Claude Code applies marketplace ${field} only to archive sources, and the generated plugin entry uses the relative './' source, so strict native validation rejects it.`,
+      `Remove plugin.${field} until Agent Bundle emits URL-capable marketplace sources, then rebuild.`,
+    ));
+  }
+  const author = declared['author'];
+  if (author !== undefined) {
+    const planned = planMarketplaceContact(author, 'author');
+    diagnostics.push(...planned.diagnostics);
+    if (planned.value !== undefined) value['author'] = planned.value;
+  }
+  const relevance = declared['relevance'];
+  if (relevance !== undefined) {
+    const planned = planMarketplaceRelevance(relevance);
+    diagnostics.push(...planned.diagnostics);
+    if (planned.value !== undefined) value['relevance'] = planned.value;
+  }
+  return {
+    diagnostics,
+    ...(diagnostics.length === 0 ? { value } : {}),
+  };
+};
+
+const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan => {
+  const extension = model.extensions[claudeName];
+  const declared = extension !== undefined && isDataRecord(extension.value)
+    ? extension.value['marketplace']
+    : undefined;
+  const inputs = declared === undefined || extension === undefined
+    ? []
+    : sourceInputs(extension.provenance.sourcePath);
+  const basePlugin: Record<string, unknown> = {
+    description: model.metadata.description ?? model.metadata.name,
+    name: model.metadata.name,
+    source: './',
+    version: model.metadata.version,
+  };
+  const generatedName = `${model.metadata.name}-marketplace`;
+  const base: Record<string, unknown> = {
+    description: model.metadata.description ?? model.metadata.name,
+    name: generatedName,
+    owner: { name: model.metadata.name },
+    plugins: [basePlugin],
+  };
+  if (declared === undefined) {
+    if (!reservedMarketplaceNames.has(generatedName)) {
+      return { diagnostics: [], document: base, sourceInputs: inputs };
+    }
+    return {
+      diagnostics: [marketplaceDiagnostic(
+        'claude.marketplace.name.reserved',
+        `Claude marketplace name ${JSON.stringify(generatedName)} is reserved for official Anthropic use.`,
+        'Override claude.marketplace.name with a distinct lowercase kebab-case marketplace identifier, then rebuild.',
+      )],
+      sourceInputs: inputs,
+    };
+  }
+  if (!isPlainDataRecord(declared)) {
+    return {
+      diagnostics: [marketplaceDiagnostic(
+        'claude.marketplace.declaration.invalid',
+        'Claude marketplace must be a plain authored overlay object.',
+        'Set claude.marketplace to an object of documented marketplace fields, then rebuild.',
+      )],
+      sourceInputs: inputs,
+    };
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  for (const field of Object.keys(declared).sort()) {
+    if (marketplaceFields.has(field)) continue;
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.field.unknown',
+      `Claude marketplace declares unknown or generator-owned field ${JSON.stringify(field)}.`,
+      `Remove marketplace.${field} or replace it with a documented authored overlay field, then rebuild.`,
+    ));
+  }
+  const document: Record<string, unknown> = { ...base };
+  for (const field of ['$schema', 'description', 'version'] as const) {
+    const value = declared[field];
+    if (value === undefined) continue;
+    if (!isNonemptyString(value) || (field === '$schema' && !isHttpUrl(value))) {
+      diagnostics.push(marketplaceDiagnostic(
+        `claude.marketplace.${field === '$schema' ? 'schema' : field}.invalid`,
+        field === '$schema'
+          ? 'Claude marketplace $schema must be an absolute HTTP(S) URL.'
+          : `Claude marketplace ${field} must be a nonempty string.`,
+        `Set marketplace.${field} to a valid nonempty value or remove it, then rebuild.`,
+      ));
+    } else {
+      document[field] = value;
+    }
+  }
+  const name = declared['name'];
+  if (name !== undefined) {
+    if (typeof name !== 'string' || !pluginNamePattern.test(name)) {
+      diagnostics.push(marketplaceDiagnostic(
+        'claude.marketplace.name.invalid',
+        `Claude marketplace name must match the kebab-case pattern ${pluginNamePattern.source}.`,
+        'Set marketplace.name to a lowercase kebab-case identifier, then rebuild.',
+      ));
+    } else {
+      document['name'] = name;
+      if (reservedMarketplaceNames.has(name)) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.name.reserved',
+          `Claude marketplace name ${JSON.stringify(name)} is reserved for official Anthropic use.`,
+          'Set marketplace.name to a distinct lowercase kebab-case identifier, then rebuild.',
+        ));
+      }
+    }
+  }
+  const owner = declared['owner'];
+  if (owner !== undefined) {
+    const planned = planMarketplaceContact(owner, 'owner');
+    diagnostics.push(...planned.diagnostics);
+    if (planned.value !== undefined) {
+      document['owner'] = { ...(base['owner'] as Record<string, string>), ...planned.value };
+    }
+  }
+  const metadataValue = declared['metadata'];
+  if (metadataValue !== undefined) {
+    if (!isPlainDataRecord(metadataValue)) {
+      diagnostics.push(marketplaceDiagnostic(
+        'claude.marketplace.metadata.invalid',
+        'Claude marketplace metadata must be a plain object.',
+        'Set marketplace.metadata to an object containing pluginRoot, description, or version, then rebuild.',
+      ));
+    } else {
+      const metadataDocument: Record<string, string> = {};
+      for (const field of Object.keys(metadataValue).sort()) {
+        if (!marketplaceMetadataFields.has(field)) {
+          diagnostics.push(marketplaceDiagnostic(
+            'claude.marketplace.metadata.field.unknown',
+            `Claude marketplace metadata declares unknown field ${JSON.stringify(field)}.`,
+            `Remove marketplace.metadata.${field}; metadata supports pluginRoot, description, and version, then rebuild.`,
+          ));
+          continue;
+        }
+        const value = metadataValue[field];
+        const pathValid = field !== 'pluginRoot' ||
+          (isNonemptyString(value) &&
+            value.startsWith('./') &&
+            !value.split('/').includes('..'));
+        if (!isNonemptyString(value) || !pathValid) {
+          diagnostics.push(marketplaceDiagnostic(
+            `claude.marketplace.metadata.${field}.invalid`,
+            field === 'pluginRoot'
+              ? 'Claude marketplace metadata.pluginRoot must be a nonempty ./-prefixed path that stays inside the marketplace.'
+              : `Claude marketplace metadata.${field} must be a nonempty string.`,
+            `Correct marketplace.metadata.${field} or remove it, then rebuild.`,
+          ));
+        } else {
+          metadataDocument[field] = value;
+        }
+      }
+      document['metadata'] = metadataDocument;
+    }
+  }
+  const allowlist = declared['allowCrossMarketplaceDependenciesOn'];
+  if (allowlist !== undefined) {
+    if (
+      !validateStringList(allowlist, undefined, undefined) ||
+      !allowlist.every((entry) => pluginNamePattern.test(entry)) ||
+      new Set(allowlist).size !== allowlist.length
+    ) {
+      diagnostics.push(marketplaceDiagnostic(
+        'claude.marketplace.allowCrossMarketplaceDependenciesOn.invalid',
+        'Claude allowCrossMarketplaceDependenciesOn must be a nonempty array of unique lowercase kebab-case marketplace names.',
+        'Set marketplace.allowCrossMarketplaceDependenciesOn to unique trusted marketplace names, then rebuild.',
+      ));
+    } else {
+      document['allowCrossMarketplaceDependenciesOn'] = allowlist;
+    }
+  }
+  const renames = declared['renames'];
+  if (renames !== undefined) {
+    if (
+      !isPlainDataRecord(renames) ||
+      Object.keys(renames).length === 0 ||
+      !Object.entries(renames).every(([formerName, replacement]) =>
+        pluginNamePattern.test(formerName) &&
+        (replacement === null || (typeof replacement === 'string' && pluginNamePattern.test(replacement))))
+    ) {
+      diagnostics.push(marketplaceDiagnostic(
+        'claude.marketplace.renames.invalid',
+        'Claude marketplace renames must be a nonempty map from kebab-case former plugin names to kebab-case replacements or null.',
+        'Correct marketplace.renames to map former plugin names to current names or null, then rebuild.',
+      ));
+    } else {
+      document['renames'] = renames;
+    }
+  }
+  const pluginOverlay = declared['plugin'];
+  if (pluginOverlay !== undefined) {
+    const planned = planMarketplacePlugin(pluginOverlay);
+    diagnostics.push(...planned.diagnostics);
+    if (planned.value !== undefined) {
+      document['plugins'] = [{ ...basePlugin, ...planned.value }];
+    }
+  }
+  const effectiveName = document['name'];
+  if (
+    typeof effectiveName === 'string' &&
+    reservedMarketplaceNames.has(effectiveName) &&
+    !diagnostics.some((diagnostic) => diagnostic.code === 'claude.marketplace.name.reserved')
+  ) {
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.name.reserved',
+      `Claude marketplace name ${JSON.stringify(effectiveName)} is reserved for official Anthropic use.`,
+      'Set marketplace.name to a distinct lowercase kebab-case identifier, then rebuild.',
+    ));
+  }
+  return {
+    diagnostics,
+    ...(diagnostics.length === 0 ? { document } : {}),
+    sourceInputs: inputs,
+  };
 };
 
 const expandLspToken = (value: unknown): unknown =>
@@ -1898,19 +2559,12 @@ export const planClaudeArtifacts = (
   };
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
 
-  const marketplace = {
-    description: model.metadata.description ?? model.metadata.name,
-    name: `${model.metadata.name}-marketplace`,
-    owner: { name: model.metadata.name },
-    plugins: [{
-      description: model.metadata.description ?? model.metadata.name,
-      name: model.metadata.name,
-      source: './',
-      version: model.metadata.version,
-    }],
-  };
-  const marketplaceValid = validateMarketplace(marketplace);
-  diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
+  const marketplace = planClaudeMarketplace(model);
+  diagnostics.push(...marketplace.diagnostics);
+  const marketplaceValid = marketplace.document !== undefined && validateMarketplace(marketplace.document);
+  if (marketplace.document !== undefined) {
+    diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
+  }
 
   const hostDocuments: StandardPluginHostDocument[] = [];
   if (lsp.document !== undefined) {
@@ -1956,8 +2610,9 @@ export const planClaudeArtifacts = (
     hookEntries: generatedHooks.hookEntries,
     hookManifestPath: hookContract.manifestPath,
     isSelected,
-    marketplace,
+    marketplace: marketplace.document,
     marketplaceRelativePath: claudeArtifactPaths.marketplace,
+    marketplaceSourceInputs: marketplace.sourceInputs,
     marketplaceValid,
     mcp,
     mcpValid,
@@ -2049,6 +2704,24 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     ),
     install: supportedCapability(evidence),
     marketplace: supportedCapability(evidence),
+    marketplaceManifest: capabilityStateFromSupport(
+      capabilityTable.plugin.marketplaceManifest.renames &&
+        capabilityTable.plugin.marketplaceManifest.entryAuthenticationFields.includes('headers') &&
+        capabilityTable.plugin.marketplaceManifest.entryAuthenticationFields.includes('headersHelper') &&
+        capabilityTable.plugin.marketplaceManifest.entryMetadataFields.includes('metadata') &&
+        capabilityTable.plugin.marketplaceManifest.entryMetadataFields.includes('strict') &&
+        capabilityTable.plugin.marketplaceManifest.entryRelevanceSignals.includes('manifestDeps') &&
+        capabilityTable.plugin.marketplaceManifest.generatedSourceForms.length === 1 &&
+        capabilityTable.plugin.marketplaceManifest.generatedSourceForms[0] === 'relative',
+      evidence,
+      'The pinned Claude plugin contract does not document the complete marketplace manifest surface.',
+    ),
+    allowCrossMarketplaceDependenciesOn: capabilityStateFromSupport(
+      capabilityTable.plugin.marketplaceManifest.allowCrossMarketplaceDependenciesOn &&
+        capabilityTable.plugin.dependencies.crossMarketplaceAllowlist === 'allowCrossMarketplaceDependenciesOn',
+      evidence,
+      'The pinned Claude plugin contract does not document a root marketplace cross-dependency allowlist.',
+    ),
     hooks: supportedCapability(evidence),
     lsp: capabilityStateFromSupport(
       capabilityTable.plugin.lsp.config === claudeArtifactPaths.lsp &&

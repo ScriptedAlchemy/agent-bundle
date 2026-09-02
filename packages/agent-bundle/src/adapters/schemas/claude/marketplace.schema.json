@@ -1,32 +1,298 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/marketplace.schema.json",
-  "additionalProperties": false,
-  "properties": {
-    "description": { "minLength": 1, "type": "string" },
-    "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
-    "owner": {
+  "$defs": {
+    "channel": {
       "additionalProperties": false,
-      "properties": { "name": { "minLength": 1, "type": "string" } },
+      "properties": {
+        "server": { "minLength": 1, "type": "string" },
+        "userConfig": {
+          "additionalProperties": false,
+          "minProperties": 1,
+          "patternProperties": {
+            "^[A-Za-z_][A-Za-z0-9_]*$": { "$ref": "#/$defs/userConfigOption" }
+          },
+          "type": "object"
+        }
+      },
+      "required": ["server"],
+      "type": "object"
+    },
+    "componentPath": {
+      "anyOf": [
+        { "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))(?:\\.|\\./.+)$", "type": "string" },
+        {
+          "items": { "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))(?:\\.|\\./.+)$", "type": "string" },
+          "minItems": 1,
+          "type": "array"
+        }
+      ]
+    },
+    "contact": {
+      "additionalProperties": false,
+      "properties": {
+        "email": { "format": "email", "type": "string" },
+        "name": { "minLength": 1, "type": "string" },
+        "url": { "format": "uri", "pattern": "^https?://", "type": "string" }
+      },
       "required": ["name"],
       "type": "object"
     },
+    "dependency": {
+      "additionalProperties": false,
+      "properties": {
+        "marketplace": { "minLength": 1, "type": "string" },
+        "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+        "version": { "minLength": 1, "type": "string" }
+      },
+      "required": ["name"],
+      "type": "object"
+    },
+    "freeformObject": {
+      "additionalProperties": false,
+      "patternProperties": {
+        "^.*$": { "$ref": "#/$defs/jsonValue" }
+      },
+      "type": "object"
+    },
+    "jsonValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "items": { "$ref": "#/$defs/jsonValue" }, "type": "array" },
+        { "$ref": "#/$defs/freeformObject" }
+      ]
+    },
+    "manifestDependencySignal": {
+      "additionalProperties": false,
+      "properties": {
+        "file": { "maxLength": 256, "minLength": 1, "type": "string" },
+        "pattern": { "maxLength": 256, "minLength": 1, "type": "string" }
+      },
+      "required": ["file", "pattern"],
+      "type": "object"
+    },
+    "nonemptyStrings": {
+      "items": { "minLength": 1, "type": "string" },
+      "minItems": 1,
+      "type": "array"
+    },
+    "relevance": {
+      "additionalProperties": false,
+      "properties": {
+        "signals": {
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "cli": {
+              "items": { "maxLength": 64, "minLength": 1, "type": "string" },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array"
+            },
+            "cwd": {
+              "items": { "maxLength": 256, "minLength": 1, "type": "string" },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array"
+            },
+            "filesRead": {
+              "items": { "maxLength": 256, "minLength": 1, "type": "string" },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array"
+            },
+            "hosts": {
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$",
+                "type": "string"
+              },
+              "maxItems": 20,
+              "minItems": 1,
+              "type": "array"
+            },
+            "manifestDeps": {
+              "items": { "$ref": "#/$defs/manifestDependencySignal" },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "topic": { "maxLength": 64, "minLength": 1, "type": "string" }
+      },
+      "required": ["signals"],
+      "type": "object"
+    },
+    "userConfigOption": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "number" },
+            { "type": "string" },
+            { "items": { "type": "string" }, "type": "array" }
+          ]
+        },
+        "description": { "minLength": 1, "type": "string" },
+        "max": { "type": "number" },
+        "min": { "type": "number" },
+        "multiple": { "type": "boolean" },
+        "required": { "type": "boolean" },
+        "sensitive": { "type": "boolean" },
+        "title": { "minLength": 1, "type": "string" },
+        "type": { "enum": ["boolean", "directory", "file", "number", "string"] }
+      },
+      "required": ["type", "title", "description"],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "format": "uri", "pattern": "^https?://", "type": "string" },
+    "allowCrossMarketplaceDependenciesOn": {
+      "items": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "description": { "minLength": 1, "type": "string" },
+    "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "description": { "minLength": 1, "type": "string" },
+        "pluginRoot": {
+          "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))\\./.+",
+          "type": "string"
+        },
+        "version": { "minLength": 1, "type": "string" }
+      },
+      "type": "object"
+    },
+    "owner": { "$ref": "#/$defs/contact" },
     "plugins": {
       "items": {
+        "allOf": [
+          {
+            "if": { "required": ["headersHelper"] },
+            "then": {
+              "properties": { "strict": { "const": false } },
+              "required": ["strict"]
+            }
+          }
+        ],
         "additionalProperties": false,
         "properties": {
+          "$schema": { "format": "uri", "type": "string" },
+          "agents": { "$ref": "#/$defs/componentPath" },
+          "author": { "$ref": "#/$defs/contact" },
+          "category": { "minLength": 1, "type": "string" },
+          "channels": {
+            "items": { "$ref": "#/$defs/channel" },
+            "minItems": 1,
+            "type": "array"
+          },
+          "commands": { "$ref": "#/$defs/componentPath" },
+          "defaultEnabled": { "type": "boolean" },
+          "dependencies": {
+            "items": {
+              "oneOf": [
+                { "minLength": 1, "type": "string" },
+                { "$ref": "#/$defs/dependency" }
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          },
           "description": { "minLength": 1, "type": "string" },
+          "displayName": { "minLength": 1, "type": "string" },
+          "experimental": { "$ref": "#/$defs/freeformObject" },
+          "headers": {
+            "additionalProperties": false,
+            "minProperties": 1,
+            "patternProperties": {
+              "^.+$": { "minLength": 1, "type": "string" }
+            },
+            "type": "object"
+          },
+          "headersHelper": { "minLength": 1, "type": "string" },
+          "homepage": { "format": "uri", "pattern": "^https?://", "type": "string" },
+          "hooks": {
+            "anyOf": [
+              { "pattern": "^\\./", "type": "string" },
+              { "$ref": "#/$defs/freeformObject" }
+            ]
+          },
+          "keywords": { "$ref": "#/$defs/nonemptyStrings" },
+          "license": { "minLength": 1, "type": "string" },
+          "lspServers": {
+            "anyOf": [
+              { "pattern": "^\\./", "type": "string" },
+              {
+                "items": { "pattern": "^\\./", "type": "string" },
+                "minItems": 1,
+                "type": "array"
+              },
+              { "$ref": "#/$defs/freeformObject" }
+            ]
+          },
+          "mcpServers": {
+            "anyOf": [
+              { "pattern": "^\\./", "type": "string" },
+              { "$ref": "#/$defs/freeformObject" }
+            ]
+          },
+          "metadata": { "$ref": "#/$defs/freeformObject" },
           "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
-          "source": { "pattern": "^\\./", "type": "string" },
-          "version": { "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$", "type": "string" }
+          "outputStyles": { "$ref": "#/$defs/componentPath" },
+          "relevance": { "$ref": "#/$defs/relevance" },
+          "repository": { "format": "uri", "pattern": "^https?://", "type": "string" },
+          "settings": { "$ref": "#/$defs/freeformObject" },
+          "skills": { "$ref": "#/$defs/componentPath" },
+          "source": {
+            "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))\\./",
+            "type": "string"
+          },
+          "strict": { "type": "boolean" },
+          "tags": { "$ref": "#/$defs/nonemptyStrings" },
+          "userConfig": {
+            "additionalProperties": false,
+            "minProperties": 1,
+            "patternProperties": {
+              "^[A-Za-z_][A-Za-z0-9_]*$": { "$ref": "#/$defs/userConfigOption" }
+            },
+            "type": "object"
+          },
+          "version": { "minLength": 1, "type": "string" },
+          "workflows": { "$ref": "#/$defs/componentPath" }
         },
-        "required": ["name", "source", "description", "version"],
+        "required": ["name", "source"],
         "type": "object"
       },
       "minItems": 1,
       "type": "array"
-    }
+    },
+    "renames": {
+      "additionalProperties": false,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z0-9]+(?:-[a-z0-9]+)*$": {
+          "oneOf": [
+            { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "version": { "minLength": 1, "type": "string" }
   },
-  "required": ["name", "description", "owner", "plugins"],
+  "required": ["name", "owner", "plugins"],
   "type": "object"
 }
