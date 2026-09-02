@@ -167,9 +167,11 @@ export interface ClaudeSettingsConfig {
 }
 
 /** One experimental Claude Code color theme emitted under the plugin-root `themes/` directory. */
+export type ClaudeThemeBasePreset = 'dark' | 'light';
+
 export interface ClaudeThemeConfig {
   /** Built-in preset inherited before sparse token overrides are applied. */
-  readonly base: string;
+  readonly base: ClaudeThemeBasePreset;
   /** Display name shown in `/theme`; defaults to the declaration key. */
   readonly name?: string;
   /** Sparse color-token overrides. Values stay host-defined strings rather than being narrowed to hex colors. */
@@ -422,7 +424,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.16.0',
+  adapterRevision: '1.17.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -595,7 +597,7 @@ const semverSuffix = `(?:-${prereleaseSemverIdentifier}(?:\\.${prereleaseSemverI
 const fullSemverVersion = `${numericSemverIdentifier}\\.${numericSemverIdentifier}\\.${numericSemverIdentifier}${semverSuffix}`;
 const partialSemverVersion = `${numericSemverIdentifier}(?:\\.${numericSemverIdentifier})?`;
 const wildcardSemverVersion = `${numericSemverIdentifier}\\.(?:[xX*]|${numericSemverIdentifier}\\.[xX*])`;
-const semverRangeVersion = `(?:${fullSemverVersion}|${wildcardSemverVersion}|${partialSemverVersion})`;
+const semverRangeVersion = `(?:[xX*]|${fullSemverVersion}|${wildcardSemverVersion}|${partialSemverVersion})`;
 const hyphenRangePattern = new RegExp(`^${semverRangeVersion}\\s+-\\s+${semverRangeVersion}$`, 'u');
 const comparatorPattern = new RegExp(`(?:~|\\^|>=|<=|>|<|=)?\\s*${semverRangeVersion}`, 'uy');
 
@@ -645,7 +647,10 @@ const dependencyDiagnostic = (code: string, message: string, recovery: string): 
   recovery,
 });
 
-const planClaudeDependencies = (model: NormalizedPlugin): ClaudeDependenciesPlan => {
+const planClaudeDependencies = (
+  model: NormalizedPlugin,
+  emittedMarketplacePluginNames: ReadonlySet<string>,
+): ClaudeDependenciesPlan => {
   const extension = model.extensions[claudeName];
   if (extension === undefined || !isDataRecord(extension.value)) return noDependenciesPlan;
   const declared = extension.value['dependencies'];
@@ -701,6 +706,14 @@ const planClaudeDependencies = (model: NormalizedPlugin): ClaudeDependenciesPlan
         continue;
       }
       seen.add(identity);
+      if (!emittedMarketplacePluginNames.has(entry)) {
+        diagnostics.push(dependencyDiagnostic(
+          'claude.dependencies.unresolved',
+          `Claude dependency ${JSON.stringify(entry)} has no marketplace, but the generated marketplace does not emit a plugin with that name.`,
+          'Declare the marketplace that provides this plugin, or remove the dependency; bare names resolve only within the generated marketplace.',
+        ));
+        continue;
+      }
       document.push(entry);
       continue;
     }
@@ -756,7 +769,7 @@ const planClaudeDependencies = (model: NormalizedPlugin): ClaudeDependenciesPlan
       ));
       continue;
     }
-    if (name === model.metadata.name) {
+    if (name === model.metadata.name && marketplace === undefined) {
       diagnostics.push(dependencyDiagnostic(
         'claude.dependencies.self',
         `Claude plugin ${JSON.stringify(model.metadata.name)} cannot depend on itself.`,
@@ -774,6 +787,14 @@ const planClaudeDependencies = (model: NormalizedPlugin): ClaudeDependenciesPlan
       continue;
     }
     seen.add(identity);
+    if (marketplace === undefined && !emittedMarketplacePluginNames.has(name)) {
+      diagnostics.push(dependencyDiagnostic(
+        'claude.dependencies.unresolved',
+        `Claude dependency ${JSON.stringify(name)} has no marketplace, but the generated marketplace does not emit a plugin with that name.`,
+        'Declare the marketplace that provides this plugin, or remove the dependency; bare names resolve only within the generated marketplace.',
+      ));
+      continue;
+    }
     document.push(Object.freeze({
       ...(typeof marketplace === 'string' ? { marketplace } : {}),
       name,
@@ -984,7 +1005,7 @@ const planMarketplaceRelevance = (
     ));
   }
   const topic = declared['topic'];
-  if (topic !== undefined && (!isNonemptyString(topic) || topic.length > 64)) {
+  if (topic !== undefined && (!isNonemptyString(topic) || [...topic].length > 64)) {
     diagnostics.push(marketplaceDiagnostic(
       'claude.marketplace.plugin.relevance.topic.invalid',
       'Claude marketplace plugin relevance topic must be a nonempty string of at most 64 characters.',
@@ -1941,13 +1962,18 @@ interface ClaudeUserConfigOptionPlan {
  * Validates and allowlist-copies one option independently so the same closed
  * declaration contract can be reused by a later channels.userConfig slice.
  */
-const planClaudeUserConfigOption = (key: string, declared: unknown): ClaudeUserConfigOptionPlan => {
+const planClaudeUserConfigOption = (
+  key: string,
+  declared: unknown,
+  path = 'userConfig',
+): ClaudeUserConfigOptionPlan => {
   const diagnostics: Diagnostic[] = [];
+  const codePrefix = `claude.${path}`;
   if (!isPlainDataRecord(declared)) {
     diagnostics.push(userConfigDiagnostic(
-      'claude.userConfig.option.invalid',
-      `Claude userConfig option "${key}" must be an option declaration object.`,
-      `Replace userConfig.${key} with an object containing type, title, and description, then rebuild.`,
+      `${codePrefix}.option.invalid`,
+      `Claude ${path} option "${key}" must be an option declaration object.`,
+      `Replace ${path}.${key} with an object containing type, title, and description, then rebuild.`,
     ));
     return { diagnostics };
   }
@@ -1955,34 +1981,34 @@ const planClaudeUserConfigOption = (key: string, declared: unknown): ClaudeUserC
   for (const field of Object.keys(declared).sort()) {
     if (userConfigOptionFieldSet.has(field)) continue;
     diagnostics.push(userConfigDiagnostic(
-      'claude.userConfig.field.unknown',
-      `Claude userConfig option "${key}" declares unknown field "${field}".`,
-      `Remove userConfig.${key}.${field} or replace it with a documented option field, then rebuild.`,
+      `${codePrefix}.field.unknown`,
+      `Claude ${path} option "${key}" declares unknown field "${field}".`,
+      `Remove ${path}.${key}.${field} or replace it with a documented option field, then rebuild.`,
     ));
   }
 
   const type = declared['type'];
   if (!isUserConfigOptionType(type)) {
     diagnostics.push(userConfigDiagnostic(
-      'claude.userConfig.type.invalid',
-      `Claude userConfig option "${key}" requires type "string", "number", "boolean", "directory", or "file".`,
-      `Set userConfig.${key}.type to one of the five documented option types, then rebuild.`,
+      `${codePrefix}.type.invalid`,
+      `Claude ${path} option "${key}" requires type "string", "number", "boolean", "directory", or "file".`,
+      `Set ${path}.${key}.type to one of the five documented option types, then rebuild.`,
     ));
   }
   for (const field of ['title', 'description'] as const) {
     if (typeof declared[field] === 'string' && declared[field].length > 0) continue;
     diagnostics.push(userConfigDiagnostic(
-      `claude.userConfig.${field}.required`,
-      `Claude userConfig option "${key}" requires a nonempty ${field}.`,
-      `Set userConfig.${key}.${field} to the text Claude Code should show in its configuration dialog, then rebuild.`,
+      `${codePrefix}.${field}.required`,
+      `Claude ${path} option "${key}" requires a nonempty ${field}.`,
+      `Set ${path}.${key}.${field} to the text Claude Code should show in its configuration dialog, then rebuild.`,
     ));
   }
   for (const field of ['sensitive', 'required'] as const) {
     if (declared[field] === undefined || typeof declared[field] === 'boolean') continue;
     diagnostics.push(userConfigDiagnostic(
-      `claude.userConfig.${field}.invalid`,
-      `Claude userConfig option "${key}" field "${field}" must be a boolean when provided.`,
-      `Set userConfig.${key}.${field} to true or false, or remove it, then rebuild.`,
+      `${codePrefix}.${field}.invalid`,
+      `Claude ${path} option "${key}" field "${field}" must be a boolean when provided.`,
+      `Set ${path}.${key}.${field} to true or false, or remove it, then rebuild.`,
     ));
   }
 
@@ -1992,9 +2018,9 @@ const planClaudeUserConfigOption = (key: string, declared: unknown): ClaudeUserC
     (typeof multiple !== 'boolean' || (isUserConfigOptionType(type) && type !== 'string'))
   ) {
     diagnostics.push(userConfigDiagnostic(
-      'claude.userConfig.multiple.invalid',
-      `Claude userConfig option "${key}" may declare boolean field "multiple" only for type "string".`,
-      `Remove userConfig.${key}.multiple or change the option type to "string", then rebuild.`,
+      `${codePrefix}.multiple.invalid`,
+      `Claude ${path} option "${key}" may declare boolean field "multiple" only for type "string".`,
+      `Remove ${path}.${key}.multiple or change the option type to "string", then rebuild.`,
     ));
   }
 
@@ -2004,9 +2030,9 @@ const planClaudeUserConfigOption = (key: string, declared: unknown): ClaudeUserC
     if (bound === undefined) continue;
     if (typeof bound !== 'number' || !Number.isFinite(bound) || (isUserConfigOptionType(type) && type !== 'number')) {
       diagnostics.push(userConfigDiagnostic(
-        `claude.userConfig.${field}.invalid`,
-        `Claude userConfig option "${key}" may declare finite numeric field "${field}" only for type "number".`,
-        `Remove userConfig.${key}.${field} or use it with a number option and a finite numeric value, then rebuild.`,
+        `${codePrefix}.${field}.invalid`,
+        `Claude ${path} option "${key}" may declare finite numeric field "${field}" only for type "number".`,
+        `Remove ${path}.${key}.${field} or use it with a number option and a finite numeric value, then rebuild.`,
       ));
       continue;
     }
@@ -2014,9 +2040,9 @@ const planClaudeUserConfigOption = (key: string, declared: unknown): ClaudeUserC
   }
   if (bounds.min !== undefined && bounds.max !== undefined && bounds.min > bounds.max) {
     diagnostics.push(userConfigDiagnostic(
-      'claude.userConfig.bounds.invalid',
-      `Claude userConfig option "${key}" has min ${String(bounds.min)} greater than max ${String(bounds.max)}.`,
-      `Set userConfig.${key}.min less than or equal to userConfig.${key}.max, then rebuild.`,
+      `${codePrefix}.bounds.invalid`,
+      `Claude ${path} option "${key}" has min ${String(bounds.min)} greater than max ${String(bounds.max)}.`,
+      `Set ${path}.${key}.min less than or equal to ${path}.${key}.max, then rebuild.`,
     ));
   }
 
@@ -2050,17 +2076,17 @@ const planClaudeUserConfigOption = (key: string, declared: unknown): ClaudeUserC
     }
     if (!validDefault) {
       diagnostics.push(userConfigDiagnostic(
-        'claude.userConfig.default.invalid',
-        `Claude userConfig option "${key}" has a default that does not match its type, multiple mode, or numeric bounds.`,
-        `Set userConfig.${key}.default to a valid ${type} value for this declaration, or remove it, then rebuild.`,
+        `${codePrefix}.default.invalid`,
+        `Claude ${path} option "${key}" has a default that does not match its type, multiple mode, or numeric bounds.`,
+        `Set ${path}.${key}.default to a valid ${type} value for this declaration, or remove it, then rebuild.`,
       ));
     }
   }
   if (declared['sensitive'] === true && defaultValue !== undefined) {
     diagnostics.push(userConfigDiagnostic(
-      'claude.userConfig.sensitive.default',
-      `Claude userConfig option "${key}" cannot combine sensitive: true with a manifest default because that would ship a secure-storage value in the plugin manifest.`,
-      `Remove userConfig.${key}.default and let Claude Code prompt for the sensitive value, then rebuild.`,
+      `${codePrefix}.sensitive.default`,
+      `Claude ${path} option "${key}" cannot combine sensitive: true with a manifest default because that would ship a secure-storage value in the plugin manifest.`,
+      `Remove ${path}.${key}.default and let Claude Code prompt for the sensitive value, then rebuild.`,
     ));
   }
 
@@ -2311,7 +2337,11 @@ export const planClaudeChannels = (
               `Rename one channels[${index}].userConfig option so every key remains unique after uppercasing, then rebuild.`,
             ));
           }
-          const optionPlan = planClaudeUserConfigOption(key, userConfig[key]);
+          const optionPlan = planClaudeUserConfigOption(
+            key,
+            userConfig[key],
+            `channels[${index}].userConfig`,
+          );
           diagnostics.push(...optionPlan.diagnostics);
           if (optionPlan.value !== undefined) plannedUserConfig[key] = optionPlan.value;
         }
@@ -2691,6 +2721,7 @@ export const planClaudeSettings = (model: NormalizedPlugin): ClaudeSettingsPlan 
 
 const themeFields: ReadonlySet<string> = new Set(['base', 'name', 'overrides']);
 const themeKeyPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+const themeBasePresets: ReadonlySet<string> = new Set(['dark', 'light']);
 
 interface ClaudeThemeDocument {
   readonly document: Record<string, unknown>;
@@ -2756,6 +2787,11 @@ export const planClaudeThemes = (model: NormalizedPlugin): ClaudeThemesPlan => {
       diagnostics.push(errorDiagnostic(
         'claude.themes.base.required',
         `Claude theme "${key}" requires a nonempty base preset.`,
+      ));
+    } else if (!themeBasePresets.has(base)) {
+      diagnostics.push(errorDiagnostic(
+        'claude.themes.base.invalid',
+        `Claude theme "${key}" base must be one of the documented "dark" or "light" presets.`,
       ));
     } else {
       document['base'] = base;
@@ -2883,7 +2919,7 @@ export const planClaudeMonitors = (
         `Claude monitors[${index}] command cannot reference \`\${user_config.*}\`; Claude Code runs monitor commands through a shell and rejects them instead of substituting the value, and monitor processes do not receive CLAUDE_PLUGIN_OPTION_ environment variables.`,
       ));
     } else {
-      planned['command'] = command;
+      planned['command'] = expandClaudeToken(command);
     }
 
     const description = monitor['description'];
@@ -2985,7 +3021,7 @@ export const planClaudeArtifacts = (
   diagnostics.push(...themes.diagnostics);
   const monitors = planClaudeMonitors(model, targetName);
   diagnostics.push(...monitors.diagnostics);
-  const dependencies = planClaudeDependencies(model);
+  const dependencies = planClaudeDependencies(model, new Set([model.metadata.name]));
   diagnostics.push(...dependencies.diagnostics);
   const generatedHooks = planHooks(model, targetName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
@@ -3241,7 +3277,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       'The pinned Claude plugin contract does not document the plugin-root output-styles surface.',
     ),
     pluginCliLifecycle: unavailableCapability(distributionPolicy.pluginCliLifecycle.reason),
-    pluginInstallScopes: unavailableCapability(distributionPolicy.pluginInstallScopes.reason),
+    pluginInstallScopes: supportedCapability(evidence),
     pluginReload: unavailableCapability(distributionPolicy.pluginReload.reason),
     pluginTrustGates: unavailableCapability(distributionPolicy.pluginTrustGates.reason),
     rules: unavailableCapability(

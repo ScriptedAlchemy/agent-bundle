@@ -115,11 +115,11 @@
         ]
       },
       "pluginInstallScopes": {
-        "state": "unavailable",
-        "reason": "Agent Bundle emits installation instructions but cannot choose or persist a Claude plugin installation scope.",
+        "state": "supported",
         "evidence": [
           "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference maps user, project, and local installs to ~/.claude/settings.json, .claude/settings.json, and .claude/settings.local.json respectively, while managed scope is read-only and update-only.",
-          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents --scope user|project|local for install and uninstall, scope auto-detection for enable and disable, and --scope user|project|local|managed for update."
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents --scope user|project|local for install and uninstall, scope auto-detection for enable and disable, and --scope user|project|local|managed for update.",
+          "retrieved 2026-09-02: packages/agent-bundle/src/install/install.ts installPublicCli accepts the requested user, project, or local scope and forwards it to `claude plugin install ... --scope <scope>`."
         ]
       },
       "pluginReload": {
