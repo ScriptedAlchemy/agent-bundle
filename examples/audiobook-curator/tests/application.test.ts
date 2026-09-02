@@ -56,7 +56,7 @@ describe('audiobook curator filesystem application', () => {
       toolNames.map((tool) => `curator ${tool}`),
     );
     expect(customCommands.filter((command) => command.rendered).map((command) => command.path.join(' ')))
-      .toEqual(['library-audit', 'shelf']);
+      .toEqual(['audible-search', 'audit', 'convert', 'inventory', 'library-audit', 'select', 'shelf']);
     expect(projectedCommands.every((command) => command.rendered)).toBe(true);
   });
 });

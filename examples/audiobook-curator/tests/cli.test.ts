@@ -67,7 +67,7 @@ describe('audiobook-curator routed CLI', () => {
 
     // inventory <source> --report FILE [--strict]
     const inventory = byName.get('inventory')!;
-    expect(inventory).toMatchObject({ exitCode: 'result', rendered: false });
+    expect(inventory).toMatchObject({ exitCode: 'result', rendered: true });
     expect(inventory.options.map((option) => [option.option, option.required, option.positional ?? null])).toEqual([
       ['report', true, null],
       ['source', true, 0],
@@ -87,6 +87,7 @@ describe('audiobook-curator routed CLI', () => {
     // convert keeps its full named-option surface, including kebab-case
     // projections of camelCase keys (--audio-bitrate, --forge-aac-encoder).
     const convert = byName.get('convert')!;
+    expect(convert).toMatchObject({ rendered: true });
     expect(convert.options.map((option) => option.option).sort()).toEqual([
       'apply', 'artwork', 'audio-bitrate', 'audio-codec', 'author', 'engine',
       'forge-aac-encoder', 'forge-cli', 'jobs', 'language', 'narrator',
@@ -111,7 +112,9 @@ describe('audiobook-curator routed CLI', () => {
     expect(audibleSearch.options.map((option) => option.option)).toEqual([
       'attempts', 'author', 'duration', 'limit', 'narrator', 'regions', 'report', 'title',
     ]);
-    expect(audibleSearch).toMatchObject({ exitCode: 'result' });
+    expect(audibleSearch).toMatchObject({ exitCode: 'result', rendered: true });
+    expect(byName.get('audit')).toMatchObject({ exitCode: 'result', rendered: true });
+    expect(byName.get('select')).toMatchObject({ rendered: true });
 
     // audible-cache keeps --cache-dir.
     expect(byName.get('audible-cache')!.options.some((option) => option.option === 'cache-dir')).toBe(true);
