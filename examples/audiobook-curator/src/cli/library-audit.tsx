@@ -1,8 +1,11 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
-import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
+import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
+import { CuratorDocument } from '../components/curator-document.js';
+import { LibraryAnalysis } from '../components/library-analysis.js';
+import { DataList } from '../components/primitives.js';
 import type { LibraryAuditReceipt } from '../library.js';
 import { defaultDiscoveryOperations, discoveryOperations } from '../operations/discovery.js';
 
@@ -41,20 +44,22 @@ export default async function LibraryAudit({ input, signal }: CliRouteProps<type
     summary.missingAlbum + summary.missingArtwork + summary.missingAuthor +
     summary.missingChapters + summary.missingTitle + summary.probeFailures;
   return (
-    <Agent.Result value={receipt as unknown as JsonValue}>
-      <Agent.Markdown>
-        {[
-          `## Library audit`,
-          '',
-          `Audited **${String(summary.files)}** files (${String(summary.bytes)} bytes) across **${String(total)}** sources.`,
-          '',
-          `- metadata issues: **${String(issues)}**`,
-          `- duplicate candidates: **${String(receipt.duplicateCandidates.length)}**`,
-          `- multipart candidates: **${String(receipt.multipartCandidates.length)}**`,
-          '',
-          receipt.reviewNote,
-        ].join('\n')}
-      </Agent.Markdown>
-    </Agent.Result>
+    <CuratorDocument
+      headline={`Audited ${String(summary.files)} files (${String(summary.bytes)} bytes) across ${String(total)} sources.`}
+      receipt={receipt}
+    >
+      <Agent.Markdown>## Library audit</Agent.Markdown>
+      <DataList fields={[
+        { label: 'Files', value: summary.files },
+        { label: 'Total bytes', value: summary.bytes },
+        { label: 'Sources', value: total },
+        { label: 'Metadata issues', value: issues },
+        { label: 'Duplicate candidates', value: receipt.duplicateCandidates.length },
+        { label: 'Multipart candidates', value: receipt.multipartCandidates.length },
+      ]} />
+      <Suspense fallback={<Agent.Progress completed={0} message="Analyzing duplicate and multipart groups" />}>
+        <LibraryAnalysis receipt={receipt} signal={signal} />
+      </Suspense>
+    </CuratorDocument>
   );
 }
