@@ -746,6 +746,33 @@ const validateMcpServer = (
   return diagnostics;
 };
 
+const validatePluginLogo = (
+  loaded: LoadedConfig,
+  pluginRecord: Record<string, unknown> | undefined,
+): Diagnostic[] => {
+  if (pluginRecord === undefined || !Object.hasOwn(pluginRecord, 'logo')) return [];
+  const declared = pluginRecord.logo;
+  const recovery = 'Set plugin.logo to an existing file inside the project root, or omit the field.';
+  const fail = (message: string): Diagnostic => ({
+    code: 'AB4012',
+    message,
+    recovery,
+    severity: 'error',
+    sourcePath: loaded.configPath,
+  });
+  if (typeof declared !== 'string' || declared.trim().length === 0) {
+    return [fail('Plugin logo must be a nonempty path to an existing file inside the project.')];
+  }
+  const source = resolve(loaded.context.projectRoot, declared);
+  if (!isInside(loaded.context.projectRoot, source) || resolve(loaded.context.projectRoot) === source) {
+    return [fail(`Plugin logo ${JSON.stringify(declared)} must resolve inside the project root.`)];
+  }
+  if (!localEntryExists(loaded.context.projectRoot, declared)) {
+    return [fail(`Plugin logo ${JSON.stringify(declared)} must name an existing file.`)];
+  }
+  return [];
+};
+
 const validateAssets = (loaded: LoadedConfig): Diagnostic[] => {
   const assets = loaded.config.assets;
   if (assets === undefined) return [];
@@ -1736,6 +1763,7 @@ export const validateSource = (
       ),
     );
   }
+  diagnostics.push(...validatePluginLogo(loaded, pluginRecord));
 
   const skillNames = new Map<string, string>();
   for (const skill of discovered.skills) {

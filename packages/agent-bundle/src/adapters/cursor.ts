@@ -50,6 +50,7 @@ import {
   type TargetArtifactLayout,
   type TargetArtifactPlan,
 } from './types.ts';
+import { pluginLogoManifestRef, withPluginLogoEntry } from './plugin-logo.ts';
 import { withInstallSurface } from '../install/surface.ts';
 
 const cursorName = 'cursor';
@@ -256,6 +257,7 @@ export const cursorManifest = (
   description: model.metadata.description ?? model.metadata.name,
   displayName: model.metadata.name,
   ...(pointers.hooks === undefined ? {} : { hooks: pointers.hooks }),
+  ...(model.metadata.logo === undefined ? {} : { logo: pluginLogoManifestRef(model.metadata.logo.path) }),
   ...(pointers.mcp === undefined ? {} : { mcpServers: pointers.mcp }),
   name: model.metadata.name,
   ...(pointers.rules === undefined ? {} : { rules: pointers.rules }),
@@ -406,6 +408,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
     additionalPluginSourceInputs: [
       ...selectedCommands.map((command) => command.source),
       ...selectedRules.map((rule) => rule.source),
+      ...(model.metadata.logo === undefined ? [] : [model.metadata.logo.source]),
     ],
     diagnostics,
     hookDocument,
@@ -426,12 +429,12 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   });
   return withInstallSurface(Object.freeze({
     ...basePlan,
-    entries: sortedEntries([
+    entries: sortedEntries(withPluginLogoEntry([
       ...basePlan.entries,
       ...commandWriteEntries(model, isSelected, (command) =>
         command.markdown === command.body ? command.markdown : command.body),
       ...ruleWriteEntries(model, isSelected),
-    ]),
+    ], model)),
   }), model, 'cursor');
 };
 

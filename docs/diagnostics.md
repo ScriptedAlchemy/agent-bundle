@@ -11,7 +11,7 @@ gate a build, a validation, or a dev rebuild.
 | Family | Area |
 | --- | --- |
 | `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter) and rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset). |
-| `AB40xx` | Plugin metadata and Skill source validation. |
+| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: missing name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011`: package identity; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project). |
 | `AB41xx` | Normalized model invariants (unknown targets, duplicate IDs and outputs). |
 | `AB42xx` | Hook configuration and native hook sources. |
 | `AB43xx` | MCP server and MCP App configuration. |
@@ -24,6 +24,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB5000` | General CLI and adapter failures. |
+| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree). |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
 | `AB7xxx` | Project preparation and development rebuilds. |
 | `AB7300`–`AB7315` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, and runtime endpoint health. |

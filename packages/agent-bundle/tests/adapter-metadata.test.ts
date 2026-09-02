@@ -186,6 +186,17 @@ it('records observed capability versions and rehashes schema snapshots against p
       expect(schema.sha256).toBe(provenance.schemas[fileName]?.sha256);
       expect(schema.revision).toBe(metadata.observedVersion);
     }
+
+    if (target === 'cursor') {
+      const pluginSchema = JSON.parse(await readFile(
+        new URL('../src/adapters/schemas/cursor/plugin.schema.json', import.meta.url),
+        'utf8',
+      )) as { readonly properties: { readonly logo?: unknown } };
+      expect(pluginSchema.properties.logo).toEqual({
+        description: 'Path to a logo image (relative to the plugin root) or an absolute URL.',
+        type: 'string',
+      });
+    }
   }
 });
 

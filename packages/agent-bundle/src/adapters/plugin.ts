@@ -34,6 +34,7 @@ import {
   planCursorMarketplace,
   planCursorMcpServer,
 } from './cursor.ts';
+import { pluginLogoCopyEntry } from './plugin-logo.ts';
 import {
   encodeNativeHookPlaygroundInput,
   encodeNativeHookPlaygroundOutput,
@@ -445,8 +446,13 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
           model.metadata.provenance.sourcePath,
           ...targetSourceInputs,
           ...selectedRules.map((rule) => rule.source),
+          model.metadata.logo?.source,
         ),
       });
+      const logoEntry = pluginLogoCopyEntry(model);
+      if (logoEntry !== undefined && !entries.some((entry) => entry.relativePath === logoEntry.relativePath)) {
+        entries.push(logoEntry);
+      }
       if (cursorMcp !== undefined && cursorMcpValid) {
         entries.push({
           content: `${stableJson(cursorMcp)}\n`,

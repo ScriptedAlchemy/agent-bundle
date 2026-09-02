@@ -11,6 +11,8 @@ import type { CapabilityState } from './capabilities.ts';
 
 export interface AgentBundlePluginConfig {
   description?: string;
+  /** Project-relative path to a logo image copied into host artifacts that support it. */
+  logo?: string;
   name: string;
   version: string;
   [key: string]: unknown;
@@ -262,9 +264,17 @@ export interface SourceProvenance {
   readonly sourcePath: string;
 }
 
+export interface NormalizedPluginLogo {
+  readonly bytes: number;
+  /** Artifact-relative POSIX path written into host manifests that support logo. */
+  readonly path: string;
+  readonly source: string;
+}
+
 export interface NormalizedMetadata {
   readonly description?: string;
   readonly id: string;
+  readonly logo?: NormalizedPluginLogo;
   readonly name: string;
   /** The validated npm package name derived from the project's package.json. */
   readonly packageName?: string;

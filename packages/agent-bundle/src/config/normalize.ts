@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, extname, relative, resolve } from 'node:path';
+import { basename, extname, posix, relative, resolve, sep } from 'node:path';
 
 import { digest } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -45,6 +45,7 @@ import type {
   NormalizedPackageBuild,
   NormalizedPayload,
   NormalizedPlugin,
+  NormalizedPluginLogo,
   NormalizedRuntime,
   NormalizedRule,
   NormalizedScript,
@@ -890,6 +891,21 @@ const skillProvenance = (
   sourcePath,
 });
 
+const normalizePluginLogo = (loaded: LoadedConfig): NormalizedPluginLogo | undefined => {
+  const declared = loaded.config.plugin.logo;
+  if (typeof declared !== 'string' || declared.trim().length === 0) return undefined;
+  const projectRoot = loaded.context.projectRoot;
+  const source = resolve(projectRoot, declared);
+  if (!isInside(projectRoot, source) || !existsSync(source)) return undefined;
+  const stats = statSync(source);
+  if (!stats.isFile()) return undefined;
+  return {
+    bytes: stats.size,
+    path: posix.join('assets', relative(projectRoot, source).split(sep).join(posix.sep)),
+    source,
+  };
+};
+
 const normalizeAssets = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1000,6 +1016,7 @@ export const normalizeProject = async (
     };
   });
   const description = loaded.config.plugin.description;
+  const logo = normalizePluginLogo(loaded);
   // The npm package axes are derived, never authored in config: package.json
   // is authoritative for release identity (issue #94), while plugin.version
   // remains the host-facing declared version during the migration.
@@ -1033,6 +1050,7 @@ export const normalizeProject = async (
     metadata: {
       ...(typeof description === 'string' ? { description } : {}),
       id: `plugin:${loaded.config.plugin.name}`,
+      ...(logo === undefined ? {} : { logo }),
       name: loaded.config.plugin.name,
       ...(packageIdentity.packageName === undefined ? {} : { packageName: packageIdentity.packageName }),
       ...(packageIdentity.packageVersion === undefined ? {} : { packageVersion: packageIdentity.packageVersion }),

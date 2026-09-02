@@ -169,6 +169,34 @@ it('lays both host manifests over one shared bundle root', () => {
   });
 });
 
+it('emits Cursor logo and omits it from Claude and Codex manifests', () => {
+  const model: NormalizedPlugin = {
+    ...bundleModel,
+    metadata: {
+      ...bundleModel.metadata,
+      logo: {
+        bytes: 64,
+        path: 'assets/docs/media/logo.svg',
+        source: '/workspace/docs/media/logo.svg',
+      },
+    },
+  };
+  const plan = planBundle(model);
+  expect(plan.diagnostics).toEqual([]);
+  const documents = writeContents(model);
+  const claudePlugin = JSON.parse(documents['.claude-plugin/plugin.json']!) as Record<string, unknown>;
+  const codexPlugin = JSON.parse(documents['.codex-plugin/plugin.json']!) as Record<string, unknown>;
+  const cursorPlugin = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(claudePlugin).not.toHaveProperty('logo');
+  expect(codexPlugin).not.toHaveProperty('logo');
+  expect(cursorPlugin.logo).toBe('./assets/docs/media/logo.svg');
+  expect(plan.entries).toContainEqual(expect.objectContaining({
+    kind: 'copy',
+    relativePath: 'assets/docs/media/logo.svg',
+    source: '/workspace/docs/media/logo.svg',
+  }));
+});
+
 it('bundles subagent hooks at Codex default hooks/hooks.json location', () => {
   const model: NormalizedPlugin = {
     ...bundleModel,
