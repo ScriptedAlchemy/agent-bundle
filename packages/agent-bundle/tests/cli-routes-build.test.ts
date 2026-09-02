@@ -141,6 +141,15 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       '}',
       '',
     ].join('\n')),
+    writeProjectFile(root, 'src/scripts/checksum.ts', [
+      'const checksum = async (): Promise<number> => {',
+      "  process.stdout.write('Fixture checksum: 102\\n');",
+      '  return 0;',
+      '};',
+      'export default checksum;',
+      'export { checksum as main };',
+      '',
+    ].join('\n')),
     writeProjectFile(root, 'src/scripts/summarize.tsx', [
       "import React from 'react';",
       "import { Agent } from '@agent-bundle/runtime';",
@@ -275,4 +284,13 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   expect(scriptMarkdown.stdout).toBe('Summarized 2 arguments.\n');
   const scriptJson = await execFile(process.execPath, [scriptPath, 'alpha', '--json']);
   expect(JSON.parse(scriptJson.stdout)).toEqual({ arguments: 1 });
+
+  // #102 acceptance: one build ships custom, MCP-generated, plain, and rendered commands/scripts.
+  const plainScriptPath = join(root, 'artifact', 'portable', 'scripts', 'checksum.mjs');
+  await expect(stat(plainScriptPath)).resolves.toMatchObject({});
+  const plainScript = await execFile(process.execPath, [plainScriptPath]);
+  expect(plainScript.stdout).toBe('Fixture checksum: 102\n');
+  await expect(stat(join(root, 'artifact', 'portable', 'scripts', 'checksum-flight.mjs'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
 });
