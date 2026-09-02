@@ -644,6 +644,68 @@ it('enriches the generated Claude marketplace with the complete authored catalog
 });
 
 it.each([
+  ['./plugins/review-tools', undefined],
+  ['review-tools', { pluginRoot: './plugins' }],
+  [{ source: 'github', repo: 'acme/review-tools', ref: 'v1', sha: 'a'.repeat(40) }, undefined],
+  [{ source: 'url', url: 'git@example.test:acme/review-tools.git', ref: 'main', sha: 'b'.repeat(40) }, undefined],
+  [{
+    source: 'git-subdir',
+    url: 'acme/review-tools',
+    path: 'plugins/review-tools',
+    ref: 'main',
+    sha: 'c'.repeat(40),
+  }, undefined],
+  [{
+    source: 'npm',
+    package: '@acme/review-tools',
+    version: '^1.2.3',
+    registry: 'https://npm.example.test',
+  }, undefined],
+  [{
+    source: 'archive',
+    url: 'https://artifacts.example.test/review-tools.zip',
+    sha256: 'd'.repeat(64),
+  }, undefined],
+  [{ source: 'command', command: 'review-tools plugin-path', timeout: 120, mode: 'copy' }, undefined],
+  [{ source: 'command', command: 'review-tools plugin-path', mode: 'link' }, undefined],
+] as const)('emits an authored Claude marketplace plugin source %#', (source, metadata) => {
+  const marketplace = {
+    ...(metadata === undefined ? {} : { metadata }),
+    plugin: { source },
+  };
+  const document = writeContents(withClaudeMarketplace(plugin, marketplace), 'claude');
+
+  expect(JSON.parse(document['.claude-plugin/marketplace.json']!)).toMatchObject({
+    plugins: [{ source }],
+  });
+});
+
+it('accepts archive entry authentication only for an archive source', () => {
+  const source = {
+    source: 'archive',
+    url: 'https://artifacts.example.test/review-tools.zip',
+    sha256: 'e'.repeat(64),
+  };
+  const document = writeContents(withClaudeMarketplace(plugin, {
+    plugin: {
+      headers: { Authorization: 'Bearer catalog-token' },
+      headersHelper: '/opt/bin/mint-plugin-token',
+      source,
+      strict: false,
+    },
+  }), 'claude');
+
+  expect(JSON.parse(document['.claude-plugin/marketplace.json']!)).toMatchObject({
+    plugins: [{
+      headers: { Authorization: 'Bearer catalog-token' },
+      headersHelper: '/opt/bin/mint-plugin-token',
+      source,
+      strict: false,
+    }],
+  });
+});
+
+it.each([
   {
     code: 'claude.marketplace.declaration.invalid',
     marketplace: [],
@@ -678,7 +740,7 @@ it.each([
   },
   {
     code: 'claude.marketplace.plugin.field.unknown',
-    marketplace: { plugin: { source: { source: 'github', repo: 'acme/review-tools' } } },
+    marketplace: { plugin: { unknown: true } },
   },
   {
     code: 'claude.marketplace.plugin.headers.inapplicable',
@@ -687,6 +749,106 @@ it.each([
   {
     code: 'claude.marketplace.plugin.headersHelper.inapplicable',
     marketplace: { plugin: { headersHelper: './scripts/headers.sh', strict: false } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.invalid',
+    marketplace: { plugin: { source: [] } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.relative.invalid',
+    marketplace: { plugin: { source: './../outside' } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.relative.invalid',
+    marketplace: { plugin: { source: 'review-tools' } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.form.invalid',
+    marketplace: { plugin: { source: { source: 'other' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.field.unknown',
+    marketplace: { plugin: { source: { source: 'github', repo: 'acme/review-tools', depth: 1 } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.repo.invalid',
+    marketplace: { plugin: { source: { source: 'github', repo: 'not-a-repository' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.url.invalid',
+    marketplace: { plugin: { source: { source: 'url', url: 'ftp://example.test/plugin.git' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.path.invalid',
+    marketplace: { plugin: { source: { source: 'git-subdir', url: 'acme/repo', path: '../plugin' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.ref.invalid',
+    marketplace: { plugin: { source: { source: 'github', repo: 'acme/repo', ref: '' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.sha.invalid',
+    marketplace: { plugin: { source: { source: 'github', repo: 'acme/repo', sha: 'abc123' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.package.invalid',
+    marketplace: { plugin: { source: { source: 'npm', package: '@acme' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.version.invalid',
+    marketplace: { plugin: { source: { source: 'npm', package: '@acme/review-tools', version: 'latest' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.registry.invalid',
+    marketplace: { plugin: { source: { source: 'npm', package: '@acme/review-tools', registry: 'npm.example.test' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.url.invalid',
+    marketplace: { plugin: { source: { source: 'archive', url: 'http://artifacts.example.test/plugin.zip' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.url.invalid',
+    marketplace: { plugin: { source: { source: 'archive', url: 'https://169.254.169.254/plugin.zip' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.sha256.invalid',
+    marketplace: { plugin: { source: { source: 'archive', url: 'https://example.test/plugin.zip', sha256: 'abc123' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.command.invalid',
+    marketplace: { plugin: { source: { source: 'command', command: '   ' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.timeout.invalid',
+    marketplace: { plugin: { source: { source: 'command', command: 'plugin-path', timeout: 601 } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.source.mode.invalid',
+    marketplace: { plugin: { source: { source: 'command', command: 'plugin-path', mode: 'move' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.headers.invalid',
+    marketplace: { plugin: { source: { source: 'archive', url: 'https://example.test/plugin.zip' }, headers: {} } },
+  },
+  {
+    code: 'claude.marketplace.plugin.headersHelper.invalid',
+    marketplace: {
+      plugin: {
+        source: { source: 'archive', url: 'https://example.test/plugin.zip' },
+        headersHelper: '',
+        strict: false,
+      },
+    },
+  },
+  {
+    code: 'claude.marketplace.plugin.headersHelper.strict',
+    marketplace: {
+      plugin: {
+        source: { source: 'archive', url: 'https://example.test/plugin.zip' },
+        headersHelper: 'mint-token',
+        strict: true,
+      },
+    },
   },
   {
     code: 'claude.marketplace.plugin.relevance.invalid',
@@ -709,7 +871,7 @@ it.each([
   expect(document['.claude-plugin/marketplace.json']).toBeUndefined();
 });
 
-it('pins the full closed Claude marketplace schema while retaining relative sources', async () => {
+it('pins the full closed Claude marketplace schema with the documented source matrix', async () => {
   const schema = (await import('../src/adapters/schemas/claude/marketplace.schema.json', {
     with: { type: 'json' },
   })).default;
@@ -723,19 +885,39 @@ it('pins the full closed Claude marketplace schema while retaining relative sour
       headersHelper: './scripts/headers.sh',
       name: 'review-tools',
       relevance: { signals: { hosts: ['api.example.test'] }, topic: 'Review' },
-      source: './',
+      source: { source: 'archive', url: 'https://artifacts.example.test/review-tools.zip' },
       strict: false,
     }],
   };
 
   expect(validate(manifest), JSON.stringify(validate.errors)).toBe(true);
+  const sourcePlugin = {
+    name: manifest.plugins[0].name,
+    relevance: manifest.plugins[0].relevance,
+  };
+  for (const source of [
+    './plugins/review-tools',
+    { source: 'github', repo: 'acme/review-tools', ref: 'main', sha: 'a'.repeat(40) },
+    { source: 'url', url: 'https://git.example.test/acme/review-tools.git', sha: 'b'.repeat(40) },
+    { source: 'git-subdir', url: 'acme/monorepo', path: 'plugins/review-tools' },
+    { source: 'npm', package: '@acme/review-tools', version: '~1.2.3', registry: 'https://npm.example.test' },
+    { source: 'archive', url: 'https://artifacts.example.test/review-tools.zip', sha256: 'c'.repeat(64) },
+    { source: 'command', command: 'review-tools plugin-path', timeout: 60, mode: 'link' },
+  ]) {
+    expect(validate({
+      ...manifest,
+      plugins: [{ ...sourcePlugin, source }],
+    }), JSON.stringify(validate.errors)).toBe(true);
+  }
   for (const invalid of [
     { ...manifest, unknown: true },
     { ...manifest, owner: { ...manifest.owner, unknown: true } },
     { ...manifest, plugins: [{ ...manifest.plugins[0], unknown: true }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: 'review-tools' }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: './../outside' }] },
-    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'github', repo: 'acme/review-tools' } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'github', repo: 'acme/review-tools', extra: true } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://example.test/plugin.zip', sha256: 'bad' } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'command', command: 'plugin-path', mode: 'move' } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], relevance: { signals: { unknown: ['value'] } } }] },
   ]) {
     expect(validate(invalid)).toBe(false);

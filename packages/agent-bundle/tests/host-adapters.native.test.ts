@@ -332,6 +332,160 @@ nativeIt('accepts the enriched Claude marketplace under strict native validation
   }
 });
 
+nativeIt('accepts every documented Claude marketplace plugin source form', async () => {
+  const sources = [
+    {
+      label: 'github',
+      plugin: {
+        source: {
+          source: 'github',
+          repo: 'acme/review-tools',
+          ref: 'v1.2.3',
+          sha: 'a'.repeat(40),
+        },
+      },
+    },
+    {
+      label: 'git-url',
+      plugin: {
+        source: {
+          source: 'url',
+          url: 'https://git.example.test/acme/review-tools.git',
+          ref: 'main',
+          sha: 'b'.repeat(40),
+        },
+      },
+    },
+    {
+      label: 'git-subdir',
+      plugin: {
+        source: {
+          source: 'git-subdir',
+          url: 'acme/monorepo',
+          path: 'plugins/review-tools',
+          ref: 'main',
+          sha: 'c'.repeat(40),
+        },
+      },
+    },
+    {
+      label: 'npm',
+      plugin: {
+        source: {
+          source: 'npm',
+          package: '@acme/review-tools',
+          version: '^1.2.3',
+          registry: 'https://npm.example.test',
+        },
+      },
+    },
+    {
+      label: 'archive',
+      plugin: {
+        headers: { Authorization: 'Bearer native-test-token' },
+        headersHelper: 'printf \'{}\'',
+        source: {
+          source: 'archive',
+          url: 'https://artifacts.example.test/review-tools.zip',
+          sha256: 'd'.repeat(64),
+        },
+        strict: false,
+      },
+    },
+    {
+      label: 'command-copy',
+      plugin: {
+        source: {
+          source: 'command',
+          command: 'review-tools plugin-path',
+          timeout: 120,
+          mode: 'copy',
+        },
+      },
+    },
+    {
+      label: 'command-link',
+      plugin: {
+        source: {
+          source: 'command',
+          command: 'review-tools plugin-path',
+          mode: 'link',
+        },
+      },
+    },
+  ] as const;
+
+  for (const { label, plugin } of sources) {
+    const root = await mkdtemp(join(tmpdir(), `agent-bundle-claude-source-${label}-`));
+    try {
+      await writeClaudeArtifact(root, withClaudeMarketplace({ plugin }));
+      const validation = await runClaudeValidation(
+        root,
+        join(root, '.claude-plugin', 'marketplace.json'),
+      );
+
+      expect(validation.code, `${label}: ${validation.output}`).toBe(0);
+      expect(validation.output).toContain('Validation passed');
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }
+});
+
+nativeIt('records which source constraints strict Claude marketplace validation enforces', async () => {
+  const cases = [
+    {
+      expectedCode: 1,
+      label: 'short github sha',
+      output: 'full 40-character lowercase git commit SHA',
+      source: { source: 'github', repo: 'acme/review-tools', sha: 'abc123' },
+    },
+    {
+      expectedCode: 1,
+      label: 'insecure archive URL',
+      output: 'Archive URLs must use https://',
+      source: { source: 'archive', url: 'http://artifacts.example.test/review-tools.zip' },
+    },
+    {
+      expectedCode: 0,
+      label: 'unreachable archive URL',
+      output: 'Validation passed',
+      source: { source: 'archive', url: 'https://does-not-exist.invalid/review-tools.zip' },
+    },
+    {
+      expectedCode: 0,
+      label: 'failing command',
+      output: 'Validation passed',
+      source: { source: 'command', command: 'exit 9' },
+    },
+    {
+      expectedCode: 1,
+      label: 'unknown command mode',
+      output: 'plugins.0.source: Invalid input',
+      source: { source: 'command', command: 'review-tools plugin-path', mode: 'move' },
+    },
+  ] as const;
+
+  for (const { expectedCode, label, output, source } of cases) {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-source-negative-'));
+    try {
+      await writeClaudeArtifact(root, model);
+      const marketplacePath = join(root, '.claude-plugin', 'marketplace.json');
+      const marketplace = JSON.parse(await readFile(marketplacePath, 'utf8')) as {
+        plugins: Record<string, unknown>[];
+      };
+      marketplace.plugins[0]!['source'] = source;
+      await writeFile(marketplacePath, `${JSON.stringify(marketplace)}\n`);
+      const validation = await runClaudeValidation(root, marketplacePath);
+
+      expect(validation.code, `${label}: ${validation.output}`).toBe(expectedCode);
+      expect(validation.output).toContain(output);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }
+});
+
 nativeIt('records whether strict native validation enforces marketplace allowlist entry names', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-marketplace-allowlist-invalid-'));
 

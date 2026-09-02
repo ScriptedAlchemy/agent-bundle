@@ -184,6 +184,11 @@ it('keeps the Claude marketplace overlay host-specific in the unified bundle', (
             owner: { email: 'plugins@example.test' },
             plugin: {
               relevance: { signals: { hosts: ['api.example.test'] } },
+              source: {
+                package: '@acme/bundle-example',
+                source: 'npm',
+                version: '^1.0.0',
+              },
               strict: true,
             },
             renames: { 'legacy-bundle-example': 'bundle-example' },
@@ -202,7 +207,11 @@ it('keeps the Claude marketplace overlay host-specific in the unified bundle', (
     plugins: [{
       name: 'bundle-example',
       relevance: { signals: { hosts: ['api.example.test'] } },
-      source: './',
+      source: {
+        package: '@acme/bundle-example',
+        source: 'npm',
+        version: '^1.0.0',
+      },
       strict: true,
     }],
     renames: { 'legacy-bundle-example': 'bundle-example' },

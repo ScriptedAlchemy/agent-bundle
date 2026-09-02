@@ -1909,7 +1909,12 @@ it('validates an enriched Claude marketplace against the full closed pinned cont
       metadata: { catalogId: 'claude-marketplace-artifact' },
       name: 'claude-marketplace-artifact',
       relevance: { signals: { hosts: ['api.example.test'] } },
-      source: './',
+      source: {
+        repo: 'acme/claude-marketplace-artifact',
+        ref: 'main',
+        sha: 'a'.repeat(40),
+        source: 'github',
+      },
       strict: true,
     }],
     renames: { 'legacy-marketplace-artifact': 'claude-marketplace-artifact' },
@@ -1929,7 +1934,7 @@ it('validates an enriched Claude marketplace against the full closed pinned cont
       {
         contents: `${JSON.stringify({
           ...marketplace,
-          plugins: [{ ...marketplace.plugins[0], source: { repo: 'acme/plugin', source: 'github' } }],
+          plugins: [{ ...marketplace.plugins[0], source: { repo: 'not-owner-repo', source: 'github' } }],
         })}\n`,
         kind: 'generated' as const,
         path: marketplacePath,
