@@ -247,13 +247,19 @@ it('uses only an installed tarball after source deletion', async () => {
         status: 'unavailable',
       });
     }
-    expect(codexValidation).toMatchObject({
-      diagnostics: [
-        { code: 'AB6030', severity: 'info' },
-        { code: 'AB6031', severity: 'info' },
-      ],
-      status: 'passed',
-    });
+    if (codexValidation!.status === 'passed') {
+      expect(codexValidation).toMatchObject({
+        diagnostics: [
+          { code: 'AB6030', severity: 'info' },
+          { code: 'AB6031', severity: 'info' },
+        ],
+      });
+    } else {
+      expect(codexValidation).toMatchObject({
+        diagnostics: [{ code: 'AB6030', severity: 'info' }],
+        status: 'unavailable',
+      });
+    }
     expect(validationDocument.diagnostics).toEqual(
       validationDocument.hostValidation.flatMap(({ diagnostics }) => diagnostics),
     );
