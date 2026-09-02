@@ -1,11 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-import {
-  AGENT_STATE_DEFAULT_BUDGETS,
-  type AgentStateBudgets,
-} from '@agent-bundle/runtime/state';
-
 import { capabilityIsSupported } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
@@ -264,6 +259,13 @@ export interface InspectOptions extends ProjectOptions {
 
 export type StateInspectionDriver = 'memory' | 'sqlite';
 
+export interface StateInspectionBudgets {
+  readonly maxCommitMs: number;
+  readonly maxEventBytes: number;
+  readonly maxRevisions: number;
+  readonly maxStateBytes: number;
+}
+
 export type StateInspection =
   | {
     readonly declared: false;
@@ -271,7 +273,7 @@ export type StateInspection =
   | {
     readonly budgets:
       | {
-        readonly resolved: AgentStateBudgets;
+        readonly resolved: StateInspectionBudgets;
         readonly source: 'declared' | 'defaults';
       }
       | {
@@ -528,6 +530,16 @@ const durableStateLocation =
 const noticeLedgerInspection =
   'Generated runtimes co-mount the notice ledger store at the same lifetime under reserved id @agent-bundle/runtime/agent-notice-ledger/v1.';
 
+// Keep static inspection independent of the optional runtime peer. The
+// cross-package inspection test compares these policy defaults with the
+// runtime export so the two package boundaries cannot drift silently.
+const agentStateDefaultBudgets: StateInspectionBudgets = Object.freeze({
+  maxCommitMs: 5_000,
+  maxEventBytes: 262_144,
+  maxRevisions: 100_000,
+  maxStateBytes: 1_048_576,
+});
+
 const stateDriver = (
   lifetime: NonNullable<NormalizedPlugin['state']>['lifetime'],
 ): StateInspectionDriver => {
@@ -552,7 +564,7 @@ const inspectState = (model: NormalizedPlugin): StateInspection => {
       ? Object.freeze({ source: 'dynamic' })
       : Object.freeze({
         resolved: Object.freeze({
-          ...AGENT_STATE_DEFAULT_BUDGETS,
+          ...agentStateDefaultBudgets,
           ...(definition.budgets?.declared ?? {}),
         }),
         source: definition.budgets === undefined ? 'defaults' : 'declared',

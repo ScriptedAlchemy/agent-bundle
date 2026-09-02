@@ -266,8 +266,12 @@ it('serves compiled routes and durable state across packed process restarts', as
           timeoutMs: 10_000,
         });
       } catch (error) {
-        throw new Error(`Packed event route failed.\nserver stderr:\n${secondSession.stderr()}`, { cause: error });
+        throw new Error(
+          `Packed event route failed: ${error instanceof Error ? error.message : String(error)}\nserver stderr:\n${secondSession.stderr()}`,
+          { cause: error },
+        );
       }
+      expect(JSON.stringify(eventResponse)).toContain('actor unavailable:not-provided');
       expect(JSON.stringify(eventResponse)).toContain(noticeId);
       expect(JSON.stringify(eventResponse)).toContain('cross-process notice');
       expect(secondSession.stderr()).not.toContain('"jsonrpc"');

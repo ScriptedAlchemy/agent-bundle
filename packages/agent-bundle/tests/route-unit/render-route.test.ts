@@ -257,7 +257,8 @@ describe('renderRoute through the real renderer', () => {
     expectDocument(rendered)
       .toHaveStatus('success')
       .toContainMarkdown('Observed tool/after from claude.')
-      .toHaveValue({ actor: notProvided });
+      .toContainContext('actor unavailable:not-provided')
+      .toHaveValue(undefined);
   });
 
   it('renders a route module handed in directly, without the compiled manifest', async () => {

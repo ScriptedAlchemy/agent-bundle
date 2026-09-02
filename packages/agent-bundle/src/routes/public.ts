@@ -1,4 +1,4 @@
-import type { AgentRenderInvocation } from '@agent-bundle/runtime';
+import type { JsonValue } from '../core/strict-json.ts';
 
 /** The structural schema surface route props infer without coupling to one schema library. */
 export interface RouteSchema<Output = unknown> {
@@ -54,9 +54,31 @@ export interface AgentEventRouteProps {
   readonly signal: AbortSignal;
 }
 
+type AgentProviderInvocation =
+  | {
+    readonly kind: 'tool';
+    readonly props: { readonly input: JsonValue; readonly operationId: string };
+  }
+  | {
+    readonly kind: 'event';
+    readonly props: { readonly event: string; readonly payload: JsonValue };
+  }
+  | {
+    readonly kind: 'cli';
+    readonly props: { readonly args: readonly string[]; readonly command: string };
+  }
+  | {
+    readonly kind: 'script';
+    readonly props: { readonly input?: JsonValue; readonly name: string };
+  }
+  | {
+    readonly kind: 'workbench';
+    readonly props: { readonly input?: JsonValue; readonly view: string };
+  };
+
 /** Request-scoped inputs supplied to a conventional context provider factory. */
 export interface AgentProviderContext {
-  readonly invocation: AgentRenderInvocation;
+  readonly invocation: AgentProviderInvocation;
   readonly signal: AbortSignal;
 }
 

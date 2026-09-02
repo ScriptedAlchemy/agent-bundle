@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { AGENT_STATE_DEFAULT_BUDGETS } from '@agent-bundle/runtime/state';
 import { expect, it } from '@rstest/core';
 
 import { runCli } from '../src/cli.ts';
@@ -57,12 +58,7 @@ it('inspects volatile and workspace-durable state without inventing runtime path
       selected: {
         state: {
           budgets: {
-            resolved: {
-              maxCommitMs: 5000,
-              maxEventBytes: 262144,
-              maxRevisions: 100000,
-              maxStateBytes: 1048576,
-            },
+            resolved: AGENT_STATE_DEFAULT_BUDGETS,
             source: 'defaults',
           },
           declared: true,
@@ -93,9 +89,7 @@ it('inspects volatile and workspace-durable state without inventing runtime path
         state: {
           budgets: {
             resolved: {
-              maxCommitMs: 5000,
-              maxEventBytes: 262144,
-              maxRevisions: 100000,
+              ...AGENT_STATE_DEFAULT_BUDGETS,
               maxStateBytes: 2048,
             },
             source: 'declared',
