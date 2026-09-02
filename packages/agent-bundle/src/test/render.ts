@@ -1,5 +1,11 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type * as AgentFlightServer from '@agent-bundle/runtime/flight/server';
 import type * as AgentRuntime from '@agent-bundle/runtime';
+import type * as AgentMount from '@agent-bundle/runtime/mount';
+import type * as AgentState from '@agent-bundle/runtime/state';
 import type {
   AgentDocument,
   AgentInvocationInput,
@@ -14,7 +20,12 @@ import type * as React from 'react';
 
 import { AgentTestError, captured } from './errors.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
-import { registeredManifestIdentity, registeredRouteLoader, testManifest } from './registry.ts';
+import {
+  registeredManifestIdentity,
+  registeredRouteLoader,
+  registeredStateLoader,
+  testManifest,
+} from './registry.ts';
 import type {
   AgentRouteModule,
   RenderableRouteKind,
@@ -60,6 +71,8 @@ export type RenderRouteTarget = AgentRouteModule | string;
 interface Renderer {
   readonly createAgentRenderDispatcher: typeof AgentRuntime.createAgentRenderDispatcher;
   readonly createElement: typeof React.createElement;
+  readonly createGeneratedRuntimeState: typeof AgentMount.createGeneratedRuntimeState;
+  readonly createMemoryStateDriver: typeof AgentState.createMemoryStateDriver;
   readonly renderAgentFlight: typeof AgentFlightServer.renderAgentFlight;
   readonly runAgentRequest: typeof AgentRuntime.runAgentRequest;
 }
@@ -76,14 +89,18 @@ let rendererPromise: Promise<Renderer> | undefined;
  */
 const loadRenderer = async (): Promise<Renderer> => {
   rendererPromise ??= (async (): Promise<Renderer> => {
-    const [runtime, flight, react] = await Promise.all([
+    const [runtime, mount, state, flight, react] = await Promise.all([
       import('@agent-bundle/runtime'),
+      import('@agent-bundle/runtime/mount'),
+      import('@agent-bundle/runtime/state'),
       import('@agent-bundle/runtime/flight/server'),
       import('react'),
     ]);
     return {
       createAgentRenderDispatcher: runtime.createAgentRenderDispatcher,
       createElement: react.createElement,
+      createGeneratedRuntimeState: mount.createGeneratedRuntimeState,
+      createMemoryStateDriver: state.createMemoryStateDriver,
       renderAgentFlight: flight.renderAgentFlight,
       runAgentRequest: runtime.runAgentRequest,
     };
@@ -204,6 +221,7 @@ const knownRouteIds = (manifest: AgentBundleTestManifest): string =>
 interface ResolvedTarget {
   readonly component: (props: never) => unknown;
   readonly kind: RenderableRouteKind;
+  readonly manifest?: AgentBundleTestManifest;
   readonly module: AgentRouteModule;
   readonly provenance: RenderedRouteProvenance;
 }
@@ -354,6 +372,7 @@ const resolveTarget = async (
   return {
     component: componentOf(module, { ...provenance, kind }),
     kind,
+    manifest,
     module,
     provenance: { ...provenance, kind },
   };
@@ -400,7 +419,94 @@ const streamOf = (chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> => 
   },
 });
 
+interface AutoMountedState {
+  readonly context: Pick<AgentRequestInit, 'noticeLedger' | 'state'>;
+  close(): Promise<void>;
+}
+
+const noMountedState: AutoMountedState = Object.freeze({
+  context: {},
+  close: async () => undefined,
+});
+
+/**
+ * Mounts one fresh state owner for a manifest render. Durable definitions use
+ * a disposable sqlite root so repeated route-unit renders are deterministic.
+ */
+const mountManifestState = async (
+  resolved: ResolvedTarget,
+  context: RenderRouteContext,
+  renderer: Renderer,
+  signal: AbortSignal,
+): Promise<AutoMountedState> => {
+  const manifest = resolved.manifest;
+  const descriptor = manifest?.state;
+  if (
+    manifest === undefined
+    || descriptor === undefined
+    || context.state !== undefined
+    || context.noticeLedger !== undefined
+  ) return noMountedState;
+  const loader = registeredStateLoader(manifest);
+  if (loader === undefined) {
+    throw new AgentTestError(
+      'manifest-unavailable',
+      `State ${descriptor.id} is declared but no test-time state module loader is registered for it.`,
+      {
+        provenance: resolved.provenance,
+        recovery: 'Build the Rstest configuration with agentBundleRstest() so the generated setup registers the state loader.',
+      },
+    );
+  }
+  const definition = (await loader()).default;
+  let root: string | undefined;
+  let driver: AgentState.AgentStateDriver;
+  try {
+    if (descriptor.lifetime === 'workspace-durable') {
+      root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-state-'));
+      driver = (await import('@agent-bundle/runtime/state/sqlite')).createSqliteStateDriver({ root });
+    } else {
+      driver = renderer.createMemoryStateDriver({ lifetime: descriptor.lifetime });
+    }
+  } catch (error) {
+    if (root !== undefined) await rm(root, { force: true, recursive: true });
+    throw error;
+  }
+  const owner = renderer.createGeneratedRuntimeState({ definition, driver });
+  try {
+    const bindings = await owner.requestBindings({ signal });
+    let closed = false;
+    return Object.freeze({
+      context: {
+        noticeLedger: bindings.noticeLedger,
+        state: bindings.state,
+      },
+      async close() {
+        if (closed) return;
+        closed = true;
+        try {
+          await bindings.close();
+        } finally {
+          try {
+            await owner.close();
+          } finally {
+            if (root !== undefined) await rm(root, { force: true, recursive: true });
+          }
+        }
+      },
+    });
+  } catch (error) {
+    try {
+      await owner.close();
+    } finally {
+      if (root !== undefined) await rm(root, { force: true, recursive: true });
+    }
+    throw error;
+  }
+};
+
 interface PreparedRender {
+  readonly close: () => Promise<void>;
   readonly collected: readonly AgentProgressUpdate[];
   readonly dispatcher: AgentRuntime.AgentRenderDispatcher;
   readonly invocation: AgentRenderInvocation;
@@ -423,6 +529,8 @@ const prepareRender = async (
   const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, options, resolved.provenance);
   const collected: AgentProgressUpdate[] = [];
   const context = options.context ?? {};
+  const signal = options.signal ?? new AbortController().signal;
+  const mounted = await mountManifestState(resolved, context, renderer, signal);
   /**
    * Every render collects progress for {@link RenderedRoute.progress}, then
    * forwards it to the caller's reporter and to the dispatcher's, which is
@@ -440,6 +548,7 @@ const prepareRender = async (
   const dispatcher = renderer.createAgentRenderDispatcher({
     execute: async (request) => streamOf(await renderer.runAgentRequest({
       ...context,
+      ...mounted.context,
       invocation: {
         ...requestInvocation(request.invocation, resolved.provenance.routeId),
         ...context.invocation,
@@ -456,11 +565,12 @@ const prepareRender = async (
     )))),
   }, options.limits === undefined ? {} : { limits: options.limits });
   return {
+    close: mounted.close,
     collected,
     dispatcher,
     invocation,
     resolved,
-    signal: options.signal ?? new AbortController().signal,
+    signal,
   };
 };
 
@@ -490,22 +600,23 @@ export const renderRoute = async (
   target: RenderRouteTarget,
   options: RenderRouteOptions = {},
 ): Promise<RenderedRoute> => {
-  const { collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
-  let document: AgentDocument;
+  const { close, collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
   try {
-    document = await dispatcher.dispatch({ invocation, signal });
+    const document = await dispatcher.dispatch({ invocation, signal });
+    return Object.freeze({
+      document,
+      invocation,
+      progress: Object.freeze([...collected]),
+      provenance: resolved.provenance,
+      ...(resolved.module.resultSchema === undefined
+        ? {}
+        : { result: parsedResult(resolved.module.resultSchema, document, resolved.provenance) }),
+    });
   } catch (error) {
     throw renderFailure(error, invocation, resolved.provenance);
+  } finally {
+    await close();
   }
-  return Object.freeze({
-    document,
-    invocation,
-    progress: Object.freeze([...collected]),
-    provenance: resolved.provenance,
-    ...(resolved.module.resultSchema === undefined
-      ? {}
-      : { result: parsedResult(resolved.module.resultSchema, document, resolved.provenance) }),
-  });
 };
 
 export interface RenderedRouteEvents extends RenderedRoute {
@@ -524,7 +635,7 @@ export const renderRouteEvents = async (
   target: RenderRouteTarget,
   options: RenderRouteOptions = {},
 ): Promise<RenderedRouteEvents> => {
-  const { collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
+  const { close, collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
   const events: AgentRenderEvent[] = [];
   const reader = dispatcher.stream({ invocation, signal }).getReader();
   try {
@@ -535,6 +646,8 @@ export const renderRouteEvents = async (
     }
   } catch (error) {
     throw renderFailure(error, invocation, resolved.provenance);
+  } finally {
+    await close();
   }
   const complete = events.findLast((event) => event.type === 'complete');
   if (complete === undefined) {

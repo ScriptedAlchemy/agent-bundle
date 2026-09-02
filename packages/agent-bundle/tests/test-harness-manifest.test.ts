@@ -71,6 +71,8 @@ describe('the compiled test manifest', () => {
       'resource:harness/notes',
       'tool:harness/catalog',
       'tool:harness/echo',
+      'tool:harness/journal',
+      'tool:harness/publish-notice',
       'tool:harness/unavailable',
     ]);
     expect(manifest.diagnostics).toEqual([]);
@@ -87,6 +89,12 @@ describe('the compiled test manifest', () => {
     });
     expect(manifest.proofLevel).toBe('route-unit');
     expect(manifest.projectRoot).toBe(fixtureRoot);
+    expect(manifest.state).toEqual({
+      id: 'route-harness/journal',
+      lifetime: 'workspace-durable',
+      relativePath: 'src/state.ts',
+      source: resolve(fixtureRoot, 'src/state.ts'),
+    });
     expect(manifest.targets).toEqual(['claude']);
     expect(manifest.apps).toEqual({
       panel: {
@@ -210,6 +218,7 @@ describe('the generated route registry', () => {
 
     expect(loaders).toContain('"event:tool/after": () => import(');
     expect(loaders).toContain('"tool:harness/echo": () => import(');
+    expect(loaders).toContain('"tool:harness/journal": () => import(');
     expect(loaders).toContain('"tool:harness/unavailable": () => import(');
     expect(loaders).not.toContain('app:harness/panel');
     expect(loaders).toContain('"resource:harness/notes": () => import(');
@@ -221,6 +230,8 @@ describe('the generated route registry', () => {
   it('carries the manifest and the registry version the helpers require', () => {
     expect(source).toContain(`version: ${String(AGENT_TEST_REGISTRY_VERSION)}`);
     expect(source).toContain('globalThis[Symbol.for("agent-bundle/test-route-registry")]');
+    expect(source).toContain('stateLoader: () => import(');
+    expect(source).toContain('/src/state.ts');
     expect(JSON.parse(/manifest: JSON\.parse\((".*?")\),/u.exec(source)![1]!) as string)
       .toBe(JSON.stringify(manifest));
   });

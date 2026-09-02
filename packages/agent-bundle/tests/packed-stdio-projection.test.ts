@@ -1,11 +1,12 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
+import { requestEventRuntime } from '../src/events/ipc.ts';
 import { openPackedMcpServer, removeProjectSource } from '../src/test/packed.ts';
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
 
@@ -13,7 +14,10 @@ const execFile = promisify(executeFile);
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/route-harness');
 
 interface McpJson {
-  readonly mcpServers: Readonly<Record<string, { readonly args: readonly [string, ...string[]] }>>;
+  readonly mcpServers: Readonly<Record<string, {
+    readonly args: readonly [string, ...string[]];
+    readonly env?: Readonly<Record<string, string>>;
+  }>>;
 }
 
 /**
@@ -21,9 +25,9 @@ interface McpJson {
  * proof journey for the consumer test harness (#103 cost rule).
  *
  * One tarball (the run-level shared pack), one install, one artifact build,
- * one verified source removal, one spawned server. Every per-route assertion
- * runs inside that one client session, because a second spawn would double
- * the only cost this level has and prove the same thing twice.
+ * one verified source removal, and two spawned servers over that same built
+ * artifact. The second spawn exists only to prove workspace-durable state and
+ * notices survive a process restart; every other route stays in one session.
  *
  * The generated entry runs as a separate operating-system process, out of a
  * built artifact, over real stdio framing after the project source and config
@@ -32,7 +36,7 @@ interface McpJson {
  * (tests/projection/) covers the same route protocol surface at a fraction of
  * the cost and explicitly does not claim any of this.
  */
-it('serves every compiled route and embedded App after packed consumer source deletion', async () => {
+it('serves compiled routes and durable state across packed process restarts', async () => {
   const [agentBundle, runtime] = await Promise.all([
     sharedPackedTarball('agent-bundle'),
     sharedPackedTarball('runtime'),
@@ -61,71 +65,160 @@ it('serves every compiled route and embedded App after packed consumer source de
 
     const pluginRoot = join(artifact, 'claude');
     const manifest = JSON.parse(await readFile(join(pluginRoot, '.mcp.json'), 'utf8')) as McpJson;
+    const serverConfig = manifest.mcpServers['harness']!;
     // Claude Code expands ${CLAUDE_PLUGIN_ROOT} to the installed plugin root
     // before it spawns the server; the test stands in for the host there.
-    const entry = manifest.mcpServers['harness']!.args[0].replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot);
+    const expandPluginRoot = (value: string): string =>
+      value.replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot);
+    const entry = expandPluginRoot(serverConfig.args[0]);
+    const serverEnvironment = Object.fromEntries(
+      Object.entries(serverConfig.env ?? {}).map(([key, value]) => [key, expandPluginRoot(value)]),
+    );
+    expect(serverConfig.env).toMatchObject({
+      AGENT_BUNDLE_PLUGIN_ROOT: '${CLAUDE_PLUGIN_ROOT}',
+    });
+    const env = {
+      ...installedEnvironment(),
+      ...serverEnvironment,
+    } as Record<string, string>;
+    const worker = entry.replace(/\.mjs$/u, '-flight.mjs');
+    const workerSource = await readFile(worker, 'utf8');
+    expect(workerSource).toContain('node:sqlite');
+    expect(workerSource).toContain('createSqliteStateDriver');
+    expect(workerSource).toContain('AGENT_BUNDLE_PLUGIN_ROOT');
+    expect(workerSource).toMatch(/new URL\(["']\.\.["'], import\.meta\.url\)/u);
     const deletedSource = await removeProjectSource({ projectRoot: project });
 
-    await using session = await openPackedMcpServer({
+    const firstSession = await openPackedMcpServer({
       cwd: project,
       deletedSource,
       entry,
-      env: installedEnvironment() as Record<string, string>,
+      env,
     });
+    let noticeId: string;
+    try {
+      expect(firstSession.provenance.proofLevel).toBe('packed-deleted-source');
+      expect(firstSession.provenance.pid).toBeGreaterThan(0);
+      expect(firstSession.provenance.sourceRemoved).toEqual(['agent-bundle.config.ts', 'src']);
 
-    expect(session.provenance.proofLevel).toBe('packed-deleted-source');
-    expect(session.provenance.pid).toBeGreaterThan(0);
-    expect(session.provenance.sourceRemoved).toEqual(['agent-bundle.config.ts', 'src']);
+      const tools = await firstSession.client.listTools();
+      expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
+        'catalog',
+        'echo',
+        'journal',
+        'publish-notice',
+        'unavailable',
+      ]);
+      const resources = await firstSession.client.listResources();
+      expect(resources.resources).toEqual(expect.arrayContaining([
+        expect.objectContaining({ mimeType: 'text/markdown', uri: 'harness://notes' }),
+        expect.objectContaining({ mimeType: 'text/html;profile=mcp-app', uri: 'ui://harness/panel' }),
+      ]));
 
-    const tools = await session.client.listTools();
-    expect(tools.tools.map((tool) => tool.name).sort()).toEqual(['catalog', 'echo', 'unavailable']);
-    const resources = await session.client.listResources();
-    expect(resources.resources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ mimeType: 'text/markdown', uri: 'harness://notes' }),
-      expect.objectContaining({ mimeType: 'text/html;profile=mcp-app', uri: 'ui://harness/panel' }),
+      await expect(firstSession.client.callTool({ arguments: { message: 'packed' }, name: 'echo' }))
+        .resolves.toMatchObject({
+          content: [{ text: '# Echo\n\npacked', type: 'text' }, { text: expect.stringContaining('workspace:'), type: 'text' }],
+          structuredContent: { message: 'packed', operationId: 'tool:harness/echo' },
+        });
+      await expect(firstSession.client.callTool({ arguments: { genre: 'mystery' }, name: 'catalog' }))
+        .resolves.toMatchObject({
+          content: [
+            { text: 'catalog: mystery', type: 'text' },
+            { text: '## mystery\n\n- Piranesi\n- Solaris', type: 'text' },
+          ],
+          structuredContent: { genre: 'mystery', titles: ['Piranesi', 'Solaris'] },
+        });
+      await expect(firstSession.client.callTool({
+        arguments: { note: 'packed durable proof' },
+        name: 'journal',
+      })).resolves.toMatchObject({
+        structuredContent: { entries: [{ note: 'packed durable proof' }], revision: 1 },
+      });
+      const published = await firstSession.client.callTool({
+        arguments: { message: 'cross-process notice', recipientSession: 'proof-session' },
+        name: 'publish-notice',
+      });
+      expect(published).toMatchObject({
+        structuredContent: { noticeId: expect.any(String), state: 'pending' },
+      });
+      noticeId = String((published.structuredContent as { noticeId: string }).noticeId);
+      await expect(firstSession.client.callTool({ arguments: {}, name: 'unavailable' }))
+        .resolves.toMatchObject({ isError: true, structuredContent: { available: false } });
+      await expect(firstSession.client.readResource({ uri: 'harness://notes' })).resolves.toEqual({
+        contents: [{ mimeType: 'text/markdown', text: '# Notes for harness://notes', uri: 'harness://notes' }],
+      });
+      const panel = await firstSession.client.readResource({ uri: 'ui://harness/panel' });
+      expect(panel.contents[0]).toMatchObject({
+        mimeType: 'text/html;profile=mcp-app',
+        uri: 'ui://harness/panel',
+      });
+      const panelContent = panel.contents[0];
+      if (panelContent === undefined || !('text' in panelContent)) {
+        throw new TypeError('The embedded panel resource did not return inline text.');
+      }
+      expect(panelContent.text).toContain('route-harness panel');
+      expect(panelContent.text).toMatch(/<script\b/iu);
+      expect(panelContent.text).not.toMatch(/<(?:script|link)\b[^>]+(?:src|href)=/iu);
+      await expect(firstSession.client.getPrompt({
+        arguments: { note: 'chapter one' },
+        name: 'summarize',
+      })).resolves.toEqual({
+        messages: [{ content: { text: 'Summarize chapter one', type: 'text' }, role: 'user' }],
+      });
+      expect(firstSession.stderr()).not.toContain('"jsonrpc"');
+    } finally {
+      await firstSession.close();
+    }
+
+    const stateRoot = join(pluginRoot, 'state');
+    expect(await readdir(stateRoot)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/\.sqlite$/u),
     ]));
 
-    // Per-route assertions iterate inside this one session: the packed cost is
-    // the spawn, not the calls.
-    await expect(session.client.callTool({ arguments: { message: 'packed' }, name: 'echo' }))
-      .resolves.toMatchObject({
-        content: [{ text: '# Echo\n\npacked', type: 'text' }, { text: expect.stringContaining('workspace:'), type: 'text' }],
-        structuredContent: { message: 'packed', operationId: 'tool:harness/echo' },
-      });
-    await expect(session.client.callTool({ arguments: { genre: 'mystery' }, name: 'catalog' }))
-      .resolves.toMatchObject({
-        content: [
-          { text: 'catalog: mystery', type: 'text' },
-          { text: '## mystery\n\n- Piranesi\n- Solaris', type: 'text' },
-        ],
-        structuredContent: { genre: 'mystery', titles: ['Piranesi', 'Solaris'] },
-      });
-    await expect(session.client.callTool({ arguments: {}, name: 'unavailable' }))
-      .resolves.toMatchObject({ isError: true, structuredContent: { available: false } });
-    await expect(session.client.readResource({ uri: 'harness://notes' })).resolves.toEqual({
-      contents: [{ mimeType: 'text/markdown', text: '# Notes for harness://notes', uri: 'harness://notes' }],
+    const secondSession = await openPackedMcpServer({
+      cwd: project,
+      deletedSource,
+      entry,
+      env,
     });
-    const panel = await session.client.readResource({ uri: 'ui://harness/panel' });
-    expect(panel.contents).toHaveLength(1);
-    const panelContent = panel.contents[0];
-    expect(panelContent).toMatchObject({
-      mimeType: 'text/html;profile=mcp-app',
-      uri: 'ui://harness/panel',
-    });
-    if (panelContent === undefined || !('text' in panelContent)) {
-      throw new TypeError('The embedded panel resource did not return inline text.');
+    try {
+      await expect(secondSession.client.callTool({ arguments: {}, name: 'journal' }))
+        .resolves.toMatchObject({
+          structuredContent: { entries: [{ note: 'packed durable proof' }], revision: 1 },
+        });
+      const artifactManifest = JSON.parse(
+        await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'),
+      ) as { readonly project: { readonly revision: string } };
+      let eventResponse: unknown;
+      try {
+        eventResponse = await requestEventRuntime({
+          artifactEpoch: artifactManifest.project.revision,
+          endpointId: `${artifactManifest.project.revision}:claude:${dirname(dirname(resolve(entry)))}`,
+          event: 'tool/after',
+          hostContractRevision: 'packed-proof',
+          native: {
+            cwd: project,
+            hook_event_name: 'PostToolUse',
+            session_id: 'proof-session',
+            tool_input: { proof: true },
+            tool_name: 'Write',
+            tool_response: { ok: true },
+            tool_use_id: 'packed-proof',
+            transcript_path: join(project, 'transcript.jsonl'),
+          },
+          signal: AbortSignal.timeout(10_000),
+          target: 'claude',
+          timeoutMs: 10_000,
+        });
+      } catch (error) {
+        throw new Error(`Packed event route failed.\nserver stderr:\n${secondSession.stderr()}`, { cause: error });
+      }
+      expect(JSON.stringify(eventResponse)).toContain(noticeId);
+      expect(JSON.stringify(eventResponse)).toContain('cross-process notice');
+      expect(secondSession.stderr()).not.toContain('"jsonrpc"');
+    } finally {
+      await secondSession.close();
     }
-    const panelHtml = panelContent.text;
-    expect(panelHtml).toContain('route-harness panel');
-    expect(panelHtml).toMatch(/<script\b/iu);
-    expect(panelHtml).not.toMatch(/<(?:script|link)\b[^>]+(?:src|href)=/iu);
-    await expect(session.client.getPrompt({ arguments: { note: 'chapter one' }, name: 'summarize' })).resolves.toEqual({
-      messages: [{ content: { text: 'Summarize chapter one', type: 'text' }, role: 'user' }],
-    });
-
-    // The generated entry keeps stdout for the protocol; anything the routes or
-    // the warm worker print has to arrive on stderr instead.
-    expect(session.stderr()).not.toContain('"jsonrpc"');
   } finally {
     await rm(consumer, { force: true, recursive: true });
   }

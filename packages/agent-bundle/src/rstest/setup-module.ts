@@ -48,6 +48,9 @@ export const routeTestSetupSource = (manifest: AgentBundleTestManifest): string 
     ...loaders,
     '  },',
     `  manifest: JSON.parse(${JSON.stringify(JSON.stringify(manifest))}),`,
+    ...(manifest.state === undefined
+      ? []
+      : [`  stateLoader: () => import(${JSON.stringify(specifier(manifest.state.source))}),`]),
     `  version: ${String(AGENT_TEST_REGISTRY_VERSION)},`,
     '};',
     '',

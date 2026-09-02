@@ -39,6 +39,7 @@ export type {
   TestManifestPluginIdentity,
   TestableAppDescriptor,
   TestableRouteDescriptor,
+  TestableStateDescriptor,
 } from './manifest.ts';
 export { AGENT_TEST_REGISTRY_VERSION, registerTestRoutes, testManifest } from './registry.ts';
 export type { AgentTestRouteRegistry } from './registry.ts';
