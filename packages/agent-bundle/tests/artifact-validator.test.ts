@@ -1993,6 +1993,54 @@ it.each(['claude', 'codex'] as const)(
   },
 );
 
+const claudeSettingsFiles = async (settings: string): Promise<string> => {
+  const registry = createDefaultRegistry();
+  const model: NormalizedPlugin = {
+    ...installSurfaceModel('claude'),
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+        target: 'claude',
+        value: { settings: { agent: 'security-reviewer' } },
+      },
+    },
+  };
+  const files = registry.get('claude').plan(model).entries
+    .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
+    .map((entry) => ({
+      contents: entry.relativePath === 'settings.json' ? settings : entry.content,
+      kind: 'generated' as const,
+      path: `claude/${entry.relativePath}`,
+    }));
+  expect(files.some((file) => file.path === 'claude/settings.json')).toBe(true);
+  return writeArtifact(files, true, [targetFromRegistry(registry, 'claude')]);
+};
+
+it('accepts an emitted Claude settings document against its pinned schema', async () => {
+  const root = await claudeSettingsFiles('{"agent":"security-reviewer"}\n');
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a rehashed Claude settings document that carries an unsupported key', async () => {
+  const root = await claudeSettingsFiles('{"agent":"security-reviewer","statusLine":{"type":"command","command":"rows.sh"}}\n');
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([expect.objectContaining({
+      code: 'AB6012',
+      generatedPath: 'claude/settings.json',
+      message: expect.stringContaining('"settings"'),
+      target: 'claude',
+    })]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 const logoSurfaceModel = (target: 'cursor' | 'plugin'): NormalizedPlugin => ({
   ...installSurfaceModel(target),
   metadata: {

@@ -1,5 +1,5 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
-import type { Diagnostic } from '../core/diagnostics.ts';
+import { hasErrors, type Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
   pathTokens,
@@ -40,6 +40,7 @@ import lspSchema from './schemas/claude/lsp.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
+import settingsSchema from './schemas/claude/settings.schema.json' with { type: 'json' };
 import { stringify as stringifyYaml } from 'yaml';
 import {
   commandWriteEntries,
@@ -53,6 +54,7 @@ import {
   validateJsonSchemaDocument,
   validateModernMcpDocument,
   withPluginRootEnvAnchor,
+  type StandardPluginHostDocument,
   type TargetAdapter,
   type TargetArtifactCopy,
   type TargetArtifactLayout,
@@ -90,14 +92,54 @@ export interface ClaudeLspServerConfig {
 }
 
 /**
+ * One Claude Code subagent status line: the command object documented for
+ * `subagentStatusLine`, which renders a custom row body for each subagent in
+ * the agent panel. Only `type` and `command` are admitted; `statusLine`'s
+ * optional `padding` is documented for the user status line, not for the
+ * plugin default, so it is not part of this pinned shape.
+ */
+export interface ClaudeSubagentStatusLineConfig {
+  /** A path to an executable or an inline command; Claude Code runs it once per refresh tick. */
+  readonly command: string;
+  readonly type: 'command';
+}
+
+/**
+ * Default configuration Claude Code applies when the plugin is enabled,
+ * emitted as `settings.json` at the plugin root. The pinned 2.1.250 contract
+ * supports exactly two keys, and `settings.json` takes priority over
+ * `settings` declared in the manifest.
+ *
+ * `agent` activates one of the plugin's own agents as the main thread. The
+ * plugin `agents/` component is deferred by the #100 stage-2 G5 gate (merged
+ * PR #220), so this compiler emits no `agents/` tree: a declared `agent`
+ * resolves only when the author ships that agent by other means, such as a
+ * prebuilt payload. Declaring it raises the `claude.settings.agent.deferred`
+ * warning rather than silently emitting a dangling reference.
+ *
+ * Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` and its siblings only in
+ * the components its placeholder table names (Skill and agent content, hook
+ * and monitor commands, MCP servers, LSP servers). `settings.json` is absent
+ * from that table, so Agent Bundle path tokens are rejected here instead of
+ * being emitted as placeholders the host never resolves.
+ */
+export interface ClaudeSettingsConfig {
+  /** Name of a plugin agent to activate as the main thread. */
+  readonly agent?: string;
+  readonly subagentStatusLine?: ClaudeSubagentStatusLineConfig;
+}
+
+/**
  * Claude's host config. `lspServers` lives here rather than in a portable
  * top-level block because no other pinned host contract has an LSP surface;
- * the portable LSP component kind stays deferred.
+ * the portable LSP component kind stays deferred. `settings` is host-scoped
+ * for the same reason: no other pinned contract ships plugin defaults.
  */
 export interface ClaudeHostConfig extends AgentBundleHostConfig {
   /** Project-authored directory copied to the plugin-root `bin/` executable convention. */
   readonly bin?: string;
   readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
+  readonly settings?: ClaudeSettingsConfig;
 }
 
 export interface ClaudeConfigExtension {
@@ -119,6 +161,7 @@ export const claudeArtifactPaths = Object.freeze({
   marketplace: '.claude-plugin/marketplace.json',
   mcp: '.mcp.json',
   plugin: '.claude-plugin/plugin.json',
+  settings: 'settings.json',
 });
 const validator = createAdapterValidator();
 const validatePlugin = validator.compile(pluginSchema);
@@ -126,6 +169,7 @@ const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 const validateHooks = validator.compile(hooksSchema);
 const validateLsp = validator.compile(lspSchema);
+const validateSettings = validator.compile(settingsSchema);
 
 /** The pinned Claude hooks validator, shared with the unified bundle adapter. */
 export const claudeHooksValidator = validateHooks;
@@ -149,7 +193,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.6.0',
+  adapterRevision: '1.7.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -162,6 +206,7 @@ const artifactValidation = deepFreeze({
     Object.freeze({ path: '.claude-plugin/marketplace.json', required: false, schema: 'marketplace' }),
     Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
     Object.freeze({ path: '.claude-plugin/plugin.json', required: true, schema: 'plugin' }),
+    Object.freeze({ path: claudeArtifactPaths.settings, required: false, schema: 'settings' }),
   ],
   schemas: [
     Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
@@ -169,6 +214,7 @@ const artifactValidation = deepFreeze({
     Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
     Object.freeze({ name: 'mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateMcp)) }),
     Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
+    Object.freeze({ name: 'settings', validate: validateJsonSchemaDocument(validateSettings) }),
   ],
 });
 
@@ -187,7 +233,7 @@ const mcpRuntime = createTargetMcpRuntime({
   }),
 });
 
-const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(claudeName, 'Claude');
+const { errorDiagnostic, schemaDiagnostics, warningDiagnostic } = createTargetDiagnostics(claudeName, 'Claude');
 
 const claudeCommandMarkdown = (
   command: NonNullable<NormalizedPlugin['commands']>[number],
@@ -538,6 +584,138 @@ const planClaudeBin = (model: NormalizedPlugin, targetName: string): ClaudeBinPl
   return deepFreeze({ diagnostics, entries });
 };
 
+/**
+ * Every key the pinned plugin `settings.json` contract documents. The emitted
+ * document copies this allowlist rather than the declared object, so a
+ * misspelled key is a build diagnostic instead of a key Claude Code silently
+ * ignores at runtime.
+ */
+const settingsFields: ReadonlySet<string> = new Set(['agent', 'subagentStatusLine']);
+
+/** The two fields the documented `subagentStatusLine` examples carry. */
+const subagentStatusLineFields: ReadonlySet<string> = new Set(['command', 'type']);
+
+const settingsTokenDiagnostic = (field: string): Diagnostic => errorDiagnostic(
+  'claude.settings.token.unsupported',
+  `Claude settings key "${field}" cannot use a path token: the pinned placeholder table substitutes \${CLAUDE_PLUGIN_ROOT} and its siblings in Skill and agent content, hook and monitor commands, MCP servers, and LSP servers only, never in settings.json.`,
+);
+
+const planSubagentStatusLine = (
+  declared: unknown,
+): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
+  const diagnostics: Diagnostic[] = [];
+  if (!isDataRecord(declared)) {
+    diagnostics.push(errorDiagnostic(
+      'claude.settings.statusline.invalid',
+      'Claude settings subagentStatusLine must be a command object of the form { "type": "command", "command": "<path-or-inline-command>" }.',
+    ));
+    return { diagnostics };
+  }
+  for (const field of Object.keys(declared).sort()) {
+    if (subagentStatusLineFields.has(field)) continue;
+    diagnostics.push(errorDiagnostic(
+      'claude.settings.statusline.field.unknown',
+      `Claude settings subagentStatusLine declares unknown field "${field}"; the documented subagent status line carries only "type" and "command". The optional "padding" field is documented for the user statusLine, not for a plugin default.`,
+    ));
+  }
+  if (declared['type'] !== 'command') {
+    diagnostics.push(errorDiagnostic(
+      'claude.settings.statusline.type.invalid',
+      'Claude settings subagentStatusLine requires type "command"; the pinned contract documents no other subagent status line type.',
+    ));
+  }
+  const command = declared['command'];
+  if (typeof command !== 'string' || command.length === 0) {
+    diagnostics.push(errorDiagnostic(
+      'claude.settings.statusline.command.required',
+      'Claude settings subagentStatusLine requires a nonempty command; Claude Code runs it once per refresh tick to render the subagent rows.',
+    ));
+    return { diagnostics };
+  }
+  if (hasPathToken(command)) {
+    diagnostics.push(settingsTokenDiagnostic('subagentStatusLine.command'));
+    return { diagnostics };
+  }
+  return { diagnostics, value: { command, type: 'command' } };
+};
+
+interface ClaudeSettingsPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Record<string, unknown>;
+  readonly sourceInputs: readonly string[];
+}
+
+const noSettingsPlan: ClaudeSettingsPlan = deepFreeze({
+  diagnostics: [],
+  sourceInputs: [],
+});
+
+/**
+ * Lowers `claude.settings` into the plugin-root `settings.json` document
+ * Claude Code applies as default configuration when the plugin is enabled.
+ * The host tolerates unknown keys by ignoring them silently; this compiler
+ * rejects them instead, so a default an author asked for never disappears
+ * between the config and the running session.
+ */
+export const planClaudeSettings = (model: NormalizedPlugin): ClaudeSettingsPlan => {
+  const extension = model.extensions[claudeName];
+  if (extension === undefined || !isDataRecord(extension.value)) return noSettingsPlan;
+  const declared = extension.value['settings'];
+  if (declared === undefined) return noSettingsPlan;
+  const diagnostics: Diagnostic[] = [];
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (!isDataRecord(declared) || Object.keys(declared).length === 0) {
+    diagnostics.push(errorDiagnostic(
+      'claude.settings.declaration.invalid',
+      'Claude settings must be a nonempty object declaring agent, subagentStatusLine, or both; an empty settings.json applies no default configuration.',
+    ));
+    return { diagnostics, sourceInputs: inputs };
+  }
+  for (const field of Object.keys(declared).sort()) {
+    if (settingsFields.has(field)) continue;
+    diagnostics.push(errorDiagnostic(
+      'claude.settings.field.unknown',
+      `Claude settings declares unknown key "${field}"; the pinned contract supports only "agent" and "subagentStatusLine". Claude Code ignores unknown keys silently, so the bundle refuses the declaration instead of shipping a default that never applies.`,
+    ));
+  }
+
+  const document: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  const agent = declared['agent'];
+  if (agent !== undefined) {
+    if (typeof agent !== 'string' || agent.length === 0) {
+      diagnostics.push(errorDiagnostic(
+        'claude.settings.agent.invalid',
+        'Claude settings agent must be a nonempty plugin agent name; it activates that agent as the main thread.',
+      ));
+    } else if (hasPathToken(agent)) {
+      diagnostics.push(settingsTokenDiagnostic('agent'));
+    } else {
+      document['agent'] = agent;
+    }
+  }
+  const subagentStatusLine = declared['subagentStatusLine'];
+  if (subagentStatusLine !== undefined) {
+    const statusLinePlan = planSubagentStatusLine(subagentStatusLine);
+    diagnostics.push(...statusLinePlan.diagnostics);
+    if (statusLinePlan.value !== undefined) document['subagentStatusLine'] = statusLinePlan.value;
+  }
+  if (hasErrors(diagnostics)) return { diagnostics, sourceInputs: inputs };
+
+  const valid = validateSettings(document);
+  diagnostics.push(...schemaDiagnostics('settings', valid, validateSettings.errors));
+  if (!valid) return { diagnostics, sourceInputs: inputs };
+  // The setting itself is shippable host configuration, so the deferred
+  // plugin-agents component is reported alongside the emitted document
+  // rather than in place of it: the agent can still arrive by other means.
+  if (typeof document['agent'] === 'string') {
+    diagnostics.push(warningDiagnostic(
+      'claude.settings.agent.deferred',
+      `Claude settings activates plugin agent "${document['agent']}" as the main thread, but the plugin agents component stays deferred (#100 stage 2 G5, PR #220), so this bundle emits no agents/ directory. Ship the agent another way, for example a prebuilt payload that lands agents/${document['agent']}.md at the plugin root, or the setting dangles at runtime.`,
+    ));
+  }
+  return { diagnostics, document, sourceInputs: inputs };
+};
+
 export interface ClaudeArtifactPlanOptions {
   /** Target name used for selection and provenance; native hooks stay keyed to Claude. */
   readonly targetName?: string;
@@ -564,6 +742,8 @@ export const planClaudeArtifacts = (
   diagnostics.push(...lsp.diagnostics);
   const bin = planClaudeBin(model, targetName);
   diagnostics.push(...bin.diagnostics);
+  const settings = planClaudeSettings(model);
+  diagnostics.push(...settings.diagnostics);
   const generatedHooks = planHooks(model, targetName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
@@ -597,15 +777,25 @@ export const planClaudeArtifacts = (
   const marketplaceValid = validateMarketplace(marketplace);
   diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
 
+  const hostDocuments: StandardPluginHostDocument[] = [];
+  if (lsp.document !== undefined) {
+    hostDocuments.push({
+      document: lsp.document,
+      relativePath: claudeArtifactPaths.lsp,
+      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...lsp.sourceInputs),
+    });
+  }
+  if (settings.document !== undefined) {
+    hostDocuments.push({
+      document: settings.document,
+      relativePath: claudeArtifactPaths.settings,
+      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...settings.sourceInputs),
+    });
+  }
+
   const basePlan = standardPluginArtifactPlan({
     diagnostics,
-    ...(lsp.document === undefined ? {} : {
-      hostDocuments: [{
-        document: lsp.document,
-        relativePath: claudeArtifactPaths.lsp,
-        sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...lsp.sourceInputs),
-      }],
-    }),
+    ...(hostDocuments.length === 0 ? {} : { hostDocuments }),
     hookDocument,
     hookDocumentValid,
     hookEntries: generatedHooks.hookEntries,
@@ -675,6 +865,13 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     ),
     rules: unavailableCapability(
       'The pinned Claude Code plugin contract (2.1.250) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
+    ),
+    settings: capabilityStateFromSupport(
+      capabilityTable.plugin.settings.config === claudeArtifactPaths.settings &&
+        capabilityTable.plugin.settings.supportedKeys.length === settingsFields.size &&
+        capabilityTable.plugin.settings.supportedKeys.every((key) => settingsFields.has(key)),
+      evidence,
+      'The pinned Claude plugin contract does not document the plugin-root settings.json defaults surface.',
     ),
     skills: capabilityStateFromSupport(
       capabilityTable.plugin.skills,

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/settings.schema.json",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "agent": { "minLength": 1, "type": "string" },
+    "subagentStatusLine": {
+      "additionalProperties": false,
+      "properties": {
+        "command": { "minLength": 1, "type": "string" },
+        "type": { "const": "command" }
+      },
+      "required": ["command", "type"],
+      "type": "object"
+    }
+  },
+  "type": "object"
+}

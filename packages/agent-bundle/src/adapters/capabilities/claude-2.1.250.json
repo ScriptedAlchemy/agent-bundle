@@ -87,6 +87,14 @@
     },
     "manifest": ".claude-plugin/plugin.json",
     "marketplace": ".claude-plugin/marketplace.json",
+    "settings": {
+      "config": "settings.json",
+      "placeholderSubstitution": false,
+      "precedesManifestSettings": true,
+      "subagentStatusLineFields": ["command", "type"],
+      "supportedKeys": ["agent", "subagentStatusLine"],
+      "unknownKeysIgnored": true
+    },
     "skills": true
   },
   "tokens": {
@@ -117,7 +125,13 @@
       "SubagentStart adds agent_id and agent_type to common hook fields. It cannot block subagent creation; hookSpecificOutput.additionalContext injects context before the first subagent prompt, and exit-2 stderr is only a non-blocking notice in the subagent transcript.",
       "SubagentStop adds stop_hook_active, agent_id, agent_type, agent_transcript_path, and last_assistant_message. decision:block plus reason or exit 2 keeps the subagent running; hookSpecificOutput.additionalContext provides non-error feedback that also continues it.",
       "The hooks reference states prompt_id requires Claude Code 2.1.196 or later; the pinned 2.1.250 release covers that input field without a version bump.",
-      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents an agents/ component with name, description, model, effort, maxTurns, tools, disallowedTools, skills, memory, background, and isolation: worktree; #100 stage 2 defers the agents component per the G5 narrowing in #107, so no agents capability row is published until a later stage admits it."
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents an agents/ component with name, description, model, effort, maxTurns, tools, disallowedTools, skills, memory, background, and isolation: worktree; #100 stage 2 defers the agents component per the G5 narrowing in #107, so no agents capability row is published until a later stage admits it.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins \"Ship default settings with your plugin\": a plugin may include settings.json at the plugin root \"to apply default configuration when the plugin is enabled. Currently, only the `agent` and `subagentStatusLine` keys are supported.\" The file-locations table of https://code.claude.com/docs/en/plugins-reference repeats the same bound: \"Settings | settings.json | Default configuration applied when the plugin is enabled. Only the agent and subagentStatusLine keys are supported\".",
+      "2026-09-01: The same plugins section fixes precedence and host tolerance: \"Settings from `settings.json` take priority over `settings` declared in `plugin.json`. Unknown keys are silently ignored.\" Agent Bundle tightens the silent ignore into the build error claude.settings.field.unknown, the same way an unknown LSP server field is rejected, so a documented component an author asked for is never dropped without a diagnostic; an empty settings object is rejected too, because it declares no default configuration.",
+      "2026-09-01: \"Setting `agent` activates one of the plugin's custom agents as the main thread, applying its system prompt, tool restrictions, and model\"; the documented example value \"security-reviewer\" names an agent in the plugin's agents/ directory. The plugin agents/ component remains deferred by the #100 stage-2 G5 gate recorded in merged PR #220, so this compiler emits no agents/ tree: a declared `agent` resolves only when the author ships that agent by other means, such as the prebuilt payload surface, and the compiler emits the claude.settings.agent.deferred warning to keep the dangling-reference risk visible instead of implying an agents component exists.",
+      "2026-09-01: https://code.claude.com/docs/en/statusline documents subagentStatusLine as a command object - {\"type\": \"command\", \"command\": \"~/.claude/subagent-statusline.sh\"} - whose command \"renders a custom row body for each subagent shown in the agent panel below the prompt\", and records the plugin policy: \"Plugins can ship a default `subagentStatusLine` in their `settings.json`, but unlike hooks, plugin values don't run under `allowManagedHooksOnly` even when the plugin is force-enabled in managed settings `enabledPlugins`.\" The pinned schema admits only the two fields the subagentStatusLine examples show; statusLine's optional `padding` is documented for the user status line alone and is deliberately not admitted.",
+      "2026-09-01: The plugins-reference placeholder table (\"Which fields substitute them inline depends on the plugin component\") enumerates Skill and agent content, hook and monitor commands, MCP stdio and remote fields, and LSP servers - settings.json appears nowhere - so an Agent Bundle path token in a settings value is rejected (claude.settings.token.unsupported) rather than emitted as a placeholder Claude Code never resolves.",
+      "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted claude artifact whose plugin root carries settings.json with both supported keys, for both the marketplace-manifest and plugin-manifest validation modes, printing only the validated manifest path and \"Validation passed\". The same command also passes for a deliberately malformed settings.json (empty `agent`, a user-scope `statusLine` key, a stray `padding`) and never names the file, so the host validator does not inspect plugin settings.json at all: the compiler's claude.settings.* diagnostics are the only guard an author gets before the plugin is enabled (host-adapters.native.test.ts)."
     ]
   }
 }
