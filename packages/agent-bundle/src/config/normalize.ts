@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, extname, posix, relative, resolve, sep, win32 } from 'node:path';
 
 import { digest } from '../core/digest.ts';
@@ -32,6 +32,7 @@ import type {
   CanonicalHookEvent,
   CanonicalHookTool,
   NativeHookToolSelector,
+  NormalizationHostPayloadSource,
   NormalizationTargetRegistry,
   NormalizedAsset,
   NormalizedBinEntry,
@@ -40,6 +41,7 @@ import type {
   NormalizedHook,
   NormalizedHostBin,
   NormalizedHostBinFile,
+  NormalizedHostPayloadDirectory,
   NormalizedLibEntry,
   NormalizedMcpApp,
   NormalizedMcpServer,
@@ -349,10 +351,12 @@ export const reservedPayloadDestinations = Object.freeze(new Set([
   'mcp',
   'mcp-apps',
   'mcp.json',
+  'output-styles',
   'plugin.json',
   'rules',
   'scripts',
   'skills',
+  'workflows',
 ]));
 
 const normalizePayloads = (
@@ -586,7 +590,7 @@ const normalizeNativeHooks = async (
   return nativeHooks;
 };
 
-const enumerateHostBinFiles = async (source: string): Promise<readonly NormalizedHostBinFile[]> => {
+const enumerateHostPayloadFiles = async (source: string): Promise<readonly NormalizedHostBinFile[]> => {
   const files: NormalizedHostBinFile[] = [];
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -614,46 +618,84 @@ const normalizeHostBins = async (
   loaded: LoadedConfig,
   targetNames: readonly string[],
   registry: NormalizationTargetRegistry,
-): Promise<readonly NormalizedHostBin[]> => {
+): Promise<readonly NormalizedHostBin[]> =>
+  normalizeHostPayloadDirectories(loaded, registry.binSources?.(loaded.config, targetNames) ?? []);
+
+const normalizeHostPayloadDirectories = async (
+  loaded: LoadedConfig,
+  sources: readonly NormalizationHostPayloadSource[],
+): Promise<readonly NormalizedHostPayloadDirectory[]> => {
   const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
-  const bins: NormalizedHostBin[] = [];
-  for (const binSource of registry.binSources?.(loaded.config, targetNames) ?? []) {
-    if ('issue' in binSource) {
-      bins.push({
+  const directories: NormalizedHostPayloadDirectory[] = [];
+  for (const declaredSource of sources) {
+    if ('issue' in declaredSource) {
+      directories.push({
         files: [],
-        issue: `source-${binSource.issue}`,
+        issue: `source-${declaredSource.issue}`,
         provenance: { ...provenance },
         source: loaded.configPath,
-        target: binSource.target,
+        target: declaredSource.target,
       });
       continue;
     }
-    const source = resolve(dirname(loaded.configPath), binSource.source);
+    const source = resolve(dirname(loaded.configPath), declaredSource.source);
     if (!isInside(loaded.context.projectRoot, source)) {
-      bins.push({ files: [], issue: 'outside', provenance: { ...provenance }, source, target: binSource.target });
+      directories.push({
+        files: [],
+        issue: 'outside',
+        provenance: { ...provenance },
+        source,
+        target: declaredSource.target,
+      });
       continue;
     }
     let metadata;
     try {
       metadata = await stat(source);
     } catch {
-      bins.push({ files: [], issue: 'missing', provenance: { ...provenance }, source, target: binSource.target });
+      directories.push({
+        files: [],
+        issue: 'missing',
+        provenance: { ...provenance },
+        source,
+        target: declaredSource.target,
+      });
       continue;
     }
     if (!metadata.isDirectory()) {
-      bins.push({ files: [], issue: 'not-directory', provenance: { ...provenance }, source, target: binSource.target });
+      directories.push({
+        files: [],
+        issue: 'not-directory',
+        provenance: { ...provenance },
+        source,
+        target: declaredSource.target,
+      });
       continue;
     }
-    const files = await enumerateHostBinFiles(source);
-    bins.push({
+    const [projectRealPath, sourceRealPath] = await Promise.all([
+      realpath(loaded.context.projectRoot),
+      realpath(source),
+    ]);
+    if (!isInside(projectRealPath, sourceRealPath)) {
+      directories.push({
+        files: [],
+        issue: 'outside',
+        provenance: { ...provenance },
+        source,
+        target: declaredSource.target,
+      });
+      continue;
+    }
+    const files = await enumerateHostPayloadFiles(source);
+    directories.push({
       files,
       ...(files.length === 0 ? { issue: 'empty' as const } : {}),
       provenance: { ...provenance },
       source,
-      target: binSource.target,
+      target: declaredSource.target,
     });
   }
-  return bins;
+  return directories;
 };
 
 const normalizeMcpServer = (
@@ -1157,6 +1199,14 @@ export const normalizeProject = async (
   const packageIdentity = snapshotPackageIdentity(loaded.context.projectRoot);
   const version = resolvePluginVersion(loaded.config.plugin.version, packageIdentity.packageVersion);
   const hostBins = await normalizeHostBins(loaded, targetNames, registry);
+  const hostOutputStyles = await normalizeHostPayloadDirectories(
+    loaded,
+    registry.outputStyleSources?.(loaded.config, targetNames) ?? [],
+  );
+  const hostWorkflows = await normalizeHostPayloadDirectories(
+    loaded,
+    registry.workflowSources?.(loaded.config, targetNames) ?? [],
+  );
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
   const payloads = normalizePayloads(loaded, discovered, targetNames);
   const mcpServers = normalizeMcpServers(loaded, discovered, targetNames, payloads);
@@ -1184,6 +1234,8 @@ export const normalizeProject = async (
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
     extensions: normalizeExtensions(loaded, registry, configProvenance),
     ...(hostBins.length === 0 ? {} : { hostBins }),
+    ...(hostOutputStyles.length === 0 ? {} : { hostOutputStyles }),
+    ...(hostWorkflows.length === 0 ? {} : { hostWorkflows }),
     metadata: {
       ...(typeof description === 'string' ? { description } : {}),
       id: `plugin:${loaded.config.plugin.name}`,

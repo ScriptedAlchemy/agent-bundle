@@ -271,6 +271,14 @@ const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
     bin.provenance.sourcePath,
     ...bin.files.map((file) => file.source),
   ]),
+  ...(model.hostOutputStyles ?? []).flatMap((directory) => [
+    directory.provenance.sourcePath,
+    ...directory.files.map((file) => file.source),
+  ]),
+  ...(model.hostWorkflows ?? []).flatMap((directory) => [
+    directory.provenance.sourcePath,
+    ...directory.files.map((file) => file.source),
+  ]),
   ...model.targets.map((target) => target.provenance.sourcePath),
   // A prebuilt hook's source is its payload file, which may not exist yet
   // (the payload comes from the consumer's own build step); its bytes join
@@ -388,6 +396,32 @@ export const canonicalizeNormalizedModel = (
           })),
           provenance: canonicalProvenance(root, bin.provenance),
           source: canonicalCompilerPath(root, bin.source, 'Host bin source path'),
+        })),
+      }),
+    ...(detached.hostOutputStyles === undefined
+      ? {}
+      : {
+        hostOutputStyles: detached.hostOutputStyles.map((directory) => ({
+          ...directory,
+          files: directory.files.map((file) => ({
+            ...file,
+            source: canonicalCompilerPath(root, file.source, 'Host output style file source path'),
+          })),
+          provenance: canonicalProvenance(root, directory.provenance),
+          source: canonicalCompilerPath(root, directory.source, 'Host output styles source path'),
+        })),
+      }),
+    ...(detached.hostWorkflows === undefined
+      ? {}
+      : {
+        hostWorkflows: detached.hostWorkflows.map((directory) => ({
+          ...directory,
+          files: directory.files.map((file) => ({
+            ...file,
+            source: canonicalCompilerPath(root, file.source, 'Host workflow file source path'),
+          })),
+          provenance: canonicalProvenance(root, directory.provenance),
+          source: canonicalCompilerPath(root, directory.source, 'Host workflows source path'),
         })),
       }),
     hooks: detached.hooks.map((hook) => ({

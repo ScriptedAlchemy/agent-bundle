@@ -184,7 +184,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.10.0',
+  adapterRevision: '1.11.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -218,10 +218,12 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
   hookWrappers: standardArtifactLayout.hookWrappers,
   mcpApps: standardArtifactLayout.mcpApps,
   mcpEntries: standardArtifactLayout.mcpEntries,
+  outputStyles: Object.freeze({ allowedSuffixes: Object.freeze(['.md']), directory: 'output-styles' }),
   rootDocuments: Object.freeze(['AGENTS.md', ...(standardArtifactLayout.rootDocuments ?? [])]),
   rules: Object.freeze({ allowedSuffixes: Object.freeze(['.mdc']), directory: 'rules' }),
   scripts: standardArtifactLayout.scripts,
   skills: standardArtifactLayout.skills,
+  workflows: 'workflows',
 });
 
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(pluginName, 'Agent plugin bundle');
@@ -233,10 +235,14 @@ interface AgentsDocumentOptions {
   readonly commands: boolean;
   /** True when the Claude half of this bundle emitted `.lsp.json`. */
   readonly lsp: boolean;
+  /** True when the Claude half emitted output styles. */
+  readonly outputStyles: boolean;
   /** True when the Cursor half emitted conventional `.mdc` rules. */
   readonly rules: boolean;
   /** True when the Claude half of this bundle emitted `settings.json`. */
   readonly settings: boolean;
+  /** True when the Claude half emitted workflow scripts. */
+  readonly workflows: boolean;
 }
 
 const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions): string => {
@@ -281,6 +287,16 @@ const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions)
     ...(options.bin
       ? [
           '- `bin/` — Claude Code executables added to the Bash tool PATH while the plugin is enabled; Codex and Cursor have no declared bin surface.',
+        ]
+      : []),
+    ...(options.workflows
+      ? [
+          '- `workflows/` — Claude Code workflow scripts. Codex and Cursor have no declared workflows surface.',
+        ]
+      : []),
+    ...(options.outputStyles
+      ? [
+          '- `output-styles/` — Claude Code output style definitions. Codex and Cursor have no declared output-styles surface.',
         ]
       : []),
     ...(options.rules
@@ -497,8 +513,10 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       bin: entries.some((entry) => entry.relativePath.startsWith('bin/')),
       commands: selectedCommands.length > 0,
       lsp: entries.some((entry) => entry.relativePath === claudeArtifactPaths.lsp),
+      outputStyles: entries.some((entry) => entry.relativePath.startsWith('output-styles/')),
       rules: selectedRules.length > 0,
       settings: entries.some((entry) => entry.relativePath === claudeArtifactPaths.settings),
+      workflows: entries.some((entry) => entry.relativePath.startsWith('workflows/')),
     }),
     kind: 'write',
     relativePath: 'AGENTS.md',
@@ -613,6 +631,9 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
       intersectCapabilityStates(claudeAdapter.capabilities.mcp!, codexAdapter.capabilities.mcp!),
       cursorAdapter.capabilities.mcp!,
     ),
+    outputStyles: unavailableCapability(
+      'The unified bundle emits Claude-only output styles, but the pinned Codex and Cursor contracts declare no shared output styles surface.',
+    ),
     // The bundle exposes Cursor's real rules directory; the composite row is
     // the honest three-host intersection, so it stays non-supported while
     // Claude and Codex cannot consume rules.
@@ -636,6 +657,9 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
     userConfig: unavailableCapability(
       'The unified bundle emits the Claude-only userConfig manifest field, but the pinned Codex and Cursor contracts declare no shared enable-time option surface.',
     ),
+    workflows: unavailableCapability(
+      'The unified bundle emits Claude-only workflows, but the pinned Codex and Cursor contracts declare no shared workflows surface.',
+    ),
   }),
   componentCapabilities,
   hookContract: bundleHookContract,
@@ -643,5 +667,7 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   mcpRuntime,
   name: pluginName,
   binSource: (config: Readonly<AgentBundleConfig>) => config.claude?.bin,
+  outputStylesSource: (config: Readonly<AgentBundleConfig>) => config.claude?.outputStyles,
   plan,
+  workflowsSource: (config: Readonly<AgentBundleConfig>) => config.claude?.workflows,
 });

@@ -240,6 +240,80 @@ nativeIt('accepts an emitted Claude plugin with bin under strict native validati
   }
 });
 
+nativeIt('accepts emitted Claude workflows and output styles under strict native validation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-workflows-output-styles-'));
+  const sourceRoot = join(root, 'authored');
+  const workflowsRoot = join(sourceRoot, 'workflows');
+  const outputStylesRoot = join(sourceRoot, 'styles');
+  const workflowSource = join(workflowsRoot, 'release-audit.js');
+  const outputStyleSource = join(outputStylesRoot, 'terse.md');
+  const outputRoot = join(root, 'plugin');
+  const workflow = 'export default async function releaseAudit() {}\n';
+  const outputStyle = '---\nname: Terse\ndescription: Be concise\n---\n\nBe concise.\n';
+  const payloadModel: NormalizedPlugin = {
+    ...model,
+    hostOutputStyles: [{
+      files: [{
+        bytes: Buffer.byteLength(outputStyle),
+        executable: false,
+        relativePath: 'terse.md',
+        source: outputStyleSource,
+      }],
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      source: outputStylesRoot,
+      target: 'claude',
+    }],
+    hostWorkflows: [{
+      files: [{
+        bytes: Buffer.byteLength(workflow),
+        executable: false,
+        relativePath: 'release-audit.js',
+        source: workflowSource,
+      }],
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      source: workflowsRoot,
+      target: 'claude',
+    }],
+  };
+
+  try {
+    await Promise.all([
+      mkdir(workflowsRoot, { recursive: true }),
+      mkdir(outputStylesRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(workflowSource, workflow),
+      writeFile(outputStyleSource, outputStyle),
+    ]);
+    await emitPlanEntries({ entries: claudeAdapter.plan(payloadModel).entries, root: outputRoot });
+    expect(await readFile(join(outputRoot, 'workflows', 'release-audit.js'), 'utf8')).toBe(workflow);
+    expect(await readFile(join(outputRoot, 'output-styles', 'terse.md'), 'utf8')).toBe(outputStyle);
+    const validation = await runClaudeValidation(outputRoot, outputRoot);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records whether strict native validation inspects output-style frontmatter', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-output-style-frontmatter-'));
+  const outputRoot = join(root, 'plugin');
+
+  try {
+    await writeClaudeArtifact(outputRoot, model);
+    await mkdir(join(outputRoot, 'output-styles'), { recursive: true });
+    await writeFile(join(outputRoot, 'output-styles', 'missing-frontmatter.md'), 'Be concise.\n');
+    const validation = await runClaudeValidation(outputRoot, outputRoot);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).not.toContain('missing-frontmatter.md');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 nativeIt('accepts emitted Claude userConfig under strict native validation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-user-config-'));
   const outputRoot = join(root, 'plugin');

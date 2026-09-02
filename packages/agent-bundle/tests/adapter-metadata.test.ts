@@ -93,7 +93,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.11.0',
+    adapterRevision: '1.12.0',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -154,7 +154,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.10.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.11.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {

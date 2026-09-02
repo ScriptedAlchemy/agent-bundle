@@ -155,6 +155,13 @@
       "skillsRootException": ".",
       "skillsRootExceptionSince": "2.1.221"
     },
+    "outputStyles": {
+      "allowedSuffixes": [".md"],
+      "directory": "output-styles",
+      "frontmatterFields": ["description", "force-for-plugin", "keep-coding-instructions", "name"],
+      "manifestField": "outputStyles",
+      "replacesDefault": true
+    },
     "settings": {
       "config": "settings.json",
       "placeholderSubstitution": false,
@@ -175,6 +182,12 @@
       "shellSubstitutionRejected": ["hookShellCommands", "monitorCommands", "mcpHeadersHelper"],
       "substitutionToken": "${user_config.KEY}",
       "types": ["boolean", "directory", "file", "number", "string"]
+    },
+    "workflows": {
+      "directory": "workflows",
+      "fileContents": "opaque",
+      "manifestField": "workflows",
+      "replacesDefault": true
     }
   },
   "tokens": {
@@ -234,7 +247,11 @@
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents custom component path fields as string or array values: commands, agents, workflows, outputStyles, experimental.themes, and experimental.monitors replace their default scans, while skills adds to the default scan. Keeping a replaced default requires listing it explicitly, for example `\"commands\": [\"./commands/\", \"./extras/\"]`.",
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference requires component paths to be relative to the plugin root and start with `./`, except skills also accepts `.` starting in v2.1.221; before that version `.` failed manifest validation. A marketplace-root source that declares specific skills subdirectories replaces the default skills scan.",
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents that a default folder shadowed by a replacing manifest path still allows the plugin to load but warns in `claude plugin list` and the `/plugin` detail view. Its file-locations table defines commands/ as flat Markdown Skill files and recommends skills/ for new plugins; Agent Bundle already emits flat `.md` commands in the canonical commands/ directory and deliberately leaves custom-path discovery to the host.",
-      "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted plugin manifest containing displayName, object metadata, and defaultEnabled, and separately accepts `\"commands\": \"./custom/deploy.md\"` when that flat Markdown file exists and no default commands/ directory exists (host-adapters.native.test.ts). These positive probes establish acceptance; they do not claim that the CLI checks custom-path existence or contents."
+      "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted plugin manifest containing displayName, object metadata, and defaultEnabled, and separately accepts `\"commands\": \"./custom/deploy.md\"` when that flat Markdown file exists and no default commands/ directory exists (host-adapters.native.test.ts). These positive probes establish acceptance; they do not claim that the CLI checks custom-path existence or contents.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents plugin-root `workflows/` as workflow script files and `output-styles/` as output style definitions; their `workflows` and `outputStyles` manifest path fields accept string or array values and replace the corresponding default directory when present.",
+      "2026-09-01: https://code.claude.com/docs/en/output-styles documents custom output styles as Markdown files containing optional frontmatter metadata plus prompt instructions. The documented frontmatter fields are `name`, `description`, `keep-coding-instructions`, and plugin-only `force-for-plugin`; a filename supplies the style name when `name` is omitted.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents workflow scripts only as files in `workflows/`, without a deeper file schema, so Agent Bundle treats regular workflow files as opaque payloads.",
+      "2026-09-01: Local host proof against Claude Code 2.1.257: `claude plugin validate --strict` accepts an emitted plugin with `workflows/release-audit.js` and frontmatter-bearing `output-styles/terse.md`. A second probe accepts `output-styles/missing-frontmatter.md` containing plain Markdown and does not name that file, so the CLI does not inspect output-style frontmatter during strict plugin validation (host-adapters.native.test.ts)."
     ]
   }
 }

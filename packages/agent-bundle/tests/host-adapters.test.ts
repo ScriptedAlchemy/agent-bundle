@@ -155,6 +155,26 @@ const withClaudeBin = (
   }],
 });
 
+const withClaudePayloadDirectory = (
+  model: NormalizedPlugin,
+  field: 'hostOutputStyles' | 'hostWorkflows',
+  files: NonNullable<NormalizedPlugin['hostOutputStyles']>[number]['files'],
+  options: {
+    readonly issue?: NonNullable<NormalizedPlugin['hostOutputStyles']>[number]['issue'];
+    readonly source?: string;
+    readonly target?: string;
+  } = {},
+): NormalizedPlugin => ({
+  ...model,
+  [field]: [{
+    files,
+    ...(options.issue === undefined ? {} : { issue: options.issue }),
+    provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    source: options.source ?? (field === 'hostWorkflows' ? '/workspace/workflows' : '/workspace/styles'),
+    target: options.target ?? 'claude',
+  }],
+});
+
 const withClaudeSettings = (
   model: NormalizedPlugin,
   settings: unknown,
@@ -1188,6 +1208,118 @@ it('preserves the executable mode when emitting a Claude bin copy entry', async 
   } finally {
     await rm(root, { force: true, recursive: true });
   }
+});
+
+it('plans Claude workflow and output-style files as byte-faithful prebuilt copies without manifest path fields', () => {
+  const withWorkflows = withClaudePayloadDirectory(plugin, 'hostWorkflows', [{
+    bytes: 48,
+    executable: false,
+    relativePath: 'release-audit.js',
+    source: '/workspace/workflows/release-audit.js',
+  }]);
+  const model = withClaudePayloadDirectory(withWorkflows, 'hostOutputStyles', [{
+    bytes: 72,
+    executable: false,
+    relativePath: 'terse.md',
+    source: '/workspace/styles/terse.md',
+  }]);
+  const plan = createDefaultRegistry().get('claude').plan(model);
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(plan.entries.filter((entry) =>
+    entry.relativePath.startsWith('workflows/') || entry.relativePath.startsWith('output-styles/'))).toEqual([
+    {
+      bytes: 72,
+      kind: 'copy',
+      prebuilt: true,
+      relativePath: 'output-styles/terse.md',
+      source: '/workspace/styles/terse.md',
+      sourceInputs: ['/workspace/agent-bundle.config.ts', '/workspace/styles/terse.md'],
+    },
+    {
+      bytes: 48,
+      kind: 'copy',
+      prebuilt: true,
+      relativePath: 'workflows/release-audit.js',
+      source: '/workspace/workflows/release-audit.js',
+      sourceInputs: ['/workspace/agent-bundle.config.ts', '/workspace/workflows/release-audit.js'],
+    },
+  ]);
+  if (manifest?.kind !== 'write') throw new Error('Expected the Claude plugin manifest.');
+  expect(JSON.parse(manifest.content)).not.toHaveProperty('workflows');
+  expect(JSON.parse(manifest.content)).not.toHaveProperty('outputStyles');
+});
+
+it.each([
+  {
+    code: 'claude.workflows.directory.missing',
+    field: 'hostWorkflows' as const,
+    issue: 'missing' as const,
+  },
+  {
+    code: 'claude.workflows.directory.invalid',
+    field: 'hostWorkflows' as const,
+    issue: 'not-directory' as const,
+  },
+  {
+    code: 'claude.workflows.directory.outside',
+    field: 'hostWorkflows' as const,
+    issue: 'outside' as const,
+  },
+  {
+    code: 'claude.workflows.source.error',
+    field: 'hostWorkflows' as const,
+    issue: 'source-error' as const,
+  },
+  {
+    code: 'claude.workflows.source.invalid',
+    field: 'hostWorkflows' as const,
+    issue: 'source-invalid' as const,
+  },
+  {
+    code: 'claude.outputStyles.directory.empty',
+    field: 'hostOutputStyles' as const,
+    issue: 'empty' as const,
+  },
+])('diagnoses $code without emitting the declared payload directory', ({ code, field, issue }) => {
+  const plan = createDefaultRegistry().get('claude').plan(
+    withClaudePayloadDirectory(plugin, field, [], { issue }),
+  );
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    recovery: expect.any(String),
+    severity: 'error',
+  }));
+  expect(plan.entries.some((entry) =>
+    entry.relativePath.startsWith('workflows/') || entry.relativePath.startsWith('output-styles/'))).toBe(false);
+});
+
+it('rejects non-Markdown Claude output-style files without applying executable requirements', () => {
+  const plan = createDefaultRegistry().get('claude').plan(
+    withClaudePayloadDirectory(plugin, 'hostOutputStyles', [
+      {
+        bytes: 12,
+        executable: true,
+        relativePath: 'nested/terse.md',
+        source: '/workspace/styles/nested/terse.md',
+      },
+      {
+        bytes: 12,
+        executable: false,
+        relativePath: 'README.txt',
+        source: '/workspace/styles/README.txt',
+      },
+    ]),
+  );
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'claude.outputStyles.file.invalid',
+    recovery: expect.stringContaining('.md'),
+    severity: 'error',
+  }));
+  expect(plan.entries.some((entry) => entry.relativePath.startsWith('output-styles/'))).toBe(false);
 });
 
 it('pins all documented Claude plugin-manifest LSP declaration forms', async () => {

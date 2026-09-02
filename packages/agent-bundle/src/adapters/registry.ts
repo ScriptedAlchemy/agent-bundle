@@ -5,6 +5,7 @@ import type {
   AgentBundleConfig,
   NormalizationConfigExtension,
   NormalizationHostBinSource,
+  NormalizationHostPayloadSource,
   NormalizationNativeHookSource,
   NormalizationTargetRegistry,
 } from '../core/types.ts';
@@ -33,6 +34,8 @@ import { deepFreeze } from '../core/freeze.ts';
 const sha256Pattern = /^[0-9a-f]{64}$/;
 type NativeHookSource = NonNullable<TargetAdapter['nativeHookSource']>;
 type BinSource = NonNullable<TargetAdapter['binSource']>;
+type OutputStylesSource = NonNullable<TargetAdapter['outputStylesSource']>;
+type WorkflowsSource = NonNullable<TargetAdapter['workflowsSource']>;
 
 const emptyArtifactValidation: TargetArtifactValidationContract = deepFreeze({
   documents: [],
@@ -191,6 +194,9 @@ const snapshotArtifactLayout = (
   const mcpEntries = layout.mcpEntries === undefined
     ? undefined
     : snapshotOutputLayout(layout.mcpEntries, 'MCP entries');
+  const outputStyles = layout.outputStyles === undefined
+    ? undefined
+    : snapshotOutputLayout(layout.outputStyles, 'output styles');
   const rules = layout.rules === undefined ? undefined : snapshotOutputLayout(layout.rules, 'rules');
   const scripts = layout.scripts === undefined ? undefined : snapshotOutputLayout(layout.scripts, 'scripts');
   const assets = layout.assets === undefined
@@ -202,6 +208,9 @@ const snapshotArtifactLayout = (
   const skills = layout.skills === undefined
     ? undefined
     : requireNonempty(layout.skills, 'artifact layout skills namespace');
+  const workflows = layout.workflows === undefined
+    ? undefined
+    : requireNonempty(layout.workflows, 'artifact layout workflows namespace');
   const rootDocuments = layout.rootDocuments === undefined ? undefined : snapshotRootDocuments(layout.rootDocuments);
 
   if (assets !== undefined && !isSafeArtifactDirectory(assets)) {
@@ -212,6 +221,9 @@ const snapshotArtifactLayout = (
   }
   if (skills !== undefined && !isSafeArtifactDirectory(skills)) {
     throw new Error('Target adapter artifact layout skills namespace must be a safe single namespace.');
+  }
+  if (workflows !== undefined && !isSafeArtifactDirectory(workflows)) {
+    throw new Error('Target adapter artifact layout workflows namespace must be a safe single namespace.');
   }
   if (hookWrappers !== undefined && hookContract === undefined) {
     throw new Error(`Target adapter "${adapter.name}" declares hook wrapper layout without a hook contract.`);
@@ -229,10 +241,12 @@ const snapshotArtifactLayout = (
     ...(hookWrappers === undefined ? {} : { hookWrappers }),
     ...(mcpApps === undefined ? {} : { mcpApps }),
     ...(mcpEntries === undefined ? {} : { mcpEntries }),
+    ...(outputStyles === undefined ? {} : { outputStyles }),
     ...(rootDocuments === undefined ? {} : { rootDocuments }),
     ...(rules === undefined ? {} : { rules }),
     ...(scripts === undefined ? {} : { scripts }),
     ...(skills === undefined ? {} : { skills }),
+    ...(workflows === undefined ? {} : { workflows }),
   });
 };
 
@@ -328,6 +342,22 @@ const snapshotBinSource = (adapter: TargetAdapter): BinSource | undefined => {
   return source;
 };
 
+const snapshotOutputStylesSource = (adapter: TargetAdapter): OutputStylesSource | undefined => {
+  const source = adapter.outputStylesSource;
+  if (source !== undefined && typeof source !== 'function') {
+    throw new Error('Target adapter output styles source must be a function.');
+  }
+  return source;
+};
+
+const snapshotWorkflowsSource = (adapter: TargetAdapter): WorkflowsSource | undefined => {
+  const source = adapter.workflowsSource;
+  if (source !== undefined && typeof source !== 'function') {
+    throw new Error('Target adapter workflows source must be a function.');
+  }
+  return source;
+};
+
 const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | undefined => {
   const hookContract = adapter.hookContract;
   if (capabilityIsSupported(adapter.capabilities.hooks) && hookContract === undefined) {
@@ -417,6 +447,8 @@ export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #metadata = new Map<string, TargetAdapterMetadata>();
   readonly #mcpRuntimes = new Map<string, TargetMcpRuntimeContract>();
   readonly #nativeHookSources = new Map<string, NativeHookSource>();
+  readonly #outputStylesSources = new Map<string, OutputStylesSource>();
+  readonly #workflowsSources = new Map<string, WorkflowsSource>();
 
   register(adapter: TargetAdapter, options: { readonly default?: boolean } = {}): this {
     if (this.#adapters.has(adapter.name)) {
@@ -431,6 +463,8 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     const artifactValidation = snapshotArtifactValidation(adapter, metadata);
     const binSource = snapshotBinSource(adapter);
     const nativeHookSource = snapshotNativeHookSource(adapter);
+    const outputStylesSource = snapshotOutputStylesSource(adapter);
+    const workflowsSource = snapshotWorkflowsSource(adapter);
     const hookContract = snapshotHookContract(adapter);
     const mcpRuntime = snapshotMcpRuntime(adapter);
     const artifactLayout = snapshotArtifactLayout(adapter, hookContract, mcpRuntime);
@@ -450,6 +484,12 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     }
     if (nativeHookSource !== undefined) {
       this.#nativeHookSources.set(adapter.name, nativeHookSource);
+    }
+    if (outputStylesSource !== undefined) {
+      this.#outputStylesSources.set(adapter.name, outputStylesSource);
+    }
+    if (workflowsSource !== undefined) {
+      this.#workflowsSources.set(adapter.name, workflowsSource);
     }
     if (hookContract !== undefined) {
       this.#hookContracts.set(adapter.name, hookContract);
@@ -529,6 +569,50 @@ export class TargetRegistry implements NormalizationTargetRegistry {
       const adapter = this.#adapters.get(target)!;
       try {
         const source = this.#binSources.get(target)!.call(adapter, config);
+        if (typeof source === 'string' && source.trim().length > 0) {
+          sources.push(Object.freeze({ source, target }));
+        } else if (source !== undefined) {
+          sources.push(Object.freeze({ issue: 'invalid', target }));
+        }
+      } catch {
+        sources.push(Object.freeze({ issue: 'error', target }));
+      }
+    }
+    return Object.freeze(sources);
+  }
+
+  outputStyleSources(
+    config: Readonly<AgentBundleConfig>,
+    targetNames: readonly string[],
+  ): readonly NormalizationHostPayloadSource[] {
+    const sources: NormalizationHostPayloadSource[] = [];
+    for (const target of [...this.#outputStylesSources.keys()].sort((left, right) => left.localeCompare(right))) {
+      if (!targetNames.includes(target)) continue;
+      const adapter = this.#adapters.get(target)!;
+      try {
+        const source = this.#outputStylesSources.get(target)!.call(adapter, config);
+        if (typeof source === 'string' && source.trim().length > 0) {
+          sources.push(Object.freeze({ source, target }));
+        } else if (source !== undefined) {
+          sources.push(Object.freeze({ issue: 'invalid', target }));
+        }
+      } catch {
+        sources.push(Object.freeze({ issue: 'error', target }));
+      }
+    }
+    return Object.freeze(sources);
+  }
+
+  workflowSources(
+    config: Readonly<AgentBundleConfig>,
+    targetNames: readonly string[],
+  ): readonly NormalizationHostPayloadSource[] {
+    const sources: NormalizationHostPayloadSource[] = [];
+    for (const target of [...this.#workflowsSources.keys()].sort((left, right) => left.localeCompare(right))) {
+      if (!targetNames.includes(target)) continue;
+      const adapter = this.#adapters.get(target)!;
+      try {
+        const source = this.#workflowsSources.get(target)!.call(adapter, config);
         if (typeof source === 'string' && source.trim().length > 0) {
           sources.push(Object.freeze({ source, target }));
         } else if (source !== undefined) {

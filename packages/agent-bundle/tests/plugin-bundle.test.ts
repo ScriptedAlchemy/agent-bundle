@@ -424,6 +424,58 @@ it('emits the Claude bin directory from the unified plugin target', () => {
   expect(writeContents(model)['AGENTS.md']).toContain('`bin/`');
 });
 
+it('emits Claude workflows and output styles from the unified plugin target', () => {
+  const model: NormalizedPlugin = {
+    ...bundleModel,
+    hostOutputStyles: [{
+      files: [{
+        bytes: 72,
+        executable: false,
+        relativePath: 'terse.md',
+        source: '/workspace/styles/terse.md',
+      }],
+      provenance: { kind: 'config', sourcePath: configPath },
+      source: '/workspace/styles',
+      target: 'plugin',
+    }],
+    hostWorkflows: [{
+      files: [{
+        bytes: 48,
+        executable: false,
+        relativePath: 'release-audit.js',
+        source: '/workspace/workflows/release-audit.js',
+      }],
+      provenance: { kind: 'config', sourcePath: configPath },
+      source: '/workspace/workflows',
+      target: 'plugin',
+    }],
+  };
+  const plan = planBundle(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(plan.entries.filter((entry) =>
+    entry.relativePath.startsWith('workflows/') || entry.relativePath.startsWith('output-styles/'))).toEqual([
+    {
+      bytes: 72,
+      kind: 'copy',
+      prebuilt: true,
+      relativePath: 'output-styles/terse.md',
+      source: '/workspace/styles/terse.md',
+      sourceInputs: [configPath, '/workspace/styles/terse.md'],
+    },
+    {
+      bytes: 48,
+      kind: 'copy',
+      prebuilt: true,
+      relativePath: 'workflows/release-audit.js',
+      source: '/workspace/workflows/release-audit.js',
+      sourceInputs: [configPath, '/workspace/workflows/release-audit.js'],
+    },
+  ]);
+  expect(writeContents(model)['AGENTS.md']).toContain('`workflows/`');
+  expect(writeContents(model)['AGENTS.md']).toContain('`output-styles/`');
+});
+
 it('emits Claude-only plugin default settings at the shared composite root', () => {
   const model = {
     ...bundleModel,

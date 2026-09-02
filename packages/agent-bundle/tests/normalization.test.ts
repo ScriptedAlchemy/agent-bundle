@@ -1,5 +1,5 @@
 import { expect, it } from '@rstest/core';
-import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -268,6 +268,77 @@ it('enumerates claude.bin relative to the config file into immutable executable 
   }
 });
 
+it('enumerates Claude workflows and output styles relative to the config file into immutable payload metadata', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-payloads-normalize-'));
+  const configDir = join(root, 'configs');
+  const workflowsRoot = join(root, 'workflows');
+  const outputStylesRoot = join(root, 'styles');
+  const workflow = join(workflowsRoot, 'release-audit.js');
+  const outputStyle = join(outputStylesRoot, 'terse.md');
+  const workflowContents = 'export default async function releaseAudit() {}\n';
+  const outputStyleContents = '---\nname: Terse\ndescription: Be concise\n---\n\nBe concise.\n';
+  await Promise.all([
+    mkdir(configDir, { recursive: true }),
+    mkdir(workflowsRoot, { recursive: true }),
+    mkdir(outputStylesRoot, { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(workflow, workflowContents),
+    writeFile(outputStyle, outputStyleContents),
+  ]);
+  const loaded: LoadedConfig = {
+    ...loadedProject({
+      claude: {
+        outputStyles: '../styles',
+        workflows: '../workflows',
+      },
+      plugin: { name: 'claude-payload-fixture', version: '1.0.0' },
+      targets: ['claude'],
+    }, { root }),
+    configPath: join(configDir, 'agent-bundle.config.ts'),
+  };
+
+  try {
+    const model = await normalizeProject(loaded, { skills: [] }, createDefaultRegistry());
+
+    expect(model.hostWorkflows).toEqual([{
+      files: [{
+        bytes: Buffer.byteLength(workflowContents),
+        executable: false,
+        relativePath: 'release-audit.js',
+        source: workflow,
+      }],
+      provenance: { kind: 'config', sourcePath: loaded.configPath },
+      source: workflowsRoot,
+      target: 'claude',
+    }]);
+    expect(model.hostOutputStyles).toEqual([{
+      files: [{
+        bytes: Buffer.byteLength(outputStyleContents),
+        executable: false,
+        relativePath: 'terse.md',
+        source: outputStyle,
+      }],
+      provenance: { kind: 'config', sourcePath: loaded.configPath },
+      source: outputStylesRoot,
+      target: 'claude',
+    }]);
+    expect(Object.isFrozen(model.hostWorkflows)).toBe(true);
+    expect(Object.isFrozen(model.hostWorkflows?.[0]?.files[0])).toBe(true);
+    expect(Object.isFrozen(model.hostOutputStyles)).toBe(true);
+    expect(Object.isFrozen(model.hostOutputStyles?.[0]?.files[0])).toBe(true);
+
+    const pluginModel = await normalizeProject({
+      ...loaded,
+      config: { ...loaded.config, targets: ['plugin'] },
+    }, { skills: [] }, createDefaultRegistry());
+    expect(pluginModel.hostWorkflows?.[0]?.target).toBe('plugin');
+    expect(pluginModel.hostOutputStyles?.[0]?.target).toBe('plugin');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it.each([
   { code: 'claude.bin.directory.missing', create: false, issue: 'missing' as const },
   { code: 'claude.bin.directory.empty', create: true, issue: 'empty' as const },
@@ -289,6 +360,73 @@ it.each([
     expect(plan.diagnostics).toContainEqual(expect.objectContaining({ code, severity: 'error' }));
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+it.each([
+  {
+    code: 'claude.workflows.directory.empty',
+    field: 'workflows' as const,
+    issue: 'empty' as const,
+  },
+  {
+    code: 'claude.outputStyles.directory.missing',
+    field: 'outputStyles' as const,
+    issue: 'missing' as const,
+  },
+])('normalizes and diagnoses a Claude $field directory that is $issue', async ({ code, field, issue }) => {
+  const root = await mkdtemp(join(tmpdir(), `agent-bundle-claude-${field}-diagnostic-`));
+  const sourceRoot = join(root, 'payload');
+  if (issue === 'empty') await mkdir(sourceRoot, { recursive: true });
+  const loaded = loadedProject({
+    claude: { [field]: './payload' },
+    plugin: { name: 'claude-payload-diagnostic', version: '1.0.0' },
+    targets: ['claude'],
+  }, { root });
+
+  try {
+    const model = await normalizeProject(loaded, { skills: [] }, createDefaultRegistry());
+    const plan = createDefaultRegistry().get('claude').plan(model);
+    const payload = field === 'workflows' ? model.hostWorkflows?.[0] : model.hostOutputStyles?.[0];
+
+    expect(payload).toMatchObject({ files: [], issue, source: sourceRoot, target: 'claude' });
+    expect(plan.diagnostics).toContainEqual(expect.objectContaining({ code, severity: 'error' }));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a Claude payload directory symlink that resolves outside the project', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-payload-symlink-'));
+  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-payload-outside-'));
+  const linked = join(root, 'styles');
+  await writeFile(join(outside, 'terse.md'), 'Be concise.\n');
+  await symlink(outside, linked, 'dir');
+  const loaded = loadedProject({
+    claude: { outputStyles: './styles' },
+    plugin: { name: 'claude-payload-symlink', version: '1.0.0' },
+    targets: ['claude'],
+  }, { root });
+
+  try {
+    const model = await normalizeProject(loaded, { skills: [] }, createDefaultRegistry());
+    const plan = createDefaultRegistry().get('claude').plan(model);
+
+    expect(model.hostOutputStyles?.[0]).toMatchObject({
+      files: [],
+      issue: 'outside',
+      source: linked,
+      target: 'claude',
+    });
+    expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'claude.outputStyles.directory.outside',
+      severity: 'error',
+    }));
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(outside, { force: true, recursive: true }),
+    ]);
   }
 });
 
